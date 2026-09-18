@@ -28,6 +28,7 @@ import { ThemeIcon } from '../../../base/common/themables.js';
 import { IAction, Separator, SubmenuAction, toAction } from '../../../base/common/actions.js';
 import { StringSHA1 } from '../../../base/common/hash.js';
 import { GestureEvent } from '../../../base/browser/touch.js';
+import { Event } from '../../../base/common/event.js';
 import { IPaneCompositePart } from './paneCompositePart.js';
 import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import { IViewsService } from '../../services/views/common/viewsService.js';
@@ -91,6 +92,12 @@ export class PaneCompositeBar extends Disposable {
 
 	private readonly compositeBar: CompositeBar;
 	readonly dndHandler: ICompositeDragAndDrop;
+
+	/**
+	 * Fires whenever the set of rendered view containers changes, including when one is pinned,
+	 * hidden, reordered or pushed into the overflow action.
+	 */
+	readonly onDidChange: Event<void>;
 	private readonly compositeActions = this._register(new DisposableMap<string, { activityAction: ViewContainerActivityAction; pinnedAction: ToggleCompositePinnedAction; badgeAction: ToggleCompositeBadgeAction; dispose: () => void }>());
 
 	private hasExtensionsRegistered: boolean = false;
@@ -126,6 +133,7 @@ export class PaneCompositeBar extends Disposable {
 				pinned: container.pinned,
 			}));
 		this.compositeBar = this.createCompositeBar(cachedItems);
+		this.onDidChange = this.compositeBar.onDidChange;
 		this.onDidRegisterViewContainers(this.getViewContainers());
 		this.registerListeners();
 	}

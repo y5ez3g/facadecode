@@ -29,6 +29,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { CodeWindow, mainWindow } from '../../../../base/browser/window.js';
 import { IsWindowAlwaysOnTopContext } from '../../../common/contextkeys.js';
+import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
 
 export class NativeTitlebarPart extends BrowserTitlebarPart {
 
@@ -78,9 +79,10 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 		@IEditorService editorService: IEditorService,
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
-		@IActionViewItemService actionViewItemService: IActionViewItemService
+		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IPaneCompositePartService paneCompositePartService: IPaneCompositePartService
 	) {
-		super(id, targetWindow, editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService);
+		super(id, targetWindow, editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService, paneCompositePartService);
 
 		this.tahoeOrNewer = isTahoeOrNewer(environmentService.os.release);
 
@@ -303,9 +305,10 @@ export class MainNativeTitlebarPart extends NativeTitlebarPart {
 		@IEditorService editorService: IEditorService,
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
-		@IActionViewItemService actionViewItemService: IActionViewItemService
+		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IPaneCompositePartService paneCompositePartService: IPaneCompositePartService
 	) {
-		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService);
+		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService, paneCompositePartService);
 	}
 }
 
@@ -333,10 +336,11 @@ export class AuxiliaryNativeTitlebarPart extends NativeTitlebarPart implements I
 		@IEditorService editorService: IEditorService,
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
-		@IActionViewItemService actionViewItemService: IActionViewItemService
+		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IPaneCompositePartService paneCompositePartService: IPaneCompositePartService
 	) {
 		const id = AuxiliaryNativeTitlebarPart.COUNTER++;
-		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService);
+		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService, paneCompositePartService);
 	}
 
 	override get preventZoom(): boolean {

@@ -8,6 +8,7 @@ import { Event } from '../../../../base/common/event.js';
 import { PaneCompositeDescriptor } from '../../../browser/panecomposite.js';
 import { IProgressIndicator } from '../../../../platform/progress/common/progress.js';
 import { IPaneComposite } from '../../../common/panecomposite.js';
+import { IPaneCompositePart } from '../../../browser/parts/paneCompositePart.js';
 import { ViewContainerLocation } from '../../../common/views.js';
 import { SINGLE_WINDOW_PARTS } from '../../layout/browser/layoutService.js';
 
@@ -23,6 +24,12 @@ export interface IPaneCompositePartService {
 	getRegistryId(viewContainerLocation: ViewContainerLocation): string;
 
 	getPartId(viewContainerLocation: ViewContainerLocation): SINGLE_WINDOW_PARTS;
+
+	/**
+	 * Returns the part that hosts the given location. A `PaneCompositeBar` is constructed against
+	 * the part it drives, so a bar hosted outside that part needs it directly.
+	 */
+	getPartByLocation(viewContainerLocation: ViewContainerLocation): IPaneCompositePart;
 
 	/**
 	 * Opens a viewlet with the given identifier and pass keyboard focus to it if specified.

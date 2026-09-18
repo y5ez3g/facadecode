@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/titlebarpart.css';
+import './media/titlebarCompositeBar.css';
 import { localize, localize2 } from '../../../../nls.js';
 import { MultiWindowParts, Part } from '../../part.js';
 import { ITitleService } from '../../../services/title/browser/titleService.js';
@@ -58,6 +59,10 @@ import { safeIntl } from '../../../../base/common/date.js';
 import { IsCompactTitleBarContext, TitleBarVisibleContext } from '../../../common/contextkeys.js';
 import { ServiceCollection } from '../../../../platform/instantiation/common/serviceCollection.js';
 import { WORKBENCH_MENU_MOTION_CLASS, workbenchMenuCloseAnimation } from '../../actions/menuMotion.js';
+import { PaneCompositeBar } from '../paneCompositeBar.js';
+import { getTitlebarCompositeBarOptions } from './titlebarCompositeBar.js';
+import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
+import { ViewContainerLocation } from '../../../common/views.js';
 
 export interface ITitleVariable {
 	readonly name: string;
@@ -226,6 +231,12 @@ export class BrowserTitleService extends MultiWindowParts<BrowserTitlebarPart> i
 
 export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 
+	// Budget for the activity icons hosted here (`activityBar.location: toolbar`). Below the
+	// minimum every icon folds into the overflow action; the gutter is the clearance kept between
+	// the bar and the toolbar on its left.
+	private static readonly MIN_COMPOSITE_BAR_WIDTH = 50;
+	private static readonly COMPOSITE_BAR_GUTTER = 12;
+
 	//#region IView
 
 	readonly minimumWidth: number = 0;
@@ -264,6 +275,11 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 	private leftContent!: HTMLElement;
 	private centerContent!: HTMLElement;
 	private rightContent!: HTMLElement;
+
+	// The activity icons, while `activityBar.location` puts them here.
+	private readonly titlebarCompositeBar = this._register(new MutableDisposable<PaneCompositeBar>());
+	private readonly titlebarCompositeBarDisposable = this._register(new MutableDisposable());
+	private titlebarCompositeBarContainer: HTMLElement | undefined;
 
 	protected readonly customMenubar = this._register(new MutableDisposable<CustomMenubarControl>());
 	private readonly customMenubarDisposables = this._register(new DisposableStore());
@@ -321,7 +337,8 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 		@IEditorService editorService: IEditorService,
 		@IMenuService private readonly menuService: IMenuService,
 		@IKeybindingService private readonly keybindingService: IKeybindingService,
-		@IActionViewItemService private readonly actionViewItemService: IActionViewItemService
+		@IActionViewItemService private readonly actionViewItemService: IActionViewItemService,
+		@IPaneCompositePartService private readonly paneCompositePartService: IPaneCompositePartService
 	) {
 		super(id, { hasTitle: false }, themeService, storageService, layoutService);
 
@@ -388,6 +405,10 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 			const affectsActivityControl = event.affectsConfiguration(LayoutSettings.ACTIVITY_BAR_LOCATION);
 
 			if (affectsLayoutControl || affectsActivityControl) {
+				if (affectsActivityControl) {
+					this.updateTitlebarCompositeBar();
+				}
+
 				this.createActionToolBarMenus({ layoutActions: affectsLayoutControl, activityActions: affectsActivityControl });
 
 				this._onDidChange.fire(undefined);
@@ -532,6 +553,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 		// Create Toolbar Actions
 		if (hasCustomTitlebar(this.configurationService, this.titleBarStyle)) {
 			this.actionToolBarElement = append(this.rightContent, $('div.action-toolbar-container'));
+			this.updateTitlebarCompositeBar();
 			this.createActionToolBar();
 			this.createActionToolBarMenus();
 		}
@@ -907,9 +929,88 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 			));
 	}
 
+	/**
+	 * Creates or disposes the activity icons hosted here so that `workbench.activityBar.location`
+	 * can be changed while the window is open, the way the other positions can.
+	 */
+	private updateTitlebarCompositeBar(): void {
+		const wanted = !this.isAuxiliary && this.configurationService.getValue<ActivityBarPosition>(LayoutSettings.ACTIVITY_BAR_LOCATION) === ActivityBarPosition.TOOLBAR;
+		if (wanted === !!this.titlebarCompositeBar.value) {
+			return;
+		}
+
+		if (!wanted) {
+			this.titlebarCompositeBar.clear();
+			this.titlebarCompositeBarDisposable.clear();
+			this.titlebarCompositeBarContainer?.remove();
+			this.titlebarCompositeBarContainer = undefined;
+			return;
+		}
+
+		if (!this.actionToolBarElement) {
+			return;
+		}
+
+		// Inside the title actions container as its first child, to inherit its drag opt-out,
+		// alignment, z-index and badge styling. Prepending keeps the icons ahead of the tool bar
+		// whether or not that has been created yet.
+		this.titlebarCompositeBarContainer = prepend(this.actionToolBarElement, $('div.titlebar-composite-bar-container.composite-bar-container'));
+
+		// The icons open view containers in the primary side bar, so that is the part they drive.
+		// Parts.ACTIVITYBAR_PART, not SIDEBAR_PART: ViewContainerActivityAction reads it to decide
+		// whether clicking the active icon collapses the side bar.
+		const sidebarPart = this.paneCompositePartService.getPartByLocation(ViewContainerLocation.Sidebar);
+		const compositeBar = this.titlebarCompositeBar.value = this.instantiationService.createInstance(PaneCompositeBar, ViewContainerLocation.Sidebar, getTitlebarCompositeBarOptions(this.menuService, this.contextKeyService, this.configurationService, this.layoutService, this.instantiationService), Parts.ACTIVITYBAR_PART, sidebarPart);
+		compositeBar.create(this.titlebarCompositeBarContainer);
+		this.titlebarCompositeBarDisposable.value = compositeBar.onDidChange(() => this.updateTitlebarCompositeBarDivider());
+
+		// A bar created after the part was laid out has to be sized here, or it renders no icons
+		// until the next resize: CompositeBar.layout returns early on a zero dimension. The part's
+		// own element carries the current size, as `this.dimension` is never set by
+		// BrowserTitlebarPart.layout. It reads zero while the part is still being created, where
+		// the first layout does this instead.
+		const { clientWidth, clientHeight } = this.element;
+		if (clientWidth > 0 && clientHeight > 0) {
+			this.layoutTitlebarCompositeBar(clientWidth, clientHeight);
+		}
+	}
+
+	private layoutTitlebarCompositeBar(width: number, height: number): void {
+		const bar = this.titlebarCompositeBar.value;
+		if (!bar) {
+			return;
+		}
+
+		// Budgeted the way AbstractPaneCompositePart.layoutCompositeBar budgets its own: from the
+		// width this part was handed, minus the neighbours that are sized by their own content and
+		// so do not move when the bar does. Never measured from our own container, which is sized
+		// by its content - reading it back is a layout feedback loop, and it reports zero on the
+		// first layout, which collapses every icon into the overflow action.
+		//
+		// The cap keeps the bar off those neighbours. `.titlebar-right` is `min-width: min-content`
+		// and never shrinks below what it holds, so a bar that always asks for its natural width
+		// pushes the region into the command center and then under the adjacent-center toolbar,
+		// which macOS offsets 8px further left than flex places it.
+		const reserved = (this.centerAdjacentToolBarElement?.offsetWidth ?? 0) +
+			(this.updateToolBarElement?.offsetWidth ?? 0) +
+			this.actionToolBar.getElement().offsetWidth +
+			BrowserTitlebarPart.COMPOSITE_BAR_GUTTER;
+
+		bar.layout(Math.max(BrowserTitlebarPart.MIN_COMPOSITE_BAR_WIDTH, Math.floor(width / 2) - reserved), height);
+		this.updateTitlebarCompositeBarDivider();
+	}
+
+	/**
+	 * Draws the divider only while the bar has something to the left of it. Every icon can be
+	 * hidden from the context menu, and a divider with one empty side is a stray mark.
+	 */
+	private updateTitlebarCompositeBarDivider(): void {
+		this.titlebarCompositeBarContainer?.classList.toggle('has-composites', (this.titlebarCompositeBar.value?.getVisiblePaneCompositeIds().length ?? 0) > 0);
+	}
+
 	private get activityActionsEnabled(): boolean {
 		const activityBarPosition = this.configurationService.getValue<ActivityBarPosition>(LayoutSettings.ACTIVITY_BAR_LOCATION);
-		return !this.isCompact && !this.isAuxiliary && (activityBarPosition === ActivityBarPosition.TOP || activityBarPosition === ActivityBarPosition.BOTTOM);
+		return !this.isCompact && !this.isAuxiliary && (activityBarPosition === ActivityBarPosition.TOP || activityBarPosition === ActivityBarPosition.BOTTOM || activityBarPosition === ActivityBarPosition.TOOLBAR);
 	}
 
 	private get globalActionsEnabled(): boolean {
@@ -935,6 +1036,9 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 		this.updateLayout(new Dimension(width, height));
 
 		super.layoutContents(width, height);
+
+		// After `layoutContents`, so that the neighbours we measure report their new widths.
+		this.layoutTitlebarCompositeBar(width, height);
 
 		this.titleBarToolBarOverflowScheduler.schedule();
 	}
@@ -1019,8 +1123,9 @@ export class MainBrowserTitlebarPart extends BrowserTitlebarPart {
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
 		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IPaneCompositePartService paneCompositePartService: IPaneCompositePartService,
 	) {
-		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService);
+		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService, paneCompositePartService);
 	}
 }
 
@@ -1055,9 +1160,10 @@ export class AuxiliaryBrowserTitlebarPart extends BrowserTitlebarPart implements
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
 		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IPaneCompositePartService paneCompositePartService: IPaneCompositePartService,
 	) {
 		const id = AuxiliaryBrowserTitlebarPart.COUNTER++;
-		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService);
+		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService, paneCompositePartService);
 	}
 
 	override get preventZoom(): boolean {

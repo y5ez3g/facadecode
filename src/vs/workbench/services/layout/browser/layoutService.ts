@@ -106,6 +106,12 @@ export const enum ActivityBarPosition {
 	DEFAULT = 'default',
 	TOP = 'top',
 	BOTTOM = 'bottom',
+
+	/**
+	 * Hosted by the title bar, to the left of the layout controls. `TOP` and `BOTTOM` keep the view
+	 * containers in a strip inside the side bar and move only Accounts and Manage up here.
+	 */
+	TOOLBAR = 'toolbar',
 	HIDDEN = 'hidden'
 }
 

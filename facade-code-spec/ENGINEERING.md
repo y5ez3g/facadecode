@@ -70,9 +70,14 @@ node     24 (see .nvmrc); the preinstall check rejects other major versions
 install  npm install
 build    npm run transpile-client      fast, for iterating on src/
 run      ./scripts/code.sh --user-data-dir=<dir> --extensions-dir=<dir>
-check    npm run valid-layers-check && npm run gulp -- hygiene
+check    npm run valid-layers-check && npm run stylelint && npm run gulp -- hygiene
 test     ./scripts/test.sh --grep <pattern>
 ```
+
+`stylelint` is the one that is easy to forget and the only one that knows about CSS. It
+carries rules that exist because of a measured regression - `build/lib/stylelint/` rejects
+root-anchored `:has()`, which made Blink re-evaluate the selector on every DOM mutation in
+the workbench (#327052) - so a change that only touches a `.css` file still has to run it.
 
 ### ⚠️ Two steps a fresh clone needs that `transpile-client` does not do
 

@@ -1,0 +1,47 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * The activity icons hosted in the title bar sit inside .action-toolbar-container, so alignment,
+ * drag opt-out, z-index and badge styling all come from the rules for that container in
+ * titlebarpart.css. Only the bar's own box is described here.
+ *
+ * The leading gutter separates the icons from the adjacent-center toolbar. The two containers meet
+ * once the title bar runs out of slack, and on macOS titlebarpart.css offsets this one 8px further
+ * left than flex places it, so the gutter has to survive that much overlap.
+ */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container {
+	display: flex;
+	align-items: center;
+	height: 100%;
+	flex-grow: 0;
+	flex-shrink: 0;
+	width: auto;
+	padding-left: 12px;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container .monaco-action-bar .action-item {
+	display: flex;
+	align-items: center;
+}
+
+/*
+ * Divider between the view containers and the commands that follow them. Drawn here rather than
+ * pushed into the tool bar as a Separator, because the boundary is at the tool bar's left edge and
+ * prepareActions drops a leading separator.
+ *
+ * The 1px x 16px box, the 4px margins and disabledForeground are taken from
+ * .monaco-action-bar .action-item .action-label.separator, so this reads as the same line the tool
+ * bar draws. `.has-composites` is toggled in titlebarPart.ts, which already knows the count; see
+ * #327052 for why this is a class rather than :has().
+ */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container.has-composites::after {
+	content: '';
+	width: 1px;
+	min-width: 1px;
+	height: 16px;
+	margin: 0 4px;
+	background-color: var(--vscode-disabledForeground);
+}

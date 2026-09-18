@@ -271,7 +271,10 @@ export class SidebarPart extends AbstractPaneCompositePart {
 			return false;
 		}
 
-		return this.configurationService.getValue(LayoutSettings.ACTIVITY_BAR_LOCATION) !== ActivityBarPosition.HIDDEN;
+		// `TOOLBAR` looks like `HIDDEN` from here: the icons exist, but the title bar draws them and
+		// this part must not draw a strip as well.
+		const location = this.configurationService.getValue(LayoutSettings.ACTIVITY_BAR_LOCATION);
+		return location !== ActivityBarPosition.HIDDEN && location !== ActivityBarPosition.TOOLBAR;
 	}
 
 	protected getCompositeBarPosition(): CompositeBarPosition {
@@ -280,6 +283,7 @@ export class SidebarPart extends AbstractPaneCompositePart {
 			case ActivityBarPosition.TOP: return CompositeBarPosition.TOP;
 			case ActivityBarPosition.BOTTOM: return CompositeBarPosition.BOTTOM;
 			case ActivityBarPosition.HIDDEN:
+			case ActivityBarPosition.TOOLBAR: // drawn by the title bar
 			case ActivityBarPosition.DEFAULT: // noop
 			default: return CompositeBarPosition.TITLE;
 		}
