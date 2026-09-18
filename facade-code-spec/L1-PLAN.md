@@ -9,7 +9,7 @@ while the change surface is still small; step 3 then adds work to the switch pat
 
 ```
 0  identity        drop Copilot, new icon, rename to Facade Code
-1  top bar         let each activity icon choose the title bar or the side strip
+1  top bar         the activity bar in the title bar, then each icon choosing a side
 2  workspace bar   the project and worktree rail
 3  per-tab shells  terminals and agent CLIs that follow the project
 4  switching       make moving between projects fast
@@ -111,13 +111,113 @@ no chat view registered, and nothing on screen pointing at an extension we hide
 
 ---
 
-## Step 1 — Each activity icon picks its bar
+## Step 1 — The activity bar can live in the title bar
 
-Upstream has `workbench.activityBar.location: default|top|bottom|titleBar|hidden` —
-**one position for the whole bar**. An individual icon cannot choose. This step gives
-each icon a position and lets it be dragged between the two.
+Upstream has `workbench.activityBar.location: default|top|bottom|hidden` — four places,
+and all four keep the view container icons inside the side bar's own frame. None of them
+puts navigation on the same row as the layout controls.
 
-### 1.1 Where the contract lives
+The step is in two parts. **1a** adds a fifth position and moves the whole bar there.
+**1b** breaks the bar apart so each icon picks its own side. 1a is a complete change on
+its own and ships without 1b.
+
+### 1a — A fifth position: `toolbar`  ✅ done
+
+One row, in this order:
+
+```
+[command center]  ......empty......  ⬚ ⬚ ⬚ ⬚ ⬚ │ ▭ ▤ ▥ ▦ ⊙ ⚙
+                                     navigation   layout    account
+```
+
+The icons are hosted by a second `PaneCompositeBar`, prepended into the title bar's
+`.action-toolbar-container`, and the side bar draws no strip while this position is
+chosen. Everything else about the icons — drag to reorder, badges, hover, the context
+menu, what a click does — is upstream's, because the host is upstream's class.
+
+```
+layoutService.ts          ActivityBarPosition.TOOLBAR
+workbench.contribution.ts the setting's enum and its description
+activitybarPart.ts        the fifth entry in the position menu
+layout.ts                 toolbar joins top/bottom: no standalone activity bar part
+sidebarPart.ts            toolbar looks like hidden from here - draw no strip
+titlebarPart.ts           create, size and dispose the host
+titlebarCompositeBar.ts   its options                                      (new)
+media/titlebarCompositeBar.css  its box, and the divider                   (new)
+panecomposite.ts          getPartByLocation, no longer private
+```
+
+**⚠️ `Parts.ACTIVITYBAR_PART`, not `SIDEBAR_PART`.** `ViewContainerActivityAction` reads
+that argument to decide whether clicking the active icon collapses the side bar. Passing
+the side bar - which is what `SidebarPart` does for its own strip - silently drops that
+behaviour, and the setting named `workbench.activityBar.iconClickBehavior` stops applying
+to the activity bar.
+
+**⚠️ Size the bar on creation, not only on layout.** `CompositeBar.layout` returns early
+on a zero dimension and nothing lays the part out again just because a setting changed, so
+a bar built at that moment renders no icons until the next resize. The part's own element
+carries the current size; `this.dimension` does not, because `Part.layout` is never
+reached from `BrowserTitlebarPart.layout`.
+
+**⚠️ Never measure our own container when budgeting the bar.** It is sized by its content,
+so reading it back is a layout feedback loop, and it reports zero on the first layout,
+which collapses every icon into the overflow chevron. Budget from the width the part was
+handed minus the neighbours that are sized by their own content, capped at half the title
+bar - `.titlebar-right` is `min-width: min-content`, so a bar that always asks for its
+natural width pushes the region into the command center and then under the
+adjacent-center toolbar, which macOS offsets 8px further left than flex puts it.
+
+**⚠️ The bar has to carry its own way out.** A `PaneCompositeBar` with no
+`fillExtraContextMenuActions` offers the view containers and nothing else, so right-clicking
+the icons cannot move them anywhere: the only routes back are the settings editor and the
+command palette, neither of which the person is looking at. Upstream keeps those entries in
+`ActivityBarCompositeBar.getActivityBarContextMenuActions`; it is lifted out into a function
+both bars call, rather than copied.
+
+**The submenu label and the setting value are the same word.** The full command title says
+where the bar goes ("Move Activity Bar to Title Bar", matching upstream's "Move Activity Bar
+to Side"); the short title is the position's name and reads `Toolbar`, because a menu entry
+saying "Title Bar" beside a setting saying `toolbar` leaves nothing to search for.
+
+**⚠️ The divider is `::after` on the bar's container, not a `Separator` in the toolbar.**
+The boundary is at the toolbar's *left* edge and `prepareActions` deletes a leading
+separator - correctly, since a separator with nothing before it separates nothing.
+
+**⚠️ A class, not `:has()`.** `:not(:empty)` does not work - the container always holds the
+bar's action bar even when that bar shows nothing - and `:has(.action-item)` is the trap
+upstream closed in #327052: a `:has()` whose anchor is live makes Blink re-evaluate it on
+every DOM mutation in the document, and `build/stylelint.ts` now rejects the root-anchored
+form outright. Toggle a class from the part, which already knows the count. That needs a
+change signal, so `PaneCompositeBar` forwards its `CompositeBar`'s `onDidChange` - the one
+event that fires from `updateCompositeSwitcher`, the single funnel for what is rendered.
+
+**The storage keys are the activity bar's, on purpose.** One position for one bar, so only
+one of them is ever on screen, and what a person pinned, hid and reordered has to survive
+being moved - the same way upstream's `top` and `bottom` share these keys with `default`.
+**⚠️ 1b must split them** before two bars can be visible at once: each `CompositeBar` saves
+the whole list it knows about, so two bars over one key take turns erasing each other.
+
+Measured, in a dev window at `toolbar`:
+
+```
+nav icons          5, draggable, reorder survives a switch back to default
+divider            drawn in all four theme kinds, and keyed off a class, not the icons
+side bar strip     absent;  activity bar part  0 wide
+title actions      4 layout toggles, Accounts, Manage
+click active icon  collapses the side bar;  click another  switches to it
+context menu       Activity Bar Position (5 entries, toolbar checked) + Move Primary Side
+                   Bar Right;  round trip toolbar -> default -> toolbar from the menu alone
+                   default and top menus unchanged by the extraction
+window 1440 -> 480 icons fold into the chevron at 480, never overlap the command center
+5 locations x 14 live switches  every cell as specified
+```
+
+### 1b — Each activity icon picks its bar
+
+1a moves the bar as a unit. 1b gives each icon a position of its own and lets it be
+dragged between the title bar and the side strip.
+
+#### Where the contract lives
 
 ```
 services/facade/common/facadeTopBar.ts     IFacadeTopBarService (parts may depend on this)
@@ -129,7 +229,7 @@ browser/parts/facadeLauncherBar.ts         bar items that are not view container
 import from `vs/workbench/contrib/**`, and both bars are parts. A part importing from
 contrib will type-check and pass `valid-layers-check`; only hygiene catches it.
 
-### 1.2 Upstream files get optional hooks only
+#### Upstream files get optional hooks only
 
 Four of them on `IPaneCompositeBarOptions`:
 
@@ -149,10 +249,10 @@ filtering only there leaves both bars showing everything.
 removal branch becomes dead code, and not through `addComposite`, which bypasses
 `hideIfEmpty` and conjures up containers that should stay away.
 
-**⚠️ Separate storage keys.** The title bar's bar must not borrow the activity bar's
-pinned/placeholder/workspace-state keys, or the two overwrite each other's half.
+**⚠️ Separate storage keys**, as 1a's note says: the moment both bars can be on screen,
+sharing one record has them overwriting each other's half.
 
-### 1.3 Dragging between the bars
+#### Dragging between the bars
 
 `CompositeDragAndDrop` needs a third case: an item this bar does not own.
 **⚠️ Ask before the location lookup.** A launcher has no view container, so
@@ -166,35 +266,35 @@ this location by the view service first.
 ⚠️ The "Move To" menu entries are **the only route that works from a standing start** —
 the side strip is hidden while empty, so the first icon cannot be dragged onto it.
 
-### 1.4 The divider, and auto-hiding
+#### Auto-hiding
 
-Draw the divider as `::after` on the bar's own container, **not as a `Separator` in the
-toolbar**: the boundary is at the toolbar's left edge and `prepareActions` deletes a
-leading separator. Draw it only when both sides have something. With the split off, do
-not draw it and let the toolbar push its own separator back.
-
-The side strip hides when nothing is assigned to it.
+The divider is drawn only when something is left of it — 1a already ties it to the bar
+holding an item. The side strip hides when nothing is assigned to it.
 ⚠️ Its composite bar is built lazily in `show()`, which the layout service's hide/show
 path does not call — the symptom is a full-height activity bar with nothing in it.
 
-### 1.5 ⭐ The precondition that makes or breaks this
+#### ⭐ The precondition that makes or breaks this
 
 ```ts
 get enabled() {
-  return settingIsOn && activityBarLocation === 'titleBar';
+  return settingIsOn && activityBarLocation === 'toolbar';
 }
 ```
 
 ⚠️ **Without the second half this does not degrade, it empties the window.** The title
-bar only builds its bar at `titleBar`, and the default assigns every icon to the top bar,
+bar only builds its bar at `toolbar`, and the default assigns every icon to the top bar,
 so at any other location the top bar names something that does not exist: no title bar
 host, a zero-width activity bar, a zero-width side strip, and two icons left in the whole
 window.
 
-### 1.6 Acceptance
+### Acceptance
 
 Five locations × switch on and off — the **cross product**, every cell. Testing one value
 per axis passes while the broken combination goes unvisited.
+
+⚠️ An HTML5 drag cannot be driven over CDP on macOS: `Input.dispatchMouseEvent` with a
+button held produces no `dragover` at all. Reordering has to be checked with real OS mouse
+events.
 
 ---
 

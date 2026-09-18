@@ -601,32 +601,48 @@ export class ActivityBarCompositeBar extends PaneCompositeBar {
 	}
 
 	getActivityBarContextMenuActions(): IAction[] {
-		const activityBarPositionMenu = this.menuService.getMenuActions(MenuId.ActivityBarPositionMenu, this.contextKeyService, { shouldForwardArgs: true, renderShortTitle: true });
-		const positionActions = getContextMenuActions(activityBarPositionMenu).secondary;
-		const actions: IAction[] = [
-			new SubmenuAction('workbench.action.activityBar.position', localize('activity bar position', "Activity Bar Position"), positionActions),
-		];
-
-		// Show size submenu only when activity bar is in default position
-		const activityBarPosition = this.configurationService.getValue<string>(LayoutSettings.ACTIVITY_BAR_LOCATION);
-		if (activityBarPosition === ActivityBarPosition.DEFAULT) {
-			const isCompact = this.configurationService.getValue<boolean>(LayoutSettings.ACTIVITY_BAR_COMPACT) ?? false;
-			const sizeActions = [
-				toAction({ id: 'workbench.action.activityBar.size.default', label: localize('activityBarSizeDefault', "Default"), checked: !isCompact, run: () => this.configurationService.updateValue(LayoutSettings.ACTIVITY_BAR_COMPACT, false) }),
-				toAction({ id: 'workbench.action.activityBar.size.compact', label: localize('activityBarSizeCompact', "Compact"), checked: isCompact, run: () => this.configurationService.updateValue(LayoutSettings.ACTIVITY_BAR_COMPACT, true) }),
-			];
-			actions.push(new SubmenuAction('workbench.action.activityBar.size', localize('activity bar size', "Activity Bar Size"), sizeActions));
-		}
-
-		actions.push(toAction({ id: ToggleSidebarPositionAction.ID, label: ToggleSidebarPositionAction.getLabel(this.layoutService), run: () => this.instantiationService.invokeFunction(accessor => new ToggleSidebarPositionAction().run(accessor)) }));
-
-		if (this.part === Parts.SIDEBAR_PART) {
-			actions.push(toAction({ id: ToggleSidebarVisibilityAction.ID, label: ToggleSidebarVisibilityAction.LABEL, run: () => this.instantiationService.invokeFunction(accessor => new ToggleSidebarVisibilityAction().run(accessor)) }));
-		}
-
-		return actions;
+		return getActivityBarContextMenuActions(this.part, this.menuService, this.contextKeyService, this.configurationService, this.layoutService, this.instantiationService);
 	}
 
+}
+
+/**
+ * The tail of the activity bar's context menu: where the bar lives, how big it is, and where the
+ * side bar it drives lives. Shared with bars hosted outside this part, so that they do not need a
+ * second copy of these entries to keep in step.
+ */
+export function getActivityBarContextMenuActions(
+	part: Parts,
+	menuService: IMenuService,
+	contextKeyService: IContextKeyService,
+	configurationService: IConfigurationService,
+	layoutService: IWorkbenchLayoutService,
+	instantiationService: IInstantiationService,
+): IAction[] {
+	const activityBarPositionMenu = menuService.getMenuActions(MenuId.ActivityBarPositionMenu, contextKeyService, { shouldForwardArgs: true, renderShortTitle: true });
+	const positionActions = getContextMenuActions(activityBarPositionMenu).secondary;
+	const actions: IAction[] = [
+		new SubmenuAction('workbench.action.activityBar.position', localize('activity bar position', "Activity Bar Position"), positionActions),
+	];
+
+	// Show size submenu only when activity bar is in default position
+	const activityBarPosition = configurationService.getValue<string>(LayoutSettings.ACTIVITY_BAR_LOCATION);
+	if (activityBarPosition === ActivityBarPosition.DEFAULT) {
+		const isCompact = configurationService.getValue<boolean>(LayoutSettings.ACTIVITY_BAR_COMPACT) ?? false;
+		const sizeActions = [
+			toAction({ id: 'workbench.action.activityBar.size.default', label: localize('activityBarSizeDefault', "Default"), checked: !isCompact, run: () => configurationService.updateValue(LayoutSettings.ACTIVITY_BAR_COMPACT, false) }),
+			toAction({ id: 'workbench.action.activityBar.size.compact', label: localize('activityBarSizeCompact', "Compact"), checked: isCompact, run: () => configurationService.updateValue(LayoutSettings.ACTIVITY_BAR_COMPACT, true) }),
+		];
+		actions.push(new SubmenuAction('workbench.action.activityBar.size', localize('activity bar size', "Activity Bar Size"), sizeActions));
+	}
+
+	actions.push(toAction({ id: ToggleSidebarPositionAction.ID, label: ToggleSidebarPositionAction.getLabel(layoutService), run: () => instantiationService.invokeFunction(accessor => new ToggleSidebarPositionAction().run(accessor)) }));
+
+	if (part === Parts.SIDEBAR_PART) {
+		actions.push(toAction({ id: ToggleSidebarVisibilityAction.ID, label: ToggleSidebarVisibilityAction.LABEL, run: () => instantiationService.invokeFunction(accessor => new ToggleSidebarVisibilityAction().run(accessor)) }));
+	}
+
+	return actions;
 }
 
 registerAction2(class extends Action2 {
@@ -710,6 +726,32 @@ registerAction2(class extends Action2 {
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
+			id: 'workbench.action.activityBarLocation.toolbar',
+			title: {
+				...localize2('positionActivityBarToolbar', 'Move Activity Bar to Title Bar'),
+				mnemonicTitle: localize({ key: 'miToolbarActivityBar', comment: ['&& denotes a mnemonic'] }, "&&Toolbar"),
+			},
+			shortTitle: localize('toolbar', "Toolbar"),
+			category: Categories.View,
+			toggled: ContextKeyExpr.equals(`config.${LayoutSettings.ACTIVITY_BAR_LOCATION}`, ActivityBarPosition.TOOLBAR),
+			menu: [{
+				id: MenuId.ActivityBarPositionMenu,
+				order: 4
+			}, {
+				id: MenuId.CommandPalette,
+				when: ContextKeyExpr.and(ContextKeyExpr.notEquals(`config.${LayoutSettings.ACTIVITY_BAR_LOCATION}`, ActivityBarPosition.TOOLBAR), IsSessionsWindowContext.negate()),
+			}]
+		});
+	}
+	run(accessor: ServicesAccessor): void {
+		const configurationService = accessor.get(IConfigurationService);
+		configurationService.updateValue(LayoutSettings.ACTIVITY_BAR_LOCATION, ActivityBarPosition.TOOLBAR);
+	}
+});
+
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
 			id: 'workbench.action.activityBarLocation.hide',
 			title: {
 				...localize2('hideActivityBar', 'Hide Activity Bar'),
@@ -720,7 +762,7 @@ registerAction2(class extends Action2 {
 			toggled: ContextKeyExpr.equals(`config.${LayoutSettings.ACTIVITY_BAR_LOCATION}`, ActivityBarPosition.HIDDEN),
 			menu: [{
 				id: MenuId.ActivityBarPositionMenu,
-				order: 4
+				order: 5
 			}, {
 				id: MenuId.CommandPalette,
 				when: ContextKeyExpr.and(ContextKeyExpr.notEquals(`config.${LayoutSettings.ACTIVITY_BAR_LOCATION}`, ActivityBarPosition.HIDDEN), IsSessionsWindowContext.negate()),
