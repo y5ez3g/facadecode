@@ -1,0 +1,45 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* Part Element */
+.monaco-workbench .part.workspacebar > .content {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+}
+
+/* Room for the title bar, and on macOS for the window controls drawn over this column */
+.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
+	flex: 0 0 auto;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer.draggable {
+	-webkit-app-region: drag;
+}
+
+/* Header, on the same line as the side bar's title and inset to match */
+.monaco-workbench .part.workspacebar .workspacebar-header {
+	display: flex;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 35px;
+	padding: 0 8px 0 20px;
+	box-sizing: border-box;
+	cursor: default;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-title {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 11px;
+	font-weight: normal;
+	text-transform: uppercase;
+	line-height: 35px;
+}

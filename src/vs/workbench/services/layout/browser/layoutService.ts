@@ -19,6 +19,7 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 export const IWorkbenchLayoutService = refineServiceDecorator<ILayoutService, IWorkbenchLayoutService>(ILayoutService);
 
 export const enum Parts {
+	WORKSPACEBAR_PART = 'workbench.parts.workspacebar',
 	TITLEBAR_PART = 'workbench.parts.titlebar',
 	BANNER_PART = 'workbench.parts.banner',
 	ACTIVITYBAR_PART = 'workbench.parts.activitybar',
