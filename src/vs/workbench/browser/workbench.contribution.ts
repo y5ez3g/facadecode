@@ -674,7 +674,9 @@ const registry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Con
 			[LayoutSettings.ACTIVITY_BAR_LOCATION]: {
 				'type': 'string',
 				'enum': ['default', 'top', 'bottom', 'toolbar', 'hidden'],
-				'default': 'default',
+				// The window's first column is the workspace bar; a second strip of icons beside it
+				// is one column too many. `default` puts them back where upstream has them.
+				'default': 'toolbar',
 				'markdownDescription': localize({ comment: ['This is the description for a setting'], key: 'activityBarLocation' }, "Controls the location of the Activity Bar relative to the Primary and Secondary Side Bars."),
 				'enumDescriptions': [
 					localize('workbench.activityBar.location.default', "Show the Activity Bar on the side of the Primary Side Bar and on top of the Secondary Side Bar."),
