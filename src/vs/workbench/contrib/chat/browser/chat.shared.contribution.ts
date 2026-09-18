@@ -2352,7 +2352,11 @@ configurationRegistry.registerConfiguration({
 		[ChatAIDisabledSettingId]: {
 			type: 'boolean',
 			description: nls.localize('chat.disableAIFeatures', "Disable and hide built-in AI features provided by GitHub Copilot, including chat and inline suggestions."),
-			default: false,
+			// ⚠️ FACADE: upstream ships this off. Facade Code does not front GitHub Copilot, so the
+			// default is inverted here rather than the feature being torn out: the extension and
+			// `defaultChatAgent` stay, every call site upstream already respects this flag, and
+			// setting it back to false restores stock behaviour in one step.
+			default: true,
 			scope: ConfigurationScope.WINDOW,
 		},
 		[ChatConfiguration.TitleBarSignInEnabled]: {

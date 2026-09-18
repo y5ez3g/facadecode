@@ -68,11 +68,33 @@ where a feature began and ended.
 ```
 node     24 (see .nvmrc); the preinstall check rejects other major versions
 install  npm install
-build    npm run transpile-client      fast, for iterating
+build    npm run transpile-client      fast, for iterating on src/
 run      ./scripts/code.sh --user-data-dir=<dir> --extensions-dir=<dir>
 check    npm run valid-layers-check && npm run gulp -- hygiene
 test     ./scripts/test.sh --grep <pattern>
 ```
+
+### ⚠️ Two steps a fresh clone needs that `transpile-client` does not do
+
+Run these once after `npm install`, or the application comes up looking broken in a
+way that has nothing to do with the code:
+
+```sh
+cp node_modules/@vscode/codicons/dist/codicon.ttf src/vs/base/browser/ui/codicons/codicon/
+npm run gulp compile-extensions
+```
+
+Without the first, **every icon in the window renders as an empty box**. `codicon.ttf` is
+gitignored upstream and is never in any commit; it is copied out of `node_modules` by
+`build/lib/compilation.ts` and `build/gulpfile.editor.ts`, which are on the `npm run
+compile` path. `transpile-client` skips that path, and `postinstall` does not do it
+either.
+
+Without the second, the built-in extensions are not compiled and the window fills with
+`Activating extension 'vscode.git-base' failed: Cannot find module ...` notifications.
+
+Both symptoms look like a broken checkout or a bad commit, and neither is. Check these
+before diagnosing anything else.
 
 ⚠️ Run the fork through `./scripts/code.sh`, never the raw Electron binary. The script
 sets `NODE_ENV=development` and `VSCODE_DEV=1`; without them the window comes up blank
