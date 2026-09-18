@@ -9,13 +9,21 @@ while the change surface is still small; step 3 then adds work to the switch pat
 
 ```
 0  identity        drop Copilot, new icon, rename to Facade Code
-1  top bar         the activity bar in the title bar, then each icon choosing a side
+1  top bar         the activity bar can live in the title bar, and does by default
 2  workspace bar   the project and worktree rail
 3  per-tab shells  terminals and agent CLIs that follow the project
 4  switching       make moving between projects fast
 ```
 
-All new code uses the `facade` prefix.
+Naming, so that it is settled once:
+
+```
+the surface     "workspace bar" wherever a person reads it
+the part        Parts.WORKSPACEBAR_PART, WorkspaceBarPart - like ActivitybarPart, no vendor
+                prefix on a part
+settings        facade.*        upstream owns workbench.*, so ours cannot collide with it
+colour tokens   workspaceBar.*  named after the surface, the way every other part's are
+```
 
 ---
 
@@ -212,80 +220,23 @@ window 1440 -> 480 icons fold into the chevron at 480, never overlap the command
 5 locations x 14 live switches  every cell as specified
 ```
 
-### 1b — Each activity icon picks its bar
+### 1b — Each activity icon picks its bar  ❌ not doing this
 
-1a moves the bar as a unit. 1b gives each icon a position of its own and lets it be
-dragged between the title bar and the side strip.
+An earlier design gave every icon its own position and let it be dragged between the two
+bars. Against a bar that moves as a whole, none of it is needed: one bar has one position,
+so there is nothing to filter and nowhere to drag to, and `layout.ts` already hides the
+side strip. It also carries the worst failure in this step - a precondition that has to
+read `enabled && location === 'toolbar'`, where dropping the second half does not degrade
+but empties the window - and that failure only exists if the split does.
 
-#### Where the contract lives
+What it was for was real: with launcher buttons on this row, the first few icons were
+draggable and the rest were not, with nothing to say where that changed. **1a's divider
+answers that.** It sits on the boundary - view containers left, commands right - so a
+launcher to the right of the line is consistent rather than inconsistent.
 
-```
-services/facade/common/facadeTopBar.ts     IFacadeTopBarService (parts may depend on this)
-contrib/facade/browser/facadeTopBar.ts     implementation, setting, layout contribution
-browser/parts/facadeLauncherBar.ts         bar items that are not view containers
-```
-
-⚠️ **This split is the layering rule, not tidiness.** `vs/workbench/browser/**` may not
-import from `vs/workbench/contrib/**`, and both bars are parts. A part importing from
-contrib will type-check and pass `valid-layers-check`; only hygiene catches it.
-
-#### Upstream files get optional hooks only
-
-Four of them on `IPaneCompositeBarOptions`:
-
-```
-shouldShow(id)            does this bar show this view container at all
-onDidChangeShouldShow     the answer changed, redraw
-extraMoveActions(id)      extra entries for the item's "Move To" submenu
-foreignItems              accept an item dragged in from the other bar
-```
-
-**⚠️ The filter belongs in `getViewContainers()` / `getViewContainer()`, not in
-`addComposite`.** `updateCompositeBarItemsFromStorage` never goes near `addComposite`, so
-filtering only there leaves both bars showing everything.
-
-**⚠️ A "refresh visibility" pass must iterate the unfiltered set and go through
-`showOrHideViewContainer`** — not through the already-filtered accessor, where the
-removal branch becomes dead code, and not through `addComposite`, which bypasses
-`hideIfEmpty` and conjures up containers that should stay away.
-
-**⚠️ Separate storage keys**, as 1a's note says: the moment both bars can be on screen,
-sharing one record has them overwriting each other's half.
-
-#### Dragging between the bars
-
-`CompositeDragAndDrop` needs a third case: an item this bar does not own.
-**⚠️ Ask before the location lookup.** A launcher has no view container, so
-`getViewContainerById` returns undefined behind a non-null assertion and reading `.id`
-off it throws inside the drop handler. From outside that is indistinguishable from a
-refused drop: dragstart fires, dragover fires repeatedly, drop fires, nothing happens.
-
-⚠️ An item arriving from the panel does **not** take this path; it has to be moved to
-this location by the view service first.
-
-⚠️ The "Move To" menu entries are **the only route that works from a standing start** —
-the side strip is hidden while empty, so the first icon cannot be dragged onto it.
-
-#### Auto-hiding
-
-The divider is drawn only when something is left of it — 1a already ties it to the bar
-holding an item. The side strip hides when nothing is assigned to it.
-⚠️ Its composite bar is built lazily in `show()`, which the layout service's hide/show
-path does not call — the symptom is a full-height activity bar with nothing in it.
-
-#### ⭐ The precondition that makes or breaks this
-
-```ts
-get enabled() {
-  return settingIsOn && activityBarLocation === 'toolbar';
-}
-```
-
-⚠️ **Without the second half this does not degrade, it empties the window.** The title
-bar only builds its bar at `toolbar`, and the default assigns every icon to the top bar,
-so at any other location the top bar names something that does not exist: no title bar
-host, a zero-width activity bar, a zero-width side strip, and two icons left in the whole
-window.
+`workbench.activityBar.location` defaults to `toolbar`, because the window's first column
+is the workspace bar and a second strip of icons beside it is one column too many. Setting
+it back to `default` puts them where upstream has them.
 
 ### Acceptance
 
@@ -334,19 +285,40 @@ newWorktree / deleteWorktree
 openInNewWindow / revealInOS
 ```
 
-### 2.4 Git call rules
+### 2.4 Reading git, and writing it
 
-`execFile` with an argument array, **never a shell string**. No call site for `rebase`,
-`reset --hard` or `push --force`; enforce it with a grep check that fails the build.
+**⚠️ The workbench cannot run git.** The renderer is sandboxed, so there is no `execFile`
+to reach for from here at all. The two halves go to different places:
+
+```
+read     the workbench, itself, through IFileService
+         `git worktree` keeps its bookkeeping in plain files under the shared `.git`, and
+         reading them is four small reads - which is all the git extension does for this
+         too. No extension is activated, no process is spawned, no dependency is added,
+         and the answer does not depend on which folder the window happens to show.
+
+write    the git extension, through commands it exposes
+         `git worktree add` and `remove` do real work that cannot be imitated by writing
+         files. `git.createWorktreeAt`, `git.deleteWorktreeAt`, `git.worktreePreflightAt`.
+```
+
+Inside the extension: `execFile` with an argument array, **never a shell string**. No call
+site for `rebase`, `reset --hard` or `push --force`; enforce it with a grep check that
+fails the build.
 
 ### 2.5 Colours
 
 ```
-facadeBar.background          = activityBar.background
-facadeBar.foreground          = activityBar.foreground
-facadeBar.inactiveForeground  = 80% of this bar's own ink over its own fill, ⭐ opaque
-facadeBar.hoverBackground     =  8% of this bar's own ink over its own fill
+workspaceBar.background          = the activity bar's, and the whole of its rule
+workspaceBar.foreground          = activityBar.foreground
+workspaceBar.inactiveForeground  = 80% of this bar's own ink over its own fill, ⭐ opaque
+workspaceBar.hoverBackground     =  8% of this bar's own ink over its own fill
 ```
+
+**⚠️ The background is three tokens, not one.** Modern UI swaps in
+`modernActivityBar.background`, and that one has a second colour for a window without
+focus. Taking only `activityBar.background` agrees in eighteen of the nineteen built-in
+themes and then disagrees in Solarized Light, which leaves the modern token undefined.
 
 **⚠️ Take the pair, never half of it.** Moving only the background leaves the text tuned
 for a surface it no longer sits on. Branching on theme kind to avoid that is worse: if a
@@ -370,7 +342,40 @@ fill lands within the band the built-in themes use for their own hovers.
 
 ### 2.6 Reversibility
 
-`facade.rail.enabled`, default on. Off must be genuinely stock, not "mostly hidden".
+**No switch for the bar itself.** It is what the product is; a window without it is not
+this product wearing a different setting, it is Visual Studio Code. Everything the bar
+*changes* about the stock window stays reversible on its own -
+`workbench.activityBar.location` back to `default` is the whole of it today.
+
+### 2.7 Nine commits
+
+Sized against a working implementation of the same thing: 4,470 lines of TypeScript and
+1,004 of CSS in new files, plus `layout.ts` +140, the git extension +373 and a handful of
+smaller upstream edits. Each of these builds, is checked and is reverted on its own.
+
+```
+1  the part          in the grid, with its width and its sash, and the grid-shape test
+                     that a part missing from the enum needs          ✅ done
+2  reading git       the .git bookkeeping, watched          unit tests, no UI
+3  the model         projects and worktrees, and where each half of the state is stored
+                                                            unit tests, storage scope
+4  the bar draws     rows on the list widget, expanding, filtering
+5  switching         the window changes folder[0]           and the three staleness bugs
+6  worktrees         made and unmade, with a preflight      fixture repository
+7  colours           derived, and swept over every built-in theme    the table
+8  naming            rename, and the customize dialog
+9  the rest          new window, reveal, reorder, next/previous, dropping a folder in
+```
+
+Two more landed with 1 that were not in this list: `workbench.activityBar.location`
+defaulting to `toolbar`, and the splash learning to paint the first column, which it has
+to or the window's first frame does not line up with its second.
+
+⚠️ **2 comes before 3 and is not folded into it.** It is the trap in 2.2 and the one piece
+here that is pure logic, so it can be held to unit tests before anything renders.
+
+⚠️ **7 is its own commit** because its acceptance is a published table, not a screenshot,
+and that table has to be attached to the change it measures.
 
 ---
 
