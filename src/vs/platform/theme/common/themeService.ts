@@ -255,6 +255,7 @@ export interface IPartsSplash {
 		sideBarSide: string;
 		editorPartMinWidth: number;
 		titleBarHeight: number;
+		workspaceBarWidth: number;
 		activityBarWidth: number;
 		sideBarWidth: number;
 		auxiliaryBarWidth: number;
