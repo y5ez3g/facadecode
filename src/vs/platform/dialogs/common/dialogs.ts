@@ -292,9 +292,13 @@ export const IDialogService = createDecorator<IDialogService>('dialogService');
 export interface ICustomDialogOptions {
 	readonly buttonDetails?: string[];
 	readonly markdownDetails?: ICustomDialogMarkdown[];
+	/** Added to the dialog element and to its body container, so a caller can size or restyle either. */
 	readonly classes?: string[];
 	readonly icon?: ThemeIcon;
+	/** Hides the close button and stops `Escape` from dismissing the dialog. */
 	readonly disableCloseAction?: boolean;
+	/** Hides the close button only. `Escape` still dismisses the dialog. */
+	readonly disableCloseButton?: boolean;
 
 	/**
 	 * Aligns the dialog's icon, message, and buttons vertically (full-width

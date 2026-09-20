@@ -6,36 +6,40 @@
 import './media/workspacebarpart.css';
 import { $, append } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
-import { mainWindow } from '../../../../base/browser/window.js';
 import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
-import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { getTitleBarStyle, TitlebarStyle } from '../../../../platform/window/common/window.js';
-import { ACTIVITY_BAR_BACKGROUND, ACTIVITY_BAR_BORDER, ACTIVITY_BAR_FOREGROUND, MODERN_ACTIVITY_BAR_BACKGROUND, MODERN_ACTIVITY_BAR_INACTIVE_BACKGROUND } from '../../../common/theme.js';
-import { IHostService } from '../../../services/host/browser/host.js';
-import { IWorkbenchLayoutService, LayoutSettings, Parts } from '../../../services/layout/browser/layoutService.js';
+import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { Part } from '../../part.js';
+import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
+import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
+import { URI } from '../../../../base/common/uri.js';
+import { MenuWorkbenchToolBar } from '../../../../platform/actions/browser/toolbar.js';
+// Imported for its `registerAction2` calls as much as for the menu id.
+import { WorkspaceBarTitleMenu } from './workspaceBarActions.js';
+import { WorkspaceBarModel } from './workspaceBarModel.js';
+import { IWorkspaceBarService } from './workspaceBarService.js';
+import { WorkspaceBarEditors } from './workspaceBarEditors.js';
+import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
+import { WorkspaceBarView } from './workspaceBarView.js';
 
-/**
- * The width the bar opens at and the narrowest it can be dragged to, and the widest. Measured off
- * the product this is modelled on: 219 of content and a 1px divider, an edge that will not go left
- * of that, and 480 when pushed the other way.
- */
+/** The width the bar opens at and the narrowest it can be dragged to. Measured: 219 and a divider. */
 export const WORKSPACEBAR_WIDTH = 220;
-export const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
+
+/** Kept with the stylesheet's `.workspacebar-header` height, which the list is laid out below. */
+const HEADER_HEIGHT = 35;
+const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
 
 /**
- * Whether the grid has the workspace bar as its first column, which is what every hard-coded grid
- * coordinate in `layout.ts` rests on.
- *
- * Here rather than in `layout.ts` so that it can be tested without building a workbench. `layout.ts`
- * asks it of the grid it actually built rather than of the descriptor it asked for, because a
- * restored layout comes from storage and can be older than the code reading it.
+ * Whether the grid has the workspace bar as its first column, which every hard-coded grid coordinate
+ * in `layout.ts` rests on. Asked of the grid that was built, not the descriptor: a restored layout
+ * comes from storage and can be older than the code reading it.
  */
 export function isWorkspaceBarFirstColumn(root: ISerializedNode | undefined): boolean {
 	if (root?.type !== 'branch') {
@@ -47,20 +51,8 @@ export function isWorkspaceBarFirstColumn(root: ISerializedNode | undefined): bo
 }
 
 /**
- * A marker, not an API. `layout.ts` resolves it to force the part into existence before the grid is
- * built; the part has nothing else to offer callers.
- */
-export interface IWorkspaceBarService {
-	readonly _serviceBrand: undefined;
-}
-
-export const IWorkspaceBarService = createDecorator<IWorkspaceBarService>('workspaceBarService');
-
-/**
- * The workspace bar: column zero of the window, from the top edge to the bottom.
- *
- * This class is the shell and nothing more. It takes part in the grid, gives the macOS window
- * controls somewhere to sit, and draws a header. Nothing in it knows what a project is.
+ * The workspace bar: column zero of the window. The shell only - what a folder is belongs to
+ * `WorkspaceBarModel`, switching to `WorkspaceBarSwitcher`, how one looks to `WorkspaceBarView`.
  */
 export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
@@ -79,14 +71,17 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	/** The strip above the header. Its height is the title bar's, read on every layout. */
 	private titlebarSpacer: HTMLElement | undefined;
 
-	private activeWindowId: number | undefined;
+	private readonly model: WorkspaceBarModel;
+	private view: WorkspaceBarView | undefined;
+	private editors: WorkspaceBarEditors | undefined;
+	private switcher: WorkspaceBarSwitcher | undefined;
 
 	constructor(
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
-		@IHostService private readonly hostService: IHostService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -95,22 +90,13 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 				// Without this the content is laid out at the full width while the border eats a
 				// pixel of it, and the last pixel of every row sits under the border. `sidebarPart.ts`
 				// declares the same thing for the same reason.
-				borderWidth: () => (this.getColor(ACTIVITY_BAR_BORDER) || this.getColor(contrastBorder)) ? 1 : 0
+				borderWidth: () => (this.getColor(FACADE_BAR_BORDER) || this.getColor(contrastBorder)) ? 1 : 0
 			},
 			themeService, storageService, layoutService);
 
-		// The borrowed background depends on window focus, so redo it on the same events the
-		// activity bar does.
-		const updateStyles = () => {
-			if (this.element) {
-				this.updateStyles();
-			}
-		};
-		this._register(this.hostService.onDidChangeFocus(updateStyles));
-		this._register(this.hostService.onDidChangeActiveWindow(windowId => {
-			this.activeWindowId = windowId;
-			updateStyles();
-		}));
+		// Built here rather than with the content area: an action can run before anything has been
+		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
+		this.model = this._register(this.instantiationService.createInstance(WorkspaceBarModel));
 	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {
@@ -118,12 +104,9 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this.element = parent;
 		this.content = append(this.element, $('.content'));
 
-		// The bar starts at the top of the window rather than below the title bar, so the header
-		// needs the title bar's height above it to line up with the side bar's. `layout` sets it.
-		// On macOS the strip is also where the traffic lights land, since the system draws them
-		// over column zero. `getTitleBarStyle` rather than `hasCustomTitlebar`, which is true for
-		// everyone: native tabs and simple fullscreen fall back to a native title bar that keeps
-		// the lights away from us.
+		// The bar starts at the top of the window, so the header needs the title bar's height above it,
+		// which is also where macOS draws the traffic lights. ⚠️ `getTitleBarStyle`, not
+		// `hasCustomTitlebar`: native tabs and simple fullscreen keep the lights off column zero.
 		this.titlebarSpacer = append(this.content, $('.workspacebar-titlebar-spacer'));
 		this.titlebarSpacer.setAttribute('aria-hidden', 'true');
 		if (isMacintosh && getTitleBarStyle(this.configurationService) === TitlebarStyle.CUSTOM) {
@@ -131,9 +114,31 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		}
 
 		const header = append(this.content, $('.workspacebar-header'));
-		append(header, $('span.workspacebar-title')).textContent = localize('workspaceBar.title', "Projects");
+		append(header, $('span.workspacebar-title')).textContent = localize('workspaceBar.title', "Workspace");
+
+		this._register(this.instantiationService.createInstance(MenuWorkbenchToolBar,
+			append(header, $('.workspacebar-actions')),
+			WorkspaceBarTitleMenu,
+			{
+				orientation: ActionsOrientation.HORIZONTAL,
+				toggleMenuTitle: localize('workspaceBar.moreActions', "More Actions...")
+			}
+		));
+
+		// Built here and handed in rather than made inside the switcher, so that what stores a
+		// folder's editors can be replaced in a test.
+		this.editors = this._register(this.instantiationService.createInstance(WorkspaceBarEditors));
+		this._register(this.model.onDidChange(() => this.pruneEditors()));
+		this.pruneEditors();
+		this.switcher = this._register(this.instantiationService.createInstance(WorkspaceBarSwitcher, this.model, this.editors));
+		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView, this.content, this.model, this.switcher));
 
 		return this.content;
+	}
+
+	/** Whatever took a folder out of the workspace, its editors go with it. */
+	private pruneEditors(): void {
+		this.editors?.prune(new Set(this.model.folders.map(folder => this.model.key(folder.uri))));
 	}
 
 	override updateStyles(): void {
@@ -144,20 +149,13 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			return;
 		}
 
-		// The activity bar's rule in full: three tokens, not one. Taking only the first agrees with
-		// it in eighteen of the nineteen built-in themes and then disagrees in Solarized Light,
-		// which leaves `modernActivityBar.background` undefined.
-		let background = ACTIVITY_BAR_BACKGROUND;
-		if (this.configurationService.getValue<boolean>(LayoutSettings.MODERN_UI) === true) {
-			const isWindowActive = this.activeWindowId === undefined ? mainWindow.document.hasFocus() : this.activeWindowId === mainWindow.vscodeWindowId;
-			const isInactive = !this.hostService.hasFocus || !isWindowActive;
-			background = isInactive ? MODERN_ACTIVITY_BAR_INACTIVE_BACKGROUND : MODERN_ACTIVITY_BAR_BACKGROUND;
-		}
+		container.style.backgroundColor = this.getColor(FACADE_BAR_BACKGROUND) ?? '';
 
-		container.style.backgroundColor = this.getColor(background) ?? '';
-		container.style.color = this.getColor(ACTIVITY_BAR_FOREGROUND) ?? '';
+		// ⚠️ Left unset when the theme has not set one, as the side bar does: a row's name then
+		// inherits the workbench foreground, which is where the explorer's file names get theirs.
+		container.style.color = this.getColor(FACADE_BAR_FOREGROUND) ?? '';
 
-		const borderColor = this.getColor(ACTIVITY_BAR_BORDER) ?? this.getColor(contrastBorder);
+		const borderColor = this.getColor(FACADE_BAR_BORDER) ?? this.getColor(contrastBorder);
 		container.style.borderRight = borderColor ? `1px solid ${borderColor}` : '';
 	}
 
@@ -170,7 +168,33 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			this.titlebarSpacer.style.height = `${this.layoutService.mainContainerOffset.top}px`;
 		}
 
-		super.layoutContents(width, height);
+		// A virtualised list does not re-flow on its own: without handing the size down the rows stop
+		// being recycled against the visible area and the scroll height is computed from the old one.
+		const { contentSize } = super.layoutContents(width, height);
+		this.view?.layout(contentSize.width, contentSize.height - (this.titlebarSpacer?.clientHeight ?? 0) - HEADER_HEIGHT);
+	}
+
+	async add(uris: readonly URI[]): Promise<void> {
+		await this.model.add(uris);
+	}
+
+	async remove(uris: readonly URI[]): Promise<void> {
+		// ⚠️ Nothing to forget here. Taking the folders out of the workspace is what moves the window
+		// off one that is leaving, and `pruneEditors` drops what they left behind - which is the same
+		// work whether the removal came from this bar or from someone editing the workspace file.
+		await this.model.remove(uris);
+	}
+
+	/**
+	 * ⚠️ The fallback is not decoration: the list has no focused row until someone clicks in the bar,
+	 * so without it the command palette entry is a silent no-op on a fresh window.
+	 */
+	folderForCommand(): URI | undefined {
+		return this.view?.focused() ?? this.switcher?.active;
+	}
+
+	focus(): void {
+		this.view?.focus();
 	}
 
 	toJSON(): object {

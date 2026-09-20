@@ -38,13 +38,15 @@ export class WebviewWindowDragMonitor extends Disposable {
 			}
 		}));
 
+		// Capture, so that a drag a drop target swallows on its way down is still seen here: a
+		// webview that never unblocks its iframe eats the drop instead of letting it through.
 		this._register(DOM.addDisposableListener(targetWindow, DOM.EventType.DRAG, (event) => {
 			if (event.shiftKey) {
 				onDragEnd();
 			} else {
 				onDragStart();
 			}
-		}));
+		}, true));
 
 		this._register(DOM.addDisposableListener(targetWindow, DOM.EventType.DRAG_OVER, (event) => {
 			if (event.shiftKey) {
@@ -52,7 +54,7 @@ export class WebviewWindowDragMonitor extends Disposable {
 			} else {
 				onDragStart();
 			}
-		}));
+		}, true));
 
 	}
 }

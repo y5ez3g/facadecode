@@ -3,7 +3,16 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/* Part Element */
+/*
+ * ⚠️ Every distance, radius and size in this file is a registered token, never a number someone
+ * picked. Numbers chosen one at a time cannot add up to a system however carefully each one is
+ * chosen, because nothing relates them - which is what made the first version of this bar look
+ * assembled rather than designed. `platform/theme/common/sizes/baseSizes.ts` is the table.
+ *
+ * The two exceptions are the header's height and its right padding, and both are called out where
+ * they appear.
+ */
+
 .monaco-workbench .part.workspacebar > .content {
 	display: flex;
 	flex-direction: column;
@@ -11,7 +20,7 @@
 	overflow: hidden;
 }
 
-/* Room for the title bar, and on macOS for the window controls drawn over this column */
+/* Room for the title bar, and on macOS for the window controls drawn over this column. */
 .monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
 	flex: 0 0 auto;
 }
@@ -20,26 +29,212 @@
 	-webkit-app-region: drag;
 }
 
-/* Header, on the same line as the side bar's title and inset to match */
+/*
+ * The header sits on the same 35px row the side bar gives its title
+ * (`parts/media/paneCompositePart.css`, "matches height of composite container"), so with the
+ * spacer above holding the title bar's height, `Projects` and `EXPLORER` come out on one line
+ * across the seam.
+ *
+ * ⚠️ The same type as `EXPLORER`, to the value: 11px, weight 400, upper case, and the side bar's own
+ * title colour. Those are `paneview.css` lines 28 and 42 and `sideBarTitle.foreground`, read off the
+ * running window rather than copied. The two headers sit eight pixels apart across the seam, so any
+ * difference in size, case or ink reads as two programs rather than one.
+ *
+ * ⚠️ The two paddings are not the same number, and neither of them was chosen. The header's label
+ * has to start on the column the rows' icons start on, and the header's control has to sit as far
+ * from the right edge as that column is from the left - which is the rule the reference rail is
+ * built on, measured: its plus centre is 26.75 from the right against a row icon centre 25.75 from
+ * the left.
+ *
+ *     left   1 border + 16 padding                     = 17   the row's icon starts at 1 + 8 + 8
+ *     right  1 border + 12 padding + 14 of a 28px box  = 27   the reference's is 26.75
+ */
 .monaco-workbench .part.workspacebar .workspacebar-header {
 	display: flex;
 	align-items: center;
+	justify-content: space-between;
 	flex: 0 0 auto;
 	height: 35px;
-	padding: 0 8px 0 20px;
+	padding: 0 var(--vscode-spacing-size120) 0 var(--vscode-spacing-size160);
 	box-sizing: border-box;
+	font-size: 11px;
+	font-weight: 400;
+	text-transform: uppercase;
+	color: var(--vscode-facadeBar-titleForeground);
+	cursor: default;
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Flat, unlike a button on a row: nothing reveals it, so it has no reveal to complete. */
+.monaco-workbench .part.workspacebar .workspacebar-actions {
+	flex: 0 0 auto;
+	display: flex;
+}
+
+/*
+ * The button is a 28px box with a 10px glyph in it: mostly slack, and that is the point - the box
+ * is the target, the glyph is the mark, and a plus drawn at the codicon's ordinary 16px is the
+ * loudest thing in a bar whose job is to show names.
+ *
+ * All four numbers measured off the reference rail rather than chosen:
+ *
+ *     28px box        its chip is 56 device pixels square on a 2x display
+ *     radius 6        11 device pixels of curve, which is `cornerRadius.medium`
+ *     codicon compact 12px, whose plus draws 9pt against the reference's 10
+ *     right padding   12, which puts the chip's right edge 13 from the bar's edge (theirs: 12.75)
+ *                     and the glyph's centre 27 from it (theirs: 26.75)
+ *
+ * ⚠️ The chip appears under the pointer and not before. Flat at rest is what makes the chip mean
+ * "this is what you are about to press" rather than "there is a button here" - the second is
+ * something the glyph already says, and saying it twice is how a bar ends up looking busy.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-actions .action-label {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	/* ⚠️ Both, or the action bar's own padding is added to the width and the chip comes out 34. */
+	box-sizing: border-box;
+	padding: 0;
+	width: var(--vscode-spacing-size280);
+	height: var(--vscode-spacing-size280);
+	border-radius: var(--vscode-cornerRadius-medium);
+	font-size: var(--vscode-codiconFontSize-compact);
+	color: var(--vscode-facadeBar-titleForeground);
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-actions .action-label:hover {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-actions .action-label:active {
+	background-color: var(--vscode-toolbar-activeBackground);
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-list {
+	flex: 1 1 auto;
+	min-height: 0;
+	margin-top: var(--vscode-spacing-size40);
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-empty {
+	flex: 0 0 auto;
+	padding: var(--vscode-spacing-size40) var(--vscode-spacing-size160);
+	color: var(--vscode-descriptionForeground);
 	cursor: default;
 	user-select: none;
 	-webkit-user-select: none;
 }
 
-.monaco-workbench .part.workspacebar .workspacebar-title {
-	flex: 1 1 auto;
+.monaco-workbench .part.workspacebar .workspacebar-empty.hidden {
+	display: none;
+}
+
+/*
+ * The fill stops short of each edge and is rounded, so a row is a pill inside the bar rather than a
+ * band across it. Moving the row's own box is what does it: the list widget paints hover, selection
+ * and the focus outline onto this element and all three want to agree about where the row is.
+ *
+ * ⚠️ Only safe because the list has `horizontalScrolling: false`, which is the one case where
+ * `listView` leaves a row's inline width alone.
+ */
+.monaco-workbench .part.workspacebar .monaco-list-row {
+	left: var(--vscode-spacing-size80);
+	width: calc(100% - var(--vscode-spacing-size160));
+	border-radius: var(--vscode-cornerRadius-small);
+}
+
+/* One icon slot, so every name in the column starts on the same vertical line. */
+.monaco-workbench .part.workspacebar .workspacebar-row {
+	display: flex;
+	align-items: center;
+	gap: var(--vscode-spacing-size80);
+	height: 100%;
+	padding: 0 var(--vscode-spacing-size80);
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	font-size: 11px;
-	font-weight: normal;
-	text-transform: uppercase;
-	line-height: 35px;
+}
+
+/*
+ * ⚠️ `inherit`, and said out loud. `style.css` gives every codicon `icon.foreground`, which in the
+ * default dark theme is #8c8c8c against a name at #bfbfbf - a column of folder glyphs quieter than
+ * the names beside them, and quieter still on the marked row where the name is #ededed. Inheriting
+ * puts the glyph in the row's own ink, so it takes the theme's focus pair and selection pair with
+ * the name instead of half of either. The explorer's twistie, eight pixels away, does the same.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-icon {
+	flex: 0 0 auto;
+	width: var(--vscode-spacing-size160);
+	font-size: var(--vscode-codiconFontSize);
+	color: inherit;
+}
+
+/*
+ * ⚠️ No size and no colour. A row's name inherits the workbench's own 13px (`style.css`) and the
+ * part's foreground, which is the side bar's - so `api` here and `README.md` in the explorer come
+ * out identical without either of them naming a number. Setting 12px here was what made the two
+ * lists next to each other read as two different programs.
+ *
+ */
+.monaco-workbench .part.workspacebar .monaco-icon-label {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/*
+ * The row the window is in.
+ *
+ * ⚠️ The bar's own mark, painted here rather than left to the list's selection. A list clears its
+ * selection when a pointer lands on it away from any row, which is right for a list - there a
+ * selection belongs to the person - and wrong for a fact about the window. So `.active` comes from
+ * the renderer and the list's selection colours are set to the bar's own surface.
+ *
+ * ⚠️ On the inner row, so it sits above whatever the list paints, and `inherit` for the radius so
+ * the fill keeps the shape the outer row was given.
+ *
+ * ⚠️ The theme's pair, taken whole and not adjusted. Swept across all 19 built-in themes: seventeen
+ * clear 4.5, and Quiet Light (3.48) and Solarized Light (3.24) do not - because that is the pair
+ * those themes ship. Measured against the explorer's own selected row in the same theme, the ratios
+ * are identical to two decimal places, so every list in the product reads the same there. Lightening
+ * the ink here would put this one column at odds with the rest of the window over a number the
+ * theme chose.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row.active {
+	background-color: var(--vscode-list-activeSelectionBackground);
+	color: var(--vscode-list-activeSelectionForeground);
+	border-radius: inherit;
+}
+
+/*
+ * Hover is the theme's business and the theme's answer is "do not change the text".
+ *
+ * ⚠️ `:not(.active)` and `:not(.focused)` are doing real work, not tidying. A row can be hovered
+ * and marked at once, and then the surface under the text is the mark's fill rather than the hover
+ * wash - so the mark's foreground has to win. As a bare `:hover` this rule has the same specificity
+ * and comes later, so it takes the text back off the mark on the one row the person is most likely
+ * to have the pointer over.
+ */
+.monaco-workbench .part.workspacebar .monaco-list-row:not(.focused):hover .workspacebar-row:not(.active) .monaco-icon-label,
+.monaco-workbench .part.workspacebar .monaco-list-row:not(.focused):hover .workspacebar-row:not(.active) .workspacebar-icon {
+	color: var(--vscode-list-hoverForeground, inherit);
+}
+
+/*
+ * A folder that could not be reached. Dimmed and struck through, never hidden: the row is the only
+ * place it can be removed from, and a person who unplugged a disk wants to see that the folder is
+ * still in their workspace.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row.unavailable {
+	opacity: 0.5;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-row.unavailable .monaco-icon-label {
+	text-decoration: line-through;
 }

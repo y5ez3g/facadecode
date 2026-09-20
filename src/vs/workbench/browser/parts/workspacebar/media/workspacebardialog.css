@@ -1,0 +1,53 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * The dialog the bar asks with.
+ *
+ * ⚠️ A width, because a dialog has none of its own: `.monaco-dialog-box` is `width: min-content`
+ * over a detail that is `white-space: pre-wrap`, so one long sentence lays the whole box out as a
+ * letterbox 670px wide and 200 tall. Narrow enough that the path and the sentence under it wrap into
+ * a block instead. `min-width` with it: the host declares 480px, which beats a width on its own.
+ *
+ * ⚠️ The four rules under it take out what the host reserves for a severity glyph and a close button
+ * that this dialog does not have. They name the host's own class names, so they are kept together:
+ * if `dialog.css` renames a row, this is the one place that has to follow.
+ */
+.monaco-dialog-box.workspacebar-confirm {
+	width: 340px;
+	min-width: 0;
+	padding: var(--vscode-spacing-size200);
+}
+
+/* Carried the close button, and has a height whether or not it carried one. */
+.monaco-dialog-box.workspacebar-confirm .dialog-toolbar-row {
+	display: none;
+}
+
+/*
+ * No glyph, so neither the column it sat in nor the gutter the host leaves around it.
+ *
+ * ⚠️ Not `.dialog-icon.codicon`, which is the host's own selector: for `type: 'none'` the element is
+ * given `no-codicon` instead, and a rule written that way never matches anything.
+ */
+.monaco-dialog-box.workspacebar-confirm .dialog-message-row {
+	padding: 0;
+}
+
+.monaco-dialog-box.workspacebar-confirm .dialog-message-row > .dialog-icon {
+	display: none;
+}
+
+.monaco-dialog-box.workspacebar-confirm .dialog-message-row .dialog-message-container {
+	padding-left: 0;
+}
+
+/*
+ * A rendered paragraph carries a margin under it. The last one has nothing to be spaced from but
+ * the buttons, which bring their own.
+ */
+.monaco-dialog-box.workspacebar-confirm .dialog-message-detail .rendered-markdown > p:last-child {
+	margin-bottom: 0;
+}

@@ -10,6 +10,7 @@ import '../editor/editor.all.js';
 import './api/browser/extensionHost.contribution.js';
 import './browser/workbench.contribution.js';
 import './browser/workbench.zenMode.contribution.js';
+import './browser/parts/workspacebar/workspaceBarDrop.js';
 
 // Agent-sessions color tokens — side-effect import so they register in the
 // global color registry and appear in the color-theme JSON schema.
