@@ -428,6 +428,242 @@ anything on the bar itself.
 
 ---
 
+## Step 3.5 — Which layer holds the list
+
+Settled 2026-09-20 after reading the workspace architecture end to end.
+
+### 3.5.1 What VS Code's workspace actually is
+
+```
+IWorkspace = { id, folders[], configuration, transient }
+  folders[] IS the file. configurationService.setFolders() writes it back through
+  IJSONEditingService. Memory and disk are one thing.
+  id = md5(config path). Editing folders does not change it, so StorageScope.WORKSPACE
+  survives a switch. Save-as changes the path, so it changes the id.
+  Only WorkbenchState.WORKSPACE may edit folders; doUpdateFolders returns early for
+  EMPTY and FOLDER. That is where the one-time transition comes from.
+  Every view is a pure function of folders[]: explorerModel.ts builds roots from it and
+  rebuilds on onDidChangeWorkspaceFolders.
+  The extension host gets it through one function: mainThreadWorkspace.getWorkspaceData().
+```
+
+Blast radius: `getWorkspace().folders` 182 sites, `onDidChangeWorkspaceFolders` 79,
+`getWorkspaceFolder()` 120.
+
+### 3.5.2 The choice, as a 2x2
+
+```
+                    ext host sees 1                    ext host sees N
+workbench sees 1    WHAT WE BUILT. Everything is       -
+                    isolated for free. Switching
+                    tears down and rebuilds.
+workbench sees N    All of the work, the same          Switching is free at the language
+                    switch cost. Only worth it to      layer. N language services resident.
+                    show cross-repo things.            Noise IS filterable - Problems and
+                                                       SCM are workbench views.
+```
+
+⚠️ Isolation and a cheap switch are opposed. Isolation means the language services know one
+repository; switching means they must forget it. Feeding the extension host a filtered list
+does not avoid that - `$acceptWorkspaceData` with different contents fires the same folder
+change, and the project is rebuilt either way.
+
+### 3.5.3 Decision - SUPERSEDED by 3.6
+
+⚠️ What follows was decided before the measurements in 4.2f and 4.2j existed. Both numbers it
+rests on turned out to be wrong, in opposite directions. Kept because the reasoning is still
+the right reasoning; read 3.6.1 for what changed.
+
+Stay where we are: the window keeps an untitled workspace holding exactly one folder, and
+the list of projects is ours.
+
+```
+The list is saveable by writing a real .code-workspace whose folders[] is the whole list,
+  and reading one back. Opened in stock VS Code it is an ordinary multi-root workspace -
+  an honest degradation. Reading one is already built (the drop handler).
+Cross-repository information does not need multi-root. Read .git from the bar with
+  IFileService - branch, worktrees, dirty - no extension host, no membership.
+Multi-root only earns its cost if two repositories must be edited together, or searched
+  together. That is a feature to add later, not an architecture to adopt now.
+```
+
+⚠️ Overruled. This said not to call it "Workspace" in the product, because 426 user-visible
+strings already say it and a third meaning reproduces microsoft/vscode#77718. That objection
+only holds for a *third* meaning. Under 3.6 there is no third meaning: the window has one
+workspace, it is a real one, and the bar lists its roots. The word keeps the meaning it had.
+
+⚠️ Hiding "Add Folder to Workspace" does not stop an extension calling
+`updateWorkspaceFolders`. The bar follows `onDidChangeWorkspaceFolders` already; what a
+folder we did not put there should look like is still undefined.
+
+### 3.5.4 How much anyone uses multi-root
+
+Evidence, not opinion, gathered 2026-09-20:
+
+```
+microsoft/vscode issues by area label, all time
+  debug 7671 · git 4354 · search 2527 · tasks 2506 · file-explorer 2306
+  scm 1345 · workbench-editors 813 · workbench-multiroot 495 (28 still open)
+workspaceLoad telemetry records window size, theme, language, restored editors - not the
+  number of folders. Adoption is not measured.
+microsoft/vscode#77718, "Consistency with the use of workspace": folder settings are called
+  Workspace until a .code-workspace exists, then they are called Folder. Users do not know
+  what a workspace is. Closed, under-discussion.
+What its users do use it for: monorepos (cited benefit: per-folder settings), microservices,
+  front-end plus back-end, infrastructure beside application, and since 2025 feeding AI
+  agents across repositories.
+Their standing complaint is that multi-root flattens the explorer - which is the thing we
+  are avoiding, not inventing.
+```
+
+---
+
+## Step 3.6 — The architecture
+
+Settled 2026-09-20, after 4.2j measured a cold start with N projects resident. Supersedes 3.5.3.
+
+### 3.6.1 What changed the decision
+
+3.5.3 chose way 3 believing that N resident roots cost N times something, and that way 3's
+switch was the cheap one. Both were measured afterwards and both were wrong:
+
+```
+4.2j   folder count costs nothing at startup and almost nothing in memory. 1 folder against
+       8: window painted ~120ms either way, workbench restored ~1.9s either way, +100..190MB.
+       What costs is language COUNT - and a stock multi-root workspace holding the same
+       folders pays exactly the same. It is parity, not a cost we introduce.
+4.2f   retention is bound to workspace membership, not to process lifetime. Way 3 swaps the
+       folder out of folders[], so every revisit rebuilds the project graph: 19s. A root that
+       stayed in folders[] comes back in 1.75s.
+```
+
+So way 3 buys isolation we can get another way, and pays 19s per revisit for it.
+
+### 3.6.2 The shape
+
+The window is a real multi-root workspace. One service says which root is active. Layer 1 asks
+that service instead of asking the workspace. Layer 2 is untouched and gets all N.
+
+```
+              folders[] = all N          a real .code-workspace, on disk, openable by stock
+                   |
+        +----------+----------+
+        |                     |
+    layer 1               layer 2
+    drawn by the          the extension host
+    workbench             |
+        |                 gets all N, unfiltered
+    asks IActiveFolder    |
+    Service -> sees 1     what it returns lands in layer 1's views,
+                          and layer 1 is already narrowed
+```
+
+The reason this works is the one thing 3.5.2 got right: layer 1 is ours to filter and layer 2
+is not. Narrowing layer 1 is enough, because layer 2 has no screen of its own.
+
+### 3.6.3 IActiveFolderService
+
+`src/vs/workbench/services/activeFolder/`
+
+```ts
+readonly activeFolder: IWorkspaceFolder | undefined;
+readonly onDidChangeActiveFolder: Event<void>;
+setActiveFolder(folder: IWorkspaceFolder | URI): Promise<void>;
+isInActiveFolder(resource: URI): boolean;   // the predicate layer 1 filters with
+```
+
+State lives in `StorageScope.WORKSPACE` - it is per window. It seeds from
+`getLastActiveWorkspaceRoot()` the first time.
+
+⚠️ The name is upstream's own. `IHistoryService.getLastActiveWorkspaceRoot()` has 27 call
+sites, and every one of them names its local `activeWorkspaceRootUri`: the terminal's cwd, the
+terminal profile resolver, the search editor. They are all *guessing* which root is meant.
+This service makes the guess authoritative, which is most of what "only better" means here.
+
+```
+rejected  scope     StorageScope 2822 sites, ConfigurationScope 571. Worse, StorageScope
+                    .WORKSPACE means the WHOLE workspace - the opposite of one folder in it
+rejected  view      IViewDescriptor, ViewContainer, IViewsService all mean something else
+```
+
+The part stays `workspacebar`. The product word stays "workspace".
+
+### 3.6.4 What layer 1 narrows
+
+```
+explorer          the active root only (SET_ROOT_FOLDER_COMMAND_ID already exists upstream)
+search, quick     default scope = active root, with a way to widen
+open
+SCM               the active root's repositories
+problems          PARTITION per root and keep them, show the active root's. Never discard -
+                  republish on switch
+title, status     the active root's name
+editors           a working set per root (built)
+terminals         cwd = active root (step 3)
+```
+
+### 3.6.5 Two rules that cannot be broken
+
+```
+⚠️ IActiveFolderService never enters the write path. doUpdateFolders (configurationService.ts
+   :241) is read-modify-write: it takes getWorkspace().folders, rebuilds newStoredFolders from
+   it, and writes that back. A narrowed list reaching it means one Add Folder deletes the other
+   N-1 from the .code-workspace.
+⚠️ Layer 2 has exactly one entry: getWorkspaceData() (mainThreadWorkspace.ts:132), used by
+   $initializeWorkspace and $acceptWorkspaceData. The baseline changes nothing there.
+```
+
+### 3.6.6 How the two requirements are met
+
+**Nothing the workspace does may be lost.** It is not lost because we did not touch the thing
+that does it. `folders[]` *is* the workspace, so Save Workspace As, Add and Remove Folder,
+workspace settings, workspace tasks and launch, `${workspaceFolder}` resolution, recently
+opened and multi-root search all keep working without being adapted one by one. This is the
+structural advantage of way 1 over way 3, where the list was private and none of that was free.
+
+**Performance may not be worse.** Two honest baselines:
+
+```
+vs a stock workspace holding the same N folders
+   identical by construction, and measured so in 4.2j - every startup milestone inside the
+   run-to-run spread, same processes, same memory
+vs N windows each holding one folder
+   we save N-1 renderers and N-1 extension hosts. DERIVED from the per-process figures in
+   4.2j (one window's shell is 2.3-3.0GB, of which main, shared, gpu and the watcher are
+   shared between windows and the renderer and ext host are not) - NOT measured end to end
+better than stock
+   moving between two roots is 1.75s with both resident, against 19s for a folder swap (4.2f)
+```
+
+**What stays at parity rather than improving.** An extension's own UI - `showWorkspaceFolderPick`,
+a tree it draws itself - lists all N. We cannot filter it. Stock multi-root does the same thing,
+so it is parity, not a regression.
+
+### 3.6.7 What we save must open in stock VS Code
+
+A `.code-workspace` we write is an ordinary one. That is a checkable acceptance test, not an
+aspiration: write it, open it in stock VS Code, get all N folders and no warnings.
+
+```
+⚠️ The file contains only what upstream would write. folders[] as plain {path} or {uri,name},
+   and settings only if the user set them.
+⚠️ Our own state never goes in it: which root is active, the per-root editor working sets, any
+   bookkeeping. StorageScope.WORKSPACE, keyed by the workspace id. Writing a facade.* key into
+   the file would make stock VS Code report an unknown setting.
+```
+
+### 3.6.8 Deliberately later
+
+Withholding a root from layer 2 until it is needed would stop `workspaceContains:` starting a
+heavy language server for a project nobody has opened - the 1.2GB jdt.ls in 4.2j. The lever is
+`getWorkspaceData()`.
+
+Not in the baseline: extensions would see a folder list the workbench does not have, and
+`${workspaceFolder}` and friends would drift from it. That breaks the first requirement to
+serve the second, and 4.2j says the second is not under threat.
+
+---
+
 ## Step 4 — Switching performance
 
 ### 4.1 Two levers, already measured
@@ -444,11 +680,267 @@ anything on the bar itself.
    repository. Measured: SCM settles in ~590ms instead of ~1650-2350ms.
 ```
 
-### 4.2 Still undefined
+### 4.2 Where a switch actually spends its time
 
-⚠️ **There is no ceiling for switch time yet.** The known floor is a 301ms extension host
-restart. What blocks the ceiling is that language-service re-indexing has never been
-measured. Measure it first, then set the target.
+Measured 2026-09-20, three git repos of 32 / 20 000 files, renderer clock, 20ms sampling.
+
+```
++0ms          click
++38-98ms      explorer root swapped, title swapped, SCM cleared    <- everything we own
++273ms        old extension host process gone                      graceful stop ~220ms
++348ms        new extension host process up                        spawn ~75ms
++800-1100ms   git indicators back                                  bootstrap + activate + status
+```
+
+⚠️ **The cost is fixed, not proportional to the repository.** 32 files -> 20 000 files is
+1096ms; 20 000 -> 32 is 1118ms; 32 -> 32 is 1058ms. Meanwhile `git status` itself is 13ms
+on 32 files, 47ms on 20 000, 346ms on this repo's 18 866. Nearly all of that second is the
+extension host being torn down and rebuilt, and none of it is work anybody asked for.
+
+⚠️ **Every switch restarts the extension host.** `relauncher.contribution.ts` watches
+`folders[0]` and restarts when it changes, for the deprecated `workspace.rootPath`. Counted
+by PID, not by a coalescing event: three switches, three new processes.
+
+### 4.2b The ceiling, per surface
+
+```
+explorer                  40-100ms      already there, nothing to do
+title / context / editors tens of ms    already there
+Source Control            ~instant      needs 4.1's two levers, plus keeping the git
+                                        extension's repositories open across a switch
+Problems / search         tens of ms    workbench-side; MarkerService.read() filters by
+                                        resource and markersView already has FilterOptions
+language services         UNMEASURED    the only thing left, and the only thing a workbench
+                                        change cannot fix
+```
+
+⚠️ **Language services are the open question.** tsserver has to forget one project and learn
+another; that work is real. Suppressing the restart keeps the tsserver *process* alive (the
+TS extension spawns it, so it dies with the host), which should leave only the project graph
+to rebuild - unverified. Measure "switch -> first completion" on real repositories before
+promising a switch time.
+
+⚠️ The 20 000-file repository above had no `tsconfig.json`, so no TS project was ever built.
+Everything in 4.2 measures the git path only.
+
+### 4.2c Language services, measured
+
+Real repositories cloned from GitHub, bundled extensions only (this fork has no marketplace),
+completions driven through the UI and timed from the click. 2026-09-20.
+
+```
+                    files   probe                         cold switch    warm
+ky (TS, deps)         104   Math. (lib.d.ts)               316-1273ms   ~200ms
+axios (JS, deps)      473   Math.                          598-1080ms   ~200ms
+vue-core (TS)         702   Math.                          349-1390ms      -
+bootstrap (SCSS)      793   colo -> color                  250-731ms    ~170ms
+FacadeCode (TS,deps) 18866  Math.                          523-601ms    ~207ms
+FacadeCode (TS,deps) 18866  cross-file auto-import       17845-18632ms  558-675ms
+```
+
+⚠️ **`Math.` is not a test of the language service.** It is answerable from `lib.d.ts` before
+tsserver has built anything, which is why an 18 866-file repository and a 104-file one score
+the same on it. The honest probe is a completion that only a built project graph can answer -
+here, an auto-import of a symbol from another file.
+
+⚠️ **On a large TypeScript project the project graph takes ~18 seconds, and suppressing the
+extension host restart does not change it** (17 845ms with the restart, 18 632ms without).
+The work is tsserver reading 13 159 `.ts` and 6 101 `.d.ts`, and nothing in the workbench
+touches it.
+
+⚠️ This is the same cost as opening that folder in stock VS Code. What is new is that a bar
+makes it a one-click habit instead of a File > Open Folder.
+
+### 4.2d What the restart gate is actually worth
+
+A/B over four projects, `facade.switch.restartExtensionHost` true vs false:
+
+```
+                  restart on   restart off   saved
+axios                  812ms        598ms     -26%
+vue-core               694ms        358ms     -48%
+ky                     658ms        316ms     -52%
+bootstrap (SCSS)       350ms        250ms     -29%
+ky (repeat)            720ms        205ms     -72%
+FacadeCode graph    17845ms      18632ms       none
+```
+
+It buys back the host teardown and the re-activation of every extension - real for small and
+medium projects, worth nothing against a large project graph.
+
+⚠️ Not built, and the measurement patch has been reverted. Under 3.6 a switch never touches
+`folders[]`, so `WorkspaceChangeExtHostRelauncher` does not fire on one and there is nothing to
+gate. It still fires when a project is added or removed, where the restart is upstream's own
+correct behaviour and should stay. The numbers are kept because they price what a folder swap
+costs, which is what 3.6.1 weighed way 3 against.
+
+### 4.2f What actually keeps a project graph warm
+
+The question: if the extension host is not restarted, does tsserver keep the project it built?
+
+```
+Way 3, folder swapped out and back, extension host kept alive (restart gate off)
+  first build of FacadeCode      ~20s
+  revisit after one hop away    19237ms
+  revisit again                 18688ms          <- rebuilt every single time
+
+Way 1 shape, both folders resident in one .code-workspace, never swapped
+  first build of FacadeCode     19576ms
+  work in vue-core                213ms
+  revisit FacadeCode             1750ms          <- retained
+```
+
+⚠️ **Keeping tsserver alive is not what keeps a project warm - workspace membership is.**
+The TS extension follows the workspace folders, and our editor working sets close every file
+of the project being left, so tsserver drops the project either way. Suppressing the extension
+host restart buys 26-72% on small and medium projects and nothing at all here.
+
+⚠️ tsserver is one semantic server plus one syntax server per extension host, holding many
+projects at once. "Run several tsservers" is not a shape this can take; the shape is one
+server holding several graphs, and it holds them for folders in the workspace.
+
+So the switch cost on a large TypeScript project is a real fork in the road:
+
+```
+folder swapped (Way 3)      ~19s on every visit
+folder resident (Way 1)     ~20s once, then ~1.7s
+```
+
+### 4.2g Languages not measured, and why
+
+This fork has no `extensionsGallery`, so only bundled language features could be driven:
+TS/JS, JSON, HTML, CSS/SCSS, Markdown. Java, Kotlin, Swift, Rust, Go all live in the
+marketplace. The machine has `java` and `swift` but no `kotlin`, `rustc`, `cargo`, `go`,
+`gradle` or `mvn`, so several of those servers could not do real work even if sideloaded.
+
+⚠️ Do not read the TypeScript number as the worst case. jdt.ls, rust-analyzer and
+sourcekit-lsp all build a whole-project model before answering, and all key it to the
+workspace root, so 4.2f's conclusion applies to them unchanged - most likely with a larger
+constant.
+
+### 4.2h Go, and the languages that could not be reached
+
+Open VSX wired into `product.json`, `golang.Go` and `redhat.java` sideloaded as VSIX, `go`,
+`gopls` and `openjdk` installed. 2026-09-20.
+
+```
+                        project              switch -> a completion that needs the graph
+Go     gopls (2 procs)  gin, 99 .go files    19991ms cold · 15135ms on a later visit
+Java   jdt.ls           gson                 NOT MEASURED
+```
+
+⚠️ Java could not be measured. jdt.ls starts, reports `Java: Ready` and holds 732MB, but
+`mvn` cannot resolve gson offline, so there is no classpath: no completions and no errors
+either. A real number needs the dependency download first.
+
+⚠️ **Two heavy servers make the window itself janky.** With gopls and jdt.ls both up, a
+100ms sleep driven over CDP stretched to seconds and opening a file went from 300ms to
+13 000ms. For Way 1 the cost of N resident servers is not only memory - it is the
+responsiveness of the whole window. jdt.ls alone idles at 732MB.
+
+⚠️ **`workspaceContains` confirmed in the wild.** Opening a Go project lit up `Java: Ready`
+in the status bar as well. N projects resident means every language's extension activates.
+
+⚠️ **A flaw in this harness, which changes how to read 4.2c.** `completionMs` starts after the
+file is open, and the language server warms up during that open. Where the open was slow the
+server got a free head start:
+
+```
+Go gin revisit   fileOpen 13027ms -> completionMs 1109ms -> end to end 15135ms
+                        ^ 13 seconds of warm-up that completionMs does not count
+```
+
+Read `totalFromClickMs`. The TypeScript numbers in 4.2c are affected only slightly (2s of
+open against 19s of graph); the Go "fast revisit" was an artefact.
+
+### 4.2i What the language measurements settle
+
+```
+light servers   CSS · SCSS · JSON · HTML    separate small processes, ~200ms, never a problem
+heavy servers   TS · Go · Java · Rust       15-20s on a real project, every cold visit
+```
+
+Two independent implementations, tsserver and gopls, land in the same 15-20s band on real
+projects. That is the number the product has to be designed around, not the 200ms one.
+
+### 4.2j Cold start with N projects resident
+
+The question way 1 has to answer: a window that really holds N folders, opened cold. Measured on
+a 32GB machine, six runs, a fresh profile each time, one TypeScript file passed on the command
+line so a real language service starts. Timings are VS Code's own `performance.mark('code/*')`,
+not a poll of mine. Memory is RSS attributed by walking the process tree from the launched pid.
+
+```
+                        folders   splash  workbench  extensions  Eventually   final MB  idle at
+  8 incl. one Java         8       110-129  1885-1994  2364-2463   4410-4518   5801-5991   44-45s
+  8, Facade first          8       118      1892       2400        4394        6220        39s
+  7, no Java               7       119      1909       2485        4409        5559        29s
+  1 (Facade alone)         1       117-128  1885-1991  2484-2515   4390-4494   5373-5459   29s
+```
+
+**Folder count costs nothing in time.** Every milestone is inside its own run-to-run spread:
+the window is painted at ~120ms, the workbench is restored at ~1.9s, and extensions are loaded
+at ~2.4s whether the workspace holds one folder or eight. Nothing in the startup path walks the
+folder list in a way that shows up.
+
+**Folder count costs almost nothing in memory either - language *count* does.** Seven folders
+against one is +100..190MB. Adding a single Java folder that nobody opened is +1.2GB and +15s
+of background CPU: `gson` is one of the eight, so `workspaceContains:` activates the Java
+extension, which starts jdt.ls, which settles at 1165-1300MB. Drop that one folder and both the
+memory and the late CPU go with it.
+
+```
+  cost of N projects resident = sum of the language servers those N projects eagerly activate
+  the folder list itself is free
+```
+
+**The UI never degrades.** A trivial expression on the renderer's main thread, sampled every
+400ms for the whole warm-up, across six runs and ~1400 samples:
+
+```
+  p50 1ms   p90 1-3ms   p99 20-40ms   worst 82-259ms   samples with no answer: 0
+```
+
+Every worst-case spike lands between 2.3s and 5.2s - extension loading - and the *single-folder*
+runs produce the largest of them (259ms, 247ms, 245ms, 233ms) while the eight-folder runs stay
+under 100ms. After 20s the worst sample in any run is 27ms. jdt.ls burning 484-628% CPU at
+t=22-37s does not move the renderer at all: it is a separate process and the machine has cores.
+
+⚠️ RSS totals are a floor, not demand. The eight-folder runs peak at 6.2-6.3GB, and on a machine
+already 8.6GB into swap macOS reclaims from whoever has the most reclaimable pages. That is why
+the *renderer* and *tsserver* read smaller in the 8-folder runs (1043-1104MB / 2143-2398MB) than
+in the 1-folder run (1459-1636MB / 2557-2568MB) - not a saving, a reclaim. The totals are still
+comparable; the per-process split under pressure is not.
+
+**What this settles for view space.** Criteria one and two are met by way 1 as it stands, with no
+work: the window is up in 120ms and operable in under 2s, and it stays operable while everything
+warms up behind it. Criterion four is the only one that binds, and it binds on a single axis -
+how many *language servers* are resident, not how many folders. So view space does not need to
+stagger folders; it needs to own when a root is handed to layer 2 at all, and the only rows that
+matter are the ones that would pull in a heavy server nobody asked for.
+
+### 4.2e Harness traps hit while measuring this
+
+```
+⚠️ File search lives in a process that goes down with the extension host. Right after a switch
+   quick open answers with nothing; a fixed timeout turns that into a fabricated 30s
+⚠️ Cmd+K Cmd+W is a chord. A half-delivered chord swallows every key after it
+⚠️ Clicking the project you are already on produces no folder change, and a wait-for-change
+   probe then reports a 20s timeout as if it were a measurement
+⚠️ xterm draws to a canvas, so innerText reads nothing - including the prompt. A probe that
+   cannot see a control case cannot report a negative one
+⚠️ A clean repository shows no SCM badge, so "N pending changes" is not a readiness signal
+⚠️ Matching processes by name pulls in every other instance on the machine and every leftover.
+   Attribute by walking the process tree from the pid that was launched
+⚠️ `Code Helper (Plugin)` does not exist in a build from source, so matching on it filed the
+   extension host under the workbench. Tag by `--type=`, which the process carries itself
+⚠️ `node uisample.mjs x 240` makes argv[2] the label, so the budget is NaN and the loop never
+   runs. It still prints a result, and the result is empty
+⚠️ tsserver and gopls start from an *open file*, not from the workspace. A cold-start run that
+   opens nothing measures a window with no language service in it
+⚠️ Polling for a DOM condition every 3s reports every mark inside that window at the same
+   timestamp. VS Code's own `performance.mark('code/*')` is already there and is exact
+```
 
 ### 4.3 Rules for the measuring harness
 
