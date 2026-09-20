@@ -11,7 +11,8 @@ import { IFileStat, IFileService, FileSystemProviderCapabilities } from '../../.
 import { rtrim, startsWithIgnoreCase, equalsIgnoreCase } from '../../../../base/common/strings.js';
 import { coalesce } from '../../../../base/common/arrays.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import { IDisposable, dispose } from '../../../../base/common/lifecycle.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { DisposableStore, IDisposable, dispose } from '../../../../base/common/lifecycle.js';
 import { memoize } from '../../../../base/common/decorators.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { joinPath, isEqualOrParent, basenameOrAuthority } from '../../../../base/common/resources.js';
@@ -26,7 +27,7 @@ import { IMarkdownString } from '../../../../base/common/htmlContent.js';
 export class ExplorerModel implements IDisposable {
 
 	private _roots!: ExplorerItem[];
-	private _listener: IDisposable;
+	private readonly _listener = new DisposableStore();
 	private readonly _onDidChangeRoots = new Emitter<void>();
 
 	constructor(
@@ -35,15 +36,28 @@ export class ExplorerModel implements IDisposable {
 		fileService: IFileService,
 		configService: IConfigurationService,
 		filesConfigService: IFilesConfigurationService,
+		activeFolderService: IActiveFolderService,
 	) {
-		const setRoots = () => this._roots = this.contextService.getWorkspace().folders
-			.map(folder => new ExplorerItem(folder.uri, fileService, configService, filesConfigService, undefined, true, false, false, false, folder.name));
+		// The root the window is on, not every root the workspace holds. A workspace with eight
+		// repositories in it is still one repository to work in, and this is where that is decided:
+		// every other view of the file tree is built from these.
+		//
+		// ⚠️ One listener, on the active folder rather than on the folder list. The two fire for the
+		// same edits and the order between them is whichever was registered first, so reading
+		// `activeFolder` from the folder-list event can read it before the service has caught up.
+		// `onDidChangeActiveFolder` fires after it has, including for a rename of the active root.
+		const setRoots = () => {
+			const active = activeFolderService.activeFolder;
+			this._roots = active
+				? [new ExplorerItem(active.uri, fileService, configService, filesConfigService, undefined, true, false, false, false, active.name)]
+				: [];
+		};
 		setRoots();
 
-		this._listener = this.contextService.onDidChangeWorkspaceFolders(() => {
+		this._listener.add(activeFolderService.onDidChangeActiveFolder(() => {
 			setRoots();
 			this._onDidChangeRoots.fire();
-		});
+		}));
 	}
 
 	get roots(): ExplorerItem[] {

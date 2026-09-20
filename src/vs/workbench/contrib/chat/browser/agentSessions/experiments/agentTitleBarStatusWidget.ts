@@ -1365,14 +1365,14 @@ export class AgentTitleBarStatusWidget extends BaseActionViewItem {
 
 	/**
 	 * Compute the label to display in the command center.
-	 * Uses the workspace name (folder name) with prefix/suffix decorations.
+	 * Uses the name of the root the window is on, with prefix/suffix decorations.
 	 * Falls back to file name when tabs are hidden, or "Search" when empty.
 	 */
 	private _getLabel(): string {
 		const { prefix, suffix } = this._windowTitle.getTitleDecorations();
 
-		// Base label: custom title, workspace name, or file name when tabs are hidden
-		let label = this._windowTitle.workspaceName;
+		// Base label: custom title, the active root's name, or file name when tabs are hidden
+		let label = this._windowTitle.rootName;
 		if (this._windowTitle.isCustomTitleFormat()) {
 			label = this._windowTitle.getWindowTitle();
 		} else if (!label && this.editorGroupsService.partOptions.showTabs === 'none') {

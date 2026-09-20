@@ -100,7 +100,6 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
 		@IFileService private readonly fileService: IFileService,
 		@IExplorerService private readonly explorerService: IExplorerService,
-		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IFilesConfigurationService private readonly filesConfigService: IFilesConfigurationService
 	) { }
 
@@ -110,6 +109,16 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 		}
 
 		throw new Error('getParent only supported for cached parents');
+	}
+
+	/**
+	 * Whether the tree is showing one root, which is when that root has no row of its own.
+	 *
+	 * ⚠️ Not `WorkbenchState.FOLDER`, which this used to ask. A window showing one root of a
+	 * workspace that holds several is in `WORKSPACE` state and still has nowhere to put an error.
+	 */
+	private isOnlyRoot(): boolean {
+		return this.explorerService.roots.length === 1;
 	}
 
 	hasChildren(element: ExplorerItem | ExplorerItem[]): boolean {
@@ -136,7 +145,7 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 		const promise = children.then(
 			children => {
 				// Clear previous error decoration on root folder
-				if (element instanceof ExplorerItem && element.isRoot && !element.error && hasError && this.contextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
+				if (element instanceof ExplorerItem && element.isRoot && !element.error && hasError && !this.isOnlyRoot()) {
 					explorerRootErrorEmitter.fire(element.resource);
 				}
 				return children;
@@ -144,8 +153,8 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 			, e => {
 
 				if (element instanceof ExplorerItem && element.isRoot) {
-					if (this.contextService.getWorkbenchState() === WorkbenchState.FOLDER) {
-						// Single folder create a dummy explorer item to show error
+					if (this.isOnlyRoot()) {
+						// A single root has no row of its own to carry the error, so make a dummy item
 						const placeholder = new ExplorerItem(element.resource, this.fileService, this.configService, this.filesConfigService, undefined, undefined, false);
 						placeholder.error = e;
 						return [placeholder];

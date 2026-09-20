@@ -5,6 +5,7 @@
 
 import { Event } from '../../../../base/common/event.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { IFilesConfiguration, ISortOrderConfiguration, SortOrder, LexicographicOptions } from '../common/files.js';
 import { ExplorerItem, ExplorerModel } from '../common/explorerModel.js';
@@ -58,11 +59,12 @@ export class ExplorerService implements IExplorerService {
 		@IProgressService private readonly progressService: IProgressService,
 		@IHostService hostService: IHostService,
 		@IFilesConfigurationService private readonly filesConfigurationService: IFilesConfigurationService,
-		@IDecorationsService private readonly decorationsService: IDecorationsService
+		@IDecorationsService private readonly decorationsService: IDecorationsService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService
 	) {
 		this.config = this.configurationService.getValue('explorer');
 
-		this.model = new ExplorerModel(this.contextService, this.uriIdentityService, this.fileService, this.configurationService, this.filesConfigurationService);
+		this.model = new ExplorerModel(this.contextService, this.uriIdentityService, this.fileService, this.configurationService, this.filesConfigurationService, this.activeFolderService);
 		this.disposables.add(this.model);
 		this.disposables.add(this.fileService.onDidRunOperation(e => this.onDidRunOperation(e)));
 

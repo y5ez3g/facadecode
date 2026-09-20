@@ -13,6 +13,7 @@ import { FileCopiedContext, NEW_FILE_COMMAND_ID, NEW_FOLDER_COMMAND_ID } from '.
 import * as DOM from '../../../../../base/browser/dom.js';
 import { IWorkbenchLayoutService } from '../../../../services/layout/browser/layoutService.js';
 import { isUntitledWorkspace, IWorkspace, IWorkspaceContextService, WorkbenchState } from '../../../../../platform/workspace/common/workspace.js';
+import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IConfigurationService, IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
 import { IKeybindingService } from '../../../../../platform/keybinding/common/keybinding.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../../platform/instantiation/common/instantiation.js';
@@ -239,7 +240,8 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 		@ICommandService private readonly commandService: ICommandService,
 		@IOpenerService openerService: IOpenerService,
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
-		@IEnvironmentService private readonly environmentService: IEnvironmentService
+		@IEnvironmentService private readonly environmentService: IEnvironmentService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 
@@ -272,7 +274,11 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 	}
 
 	get name(): string {
-		return this.labelService.getWorkspaceLabel(this.contextService.getWorkspace());
+		// ⚠️ The root the window is on, like the window title. The pane sits directly above that
+		// root's files, so naming the workspace here says the one thing they are not.
+		const activeFolder = this.activeFolderService.activeFolder;
+
+		return activeFolder ? activeFolder.name : this.labelService.getWorkspaceLabel(this.contextService.getWorkspace());
 	}
 
 	override get title(): string {
@@ -331,6 +337,10 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 		this._register(this.contextService.onDidChangeWorkspaceName(() => {
 			setHeader();
 			this.updateWorkspaceTitleCase();
+		}));
+		this._register(this.activeFolderService.onDidChangeActiveFolder(() => {
+			setHeader();
+			this._onDidChangeTitleArea.fire();
 		}));
 		this._register(this.contextService.onDidChangeWorkbenchState(() => this.updateWorkspaceTitleCase()));
 		this._register(this.labelService.onDidChangeFormatters(setHeader));
@@ -842,10 +852,14 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 			perf.mark('code/willResolveExplorer');
 		}
 		const roots = this.explorerService.roots;
-		let input: ExplorerItem | ExplorerItem[] = roots[0];
-		if (this.contextService.getWorkbenchState() !== WorkbenchState.FOLDER || roots[0].error) {
-			// Display roots only when multi folder workspace
-			input = roots;
+		// A single root has no row of its own; the tree is fed that root and shows its children.
+		//
+		// ⚠️ How many roots the explorer is showing, not what state the workbench is in. A window
+		// showing one root of a workspace that holds eight reads as WORKSPACE, which used to put a
+		// root row above a tree that has only one.
+		let input: ExplorerItem | ExplorerItem[] = roots;
+		if (roots.length === 1 && !roots[0].error) {
+			input = roots[0];
 		}
 
 		let viewState: IAsyncDataTreeViewState | undefined;
