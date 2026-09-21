@@ -312,7 +312,7 @@ with someone else's code and changing it is a break.
 | `File > Open Recent` (`openRecent`, `quickOpenRecent`) | UI | folders and workspaces, mixed | unchanged |
 | `File > Close Folder` / `Close Workspace` (`closeFolder`) | UI | back to an empty window | unchanged |
 | `Open Folder via Workspace` (`openFolderViaWorkspace`) | UI | opens one folder of this workspace in a new window | unchanged |
-| `Duplicate Workspace in New Window` | UI | a second window on the same workspace | unchanged. Each window keeps its own active folder - that record is `StorageScope.WORKSPACE`, which is per window |
+| `Duplicate Workspace in New Window` | UI | a second window on the same workspace | unchanged. ⭐ **Measured, because a review said this line was wrong.** `StorageScope.WORKSPACE` is keyed by the **workspace id**, not by the window - so the sentence as first written was wrong. The consequence it feared does not arise: the duplicate is a *new* workspace with its own id (two `workspaceStorage` directories, measured), and a workspace that is already open cannot be opened a second time - `--new-window` on it focuses the window that has it. So no two windows ever share one record, and each keeps its own active folder |
 | Opening a `.code-workspace` in an editor (`openWorkspaceFromEditor`, and the prompt behind `workspaces.dontPromptToOpen`) | UI | a banner offers to enter it | unchanged. ⚠️ Deliberately different from **dropping** the same file, which adds its folders here - opening a file in an editor and dropping it on the window are two different requests |
 | `code <folder>`, `code <file.code-workspace>` | UI | opens it | unchanged |
 | `code --add <folder>`, `--folder-uri`, `--reuse-window`, `--new-window` | UI | adds to, or opens, the last active window | unchanged. `--add` now also puts a row in the bar |
@@ -746,31 +746,96 @@ One decision, three views, because the results all come back from layer 2 and ar
 where they land.
 
 ```
-B1  Find in Files                   queryBuilder's folderQueries = the active folder, with a
-                                    way to widen to the whole workspace
-B2  Go to File (⌘P)                 the same scope
-B3  Go to Symbol in Workspace (⌘T)  the same scope. ⚠️ Found by the §4.10 audit, not by memory
-    proves it                       a string that exists in two folders: found once, in the
-                                    active one, and found twice after widening
-    ⚠️ widening has to be reachable and has to be remembered per window, or this is a
-      narrowing that costs people a feature
+B0  one scope, not three            `ISearchScopeService`: folder or workspace, held in
+                                    `StorageScope.WORKSPACE` and announced when either it or the
+                                    active folder changes. One answer for all three, because
+                                    they are one question to the person asking it - somebody who
+                                    widened the search view and then presses ⌘P is still looking
+                                    for the same thing
+B1  Find in Files                   `queryBuilder`'s folderQueries come from the scope, and the
+                                    view re-runs when it changes: results for a folder the
+                                    window has left are answers to a question nobody is asking
+B2  Go to File (⌘P)                 the same scope, in all three of its file queries. ⚠️ Its
+                                    file cache is built over the folders the scope covered when
+                                    the picker opened, so widening from inside it builds a new
+                                    one
+B3  Go to Symbol in Workspace (⌘T)  narrowed where the results land, not in the query: the
+                                    providers live in the extension host and are handed the
+                                    whole workspace, which is the layer split this design turns
+                                    on. ⚠️ Found by the §4.10 audit, not by memory
+    the way back                    a toggle in the search view's title, and a button on both
+                                    pickers. ⚠️ On the pickers and not only in the view:
+                                    somebody who types a file name, finds nothing and has to go
+                                    open another view to widen has been handed a narrowing with
+                                    no way out of it from where they are. `PickerQuickAccess`
+                                    gains a `refresh` event for it, because it only asked for
+                                    its picks again when somebody typed
+    ⚠️ the tension, on purpose      ⌘P and ⌘T are pickers, and stage D's rule is that a chooser
+                                    lists everything and puts the active folder first. Narrowed
+                                    here because the folder list makes switching cost 49-86ms,
+                                    so the two steps are cheap - and because a search that
+                                    answers about eight repositories is the complaint this whole
+                                    design starts from. The rule still holds for D's own rows
+    measured                        ⌘P on gson: only gson's README files. On ky: one. The button
+                                    widens in place, and the next ⌘P is still wide · Find in
+                                    Files for `Copyright`, window on gson: 275 results in 251
+                                    files, which is what `grep -rl` counts in that folder alone;
+                                    widened, 384 in 350 · ⌘T for `Ky` with the window on axios:
+                                    ky's symbols while wide, nothing while narrow, and back
+                                    again once the window is on ky
+    ⚠️ twice in one stage           a negative result needs a control. "Licensed under the
+                                    Apache" reads as a narrowing that works and is really a
+                                    string only one of the five folders has; ⌘T answering with
+                                    nothing reads the same way and was really a language server
+                                    that had indexed nothing yet. Neither says anything until
+                                    the instrument has produced the other answer somewhere
+    not run                         ⌘T rests on a language server having indexed the folder,
+                                    which only the TypeScript one had here. ⚠️ And the ranking
+                                    once widened is upstream's: the folder the window is on is
+                                    not put first, which is a stage-D question rather than this
+                                    one
 ```
 
 #### Stage C — problems
 
 ```
-C1  filter the markers view         by the active folder. ⚠️ markersModel stores by resource,
-                                    so this partitions rather than discards: the other
-                                    folders' markers are still there when you switch back
-    proves it                       a Java error in folder B while the window is on A: the
-                                    status bar and the panel show A's count, and B's errors
-                                    are there the moment you switch
+C0  the scope moves house           `ISearchScopeService` becomes `IFolderScopeService` and leaves
+                                    `contrib/search` for `services/folderScope`. How wide a window
+                                    is looking is a fact about the window, not about searching, and
+                                    problems live in another contrib - a contrib reaching into
+                                    another contrib would have been the wrong seam. The toggle
+                                    becomes one action with a menu entry per narrowing view
+C1  the markers view                reads the markers the scope covers. ⚠️ Filtered where they land,
+                                    never at `IMarkerService`: every extension reads and writes
+                                    that, and a problem in a folder the window is not on is still a
+                                    problem. `markersModel` stores by resource, so this partitions
+                                    rather than discards and a switch brings the others straight up
+C2  the count beside them           the status bar entry and the activity badge counted
+                                    `getStatistics()`, which the marker service maintains over
+                                    every marker it holds. Narrowed they count what the scope
+                                    covers; widened they use the maintained answer, which is
+                                    already the right one
+    proves it                       a problem in folder B while the window is on A: the status bar
+                                    and the panel show A's, and B's are there the moment you widen
+                                    or switch
+    measured                        two broken JSON files, one in ky and one in axios, both open in
+                                    the same window: widened 4 problems and both files listed,
+                                    narrowed 3 and one file, widened again 4
+    ⚠️ the control, a third time    markers from the built-in language services live as long as the
+                                    editor holding them does, and the editor working set is per
+                                    folder - so opening one file in each folder and switching
+                                    between them measures the editors, not the narrowing. Both
+                                    files had to be opened from the same folder before the
+                                    narrowing was the only thing left that could explain the
+                                    numbers. ⚠️ The Java server, which would have had markers that
+                                    outlive an editor, never finished starting in three minutes
 ```
 
-#### Stage D — five pickers, ordered not narrowed
+#### Stage D — seven pickers, ordered not narrowed
 
-All five ask "which folder?", which is a workspace-level question. Listing every folder is
-right; **not putting the active one first is the bug**.
+All of them ask "which folder?", which is a workspace-level question. Listing every folder is
+right; **not putting the active one first is the bug**. `foldersWithActiveFirst` is that sentence
+as a function, and most of the rows are one call to it.
 
 ```
 D1  debug configuration             `Add Config (ky)` first while the window is on axios
@@ -781,14 +846,16 @@ D4  Tasks: Run Task                 lists every folder's tasks; the active folde
 D5  the agent folder picker         agentHostFolderPickerActionItem.ts:146 falls back to
                                     `folders[0]`, so a session started on axios offers ky.
                                     ⚠️ same shape as the Graph, and the same fix
-D6  Terminal: Create New Terminal   found while proving A1, not by the audit: in a workspace
-                                    with more than one folder the command asks "Select current
-                                    working directory for new terminal" and opens on `ky`, the
-                                    first folder, while the window is on gin. ⚠️ A1 does not
-                                    reach it - the picker answers before the fallback does.
-                                    ⚠️ And upstream already has a second command for choosing a
-                                    directory, so the answer here is probably "stop asking"
-                                    rather than "ask in a better order"
+D6  Terminal: Create New Terminal   found while proving A1, not by the audit: with more than one
+                                    folder the command asked "Select current working directory for
+                                    new terminal" and offered `ky`, the first folder, while the
+                                    window was on gin. It no longer asks - the bar has answered -
+                                    and `Terminal: Create New Terminal in Another Folder...` is
+                                    where the question went. ⚠️ I had written that upstream already
+                                    had a command that asks. It does not: `newWithCwd` takes a
+                                    path as an argument. Stopping asking without putting the
+                                    question somewhere would have taken away the only way to start
+                                    a terminal in a folder you are not looking at
 D7  the three repository choosers   the Repositories view (measured: lists all four while the
                                     window is on gin), the Graph's repository picker, and
                                     `RepositoryPicker`. ⚠️ Deliberately left out of A2: by this
@@ -796,8 +863,21 @@ D7  the three repository choosers   the Repositories view (measured: lists all f
                                     active folder first. Narrowing the Repositories view would
                                     also take away the only way to re-enable a repository that
                                     was turned off in a folder you are not in
+    the shared one                  `_workbench.pickWorkspaceFolder` is the answer to "which
+                                    folder?" for the settings editor's folder tab, an extension
+                                    being installed into one, an MCP server and a terminal's
+                                    working directory. One call there covers all of them
     proves it                       window on the last folder of four: each picker opens with
                                     that folder first or preselected, and still lists all four
+    measured                        window on gson: `Preferences: Open Folder Settings` lists
+                                    gson, ky, gin, axios, plainfolder - the active folder first
+                                    and all five still there · `Terminal: Create New Terminal`
+                                    asks nothing and opens in gson
+    not clicked                     snippets, tasks, the debug dropdown and the agent picker. All
+                                    four are one call to `foldersWithActiveFirst`, which has six
+                                    tests, but the harness could not get the command palette to
+                                    accept those rows - a separator sits at index 0 in a palette
+                                    that has a "recently used" group, and Enter accepts nothing
 ```
 
 #### Stage E — one window, many folders
@@ -807,33 +887,74 @@ purpose: a folder arriving in a window whose right-hand side is not narrowed yet
 state that is confusing to judge.
 
 ```
-E1  the seam                        the places that mean "show me this folder" call
-                                    IActiveFolderService instead of IHostService.openWindow;
-                                    the places that mean "give me another window" keep calling
-                                    it. One decision point, seven callers
-E2  the seven                       File > Open Folder · `code <folder>` · Open Recent on a
-                                    folder · the welcome page · the "Open Folder" offered when
-                                    a directory is opened as a file · Open Folder via Workspace
-                                    (which should just switch - that folder is already here) ·
-                                    git clone's "Open"
-    ⚠️ never                        swallow an explicit request. "in New Window", ⌘Enter in
-                                    Open Recent, and `vscode.openFolder` from an extension all
-                                    keep meaning a window
-    ⚠️ upstream agrees              git clone already offers "Add to Workspace" when a
-                                    workspace is open, and that path calls
-                                    updateWorkspaceFolders. It is just not the default, and it
-                                    is only there
+E1  the seam                        `IWorkspaceBarService.show(uri)`: put the folder in the
+                                    workspace if it is not there, then move the window onto it.
+                                    Through the bar because the bar owns the list, including
+                                    knowing that `/tmp/x` and `/private/tmp/x` are one folder -
+                                    two ways to put a folder in a workspace would be two answers
+                                    to that. `openOrShow` sits beside it for the callers that
+                                    offer "a folder or a workspace or a file" and were written
+                                    when a folder could only mean a window
+E2  the callers                     File > Open Folder, native and in-app · Open Recent, both its
+                                    paths · the recent-folders menu · the welcome page, its recent
+                                    list and its walkthrough command · the "Open Folder" offered
+                                    when a directory is opened as a file · folders dropped on the
+                                    window · `code <folder>`
+    `code <folder>`                 decided in the main process, where `--add` already knew how to
+                                    put a folder in a running window. A folder named on a command
+                                    line, dropped on the dock or followed from a link takes that
+                                    path; `API` - which is what `vscode.openFolder` arrives as -
+                                    and the dialogs this window drives itself do not
+    git                             "Add to Workspace" is offered first after a clone and after an
+                                    init, and `git.openAfterClone: always` adds to a window that
+                                    already holds folders rather than replacing it. ⚠️ Both
+                                    choices are still there; only the order and the default moved
+    ⚠️ never                        swallow an explicit request. `--new-window`, "in New Window",
+                                    the modifier in Open Recent and `vscode.openFolder` from an
+                                    extension all keep meaning a window
     proves it                       stock and this build side by side, same action: `code
                                     <folder>` gives stock a second window and gives this one a
-                                    new row. Then the same for each of the seven
+                                    new row
+    measured                        five folders, one window. `code /tmp/langbench/newfolder`: one
+                                    row added, the window moves onto it, still one page. The same
+                                    command again: still one row, no second one - the bar's own
+                                    spelling rule doing the work. `code --new-window <folder>`:
+                                    two pages
+    ⚠️ the ring                     injecting `IWorkspaceBarService` into `IFileDialogService`
+                                    made the workbench unbuildable: `IWorkspaceEditingService`
+                                    asks the dialog service where to put a workspace file, and the
+                                    bar asks `IWorkspaceEditingService` to change the folder list.
+                                    The window came up **entirely blank** and the only trace was
+                                    one line in the log - `illegal state - RECURSIVELY
+                                    instantiating service`. Resolved at the point of use instead.
+                                    A service that everything already depends on is the wrong
+                                    place to hang a new dependency
 ```
 
 #### Stage F — the list as a product, and the loose ends
 
 ```
-F1  move a folder up and down       the order of folders[] is the order in the file
-F2  open a workspace from outside   prove the direction we have not: a .code-workspace opened
-                                    from the CLI or the File menu fills the bar
+F1  move a folder up and down       the order of `folders[]` is the order in the file, so there is
+                                    nothing of ours to keep in step. Right-click or ⌥↑/⌥↓ on the
+                                    bar, and the command palette. ⚠️ Not `updateFolders`: a
+                                    read-modify-write of the whole list runs outside the workspace
+                                    write queue, so it loses whatever landed between the read and
+                                    the write, and re-serialises every entry. `moveFolder`
+                                    instead - queued behind every other workspace edit, by
+                                    identity rather than by index, and each entry keeps its `raw`
+                                    so nothing else in the file moves. ⚠️ No drag to reorder - two
+                                    ways to move a row is two sets of edge cases for something
+                                    people do a handful of times
+    measured                        six rows, window on the last: up, up, down. The folder moves,
+                                    the window stays on it, and the rest keep their order.
+                                    ⚠️ Moving a folder through the first position **restarts the
+                                    extension host** - upstream's relauncher watches `folders[0]`
+                                    for the deprecated `workspace.rootPath`. One Move Folder Down
+                                    took pid 75498 out and 78361 in. Upstream's behaviour and
+                                    correct, but it is a cost and it belongs beside the feature
+F2  open a workspace from outside   a `.code-workspace` opened from the CLI fills the bar. ⚠️ Not
+                                    a task so much as a standing fact: every measurement in
+                                    stages A to F was taken in a window opened exactly that way
 F3  the three unverified rows       Save Workspace As (it changes the workspace id), workspace
     of §4                           trust (one untrusted folder restricts the window), and
                                     per-folder launch.json. Point at them rather than argue
@@ -874,10 +995,94 @@ cannot be run here  everything on `vscode-remote`: the remote terminal backend, 
                     `activeFolderFor`. ⚠️ That fallback is the whole reason the method exists
                     and it is the least exercised code in stage A
 
+Stage B, as of 2026-09-20:
+
+```
+seen to work        ⌘P narrowed and widened, the widening surviving the picker being closed ·
+                    Find in Files narrowed and widened, counted against `grep -rl` · ⌘T
+                    narrowed and widened against a language server that had indexed one folder
+
+compiled and unit   the scope itself: eleven tests over what it covers, what it announces and
+tested only         what it remembers
+
+not run             ⌘T on anything but TypeScript, because no other language server had
+                    indexed a folder in the window it was measured in
+```
+
+Stages C to F, as of 2026-09-20:
+
+```
+seen to work        the problems panel and its count, narrowed and widened, against two broken
+                    files in two folders · the shared folder picker listing the active folder
+                    first and all five folders · `Terminal: Create New Terminal` asking nothing
+                    and opening where the bar is · `code <folder>` adding one row, moving the
+                    window onto it, and adding nothing the second time · `code --new-window`
+                    still opening a window · moving a folder up and down the bar
+
+compiled and unit   `foldersWithActiveFirst` itself, six tests. The four pickers that use it and
+tested only         were not clicked: snippets, tasks, the debug dropdown, the agent picker
+
+not run             File > Open Folder and Open Recent end to end - both are native dialogs or
+                    palette rows this harness could not drive, though the code they now reach is
+                    the same `show` that `code <folder>` proved · git clone and git init, which
+                    need a remote · the three unverified rows of §4 and the two untested ones,
+                    which is what F3 and F4 are for and they are still open
+```
+
 not covered by a    the Graph's empty state on a folder with no repository, and the status bar
 unit test           entry that used to count every repository. Both are view-level and were
                     measured live instead; `activeRepository` answering `undefined` on such a
                     folder - the root both of them hang off - is covered
+```
+
+#### What the review found
+
+⚠️ Written down because every one of these passed the type checker, the layer checker, the linter
+and thirty-seven thousand unit tests. Reading the diff found them; nothing else was going to.
+
+```
+covered nothing outside    `covers()` answered false for a resource in none of the workspace's
+the workspace              folders, so a file opened from outside it - and everything in a window
+                           with no folders - had its problems and its symbols hidden with no way
+                           back: widening does not reach a folder the workspace never had.
+                           ⭐ Now covered by every scope, and measured: a broken file in /tmp,
+                           opened into a five-folder window, shows its problem
+
+one write per folder        `code a b c` and a three-folder drop called `show` once per folder,
+                           editing the `.code-workspace` three times and walking the window
+                           through two folders nobody asked to see. One add, then one switch
+
+the wrong visibility       the problems view rebuilt on `isVisible()`, but its model is built and
+                           torn down on body visibility - a collapsed view was rebuilt for
+                           nothing and then rebuilt again when opened
+
+a search nobody was        the search view re-ran on every folder switch even while hidden.
+looking at                 Switching folders is the cheap, frequent act here; a folder's worth of
+                           ripgrep behind it is not. It now defers, the way the view's own
+                           `changedWhileHidden` already did
+
+a folder dropped in        the main process decided "join the open window" against any last active
+silence                    window, but dispatched against the one matching the folder's authority.
+                           When those differ - a local folder and only a remote window open -
+                           `foldersToOpen` was empty and the folder went nowhere at all
+
+a row that cannot be       `openOrShow` would put a folder from another remote authority into a
+opened                     window not connected to it. A folder this window cannot reach needs a
+                           window that can, the same as an explicit "in New Window"
+
+a name nobody wrote        reordering passed each folder's `name` back, which for a folder never
+                           named in the file is its basename - so a reorder wrote a `"name"` into
+                           the `.code-workspace` for every folder
+
+every path rewritten       ⭐ and reordering with `updateFolders` over the whole list removes and
+                           re-adds every folder, so every path was serialised afresh: five
+                           absolute paths came back relative. The control settled it - a plain
+                           `addFolders` leaves existing entries alone, so this was ours. A move is
+                           now its own operation on the stored list, and no entry's value changes.
+                           ⚠️ The array's formatting is not preserved - a comment inside it is
+                           lost - but stock's own Remove Folder loses it too. Measured both.
+                           Measured: after a move, every path is byte-for-byte what it was and the
+                           one folder that had a name still has it
 ```
 
 #### What is deliberately not in the plan
@@ -892,6 +1097,17 @@ narrowing showWorkspaceFolderPick or a tree an         an extension's own UI is 
 narrowing _workbench.pickWorkspaceFolder's list        it is asked by tasks and debug, and
                                                        those are workspace-level questions.
                                                        Stage D orders it instead
+taking one workspace file's folders into      considered and parked. The capability is the
+another window                               right one - two `.code-workspace` files you want
+                                             to see at once is exactly what this fork exists
+                                             for - but a `.code-workspace` is not only folders:
+                                             its `settings`, `extensions`, `launch` and `tasks`
+                                             cannot be merged, and after the folders arrive the
+                                             file is no longer the one being written to. Calling
+                                             that "merge" would be a lie the UI cannot walk back
+                                             from. ⚠️ If it comes back, it is "add its folders
+                                             to this window", said in those words, with what
+                                             stays behind said out loud
 ```
 
 ## 7 Tests
@@ -973,4 +1189,1577 @@ npm run valid-layers-check · npm run stylelint · npx eslint <touched> · npx g
 (cd build && npm test)
 ./scripts/test.sh --grep "Workspace bar|Active folder|Files - the roots"
 grep -rnE "#[0-9a-fA-F]{3,8}\b|rgba?\(" src/vs/workbench/browser/parts/workspacebar/
+```
+
+---
+
+## 8 The comparison suite
+
+Everything in section 7 asks "does ours do the right thing". This asks a harder question, and the
+one the first promise is made of: **put stock VS Code and this build side by side, do the same thing
+to both, and account for every difference.**
+
+### 8.1 Two kinds of case, and why that is the whole design
+
+```
+≠   must differ    somewhere we changed behaviour on purpose. The case fails if the two
+                   builds agree - an intended change that did not happen is a feature that
+                   is not there
+=   must match     somewhere we did not. The case fails if the two builds differ at all.
+                   This is promise 1 written as a test, and it is where regressions live
+```
+
+⚠️ The `=` cases are the point. Anybody can check that a new feature works; nobody notices the
+setting that stopped being honoured, the menu item that moved, the file that got rewritten. Two
+thirds of this suite is `=`.
+
+### 8.2 How it is run
+
+```
+one fixture         /tmp/cmp/three.code-workspace, three folders: alpha, beta, gamma. Each a
+                    git repository on a different branch, each with a README.md and an
+                    index.ts, one with a file that has an error in it, and one file name that
+                    exists in all three so a search has something to be wrong about
+one at a time       argent probes one CDP port, so the suite runs against stock, then against
+                    this build, from the same fresh fixture and the same fresh profile. That
+                    is also how a person with one screen does it
+like a person       `describe` reads the window the way a screen reader does - every row,
+                    button and status entry with a frame - and `gesture-tap` clicks the frame.
+                    No selectors into our own DOM, because stock does not have our DOM
+what is recorded    for each case: the action, what stock showed, what this build showed, and
+                    whether they were meant to differ. A case with no recorded reading from
+                    one of the two builds is not a result
+⚠️ the control      a case where both builds show nothing proves nothing. Every `≠` case has to
+                    produce the difference somewhere, and every `=` case has to produce the
+                    thing that is supposed to match - three times this session a "narrowing
+                    works" reading turned out to be an empty instrument
+```
+
+### 8.3 The cases
+
+⚠️ These twelve letters are also §9.4's. The numbers below never move; everything found
+after the run was appended to the same areas, and four more letters were added for what had no home.
+There is one set of case IDs in this document.
+
+```
+A  the shape of the window            7    A-1 = both hold three folders · A-2 ≠ explorer roots
+                                           A-3 ≠ title and command centre · A-4 = opening a
+                                           workspace does not rewrite it · A-5 = a plain folder
+                                           A-6 = a second workspace file is a second window
+                                           A-7 ≠ column zero exists
+
+B  editing the folder list            6    B-1 = add · B-2 = remove · B-3 = add the same twice
+                                           B-4 ≠ move up and down · B-5 = ⭐ the other entries'
+                                           paths are untouched · B-6 = Save Workspace As
+
+C  explorer and files                 5    C-1 ≠ roots · C-2 ≠ switching · C-3 = create, rename,
+                                           delete · C-4 = collapse and filter · C-5 = reveal
+
+D  source control                     8    D-1 ≠ Changes · D-2 ≠ Graph · D-3 ≠ status bar branch
+                                           D-4 ≠ a folder with no repository · D-5 = the
+                                           Repositories view lists all · D-6 = ⭐ a deselected
+                                           repository stays deselected across a reload
+                                           D-7 = stage and commit · D-8 ≠ the provider entry
+
+E  search                             8    E-1 ≠ Find in Files · E-2 = ⭐ widened equals stock
+                                           E-3 ≠ ⌘P · E-4 = widened equals stock · E-5 ≠ ⌘T
+                                           E-6 = widened equals stock · E-7 = include and
+                                           exclude · E-8 ≠ the scope survives a reload
+
+F  problems                           5    F-1 ≠ count and contents · F-2 = ⭐ widened equals
+                                           stock · F-3 = ⭐ a file outside the workspace
+                                           F-4 = clicking one · F-5 = badge agrees with the bar
+
+G  pickers                            7    G-1..G-5 ≠ order, = membership: folder settings,
+                                           snippets, tasks, debug, the agent picker
+                                           G-6 ≠ Create New Terminal asks or does not
+                                           G-7 ≠ the command the question moved to
+
+H  one window, many folders          10    H-1 ≠ `code <folder>` · H-2 = `--new-window`
+                                           H-3 = `code <file>` · H-4 = `--add`
+                                           H-5 ≠ Open Recent · H-6 = with the modifier
+                                           H-7 ≠ File > Open Folder · H-8 ≠ the recent menu
+                                           H-9 ≠ a directory opened as a file
+                                           H-10 ≠ a dropped folder, = a dropped workspace
+
+I  terminal                           5    I-1 ≠ cwd with an editor on another folder
+                                           I-2 ≠ split with splitCwd · I-3 ≠ ${workspaceFolder}
+                                           I-4 = run, split, kill, restore
+                                           I-5 = terminal.integrated.cwd per folder
+
+J  dialogs and editors                5    J-1 ≠ ⌘O with no editor open · J-2 = with one open
+                                           J-3 ≠ Save As · J-4 ≠ editors are per folder
+                                           J-5 = reopening restores them
+
+K  what extensions see               5    K-1 = workspaceFolders is three · K-2 = tasks.json's
+   ⭐ promise 1, directly                  ${workspaceFolder} · K-3 = a language server indexes
+                                           all three · K-4 = ⭐ vscode.openFolder still opens a
+                                           window · K-5 = onDidChangeWorkspaceFolders
+
+L  persistence and a clean exit       4    L-1 = reopening restores · L-2 ≠ and the active folder
+                                           L-3 = ⭐ the file after a whole session
+                                           L-4 ≠ the scope is remembered
+```
+
+```
+75 cases · about 30 ≠ and 45 = · two runs each
+```
+
+### 8.4 What it needs that does not exist yet
+
+```
+a fixture builder      three git repositories, branches, the error file, the shared name.
+                       Written once, run before each of the two passes
+a reading extension    ✓ built, and used for K. `/tmp/cmp/ext-probe` writes `workspaceFolders`,
+                       `workspaceFile`, `name`, `getWorkspaceFolder` and every
+                       `onDidChangeWorkspaceFolders` to a file, and carries a command that calls
+                       `vscode.openFolder` so K-4 can be asked from inside the extension host
+⚠️ a transcript        every case writes one line per build. The result of the suite is the
+                       diff of two transcripts, not a pile of screenshots - a screenshot is
+                       how a difference gets explained, not how it gets found
+```
+
+### 8.5 What the run has found so far
+
+Run in order, both builds launched fresh for each area, on `/tmp/cmp/three.code-workspace`
+(alpha, beta, gamma - three git repositories on three branches, one shared file name, one
+unparseable JSON file). Stock is 1.137.0. `files.simpleDialog.enable` is on in both profiles so
+that the open and save dialogs are in the page and can be driven; both builds route the simple
+and the native dialog through the same call, so nothing is dodged by using it.
+
+**A - the shape of the window. 7 of 7 hold.**
+
+```
+A-1  =   three roots in the explorer            three rows in the bar             ok
+A-2  ≠   one section `three (Workspace)`, 13     header `alpha`, 4 rows            as intended
+         tree rows
+A-3  ≠   command centre `three (Workspace)`      `alpha`                           as intended
+A-4  =   the workspace file is not touched by opening it                            ok
+A-5  =   one folder: header `alpha`, 4 files,   word for word the same, plus       ok
+         command centre `alpha`                 one row in the bar
+A-6  =   a second workspace opens a second window on both                           ok
+A-7  ≠   only an activity bar                    a workspace bar in column zero    as intended
+```
+
+`⚠️` One observation not reproduced: on the first launch of our build for this area a screenshot
+showed the window on **gamma** with the sidebar on Source Control, while storage held
+`workbench.activeFolder = .../alpha` and a read a minute later agreed on alpha. Three clean
+relaunches all gave alpha. Recorded, not explained, and worth a second look if it returns.
+
+**B - editing the folder list. 6 of 6 hold. One bug found and fixed on the way.**
+
+```
+B-1  =   `--add /tmp/cmp/delta` writes `"delta"` into the file, on both. Ours also moves the
+         window onto the new row; stock has no window-is-on-a-folder to move
+B-2  =   `--remove` takes it out again on both, and the three that stay are byte-identical
+B-3  ≠   `/tmp/cmp/alpha` beside `/private/tmp/cmp/alpha`: stock makes a second root for the
+         same directory - two identical trees, 18 rows - and ours recognises it as the row it
+         already has and switches to it. Upstream de-duplicates by string, so it catches the
+         identical spelling and misses the symlink; a row that is a folder cannot be two rows
+B-4  ≠   stock has no reorder command at all (Add, Remove, Close, Duplicate, and dragging a
+         root in the explorer). Ours has Move Folder Up/Down, and the order survives the round
+         trip down and back up
+B-5  = ⭐ after add, remove, add, move down and move up: every entry that was not the subject
+         kept its path, character for character, and no `"name"` key appeared on any of them.
+         Both builds reindent the whole file on their first edit - that is the JSON editor's
+         formatting, and it is stock's too
+B-6  =   Save Workspace As from both, to two different paths: the two files are identical byte
+         for byte, and neither touched the workspace it was saved from
+```
+
+`⭐` **What B-1 found.** Our build wrote `"../../private/tmp/cmp/delta"` where stock writes
+`"delta"`. The bar canonicalised a folder's URI *before storing it* - `/tmp` resolves to
+`/private/tmp` on macOS - and the entry is written relative to the workspace file, which was
+still spelled `/tmp/cmp/three.code-workspace`. A sibling became a path that climbs two levels
+and comes back down. Rule (b) held - nothing of ours went into the file - but we were rewriting
+the person's own entry, which is the same trespass wearing a different hat.
+
+Which folder is this, and what should the file say, are two questions. Only the first needs the
+symlink followed. `add` and `remove` now resolve **both sides** at comparison time and store the
+spelling that was given. That closed two more, neither of which had a test:
+
+```
+a folder listed in the `.code-workspace` as `/tmp/x` was not recognised when `/private/tmp/x`
+was added, because only folders that had come in through `add` had ever been resolved - the
+symlink case the canonicalising was written for was the one it missed
+`show()` on the other spelling would have thrown out of `setActiveFolder`, which refuses a URI
+that is not a folder of the workspace. It now asks the model which row a URI names
+```
+
+Five tests were added or rewritten for the new contract, one of them named for the case that
+was live when it was found. What the bar knows a folder by, and what the bar writes down, are
+now different methods with different comments saying why.
+
+**C - the explorer and file operations. 5 of 5 hold. One bug found and fixed on the way.**
+
+The fixture grew a nested folder for this area: `sub/nested.ts` in each of the three, and
+`sub/only-in-alpha.ts`, a name no other folder has, so a quick-open query can name one file
+without ambiguity on either build.
+
+```
+C-1  ≠   three root rows and 13 rows under      header `alpha`, its 5 rows, three rows in
+         them                                   the bar
+         ⭐ and the control: stock opened on `/tmp/cmp/alpha` alone reads
+         `aria-level 1, posinset 1..5 of 5, indent 0px` - which is what ours now reads too
+C-2  ≠   nothing to click; the workspace is     clicking a row swaps the header, the tree
+         the unit                                and the command centre together, three times
+                                                 round and back
+C-3  =   new file, rename, move to trash: the same five steps, the same tree afterwards, the
+         same four files left on disk. `c3.ts` -> `c3-renamed.ts` -> gone, on both
+C-4  =   collapse, then type `shared` from the same rows on screen: focus moves `sub` ->
+         `shared.ts` on both, and neither expands anything to do it
+C-5  =   open `sub/only-in-alpha.ts`, then Reveal in Explorer: both expand `sub` and select
+         the file, at the same level, with the same siblings
+```
+
+`⚠️` Two of these needed the harness fixed before they measured anything, and both failures
+looked like findings first. `Input.insertText` puts text in without a keydown, so a tree's
+keyboard navigation never sees it - the first "ours behaves differently" was a script that typed
+into nothing. And rename and delete in the explorer are `Enter` and `cmd+backspace` on macOS, not
+`F2` and `Delete`; pressing the Windows keys proved only that the Windows keys are not bound.
+
+`⭐` **What C-1 found: the same question, asked twice, answered twice.** `explorerView` decides
+whether the tree is handed the one root or the array of them, and had already been repointed at
+"how many roots is the explorer showing" rather than "what state is the workbench in". The
+renderer asks the same question again, for the level a screen reader announces - and that one
+still read `getWorkbenchState() === WORKSPACE`. Our window is always a workspace, so every file
+in a narrowed explorer was announced one level deeper than it is: the child of a row that is not
+on screen. The indent was 0px and the rows looked right, which is why nothing caught it until
+stock was opened on the same folder and the two trees compared attribute by attribute.
+
+The fix is one predicate, `rootsAreRows`, in the model both files already import, and both call
+sites ask it. They cannot drift apart again, because there is only one of them. It also let the
+renderer give up a dependency it no longer had a use for.
+
+`⚠️` This is the second time a narrowing has been correct in the view and wrong in something the
+view feeds. The first was the SCM record of which repositories a person chose. The pattern is the
+same: a value that used to be a fact about the workbench became a fact about one folder, and the
+places that read it were repointed one at a time.
+
+**D - source control. 8 of 8 hold. One bug found and fixed, one gap found and left open.**
+
+All three repositories dirty and differently: alpha 1 file, beta 2, gamma 1. `git.useEditorAsCommitInput`
+is off in both profiles - stock's default opens `COMMIT_EDITMSG` as an editor, which the harness
+could not finish, and leaving that commit half-done gates every other git command behind
+`operationInProgress`. Same setting on both sides.
+
+```
+D-1  ≠   three repository sections, each     one repository, no section header at all -
+         with its own header, message box      the message box and the changes, the way a
+         and changes                           window on one folder reads
+D-2  ≠   the Graph follows the active        the Graph follows the bar. Clicking gamma,
+         editor: opening gamma/shared.ts       beta, alpha moves it three times
+         moves it to gamma
+D-3  ≠   the status bar follows the active   it follows the bar. Same entry, same tooltip
+         editor, tooltip `alpha (Git) - ...`   shape, different thing deciding
+D-4  ≠   a folder with no repository         the pane empties, the branch entry goes, and
+         changes nothing - the other           the Repositories view still lists all three
+         repositories are still there          ⚠️ and see the gap below
+D-5  =   the Repositories view lists all three, on both. ⭐ The way back, and on ours it now
+         works: picking one there takes the window to its folder
+D-6  = ⭐ stock: alpha+gamma chosen survives a reload, beta stays off.
+         ours: after a reload, walking all three folders shows each one's changes - the bug
+         where closing on one folder wrote down a deselection of every other is gone
+D-7  =   stage all, then commit: identical. `D-7 from the comparison run`, one file, clean
+         tree afterwards, beta and gamma untouched. Both ask "Choose a repository" and both
+         list all three - the git extension sees every folder, which is the point
+D-8  ≠   Changes carries a repository row per provider; ours has none. Same view title,
+         same panes
+```
+
+`⭐` **What D-5 found: a click in a list of every repository, in a window showing one folder's.**
+Upstream's Repositories view lists exactly the repositories that could be visible, so its
+selection means "these and no others" and hands itself straight to `visibleRepositories`. Ours
+lists every repository the workspace has - deliberately, because that is the only way back to one
+turned off in a folder you are not in. The same gesture then means something else, and two things
+were wrong at once:
+
+```
+picking a repository in another folder left the pane empty. The choice said beta, the folder
+said alpha, and nothing was in both. No message, no clue - just a blank pane
+and the write reached into every folder. "These and no others" turned off the repositories of
+folders the window was not showing and had never been asked about
+```
+
+The second is the A2 bug through the other door. That one was a narrowed getter feeding a
+persisted write; this is a write speaking for folders it cannot see. The fix is the same shape in
+the same place: a write now says nothing about a folder the window is not on, and the Repositories
+view asks the service to `show` repositories rather than writing the answer itself - so picking one
+in another folder takes the window there, the way clicking that folder in the bar would. The folder
+moves first, because the write that follows only speaks for the folder the window is on.
+
+Four tests, two of them starred. Proven live: picking beta while the bar says alpha now draws
+beta's two changes and moves the status bar to `beta (Git) - branch-beta*`, and walking all three
+folders afterwards still finds each one's changes.
+
+`⭐` **What D-4 found: a blank pane where stock offers a way forward, and three readers behind it.**
+Stock opened on a folder with no repository shows a welcome - *"The folder currently open doesn't
+have a Git repository"* and an **Initialize Repository** button. Ours, on the same folder, showed
+**nothing at all**. Asked, and the answer was to narrow the key. That took three tries, and the two
+failures are the interesting part.
+
+```
+1  scm.providerCount counted what the extension host had registered - three, whatever folder was
+   on screen - so the git extension's welcome was unreachable. The registry in `common` cannot
+   know which folder the window is on, so `SCMViewService` took the key over and set it from the
+   repositories in the folder on screen. Chosen or not: turning the only one off is not the same
+   as not having one, and offering to initialise a repository in a folder that has one is worse
+   than the blank pane
+
+2  ⚠️ and the Repositories view vanished. It is gated on `scm.providerCount != 0` too - asking
+   the opposite question. The welcome asks "does this folder have a repository"; the view that
+   lists every repository asks "are there any to choose from at all". Upstream could share one key
+   because the two answers were always the same. A folder with nothing of its own is exactly when
+   the way back is needed, and narrowing the key took it away. `scm.workspaceProviderCount` now
+   answers the second question, and the view is gated on that
+
+3  ⚠️ and the pane still drew nothing. `SCMViewPane.shouldShowWelcome()` asked the registry
+   directly - `scmService.repositoryCount === 0` - which no narrowing of a context key could
+   reach. It now asks the view service what the folder on screen has, through the same
+   `folderRepositories` the key is computed from, and the pane listens for a switch as well as for
+   repositories arriving and leaving
+```
+
+Measured afterwards: on `norepo` the Changes pane carries the welcome and an **Initialize
+Repository** link that works, the Repositories view still lists all three, and switching to alpha
+and back swaps between the four change rows and the message.
+
+`⚠️` **One thing still reads wrong, and it is not ours to fix.** The sentence is the multi-root one:
+*"The workspace currently open doesn't have any folders containing Git repositories."* In this
+window that is false - three of its four folders have one. The git extension picks between that
+sentence and the single-folder one on `workbenchState`, and this window is a workspace and has to
+stay one. The button is right, the sentence overstates, and changing `workbenchState` is the one
+thing this fork will not do.
+
+`⚠️` Three readers of one fact, found one at a time, each hidden by the one before it. The grep
+that would have found all three at once is for the *fact*, not for the symptom.
+
+**E - search. 8 of 8 hold. Nothing found: the first area that turned up no bug.**
+
+Every number checked against `grep` on the fixture first, and the widened numbers against stock's
+output, not just against each other. The fixture was made clean for this area - the dirty files
+from D reverted and every editor closed - because a search reads unsaved buffers too, and one
+stray keystroke in an open editor had already turned 3 hits into 4.
+
+```
+ground truth   FACADE_MARKER   alpha 1 file / 1 hit    all three 3 / 3
+               export          alpha 4 / 5             all three 10 / 13
+               export, not in **/sub/**                all three  6 / 9
+```
+
+```
+E-1  ≠   3 results in 3 files, in three     1 result in 1 file, and no folder row
+         folder sections                      above it
+E-2  = ⭐ widened: `3 results in 3 files`, and the row list is stock's, string for string -
+         the folder sections come back with it
+E-3  ≠   ⌘P `index` -> three, one per       -> one, alpha's
+         folder; `shared` -> three
+E-4  = ⭐ widened: the same three, in the same order stock gives them (beta, alpha, gamma)
+E-5  ≠   ⌘T `#FACADE_MARKER` -> three       -> one, alpha's
+E-6  = ⭐ widened: the same three, in the same order
+E-7  =   include `**/*.ts` -> 13 / 10;        widened: 13 / 10 and 9 / 6, the same numbers.
+         and excluding `**/sub/**` -> 9 / 6   Narrowed: 5 / 4 and 3 / 2, which is alpha on
+                                              its own, counted by `grep`
+E-8  ≠   there is no scope to survive       the widened scope survives a reload, and the
+         anything                             title reads `Showing All Folders`, checked
+```
+
+`⚠️` **⌘T needed a control before it could say anything.** The first reading was one result where
+three were expected, and it was not the narrowing: TypeScript indexes lazily, and only the folder
+whose file had been opened was warm. Opening `shared.ts` from each of the three and waiting made
+stock answer three - and only then was there an instrument that could tell a narrowed answer from
+a cold one. Both builds are warmed the same way, by opening the same three files.
+
+`⚠️` Two harness faults on the way, both of which read as findings first. A quick input remembers
+its last query **including the prefix**, so selecting all and typing over it turns `#symbol` into a
+file search that answers "No matching workspace symbols" for everything. And `Input.insertText`
+fills a box without the widget hearing a keystroke, so the search never runs - the last character
+has to go in as a real key event.
+
+`⚠️` Noticed in passing, not a planned case: after opening `shared.ts` from beta and then from
+gamma, the title still read `shared.ts — alpha`. The window stays on the folder the bar says, which
+is the rule about the editor never moving it, holding in a running window.
+
+**F - problems. 5 of 5 hold. Nothing found; one thing that looked like a bug for half an hour.**
+
+The fixture grew a bad JSON file in beta and gamma, so that narrowing has something to hide. Four
+bad files in all: one in each folder, and `outside/broken-outside.json`, which is in none of them.
+All four opened from the one folder, which the widened scope makes reachable without moving the
+window.
+
+```
+F-1  ≠   four file rows, one per bad file    two: alpha's and the one outside the
+                                              workspace. beta's and gamma's are filtered
+                                              out although their editors are still open
+F-2  = ⭐ widened: the same four rows, in the same order, with the same message, the same
+         column numbers and the same badge - `4 0`, `Errors: 4`
+F-3  = ⭐ `broken-outside.json` is in the panel in **both** scopes. A file in none of the
+         workspace's folders is covered by every scope, which is the regression this case exists
+         for: `covers()` once hid everything outside the workspace and everything in an empty
+         window
+F-4  =   double-clicking beta's problem opens the file at `Ln 1, Col 12`, one character selected,
+         on both. On ours the window stays on alpha while it does it
+F-5  =   the badge counts what the panel shows, at every step: 2 on alpha, 0 on a folder with
+         nothing open, and back
+```
+
+`⚠️` **The half hour.** Walking the bar alpha -> beta -> gamma -> alpha left the panel empty and the
+badge at zero, with all four tabs back on screen. Thirty seconds of waiting did not change it, and
+closing every editor by hand and reopening one did not either. It looked like the switch had
+broken diagnostics for the window.
+
+It had not, and two measurements said so. Widening the scope showed one problem - **beta's** - so
+the markers were not gone, there was just one of them. And stock, reloaded with the same four
+files open, came back with **one** as well: its restored tabs are lazy, so only the editor that is
+actually active has a document, and only a document has diagnostics. Four became one on both
+builds, for the same upstream reason.
+
+Ours read zero rather than one because the editor the restore made active was beta's, and the
+panel was narrowed to alpha - which is the panel doing its job. The badge agreed with it, which is
+what F-5 asks.
+
+`⚠️` Worth saying out loud even though it is upstream's: on stock this only happens when a window
+reloads, which is rare. Here it happens on **every folder switch**, because each folder brings back
+its own editors. Leaving a folder with four problems on screen and coming back to one is going to
+read as a bug to whoever it happens to, and the honest answer - the tabs are there, the documents
+are not yet - is not visible anywhere.
+
+**G - the pickers. 6 of 7 hold, 1 not run. One bug found and fixed.**
+
+The judgement here is narrow and strict: **the same folders, in a different order**. A picker that
+lost a folder would be promise 1 broken, whatever it gained. The fixture grew `.vscode/tasks.json`
+and `.vscode/launch.json` in each folder so that the task and debug pickers have something to
+offer, and the window was put on **gamma** - last in the workspace - so that "active first" is
+visible rather than assumed.
+
+```
+                              stock 1.137.0                     ours, window on gamma
+G-1  folder settings          alpha, beta, gamma                gamma, alpha, beta
+G-2  snippets                 global, then alpha, beta, gamma   global, then gamma, alpha, beta
+G-3  tasks                    echo-alpha, -beta, -gamma         echo-gamma, -alpha, -beta
+G-4  debug                    run-alpha, -beta, -gamma          run-alpha*, run-gamma, run-beta
+     and its Add Config       alpha, beta, gamma, workspace     gamma, alpha, beta, workspace
+G-6  new terminal             asks "Select current working      asks nothing. The terminal opens
+                              directory": alpha, beta, gamma    in `/private/tmp/cmp/gamma`,
+                                                                read off the shell process itself
+G-7  where the question went  there is no such command          `Create New Terminal in Another
+                                                                Folder...`, offering gamma, alpha,
+                                                                beta under stock's own placeholder
+```
+
+Membership is identical in every one of them.
+
+`⭐` **What G-4 found: the fourth reader of the same fact.** `getLaunches()` was ordered - that is
+what the Add Config entries come from, and they were right. `getAllConfigurations()`, which is what
+the launch configurations themselves come from, walked `this.launches` raw. The comment left on
+`getLaunches` said the rule out loud - *every reader that is not a `find` or a `filter` is a list
+somebody looks at* - and then a reader two hundred lines away was not repointed.
+
+Both places now share one helper, `activeFirst`, beside `foldersWithActiveFirst`, which moves one
+item to the front and disturbs nothing else. That matters here: the launches list ends with the
+workspace's own `launch.json` and the debugger takes it **by index from the end**, so a sort would
+have broken it. Four tests, and the wiring is what the live run proves.
+
+`⚠️` `run-alpha` still reads first, marked *Most Recent*. That is upstream pinning the **selected**
+configuration to the top, and the selected one is alpha's because it is the first launch with
+configurations in the raw list. Whether the selected configuration should follow the bar - the way
+the Graph and the status bar do - is the same question D-2 and D-3 answered yes to, but it is a
+persisted selection rather than a list order, so it is written down here and not changed.
+
+`⚠️` **G-5 was not run.** The agent picker lives in the chat surface, which needs the Copilot
+extension and a signed-in account; neither is present in a throwaway profile on a dev build. The
+change there is the same single call to `foldersWithActiveFirst` as G-1 and G-2 and is covered by
+that helper's tests, but **nobody has seen it on a screen**, and this table does not get to say
+otherwise.
+
+**H - one window, many folders. 8 of 10 hold, 2 not run. One bug found and fixed, in the path most
+people use.**
+
+The area the whole fork turns on, and the judgement is a number: how many windows are open
+afterwards. Counted from the debugger's own page list, not from a screenshot.
+
+```
+                              stock 1.137.0                     ours
+H-1  `code <folder>`          + 1 window, `delta`               same window. alpha -> delta, and
+     ≠                                                          the workspace gains `"delta"`
+H-2  `--new-window <folder>`  + 1 window, `epsilon`,            + 1 window, `epsilon`, workspace
+     =                        workspace file untouched          file untouched
+H-3  `code <file>`            same window,                      same window, `index.ts - alpha`
+     =                        `index.ts - three (Workspace)`
+H-4  `--add <folder>`         same window, file gains delta     the same, and the window moves
+     =                                                          onto the folder it just added
+H-5  Open Recent, Enter       ⚠️ the workspace is **replaced**   same window, delta becomes a row,
+     ≠                        by a single-folder window on      workspace intact at four folders
+                              delta
+H-6  Open Recent, ⌘Enter     + 1 window                        + 1 window, workspace file
+     =                                                          untouched
+H-7  File > Open Folder       the workspace is replaced         delta becomes a row, workspace
+     ≠                                                          intact
+H-9  File > Open..., pointed  the workspace is replaced         ⭐ after a fix: a row, workspace
+     ≠  at a directory                                          intact. A file picked the same
+                                                                way still opens as an editor
+```
+
+`⚠️` **H-5 and H-7 are not "a second window" on stock - they are "your workspace is gone".** Picking
+a recent folder, or opening one, replaces the window you were in. Nothing is lost on disk and the
+workspace can be reopened, but what was on screen is not there any more. Ours adds a row and moves
+to it, and the four folders are still four folders. That is a bigger difference than the case list
+assumed, and in the right direction.
+
+`⭐` **What H-9 found, and why it matters more than the others.** `File: Open...` offers files and
+folders at once, and a directory picked there **replaced the workspace on our build too** - the
+seam did not cover it. Two call sites were missing it, and the second is the one that matters:
+
+```
+the in-page dialog  `pickFileFolderAndOpenSimplified` opened a window itself for a directory
+the native dialog   `pickFileFolderAndOpen` handed the whole job to the main process, which
+                    picks and opens in a single call and can only answer with a window
+```
+
+⚠️ The native one is what runs by default. Every measurement in this area had been made with
+`files.simpleDialog.enable` on, so the path almost every person actually uses was the one nobody
+had looked at. The dialog is now **asked for a path** rather than told to open one - the same shape
+the Open Folder fix already had - and a shared `openPicked` decides what to do with it, so the two
+dialogs cannot answer differently again. A test pins the native half; the in-page half is what the
+live run measured, before and after.
+
+`⚠️` **H-8 and H-10 were not run.** H-8 is the File > Open Recent submenu, which on macOS is a
+native menu that the debugger cannot drive; it reaches the same `openOrShow` seam H-5 proves, but
+nobody has clicked it. H-10 is a folder dropped from Finder: synthetic drag events carry no real
+file path into the page, and **stock did not react to one either** - so there is no instrument, not
+a negative result. The drop handler is a path this fork changed and it is still unmeasured.
+
+**I - the terminal. 3 of 5 have results, 2 have none. No bug found.**
+
+The terminal is where the fifteen repointed guesses were supposed to show, and it is the surface
+the rule about the editor was written for. Its working directory is read **from the shell process**
+- `lsof -d cwd` on the pid - because xterm draws to a canvas and the screen has nothing to read.
+
+```
+I-1  ≠  stock follows the **active editor**: an editor on alpha gives a terminal in alpha, and
+        moving the editor to gamma gives the next one gamma. Both measured, so the mechanism is
+        established rather than assumed.
+        ⭐ Ours follows the **bar**. With the editor on `alpha/sub/only-in-alpha.ts` - a name no
+        other folder has, so there is nothing to misread - and the bar on gamma, the terminal
+        opened in `/private/tmp/cmp/gamma`.
+I-3  ≠  `${workspaceFolder}` in `terminal.integrated.cwd`: stock resolved it to the editor's
+        folder three times over (`beta/sub`, then `alpha/sub` and `gamma/sub`). Ours resolved it
+        to the bar's - `gamma/sub` - while the editor was still on alpha's file
+I-4  =  killing every terminal takes both builds to zero terminals and zero shell processes. The
+        split-and-restore half of this case was not driven; see below
+```
+
+`⚠️` **I-2 has no comparison.** The split could not be driven on our build: focus never lands
+inside the terminal for a synthetic click, so the split keybinding and both split commands did
+nothing, across five attempts. Stock has a data point - a split with `splitCwd: workspaceRoot`
+landed in **alpha**, the editor's folder - and it arrived incidentally, showing up in a later
+reading rather than the one that asked for it. One side measured is not a comparison, so this case
+has no result. It shares its mechanism with I-1, which is measured on both.
+
+`⚠️` **I-5 has no instrument.** A folder-level `terminal.integrated.cwd` in `gamma/.vscode/settings.json`
+did not take effect on stock - and neither did a folder-level `files.exclude` put beside it as a
+control. `terminal.integrated.cwd` is declared `ConfigurationScope.RESOURCE`, so it should have.
+With the control failing too, what was measured is the fixture or the harness, not either build,
+and there is nothing here to report about the product. The folder settings file was taken out
+again afterwards.
+
+`⚠️` Two readings in this area arrived late rather than not at all - a split that appeared in the
+*next* measurement, and terminals counted before they existed. A terminal is slower than the thing
+that asked for it, and "it did not happen" needs a second look before it is written down.
+
+**J - dialogs and editors. 5 of 5 hold. No bug found.**
+
+What a dialog offers when it opens is a guess about where you are, and it is one of the fifteen.
+The starting path is read out of the dialog's own box, without completing it.
+
+```
+J-1  ≠  `File: Open...` with nothing open: stock starts at `/private/tmp/cmp/alpha/` - the
+        **first** root, whichever folder you were working in. Ours starts at the bar's folder,
+        `gamma/`. `File: Open Folder...` starts at `/private/tmp/cmp/` on both
+J-2  =  with an editor open on `beta/shared.ts`, both start at `beta/` - **ours too, with the bar
+        on gamma**. When there is a file in front of you, the dialog follows the file
+J-3  =  Save As with that editor: `beta/shared.ts` on both, character for character
+     ≠  ⭐ and in the one place it can differ - an untitled file in a window where no file has
+        ever been opened - stock offers `alpha/Untitled-1` and ours offers `gamma/Untitled-1`
+J-4  ≠  each folder keeps its own editors. gamma has `shared.ts`; alpha opens with **no tabs at
+        all**, takes `broken.json`, and the two sets swap back and forth without losing either
+J-5  =  after a reload the window comes back on alpha with `broken.json`, and switching to gamma
+        brings `shared.ts` back. **Both** folders' sets survive, not only the one on screen
+```
+
+`⚠️` **The case list had J-3 down as a flat `≠`, and that was too coarse.** Save As follows the
+file, and there is almost always a file - so it agrees with stock everywhere except the one window
+where nothing has been opened yet. Measured three ways to find the seam: with a file (same), with
+an untitled file after a file (same - both fall back to the last file's folder, `beta`), and with
+an untitled file in a window that has never had one (different). The difference is exactly where
+there is nothing else to go on, which is where the fork intends to differ and nowhere else.
+
+**K - what extensions see. 5 of 5 hold. No bug found. ⭐ This is promise 1 said out loud.**
+
+Every case here is `=`, and any `≠` would be a failure rather than a feature. The reading is done
+by a throwaway extension - `ext-probe`, twelve lines of interest - that writes what it sees to
+`/tmp/cmp/probe-out.json`, installed into both throwaway extension directories. §8.4 listed it as
+something the suite needed and did not have; it exists now.
+
+```
+K-1  =  ⭐ the same snapshot on both builds, field for field:
+        workspaceFolders  alpha, beta, gamma, at indices 0, 1, 2
+        workspaceFile     /tmp/cmp/three.code-workspace
+        name              **"three (Workspace)"** - while the window's own title bar says `alpha`
+        getWorkspaceFolder(beta/shared.ts)  ->  beta
+K-2  =  each folder's task resolves `${workspaceFolder}` to its own folder, on both:
+        alpha -> /private/tmp/cmp/alpha, beta -> beta, gamma -> gamma. The tasks write it to a
+        file, so what is compared is what the shell was actually given
+K-3  =  the TypeScript server has all three indexed on both builds. Measured in E-5/E-6: widened,
+        ⌘T answers `FACADE_MARKER` with alpha, beta and gamma in the same order on both. The
+        narrowing is in what the picker offers, not in what the server knows
+K-4  = ⭐ `vscode.openFolder(delta, { forceNewWindow: false })` replaces the window with a
+        single-folder window on delta - on **both**. The probe confirms it from inside:
+        `workspaceFile: null`, `name: "delta"`, `folders: ["delta"]`, and the `.code-workspace`
+        on disk still holds its three. The seam that makes `code <folder>` join this window does
+        not reach the API, which is the one carve-out, and it held
+K-5  =  `onDidChangeWorkspaceFolders` fires identically: `added: ["delta"], removed: [], countAfter: 4`.
+        On our build the same command also moves the window onto the new folder, and the extension
+        is told none of that - it is told what upstream tells it
+```
+
+`⭐` **The line this area is really about.** The window shows one folder; `workspace.name` still
+answers `three (Workspace)` and `workspaceFolders` still has three. An extension written against
+VS Code cannot tell it is running here, and nothing in these five readings gives it a way to find
+out. That is the promise, and it is the first time it has been checked from the other side of the
+extension host rather than argued from the code.
+
+**L - persistence and a clean exit. 4 of 4 hold. No bug found.**
+
+A whole session on each build, then a **clean shutdown** - `SIGTERM` to the main process, so the
+save-state path actually runs - then the window reopened. The session: open a file, widen the scope
+(ours), search, problems, source control, walk the bar through all three folders (ours), a terminal,
+another file, the explorer.
+
+```
+L-1  =  reopened, both builds bring back the same two editors and the terminal
+L-2  ≠  and ours comes back **on alpha**, the folder the session left it on - explorer header,
+        command centre and title all say so. Stock comes back to `three (Workspace)`, which is
+        the only thing it has to come back to
+L-3  = ⭐ the `.code-workspace` file is **byte-identical** afterwards, on both:
+        md5 9ad2ad3c804aa3b1d8708c8676596505 before, and the same after
+L-4  ≠  the widened scope survives the quit: the same search answers `3 results in 3 files`
+        instead of 1, and the toggle reads `Showing All Folders`, checked
+```
+
+`⭐` **L-3 is the second of the two rules, measured end to end rather than argued.** Nothing of
+ours goes into the workspace file - and what this run adds is that nothing of ours goes in *by
+accident either*, after a session that touched every surface the fork changes. Where our state went
+instead is readable in the workspace storage database beside it:
+
+```
+workbench.activeFolder              which folder the window is on
+workbench.workspaceBar.editorSets   each folder's editors
+facade.folderScope                  narrowed or widened
+```
+
+Three keys, all in `WORKSPACE` storage, none in the file. Stock's own control says the same file is
+untouched by the same session, so the comparison is between two unchanged files rather than between
+a changed one and a guess.
+
+### 8.6 The suite, finished
+
+```
+area                       cases   with a result   found
+A  the shape of the window     7         7          -
+B  editing the folder list     6         6          1
+C  explorer and files          5         5          1
+D  source control              8         8          2
+E  search                      8         8          -
+F  problems                    5         5          -
+G  pickers                     7         6          1
+H  one window, many folders   10         8          1
+I  terminal                    5         3          -
+J  dialogs and editors         5         5          -
+K  what extensions see         5         5          -
+L  persistence, a clean exit   4         4          -
+                              75        70          6
+```
+
+**Six bugs, and five of them are one mistake.** A fact that used to be about the workbench became a
+fact about one folder, and its readers were repointed one at a time:
+
+```
+B   the bar resolved a symlink before *storing* the path, so a sibling folder went into the
+    `.code-workspace` as `../../private/tmp/cmp/delta`. Which folder is this, and what should the
+    file say, turned out to be two questions
+C   `explorerView` asked "how many roots am I drawing"; the renderer asked `getWorkbenchState()`
+    for the same thing, so every file was **announced** one level deeper than it is
+D   a write to `visibleRepositories` spoke for folders the window could not see - and
+    `scm.providerCount` had three readers, two of them asking opposite questions
+G   `getLaunches()` was ordered; `getAllConfigurations()` walked the raw list two hundred lines away
+H   `pickFileFolderAndOpen` bypassed the seam on **both** dialog paths, and the native one - the
+    one that runs by default - had never been measured
+```
+
+`⭐` **The pattern is worth more than the six fixes.** Fixing the reader you can see hides the
+others: they fail in a screen reader, in a stored record, in a folder nobody is looking at, behind
+a setting nobody turned on. Four of the six were found only because stock was standing beside us
+doing the same thing, and two of those only because the comparison went down to an attribute rather
+than a row label.
+
+**Five cases have no result, and none of them is a pass.**
+
+```
+G-5   the agent picker needs the chat surface: an extension and an account a throwaway profile
+      does not have
+H-8   File > Open Recent is a native menu on macOS. Same seam as H-5, which is measured
+H-10  a folder dropped from Finder. Synthetic drags carry no path, and **stock did not react
+      either** - no instrument, not a negative result. This is a path the fork changed
+I-2   the terminal split could not be driven on our build; stock has a data point and one side
+      is not a comparison
+I-5   a folder-level `terminal.integrated.cwd` did not take effect on stock, and neither did the
+      control beside it - so what failed was the fixture or the harness, not the product
+```
+
+`⚠️` H-10 is the one that should keep somebody awake: the drop handler is ours to break and nothing
+has looked at it. The other four are either covered by a neighbour or blocked by the harness rather
+than by the product.
+
+`⚠️` **What the harness got wrong, kept here so the next run does not pay for it again.** Every one
+of these read as a finding first:
+
+```
+the palette needs its `>` back after a select-all, or it silently becomes a file search
+`Input.insertText` puts text in without a keystroke, so trees and search boxes never react
+rename and delete in the explorer are Enter and cmd+backspace on macOS, not F2 and Delete
+`timeout` does not exist on macOS, so the command that "failed" never ran
+a surviving instance keeps port 9222, and every reading after that comes from the wrong window
+a terminal, and a split, can arrive in the *next* measurement rather than the one that asked
+an unsaved editor is searched too, so one stray keystroke turned 3 hits into 4
+```
+
+### 8.7 The review after the run
+
+Reading the whole change back with the suite's experience in hand, looking for three things: more
+of the bugs it found, tests it never ran, and corners cut.
+
+**More of the same bug, still in the tree: two.**
+
+```
+⭐ the settings editor's own **Folder** dropdown listed the workspace's order, while
+   `Preferences: Open Folder Settings` - the same question through the command palette - had been
+   repointed to put the folder the window is on first. Two doors onto one question, one turned.
+   Measured after the fix: with the window on gamma the dropdown offers `gamma, alpha, beta`
+   the agent-sessions welcome opened a recent folder with `hostService.openWindow` directly,
+   bypassing the seam every other "open this folder" goes through. Fixed, and ⚠️ unmeasured:
+   that screen needs an extension and an account a throwaway profile does not have
+```
+
+Everything else the sweep turned up was a `find`, a `filter`, a count, or a fallback that already
+had the active folder in front of `folders[0]`. Rule (a) holds: the two places that replace the
+whole folder list both take it from a dialog, not from a narrowed getter.
+
+**Corners cut: five, all mine.**
+
+```
+⭐ `add` then `show(the last one)` was written out twice - in the CLI path and in the drop
+   handler - with the same intent and no shared code. Now one `addAndShow` on the bar service
+⭐ and the reason only two of the four ways to add a folder move the window was **nowhere**.
+   Dropping on the window means "show me this"; dropping on the bar, or picking through its `+`,
+   means "put this in the list" - a real distinction, and one a reader could not tell from a bug.
+   Said out loud now, at both sites that do not move
+⭐ `vs/workbench/services/folderScope` was never added to `build/lib/i18n.resources.json`, so
+   every string in the new service would have shipped untranslatable. The linter had been saying
+   so; `| tail -3` had been cutting it off. Every warning across the change is read now, and there
+   are none
+   `folderScope.ts` and `pickerQuickAccess.ts` had unsorted imports, and `terminalActions.ts` had
+   one sitting where the import it replaced used to be rather than where it belongs
+   a `string | URI | undefined` annotation in `terminalActions.ts` that only widened what the
+   expression already was
+```
+
+**Tests the suite never ran, run now.**
+
+```
+the scope toggle **on the picker itself** - ⌘P's own title button. Narrowed it offered one
+`shared.ts`; clicking it offered the same three stock does, in the same order. Nothing in the 75
+had ever pressed it; the scope was always changed from the palette or the search view
+the scope changed while the Problems panel is **hidden**, which is the shape of the bug the
+first review found in the search view. Widened and open: four problems, badge four. Panel closed,
+scope narrowed, badge two straight away. Panel reopened: exactly the narrowed two. No staleness
+```
+
+`⚠️` **And a sixth harness fault, found by chasing what looked like a real one.** The bar stopped
+responding to clicks in one window. The explorer in the same window still responded, so it was not
+the window - it looked like ours. It was not: opening the settings editor's Folder dropdown
+**twice without dismissing it** leaves a context menu listening at the document, and it swallows
+every click after that. Reproduced on a fresh window, and the bar comes back the moment the menu is
+dismissed. A person cannot get into that state; only a script that opens menus and never closes
+them can.
+
+`⚠️` Still not covered by anything: `addAndShow`'s empty-list guard, and the agent-sessions welcome
+change above. Both are reasoned, neither is measured.
+
+### 8.8 Three reviews, and what they found that this one had not
+
+Two more reviews were run over the same change - one a test-plan review numbered R1 to R8, one a
+line-by-line code review that checked those eight against the tree and went on. Every one of the
+eight held. Seven are fixed here; R8, the stock-behaviour switch `ENGINEERING.md` asks for, is a
+product decision and was deliberately left.
+
+```
+R1  restoration ran outside the switching transaction     fixed  switcher joins the capture
+R2  a rename restored an old or empty editor set          fixed  a rename is not a move
+R3  reorder bypassed the workspace write queue            fixed  queued, and by identity
+R4  the drop interceptor shadowed everything              fixed  see below
+R5  Go to File history bypassed the scope                 fixed  filtered through `covers`
+R6  native Open lost multiple selection                   fixed  `canSelectMany` again
+R7  membership changes did not invalidate the scope       fixed  it listens to the workspace
+R8  no switch whose off state is stock                    open   a decision, not a defect
+```
+
+`⭐` **The worst of it was R4, and the first pass at it fixed the wrong half.** The bar's drop handler
+listens on `document.body` in the capture phase and stopped **every** drag from the file manager,
+wherever it landed. The first fix here changed what happens after that - a `.code-workspace` opens a
+window rather than being taken apart - and left the interception alone. The second review counted
+what the interception costs:
+
+```
+the explorer tree     copies the dropped files into that folder, with a confirmation
+the chat input        attaches the file to the prompt
+the Extensions view   installs a dropped `.vsix`
+a webview, a notebook cell   whatever the extension or the cell does with it
+```
+
+All four were answered with "added to the workspace" instead. That is promise 1 broken four times to
+pay for one feature that was already reachable. The listener now takes only what lands **on the
+bar**, and everything else keeps the handler it had - including the editor area, where a dropped
+folder reaches `ResourcesDropHandler` and is added *and* shown. Dropping on the bar adds without
+moving; dropping on the window moves. That distinction is now enforced by where the listener looks
+rather than asserted in a comment, and `isTheBars` is tested against all five surfaces.
+
+`⚠️` **And the handler itself had drifted the other way.** Once the listener was narrowed to the bar,
+the line inside it still said `addAndShow` - so a drop on the bar went on moving the window, which is
+the whole feature undone for somebody dropping four folders at once. The seam was right (the service
+has offered `add` and `addAndShow` side by side, with the rule written on both, since the CLI path);
+one caller had simply never been repointed. It is `add` now, and a test says so - it fails when the
+call is put back, which is how it was checked.
+
+`⭐` **And then it was measured, because the instrument was wrong about itself.** "A synthetic drag
+carries no file path" had been written down four times in this document as the reason H-10 could not
+be run. It is not true: CDP's `Input.dispatchDragEvent` takes a `files` array, and the workbench
+receives it as a real file drop. Measured on the built app, one window throughout:
+
+```
+                     bar                              title bar
+start                alpha, beta, gamma               alpha
+folder -> the bar    + delta                          alpha      added, did not move
+folder -> the editor + epsilon                        epsilon    added and moved
+file   -> the editor unchanged                        shared.ts  opened, no row
+```
+
+The same run on the build from before the fix put the title on `delta` after the bar drop - the
+defect was live, and the instrument sees it. §9 is written on top of this: the rows that three
+reviews called unreachable are reachable.
+
+`⚠️` **One thing that run turned up and did not settle.** A `.code-workspace` dropped on the bar
+does not open a second window - it **replaces this window's workspace**, and the three folders that
+were in the bar go with no prompt. That may well be what stock does with a workspace file, but the
+A/B was not run, and the sentence above this one claimed a new window. Carried into §9 as H-23.
+
+`⭐` **`code <folder>` into an empty window wrote an untitled workspace.** The gate that makes a
+folder join this window fired for any last-active window, empty ones included - and adding a folder
+to an empty window turns it into a workspace: a `.code-workspace` in the profile, an extension-host
+restart, and a "save your workspace configuration?" prompt on the way out. H-1 only ever measured a
+window that already held three folders. The gate now asks whether that window is on anything, and
+leaves upstream's own "this folder is already open over there" lookup in front of it. Measured after:
+both builds record `{"folder": "file:///tmp/cmp/delta"}` and open a second window - identical. ⚠️ The
+review said stock reuses the empty window; it does not, and the fix is the same either way.
+
+`⭐` **Moving a folder through the first position restarts the extension host.** Upstream's relauncher
+watches `folders[0]` for the deprecated `workspace.rootPath`, so Move Folder Up on the second row
+costs every language server a restart. Measured: the extension host pid went from 75498 to 78361 on
+one Move Folder Down. Not a defect - it is upstream's behaviour and it is correct - but F1 said
+"measured" and never mentioned it, and the cost belongs beside the feature.
+
+Also fixed from the third review: the Search Editor and the `%` quick text search now use the same
+folder list as Find in Files; the reachability test that decided "this folder needs another window"
+lived in two places and read a URI's own authority, so a `vscode-vfs://` folder was sent to a second
+window that could have held it - it is now one function asking for the **remote** authority; and a
+comment on `show()` that explained a guard by something `addFolders` does not do.
+
+`⚠️` **What the `%` picker still does not do** is re-run the results already on screen when the scope
+is toggled under them. The toggle is there, it flips the scope, and the next query or the next time
+it is opened is answered from the new one. Clearing its cached matches ahead of the refresh was tried
+and does not reach that path.
+
+---
+
+## 9 The release plan
+
+Three reviews wrote three plans - a review and coverage plan (80 automated cases, 24 live checks,
+R1-R8), a code review (twelve findings and a list of what the first plan missed) and a
+release plan for Mac developers using coding agents (twelve user journeys, sixteen agent cases, eight
+acceptance sessions). All three were folded in here and their files removed, so that there is one
+plan rather than four. Their IDs are kept, so a citation in any of
+them still resolves: every live row they wrote has a case in §9.4, `R1-R8` are answered in
+§8.8, `J01-J12` name the journeys in §9.3, `AG`/`AL` keep their numbers in §9.7.
+
+What none of the three could agree on was how much is enough. The first plan put a 3x2x8x4x3x3x3x2
+matrix at 10,368 cells on the page and then picked 104. The answer this section takes is different:
+**enough is when every way a person can get a folder in, move between folders, and read the right
+side has been driven on the built app at least once, and compared against stock wherever the
+behaviour is not ours.** That is about seventy rows, and they are listed.
+
+### 9.1 The instrument, and what it turned out to reach
+
+Everything here is driven through the Chrome DevTools Protocol against the packaged build, the same
+way §8 was run. What changed since §8 is one thing, and it is the reason this plan can be complete:
+
+```
+Input.dispatchDragEvent   { type, x, y, data: { items: [], files: ['/tmp/...'], dragOperationsMask } }
+```
+
+`⭐` **A synthetic drag does carry a file path.** This document said four times that it does not, and
+wrote off H-10 and five review rows on that basis. The call above delivers a real file drop to the
+renderer - a folder dropped on the bar becomes a row, a folder dropped on the editor becomes a row
+and moves the window. Every drop row below is therefore runnable, including the four stock surfaces
+the interceptor used to shadow.
+
+What is read, in order of preference. Never a screenshot alone:
+
+```
+the bar            .part.workspacebar .monaco-list-row  -> textContent, aria-selected
+where the window is document.title, and the workspace file on disk
+the tabs           .tabs-container .tab -> aria-label
+how many windows   /json/list, counting type === 'page'
+what a view holds  its own list rows; markers, repositories, search results all render rows
+the extension host the window log: 'Extension host with pid N started' | 'exiting'
+a dialog           .monaco-dialog-box .dialog-message-text
+timing             performance.now() either side of the action, in the page
+```
+
+`⚠️` **Harness faults that read as findings.** Each of these cost a wrong conclusion once:
+
+```
+two un-dismissed context menus    the bar stops answering clicks; Escape between every step
+the palette's '>' prefix          select-all then type eats it, and the palette becomes file search
+Input.insertText                  fills the box without the list taking focus, so Enter accepts nothing
+the last character                must go in as a real key event for the list to rank
+macOS rename / delete             Enter and Cmd-Backspace, not F2 and Delete
+`timeout`                         does not exist on macOS
+a surviving instance              keeps port 9222; kill by --user-data-dir before every launch
+terminals and splits              arrive in the *next* measurement, not the one that made them
+out/ is not the source            transpile-client before every run, or a green suite means nothing
+```
+
+### 9.2 What has to be true, and the three ways to be wrong
+
+Every row below fails in one of exactly three ways, and the row says which one it is watching for:
+
+```
+1  a promise is broken     something a workspace does today stopped working
+2  the illusion leaks      the right side shows another folder's content, or the window moved by itself
+3  a second window         one appeared that nobody asked for, or one was asked for and did not
+```
+
+A row that cannot say which of the three it would catch is not a test; it is a screenshot.
+
+### 9.3 The twelve things a person does
+
+The journeys from the Mac review, each one a group of rows that must all pass together. A journey
+is not passed by its first row.
+
+```
+J01  bring projects into one window        H, A-1, A-6
+J02  move between them while working       J-6..J-17, B-4, B-7
+J03  start work in the intended directory  I, G-6, G-7
+J04  keep several jobs running             P-1..P-4
+J05  watch something change underneath     C-3, C-6..C-9, P-5, P-6
+J06  resolve a conflict over one file      P-7, P-8
+J07  find and inspect code                 E, F, G-1..G-5, G-8
+J08  review and commit deliberately        D
+J09  work on parallel branches             P-10..P-12
+J10  run and interrupt commands            I, P-13, P-14
+J11  leave and come back                   L, B-13
+J12  stay usable under sustained work      M, P-15
+```
+
+`⚠️` J04, J06, J09 and most of area P are the **agent** story, and this fork hides built-in chat by
+default. They are listed because the reviews listed them, and §9.6 schedules them as a tier that a
+workspace release does not block on. Keeping an extension in the tree is not evidence a person can
+use it.
+
+### 9.4 The cases
+
+**One set of IDs, and it is §8's.** The letters below are the same twelve areas the comparison suite
+ran, with the same numbers, plus four areas that had no letter because nothing had asked for them
+yet. Every citation in §8.5 - `D-5`, `H-9`, `B-4` - still points at the same case. New cases carry on
+from the last number in their area. There is no second scheme.
+
+```
+ran  the case was driven on the built app; §8.5 or §8.8 says what it found
+new  planned
+  =  ours is expected to be identical to stock, and is compared against it
+  ≠  ours is expected to differ, and this document says how
+ [1] a promise is broken - something a workspace does today stopped working
+ [2] the illusion leaks - the right side shows another folder, or the window moved by itself
+ [3] a window appeared that nobody asked for, or was asked for and did not
+```
+
+#### A — the shape of the window
+
+```
+ran =  A-1   both builds hold three folders                                                   [1]
+ran ≠  A-2   the explorer's roots                                                             [2]
+ran ≠  A-3   the title and the command centre                                                 [2]
+ran =  A-4   opening a workspace does not rewrite the file                                    [1]
+ran =  A-5   a plain folder, no bar to speak of                                               [1]
+ran =  A-6   a second workspace file is a second window                                       [3]
+ran ≠  A-7   column zero exists
+new =  A-8   Zen mode, fullscreen, side bar right, native title bar, custom title bar         [1]
+new =  A-9   the bar at its narrowest and its widest: nothing clipped, nothing overlapping    [1]
+```
+
+#### B — editing the folder list
+
+```
+ran =  B-1   add                                                                              [1]
+ran =  B-2   remove                                                                           [1]
+ran =  B-3   add the same folder twice                                                        [1]
+ran ≠  B-4   move up and down                                                                 [2]
+ran =  B-5   the other entries' paths are untouched by a write                                [1]
+ran =  B-6   Save Workspace As
+new ≠  B-7   move through position 0.  ran in §8.8: the extension host restarts. Count it     [1]
+new =  B-8   move at either end: nothing moves, nothing throws                                [1]
+new =  B-9   remove with "do not ask again", then remove again: no second prompt               [1]
+new =  B-10  remove the last folder: the window is empty, not broken                          [1]
+new =  B-11  the .code-workspace edited by hand while open: the bar follows                   [1]
+new =  B-12  a folder added to the file by another process: the bar adopts it                 [1]
+new =  B-13  Save Workspace As with dirty editors, per-folder sets and the scope widened      [1]
+```
+
+#### C — explorer and files
+
+```
+ran ≠  C-1   the roots                                                                        [2]
+ran ≠  C-2   what switching does to it                                                        [2]
+ran =  C-3   create, rename, delete                                                           [1]
+ran =  C-4   collapse and filter                                                              [1]
+ran =  C-5   reveal                                                                           [1]
+ran ≠  C-6   aria-level and indent: a child of nothing is announced as level 1                [2]
+ran =  C-7   a file created outside, in the active folder, and in one that is not             [1]
+new =  C-8   a batch of creates, renames and deletes: nothing stale, excludes honoured        [1]
+new =  C-9   a .gitignore'd path is hidden by the rule, not by us                             [1]
+```
+
+#### D — source control
+
+```
+ran ≠  D-1   Changes            ran ≠ D-2  Graph          ran ≠ D-3  the status bar branch    [2]
+ran ≠  D-4   a folder with no repository                                                      [1]
+ran =  D-5   the Repositories view lists all                                                  [1]
+ran =  D-6   a deselected repository stays deselected across a reload                         [1]
+ran =  D-7   stage and commit                                                                 [1]
+ran ≠  D-8   the provider entry                                                               [2]
+new =  D-9   commit in one of two repositories: the other's index and branch are untouched    [1]
+```
+
+#### E — search and the pickers
+
+```
+ran ≠  E-1   Find in Files, narrowed, against `grep -rl`                                      [2]
+ran =  E-2   widened equals stock                                                             [1]
+ran ≠  E-3   ⌘P            ran = E-4  widened equals stock                                    [2]
+ran ≠  E-5   ⌘T            ran = E-6  widened equals stock                                    [2]
+ran =  E-7   include and exclude                                                              [1]
+ran ≠  E-8   the scope survives a reload                                                      [2]
+ran ≠  E-9   the scope toggle in the Search view's own title, both ways                       [2]
+new ≠  E-10  ⌘P with a history spanning three folders, narrowed: read every row               [2]
+new ≠  E-11  the `%` quick text search, both scopes                                           [2]
+new ≠  E-12  a new Search Editor, both scopes                                                 [2]
+new =  E-13  a folder added, then removed, while Search is open: it re-answers                [2]
+```
+
+#### F — problems
+
+```
+ran ≠  F-1   the count and the contents                                                       [2]
+ran =  F-2   widened equals stock                                                             [1]
+ran =  F-3   a file outside the workspace                                                     [1]
+ran =  F-4   clicking one                                                                     [1]
+ran =  F-5   the badge agrees with the bar                                                    [2]
+ran ≠  F-6   the status bar's error count agrees with the Problems panel in both scopes       [2]
+new =  F-7   a folder added, then removed, while Problems is open                             [2]
+```
+
+#### G — the surfaces that ask which folder
+
+```
+ran ≠  G-1..G-5  order, not membership: folder settings, snippets, tasks, debug, agent picker [2]
+                 ⚠️ G-5 was never run - it needs a chat fixture. Stays in the agent tier
+ran ≠  G-6   Create New Terminal asks, or does not                                            [2]
+ran ≠  G-7   the command the question moved to                                                [2]
+new ≠  G-8   the settings editor's Folder dropdown is active-first, and the extension API
+             still sees the workspace's own order                                             [1]
+```
+
+#### H — one window, many folders: every way in
+
+```
+ran ≠  H-1   `code <folder>` at a window holding folders                                      [3]
+ran =  H-2   `--new-window`                                                                   [3]
+ran =  H-3   `code <file>`                                                                    [3]
+ran =  H-4   `--add`                                                                          [3]
+ran ≠  H-5   Open Recent          ran = H-6  with the modifier                                [3]
+ran ≠  H-7   File > Open Folder                                                               [3]
+ran ≠  H-8   the recent menu                     ⚠️ unrun in §8; superseded by H-20           [3]
+ran ≠  H-9   a directory opened as a file                                                     [3]
+ran ≠  H-10  a dropped folder, a dropped workspace  ⚠️ unrun in §8; superseded by H-13..H-19  [3]
+new ≠  H-11  `code <folder>` at an empty window.  ran in §8.8: no untitled workspace          [3]
+new =  H-12  `code <folder>` already open in this window: no second row                       [3]
+new =  H-13  `code <folder>` already open in another window: that window comes forward        [3]
+new =  H-14  `code <a> <b> <c>` and a file in one invocation                                  [3]
+new =  H-15  a folder on a remote authority this window is not on: a second window, reachable [3]
+ran ≠  H-16  a folder dropped on the bar: added, the window does not move.  ran in §8.8       [2]
+ran ≠  H-17  a folder dropped on the editor area: added, and the window moves.  ran in §8.8   [2]
+ran ≠  H-18  three folders dropped at once: three rows, one edit, one move, to the last       [2]
+ran =  H-19  a file dropped on the editor area: a tab, no row.  ran in §8.8                   [1]
+ran =  H-20  a file dropped on the explorer tree: stock's copy confirmation                   [1]
+new =  H-21  a file dropped on the chat input: stock's attachment                             [1]
+new =  H-22  a `.vsix` dropped on the Extensions view: stock's install                        [1]
+             ⭐ H-20..H-22 are three of the four the body-capture listener used to swallow
+ran ≠  H-23  a `.code-workspace` dropped on the bar, and on the editor
+             ⚠️ measured as replacing this window with no prompt; the stock half is unrun     [3]
+new =  H-24  a mixed drag - a file, a folder and a `.code-workspace` - in one drop            [3]
+new =  H-25  File > Open Workspace from File                                                  [3]
+new ≠  H-26  `+ Add Folder...`, one folder and then three: added, the window does not move    [2]
+new ≠  H-27  File > Open..., two files and then two folders.  ran in §8.8 as a unit test      [1]
+new =  H-28  a folder that no longer exists: the row is marked, not dropped                   [1]
+new ≠  H-29  the same folder under `/tmp` and `/private/tmp`: one row, spelled as given       [2]
+new =  H-30  a folder whose name collides with a row already there: both readable             [2]
+```
+
+#### I — terminal, tasks and debug
+
+```
+ran ≠  I-1   the cwd with an editor open on another folder                                    [2]
+ran ≠  I-2   split, under each splitCwd mode        ⚠️ unrun in §8                            [1]
+ran ≠  I-3   `${workspaceFolder}`                                                             [2]
+ran =  I-4   run, split, kill, restore                                                        [1]
+ran =  I-5   `terminal.integrated.cwd` per folder   ⚠️ unrun in §8; needs its own control     [1]
+new =  I-6   a terminal with an explicit cwd: the explicit one wins                           [1]
+new ≠  I-7   Run Task with per-folder tasks.json: which folder's task ran                     [2]
+new ≠  I-8   Run and Debug with per-folder launch.json: the configuration list's order        [2]
+```
+
+#### J — dialogs, editors, and moving between folders
+
+```
+ran ≠  J-1   ⌘O with no editor open      ran = J-2  with one open                             [3]
+ran ≠  J-3   Save As                                                                          [2]
+ran ≠  J-4   editors are per folder                                                           [1]
+ran =  J-5   reopening restores them                                                          [1]
+ran ≠  J-6   click a row: the bar, the title, the explorer and the status bar all move         [2]
+new =  J-7   click the row already active: nothing happens, no restore                        [2]
+new ≠  J-8   Next / Previous Folder, from the palette and from the keyboard                   [2]
+new =  J-9   A with two tabs -> B (empty) -> A: the tabs are back, with their split           [1]
+new =  J-10  A dirty -> B -> A: the unsaved text, not just a tab with the right name          [1]
+new =  J-11  an untitled editor survives the round trip by content                            [1]
+ran ≠  J-12  A -> B -> C faster than the restore: C is on screen and B's slot is not A's
+             ran as a unit test in §8.8; the live row is still to run                         [2]
+ran ≠  J-13  rename the active folder on disk: the label changes, the tabs do not move
+             ran as a unit test in §8.8; the live row is still to run                         [1]
+ran ≠  J-14  open a file from another folder, widened: the window does NOT move. §3.2b        [2]
+new ≠  J-15  Go to Definition into another folder: the same                                   [2]
+new =  J-16  the active folder is removed: the window lands somewhere valid                   [2]
+new =  J-17  Timeline, Outline and the breadcrumb bar follow the active folder                [2]
+```
+
+#### K — what extensions see (promise 1, directly)
+
+```
+ran =  K-1   `workspaceFolders` is three                                                      [1]
+ran =  K-2   tasks.json's `${workspaceFolder}`                                                [1]
+ran =  K-3   a language server indexes all three                                              [1]
+ran =  K-4   `vscode.openFolder` still opens a window                                         [1]
+ran =  K-5   `onDidChangeWorkspaceFolders`                                                    [1]
+```
+
+#### L — persistence and a clean exit
+
+```
+ran =  L-1   reopening restores                                                               [1]
+ran ≠  L-2   and the active folder                                                            [2]
+ran =  L-3   the file after a whole session                                                   [1]
+ran ≠  L-4   the scope is remembered                                                          [2]
+ran =  L-5   reload the window: the bar, the active row, the tabs                             [1]
+new =  L-6   quit with unsaved content, reopen: the content, from backup                      [1]
+new =  L-7   quit with terminals open, reopen: what is honestly restored                      [1]
+new =  L-8   `kill -9` mid-switch with dirty content, reopen: recoverable                     [1]
+new =  L-9   a new profile, first run: the bar is there and says what to do next              [1]
+new =  L-10  a folder removed between sessions: its editor set is forgotten, not orphaned     [1]
+new ≠  L-11  the same `.code-workspace` open in two windows, each on a different row
+             ⚠️ §4.1 says WORKSPACE storage is per window. It is per workspace id, shared     [2]
+```
+
+#### M — moving between folders, measured
+
+```
+new =  M-1   a warm switch at 1, 10 and 50 resident roots: median, p95 and worst of 50        [1]
+new =  M-2   a cold switch, reported separately                                               [1]
+new =  M-3   10,000 markers, narrowed against widened: time per `onMarkerChanged` for the
+             status bar entry and the badge together                                          [1]
+new =  M-4   50 roots: `realpath` calls and wall time for one add, one show, one remove       [1]
+new =  M-5   100 switches in a row: memory, listeners, orphan processes                       [1]
+new =  M-6   sustained writes and terminal output during repeated switching: typing is not
+             starved, and no search runs that nobody asked for                                [1]
+```
+
+#### N — keyboard, contrast and shape
+
+```
+new =  N-1   the whole of J and B by keyboard only: every action is reachable                 [1]
+new =  N-2   the accessibility tree after a switch and after a rename                         [1]
+new =  N-3   the 19 built-in themes: name >= 4.5, hint >= 4.5, icon >= 3.0
+             ⚠️ composite the alpha onto the real background first, or 3.41 reads as 12.63    [1]
+new =  N-4   a high-contrast theme, and macOS Increase Contrast                               [1]
+```
+
+#### O — the way back to stock
+
+```
+new =  O-1   the feature switched off: every modified surface compared to stock               [1]
+new =  O-2   switched off, reopened, then switched on again                                   [1]
+             ⚠️ NOT IMPLEMENTED. R8 was deliberately not built - "R8别做". Both stay red
+             until the switch exists or ENGINEERING.md's reversibility rule is revised
+```
+
+#### P — the agent tier
+
+```
+new    P-1..P-16   the sixteen agent boundary cases (a recording worker process): same process
+                   across a switch, cwd on launch, no crossed output, a membership edit never
+                   implies a kill, convergence after a background batch, a dirty buffer is not
+                   overwritten, worktree identity, PTY input during a switch, unexpected exit
+new    P-17..P-24  the eight acceptance sessions against a real named CLI agent
+                   ⚠️ Blocked: built-in chat is hidden by default in this build, so there is no
+                   fixture. Keeping an extension in the tree is not evidence a person can use it
+```
+
+```
+175 cases  ·  75 of them §8's, unchanged  ·  100 added, 24 of those the agent tier
+```
+
+### 9.5 What is still out of reach
+
+```
+the `%` picker's open results      the toggle flips the scope; it does not re-run what is already
+                                   on screen. E-11 asserts the next query, and says so
+a real agent, a real extension     built-in chat is hidden by default in this build, so area P has
+                                   no fixture. Tier 3
+a second machine                   H-15 needs a remote this window is not connected to
+sleep / wake                       P-23; no instrument
+```
+
+Anything else that cannot be run gets a row saying **why the instrument cannot reach it**, not a row
+saying it passed. A negative result is a claim about the instrument until the instrument has produced
+the positive somewhere.
+
+### 9.6 The order, and the gate
+
+```
+tier 1   the release gate     H  B  J  C  D  E  F  G  I  K  L  A      139 cases
+         a person cannot do their work if any of these is red
+tier 2   the polish gate      M  N                                     10 cases
+         it works, and it is not unpleasant or slow
+tier 3   the agent tier       P                                        24 cases
+         scheduled, not blocking; needs a chat fixture and a named CLI agent first
+tier 0   O                                                             2 cases
+         red until R8 exists or ENGINEERING.md's rule is revised in writing
+```
+
+Run order inside tier 1 is the order above, and it is not alphabetical. **H first** - a folder that
+cannot be added cannot be switched to. **B then J** - the list has to be editable before moving
+around it means anything. Then the right side, area by area. **L last**, because it asserts that
+everything the others did survives a restart. `A` sits at the end with `L` because the window's shape
+is worth looking at once everything is in it.
+
+`⚠️` **Each row logs its own assertions.** One action succeeding is not evidence that the session
+passed - that is the mistake §8 made twice and the reviews called out three times. A session passes
+when every assertion it declared passes.
+
+`⚠️` **Before every run:** `npm run transpile-client`, then kill by `--user-data-dir`, then launch on
+a fresh profile. `out/` going stale behind the source has already produced one green suite that was
+measuring a build from thirteen minutes earlier.
+
+### 9.7 What it would take to say "an ordinary person will not hit a problem"
+
+Honestly: tier 1 green on both builds, tier 2 green, and the three open questions closed -
+
+```
+H-23      does a dropped `.code-workspace` replace this window, and is that what stock does?
+L-11      two windows on one workspace file share one WORKSPACE store; §4.1 says they do not
+O-1/O-2   is there a way back to stock, and does anyone need one?
+```
+
+Everything else in this document is either measured or has a row that says how to measure it. The
+part no plan can cover is the one §8 kept running into: a fact that used to be about the workbench
+becomes a fact about one folder, and its readers get repointed one at a time. Six of those were found
+by running the suite, three more by reading it afterwards. **The row that catches the seventh is the
+one nobody has written**, which is why `[stock]` is on every row where the behaviour is not ours: a
+difference from stock is the only oracle that does not depend on having thought of the failure first.
+
+### 9.8 The decisions the rows depend on
+
+A row has no oracle until the question it asks has an answer. The code review listed eight open
+decisions; this is where they stand.
+
+```
+settled
+  code <folder> at an empty window     it joins that window only if the window is on something.
+                                       An empty window opens a second one, as stock does. H-11
+  code <folder> already open elsewhere upstream's own lookup comes first: that window is brought
+                                       forward, not duplicated here. H-13
+  a drop on the editor area            adds and moves. H-17
+  a drop on the bar                    adds only. H-16     ⭐ the user's decision, both measured
+  which surfaces keep their handler    all of them. Ours listens on the bar and nowhere else.
+                                       H-20..H-22
+  the debug configuration list         follows the bar - active folder first - and `activeFirst`
+                                       is the one function every reader calls. I-8
+  showWorkspaceFolderPick order        reordered for the person, and the extension API still sees
+                                       the workspace's own order. G-8
+
+open
+  a dropped .code-workspace            H-23. Measured as replacing this window with no prompt;
+                                       the [stock] half was not run
+  two windows on one workspace         §4.1 says StorageScope.WORKSPACE is per window. It is per
+                                       workspace id, and two windows on one file share it. L-11
+                                       is the row; the fix, if it needs one, is not designed
+  the way back to stock                O-1 and O-2, and R8 was deliberately not built
+```
+
+`⚠️` **Four standing rules that say what "correct" means** for the terminal and agent rows, taken
+from the Mac review and not restated in each row:
+
+```
+a switch changes the view, not the process    a terminal running in A stays that process, with its
+                                              cwd and its session. No cd, no cancel, no retarget -
+                                              and its title must not start claiming B
+a new terminal follows the active folder      but an explicit cwd, a workspace variable, or an
+                                              existing session choice keeps its precedence. Read
+                                              the shell's actual cwd, never the bar's label
+a switch is not an isolation boundary         extensions still see every folder and may index all
+                                              of them. The bar cannot promise what an agent reads.
+                                              An integration has to make its own target observable
+a write belongs to its own folder             something writing to A while B is shown must not put
+                                              A's changes in B's Changes pane, and a dirty buffer
+                                              keeps upstream's conflict handling
+```
+
+---
+
+## 10 The run before the commit
+
+A second pass over the plan in §9, both builds side by side - ours on port 9222, stock on 9223, each
+on its own fresh profile and its own copy of the same fixtures. It is **not** the whole plan. What
+was covered, what it found, and what was left is below, because a partial run reported as a full one
+is worse than no run.
+
+### 10.1 What it found
+
+`⭐` **A folder with no repository was told something false about its workspace.** On `gamma` - no
+`.git`, in a workspace where `alpha` and `beta` both have one - the Source Control view showed git's
+welcome, correctly, but the welcome said *"The workspace currently open doesn't have any folders
+containing Git repositories."* The workspace has two. This is ours: stock gates that sentence on
+`scm.providerCount`, which counts every repository in the workspace, so stock never shows it here;
+narrowing that key to the active folder brought the sentence into a state it was never written for.
+
+Fixed without writing a new sentence, because the right one already existed and is already
+translated: `%view.workbench.scm.folder%` - *"The folder currently open doesn't have a Git
+repository."* The two welcomes are now told apart by the two keys that already exist:
+
+```
+scm.providerCount == 0 && scm.workspaceProviderCount == 0   ->  ...the workspace ... any folders...
+scm.providerCount == 0 && scm.workspaceProviderCount != 0   ->  ...the folder currently open...
+```
+
+Measured both ways afterwards: on `gamma` beside two repositories it names the folder; in a workspace
+of `gamma` and `delta`, where nothing is a repository, the workspace sentence comes back.
+
+`⚠️` **A comment of mine was overclaiming.** `moveFolder` says it leaves "every entry exactly as the
+file has it". Every entry's **value** yes - measured, the absolute paths stay absolute. The file's
+**formatting** no: the whole `folders` array is written back, so entries written on one line come
+back on several and a comment *inside* the array is lost. Stock loses the same comment on its own
+Remove Folder - measured, same fixture, same result - so it is upstream's way of writing that array
+and not something a reorder makes worse. The comment and §6 now say which of the two they mean.
+
+`⭐` **The two-windows-on-one-workspace question is closed, and §4.1 was wrong.**
+`StorageScope.WORKSPACE` is keyed by the workspace id, not by the window - the review was right about
+that. But no two windows ever get the same id: opening a workspace that is already open focuses the
+window that has it (measured: `--new-window` on it, window count stayed 1), and Duplicate As
+Workspace makes a *new* workspace - two `workspaceStorage` directories, measured. §4.1 now says this.
+
+### 10.2 What ran, and against what
+
+```
+                                         ours          stock         verdict
+C-1 C-2  explorer roots, and a switch    1 root, L1    3 roots, L2   ≠ as designed
+C-6      aria-level of a child of nothing     1             2        the level matches the indent
+E-1      Find in Files, narrowed         1 in 1 file   3 in 3 files  = `grep -rl`, which finds 3
+E-2      and widened                     3 in 3 files  3 in 3 files  identical
+D-1      Changes, narrowed               alpha only    alpha+beta    ≠ as designed
+D-4      a folder with no repository     git's welcome  n/a          ⭐ fixed above
+F-1 F-6  Problems, and the status bar    beta.ts, 1 0  -             they agree, and follow the bar
+J-6      click a row: every face moves   title, explorer, search, SCM, status all followed
+J-14     open a file from another folder title changed, ⭐ the window did not. §3.2b
+B-4 B-5  Move Folder Down                order changed, window stayed, other paths untouched
+         and what it does to the file    reflowed, inner comment lost - stock does the same
+L-1 L-2  reload: bar, active folder      both survived
+L-4 L-5  reload: scope, tabs             both survived
+L-11     two windows on one workspace    not reachable; see above
+H-16     a folder dropped on the bar     added, window did not move   ⭐ the user's rule, live
+H-17     a folder dropped on the editor  added, window moved          ⭐ the other half
+H-19     a file dropped on the editor    a tab, no row
+H-20     a file dropped on the explorer  copied in and opened - the handler R4 had taken away
+H-23     a .code-workspace on the bar    replaces this window, no prompt   ⚠️ still open
+```
+
+### 10.3 What the instrument could and could not do
+
+`⭐` **Synthetic file drags work on our build.** `Input.dispatchDragEvent` with a `files` array
+delivers a real file drop; every H row above was driven that way, which is how the drop contract was
+measured at last.
+
+`⚠️` **They do not work reliably on stock.** The same call, the same Electron version, the same
+`drop: Files#1` arriving at `document` - and stock acts on perhaps one drop in five. Two runs of the
+same four rows gave different answers. **No drop row therefore has a stock baseline**, and the ones
+above are ours-only. Anything drawn from stock's silence would be a claim about the instrument.
+
+Three harness faults cost a wrong conclusion each before that was understood, and all three read
+exactly like a product that ignores drops:
+
+```
+a modal over stock              a Copilot sign-in dialog covers the window and eats every event.
+                                Ours hides chat by default, so only one side had it
+an onboarding editor            stock opens on a theme picker; a drop aimed at `.part.editor`
+                                landed on `onboarding-a-theme-label`
+a document under the pointer    a file dropped on an OPEN editor means "insert this path as text",
+                                in both builds, correctly. `dropFiles` now refuses to aim at one
+```
+
+### 10.4 What was not run
+
+Honestly: about half of §9. Not run at all - `A-8` `A-9` (window shapes), `G` (picker order, beyond
+seeing the commands exist), `I` (the terminal probe never got a shell prompt back), `K` (what
+extensions see), `M` (cost), `N` (keyboard and contrast), most of `H`'s command-line rows
+(`H-1..H-15`), `O` (no switch to test), `P` (no fixture). None of those is claimed as passing.
+
+---
+
+## 11 The second run: the rest of it
+
+§10 covered about half the plan and said so. This is the rest, run the same way - both builds side by
+side, ours on 9222 and stock on 9223, fresh profiles and identical fixtures. It found four more
+defects, all of them ours, and all four are fixed below.
+
+### 11.1 What it found
+
+`⭐` **`code delta epsilon note.txt` opened a second window and wrote an untitled workspace.**
+`code <folder>` joined the open window correctly; **two** folders did not. Inside `getPathsToOpen`,
+upstream turns several folders from one command line into an untitled workspace and takes the folder
+entries out of the list - and the gate that decides "these join the window that is open" ran *after*
+that, by which time there were no folders left to look at. The folders were taken off one road and
+never put on the other.
+
+```
+before   2 windows  ·  the new one held delta+epsilon as its own workspace  ·  1 untitled workspace file
+after    1 window   ·  bar alpha beta gamma delta epsilon                   ·  0 untitled workspace files
+```
+
+The decision is one method now - `joinsTheOpenWindow` - asked at both sites, because two answers is
+exactly what went wrong. `⚠️` It cannot be unit tested: `WindowsMainService` is electron-main and the
+case needs a second window to exist. The evidence is the measurement above and nothing else.
+
+`⭐` **And then the file was filed away where nobody was looking.** With the window count fixed, the
+same command left `tabs: []`. The file was not lost - it had opened in `alpha`, the folder the window
+was on when the command arrived, and the switch that followed captured it into alpha's editor set.
+Folder requests are buffered on a scheduler in the renderer while file requests are answered at once,
+so the file always won the race. `onOpenFiles` now waits for any folders arriving in the same breath.
+Measured after: one window, five rows, `note.txt` on screen in `epsilon`.
+
+`⭐` **Remove Folder had no "do not ask me again".** The plan asked for one, modelled on
+`explorer.confirmDelete`, and it was never built: removing a second folder asked a second time. There
+is a checkbox now, and `facade.workspaceBar.confirmRemoveFolder` behind it. `⚠️` The setting is
+written only when the answer was **yes** - ticking the box and then cancelling is somebody saying
+"not this one, and stop asking", and taking the second half while ignoring the first would remove the
+next folder without a word. Measured: tick, remove, and the next removal happens with no dialog.
+
+`⭐` **Zen Mode did not take the workspace bar.** Measured side by side: stock hides its activity bar,
+side bar and status bar; ours hid the side bar and the status bar and left a 220px column of folders
+as the loudest thing on the screen. Zen Mode means the editor and nothing else, and the bar was
+exempt because `isVisible` said `WORKSPACEBAR_PART` is "always in the grid; nothing hides it". It is
+the grid's answer now, and Zen hides it with the rest. `⚠️` No setting and nothing persisted: the bar
+has no hide command of its own, so a remembered `hidden` would be a window with no way to get its
+folders back. Measured: enter hides it, Escape twice brings it back, and the grid never once
+complained that its first column had moved.
+
+### 11.2 What ran, and what it said
+
+```
+                                              ours                      stock
+H-1   code <folder>                           joins, 1 window            2 windows
+H-2   --new-window                            2 windows                  2 windows          =
+H-3   code <file>                             a tab                      a tab              =
+H-4   --add                                   joins, 1 window            2 windows + untitled
+H-11  code <folder> at an empty window        2 windows, 0 untitled      2 windows, 0 untitled  =
+H-12  the folder is already in this window    nothing new                a third window
+H-13  it is open in another window            that window forward        that window forward    =
+H-14  two folders and a file                  ⭐ fixed above
+H-5   Open Recent, a folder                   joins the list             replaces the window
+G-6   Create New Terminal                     does not ask               asks which folder
+I-1   the shell's real cwd, window on beta    /fx/beta                   -
+      with an editor open on alpha            ⭐ the folder, not the editor
+G-1   Folder Settings picker, on gamma        gamma alpha beta           alpha beta gamma
+G-8   the extension API's own pick            alpha beta gamma           alpha beta gamma   =
+K-1   what the extension host is offered      all three folders          all three folders  =
+I-7   Run Task, on beta                       say-beta say-alpha         say-alpha say-beta
+I-8   the debug configurations, on gamma      run-gamma run-alpha        alpha beta gamma
+E-3   ⌘P                                      1 shared.ts                3 shared.ts
+E-5   ⌘T symbols                              onlyalpha                  all three
+E-10  ⌘P history across three folders         alpha.ts only              all three
+E-7   Find in Files with an include pattern   no results                 no results         =
+J-7   click the row already active            nothing happens
+J-9   two tabs, leave, come back              both back, with the split
+J-10  a dirty editor, there and back          dirty and identical
+J-16  remove the folder the window is on      lands on a valid one
+J-17  breadcrumbs                             gamma/gamma.ts             gamma/gamma.ts     =
+D-3   the status bar                          one branch, 1 error        two, 2 errors
+B-8   Move at the end                         nothing moves, no throw
+B-10  remove the last folder                  empty bar, "Add a folder to get started."
+L-8   kill -9 with unsaved content            beta, the bar, the tab, still dirty
+M-1   27 warm switches                        median 48ms  p95 51ms  worst 57ms
+M-5   heap across the run                     178MB -> 183MB
+A-8   Zen Mode                                ⭐ fixed above
+```
+
+### 11.3 Two things measured that are costs, not defects
+
+`⚠️` **A dirty editor does not leave when the window does.** Switching folders with unsaved changes on
+screen leaves that editor where it is - `applyWorkingSet` will not close a dirty editor, and it
+should not. So a window on `beta` can be showing `alpha.ts`, and for that moment the right side is
+not one folder. The alternative is prompting to save on every switch, or discarding somebody's work.
+This is the price and it is upstream's mechanism, not ours.
+
+`⚠️` **The `%` picker still does not re-run what is on screen** when the scope is toggled under it.
+The next query is answered from the new scope. Unchanged from §8.8.
+
+### 11.4 Still not run, and why
+
+```
+P-1..P-24     the agent tier      built-in chat is hidden by default; no fixture exists
+O-1 O-2       the way back        R8 was deliberately not built - "R8别做"
+H-15          a remote authority  no remote this window is not already on
+N-3 N-4       themes and contrast the 19-theme sweep was run in an earlier session on the bar's
+                                  colours; it has not been re-run against this change
+C-4 C-5 C-8   collapse, reveal, a batch of external writes
+D-2 D-8       the Graph pane and the provider entry - the probe could not name their rows
+L-9 L-10      a first run on a new profile, and an editor set orphaned between sessions
+every drop row's stock half       the synthetic drag is unreliable on stock. §10.3
 ```
