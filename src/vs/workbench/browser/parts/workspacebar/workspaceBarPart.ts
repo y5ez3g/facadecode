@@ -11,6 +11,7 @@ import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { ILogService } from '../../../../platform/log/common/log.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -82,6 +83,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ILogService private readonly logService: ILogService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -176,6 +178,38 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 	async add(uris: readonly URI[]): Promise<void> {
 		await this.model.add(uris);
+	}
+
+	async addAndShow(uris: readonly URI[]): Promise<void> {
+		if (uris.length === 0) {
+			return;
+		}
+
+		await this.model.add(uris);
+		await this.show(uris[uris.length - 1]);
+	}
+
+	async show(uri: URI): Promise<void> {
+		// ⚠️ Through the model, not straight to the workspace: it is what knows that `/tmp/x` and
+		// `/private/tmp/x` are one folder, so a folder opened twice under two spellings is one row
+		// rather than two. `add` skips what is already there, which makes this the same call whether
+		// the folder is new to the window or one it already has.
+		await this.model.add([uri]);
+
+		// ⚠️ Switched to the row, not to the spelling that was asked for. A folder the workspace
+		// took in long ago under the other spelling of the same place is a row `setActiveFolder`
+		// would not find, and it throws rather than guess.
+		const folder = await this.model.resolve(uri);
+		if (!folder) {
+			// ⚠️ Nothing stats what is handed in here - `addFolders` writes what it is given - so this
+			// is the workspace having refused it: an empty window that could not be turned into one,
+			// or an edit that failed. Too rare to have a screen of its own, too quiet to leave out of
+			// the log.
+			this.logService.warn(`[workspaceBar] ${uri.toString(true)} did not become a folder of this workspace`);
+			return;
+		}
+
+		await this.switcher?.switchTo(folder.uri);
 	}
 
 	async remove(uris: readonly URI[]): Promise<void> {

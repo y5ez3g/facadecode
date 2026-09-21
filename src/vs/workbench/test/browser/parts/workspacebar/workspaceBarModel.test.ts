@@ -180,7 +180,46 @@ suite('Workspace bar - the folder list', () => {
 		await model.add([URI.file('/tmp/api')]);
 		await model.add([URI.file('/private/tmp/api')]);
 
+		assert.deepStrictEqual(paths(model), ['/tmp/api']);
+	});
+
+	test('and the row keeps the spelling it was asked for, whichever way round', async () => {
+		const model = modelWith({ links: new Map([['/tmp', '/private/tmp']]) });
+
+		await model.add([URI.file('/private/tmp/api')]);
+		await model.add([URI.file('/tmp/api')]);
+
 		assert.deepStrictEqual(paths(model), ['/private/tmp/api']);
+	});
+
+	test(`⭐ a folder is written down the way it was named, not the way it resolves`, async () => {
+		// ⭐ The path goes in a `.code-workspace`, and the entry is relative to that file. Resolving
+		// `/tmp/api` to `/private/tmp/api` beside a workspace file in `/tmp` turns a sibling into
+		// `../../private/tmp/api`, where upstream would have written `api`. Following the symlink is
+		// how the bar knows which folder this is; it is not a licence to rewrite the person's file.
+		const { model, workspace } = buildModel({ links: new Map([['/tmp', '/private/tmp']]) });
+
+		await model.add([URI.file('/tmp/cmp/delta')]);
+
+		assert.deepStrictEqual(workspace.paths, ['/tmp/cmp/delta']);
+	});
+
+	test('a folder the workspace was opened with is recognised under its other spelling', async () => {
+		// ⚠️ The listed folder never came through `add`, so nothing has resolved it. Comparing a
+		// resolved candidate against a raw list is how one directory gets two rows.
+		const model = modelWith({ paths: ['/tmp/api'], links: new Map([['/tmp', '/private/tmp']]) });
+
+		const added = await model.add([URI.file('/private/tmp/api')]);
+
+		assert.deepStrictEqual(added, []);
+		assert.deepStrictEqual(paths(model), ['/tmp/api']);
+	});
+
+	test('and `resolve` answers with that row, not with the spelling it was asked about', async () => {
+		const model = modelWith({ paths: ['/tmp/api'], links: new Map([['/tmp', '/private/tmp']]) });
+
+		assert.strictEqual((await model.resolve(URI.file('/private/tmp/api')))?.uri.path, '/tmp/api');
+		assert.strictEqual(await model.resolve(URI.file('/w/elsewhere')), undefined);
 	});
 
 	test('case is not identity on a file system that ignores it', async () => {
@@ -272,24 +311,25 @@ suite('Workspace bar - the folder list', () => {
 		assert.strictEqual(model.isUnavailable(model.folders[0]), false);
 	});
 
-	test('a folder that is not there yet is still spelled canonically', async () => {
-		// ⚠️ A `.code-workspace` can list folders nobody has cloned. Storing the spelling it arrived
-		// with makes a second row for the same directory once it exists and is added again.
+	test('a folder that is not there yet still goes in under the name it was given', async () => {
 		const model = modelWith({ links: new Map([['/tmp', '/private/tmp']]), missing: ['/tmp/later'] });
 
 		await model.add([URI.file('/tmp/later')]);
 
-		assert.deepStrictEqual(paths(model), ['/private/tmp/later']);
+		assert.deepStrictEqual(paths(model), ['/tmp/later']);
 	});
 
-	test('and adding it again once it exists is still one row', async () => {
+	test('and once it exists, its other spelling still finds it', async () => {
+		// ⚠️ A `.code-workspace` can list folders nobody has cloned yet. The row is compared as it
+		// stands each time, so the day the folder appears is the day the symlink starts resolving -
+		// nothing was frozen on the way in.
 		const { model, disk } = buildModel({ links: new Map([['/tmp', '/private/tmp']]), missing: ['/tmp/later'] });
 		await model.add([URI.file('/tmp/later')]);
 
 		disk.missing.clear();
-		await model.add([URI.file('/tmp/later')]);
+		await model.add([URI.file('/private/tmp/later')]);
 
-		assert.deepStrictEqual(paths(model), ['/private/tmp/later']);
+		assert.deepStrictEqual(paths(model), ['/tmp/later']);
 	});
 
 	test('a folder whose parents are all missing keeps the spelling it arrived with', async () => {

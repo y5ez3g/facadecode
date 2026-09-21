@@ -32,6 +32,12 @@ export class WorkspaceBarSwitcher extends Disposable {
 	/** The folder the window is on. */
 	get active(): URI | undefined { return this.activeFolderService.activeFolder?.uri; }
 
+	/** The folder whose editors are on screen, or on their way there. */
+	private showing: string | undefined;
+
+	/** Resolves when the editors asked for last are actually up. */
+	private settled: Promise<void> = Promise.resolve();
+
 	constructor(
 		private readonly model: WorkspaceBarModel,
 		editors: WorkspaceBarEditors,
@@ -45,13 +51,29 @@ export class WorkspaceBarSwitcher extends Disposable {
 
 		this.onDidChangeActive = this.activeFolderService.onDidChangeActiveFolder;
 
+		// ⚠️ The window already has a folder before anybody clicks anything, and its editors are up:
+		// the workbench restored them. Starting this blank would make the first event - a rename, say -
+		// look like a move and put a saved set over what is on screen.
+		const active = this.active;
+		this.showing = active && this.key(active);
+
 		// ⚠️ On the way out, while the folder being left is still on screen: the set is read out of
 		// the live editor part. Reversed, this writes the outgoing folder's editors into the
 		// incoming one's slot.
+		//
+		// ⚠️ Behind whatever restore is still in flight, and **joined**, so the switch waits for it.
+		// `switchTo` returns as soon as the active folder has moved - the restore that follows is
+		// started, not awaited - so a switch can be finished and awaited while the editors it asked
+		// for are still arriving. Capturing then reads a screen that still holds the folder before
+		// last, and writes it into this folder's slot. Joining is what makes capture, move and
+		// restore one piece of work rather than three that can overlap.
 		this._register(this.activeFolderService.onWillChangeActiveFolder(e => {
-			if (e.from) {
-				editors.capture(this.key(e.from.uri));
+			if (!e.from) {
+				return;
 			}
+
+			const key = this.key(e.from.uri);
+			e.join(this.settled.then(() => editors.capture(key)));
 		}));
 
 		// And now the other way round, against the folder the window is on.
@@ -59,11 +81,24 @@ export class WorkspaceBarSwitcher extends Disposable {
 		// ⚠️ Also fires when the active root was removed from the workspace and the service moved to
 		// its neighbour. Restoring is right there too: nothing was captured on the way out, because
 		// the folder that was left no longer exists to come back to.
+		//
+		// ⚠️ And it fires when the active root was only **renamed**, because the name is drawn in the
+		// title and the explorer's header and they have to hear about it. That is not a move, and
+		// restoring on it would put back whatever this folder had saved last time - or nothing at all
+		// for one that has never been left - over the editors somebody has open right now.
 		this._register(this.activeFolderService.onDidChangeActiveFolder(() => {
 			const active = this.active;
-			if (active) {
-				editors.restore(this.key(active)).then(undefined, onUnexpectedError);
+			if (!active) {
+				return;
 			}
+
+			const key = this.key(active);
+			if (key === this.showing) {
+				return;
+			}
+
+			this.showing = key;
+			this.settled = editors.restore(key).then(undefined, onUnexpectedError);
 		}));
 	}
 

@@ -93,29 +93,62 @@ export class WorkspaceBarModel extends Disposable {
 	}
 
 	/**
+	 * The one name this bar knows a folder by: its canonical spelling, resolved.
+	 *
+	 * ⚠️ To compare with, never to store. What goes into `folders[]` is the spelling whoever asked
+	 * gave, exactly as `addFolders` would have written it: `/tmp/x` named on a command line belongs
+	 * in a workspace file under `/tmp` as a sibling, and resolving it first turns that sibling into
+	 * `../../private/tmp/x`. Which folder is this, and what should the file say, are two questions,
+	 * and only the first one needs the symlink followed.
+	 */
+	private async canonicalKey(uri: URI): Promise<string> {
+		return this.key(await canonicalUri(this.fileService, uri));
+	}
+
+	/**
+	 * The row `uri` names, under whichever spelling the workspace holds it.
+	 *
+	 * ⚠️ Needed by anything that has to act on a folder after adding it: `add` answers with what it
+	 * added, which is nothing when the folder was already there, and the caller's own spelling may
+	 * not be the one in the workspace.
+	 */
+	async resolve(uri: URI): Promise<IWorkspaceFolder | undefined> {
+		const folders = this.folders;
+		const [wanted, listed] = await Promise.all([
+			this.canonicalKey(uri),
+			Promise.all(folders.map(folder => this.canonicalKey(folder.uri)))
+		]);
+
+		return folders.find((_, at) => listed[at] === wanted);
+	}
+
+	/**
 	 * Puts folders in the workspace, in the order given, skipping the ones already there.
 	 *
 	 * ⚠️ Against the batch as well as against the workspace. `doUpdateFolders` works out what is
 	 * already there once, before its loop, so one call carrying the same folder twice writes it
 	 * twice - and a `.code-workspace` dropped on the window can list one folder twice.
 	 *
-	 * ⚠️ Canonicalised on the way in, not on the way out: `/tmp` and `/private/tmp` are one place
-	 * on macOS, and the workspace file should say which one only once.
+	 * ⚠️ Compared canonically, stored verbatim: `/tmp` and `/private/tmp` are one place on macOS, so
+	 * one folder under both spellings is one row - but the row keeps the spelling it arrived with,
+	 * because the workspace file is the person's and upstream would have written it that way.
 	 */
 	async add(uris: readonly URI[]): Promise<readonly URI[]> {
-		const canonical = await Promise.all(uris.map(uri => canonicalUri(this.fileService, uri)));
+		const [listedKeys, candidateKeys] = await Promise.all([
+			Promise.all(this.folders.map(folder => this.canonicalKey(folder.uri))),
+			Promise.all(uris.map(uri => this.canonicalKey(uri)))
+		]);
 
-		const listed = new Set(this.folders.map(folder => this.key(folder.uri)));
+		const listed = new Set(listedKeys);
 		const adding: URI[] = [];
-		for (const uri of canonical) {
-			const key = this.key(uri);
-			if (listed.has(key)) {
-				continue;
+		uris.forEach((uri, at) => {
+			if (listed.has(candidateKeys[at])) {
+				return;
 			}
 
-			listed.add(key);
+			listed.add(candidateKeys[at]);
 			adding.push(uri);
-		}
+		});
 
 		if (adding.length > 0) {
 			await this.workspaceEditingService.addFolders(adding.map(uri => ({ uri })));
@@ -126,8 +159,14 @@ export class WorkspaceBarModel extends Disposable {
 
 	/** Takes folders out of the workspace. ⚠️ Out of the list only - nothing here touches the disk. */
 	async remove(uris: readonly URI[]): Promise<readonly IWorkspaceFolder[]> {
-		const keys = new Set(uris.map(uri => this.key(uri)));
-		const removing = this.folders.filter(folder => keys.has(this.key(folder.uri)));
+		const folders = this.folders;
+		const [wanted, listed] = await Promise.all([
+			Promise.all(uris.map(uri => this.canonicalKey(uri))),
+			Promise.all(folders.map(folder => this.canonicalKey(folder.uri)))
+		]);
+
+		const keys = new Set(wanted);
+		const removing = folders.filter((_, at) => keys.has(listed[at]));
 		if (removing.length === 0) {
 			return removing;
 		}

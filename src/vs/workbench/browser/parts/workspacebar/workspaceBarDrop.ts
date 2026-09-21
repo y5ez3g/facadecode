@@ -16,25 +16,20 @@ import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { containsDragType, extractEditorsAndFilesDropData, IDraggedResourceEditorInput } from '../../../../platform/dnd/browser/dnd.js';
-import { ByteSize, IFileService } from '../../../../platform/files/common/files.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
-import { ILabelService } from '../../../../platform/label/common/label.js';
-import { INotificationService } from '../../../../platform/notification/common/notification.js';
-import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { hasWorkspaceFileExtension } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkspacesService } from '../../../../platform/workspaces/common/workspaces.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
-import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
-import { foldersInWorkspaceFile } from './workspaceBar.js';
+import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 
 /**
  * Room for any `.code-workspace` anyone actually writes, and a stop if something else is dropped.
  * The same 1MB `sessions/services/sessions/browser/sessionsRecentWorkspacesService.ts` reads with.
  */
-const MAX_WORKSPACE_FILE_SIZE = ByteSize.MB;
 
 /**
  * Whether what is being dragged came from outside the application.
@@ -48,6 +43,7 @@ function isExternalDrag(e: DragEvent): boolean {
 	return containsDragType(e, DataTransfers.FILES);
 }
 
+const BAR = '.part.workspacebar';
 const EDITOR = '.monaco-editor';
 const TERMINAL = '.terminal-wrapper';
 const TEXT_FIELD = 'input, textarea, [contenteditable="true"]';
@@ -93,25 +89,50 @@ export function takesThePathAsText(e: DragEvent, dropIntoEditor: boolean): boole
 }
 
 /**
+ * Whether this drop is the bar's to answer.
+ *
+ * ⚠️ Only over the bar. The rest of the window already has an answer for a file from outside, and
+ * each one is different: the explorer copies it into the folder it was dropped on, the chat input
+ * attaches it, the Extensions view installs a `.vsix`, a webview hands it to its extension, and the
+ * editor area opens it - or, for a folder, takes it into the workspace and moves onto it. Stopping
+ * every one of those to answer "added to the workspace" would take four upstream features away to
+ * pay for one, and the one is already reachable everywhere it should be.
+ */
+export function isTheBars(e: DragEvent): boolean {
+	const target = e.target;
+
+	return isHTMLElement(target) && !!target.closest(BAR);
+}
+
+/**
  * Splits what was dropped into editors to open and folders to add, each in the order it arrived.
  *
  * `standsFor` answers, for the item at the same index, which folders that item stands for, or
  * nothing if it is a file. A workspace file expands where it was dropped rather than at the end.
  */
-export function splitDrop(dropped: readonly IDraggedResourceEditorInput[], standsFor: readonly (URI[] | undefined)[]): { editors: IDraggedResourceEditorInput[]; folders: URI[] } {
+/** What a dropped resource turns out to be: folders to take in, a window to open, or a file to open. */
+export type DroppedThing = URI[] | 'window' | undefined;
+
+export function splitDrop(dropped: readonly IDraggedResourceEditorInput[], standsFor: readonly DroppedThing[]): { editors: IDraggedResourceEditorInput[]; folders: URI[]; workspaces: URI[] } {
 	const editors: IDraggedResourceEditorInput[] = [];
 	const folders: URI[] = [];
+	const workspaces: URI[] = [];
 
 	for (let index = 0; index < dropped.length; index++) {
 		const found = standsFor[index];
-		if (found) {
+		if (found === 'window') {
+			const resource = dropped[index].resource;
+			if (resource) {
+				workspaces.push(resource);
+			}
+		} else if (found) {
 			folders.push(...found);
 		} else {
 			editors.push(dropped[index]);
 		}
 	}
 
-	return { editors, folders };
+	return { editors, folders, workspaces };
 }
 
 /**
@@ -169,11 +190,8 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IFileService private readonly fileService: IFileService,
-		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IWorkspacesService private readonly workspacesService: IWorkspacesService,
 		@IHostService private readonly hostService: IHostService,
-		@ILabelService private readonly labelService: ILabelService,
-		@INotificationService private readonly notificationService: INotificationService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
@@ -189,7 +207,9 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 
 	private registerWindow(targetWindow: CodeWindow): IDisposable {
 		const disposables = new DisposableStore();
-		const overlay = disposables.add(new DropOverlay(() => this.layoutService.getContainer(targetWindow)));
+		// ⚠️ Over the bar, not over the window: the overlay is a promise about what letting go will
+		// do, and letting go anywhere else is somebody else's promise to make.
+		const overlay = disposables.add(new DropOverlay(() => this.layoutService.getContainer(targetWindow, Parts.WORKSPACEBAR_PART)));
 
 		// Every element the pointer crosses fires its own enter and leave, so leaving one of them is
 		// not leaving the window. ⚠️ Counted outside `listen`, below, so that a surface this handler
@@ -205,12 +225,12 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 			overlay.hide();
 		}, 1000));
 
-		// ⚠️ On the body, in the capture phase. Capture so that this runs before the parts light up
-		// their own overlays, and on the body so that it is always after the listeners the webviews
-		// and the drag tracker put on the window itself - those have to keep seeing the drag.
+		// ⚠️ On the body, in the capture phase. Capture so that this runs before the bar's own list
+		// lights up a row, and on the body so that it is always after the listeners the webviews and
+		// the drag tracker put on the window itself - those have to keep seeing the drag.
 		const listen = (type: string, handler: (e: DragEvent) => void) => {
 			disposables.add(addDisposableListener(targetWindow.document.body, type, (e: DragEvent) => {
-				if (!isExternalDrag(e)) {
+				if (!isExternalDrag(e) || !isTheBars(e)) {
 					return;
 				}
 
@@ -233,7 +253,7 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 		// The tally, kept for every external drag and never stopping one.
 		const count = (type: string, by: number) => {
 			disposables.add(addDisposableListener(targetWindow.document.body, type, (e: DragEvent) => {
-				if (!isExternalDrag(e)) {
+				if (!isExternalDrag(e) || !isTheBars(e)) {
 					return;
 				}
 
@@ -279,9 +299,29 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 
 		await this.hostService.focus(targetWindow);
 
-		const { editors, folders } = await this.sort(dropped);
+		return this.apply(dropped);
+	}
+
+	/**
+	 * What a drop turns into, once it is known what was dropped.
+	 *
+	 * ⚠️ Split from `handleDrop` so a test can say what a drop of folders does: a `DragEvent`
+	 * carrying real file paths cannot be synthesised, so a test that had to start from one could only
+	 * ever assert on nothing being dropped.
+	 */
+	async apply(dropped: readonly IDraggedResourceEditorInput[]): Promise<void> {
+		const { editors, folders, workspaces } = await this.sort(dropped);
+
+		if (workspaces.length) {
+			await this.hostService.openWindow(workspaces.map((workspaceUri: URI) => ({ workspaceUri })));
+		}
 
 		if (folders.length) {
+			// ⚠️ `add`, not `addAndShow`: this handler only ever sees what landed **on the bar**,
+			// and the bar is the list. Dropping a folder there is filling the list - often several
+			// at once - and being walked to the last of them is a switch nobody asked for. A folder
+			// dropped anywhere else in the window reaches `ResourcesDropHandler`, which does mean
+			// "show me this" and calls `addAndShow`.
 			await this.workspaceBarService.add(folders);
 		}
 
@@ -295,29 +335,22 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 		}
 	}
 
-	private async sort(dropped: IDraggedResourceEditorInput[]): Promise<{ editors: IDraggedResourceEditorInput[]; folders: URI[] }> {
-		return splitDrop(dropped, await Promise.all(dropped.map(editor => this.foldersIn(editor.resource))));
+	private async sort(dropped: readonly IDraggedResourceEditorInput[]): Promise<{ editors: IDraggedResourceEditorInput[]; folders: URI[]; workspaces: URI[] }> {
+		return splitDrop(dropped, await Promise.all(dropped.map(editor => this.standsFor(editor.resource))));
 	}
 
-	/** The folders a dropped resource stands for, or nothing if it is a file to open. */
-	private async foldersIn(resource: URI | undefined): Promise<URI[] | undefined> {
+	/** What a dropped resource stands for: folders, a window, or a file to open. */
+	private async standsFor(resource: URI | undefined): Promise<DroppedThing> {
 		if (!resource || !this.fileService.hasProvider(resource)) {
 			return undefined;
 		}
 
+		// ⚠️ A `.code-workspace` is a window, not a handful of folders. Taking its folders and leaving
+		// its `settings`, `extensions`, `launch` and `tasks` behind would be the dangerous half of
+		// "merge" wearing the word "add", and after it the file being written to would no longer be
+		// the one the folders came from.
 		if (hasWorkspaceFileExtension(resource)) {
-			try {
-				// A workspace file that lists no folders is opened rather than swallowed: a drop that
-				// does nothing at all reads as a drop that missed.
-				const folders = await this.readWorkspaceFile(resource);
-
-				return folders.length ? folders : undefined;
-			} catch (error) {
-				// Still a file, and opening it is what lets someone see what is wrong with it.
-				this.notificationService.error(localize('workspaceBarDrop.unreadableWorkspace', "Could not read the folders in '{0}'.", this.labelService.getUriLabel(resource)));
-
-				return undefined;
-			}
+			return 'window';
 		}
 
 		try {
@@ -328,11 +361,6 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 		}
 	}
 
-	private async readWorkspaceFile(resource: URI): Promise<URI[]> {
-		const content = await this.fileService.readFile(resource, { limits: { size: MAX_WORKSPACE_FILE_SIZE } });
-
-		return foldersInWorkspaceFile(content.value.toString(), resource, this.uriIdentityService.extUri);
-	}
 }
 
 // ⚠️ Before the workbench restores, not after: the editor's own drop target is live as soon as a

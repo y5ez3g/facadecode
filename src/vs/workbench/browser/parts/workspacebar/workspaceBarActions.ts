@@ -7,6 +7,9 @@ import './media/workspacebardialog.css';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { localize, localize2 } from '../../../../nls.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
+import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
+import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
@@ -16,6 +19,10 @@ import { URI } from '../../../../base/common/uri.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { asCodeSpan } from './workspaceBar.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
+import { Registry } from '../../../../platform/registry/common/platform.js';
+import { workbenchConfigurationNodeBase } from '../../../common/configuration.js';
 
 /** The toolbar at the right end of the bar's header. */
 export const WorkspaceBarTitleMenu = new MenuId('WorkspaceBarTitle');
@@ -35,6 +42,26 @@ export const WorkspaceBarContextMenu = new MenuId('WorkspaceBarContext');
 export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorkspaceBarFocus', false, localize('workspaceBar.focusContext', "Whether the workspace's list of folders has keyboard focus"));
 
 const CATEGORY = localize2('workspaceBar.category', "Workspace");
+
+/**
+ * Whether taking a folder off the list asks first.
+ *
+ * ⚠️ A setting rather than a remembered dismissal, because it is the answer to a question the
+ * person was asked and it belongs somewhere they can find it again. `explorer.confirmDelete` is the
+ * same shape, and deleting files is the more serious of the two.
+ */
+export const CONFIRM_REMOVE_FOLDER = 'facade.workspaceBar.confirmRemoveFolder';
+
+Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
+	...workbenchConfigurationNodeBase,
+	properties: {
+		[CONFIRM_REMOVE_FOLDER]: {
+			type: 'boolean',
+			description: localize('workspaceBar.confirmRemoveFolder', "Controls whether the workspace asks for confirmation before taking a folder off the list. The folder itself is never deleted."),
+			default: true
+		}
+	}
+});
 
 /**
  * The `+` is a menu, not a button, with one item in it today.
@@ -83,6 +110,9 @@ class OpenFolderAction extends Action2 {
 		});
 
 		if (folders?.length) {
+			// ⚠️ `add`, not `addAndShow`: the dialog offers several folders on purpose, and somebody
+			// ticking a handful of them wants them in the list, not to be moved onto whichever one
+			// happened to be last. A drag says the other thing, and is answered the other way.
 			await workspaceBarService.add(folders);
 		}
 	}
@@ -115,10 +145,15 @@ class RemoveFolderAction extends Action2 {
 		const workspaceBarService = accessor.get(IWorkspaceBarService);
 		const dialogService = accessor.get(IDialogService);
 		const labelService = accessor.get(ILabelService);
+		const configurationService = accessor.get(IConfigurationService);
 
 		const folder = uri ?? workspaceBarService.folderForCommand();
 		if (!folder) {
 			return;
+		}
+
+		if (configurationService.getValue<boolean>(CONFIRM_REMOVE_FOLDER) === false) {
+			return workspaceBarService.remove([folder]);
 		}
 
 		// The path, then what the two words in the button actually do. Both matter: two folders can
@@ -131,7 +166,7 @@ class RemoveFolderAction extends Action2 {
 		detail.appendMarkdown(`${asCodeSpan(labelService.getUriLabel(folder))}\n\n`);
 		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from the workspace and forgets the editors saved for it. The folder itself is left alone.")));
 
-		const { confirmed } = await dialogService.confirm({
+		const { confirmed, checkboxChecked } = await dialogService.confirm({
 			// ⚠️ No severity glyph. Nothing here is destroyed - the folder is left where it is - and a
 			// warning triangle over a reversible act is a claim the dialog cannot back up. `none` is
 			// the type for it, and it announces the same as `question` does, which is nothing.
@@ -139,6 +174,7 @@ class RemoveFolderAction extends Action2 {
 			message: localize('workspaceBar.removeFolderMessage', "Remove folder?"),
 			detail,
 			primaryButton: localize({ key: 'workspaceBar.removeFolderButton', comment: ['&& denotes a mnemonic'] }, "&&Remove Folder"),
+			checkbox: { label: localize('workspaceBar.doNotAskAgain', "Do not ask me again") },
 			// ⚠️ The workbench's dialog rather than the system's, whatever `window.dialogStyle` says:
 			// a native alert renders one run of plain text, and the path is the whole point of asking.
 			// The class is what shapes it - see `media/workspacebardialog.css`.
@@ -150,9 +186,96 @@ class RemoveFolderAction extends Action2 {
 			}
 		});
 
-		if (confirmed) {
-			await workspaceBarService.remove([folder]);
+		if (!confirmed) {
+			return;
 		}
+
+		// ⚠️ Written only when the answer was yes. Ticking the box and then cancelling is somebody
+		// saying "not this one, and stop asking" - taking the second half of that while ignoring the
+		// first would remove the next folder without a word.
+		if (checkboxChecked === true) {
+			await configurationService.updateValue(CONFIRM_REMOVE_FOLDER, false);
+		}
+
+		await workspaceBarService.remove([folder]);
+	}
+}
+
+/**
+ * Moves a folder one place up or down the list.
+ *
+ * ⚠️ The list is `folders[]`, so the order is the one the `.code-workspace` file holds and the one
+ * anybody opening that file sees. There is nothing of ours to keep in step.
+ *
+ * ⚠️ `moveFolder`, which exists because neither `addFolders` nor `updateFolders` can express a move
+ * without loss: both re-serialise whatever they are handed, so a reorder written with them rewrites
+ * paths the person put in the file themselves. Measured before it existed - `updateFolders` over the
+ * whole list turned five absolute paths into relative ones.
+ *
+ * ⚠️ No drag to reorder. Two ways to move a row is two sets of edge cases - a drag that starts on
+ * the row the window is on, one that leaves the list, one that lands between two rows - for an
+ * action people take a handful of times.
+ */
+abstract class MoveFolderAction extends Action2 {
+
+	protected abstract readonly offset: number;
+
+	override async run(accessor: ServicesAccessor, uri?: URI): Promise<void> {
+		const workspaceBarService = accessor.get(IWorkspaceBarService);
+		const workspaceEditingService = accessor.get(IWorkspaceEditingService);
+
+		const folder = uri ?? workspaceBarService.folderForCommand();
+		if (!folder) {
+			return;
+		}
+
+		// ⚠️ The folder and how far, not two indices: where it sits is worked out when the move runs,
+		// behind whatever else is changing the list.
+		await workspaceEditingService.moveFolder(folder, this.offset);
+	}
+}
+
+class MoveFolderUpAction extends MoveFolderAction {
+
+	static readonly ID = 'facade.workspaceBar.moveFolderUp';
+
+	protected readonly offset = -1;
+
+	constructor() {
+		super({
+			id: MoveFolderUpAction.ID,
+			title: localize2('workspaceBar.moveFolderUp', "Move Folder Up"),
+			category: CATEGORY,
+			f1: true,
+			keybinding: {
+				when: WorkspaceBarFocusContext,
+				primary: KeyMod.Alt | KeyCode.UpArrow,
+				weight: KeybindingWeight.WorkbenchContrib
+			},
+			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 1 }
+		});
+	}
+}
+
+class MoveFolderDownAction extends MoveFolderAction {
+
+	static readonly ID = 'facade.workspaceBar.moveFolderDown';
+
+	protected readonly offset = 1;
+
+	constructor() {
+		super({
+			id: MoveFolderDownAction.ID,
+			title: localize2('workspaceBar.moveFolderDown', "Move Folder Down"),
+			category: CATEGORY,
+			f1: true,
+			keybinding: {
+				when: WorkspaceBarFocusContext,
+				primary: KeyMod.Alt | KeyCode.DownArrow,
+				weight: KeybindingWeight.WorkbenchContrib
+			},
+			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 2 }
+		});
 	}
 }
 
@@ -176,4 +299,6 @@ class FocusWorkspaceAction extends Action2 {
 
 registerAction2(OpenFolderAction);
 registerAction2(RemoveFolderAction);
+registerAction2(MoveFolderUpAction);
+registerAction2(MoveFolderDownAction);
 registerAction2(FocusWorkspaceAction);

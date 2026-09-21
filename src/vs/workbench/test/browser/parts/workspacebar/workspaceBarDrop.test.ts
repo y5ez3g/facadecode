@@ -7,16 +7,22 @@ import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IDraggedResourceEditorInput } from '../../../../../platform/dnd/browser/dnd.js';
-import { splitDrop, takesThePathAsText } from '../../../../browser/parts/workspacebar/workspaceBarDrop.js';
+import { isTheBars, splitDrop, takesThePathAsText, WorkspaceBarDropTarget } from '../../../../browser/parts/workspacebar/workspaceBarDrop.js';
+import { Event } from '../../../../../base/common/event.js';
+import { mock } from '../../../../../base/test/common/mock.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
+import { workbenchInstantiationService } from '../../workbenchTestServices.js';
 
 const dropped = (...paths: string[]): IDraggedResourceEditorInput[] => paths.map(path => ({ resource: URI.file(path) }));
 
 const opened = (editors: IDraggedResourceEditorInput[]) => editors.map(editor => editor.resource?.path);
 const added = (folders: URI[]) => folders.map(uri => uri.path);
+const windowed = (workspaces: URI[]) => workspaces.map(uri => uri.path);
 
 suite('Workspace bar - drop target - what a drop from outside means', () => {
 
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('a file is opened and a folder is added', () => {
 		const { editors, folders } = splitDrop(dropped('/w/notes.md', '/w/api'), [undefined, [URI.file('/w/api')]]);
@@ -25,21 +31,27 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 		assert.deepStrictEqual(added(folders), ['/w/api']);
 	});
 
-	test('a workspace file becomes every folder it lists', () => {
-		const { editors, folders } = splitDrop(dropped('/w/team.code-workspace'), [[URI.file('/w/api'), URI.file('/w/web')]]);
+	test(`⭐ a workspace file is a window, not a handful of folders`, () => {
+		// ⭐ A `.code-workspace` carries its own `settings`, `extensions`, `launch` and `tasks`, and
+		// none of those can be merged into the workspace this window already has. Taking only its
+		// folders would be the dangerous half of "merge" wearing the word "add".
+		const { editors, folders, workspaces } = splitDrop(dropped('/w/team.code-workspace'), ['window']);
 
 		assert.deepStrictEqual(opened(editors), []);
-		assert.deepStrictEqual(added(folders), ['/w/api', '/w/web']);
+		assert.deepStrictEqual(added(folders), []);
+		assert.deepStrictEqual(windowed(workspaces), ['/w/team.code-workspace']);
 	});
 
-	test('a workspace file expands where it was dropped, not at the end', () => {
-		const { folders } = splitDrop(dropped('/w/first', '/w/team.code-workspace', '/w/last'), [
+	test('and a workspace file dropped beside folders leaves those folders alone', () => {
+		const { editors, folders, workspaces } = splitDrop(dropped('/w/first', '/w/team.code-workspace', '/w/last'), [
 			[URI.file('/w/first')],
-			[URI.file('/w/api'), URI.file('/w/web')],
+			'window',
 			[URI.file('/w/last')]
 		]);
 
-		assert.deepStrictEqual(added(folders), ['/w/first', '/w/api', '/w/web', '/w/last']);
+		assert.deepStrictEqual(opened(editors), []);
+		assert.deepStrictEqual(added(folders), ['/w/first', '/w/last']);
+		assert.deepStrictEqual(windowed(workspaces), ['/w/team.code-workspace']);
 	});
 
 	test('a mixed drop is both, each in the order it arrived', () => {
@@ -127,4 +139,90 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 			assert.strictEqual(asks(null), false);
 		});
 	});
+
+	suite('whose drop it is', () => {
+
+		/** The bar, and the surfaces that answer an external drop for themselves. */
+		function workbench() {
+			const root = document.createElement('div');
+			root.innerHTML = '<div class="part workspacebar"><div class="monaco-list-row">alpha</div></div>'
+				+ '<div class="part editor"><div class="monaco-editor"><span class="mtk1">const a = 1;</span></div></div>'
+				+ '<div class="explorer-viewlet"><div class="monaco-list-row">src</div></div>'
+				+ '<div class="interactive-input-part"><div class="chat-input-container"></div></div>'
+				+ '<div class="extensions-viewlet"><div class="monaco-list-row">an extension</div></div>';
+
+			return (selector: string) => root.querySelector(selector)!;
+		}
+
+		const mine = (target: Element | null) => isTheBars({ target } as unknown as DragEvent);
+
+		test(`⭐ a drop on the bar is the bar's`, () => {
+			const at = workbench();
+
+			assert.strictEqual(mine(at('.workspacebar .monaco-list-row')), true);
+			assert.strictEqual(mine(at('.part.workspacebar')), true);
+		});
+
+		test(`⭐ and a drop anywhere else belongs to whatever is under it`, () => {
+			// ⚠️ Each of these has its own answer for a file from the file manager - copy it in, attach
+			// it, install it, open it - and intercepting on the body took all four away to pay for one.
+			const at = workbench();
+
+			assert.strictEqual(mine(at('.explorer-viewlet .monaco-list-row')), false);
+			assert.strictEqual(mine(at('.chat-input-container')), false);
+			assert.strictEqual(mine(at('.extensions-viewlet .monaco-list-row')), false);
+			assert.strictEqual(mine(at('.mtk1')), false);
+		});
+
+		test('a drop on nothing is nobody\'s', () => {
+			assert.strictEqual(mine(null), false);
+		});
+	});
+
+	suite('and what the bar does with it', () => {
+
+		/**
+		 * The bar's own handler, far enough to say which of the two it calls.
+		 *
+		 * ⚠️ Through `apply` rather than a `DragEvent`: a drag carrying real file paths cannot be
+		 * synthesised, which is the same instrument limit that leaves the live drop unmeasured.
+		 */
+		function bar() {
+			const added: string[][] = [];
+			const shown: string[][] = [];
+
+			const services = workbenchInstantiationService({
+				fileService: () => new class extends mock<IFileService>() {
+					override onDidFilesChange = Event.None;
+					override onDidChangeFileSystemProviderCapabilities = Event.None;
+					override onDidChangeFileSystemProviderRegistrations = Event.None;
+					override hasProvider() { return true; }
+					override hasCapability() { return true; }
+					override async exists() { return true; }
+					override async realpath(resource: URI) { return resource; }
+					override async stat(resource: URI) { return { isDirectory: !resource.path.includes('.') } as never; }
+				}
+			}, disposables);
+
+			services.stub(IWorkspaceBarService, new class extends mock<IWorkspaceBarService>() {
+				override async add(uris: readonly URI[]) { added.push(uris.map(uri => uri.path)); }
+				override async addAndShow(uris: readonly URI[]) { shown.push(uris.map(uri => uri.path)); }
+			});
+			const target = disposables.add(services.createInstance(WorkspaceBarDropTarget));
+			return { target, added, shown };
+		}
+
+		test(`⭐ a folder dropped on the bar joins the list without moving the window`, async () => {
+			// ⚠️ `addAndShow` here is the whole feature undone: somebody dropping four folders onto
+			// the list gets walked to the fourth. The bar is where you collect; the window is where you
+			// say "show me this". Written down at the seam, and drifted back once already.
+			const { target, added, shown } = bar();
+
+			await target.apply(dropped('/w/api', '/w/web'));
+
+			assert.deepStrictEqual(added, [['/w/api', '/w/web']], 'the folders did not join the list');
+			assert.deepStrictEqual(shown, [], 'dropping on the bar moved the window');
+		});
+	});
+
 });
