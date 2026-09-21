@@ -80,3 +80,34 @@ export interface IActiveFolderWillChangeEvent {
 	readonly to: IWorkspaceFolder;
 	join(promise: Promise<void>): void;
 }
+
+/**
+ * The workspace's folders, with the one the window is on first.
+ *
+ * ⚠️ Ordered, never narrowed. These are the callers that ask "which folder?", which is a question
+ * about the workspace: listing every folder is the point of them. The only thing wrong with them in
+ * a window that is on one folder is that the folder it is on is not the first thing offered.
+ *
+ * ⚠️ Stable otherwise: the rest keep the order the workspace has them in, because that order is the
+ * `.code-workspace` file's and people arrange it.
+ */
+export function foldersWithActiveFirst(folders: readonly IWorkspaceFolder[], active: IWorkspaceFolder | undefined): IWorkspaceFolder[] {
+	if (!active) {
+		return [...folders];
+	}
+
+	return activeFirst(folders, folder => folder.uri.toString() === active.uri.toString());
+}
+
+/**
+ * `items` with the one the window is on first, and everything else in the order it already had.
+ *
+ * ⚠️ Moved, not sorted. Lists like the debugger's launches carry an order other things depend
+ * on - the workspace's `launch.json` sits at the end of that one and is taken from there by index -
+ * so this answers only "which goes on top" and disturbs nothing else.
+ */
+export function activeFirst<T>(items: readonly T[], isActive: (item: T) => boolean): T[] {
+	const index = items.findIndex(isActive);
+
+	return index <= 0 ? [...items] : [items[index], ...items.slice(0, index), ...items.slice(index + 1)];
+}

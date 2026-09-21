@@ -15,6 +15,7 @@ import { UriIdentityService } from '../../../../../platform/uriIdentity/common/u
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IHistoryService } from '../../../history/common/history.js';
 import { ActiveFolderService } from '../../browser/activeFolderService.js';
+import { activeFirst, foldersWithActiveFirst } from '../../common/activeFolder.js';
 
 /** ⚠️ Built by hand, not with `toWorkspaceFolder`: that one numbers every folder 0. */
 function folder(path: string, index: number): WorkspaceFolder {
@@ -292,4 +293,72 @@ suite('Active folder - which root the window is on', () => {
 		assert.ok(storage.get('workbench.activeFolder', StorageScope.WORKSPACE));
 		assert.strictEqual(storage.get('workbench.activeFolder', StorageScope.PROFILE), undefined);
 	});
+});
+
+suite('Active folder - the order a chooser offers', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const folder = (path: string): IWorkspaceFolder =>
+		new WorkspaceFolder({ uri: URI.file(path), index: 0, name: path.slice(path.lastIndexOf('/') + 1) });
+
+	const api = folder('/w/api');
+	const web = folder('/w/web');
+	const notes = folder('/w/notes');
+	const all = [api, web, notes];
+
+	const order = (active: IWorkspaceFolder | undefined) => foldersWithActiveFirst(all, active).map(f => f.name);
+
+	test('the folder the window is on comes first', () => {
+		assert.deepStrictEqual(order(web), ['web', 'api', 'notes']);
+	});
+
+	test('and the rest keep the order the workspace has them in', () => {
+		// ⚠️ That order is the `.code-workspace` file's, and people arrange it.
+		assert.deepStrictEqual(order(notes), ['notes', 'api', 'web']);
+	});
+
+	test('a window already on the first folder changes nothing', () => {
+		assert.deepStrictEqual(order(api), ['api', 'web', 'notes']);
+	});
+
+	test('a window on no folder changes nothing', () => {
+		assert.deepStrictEqual(order(undefined), ['api', 'web', 'notes']);
+	});
+
+	test('nor does a folder that is not one of them', () => {
+		assert.deepStrictEqual(order(folder('/elsewhere')), ['api', 'web', 'notes']);
+	});
+
+	test('the list handed in is not reordered in place', () => {
+		foldersWithActiveFirst(all, notes);
+
+		assert.deepStrictEqual(all.map(f => f.name), ['api', 'web', 'notes']);
+	});
+
+	suite('activeFirst - the same question asked of a list that is not folders', () => {
+
+		test('the one that answers moves to the front, and nothing else moves', () => {
+			assert.deepStrictEqual(activeFirst(['a', 'b', 'c', 'd'], x => x === 'c'), ['c', 'a', 'b', 'd']);
+		});
+
+		test('a list whose first item already answers is handed back as it is', () => {
+			assert.deepStrictEqual(activeFirst(['a', 'b', 'c'], x => x === 'a'), ['a', 'b', 'c']);
+		});
+
+		test('and one where nothing answers keeps its order', () => {
+			// ⚠️ Launches include the workspace\'s own `launch.json`, which belongs to no folder, and
+			// the debugger takes it by index from the end. Sorting here would move it.
+			assert.deepStrictEqual(activeFirst(['a', 'b', 'c'], x => x === 'z'), ['a', 'b', 'c']);
+		});
+
+		test('the list it was given is not the list it returns', () => {
+			const given = ['a', 'b', 'c'];
+			const back = activeFirst(given, x => x === 'b');
+
+			assert.deepStrictEqual(given, ['a', 'b', 'c']);
+			assert.deepStrictEqual(back, ['b', 'a', 'c']);
+		});
+	});
+
 });
