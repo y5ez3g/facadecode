@@ -1401,7 +1401,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			case Parts.BANNER_PART:
 				return this.initialized ? this.workbenchGrid.isViewVisible(this.bannerPartView) : false;
 			case Parts.WORKSPACEBAR_PART:
-				return true; // always in the grid; nothing hides it
+				// ⚠️ It has no hide command of its own - the list is what the window is for - but Zen
+				// Mode takes it with the rest of the chrome, so the grid is what to ask.
+				return this.initialized ? this.workbenchGrid.isViewVisible(this.workspaceBarPartView) : true;
 			default:
 				return false; // any other part cannot be hidden
 		}
@@ -1515,6 +1517,12 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			this.setAuxiliaryBarHidden(true, true);
 			this.setSideBarHidden(true);
 
+			// ⚠️ And the folder list, with the rest of it. Zen Mode says "the editor and nothing
+			// else", and a 220px column of folders is the loudest thing left on the screen once the
+			// side bar and the status bar have gone. Measured before this line existed: stock hid its
+			// activity bar and side bar and ours kept the workspace bar at full height.
+			this.setWorkspaceBarHidden(true);
+
 			if (config.hideActivityBar) {
 				this.setActivityBarHidden(true);
 			}
@@ -1598,6 +1606,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			if (zenModeExitInfo.wasVisible.sideBar) {
 				this.setSideBarHidden(false);
 			}
+
+			this.setWorkspaceBarHidden(false);
 
 			if (!this.stateModel.getRuntimeValue(LayoutStateKeys.ACTIVITYBAR_HIDDEN, true)) {
 				this.setActivityBarHidden(false);
@@ -1917,6 +1927,17 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		this.stateModel.setRuntimeValue(LayoutStateKeys.ACTIVITYBAR_HIDDEN, hidden);
 		this.mainContainer.classList.toggle(LayoutClasses.ACTIVITYBAR_HIDDEN, hidden);
 		this.workbenchGrid.setViewVisible(this.activityBarPartView, !hidden);
+	}
+
+	/**
+	 * Hides the workspace bar. Zen Mode is the only thing that does.
+	 *
+	 * ⚠️ No state key and nothing persisted: unlike the side bar and the activity bar this has no
+	 * command and no setting, so the only way in is Zen Mode and the only way out is leaving it. A
+	 * remembered `hidden` would be a window with no way to get its folders back.
+	 */
+	private setWorkspaceBarHidden(hidden: boolean): void {
+		this.workbenchGrid.setViewVisible(this.workspaceBarPartView, !hidden);
 	}
 
 	private setBannerHidden(hidden: boolean): void {
