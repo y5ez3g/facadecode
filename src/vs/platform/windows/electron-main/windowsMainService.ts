@@ -357,6 +357,11 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// Identify things to open from open config
 		const pathsToOpen = await this.getPathsToOpen(openConfig);
 		this.logService.trace('windowsManager#open pathsToOpen', pathsToOpen);
+
+		if (this.joinsTheOpenWindow(openConfig, pathsToOpen.filter(isSingleFolderWorkspacePathToOpen))) {
+			openConfig.addMode = true;
+		}
+
 		for (const path of pathsToOpen) {
 			if (isSingleFolderWorkspacePathToOpen(path)) {
 				if (openConfig.addMode) {
@@ -821,6 +826,48 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		});
 	}
 
+	/**
+	 * Whether folders named this way join the window that is already open, instead of starting another.
+	 *
+	 * ⚠️ The principle this fork turns on is one window holding many folders, and a folder named on a
+	 * command line, dropped on the dock or followed from a link is as plain a way of saying "show me
+	 * this" as there is. `--new-window` still means a window, and so does an extension calling
+	 * `vscode.openFolder` - those arrive as `API` and are left alone, along with the dialogs and menus
+	 * this window drives itself. Nothing new is built here: `--add` already walks this path.
+	 *
+	 * ⚠️ Asked in **two** places, and it has to give the same answer in both. `getPathsToOpen` turns
+	 * several folders from one command line into an untitled workspace and takes the folders out of the
+	 * list; if that runs while this says the folders are joining the open window, they are taken off one
+	 * road and never put on the other, and a second window appears holding a workspace nobody asked for -
+	 * measured: `code delta epsilon note.txt` did exactly that, while `code delta` joined correctly.
+	 *
+	 * ⚠️ Against the window `doOpen` will look for - the one matching the folder's authority - and only
+	 * one that is already on something. An empty window has nowhere to add a folder *to*, so adding turns
+	 * it into an untitled workspace: a `.code-workspace` in the profile, an extension-host restart, and a
+	 * "save your workspace configuration?" prompt on the way out. And not a window that already has this
+	 * folder open - upstream focuses that one, which is the answer this fork would give anyway.
+	 */
+	private joinsTheOpenWindow(openConfig: IOpenConfiguration, folderPaths: readonly ISingleFolderWorkspacePathToOpen[]): boolean {
+		const named = openConfig.context === OpenContext.CLI
+			|| openConfig.context === OpenContext.DOCK
+			|| openConfig.context === OpenContext.DESKTOP
+			|| openConfig.context === OpenContext.LINK;
+		if (!named || openConfig.addMode || openConfig.removeMode || openConfig.forceNewWindow || openConfig.forceEmpty || openConfig.initialStartup) {
+			return false;
+		}
+
+		if (folderPaths.length === 0) {
+			return false;
+		}
+
+		const target = this.getLastActiveWindowForAuthority(folderPaths[0].remoteAuthority);
+		if (!target?.openedWorkspace) {
+			return false;
+		}
+
+		return !folderPaths.some(folderPath => findWindowOnWorkspaceOrFolder(this.getWindows(), folderPath.workspace.uri));
+	}
+
 	private async getPathsToOpen(openConfig: IOpenConfiguration): Promise<IPathToOpen[]> {
 		let pathsToOpen: IPathToOpen[];
 		let isCommandLineOrAPICall = false;
@@ -863,7 +910,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// - there is no existing workspace to open that matches these folders
 		if (!openConfig.addMode && !openConfig.removeMode && isCommandLineOrAPICall) {
 			const foldersToOpen = pathsToOpen.filter(path => isSingleFolderWorkspacePathToOpen(path));
-			if (foldersToOpen.length > 1) {
+			if (foldersToOpen.length > 1 && !this.joinsTheOpenWindow(openConfig, foldersToOpen)) {
 				const remoteAuthority = foldersToOpen[0].remoteAuthority;
 				if (foldersToOpen.every(folderToOpen => isEqualAuthority(folderToOpen.remoteAuthority, remoteAuthority))) {
 					let workspace: IWorkspaceIdentifier | undefined;

@@ -109,7 +109,6 @@ import { getPartsSplashColors } from './partsSplash.js';
 			splash.id = 'monaco-parts-splash';
 			splash.className = baseTheme ?? 'vs-dark';
 
-
 			if (layoutInfo.windowBorder && colorInfo.windowBorder) {
 				const borderElement = document.createElement('div');
 				borderElement.style.position = 'absolute';

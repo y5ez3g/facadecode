@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '../../../../nls.js';
 import { SaveDialogOptions, OpenDialogOptions } from '../../../../base/parts/sandbox/common/electronTypes.js';
 import { IHostService } from '../../host/browser/host.js';
 import { IPickAndOpenOptions, ISaveDialogOptions, IOpenDialogOptions, IFileDialogService, IDialogService, INativeOpenDialogOptions } from '../../../../platform/dialogs/common/dialogs.js';
@@ -89,7 +90,24 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 		if (shouldUseSimplified.useSimplified) {
 			return this.pickFileFolderAndOpenSimplified(schema, options, shouldUseSimplified.isSetting);
 		}
-		return this.nativeHostService.pickFileFolderAndOpen(this.toNativeOpenDialogOptions(options));
+
+		// ⚠️ Asked for a path, not told to open one - the same reason as `pickFolderAndOpen` below.
+		// `pickFileFolderAndOpen` picks and opens in the main process, which can only answer with a
+		// window, so a folder chosen here could never become a row in this one. The dialog is the same
+		// native dialog, with the same title and the same starting directory.
+		const picked = await this.showOpenDialog({
+			canSelectFiles: true,
+			canSelectFolders: true,
+			// ⚠️ As many as the dialog it replaced took: the main process opened with `multiSelections`,
+			// so several files at once has always been possible here.
+			canSelectMany: true,
+			defaultUri: options.defaultUri,
+			title: localize('openFileOrFolder.title', 'Open File or Folder')
+		});
+
+		if (picked?.length) {
+			return this.openPicked(picked, options, false);
+		}
 	}
 
 	async pickFileAndOpen(options: IPickAndOpenOptions): Promise<void> {
@@ -116,7 +134,24 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 		if (this.shouldUseSimplified(schema).useSimplified) {
 			return this.pickFolderAndOpenSimplified(schema, options);
 		}
-		return this.nativeHostService.pickFolderAndOpen(this.toNativeOpenDialogOptions(options));
+
+		// ⚠️ The dialog is asked for a folder rather than told to open one. `pickFolderAndOpen` picks
+		// and opens in the main process, which can only answer with a window; asking first leaves the
+		// answer here, where this window can show the folder instead. The dialog itself is unchanged -
+		// it is the same native one, with the same starting directory.
+		const picked = await this.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			// ⚠️ Several, as before. Upstream answered a multiple pick with one window each; this
+			// window can hold them all, which is the whole of what the bar is for.
+			canSelectMany: true,
+			defaultUri: options.defaultUri,
+			title: localize('openFolder.title', 'Open Folder')
+		});
+
+		if (picked?.length) {
+			return this.showFolders(picked, options);
+		}
 	}
 
 	async pickWorkspaceAndOpen(options: IPickAndOpenOptions): Promise<void> {

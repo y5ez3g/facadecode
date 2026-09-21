@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { coalesce } from '../../../../../base/common/arrays.js';
 import * as sinon from 'sinon';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -24,6 +25,7 @@ import { INativeHostService } from '../../../../../platform/native/common/native
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspacesService } from '../../../../../platform/workspaces/common/workspaces.js';
+import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { ISimpleFileDialog } from '../../browser/simpleFileDialog.js';
 import { FileDialogService } from '../../electron-browser/fileDialogService.js';
 import { IEditorService } from '../../../editor/common/editorService.js';
@@ -206,4 +208,87 @@ suite('FileDialogService', function () {
 		await dialogService.defaultFolderPath();
 		assert.deepStrictEqual(activeFolderFor.args[1], [Schemas.vscodeRemote, 'testRemote']);
 	});
+
+	test(`⭐ a folder picked from the native Open dialog becomes a row, not a window`, async function () {
+		// ⚠️ `pickFileFolderAndOpen` used to hand the whole job to the main process, which picks and
+		// opens in one call and can only answer with a window. The dialog is asked for a path now, and
+		// what to do with it is decided here - so a folder joins this window instead of starting
+		// another one. The in-page dialog and this one share that decision.
+		const folder = URI.file('/test/folder');
+		const shown: URI[] = [];
+		const windowed: unknown[] = [];
+
+		const configurationService = new TestConfigurationService();
+		await configurationService.setUserConfiguration('files', { simpleDialog: { enable: false } });
+		instantiationService.stub(IConfigurationService, configurationService);
+		instantiationService.stub(INativeHostService, new class extends mock<INativeHostService>() {
+			override async showOpenDialog() { return { canceled: false, filePaths: [folder.fsPath] }; }
+			override async getCursorScreenPoint() { return { point: { x: 0, y: 0 }, display: { x: 0, y: 0, width: 0, height: 0 } }; }
+		});
+		instantiationService.stub(IFileService, new class extends mock<IFileService>() {
+			override async stat() { return { isDirectory: true, resource: folder } as never; }
+		});
+		instantiationService.stub(IHostService, new class extends mock<IHostService>() {
+			override async openWindow(...args: unknown[]) { windowed.push(args); }
+		});
+		instantiationService.stub(IWorkspaceBarService, new class extends mock<IWorkspaceBarService>() {
+			override async addAndShow(uris: readonly URI[]) { shown.push(...uris); }
+		});
+
+		const dialogService = instantiationService.createInstance(TestFileDialogService, undefined as unknown as ISimpleFileDialog);
+		await dialogService.pickFileFolderAndOpen({ forceNewWindow: false });
+
+		assert.deepStrictEqual(shown.map(uri => uri.fsPath), [folder.fsPath]);
+		assert.strictEqual(windowed.length, 0);
+	});
+
+
+	test(`⭐ several files picked from the native Open dialog all open`, async function () {
+		// ⚠️ The main process opened with `multiSelections`, so this dialog could always take more
+		// than one. Asking it for paths instead of telling it to open must not quietly take that away.
+		const files = [URI.file('/test/one.ts'), URI.file('/test/two.ts')];
+		const opened: URI[] = [];
+
+		const configurationService = new TestConfigurationService();
+		await configurationService.setUserConfiguration('files', { simpleDialog: { enable: false } });
+		instantiationService.stub(IConfigurationService, configurationService);
+		instantiationService.stub(INativeHostService, new class extends mock<INativeHostService>() {
+			override async showOpenDialog() { return { canceled: false, filePaths: files.map(file => file.fsPath) }; }
+		});
+		instantiationService.stub(IFileService, new class extends mock<IFileService>() {
+			override async stat(resource: URI) { return { isDirectory: false, resource } as never; }
+		});
+		instantiationService.stub(IEditorService, new class extends mock<IEditorService>() {
+			override openEditors = (async (editors: readonly { resource?: URI }[]) => { opened.push(...coalesce(editors.map(editor => editor.resource))); return []; }) as unknown as IEditorService['openEditors'];
+		});
+
+		const dialogService = instantiationService.createInstance(TestFileDialogService, undefined as unknown as ISimpleFileDialog);
+		await dialogService.pickFileFolderAndOpen({ forceNewWindow: false });
+
+		assert.deepStrictEqual(opened.map(uri => uri.fsPath), files.map(file => file.fsPath));
+	});
+
+	test(`⭐ and several folders all join this window`, async function () {
+		const folders = [URI.file('/test/alpha'), URI.file('/test/beta')];
+		const shown: URI[][] = [];
+
+		const configurationService = new TestConfigurationService();
+		await configurationService.setUserConfiguration('files', { simpleDialog: { enable: false } });
+		instantiationService.stub(IConfigurationService, configurationService);
+		instantiationService.stub(INativeHostService, new class extends mock<INativeHostService>() {
+			override async showOpenDialog() { return { canceled: false, filePaths: folders.map(folder => folder.fsPath) }; }
+		});
+		instantiationService.stub(IFileService, new class extends mock<IFileService>() {
+			override async stat(resource: URI) { return { isDirectory: true, resource } as never; }
+		});
+		instantiationService.stub(IWorkspaceBarService, new class extends mock<IWorkspaceBarService>() {
+			override async addAndShow(uris: readonly URI[]) { shown.push([...uris]); }
+		});
+
+		const dialogService = instantiationService.createInstance(TestFileDialogService, undefined as unknown as ISimpleFileDialog);
+		await dialogService.pickFolderAndOpen({ forceNewWindow: false });
+
+		assert.deepStrictEqual(shown.map(batch => batch.map(uri => uri.fsPath)), [folders.map(folder => folder.fsPath)]);
+	});
+
 });

@@ -5,6 +5,7 @@
 
 import { localize, localize2 } from '../../../nls.js';
 import { hasWorkspaceFileExtension, IWorkspaceContextService } from '../../../platform/workspace/common/workspace.js';
+import { foldersWithActiveFirst, IActiveFolderService } from '../../services/activeFolder/common/activeFolder.js';
 import { IWorkspaceEditingService } from '../../services/workspaces/common/workspaceEditing.js';
 import { dirname } from '../../../base/common/resources.js';
 import { CancellationToken } from '../../../base/common/cancellation.js';
@@ -111,7 +112,11 @@ CommandsRegistry.registerCommand(PICK_WORKSPACE_FOLDER_COMMAND_ID, async functio
 	const modelService = accessor.get(IModelService);
 	const languageService = accessor.get(ILanguageService);
 
-	const folders = contextService.getWorkspace().folders;
+	// ⚠️ The folder the window is on comes first, and every folder is still listed. This command is
+	// the shared answer to "which folder?" - the settings editor's folder tab, a terminal's working
+	// directory, an extension being installed into one - and in a window that reads as one folder,
+	// offering another one first is the whole of what is wrong with it.
+	const folders = foldersWithActiveFirst(contextService.getWorkspace().folders, accessor.get(IActiveFolderService).activeFolder);
 	if (!folders.length) {
 		return;
 	}

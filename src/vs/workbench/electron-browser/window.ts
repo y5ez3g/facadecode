@@ -22,10 +22,11 @@ import { ICommandService, CommandsRegistry } from '../../platform/commands/commo
 import { IResourceEditorInput } from '../../platform/editor/common/editor.js';
 import { ipcRenderer, process } from '../../base/parts/sandbox/electron-browser/globals.js';
 import { IWorkspaceEditingService } from '../services/workspaces/common/workspaceEditing.js';
+import { IWorkspaceBarService } from '../browser/parts/workspacebar/workspaceBarService.js';
 import { IMenuService, MenuId, IMenu, MenuItemAction, MenuRegistry } from '../../platform/actions/common/actions.js';
 import { ICommandAction } from '../../platform/action/common/action.js';
 import { getFlatActionBarActions } from '../../platform/actions/browser/menuEntryActionViewItem.js';
-import { RunOnceScheduler } from '../../base/common/async.js';
+import { DeferredPromise, RunOnceScheduler } from '../../base/common/async.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { LifecyclePhase, ILifecycleService, WillShutdownEvent, ShutdownReason, BeforeShutdownErrorEvent, BeforeShutdownEvent } from '../services/lifecycle/common/lifecycle.js';
 import { IWorkspaceFolderCreationData } from '../../platform/workspaces/common/workspaces.js';
@@ -87,6 +88,9 @@ export class NativeWindow extends BaseWindow {
 
 	private readonly addRemoveFoldersScheduler = this._register(new RunOnceScheduler(() => this.doAddRemoveFolders(), 100));
 	private pendingFoldersToAdd: URI[] = [];
+
+	/** Settles when folders that have arrived are in the workspace and the window has moved onto them. */
+	private foldersArriving: DeferredPromise<void> | undefined;
 	private pendingFoldersToRemove: URI[] = [];
 
 	private isDocumentedEdited = false;
@@ -102,6 +106,7 @@ export class NativeWindow extends BaseWindow {
 		@IKeybindingService private readonly keybindingService: IKeybindingService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
+		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IFileService private readonly fileService: IFileService,
 		@IMenuService private readonly menuService: IMenuService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
@@ -1005,6 +1010,10 @@ export class NativeWindow extends BaseWindow {
 		this.pendingFoldersToAdd.push(...request.foldersToAdd.map(folder => URI.revive(folder)));
 		this.pendingFoldersToRemove.push(...request.foldersToRemove.map(folder => URI.revive(folder)));
 
+		if (!this.foldersArriving) {
+			this.foldersArriving = new DeferredPromise<void>();
+		}
+
 		// Delay the adding of folders a bit to buffer in case more requests are coming
 		if (!this.addRemoveFoldersScheduler.isScheduled()) {
 			this.addRemoveFoldersScheduler.schedule();
@@ -1018,8 +1027,25 @@ export class NativeWindow extends BaseWindow {
 		this.pendingFoldersToAdd = [];
 		this.pendingFoldersToRemove = [];
 
+		const arrived = this.foldersArriving;
+		this.foldersArriving = undefined;
+
+		try {
+			await this.doAddRemove(foldersToAdd, foldersToRemove);
+		} finally {
+			arrived?.complete();
+		}
+	}
+
+	private async doAddRemove(foldersToAdd: IWorkspaceFolderCreationData[], foldersToRemove: URI[]): Promise<void> {
 		if (foldersToAdd.length) {
-			await this.workspaceEditingService.addFolders(foldersToAdd);
+			// ⚠️ Through the bar, which adds and then moves the window onto it. `code <folder>` and a
+			// folder dropped on the dock both mean "show me this", and a row that arrives without the
+			// window going to it is a request half answered. `code --add` lands here too and switches
+			// as well: upstream had no folder for a window to be on, so "add without switching" was
+			// not a thing anybody could have asked for.
+			//
+			await this.workspaceBarService.addAndShow(foldersToAdd.map(folder => folder.uri));
 		}
 
 		if (foldersToRemove.length) {
@@ -1028,6 +1054,14 @@ export class NativeWindow extends BaseWindow {
 	}
 
 	private async onOpenFiles(request: INativeOpenFileRequest): Promise<void> {
+
+		// ⚠️ Behind any folders that arrived in the same breath. Their request is buffered on a
+		// scheduler while this one is answered at once, so `code <folder> <file>` opened the file, then
+		// moved the window onto the folder - and the move captured the file into the editors of the
+		// folder the window was leaving. The person asked for a folder and a file and got the folder,
+		// with the file filed away under somewhere they were not.
+		await this.foldersArriving?.p;
+
 		const diffMode = !!(request.filesToDiff && (request.filesToDiff.length === 2));
 		const mergeMode = !!(request.filesToMerge && (request.filesToMerge.length === 4));
 
