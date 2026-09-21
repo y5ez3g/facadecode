@@ -194,6 +194,56 @@ nobody outside the service reads one. Consumers that draw the name listen here a
 which is also what removes the ordering hazard: both this service and `ExplorerModel` used to
 listen to `onDidChangeWorkspaceFolders`, and which ran first was whichever registered first.
 
+### 3.2b The bar decides, and the editor never does
+
+Settled after the audit turned up a state nobody had designed for: the window on `gin`, an editor
+open on a file from `alpha`, and the title reading `alpha.ipynb — gin`.
+
+```
+⭐ The active folder is set by the bar and by nothing else. Opening a file that belongs to
+   another folder does not move it.
+```
+
+⚠️ **This is a change from upstream, and the mechanism already runs.**
+`getLastActiveWorkspaceRoot()` walks the editor history and returns the folder of the most
+recently opened file, so in stock VS Code - and in this build today, because the 15 call sites
+have not been repointed yet - a terminal opened while editing `alpha/foo.py` gets `alpha` even
+though the bar says `gin`. After the repoint it gets `gin`.
+
+What each choice costs, for the three surfaces that actually change:
+
+```
+                      the editor decides            the bar decides  (chosen)
+terminal cwd          the file's folder             the bar's folder
+Go to File            the file's neighbours         the bar's folder - and the file you are
+                                                      looking at is not in the list
+search default        the file's folder             the bar's folder
+the cost              opening one file puts away    the window can hold an editor from
+                      every tab of the folder you   outside the active folder
+                      were in and restores another
+```
+
+Why the bar: with a working set per folder, letting the editor move the active folder means
+**one cross-folder file open costs a full switch** - every tab of the folder you were in is put
+away and another set restored. That is a heavy price for looking at a file, and it would be paid
+every time.
+
+And the cost of this choice shrinks as the narrowing lands. Once the explorer, Go to File,
+search, problems and SCM are all narrowed, the ways to open a file from another folder are:
+
+```
+Go to Definition        follows the code across folders and cannot be narrowed - and it is
+                        exactly the moment when you want to look without moving house
+Open Recent, a drop     deliberate
+everything else         narrowed
+```
+
+So the state this decision tolerates is the rare, deliberate one; the state the other choice
+would have created is the everyday one.
+
+⚠️ It follows that the bar must never be a display. Anything that would move the active folder
+without the person choosing a row is this decision being broken.
+
 ### 3.3 What layer 1 narrows
 
 ```
@@ -597,44 +647,252 @@ did not    gate the extension-host relauncher. A switch no longer touches folder
    hygiene accepts a non-Microsoft gallery  build/lib/extensionsGallery.ts, 4 tests
 ```
 
-### 6.2 Next
+### 6.2 The plan, in order
+
+Six stages. Each is one commit or a short run of them, each leaves the window coherent, and each
+says what proves it. The order is by dependency first and by how much pain it removes second.
+
+⚠️ Every stage ends with the same two live checks, because they are the two the audit kept
+catching: **switch folders and read the surface again**, and **check the surface when no editor
+is open** - most of what was wrong only showed up in one of those two states.
+
+---
+
+#### Stage A — stop guessing, ask the service
+
+The `3.2b` decision becomes real here, and it is the seam the rest of the work hangs off.
 
 ```
-6  repoint the 15 guesses          terminal and external terminal (10), file dialogs (2),
-                                   search-from-here (2), debug configuration (1). ⚠️ one at a
-                                   time: some of them really do mean "last active"
-7  source control                  set scmViewService.visibleRepositories on a switch; upstream
-                                   already has the setter, the event and the record
-8  the three search surfaces       Find in Files · Go to File · Go to Symbol in Workspace.
-                                   One decision, three views: the results come back from layer
-                                   2 either way, and the narrowing happens where they land.
-                                   ⚠️ Go to Symbol was found by the §4.10 audit, not by memory
-9  problems                        filter the view by the active folder
-10 move a folder up and down       the order of folders[] is the order in the file
-11 open and save a workspace       prove the other direction: opening a .code-workspace from
-                                   outside fills the bar with its folders
-12 the folder settings picker      default the settings editor's Folder tab to the active
-                                   folder. ⚠️ Only the default - it must still list them all,
-                                   because folder settings are a workspace-level question
-13 ⭐ one window, many folders      the T1 list in §4.11. Open Folder, Open Recent, the CLI,
-                                   the welcome page, the directory-opened-as-a-file offer,
-                                   Open Folder via Workspace, and git clone's "Open" should
-                                   add the folder and switch to it. One seam: they all go
-                                   through the same `openWindow` decision. ⚠️ "in New Window",
-                                   ⌘Enter and `vscode.openFolder` keep meaning what they say
+A1  repoint the 15 guesses          getLastActiveWorkspaceRoot() -> IActiveFolderService
+                                    terminal and external terminal (10), file dialogs (2),
+                                    search-from-here (2), debug configuration (1)
+                                    ⚠️ one at a time. Some of them really do mean "last
+                                    active" - `history.ts`'s own two are the service's seed
+                                    and must stay
+                                    ⚠️ this changes the terminal cwd from upstream behaviour.
+                                    It is the point of 3.2b, and it is worth saying in the
+                                    commit message
+    proves it                       open a terminal on folder A, switch to B, open another:
+                                    two different cwds. Open a file from B while on A, open a
+                                    terminal: still A
+    measured                        four folders, one editor open on `gson/pom.xml` the whole
+                                    time. Bar on ky -> /private/tmp/langbench/ky; on gin ->
+                                    .../gin; on axios -> .../axios. Then GsonBuilder.java
+                                    opened from gson while the bar sat on axios: the bar did
+                                    not move and the next terminal opened on axios.
+                                    ⭐ Upstream answers gson in all four
+    the fallback stays              `activeFolderFor(scheme, authority)` keeps upstream's walk
+                                    to the first folder that matches, because a workspace can
+                                    hold a local folder and a remote one at once and a caller
+                                    asking for a local path cannot be handed the remote one
+
+A2  source control, both knobs      the user's own words: "I do not need SCM to show me every
+                                    repository at once. That is a downside for me."
+    A2a  the Changes pane           set scmViewService.visibleRepositories on a switch.
+                                    Upstream already has the setter, the event and the
+                                    StorageScope.WORKSPACE record
+    A2b  the Graph and the status   scmViewService.ts:298 derives activeRepository from
+         bar, one fix               [activeEditorRepository, focusedRepository] - neither of
+                                    which is the active folder, which is why it pins to the
+                                    first repository and stays there. Add the active folder,
+                                    ahead of the editor
+    A2c  what is remembered         ⚠️ `onWillSaveState` persists the selection under
+                                    `scm:view:visibleRepositories`. Reading the narrowed getter
+                                    there records "the folder the window closed on" as a
+                                    deselection of every other folder's repository - and the
+                                    record outlives the window, so the next session shows one
+                                    repository and no switch brings the others back. Same for
+                                    `onDidRemoveRepository`'s "nothing visible, select the
+                                    first": it writes a selection, so it has to ask what is
+                                    chosen, not what is on screen
+    proves it                       four repositories on four branches, no editor open. The
+                                    Changes pane lists one, the Graph header names it, the
+                                    status bar agrees, and all three follow a switch
+    and then prove it again         ⭐ stop on the last folder, reload the window, switch back.
+                                    A2c was invisible to the check above: it only shows on the
+                                    second run, and by then the record is already wrong
+    measured                        fresh profile, five folders: ky/main · gin/master · gson/main ·
+                                    axios/v1.x and one with no repository at all. Each names itself
+                                    in the Changes pane's commit box, the Graph header, the Graph's
+                                    first commit and the status bar; the fifth shows none of them
+                                    and says so. Stopped on axios, reloaded, all of it still follows
+    A2d  the two smaller surfaces   the status bar's "Source Control Provider" entry appears when
+                                    there is more than one repository - it counted all of them, so
+                                    four folders of one repository each always showed it, naming a
+                                    repository the bar already names. And `RepositoryRenderer`
+                                    disambiguates a row against the other rows, but read the whole
+                                    list to do it: two views use that renderer and they draw
+                                    different sets, so it is told which
+    A2e  a folder with no            the Graph read "there is no repository" as the moment before
+         repository in it            the first one arrived and left the tree alone, so it went on
+                                    drawing the folder the window had left, under a header naming
+                                    that folder's repository, with its context keys still enabling
+                                    its menu items. ⚠️ Upstream could not reach this state: one
+                                    window per folder, and the view is only registered when some
+                                    provider exists. It now redraws, forgets those keys, and says
+                                    "There is no source control repository in this folder."
+    tests                           `scmViewService.test.ts`, twelve of them. ⭐ Each was checked by
+                                    putting its bug back: the storage one turns three red, the
+                                    other two one each
+    ⚠️ a false-green first          the first version of the "removing a repository" test asserted
+                                    on `onDidChangeVisibleRepositories`, which is debounced on that
+                                    path - it could not have failed. A test that passes against the
+                                    broken code is worth less than no test
 ```
 
-### 6.3 Deliberately later
+#### Stage B — the three search surfaces
+
+One decision, three views, because the results all come back from layer 2 and are narrowed
+where they land.
 
 ```
-worktrees                    a worktree is a folder; it can wait until the folder list is done
-withholding folders from     5.4, and only if a real machine runs out of memory
-  layer 2
-per-folder colour and name   the workspace file already carries a name per folder; using it
-                             is free, choosing one needs a dialog
+B1  Find in Files                   queryBuilder's folderQueries = the active folder, with a
+                                    way to widen to the whole workspace
+B2  Go to File (⌘P)                 the same scope
+B3  Go to Symbol in Workspace (⌘T)  the same scope. ⚠️ Found by the §4.10 audit, not by memory
+    proves it                       a string that exists in two folders: found once, in the
+                                    active one, and found twice after widening
+    ⚠️ widening has to be reachable and has to be remembered per window, or this is a
+      narrowing that costs people a feature
+```
+
+#### Stage C — problems
+
+```
+C1  filter the markers view         by the active folder. ⚠️ markersModel stores by resource,
+                                    so this partitions rather than discards: the other
+                                    folders' markers are still there when you switch back
+    proves it                       a Java error in folder B while the window is on A: the
+                                    status bar and the panel show A's count, and B's errors
+                                    are there the moment you switch
+```
+
+#### Stage D — five pickers, ordered not narrowed
+
+All five ask "which folder?", which is a workspace-level question. Listing every folder is
+right; **not putting the active one first is the bug**.
+
+```
+D1  debug configuration             `Add Config (ky)` first while the window is on axios
+D2  Configure Snippets              same
+D3  the settings editor's Folder    same
+    tab
+D4  Tasks: Run Task                 lists every folder's tasks; the active folder's first
+D5  the agent folder picker         agentHostFolderPickerActionItem.ts:146 falls back to
+                                    `folders[0]`, so a session started on axios offers ky.
+                                    ⚠️ same shape as the Graph, and the same fix
+D6  Terminal: Create New Terminal   found while proving A1, not by the audit: in a workspace
+                                    with more than one folder the command asks "Select current
+                                    working directory for new terminal" and opens on `ky`, the
+                                    first folder, while the window is on gin. ⚠️ A1 does not
+                                    reach it - the picker answers before the fallback does.
+                                    ⚠️ And upstream already has a second command for choosing a
+                                    directory, so the answer here is probably "stop asking"
+                                    rather than "ask in a better order"
+D7  the three repository choosers   the Repositories view (measured: lists all four while the
+                                    window is on gin), the Graph's repository picker, and
+                                    `RepositoryPicker`. ⚠️ Deliberately left out of A2: by this
+                                    stage's own rule a chooser lists everything and puts the
+                                    active folder first. Narrowing the Repositories view would
+                                    also take away the only way to re-enable a repository that
+                                    was turned off in a folder you are not in
+    proves it                       window on the last folder of four: each picker opens with
+                                    that folder first or preselected, and still lists all four
+```
+
+#### Stage E — one window, many folders
+
+The principle from §1, applied to the seven rows §4.11 marks `violates`. Left until here on
+purpose: a folder arriving in a window whose right-hand side is not narrowed yet lands in a
+state that is confusing to judge.
+
+```
+E1  the seam                        the places that mean "show me this folder" call
+                                    IActiveFolderService instead of IHostService.openWindow;
+                                    the places that mean "give me another window" keep calling
+                                    it. One decision point, seven callers
+E2  the seven                       File > Open Folder · `code <folder>` · Open Recent on a
+                                    folder · the welcome page · the "Open Folder" offered when
+                                    a directory is opened as a file · Open Folder via Workspace
+                                    (which should just switch - that folder is already here) ·
+                                    git clone's "Open"
+    ⚠️ never                        swallow an explicit request. "in New Window", ⌘Enter in
+                                    Open Recent, and `vscode.openFolder` from an extension all
+                                    keep meaning a window
+    ⚠️ upstream agrees              git clone already offers "Add to Workspace" when a
+                                    workspace is open, and that path calls
+                                    updateWorkspaceFolders. It is just not the default, and it
+                                    is only there
+    proves it                       stock and this build side by side, same action: `code
+                                    <folder>` gives stock a second window and gives this one a
+                                    new row. Then the same for each of the seven
+```
+
+#### Stage F — the list as a product, and the loose ends
+
+```
+F1  move a folder up and down       the order of folders[] is the order in the file
+F2  open a workspace from outside   prove the direction we have not: a .code-workspace opened
+                                    from the CLI or the File menu fills the bar
+F3  the three unverified rows       Save Workspace As (it changes the workspace id), workspace
+    of §4                           trust (one untrusted folder restricts the window), and
+                                    per-folder launch.json. Point at them rather than argue
+F4  the two still untested          the notebook's per-folder kernel discovery (needs a Python
+                                    extension) and editSessions (needs sign-in). ⚠️ MCP has no
+                                    command in this build at all - it rides with Copilot, which
+                                    Step 0 turns off - but its 13 sites read the folder list,
+                                    so it joins stage D the day it is switched on
 ```
 
 ---
+
+#### What has been run, and what has not
+
+⚠️ Written down per stage, because "it compiles and the tests pass" is a different claim from "it
+was seen to work", and only the second one settles anything here. A row that was only compiled is
+not a row that is broken - it is a row nobody has looked at yet, and saying which is which is the
+difference between a gap and a surprise.
+
+Stage A, as of 2026-09-20:
+
+```
+seen to work        the terminal's cwd across four folders, with an editor open on a fifth
+                    folder's file the whole time, and again with no editor open at all ·
+                    source control's Changes pane, Graph header, Graph content and status bar
+                    across five folders, one of which holds no repository · the record of which
+                    repositories the person chose surviving a reload taken while the window sat
+                    on the last folder
+
+compiled and unit   the file dialogs' starting directory · the debug configuration picker ·
+tested only         `${workspaceFolder}` inside a terminal profile · `sendSequence` · the pty
+                    host's variable resolution · `findInFiles` called with arguments · the chat
+                    agent tool's cwd. ⚠️ Most of these need a variable in a setting before they
+                    are reachable at all, which is why they were not clicked
+
+cannot be run here  everything on `vscode-remote`: the remote terminal backend, Create New
+                    Integrated Terminal (Local), and the scheme fallback inside
+                    `activeFolderFor`. ⚠️ That fallback is the whole reason the method exists
+                    and it is the least exercised code in stage A
+
+not covered by a    the Graph's empty state on a folder with no repository, and the status bar
+unit test           entry that used to count every repository. Both are view-level and were
+                    measured live instead; `activeRepository` answering `undefined` on such a
+                    folder - the root both of them hang off - is covered
+```
+
+#### What is deliberately not in the plan
+
+```
+withholding a folder from layer 2 until it is needed   §5.4: it breaks promise 1 to serve
+                                                       promise 2, and promise 2 is not
+                                                       under threat
+narrowing showWorkspaceFolderPick or a tree an         an extension's own UI is its own.
+  extension draws itself                               Stock multi-root does the same:
+                                                       parity, not a regression
+narrowing _workbench.pickWorkspaceFolder's list        it is asked by tasks and debug, and
+                                                       those are workspace-level questions.
+                                                       Stage D orders it instead
+```
 
 ## 7 Tests
 
