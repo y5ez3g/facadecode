@@ -67,6 +67,8 @@ import { startEntries } from '../common/gettingStartedContent.js';
 import { GroupsOrder, IEditorGroup, IEditorGroupsService, preferredSideBySideGroupDirection } from '../../../services/editor/common/editorGroupsService.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { IWorkspaceBarService, openOrShow } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IWorkbenchThemeService } from '../../../services/themes/common/workbenchThemeService.js';
 import { GettingStartedIndexList } from './gettingStartedList.js';
 import { canShowAgentsBanner, createAgentsBanner } from '../../chat/browser/agentSessions/agentSessionsBanner.js';
@@ -192,6 +194,8 @@ export class GettingStartedPage extends EditorPane {
 		@IWorkspacesService private readonly workspacesService: IWorkspacesService,
 		@ILabelService private readonly labelService: ILabelService,
 		@IHostService private readonly hostService: IHostService,
+		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
 		@IWebviewService private readonly webviewService: IWebviewService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
@@ -1058,7 +1062,8 @@ export class GettingStartedPage extends EditorPane {
 			link.setAttribute('aria-label', localize('welcomePage.openFolderWithPath', "Open folder {0} with path {1}", name, parentPath));
 			link.addEventListener('click', e => {
 				this.telemetryService.publicLog2<GettingStartedActionEvent, GettingStartedActionClassification>('gettingStarted.ActionExecuted', { command: 'openRecent', argument: undefined, walkthroughId: this.currentWalkthrough?.id });
-				this.hostService.openWindow([windowOpenable], {
+				// ⚠️ The modifier still means a window; without it a folder is shown in this one.
+				openOrShow(this.workspaceBarService, this.hostService, this.environmentService, windowOpenable, {
 					forceNewWindow: e.ctrlKey || e.metaKey,
 					remoteAuthority: recent.remoteAuthority || null // local window if remoteAuthority is not set or can not be deducted from the openable
 				});
@@ -1426,7 +1431,7 @@ export class GettingStartedPage extends EditorPane {
 						restoreWalkthroughsConfigurationKey,
 						JSON.stringify(restoreData),
 						StorageScope.PROFILE, StorageTarget.MACHINE);
-					this.hostService.openWindow([{ folderUri: toOpen }]);
+					openOrShow(this.workspaceBarService, this.hostService, this.environmentService, { folderUri: toOpen });
 				}
 			});
 		} else {

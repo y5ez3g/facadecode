@@ -21,6 +21,7 @@ import { IContextKeyService } from '../../../../../../platform/contextkey/common
 import { IHoverService } from '../../../../../../platform/hover/browser/hover.js';
 import { IKeybindingService } from '../../../../../../platform/keybinding/common/keybinding.js';
 import { IStorageService } from '../../../../../../platform/storage/common/storage.js';
+import { foldersWithActiveFirst, IActiveFolderService } from '../../../../../services/activeFolder/common/activeFolder.js';
 import { ITelemetryService } from '../../../../../../platform/telemetry/common/telemetry.js';
 import { IWorkspaceContextService } from '../../../../../../platform/workspace/common/workspace.js';
 import { ISCMService } from '../../../../scm/common/scm.js';
@@ -58,11 +59,15 @@ export class AgentHostFolderPickerActionItem extends ChatInputPickerActionViewIt
 		@ISCMService private readonly _scmService: ISCMService,
 		@IHoverService private readonly _hoverService: IHoverService,
 		@IStorageService storageService: IStorageService,
+		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 	) {
 		const actionProvider: IActionWidgetDropdownActionProvider = {
 			getActions: () => {
 				const selected = this._selectedFolder();
-				return this._workspaceContextService.getWorkspace().folders.map(folder => ({
+				// Ordered, not narrowed: a session can be started on any folder, and the one the
+				// window is on is the one to offer first.
+				const folders = foldersWithActiveFirst(this._workspaceContextService.getWorkspace().folders, this._activeFolderService.activeFolder);
+				return folders.map(folder => ({
 					...action,
 					id: `agentHostFolder.${folder.uri.toString()}`,
 					label: folder.name,
@@ -143,7 +148,9 @@ export class AgentHostFolderPickerActionItem extends ChatInputPickerActionViewIt
 		// No explicit choice for this session yet: default to the folder the
 		// user last picked in this window (if still valid) so a new chat keeps
 		// the previous selection instead of resetting to the first folder.
-		return this._newSessionFolderService.getDefaultFolder() ?? folders[0]?.uri;
+		// ⚠️ The folder the window is on, not `folders[0]`: a session started while looking at one
+		// folder should be about that folder.
+		return this._newSessionFolderService.getDefaultFolder() ?? this._activeFolderService.activeFolder?.uri ?? folders[0]?.uri;
 	}
 
 	protected override renderLabel(element: HTMLElement): IDisposable | null {

@@ -59,6 +59,8 @@ import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkspacesService, IRecentFolder, IRecentWorkspace, isRecentFolder, isRecentWorkspace } from '../../../../platform/workspaces/common/workspaces.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { IWorkspaceBarService, openOrShow } from '../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IWorkspaceTrustManagementService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IViewDescriptorService, ViewContainerLocation } from '../../../common/views.js';
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
@@ -173,6 +175,8 @@ export class AgentSessionsWelcomePage extends EditorPane {
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IWorkspacesService private readonly workspacesService: IWorkspacesService,
 		@IHostService private readonly hostService: IHostService,
+		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
 		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
 		@IViewDescriptorService private readonly viewDescriptorService: IViewDescriptorService,
 		@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,
@@ -498,7 +502,12 @@ export class AgentSessionsWelcomePage extends EditorPane {
 		if (workspace) {
 			try {
 				if (isRecentFolder(workspace)) {
-					await this.hostService.openWindow([{ folderUri: workspace.folderUri }]);
+					// ⚠️ The same seam every other "open this folder" goes through: a folder picked here
+					// joins this window, and a `.code-workspace` on the next line goes on being a window.
+					// Nobody has driven this screen in the comparison run - it needs an extension and an
+					// account a throwaway profile does not have - so it is consistent by construction
+					// rather than by measurement.
+					await openOrShow(this.workspaceBarService, this.hostService, this.environmentService, { folderUri: workspace.folderUri });
 				} else if (isRecentWorkspace(workspace)) {
 					await this.hostService.openWindow([{ workspaceUri: workspace.workspace.configPath }]);
 				}
