@@ -563,7 +563,7 @@ export class SCMRepositoriesViewPane extends ViewPane {
 			new ListDelegate(),
 			new RepositoriesTreeCompressionDelegate(),
 			[
-				this.instantiationService.createInstance(RepositoryRenderer, MenuId.SCMSourceControlInline, getActionViewItemProvider(this.instantiationService)),
+				this.instantiationService.createInstance(RepositoryRenderer, MenuId.SCMSourceControlInline, getActionViewItemProvider(this.instantiationService), () => this.scmViewService.repositories),
 				this.instantiationService.createInstance(ArtifactGroupRenderer, getActionViewItemProvider(this.instantiationService)),
 				this.instantiationService.createInstance(ArtifactRenderer, getActionViewItemProvider(this.instantiationService))
 			],

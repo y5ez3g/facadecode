@@ -11,7 +11,9 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { SCMMenus } from './menus.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { debounce } from '../../../../base/common/decorators.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
+import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { compareFileNames, comparePaths } from '../../../../base/common/comparers.js';
 import { basename } from '../../../../base/common/resources.js';
 import { binarySearch } from '../../../../base/common/arrays.js';
@@ -26,7 +28,7 @@ import { IQuickInputService, IQuickPickItem, IQuickPickSeparator } from '../../.
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize } from '../../../../nls.js';
 import { observableConfigValue } from '../../../../platform/observable/common/platformObservableUtils.js';
-import { getSCMRepositoryIcon } from './util.js';
+import { getSCMRepositoryIcon, repositoryBelongsToFolder } from './util.js';
 
 function getProviderStorageKey(provider: ISCMProvider): string {
 	return `${provider.providerId}:${provider.label}${provider.rootUri ? `:${provider.rootUri.toString()}` : ''}`;
@@ -130,7 +132,15 @@ export class SCMViewService implements ISCMViewService {
 
 	readonly didFinishLoadingRepositories = observableValue<boolean>(this, false);
 
-	get visibleRepositories(): ISCMRepository[] {
+	/**
+	 * The repositories the person has chosen to see, whichever folder they belong to.
+	 *
+	 * ⚠️ Use this, never the public `visibleRepositories`, for anything that reads the set in order
+	 * to write it back. The public one is narrowed to the folder the window is on, so a
+	 * read-modify-write through it drops every other folder's choice - the same shape of bug as
+	 * `doUpdateFolders` losing folders from a `.code-workspace`.
+	 */
+	private get selectedRepositories(): ISCMRepository[] {
 		// In order to match the legacy behaviour, when the repositories are sorted by discovery time,
 		// the visible repositories are sorted by the selection index instead of the discovery time.
 		if (this._repositoriesSortKey === ISCMRepositorySortKey.DiscoveryTime) {
@@ -145,6 +155,33 @@ export class SCMViewService implements ISCMViewService {
 			.map(r => r.repository);
 	}
 
+	/**
+	 * What the source control views show: the chosen repositories that belong to the folder the
+	 * window is on.
+	 *
+	 * ⚠️ A third reason a repository is not on screen, beside the two that were already here - the
+	 * provider hiding itself, and the person deselecting it. It composes with them rather than
+	 * replacing them: a repository deselected in one folder stays deselected when you come back,
+	 * and one belonging to another folder is not lost, only off screen until you are in it.
+	 */
+	get visibleRepositories(): ISCMRepository[] {
+		return this.repositoriesIn(this.activeFolderService.activeFolder);
+	}
+
+	/**
+	 * The chosen repositories that belong to `folder`: what the views show while the window is on it.
+	 * See `repositoryBelongsToFolder`. A window on no folder at all is shown everything.
+	 */
+	private repositoriesIn(folder: IWorkspaceFolder | undefined): ISCMRepository[] {
+		return this.selectedRepositories.filter(repository =>
+			repositoryBelongsToFolder(repository.provider.rootUri, folder?.uri, this.uriIdentityService.extUri));
+	}
+
+	/**
+	 * ⚠️ Not narrowed: what is written here is the person's choice, for every folder. The narrowing
+	 * lives in the getter, which is why anything reading in order to write back has to go through
+	 * `selectedRepositories` instead.
+	 */
 	set visibleRepositories(visibleRepositories: ISCMRepository[]) {
 		const set = new Set(visibleRepositories);
 		const added = new Set<ISCMRepository>();
@@ -224,6 +261,7 @@ export class SCMViewService implements ISCMViewService {
 	* values are updated in the same transaction (or during the initial read of the observable value).
 	*/
 	private readonly _activeRepositoryObs: IObservable<ISCMRepository | undefined>;
+	private readonly _activeFolderObs: IObservable<IWorkspaceFolder | undefined>;
 	private readonly _activeRepositoryPinnedObs: ISettableObservable<ISCMRepository | undefined>;
 	private readonly _focusedRepositoryObs: IObservable<ISCMRepository | undefined>;
 
@@ -240,9 +278,13 @@ export class SCMViewService implements ISCMViewService {
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IStorageService private readonly storageService: IStorageService,
-		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService
+		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
+		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService
 	) {
-		this.menus = instantiationService.createInstance(SCMMenus);
+		// ⚠️ Registered, not merely created: upstream never disposed it, which costs nothing in a
+		// window (this service lives as long as the window does) and leaks in a test.
+		this.menus = this.disposables.add(instantiationService.createInstance(SCMMenus));
 
 		const explorerEnabledConfig = observableConfigValue<boolean>('scm.repositories.explorer', false, this.configurationService);
 		this.graphShowIncomingChangesConfig = observableConfigValue<boolean>('scm.graph.showIncomingChanges', true, this.configurationService);
@@ -294,8 +336,61 @@ export class SCMViewService implements ISCMViewService {
 				return Object.create(repository);
 			});
 
+		/*
+		 * A switch changes what is on screen without anything being set, so say so.
+		 *
+		 * ⚠️ As a diff against what was showing, not as "everything changed": the views add and
+		 * remove repositories from a tree they keep, and handing them a repository they already have
+		 * or removing one they never had leaves that tree wrong.
+		 *
+		 * ⚠️ Kept as the folder that was on screen, not as the list of repositories that were. A list
+		 * is a snapshot, and this one would be taken before the git extension has opened a single
+		 * repository: every repository that arrives afterwards is missing from it, so leaving a
+		 * folder announces nothing to remove and the views keep the rows. A folder is not a snapshot
+		 * - the set is derived from it at the moment of the switch, out of a selection whose own
+		 * changes the setter has already announced.
+		 */
+		let folderOnScreen = this.activeFolderService.activeFolder;
+		this.disposables.add(this.activeFolderService.onDidChangeActiveFolder(() => {
+			const previous = this.repositoriesIn(folderOnScreen);
+			folderOnScreen = this.activeFolderService.activeFolder;
+			const onScreen = this.visibleRepositories;
+
+			const added = onScreen.filter(r => !previous.includes(r));
+			const removed = previous.filter(r => !onScreen.includes(r));
+
+			if (added.length === 0 && removed.length === 0) {
+				return;
+			}
+
+			this._onDidSetVisibleRepositories.fire({ added, removed });
+		}));
+
+		this._activeFolderObs = observableFromEventOpts({
+			owner: this,
+			equalsFn: () => false
+		}, this.activeFolderService.onDidChangeActiveFolder, () => this.activeFolderService.activeFolder);
+
 		this._activeRepositoryPinnedObs = observableValue<ISCMRepository | undefined>(this, undefined);
-		this._activeRepositoryObs = latestChangedValue(this, [this._activeEditorRepositoryObs, this._focusedRepositoryObs]);
+
+		/*
+		 * ⚠️ Constrained to the folder the window is on, not merely one more source of "most recent
+		 * wins". An editor or a focused row from another folder must not move this: the window says
+		 * which folder it is on, and the graph and the status bar have to agree with it.
+		 *
+		 * ⚠️ And read through the active-folder observable, or nothing recomputes on a switch: with
+		 * no editor open, `latestChangedValue` never changes, so the first repository stays and the
+		 * graph goes on drawing a history the window has left.
+		 */
+		const latest = latestChangedValue(this, [this._activeEditorRepositoryObs, this._focusedRepositoryObs]);
+		this._activeRepositoryObs = derived(this, reader => {
+			this._activeFolderObs.read(reader);
+
+			const visible = this.visibleRepositories;
+			const candidate = latest.read(reader);
+
+			return (candidate && visible.some(r => r.id === candidate.id)) ? candidate : visible[0];
+		});
 
 		this.activeRepository = derivedOpts<{ repository: ISCMRepository; pinned: boolean } | undefined>({
 			owner: this,
@@ -311,8 +406,8 @@ export class SCMViewService implements ISCMViewService {
 		});
 
 		this.disposables.add(runOnChange(this.selectionModeConfig, selectionMode => {
-			if (selectionMode === ISCMRepositorySelectionMode.Single && this.visibleRepositories.length > 1) {
-				const repository = this.visibleRepositories[0];
+			if (selectionMode === ISCMRepositorySelectionMode.Single && this.selectedRepositories.length > 1) {
+				const repository = this.selectedRepositories[0];
 				this.visibleRepositories = [repository];
 			} else if (selectionMode === ISCMRepositorySelectionMode.Multiple && this.repositories.length > 1) {
 				this.visibleRepositories = this.repositories;
@@ -438,7 +533,10 @@ export class SCMViewService implements ISCMViewService {
 		let added: Iterable<ISCMRepository> = Iterable.empty();
 		const removed = this._repositories.splice(repositoriesIndex, 1);
 
-		if (this._repositories.length > 0 && this.visibleRepositories.length === 0) {
+		// ⚠️ `selectedRepositories`: this writes a selection, so it has to ask whether anything is
+		// chosen, not whether anything is on screen. A window sitting on a folder with no repository
+		// in it would otherwise select another folder's the moment any repository is removed.
+		if (this._repositories.length > 0 && this.selectedRepositories.length === 0) {
 			this._repositories[0].selectionIndex = 0;
 			added = [this._repositories[0].repository];
 		}
@@ -461,6 +559,12 @@ export class SCMViewService implements ISCMViewService {
 		}
 	}
 
+	/**
+	 * ⚠️ Whether the person has chosen this repository, not whether it is on screen: a repository
+	 * chosen in another folder answers `true` here while `visibleRepositories` leaves it out. That is
+	 * what its callers want - they draw the checkbox in the Repositories view and guard `focus` - but
+	 * the name reads the other way, so it is worth saying.
+	 */
 	isVisible(repository: ISCMRepository): boolean {
 		return this._repositories.find(r => r.repository === repository)?.selectionIndex !== -1;
 	}
@@ -476,15 +580,15 @@ export class SCMViewService implements ISCMViewService {
 			if (this.selectionModeConfig.get() === ISCMRepositorySelectionMode.Single) {
 				this.visibleRepositories = [repository];
 			} else if (this.selectionModeConfig.get() === ISCMRepositorySelectionMode.Multiple) {
-				this.visibleRepositories = [...this.visibleRepositories, repository];
+				this.visibleRepositories = [...this.selectedRepositories, repository];
 			}
 		} else {
-			const index = this.visibleRepositories.indexOf(repository);
+			const index = this.selectedRepositories.indexOf(repository);
 
 			if (index > -1) {
 				this.visibleRepositories = [
-					...this.visibleRepositories.slice(0, index),
-					...this.visibleRepositories.slice(index + 1)
+					...this.selectedRepositories.slice(0, index),
+					...this.selectedRepositories.slice(index + 1)
 				];
 			}
 		}
@@ -572,7 +676,11 @@ export class SCMViewService implements ISCMViewService {
 		}
 
 		const all = this.repositories.map(r => getProviderStorageKey(r.provider));
-		const visible = this.visibleRepositories.map(r => all.indexOf(getProviderStorageKey(r.provider)));
+		// ⚠️ `selectedRepositories`, never the narrowed getter. What is written here is the person's
+		// choice and it outlives the window: writing what was on screen records the folder the window
+		// happened to be closed on as a deselection of every other folder's repository, and nothing
+		// ever puts them back.
+		const visible = this.selectedRepositories.map(r => all.indexOf(getProviderStorageKey(r.provider)));
 		this.previousState = { all, visible, sortKey: this._repositoriesSortKey } satisfies ISCMViewServiceState;
 
 		this.storageService.store('scm:view:visibleRepositories', JSON.stringify(this.previousState), StorageScope.WORKSPACE, StorageTarget.MACHINE);

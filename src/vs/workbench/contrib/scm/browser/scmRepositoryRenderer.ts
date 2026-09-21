@@ -72,9 +72,16 @@ export class RepositoryRenderer implements ICompressibleTreeRenderer<ISCMReposit
 
 	private readonly onDidChangeVisibleRepositoriesSignal: IObservable<void>;
 
+	/**
+	 * @param peers the repositories the view using this renderer is drawing. ⚠️ Not
+	 * `scmViewService.repositories`: two views use this renderer and they draw different sets. A row
+	 * is disambiguated against the rows beside it, so the Changes pane, which shows one folder's
+	 * repositories, must not describe a row as though a repository it is not showing were there.
+	 */
 	constructor(
 		private readonly toolbarMenuId: MenuId,
 		private readonly actionViewItemProvider: IActionViewItemProvider,
+		private readonly peers: () => readonly ISCMRepository[],
 		@ICommandService private commandService: ICommandService,
 		@IContextKeyService private contextKeyService: IContextKeyService,
 		@IContextMenuService private contextMenuService: IContextMenuService,
@@ -115,8 +122,8 @@ export class RepositoryRenderer implements ICompressibleTreeRenderer<ISCMReposit
 				? repository.provider.iconPath
 				: Codicon.repo;
 
-			// Only show the selected icon if there are multiple repositories in the workspace
-			const showSelectedIcon = icon.id === Codicon.repo.id && isVisible && this.scmViewService.repositories.length > 1;
+			// Only show the selected icon if there are multiple repositories on screen
+			const showSelectedIcon = icon.id === Codicon.repo.id && isVisible && this.peers().length > 1;
 
 			templateData.icon.className = showSelectedIcon
 				? `icon ${ThemeIcon.asClassName(Codicon.repoSelected)}`
@@ -128,11 +135,11 @@ export class RepositoryRenderer implements ICompressibleTreeRenderer<ISCMReposit
 		// same path, we will use the provider label to disambiguate.
 		let description: string | undefined = undefined;
 		if (repository.provider.rootUri) {
-			const repositoriesWithRootUri = this.scmViewService.repositories
+			const repositoriesWithRootUri = this.peers()
 				.filter(r => r.provider.rootUri !== undefined &&
 					this.uriIdentityService.extUri.isEqual(r.provider.rootUri, repository.provider.rootUri));
 
-			const repositoriesWithSameName = this.scmViewService.repositories
+			const repositoriesWithSameName = this.peers()
 				.filter(r => r.provider.rootUri !== undefined &&
 					r.provider.name === repository.provider.name);
 

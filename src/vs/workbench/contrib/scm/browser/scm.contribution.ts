@@ -84,7 +84,16 @@ viewsRegistry.registerViewWelcomeContent(VIEW_PANE_ID, {
 
 viewsRegistry.registerViewWelcomeContent(HISTORY_VIEW_PANE_ID, {
 	content: localize('no history items', "The selected source control provider does not have any source control history items."),
-	when: ContextKeys.SCMHistoryItemCount.isEqualTo(0)
+	when: ContextKeyExpr.and(ContextKeys.SCMHistoryItemCount.isEqualTo(0), ContextKeyExpr.has('scmProvider'))
+});
+
+// ⚠️ Ours. Upstream could not reach this: the view is registered only when some provider exists, and
+// with one window per folder the window was always in a folder that provider covered. With a folder
+// bar the window can be on a folder no provider covers, and the message above names a provider that
+// is not there.
+viewsRegistry.registerViewWelcomeContent(HISTORY_VIEW_PANE_ID, {
+	content: localize('no repository in folder', "There is no source control repository in this folder."),
+	when: ContextKeyExpr.and(ContextKeys.SCMHistoryItemCount.isEqualTo(0), ContextKeyExpr.has('scmProvider').negate())
 });
 
 viewsRegistry.registerViews([{

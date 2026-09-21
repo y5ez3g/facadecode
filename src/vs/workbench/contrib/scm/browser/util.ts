@@ -11,6 +11,8 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { Action, IAction } from '../../../../base/common/actions.js';
 import { createActionViewItem, getActionBarActions, getContextMenuActions } from '../../../../platform/actions/browser/menuEntryActionViewItem.js';
 import { equals } from '../../../../base/common/arrays.js';
+import { URI } from '../../../../base/common/uri.js';
+import { IExtUri } from '../../../../base/common/resources.js';
 import { ActionViewItem, IBaseActionViewItemOptions } from '../../../../base/browser/ui/actionbar/actionViewItems.js';
 import { renderLabelWithIcons } from '../../../../base/browser/ui/iconLabel/iconLabels.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
@@ -228,4 +230,24 @@ export function getStatusBarCommandGenericName(command: Command): string | undef
 	}
 
 	return genericName;
+}
+
+/**
+ * Whether a repository rooted at `root` is source control for the folder at `folder`.
+ *
+ * ⚠️ Either way round. A folder is usually the repository's root, but a folder can sit inside a
+ * repository - one root of a monorepo checked out whole - and a repository can sit inside a folder,
+ * which is what a submodule is. Both of those are still that folder's source control, and testing
+ * only one direction hides one of them.
+ *
+ * ⚠️ A repository with no root belongs to every folder. Those come from providers that are not
+ * file-backed, and hiding one would be this narrowing taking away something the workspace never
+ * scoped in the first place.
+ */
+export function repositoryBelongsToFolder(root: URI | undefined, folder: URI | undefined, extUri: IExtUri): boolean {
+	if (!folder || !root) {
+		return true;
+	}
+
+	return extUri.isEqualOrParent(root, folder) || extUri.isEqualOrParent(folder, root);
 }
