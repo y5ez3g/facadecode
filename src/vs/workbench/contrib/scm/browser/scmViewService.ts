@@ -16,7 +16,7 @@ import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uri
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { compareFileNames, comparePaths } from '../../../../base/common/comparers.js';
 import { basename } from '../../../../base/common/resources.js';
-import { binarySearch } from '../../../../base/common/arrays.js';
+import { binarySearch, coalesce, distinct } from '../../../../base/common/arrays.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
@@ -76,7 +76,7 @@ export class RepositoryPicker {
 		const repository = activeRepository?.repository;
 		const pinned = activeRepository?.pinned === true;
 
-		picks.push(...this._scmViewService.repositories.map(r => {
+		picks.push(...this._scmViewService.orderedRepositories.map(r => {
 			const icon = getSCMRepositoryIcon(activeRepository, r);
 
 			return {
@@ -173,8 +173,59 @@ export class SCMViewService implements ISCMViewService {
 	 * See `repositoryBelongsToFolder`. A window on no folder at all is shown everything.
 	 */
 	private repositoriesIn(folder: IWorkspaceFolder | undefined): ISCMRepository[] {
-		return this.selectedRepositories.filter(repository =>
-			repositoryBelongsToFolder(repository.provider.rootUri, folder?.uri, this.uriIdentityService.extUri));
+		return this.selectedRepositories.filter(repository => this.belongsTo(repository, folder));
+	}
+
+	/**
+	 * How many source control providers the folder on screen has.
+	 *
+	 * ⚠️ The one context key of upstream's whose meaning this fork changes. It exists to drive
+	 * `when` clauses on views, and every view here shows one folder - so a key answering "three"
+	 * while the folder on screen has none leaves the git extension's "this folder does not have a
+	 * repository" welcome unreachable, and with it the only button that starts one. A blank pane
+	 * where stock offers a way forward is not this window reading as one folder.
+	 *
+	 * ⚠️ Every repository in the folder, chosen or not. Turning the only one off is not the same as
+	 * not having one, and offering to initialise a repository in a folder that already has one would
+	 * be worse than the blank pane it replaces.
+	 *
+	 * ⚠️ And `scm.workspaceProviderCount` beside it, because two `when` clauses were reading the one
+	 * key to ask opposite questions. "Does this folder have a repository" is what the welcome views
+	 * want; "are there any repositories at all to choose from" is what the Repositories view wants,
+	 * and narrowing the answer took that view away on exactly the folder that needs it most - the
+	 * one with nothing of its own to show.
+	 */
+	private updateProviderCount(): void {
+		this._providerCountContextKey.set(this.folderRepositories.length);
+		this._workspaceProviderCountContextKey.set(this.repositories.length);
+	}
+
+	get folderRepositories(): readonly ISCMRepository[] {
+		const active = this.activeFolderService.activeFolder;
+		return this.repositories.filter(repository => this.belongsTo(repository, active));
+	}
+
+	private belongsTo(repository: ISCMRepository, folder: IWorkspaceFolder | undefined): boolean {
+		return repositoryBelongsToFolder(repository.provider.rootUri, folder?.uri, this.uriIdentityService.extUri);
+	}
+
+	/**
+	 * Every repository, with the ones in the folder the window is on first.
+	 *
+	 * ⚠️ For the choosers - the Repositories view and the two repository pickers - which are the one
+	 * kind of surface that should not narrow. Listing every repository is what a chooser is for, and
+	 * narrowing this one would take away the only way back to a repository turned off in a folder
+	 * you are not in. Offering another folder's first is the whole of what is wrong with them.
+	 *
+	 * ⚠️ `sort` is stable, so the folders keep the order the workspace has them in.
+	 */
+	get orderedRepositories(): ISCMRepository[] {
+		const active = this.activeFolderService.activeFolder;
+		if (!active) {
+			return this.repositories;
+		}
+
+		return [...this.repositories].sort((a, b) => Number(this.belongsTo(b, active)) - Number(this.belongsTo(a, active)));
 	}
 
 	/**
@@ -187,7 +238,17 @@ export class SCMViewService implements ISCMViewService {
 		const added = new Set<ISCMRepository>();
 		const removed = new Set<ISCMRepository>();
 
+		// ⚠️ A write speaks for the folder the window is on, and for no other. What the person chose
+		// in a folder that is not on screen stays chosen: this window was never asked about it, and
+		// reading that silence as "turn it off" loses a choice in a folder nobody is looking at. The
+		// same reason the shutdown handler writes `selectedRepositories` and not this.
+		const active = this.activeFolderService.activeFolder;
+
 		for (const repositoryView of this._repositories) {
+			if (active && !set.has(repositoryView.repository) && !this.belongsTo(repositoryView.repository, active)) {
+				continue;
+			}
+
 			// Selected -> !Selected
 			if (!set.has(repositoryView.repository) && repositoryView.selectionIndex !== -1) {
 				repositoryView.selectionIndex = -1;
@@ -269,6 +330,8 @@ export class SCMViewService implements ISCMViewService {
 	private _sortKeyContextKey: IContextKey<ISCMRepositorySortKey>;
 
 	private _selectionModelContextKey: IContextKey<ISCMRepositorySelectionMode>;
+	private _providerCountContextKey: IContextKey<number>;
+	private _workspaceProviderCountContextKey: IContextKey<number>;
 
 	constructor(
 		@ISCMService private readonly scmService: ISCMService,
@@ -366,6 +429,8 @@ export class SCMViewService implements ISCMViewService {
 			this._onDidSetVisibleRepositories.fire({ added, removed });
 		}));
 
+		this.disposables.add(this.activeFolderService.onDidChangeActiveFolder(() => this.updateProviderCount()));
+
 		this._activeFolderObs = observableFromEventOpts({
 			owner: this,
 			equalsFn: () => false
@@ -419,6 +484,8 @@ export class SCMViewService implements ISCMViewService {
 		this._sortKeyContextKey.set(this._repositoriesSortKey);
 
 		this._selectionModelContextKey = RepositoryContextKeys.RepositorySelectionMode.bindTo(contextKeyService);
+		this._providerCountContextKey = contextKeyService.createKey('scm.providerCount', 0);
+		this._workspaceProviderCountContextKey = contextKeyService.createKey('scm.workspaceProviderCount', 0);
 		this.disposables.add(autorun(reader => {
 			const selectionMode = this.selectionModeConfig.read(reader);
 			this._selectionModelContextKey.set(selectionMode);
@@ -430,6 +497,8 @@ export class SCMViewService implements ISCMViewService {
 		for (const repository of scmService.repositories) {
 			this.onDidAddRepository(repository);
 		}
+
+		this.updateProviderCount();
 
 		storageService.onWillSaveState(this.onWillSaveState, this, this.disposables);
 
@@ -517,6 +586,8 @@ export class SCMViewService implements ISCMViewService {
 		if (!this._repositories.find(r => r.focused)) {
 			this.focus(repository);
 		}
+
+		this.updateProviderCount();
 	}
 
 	private onDidRemoveRepository(repository: ISCMRepository): void {
@@ -557,6 +628,8 @@ export class SCMViewService implements ISCMViewService {
 		if (removed.length === 1 && removed[0].repository === this._activeRepositoryPinnedObs.get()) {
 			this._activeRepositoryPinnedObs.set(undefined, undefined);
 		}
+
+		this.updateProviderCount();
 	}
 
 	/**
@@ -592,6 +665,39 @@ export class SCMViewService implements ISCMViewService {
 				];
 			}
 		}
+	}
+
+	/**
+	 * Shows these repositories, going to their folder first if the window is not on it.
+	 *
+	 * ⚠️ The Repositories view lists every repository the workspace has while the window shows one
+	 * folder's, so a pick there is not upstream's "these and no others" - it is "show me these", and
+	 * for a repository in another folder the only way to show it is to go to that folder, exactly as
+	 * clicking that folder in the bar would. Setting them visible and stopping leaves the pane empty:
+	 * the choice names one repository, the folder names another, and nothing is in both.
+	 *
+	 * ⚠️ Not the editor moving the window, which this fork rules out and for a reason that does not
+	 * apply here: that is a side effect of looking at a file, this is someone naming a repository in
+	 * the list that exists to name them. A way back that draws nothing is not a way back.
+	 *
+	 * ⚠️ The folder moves first. The setter above speaks only for the folder the window is on, so
+	 * writing before the move would turn off the repositories of the folder being left.
+	 */
+	async show(repositories: readonly ISCMRepository[]): Promise<void> {
+		const folders = distinct(
+			coalesce(repositories.map(repository => this.folderFor(repository))),
+			folder => folder.uri.toString());
+
+		if (folders.length === 1 && !this.uriIdentityService.extUri.isEqual(folders[0].uri, this.activeFolderService.activeFolder?.uri)) {
+			await this.activeFolderService.setActiveFolder(folders[0]);
+		}
+
+		this.visibleRepositories = [...repositories];
+	}
+
+	private folderFor(repository: ISCMRepository): IWorkspaceFolder | undefined {
+		const root = repository.provider.rootUri;
+		return (root && this.workspaceContextService.getWorkspaceFolder(root)) || undefined;
 	}
 
 	toggleSortKey(sortKey: ISCMRepositorySortKey): void {

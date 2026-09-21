@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import './media/scm.css';
 import { Event, Emitter } from '../../../../base/common/event.js';
 import { basename, dirname } from '../../../../base/common/resources.js';
@@ -1440,6 +1441,7 @@ export class SCMViewPane extends ViewPane {
 		@IMenuService private readonly menuService: IMenuService,
 		@ISCMService private readonly scmService: ISCMService,
 		@ISCMViewService private readonly scmViewService: ISCMViewService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
 		@IStorageService private readonly storageService: IStorageService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IKeybindingService keybindingService: IKeybindingService,
@@ -1490,7 +1492,8 @@ export class SCMViewPane extends ViewPane {
 			this.storeTreeViewState();
 		}, this, this.disposables);
 
-		Event.any(this.scmService.onDidAddRepository, this.scmService.onDidRemoveRepository)(() => this._onDidChangeViewWelcomeState.fire(), this, this.disposables);
+		// ⚠️ And a switch, which changes the answer without any repository arriving or leaving.
+		Event.any<unknown>(this.scmService.onDidAddRepository, this.scmService.onDidRemoveRepository, this.activeFolderService.onDidChangeActiveFolder)(() => this._onDidChangeViewWelcomeState.fire(), this, this.disposables);
 
 		this.disposables.add(this.revealResourceThrottler);
 		this.disposables.add(this.updateChildrenThrottler);
@@ -2144,7 +2147,11 @@ export class SCMViewPane extends ViewPane {
 	}
 
 	override shouldShowWelcome(): boolean {
-		return this.scmService.repositoryCount === 0;
+		// ⚠️ Whether this pane has anything to show, not whether the extension host registered
+		// anything anywhere. A window on a folder with no repository draws an empty pane, and the
+		// welcome is what upstream puts in an empty one: the sentence that says why, and the button
+		// that starts a repository.
+		return this.scmViewService.folderRepositories.length === 0;
 	}
 
 	override getActionsContext(): unknown {

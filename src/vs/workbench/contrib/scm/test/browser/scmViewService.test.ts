@@ -10,6 +10,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IStorageService, StorageScope, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
 import { basename } from '../../../../../base/common/resources.js';
 import { IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
@@ -93,6 +94,8 @@ suite('SCM view service - which repositories the window shows', () => {
 		/** What the person has chosen, by name, whichever folder it is in. */
 		readonly chosen: () => string[];
 		readonly go: (folder: IWorkspaceFolder) => Promise<void>;
+		/** What `scm.providerCount` says, which is what the welcome views are gated on. */
+		readonly providerCount: () => number | undefined;
 		readonly remember: () => ISCMViewServiceState | undefined;
 	}
 
@@ -127,6 +130,8 @@ suite('SCM view service - which repositories the window shows', () => {
 		const view = instantiationService.createInstance(SCMViewService);
 		store.add({ dispose: () => view.dispose() });
 
+		const contextKeyService = instantiationService.get(IContextKeyService);
+
 		// The record is only kept once the repositories are all in, which in a real window is a
 		// debounce away. Nothing here is waiting for a timer.
 		view.didFinishLoadingRepositories.set(true, undefined);
@@ -140,6 +145,7 @@ suite('SCM view service - which repositories the window shows', () => {
 			// order this test has no business depending on.
 			chosen: () => view.repositories.filter(r => view.isVisible(r)).map(r => r.provider.name).sort(),
 			go: folder => activeFolder.setActiveFolder(folder),
+			providerCount: () => contextKeyService.getContextKeyValue<number>('scm.providerCount'),
 			remember: () => {
 				storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
 				const stored = storage.get('scm:view:visibleRepositories', StorageScope.WORKSPACE);
@@ -255,6 +261,97 @@ suite('SCM view service - which repositories the window shows', () => {
 		window.view.toggleVisibility(window.repositoryIn(window.folders[0]), false);
 
 		assert.deepStrictEqual(rememberedAsChosen(window.remember()), ['web']);
+	});
+
+	test(`⭐ picking a repository in another folder takes the window there`, async () => {
+		// ⚠️ This list holds every repository the workspace has, so a pick in it can name one the
+		// window is not showing. Turning it on and stopping leaves the pane empty: the choice says
+		// one repository, the folder says another, and nothing is in both.
+		const window = openWindow();
+		await window.go(window.folders[0]);
+
+		await window.view.show([window.repositoryIn(window.folders[1])]);
+
+		assert.strictEqual(window.activeFolder.activeFolder?.name, 'web');
+		assert.deepStrictEqual(window.onScreen(), ['web']);
+	});
+
+	test('and the folder it left keeps what was chosen there', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+
+		await window.view.show([window.repositoryIn(window.folders[1])]);
+		await window.go(window.folders[0]);
+
+		assert.deepStrictEqual(window.onScreen(), ['api']);
+	});
+
+	test(`⭐ a write says nothing about a folder the window is not on`, async () => {
+		// ⭐ The same trespass as writing the narrowed set at shutdown, through the other door:
+		// upstream's setter means "these and no others", and in a window showing one folder "no
+		// others" would reach into folders nobody was asked about.
+		const window = openWindow({
+			folders: [apiFolder, webFolder, zedFolder],
+			repositories: [apiFolder, webFolder, zedFolder]
+		});
+		await window.go(window.folders[0]);
+
+		window.view.visibleRepositories = [];
+
+		assert.deepStrictEqual(window.onScreen(), []);
+		assert.deepStrictEqual(window.chosen(), ['web', 'zed']);
+	});
+
+	test('and what it does say still holds after a switch', async () => {
+		const window = openWindow({
+			folders: [apiFolder, webFolder, zedFolder],
+			repositories: [apiFolder, webFolder, zedFolder]
+		});
+		await window.go(window.folders[0]);
+		window.view.visibleRepositories = [];
+
+		await window.go(window.folders[1]);
+		assert.deepStrictEqual(window.onScreen(), ['web']);
+
+		await window.go(window.folders[0]);
+		assert.deepStrictEqual(window.onScreen(), []);
+	});
+
+	test(`⭐ the count the welcome views are gated on is the folder's, not the workspace's`, async () => {
+		// ⚠️ `scm.providerCount` decides whether the git extension offers "this folder does not have
+		// a repository" and the button that starts one. Counting every repository the extension host
+		// registered leaves a window sitting on a folder with none showing a blank pane instead.
+		const window = openWindow();
+
+		await window.go(window.folders[0]);
+		assert.strictEqual(window.providerCount(), 1);
+
+		await window.go(window.folders[2]);
+		assert.strictEqual(window.providerCount(), 0);
+	});
+
+	test('and turning the only repository off is not the same as not having one', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		window.view.toggleVisibility(window.repositoryIn(window.folders[0]), false);
+
+		assert.deepStrictEqual(window.onScreen(), []);
+		assert.strictEqual(window.providerCount(), 1);
+	});
+
+	test('and the empty pane asks the same question, since it is what draws the message', async () => {
+		// ⚠️ The Changes pane used to ask the registry how many repositories exist anywhere, so in
+		// a window that always holds several it never drew a welcome - and a folder with none of its
+		// own got a blank pane instead of the sentence saying why.
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		window.view.toggleVisibility(window.repositoryIn(window.folders[0]), false);
+
+		assert.deepStrictEqual(window.onScreen(), []);
+		assert.deepStrictEqual(window.view.folderRepositories.map(r => r.provider.name), ['api']);
+
+		await window.go(window.folders[2]);
+		assert.deepStrictEqual(window.view.folderRepositories.map(r => r.provider.name), []);
 	});
 
 	test('removing a repository does not turn one back on in a folder the window is not even in', async () => {

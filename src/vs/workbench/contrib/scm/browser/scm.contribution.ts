@@ -107,7 +107,10 @@ viewsRegistry.registerViews([{
 	canMoveView: true,
 	weight: 20,
 	order: 0,
-	when: ContextKeyExpr.and(ContextKeyExpr.has('scm.providerCount'), ContextKeyExpr.notEquals('scm.providerCount', 0)),
+	// ⚠️ Asked of the workspace, not of the folder on screen. This is the view that lists every
+	// repository the window has, and it is the way back to one in a folder that is not showing - so
+	// a folder with nothing of its own is the moment it is needed, not the moment to take it away.
+	when: ContextKeyExpr.and(ContextKeyExpr.has('scm.workspaceProviderCount'), ContextKeyExpr.notEquals('scm.workspaceProviderCount', 0)),
 	// readonly when = ContextKeyExpr.or(ContextKeyExpr.equals('config.scm.alwaysShowProviders', true), ContextKeyExpr.and(ContextKeyExpr.notEquals('scm.providerCount', 0), ContextKeyExpr.notEquals('scm.providerCount', 1)));
 	containerIcon: sourceControlViewIcon
 }], viewContainer);

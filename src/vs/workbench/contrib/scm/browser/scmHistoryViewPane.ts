@@ -1475,7 +1475,7 @@ class RepositoryPicker {
 			this._autoQuickPickItem,
 			{ type: 'separator' }];
 
-		picks.push(...this._scmViewService.repositories.map(r => ({
+		picks.push(...this._scmViewService.orderedRepositories.map(r => ({
 			label: r.provider.name,
 			description: r.provider.rootUri?.fsPath,
 			iconClass: ThemeIcon.isThemeIcon(r.provider.iconPath)

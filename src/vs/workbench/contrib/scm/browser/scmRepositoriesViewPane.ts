@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import './media/scm.css';
 import { localize } from '../../../../nls.js';
 import { ViewPane, IViewPaneOptions } from '../../../browser/parts/views/viewPane.js';
@@ -279,7 +280,9 @@ class RepositoryTreeDataSource extends Disposable implements IAsyncDataSource<IS
 				? inputOrElement.provider.id
 				: undefined;
 
-			const repositories = this.scmViewService.repositories
+			// ⚠️ Ordered, not narrowed. This view is the chooser: it is where a repository turned off
+			// in another folder is turned back on, so it has to keep listing every one of them.
+			const repositories = this.scmViewService.orderedRepositories
 				.filter(r => r.provider.parentId === parentId);
 
 			return repositories;
@@ -288,7 +291,7 @@ class RepositoryTreeDataSource extends Disposable implements IAsyncDataSource<IS
 		// Explorer mode
 		if (inputOrElement instanceof SCMViewService) {
 			// Get all top level repositories
-			const repositories = this.scmViewService.repositories
+			const repositories = this.scmViewService.orderedRepositories
 				.filter(r => r.provider.parentId === undefined);
 
 			// Check whether there are any child repositories
@@ -720,10 +723,13 @@ export class SCMRepositoriesViewPane extends ViewPane {
 		if (e.browserEvent && e.elements.length > 0) {
 			const scrollTop = this.tree.scrollTop;
 
+			// ⚠️ Asked of the service, not written here. This list holds every repository the
+			// workspace has while the window shows one folder's, so picking one can mean going to
+			// its folder - and the service is what knows which folder that is.
 			if (e.elements.every(e => isSCMRepository(e))) {
-				this.scmViewService.visibleRepositories = e.elements;
+				this.scmViewService.show(e.elements).catch(onUnexpectedError);
 			} else if (e.elements.every(e => isSCMArtifactGroupTreeElement(e) || isSCMArtifactTreeElement(e))) {
-				this.scmViewService.visibleRepositories = e.elements.map(e => e.repository);
+				this.scmViewService.show(e.elements.map(e => e.repository)).catch(onUnexpectedError);
 			}
 
 			this.tree.scrollTop = scrollTop;
