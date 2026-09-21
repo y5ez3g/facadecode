@@ -100,6 +100,18 @@ export class ExplorerModel implements IDisposable {
 	}
 }
 
+/**
+ * Whether the tree draws a row for each root, or is handed the one root and draws its children.
+ *
+ * ⚠️ How many roots the explorer is showing, not what state the workbench is in: a window showing
+ * one root of a workspace that holds eight is still `WORKSPACE`. Two places ask it - what the tree is
+ * given, and what level a screen reader announces - and they have to agree, or the files are read out
+ * as children of a row that is not on screen.
+ */
+export function rootsAreRows(roots: readonly ExplorerItem[]): boolean {
+	return !(roots.length === 1 && !roots[0].error);
+}
+
 export class ExplorerItem {
 	_isDirectoryResolved: boolean; // used in tests
 	public error: Error | undefined = undefined;

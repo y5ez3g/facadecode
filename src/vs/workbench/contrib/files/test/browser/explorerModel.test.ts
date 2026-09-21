@@ -17,7 +17,7 @@ import { UriIdentityService } from '../../../../../platform/uriIdentity/common/u
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { validateFileName } from '../../browser/fileActions.js';
-import { ExplorerItem, ExplorerModel } from '../../common/explorerModel.js';
+import { ExplorerItem, ExplorerModel, rootsAreRows } from '../../common/explorerModel.js';
 
 
 suite('Files - View Model', function () {
@@ -331,6 +331,30 @@ suite('Files - the roots the explorer shows', function () {
 	}
 
 	const rootNames = (model: ExplorerModel) => model.roots.map(root => root.name);
+
+	test(`⭐ one root has no row of its own, so its files sit at the top level`, function () {
+		// ⭐ Two places ask this - what the tree is handed, and what level a screen reader is told.
+		// Asked of the workbench state instead, a workspace narrowed to one folder announces its
+		// files as the children of a row that is not on screen, and the two answers drift apart.
+		const { model } = buildModel(['/w/api', '/w/web', '/w/notes'], 0);
+
+		assert.strictEqual(rootsAreRows(model.roots), false);
+	});
+
+	/** A root as the explorer holds one, for the cases this model will not produce on its own. */
+	const root = (path: string) => new ExplorerItem(URI.file(path), fileService, configService, NullFilesConfigurationService,
+		undefined, true, false, false, false, path.slice(path.lastIndexOf('/') + 1), Date.now());
+
+	test('several roots each get a row, and their files sit under it', function () {
+		assert.strictEqual(rootsAreRows([root('/w/api'), root('/w/web'), root('/w/notes')]), true);
+	});
+
+	test('and a root that could not be read keeps its row, which is where the error is shown', function () {
+		const unreachable = root('/w/api');
+		unreachable.error = new Error('not reachable');
+
+		assert.strictEqual(rootsAreRows([unreachable]), true);
+	});
 
 	test('one root, however many the workspace holds', function () {
 		const { model } = buildModel(['/w/api', '/w/web', '/w/notes'], 0);

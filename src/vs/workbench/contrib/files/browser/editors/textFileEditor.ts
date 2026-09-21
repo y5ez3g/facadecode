@@ -34,7 +34,7 @@ import { IPaneCompositePartService } from '../../../../services/panecomposite/br
 import { ViewContainerLocation } from '../../../../common/views.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IPreferencesService } from '../../../../services/preferences/common/preferences.js';
-import { IHostService } from '../../../../services/host/browser/host.js';
+import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IEditorOptions as ICodeEditorOptions } from '../../../../../editor/common/config/editorOptions.js';
 import { IFilesConfigurationService } from '../../../../services/filesConfiguration/common/filesConfigurationService.js';
 
@@ -63,7 +63,7 @@ export class TextFileEditor extends AbstractTextCodeEditor<ICodeEditorViewState>
 		@IPathService private readonly pathService: IPathService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IPreferencesService protected readonly preferencesService: IPreferencesService,
-		@IHostService private readonly hostService: IHostService,
+		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IFilesConfigurationService private readonly filesConfigurationService: IFilesConfigurationService
 	) {
 		super(TextFileEditor.ID, group, telemetryService, instantiationService, storageService, textResourceConfigurationService, themeService, editorService, editorGroupService, fileService);
@@ -175,7 +175,10 @@ export class TextFileEditor extends AbstractTextCodeEditor<ICodeEditorViewState>
 
 			actions.push(toAction({
 				id: 'workbench.files.action.openFolder', label: localize('openFolder', "Open Folder"), run: async () => {
-					return this.hostService.openWindow([{ folderUri: input.resource }], { forceNewWindow: true });
+					// ⚠️ In this window. The button says "Open Folder", not "in New Window", so nobody
+					// asked for a second one - upstream forced one because a folder had nowhere else
+					// to go.
+					return this.workspaceBarService.show(input.resource);
 				}
 			}));
 

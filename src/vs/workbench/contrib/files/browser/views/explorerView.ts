@@ -32,7 +32,7 @@ import { IWorkbenchThemeService } from '../../../../services/themes/common/workb
 import { ITreeContextMenuEvent, TreeVisibility } from '../../../../../base/browser/ui/tree/tree.js';
 import { MenuId, Action2, registerAction2 } from '../../../../../platform/actions/common/actions.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
-import { ExplorerItem, NewExplorerItem } from '../../common/explorerModel.js';
+import { ExplorerItem, NewExplorerItem, rootsAreRows } from '../../common/explorerModel.js';
 import { ResourceLabels } from '../../../../browser/labels.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { IAsyncDataTreeViewState } from '../../../../../base/browser/ui/tree/asyncDataTree.js';
@@ -853,12 +853,8 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 		}
 		const roots = this.explorerService.roots;
 		// A single root has no row of its own; the tree is fed that root and shows its children.
-		//
-		// ⚠️ How many roots the explorer is showing, not what state the workbench is in. A window
-		// showing one root of a workspace that holds eight reads as WORKSPACE, which used to put a
-		// root row above a tree that has only one.
 		let input: ExplorerItem | ExplorerItem[] = roots;
-		if (roots.length === 1 && !roots[0].error) {
+		if (!rootsAreRows(roots)) {
 			input = roots[0];
 		}
 
