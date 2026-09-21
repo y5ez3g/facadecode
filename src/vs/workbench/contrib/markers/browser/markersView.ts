@@ -35,6 +35,7 @@ import { IKeybindingService } from '../../../../platform/keybinding/common/keybi
 import { ResultKind } from '../../../../platform/keybinding/common/keybindingResolver.js';
 import { IListService, IOpenEvent, IWorkbenchObjectTreeOptions, WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
 import { IMarkerService, MarkerSeverity } from '../../../../platform/markers/common/markers.js';
+import { IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
 import { IOpenerService, withSelection } from '../../../../platform/opener/common/opener.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -144,6 +145,7 @@ export class MarkersView extends FilterViewPane implements IMarkersView {
 		@IEditorService private readonly editorService: IEditorService,
 		@IConfigurationService configurationService: IConfigurationService,
 		@IMarkerService private readonly markerService: IMarkerService,
+		@IFolderScopeService private readonly folderScopeService: IFolderScopeService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IContextMenuService contextMenuService: IContextMenuService,
@@ -176,6 +178,8 @@ export class MarkersView extends FilterViewPane implements IMarkersView {
 
 		this.widgetAccessibilityProvider = instantiationService.createInstance(MarkersWidgetAccessibilityProvider);
 		this.widgetIdentityProvider = { getId(element: MarkerElement | MarkerTableItem) { return element.id; } };
+
+		this._register(this.folderScopeService.onDidChangeScope(() => this.onDidChangeFolderScope()));
 
 		this.setCurrentActiveEditor();
 
@@ -542,11 +546,31 @@ export class MarkersView extends FilterViewPane implements IMarkersView {
 		}
 	}
 
+	/**
+	 * The window moved, or somebody widened the scope, so the model holds the answer to a question
+	 * that has changed. ⚠️ A rebuild rather than a filter over what is already there: the markers
+	 * this window was not showing were never put in the model, so there is nothing to unhide.
+	 */
+	private onDidChangeFolderScope(): void {
+		// ⚠️ `isBodyVisible`, which is the predicate the initialisation follows: the model is built
+		// when the body becomes visible and torn down when it stops being, so a collapsed view has
+		// nothing to rebuild and gets one anyway when it is opened.
+		if (this.isBodyVisible()) {
+			this.onDidChangeMarkersViewVisibility(true);
+		}
+	}
+
 	private reInitialize(): IDisposable[] {
 		const disposables = [];
 
 		// Markers Model
-		const readMarkers = (resource?: URI) => this.markerService.read({ resource, severities: MarkerSeverity.Error | MarkerSeverity.Warning | MarkerSeverity.Info });
+		// ⚠️ Narrowed where the markers land rather than at the marker service, which every extension
+		// also reads and writes: a problem in a folder the window is not on is still a problem, it is
+		// just not one this window is showing. Switching back brings it straight up, because nothing
+		// was discarded - `markersModel` stores by resource, so this partitions rather than deletes.
+		const readMarkers = (resource?: URI) => this.markerService
+			.read({ resource, severities: MarkerSeverity.Error | MarkerSeverity.Warning | MarkerSeverity.Info })
+			.filter(marker => this.folderScopeService.covers(marker.resource));
 		this.markersModel.setResourceMarkers(groupBy(readMarkers(), compareMarkersByUri).map(group => [group[0].resource, group]));
 		disposables.push(Event.debounce<readonly URI[], ResourceMap<URI>>(this.markerService.onMarkerChanged, (resourcesMap, resources) => {
 			resourcesMap = resourcesMap || new ResourceMap<URI>();
