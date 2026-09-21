@@ -27,7 +27,7 @@ import { RemoteTerminalChannelClient, REMOTE_TERMINAL_CHANNEL_NAME } from '../co
 import { ICompleteTerminalConfiguration, ITerminalConfiguration, TERMINAL_CONFIG_SECTION } from '../common/terminal.js';
 import { TerminalStorageKeys } from '../common/terminalStorageKeys.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { getWorkspaceForTerminal } from '../common/terminalEnvironment.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { IStatusbarService } from '../../../services/statusbar/browser/statusbar.js';
@@ -73,11 +73,11 @@ class RemoteTerminalBackend extends BaseTerminalBackend implements ITerminalBack
 		@IRemoteAuthorityResolverService private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService,
 		@IWorkspaceContextService workspaceContextService: IWorkspaceContextService,
 		@IConfigurationResolverService configurationResolverService: IConfigurationResolverService,
-		@IHistoryService private readonly _historyService: IHistoryService,
+		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IStatusbarService statusBarService: IStatusbarService
 	) {
-		super(_remoteTerminalChannel, logService, _historyService, configurationResolverService, statusBarService, workspaceContextService);
+		super(_remoteTerminalChannel, logService, _activeFolderService, configurationResolverService, statusBarService, workspaceContextService);
 
 		this._register(this._remoteTerminalChannel.onProcessData(e => this._ptys.get(e.id)?.handleData(e.event)));
 		this._register(this._remoteTerminalChannel.onProcessReplay(e => {
@@ -195,12 +195,12 @@ class RemoteTerminalBackend extends BaseTerminalBackend implements ITerminalBack
 			tabActions: shellLaunchConfig.tabActions,
 			shellIntegrationEnvironmentReporting: shellLaunchConfig.shellIntegrationEnvironmentReporting,
 		};
-		const activeWorkspaceRootUri = getWorkspaceForTerminal(shellLaunchConfig.cwd, this._workspaceContextService, this._historyService)?.uri;
+		const activeFolderUri = getWorkspaceForTerminal(shellLaunchConfig.cwd, this._workspaceContextService, this._activeFolderService)?.uri;
 
 		const result = await this._remoteTerminalChannel.createProcess(
 			shellLaunchConfigDto,
 			configuration,
-			activeWorkspaceRootUri,
+			activeFolderUri,
 			options,
 			shouldPersist,
 			cols,

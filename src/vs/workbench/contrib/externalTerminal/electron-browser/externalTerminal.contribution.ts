@@ -8,6 +8,7 @@ import * as paths from '../../../../base/common/path.js';
 import { IExternalTerminalSettings } from '../../../../platform/externalTerminal/common/externalTerminal.js';
 import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
 import { KeyMod, KeyCode } from '../../../../base/common/keyCodes.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IHistoryService } from '../../../services/history/common/history.js';
 import { KeybindingsRegistry, KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { Schemas } from '../../../../base/common/network.js';
@@ -59,7 +60,9 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 			}
 			root = folders[folderPicks.indexOf(pick)].uri;
 		} else {
-			root = historyService.getLastActiveWorkspaceRoot();
+			// ⚠️ Only reached when the workspace holds one folder or none: the branch above asks
+			// which one whenever there is a choice.
+			root = accessor.get(IActiveFolderService).activeFolder?.uri;
 		}
 
 		// It's a local workspace, open the root

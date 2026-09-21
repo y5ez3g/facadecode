@@ -21,7 +21,7 @@ import { TerminalStorageKeys } from '../common/terminalStorageKeys.js';
 import { LocalPty } from './localPty.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { IShellEnvironmentService } from '../../../services/environment/electron-browser/shellEnvironmentService.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import * as terminalEnvironment from '../common/terminalEnvironment.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { IEnvironmentVariableService } from '../common/environmentVariable.js';
@@ -89,16 +89,15 @@ class LocalTerminalBackend extends BaseTerminalBackend implements ITerminalBacke
 		@IConfigurationResolverService private readonly _configurationResolverService: IConfigurationResolverService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IProductService private readonly _productService: IProductService,
-		@IHistoryService private readonly _historyService: IHistoryService,
+		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@ITerminalProfileResolverService private readonly _terminalProfileResolverService: ITerminalProfileResolverService,
 		@IEnvironmentVariableService private readonly _environmentVariableService: IEnvironmentVariableService,
-		@IHistoryService historyService: IHistoryService,
 		@INativeHostService private readonly _nativeHostService: INativeHostService,
 		@IStatusbarService statusBarService: IStatusbarService,
 		@IRemoteAgentService private readonly _remoteAgentService: IRemoteAgentService,
 		@INativeWorkbenchEnvironmentService private readonly _environmentService: INativeWorkbenchEnvironmentService,
 	) {
-		super(_localPtyService, logService, historyService, _configurationResolverService, statusBarService, workspaceContextService);
+		super(_localPtyService, logService, _activeFolderService, _configurationResolverService, statusBarService, workspaceContextService);
 
 		this._register(this.onPtyHostRestart(() => {
 			this._directProxy = undefined;
@@ -332,9 +331,8 @@ class LocalTerminalBackend extends BaseTerminalBackend implements ITerminalBacke
 		if (reviveBufferState && reviveBufferState.length > 0) {
 			try {
 				// Create variable resolver
-				const activeWorkspaceRootUri = this._historyService.getLastActiveWorkspaceRoot();
-				const lastActiveWorkspace = activeWorkspaceRootUri ? this._workspaceContextService.getWorkspaceFolder(activeWorkspaceRootUri) ?? undefined : undefined;
-				const variableResolver = terminalEnvironment.createVariableResolver(lastActiveWorkspace, await this._terminalProfileResolverService.getEnvironment(this.remoteAuthority), this._configurationResolverService);
+				const activeFolder = this._activeFolderService.activeFolder;
+				const variableResolver = terminalEnvironment.createVariableResolver(activeFolder, await this._terminalProfileResolverService.getEnvironment(this.remoteAuthority), this._configurationResolverService);
 
 				// Re-resolve the environments and replace it on the state so local terminals use a fresh
 				// environment
@@ -374,7 +372,7 @@ class LocalTerminalBackend extends BaseTerminalBackend implements ITerminalBacke
 		const baseEnv = await (shellLaunchConfig.useShellEnvironment ? this.getShellEnvironment() : this.getEnvironment());
 		const env = await terminalEnvironment.createTerminalEnvironment(shellLaunchConfig, envFromConfigValue, variableResolver, this._productService.version, this._configurationService.getValue(TerminalSettingId.DetectLocale), baseEnv);
 		if (shouldUseEnvironmentVariableCollection(shellLaunchConfig)) {
-			const workspaceFolder = terminalEnvironment.getWorkspaceForTerminal(shellLaunchConfig.cwd, this._workspaceContextService, this._historyService);
+			const workspaceFolder = terminalEnvironment.getWorkspaceForTerminal(shellLaunchConfig.cwd, this._workspaceContextService, this._activeFolderService);
 			await this._environmentVariableService.mergedCollection.applyToProcessEnvironment(env, { workspaceFolder }, variableResolver);
 		}
 		return env;

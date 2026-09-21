@@ -29,10 +29,10 @@ import { TerminalCapability } from '../../../../../../platform/terminal/common/c
 import { ITerminalProfile } from '../../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService, toWorkspaceFolder } from '../../../../../../platform/workspace/common/workspace.js';
 import { Workspace } from '../../../../../../platform/workspace/test/common/testWorkspace.js';
-import { IHistoryService } from '../../../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../../../services/activeFolder/common/activeFolder.js';
 import { TreeSitterLibraryService } from '../../../../../services/treeSitter/browser/treeSitterLibraryService.js';
 import { workbenchInstantiationService } from '../../../../../test/browser/workbenchTestServices.js';
-import { TestContextService } from '../../../../../test/common/workbenchTestServices.js';
+import { TestActiveFolderService, TestContextService } from '../../../../../test/common/workbenchTestServices.js';
 import { TestIPCFileSystemProvider } from '../../../../../test/electron-browser/workbenchTestServices.js';
 import { TerminalToolConfirmationStorageKeys } from '../../../../chat/browser/widget/chatContentParts/toolInvocationParts/chatTerminalToolConfirmationSubPart.js';
 import { IChatService, type IChatSendRequestOptions, type IChatTerminalToolInvocationData } from '../../../../chat/common/chatService/chatService.js';
@@ -244,9 +244,7 @@ suite('RunInTerminalTool', () => {
 		});
 		instantiationService.stub(ITerminalChatService, store.add(instantiationService.createInstance(TerminalChatService)));
 		instantiationService.stub(IWorkspaceContextService, workspaceContextService);
-		instantiationService.stub(IHistoryService, {
-			getLastActiveWorkspaceRoot: () => undefined
-		});
+		instantiationService.stub(IActiveFolderService, new TestActiveFolderService(undefined));
 		terminalSandboxService = {
 			_serviceBrand: undefined,
 			isEnabled: async (precheckInputs) => sandboxEnabled && isDefaultChatPermissionSandboxPrecheckInputs(precheckInputs),
@@ -1879,9 +1877,7 @@ suite('RunInTerminalTool', () => {
 			const workspaceFolder = URI.file(isWindows ? 'C:\\workspace\\project' : '/workspace/project');
 			const workspace = new Workspace('test', [toWorkspaceFolder(workspaceFolder)]);
 			workspaceContextService.setWorkspace(workspace);
-			instantiationService.stub(IHistoryService, {
-				getLastActiveWorkspaceRoot: () => workspaceFolder
-			});
+			instantiationService.stub(IActiveFolderService, new TestActiveFolderService(workspace.folders[0]));
 
 			const toolWithWorkspace = store.add(instantiationService.createInstance(TestRunInTerminalTool));
 			injectMockPresenter(toolWithWorkspace);
@@ -1917,9 +1913,7 @@ suite('RunInTerminalTool', () => {
 			const workspaceFolder = URI.file(isWindows ? 'C:\\workspace\\project' : '/workspace/project');
 			const workspace = new Workspace('test', [toWorkspaceFolder(workspaceFolder)]);
 			workspaceContextService.setWorkspace(workspace);
-			instantiationService.stub(IHistoryService, {
-				getLastActiveWorkspaceRoot: () => workspaceFolder
-			});
+			instantiationService.stub(IActiveFolderService, new TestActiveFolderService(workspace.folders[0]));
 
 			const toolWithWorkspace = store.add(instantiationService.createInstance(TestRunInTerminalTool));
 
@@ -2483,9 +2477,7 @@ suite('RunInTerminalTool', () => {
 			const workspaceFolder = URI.file(isWindows ? 'C:/workspace/project' : '/workspace/project');
 			const workspace = new Workspace('test', [toWorkspaceFolder(workspaceFolder)]);
 			workspaceContextService.setWorkspace(workspace);
-			instantiationService.stub(IHistoryService, {
-				getLastActiveWorkspaceRoot: () => workspaceFolder
-			});
+			instantiationService.stub(IActiveFolderService, new TestActiveFolderService(workspace.folders[0]));
 
 			const result = await executeToolTest({
 				command: 'echo "abc" > ../file.txt'
@@ -3490,9 +3482,7 @@ suite('ChatAgentToolsContribution - tool registration refresh', () => {
 			setNextCommandId: async () => { }
 		});
 		instantiationService.stub(ITerminalChatService, store.add(instantiationService.createInstance(TerminalChatService)));
-		instantiationService.stub(IHistoryService, {
-			getLastActiveWorkspaceRoot: () => undefined
-		});
+		instantiationService.stub(IActiveFolderService, new TestActiveFolderService(undefined));
 
 		const terminalSandboxService: ITerminalSandboxService = {
 			_serviceBrand: undefined,

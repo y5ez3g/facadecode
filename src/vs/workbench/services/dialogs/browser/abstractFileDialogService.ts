@@ -7,6 +7,7 @@ import * as nls from '../../../../nls.js';
 import { IWindowOpenable, isWorkspaceToOpen, isFileToOpen } from '../../../../platform/window/common/window.js';
 import { IPickAndOpenOptions, ISaveDialogOptions, IOpenDialogOptions, FileFilter, IFileDialogService, IDialogService, ConfirmResult, getFileNamesMessage } from '../../../../platform/dialogs/common/dialogs.js';
 import { isSavedWorkspace, isTemporaryWorkspace, IWorkspaceContextService, WorkbenchState, WORKSPACE_EXTENSION } from '../../../../platform/workspace/common/workspace.js';
+import { IActiveFolderService } from '../../activeFolder/common/activeFolder.js';
 import { IHistoryService } from '../../history/common/history.js';
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -56,7 +57,8 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 		@IEditorService protected readonly editorService: IEditorService,
 		@ICodeEditorService protected readonly codeEditorService: ICodeEditorService,
 		@ILogService private readonly logService: ILogService,
-		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService
+		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService,
+		@IActiveFolderService protected readonly activeFolderService: IActiveFolderService
 	) { }
 
 	async defaultFilePath(schemeFilter = this.getSchemeFilterForWindow(), authorityFilter = this.getAuthorityFilterForWindow()): Promise<URI> {
@@ -70,11 +72,11 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 			candidate = undefined;
 		}
 
-		// ...then for last active file root
+		// ...then for the folder the window is on
 		if (!candidate) {
-			candidate = this.historyService.getLastActiveWorkspaceRoot(schemeFilter, authorityFilter);
+			candidate = this.activeFolderService.activeFolderFor(schemeFilter, authorityFilter)?.uri;
 			if (candidate) {
-				this.logService.debug(`[FileDialogService] Default file path using last active workspace root: ${candidate}`);
+				this.logService.debug(`[FileDialogService] Default file path using the folder the window is on: ${candidate}`);
 			}
 		} else {
 			this.logService.debug(`[FileDialogService] Default file path using parent of last active file: ${candidate}`);
@@ -91,8 +93,8 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 
 	async defaultFolderPath(schemeFilter = this.getSchemeFilterForWindow(), authorityFilter = this.getAuthorityFilterForWindow()): Promise<URI> {
 
-		// Check for last active file root first...
-		let candidate = this.historyService.getLastActiveWorkspaceRoot(schemeFilter, authorityFilter);
+		// The folder the window is on first...
+		let candidate = this.activeFolderService.activeFolderFor(schemeFilter, authorityFilter)?.uri;
 
 		// ...then for last active file
 		if (!candidate) {
@@ -108,7 +110,7 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 				this.logService.debug(`[FileDialogService] Default folder path using parent of last active file: ${candidate}`);
 			}
 		} else {
-			this.logService.debug(`[FileDialogService] Default folder path using last active workspace root: ${candidate}`);
+			this.logService.debug(`[FileDialogService] Default folder path using the folder the window is on: ${candidate}`);
 		}
 
 		if (!candidate) {

@@ -10,7 +10,7 @@ import { URI as Uri } from '../../../../../base/common/uri.js';
 import { addTerminalEnvironmentKeys, createTerminalEnvironment, getUriLabelForShell, getCwd, getLangEnvVariable, getWorkspaceForTerminal, mergeEnvironments, preparePathForShell, shouldSetLangEnvVariable } from '../../common/terminalEnvironment.js';
 import { GeneralShellType, PosixShellType, WindowsShellType } from '../../../../../platform/terminal/common/terminal.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { TestContextService, TestHistoryService } from '../../../../test/common/workbenchTestServices.js';
+import { TestActiveFolderService, TestContextService } from '../../../../test/common/workbenchTestServices.js';
 import { testWorkspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
 
 const wslPathBackend = {
@@ -323,34 +323,38 @@ suite('Workbench - TerminalEnvironment', () => {
 		});
 	});
 	suite('getWorkspaceForTerminal', () => {
-		test('should resolve workspace folder from cwd, not last active workspace', () => {
+
+		/** The workspace, plus which of its folders the window is on. */
+		function workspaceOn(activeIndex: number | undefined, ...folders: Uri[]) {
+			const contextService = new TestContextService(testWorkspace(...folders));
+			const active = activeIndex === undefined ? undefined : contextService.getWorkspace().folders[activeIndex];
+			return { contextService, activeFolderService: new TestActiveFolderService(active) };
+		}
+
+		test('should resolve workspace folder from cwd, not the folder the window is on', () => {
 			const folderA = Uri.file('/workspace/proj1');
 			const folderB = Uri.file('/workspace/proj2');
-			const contextService = new TestContextService(testWorkspace(folderA, folderB));
-			const historyService = new TestHistoryService(folderA);
-			const result = getWorkspaceForTerminal(folderB, contextService, historyService);
+			const { contextService, activeFolderService } = workspaceOn(0, folderA, folderB);
+			const result = getWorkspaceForTerminal(folderB, contextService, activeFolderService);
 			strictEqual(result?.uri.fsPath, folderB.fsPath);
 		});
 
-		test('should fall back to last active workspace when cwd is not in any workspace folder', () => {
+		test('should fall back to the folder the window is on when cwd is not in any workspace folder', () => {
 			const folderA = Uri.file('/workspace/proj1');
-			const contextService = new TestContextService(testWorkspace(folderA));
-			const historyService = new TestHistoryService(folderA);
-			const result = getWorkspaceForTerminal(Uri.file('/other/path'), contextService, historyService);
+			const { contextService, activeFolderService } = workspaceOn(0, folderA);
+			const result = getWorkspaceForTerminal(Uri.file('/other/path'), contextService, activeFolderService);
 			strictEqual(result?.uri.fsPath, folderA.fsPath);
 		});
 
-		test('should fall back to last active workspace when cwd is undefined', () => {
+		test('should fall back to the folder the window is on when cwd is undefined', () => {
 			const folderA = Uri.file('/workspace/proj1');
-			const contextService = new TestContextService(testWorkspace(folderA));
-			const historyService = new TestHistoryService(folderA);
-			strictEqual(getWorkspaceForTerminal(undefined, contextService, historyService)?.uri.fsPath, folderA.fsPath);
+			const { contextService, activeFolderService } = workspaceOn(0, folderA);
+			strictEqual(getWorkspaceForTerminal(undefined, contextService, activeFolderService)?.uri.fsPath, folderA.fsPath);
 		});
 
-		test('should return undefined when cwd and history are both unavailable', () => {
-			const contextService = new TestContextService(testWorkspace(Uri.file('/workspace/proj1')));
-			const historyService = new TestHistoryService(undefined);
-			strictEqual(getWorkspaceForTerminal(undefined, contextService, historyService), undefined);
+		test('should return undefined when there is no cwd and no folder to be on', () => {
+			const { contextService, activeFolderService } = workspaceOn(undefined, Uri.file('/workspace/proj1'));
+			strictEqual(getWorkspaceForTerminal(undefined, contextService, activeFolderService), undefined);
 		});
 	});
 

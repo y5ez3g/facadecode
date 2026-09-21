@@ -30,7 +30,7 @@ import { IEditorPane } from '../../../common/editor.js';
 import { launchSchemaId } from '../../../services/configuration/common/configuration.js';
 import { ACTIVE_GROUP, IEditorService } from '../../../services/editor/common/editorService.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
@@ -74,7 +74,7 @@ export class ConfigurationManager implements IConfigurationManager {
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IStorageService private readonly storageService: IStorageService,
 		@IExtensionService private readonly extensionService: IExtensionService,
-		@IHistoryService private readonly historyService: IHistoryService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService,
 		@IContextKeyService contextKeyService: IContextKeyService,
@@ -417,8 +417,7 @@ export class ConfigurationManager implements IConfigurationManager {
 
 	async selectConfiguration(launch: ILaunch | undefined, name?: string, config?: IConfig, dynamicConfig?: { type?: string }): Promise<void> {
 		if (typeof launch === 'undefined') {
-			const rootUri = this.historyService.getLastActiveWorkspaceRoot();
-			launch = this.getLaunch(rootUri);
+			launch = this.getLaunch(this.activeFolderService.activeFolder?.uri);
 			if (!launch || launch.getConfigurationNames().length === 0) {
 				launch = this.launches.find(l => !!(l && l.getConfigurationNames().length)) || launch || this.launches[0];
 			}

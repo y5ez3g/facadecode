@@ -124,6 +124,17 @@ export class ActiveFolderService extends Disposable implements IActiveFolderServ
 		this._onDidChangeActiveFolder.fire();
 	}
 
+	activeFolderFor(scheme?: string, authority?: string): IWorkspaceFolder | undefined {
+		const matches = (folder: IWorkspaceFolder) =>
+			(!scheme || folder.uri.scheme === scheme) && (!authority || folder.uri.authority === authority);
+
+		if (this._activeFolder && matches(this._activeFolder)) {
+			return this._activeFolder;
+		}
+
+		return this.contextService.getWorkspace().folders.find(matches);
+	}
+
 	async setActiveFolder(folder: IWorkspaceFolder | URI): Promise<void> {
 		const uri = URI.isUri(folder) ? folder : folder.uri;
 		const target = this.folderFor(uri);

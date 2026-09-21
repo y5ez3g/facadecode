@@ -16,7 +16,7 @@ import { IShellLaunchConfig, ITerminalBackend, ITerminalEnvironment, ShellIntegr
 import { IProcessEnvironment, isWindows, isMacintosh, language, OperatingSystem } from '../../../../base/common/platform.js';
 import { escapeNonWindowsPath, sanitizeCwd } from '../../../../platform/terminal/common/terminalEnvironment.js';
 import { isNumber, isString } from '../../../../base/common/types.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import type { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 
@@ -379,14 +379,14 @@ export async function preparePathForShell(resource: string | URI, executable: st
 	return escapeNonWindowsPath(originalPath, shellType);
 }
 
-export function getWorkspaceForTerminal(cwd: URI | string | undefined, workspaceContextService: IWorkspaceContextService, historyService: IHistoryService): IWorkspaceFolder | undefined {
+export function getWorkspaceForTerminal(cwd: URI | string | undefined, workspaceContextService: IWorkspaceContextService, activeFolderService: IActiveFolderService): IWorkspaceFolder | undefined {
 	const cwdUri = isString(cwd) ? URI.parse(cwd) : cwd;
 	let workspaceFolder = cwdUri ? workspaceContextService.getWorkspaceFolder(cwdUri) ?? undefined : undefined;
 	if (!workspaceFolder) {
-		// fallback to last active workspace if cwd is not available or it is not in workspace
-		// TOOD: last active workspace is known to be unreliable, we should remove this fallback eventually
-		const activeWorkspaceRootUri = historyService.getLastActiveWorkspaceRoot();
-		workspaceFolder = activeWorkspaceRootUri ? workspaceContextService.getWorkspaceFolder(activeWorkspaceRootUri) ?? undefined : undefined;
+		// The cwd is outside every folder, or there is none yet: fall back to the folder the window
+		// is on. ⚠️ This used to be the last folder an editor was opened in, which upstream's own
+		// comment calls unreliable - and it is, because it answers with a folder nobody chose.
+		workspaceFolder = activeFolderService.activeFolder;
 	}
 	return workspaceFolder;
 }

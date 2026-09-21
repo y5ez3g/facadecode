@@ -69,8 +69,7 @@ import { CommandLinePreventHistoryRewriter } from './commandLineRewriter/command
 import { CommandLinePwshChainOperatorRewriter } from './commandLineRewriter/commandLinePwshChainOperatorRewriter.js';
 import { CommandLineBackgroundDetachRewriter } from './commandLineRewriter/commandLineBackgroundDetachRewriter.js';
 import { CommandLineSandboxRewriter } from './commandLineRewriter/commandLineSandboxRewriter.js';
-import { IWorkspaceContextService } from '../../../../../../platform/workspace/common/workspace.js';
-import { IHistoryService } from '../../../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../../../services/activeFolder/common/activeFolder.js';
 import { ILifecycleService } from '../../../../../services/lifecycle/common/lifecycle.js';
 import { TerminalCommandArtifactCollector } from './terminalCommandArtifactCollector.js';
 import { isNumber, isString } from '../../../../../../base/common/types.js';
@@ -853,7 +852,7 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 		@IChatService protected readonly _chatService: IChatService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IFileService private readonly _fileService: IFileService,
-		@IHistoryService private readonly _historyService: IHistoryService,
+		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@ILabelService private readonly _labelService: ILabelService,
 		@ILanguageModelToolsService private readonly _languageModelToolsService: ILanguageModelToolsService,
@@ -863,7 +862,6 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 		@ITerminalLogService private readonly _logService: ITerminalLogService,
 		@ITerminalService private readonly _terminalService: ITerminalService,
 		@ITerminalSandboxService private readonly _terminalSandboxService: ITerminalSandboxService,
-		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
 		@IChatWidgetService private readonly _chatWidgetService: IChatWidgetService,
 		@IAgentSessionsService private readonly _agentSessionsService: IAgentSessionsService,
 		@IChatSessionsService private readonly _chatSessionsService: IChatSessionsService,
@@ -969,15 +967,13 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 			(async () => {
 				let cwd = await instance?.getCwdResource();
 				if (!cwd) {
-					// Prefer the session's working directory (agents window) over the
-					// last active workspace root, which may point to a different session's folder.
+					// Prefer the session's working directory (agents window) over the folder the
+					// window is on, which may belong to a different session.
 					const sessionModel = chatSessionResource ? this._chatService.getSession(chatSessionResource) : undefined;
 					if (sessionModel?.workingDirectory) {
 						cwd = sessionModel.workingDirectory;
 					} else {
-						const activeWorkspaceRootUri = this._historyService.getLastActiveWorkspaceRoot();
-						const workspaceFolder = activeWorkspaceRootUri ? this._workspaceContextService.getWorkspaceFolder(activeWorkspaceRootUri) ?? undefined : undefined;
-						cwd = workspaceFolder?.uri;
+						cwd = this._activeFolderService.activeFolder?.uri;
 					}
 				}
 				return cwd;

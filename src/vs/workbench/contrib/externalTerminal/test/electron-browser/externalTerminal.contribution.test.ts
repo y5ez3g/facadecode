@@ -8,7 +8,9 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { mock } from '../../../../../base/test/common/mock.js';
+import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IHistoryService } from '../../../../services/history/common/history.js';
+import { TestActiveFolderService } from '../../../../test/common/workbenchTestServices.js';
 import { IExternalTerminalService } from '../../../../../platform/externalTerminal/electron-browser/externalTerminalService.js';
 import { IExternalTerminalSettings } from '../../../../../platform/externalTerminal/common/externalTerminal.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
@@ -38,7 +40,7 @@ suite('ExternalTerminal contribution', () => {
 
 	function setupServices(options: {
 		folders: IWorkspaceFolder[];
-		lastActiveRoot?: URI;
+		activeFolder?: IWorkspaceFolder;
 		lastActiveFile?: URI;
 		pickedFolder?: IWorkspaceFolder | undefined;
 	}) {
@@ -47,10 +49,9 @@ suite('ExternalTerminal contribution', () => {
 		openTerminalCalls = [];
 		pickCalls = [];
 
+		instantiationService.stub(IActiveFolderService, new TestActiveFolderService(options.activeFolder));
+
 		instantiationService.stub(IHistoryService, new class extends mock<IHistoryService>() {
-			override getLastActiveWorkspaceRoot() {
-				return options.lastActiveRoot;
-			}
 			override getLastActiveFile(_schemeFilter: string) {
 				return options.lastActiveFile;
 			}
@@ -96,13 +97,13 @@ suite('ExternalTerminal contribution', () => {
 		});
 	}
 
-	test('single folder - uses last active workspace root', async () => {
+	test('single folder - uses the folder the window is on', async () => {
 		const folderUri = URI.file('/workspace/project');
 		const folder = createWorkspaceFolder(folderUri, 'project', 0);
 
 		setupServices({
 			folders: [folder],
-			lastActiveRoot: folderUri,
+			activeFolder: folder,
 		});
 
 		const handler = CommandsRegistry.getCommand('workbench.action.terminal.openNativeConsole')!.handler;
@@ -148,13 +149,13 @@ suite('ExternalTerminal contribution', () => {
 		assert.deepStrictEqual(openTerminalCalls, []);
 	});
 
-	test('no workspace root - falls back to active file directory', async () => {
+	test('no folder to be on - falls back to active file directory', async () => {
 		const fileUri = URI.file('/workspace/project/src/file.ts');
 		const expectedDir = URI.file('/workspace/project/src').fsPath;
 
 		setupServices({
 			folders: [],
-			lastActiveRoot: undefined,
+			activeFolder: undefined,
 			lastActiveFile: fileUri,
 		});
 
@@ -167,7 +168,7 @@ suite('ExternalTerminal contribution', () => {
 	test('no workspace, no file - opens terminal without cwd', async () => {
 		setupServices({
 			folders: [],
-			lastActiveRoot: undefined,
+			activeFolder: undefined,
 			lastActiveFile: undefined,
 		});
 

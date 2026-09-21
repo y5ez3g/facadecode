@@ -53,6 +53,20 @@ export interface IActiveFolderService {
 	 */
 	readonly onDidChangeActiveFolder: Event<void>;
 
+	/**
+	 * The active folder, when it can be reached on the given scheme and authority; otherwise the
+	 * first folder of the workspace that can be.
+	 *
+	 * ⚠️ The fallback is upstream's own, kept rather than simplified away. A workspace can hold a
+	 * local folder and a remote one at the same time, and a caller that asks for a local path
+	 * cannot be handed the remote folder the window happens to be on - it would resolve
+	 * `${workspaceFolder}` to a path that does not exist on the machine the caller is on.
+	 *
+	 * ⚠️ Filters given as `undefined` accept anything, which is what a caller with no opinion
+	 * means. `activeFolderFor()` and `activeFolder` then answer the same.
+	 */
+	activeFolderFor(scheme?: string, authority?: string): IWorkspaceFolder | undefined;
+
 	/** A folder that is not one of the workspace's roots is refused, not adopted. */
 	setActiveFolder(folder: IWorkspaceFolder | URI): Promise<void>;
 }

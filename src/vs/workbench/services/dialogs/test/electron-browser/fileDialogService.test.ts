@@ -29,6 +29,7 @@ import { FileDialogService } from '../../electron-browser/fileDialogService.js';
 import { IEditorService } from '../../../editor/common/editorService.js';
 import { BrowserWorkbenchEnvironmentService } from '../../../environment/browser/environmentService.js';
 import { IWorkbenchEnvironmentService } from '../../../environment/common/environmentService.js';
+import { IActiveFolderService } from '../../../activeFolder/common/activeFolder.js';
 import { IHistoryService } from '../../../history/common/history.js';
 import { IHostService } from '../../../host/browser/host.js';
 import { IPathService } from '../../../path/common/pathService.js';
@@ -58,10 +59,11 @@ class TestFileDialogService extends FileDialogService {
 		@IEditorService editorService: IEditorService,
 		@ICodeEditorService codeEditorService: ICodeEditorService,
 		@ILogService logService: ILogService,
-		@IRemoteAgentService remoteAgentService: IRemoteAgentService
+		@IRemoteAgentService remoteAgentService: IRemoteAgentService,
+		@IActiveFolderService activeFolderService: IActiveFolderService
 	) {
 		super(hostService, contextService, historyService, environmentService, instantiationService, configurationService, fileService,
-			openerService, nativeHostService, dialogService, languageService, workspacesService, labelService, pathService, commandService, editorService, codeEditorService, logService, remoteAgentService);
+			openerService, nativeHostService, dialogService, languageService, workspacesService, labelService, pathService, commandService, editorService, codeEditorService, logService, remoteAgentService, activeFolderService);
 	}
 
 	protected override getSimpleFileDialog() {
@@ -191,14 +193,17 @@ suite('FileDialogService', function () {
 
 		const dialogService = instantiationService.createInstance(TestFileDialogService, new TestSimpleFileDialog());
 		const historyService = instantiationService.get(IHistoryService);
-		const getLastActiveWorkspaceRoot = sinon.spy(historyService, 'getLastActiveWorkspaceRoot');
 		const getLastActiveFile = sinon.spy(historyService, 'getLastActiveFile');
+		// ⚠️ The folder the window is on is asked for under the same filter the last active file is.
+		// A remote window must not be handed a local path, so the dialog cannot simply read
+		// `activeFolder` - a workspace can hold a local folder and a remote one at once.
+		const activeFolderFor = sinon.spy(instantiationService.get(IActiveFolderService), 'activeFolderFor');
 
 		await dialogService.defaultFilePath();
 		assert.deepStrictEqual(getLastActiveFile.args, [[Schemas.vscodeRemote, 'testRemote']]);
-		assert.deepStrictEqual(getLastActiveWorkspaceRoot.args, [[Schemas.vscodeRemote, 'testRemote']]);
+		assert.deepStrictEqual(activeFolderFor.args, [[Schemas.vscodeRemote, 'testRemote']]);
 
 		await dialogService.defaultFolderPath();
-		assert.deepStrictEqual(getLastActiveWorkspaceRoot.args[1], [Schemas.vscodeRemote, 'testRemote']);
+		assert.deepStrictEqual(activeFolderFor.args[1], [Schemas.vscodeRemote, 'testRemote']);
 	});
 });

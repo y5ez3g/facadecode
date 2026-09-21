@@ -12,7 +12,6 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { EditorsOrder } from '../../../common/editor.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { getSearchView } from '../../search/browser/searchActionsBase.js';
@@ -23,7 +22,7 @@ import { serializeSearchResultForEditor } from './searchEditorSerialization.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { ACTIVE_GROUP, IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { ISearchConfigurationProperties } from '../../../services/search/common/search.js';
 import { ISearchResult } from '../../search/browser/searchTreeModel/searchTreeCommon.js';
 
@@ -104,11 +103,7 @@ export const openNewSearchEditor =
 		const configurationService = accessor.get(IConfigurationService);
 
 		const configurationResolverService = accessor.get(IConfigurationResolverService);
-		const workspaceContextService = accessor.get(IWorkspaceContextService);
-		const historyService = accessor.get(IHistoryService);
-		const activeWorkspaceRootUri = historyService.getLastActiveWorkspaceRoot(Schemas.file);
-		const lastActiveWorkspaceRoot = activeWorkspaceRootUri ? workspaceContextService.getWorkspaceFolder(activeWorkspaceRootUri) ?? undefined : undefined;
-
+		const activeFolder = accessor.get(IActiveFolderService).activeFolderFor(Schemas.file);
 
 		const activeEditorControl = editorService.activeTextEditorControl;
 		let activeModel: ICodeEditor | undefined;
@@ -153,7 +148,7 @@ export const openNewSearchEditor =
 			const value = entry[1];
 			if (value !== undefined) {
 				// eslint-disable-next-line local/code-no-any-casts
-				(args as any)[name as any] = (typeof value === 'string') ? await configurationResolverService.resolveAsync(lastActiveWorkspaceRoot, value) : value;
+				(args as any)[name as any] = (typeof value === 'string') ? await configurationResolverService.resolveAsync(activeFolder, value) : value;
 			}
 		}
 		const existing = editorService.getEditors(EditorsOrder.MOST_RECENTLY_ACTIVE).find(id => id.editor.typeId === SearchEditorInput.ID);
