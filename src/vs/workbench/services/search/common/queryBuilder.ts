@@ -115,7 +115,7 @@ export class QueryBuilder {
 	) {
 	}
 
-	aiText(contentPattern: string, folderResources?: uri[], options: ITextQueryBuilderOptions = {}): IAITextQuery {
+	aiText(contentPattern: string, folderResources?: readonly uri[], options: ITextQueryBuilderOptions = {}): IAITextQuery {
 		const commonQuery = this.commonQuery(folderResources?.map(toWorkspaceFolder), options);
 		return {
 			...commonQuery,
@@ -124,7 +124,7 @@ export class QueryBuilder {
 		};
 	}
 
-	text(contentPattern: IPatternInfo, folderResources?: uri[], options: ITextQueryBuilderOptions = {}): ITextQuery {
+	text(contentPattern: IPatternInfo, folderResources?: readonly uri[], options: ITextQueryBuilderOptions = {}): ITextQuery {
 		contentPattern = this.getContentPattern(contentPattern, options);
 
 		const commonQuery = this.commonQuery(folderResources?.map(toWorkspaceFolder), options);
@@ -194,7 +194,7 @@ export class QueryBuilder {
 		return newPattern;
 	}
 
-	file(folders: (IWorkspaceFolderData | URI)[], options: IFileQueryBuilderOptions = {}): IFileQuery {
+	file(folders: readonly (IWorkspaceFolderData | URI)[], options: IFileQueryBuilderOptions = {}): IFileQuery {
 		const commonQuery = this.commonQuery(folders, options);
 		return {
 			...commonQuery,
@@ -227,7 +227,7 @@ export class QueryBuilder {
 			: { pattern: patternListToIExpression(...(Array.isArray(pattern) ? pattern : [pattern])) };
 	}
 
-	private commonQuery(folderResources: (IWorkspaceFolderData | URI)[] = [], options: ICommonQueryBuilderOptions = {}): ICommonQueryProps<uri> {
+	private commonQuery(folderResources: readonly (IWorkspaceFolderData | URI)[] = [], options: ICommonQueryBuilderOptions = {}): ICommonQueryProps<uri> {
 
 		let excludePatterns: string | string[] | undefined = Array.isArray(options.excludePattern) ? options.excludePattern.map(p => p.pattern).flat() : options.excludePattern;
 		excludePatterns = excludePatterns?.length === 1 ? excludePatterns[0] : excludePatterns;

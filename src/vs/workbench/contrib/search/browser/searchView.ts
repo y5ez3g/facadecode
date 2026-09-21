@@ -66,6 +66,7 @@ import * as Constants from '../common/constants.js';
 import { IReplaceService } from './replace.js';
 import { getOutOfWorkspaceEditorResources, SearchStateKey, SearchUIState } from '../common/search.js';
 import { ISearchHistoryService, ISearchHistoryValues, SearchHistoryService } from '../common/searchHistoryService.js';
+import { IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
 import { createEditorFromSearchResult } from '../../searchEditor/browser/searchEditorActions.js';
 import { ACTIVE_GROUP, IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IPreferencesService, ISettingsEditorOptions } from '../../../services/preferences/common/preferences.js';
@@ -178,6 +179,7 @@ export class SearchView extends ViewPane {
 
 	private delayedRefresh: Delayer<void>;
 	private changedWhileHidden: boolean;
+	private scopeChangedWhileHidden: boolean = false;
 
 	private searchWithoutFolderMessageElement: HTMLElement | undefined;
 
@@ -221,6 +223,7 @@ export class SearchView extends ViewPane {
 		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
 		@IConfigurationService configurationService: IConfigurationService,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IFolderScopeService private readonly folderScopeService: IFolderScopeService,
 		@ISearchViewModelWorkbenchService private readonly searchViewModelWorkbenchService: ISearchViewModelWorkbenchService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IReplaceService private readonly replaceService: IReplaceService,
@@ -576,6 +579,21 @@ export class SearchView extends ViewPane {
 
 		this._register(this.inputPatternExcludes.onCancel(() => this.cancelSearch(false)));
 		this._register(this.inputPatternExcludes.onChangeIgnoreBox(() => this.triggerQueryChange()));
+
+		// Results for a folder the window has left, or for a scope someone has just widened, are
+		// answers to a question nobody is asking any more.
+		//
+		// ⚠️ Only while somebody is looking. Switching folders is the cheap, frequent act in this
+		// window - 49-86ms - and a hidden search view re-running a search on every switch would put a
+		// folder's worth of work behind a click that is meant to cost nothing. The same shape as
+		// `changedWhileHidden` right beside it, and for the same reason.
+		this._register(this.folderScopeService.onDidChangeScope(() => {
+			if (this.isBodyVisible()) {
+				this.triggerQueryChange();
+			} else {
+				this.scopeChangedWhileHidden = true;
+			}
+		}));
 		this.trackInputBox(this.inputPatternExcludes.inputFocusTracker, this.inputPatternExclusionsFocused);
 
 		const updateHasFilePatternKey = () => this.hasFilePatternKey.set(this.inputPatternIncludes.getValue().length > 0 || this.inputPatternExcludes.getValue().length > 0);
@@ -626,6 +644,11 @@ export class SearchView extends ViewPane {
 	private async onVisibilityChanged(visible: boolean): Promise<void> {
 		this.viewletVisible.set(visible);
 		if (visible) {
+			if (this.scopeChangedWhileHidden) {
+				this.scopeChangedWhileHidden = false;
+				this.triggerQueryChange();
+			}
+
 			if (this.changedWhileHidden) {
 				// Render if results changed while viewlet was hidden - #37818
 				await this.refreshAndUpdateCount();
@@ -1682,7 +1705,9 @@ export class SearchView extends ViewPane {
 			isSmartCase: this.searchConfig.smartCase,
 			expandPatterns: true
 		};
-		const folderResources = this.contextService.getWorkspace().folders;
+		// ⚠️ The folders the scope covers, not every folder the workspace holds: a window reads as one
+		// folder, so a search started in it answers about that folder until someone widens it.
+		const folderResources = this.folderScopeService.folders();
 
 		const onQueryValidationError = (err: Error) => {
 			this.searchWidget.searchInput?.showMessage({ content: err.message, type: MessageType.ERROR });

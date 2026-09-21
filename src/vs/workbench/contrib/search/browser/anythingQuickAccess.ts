@@ -10,8 +10,8 @@ import { prepareQuery, IPreparedQuery, compareItemsByFuzzyScore, scoreItemFuzzy,
 import { IFileQueryBuilderOptions, QueryBuilder } from '../../../services/search/common/queryBuilder.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { getOutOfWorkspaceEditorResources, extractRangeFromFilter, IWorkbenchSearchConfiguration } from '../common/search.js';
+import { addFolderScopeToggle, IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
 import { ISearchService, ISearchComplete } from '../../../services/search/common/search.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { untildify } from '../../../../base/common/labels.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -123,7 +123,7 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 	constructor(
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@ISearchService private readonly searchService: ISearchService,
-		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IFolderScopeService private readonly folderScopeService: IFolderScopeService,
 		@IPathService private readonly pathService: IPathService,
 		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
 		@IFileService private readonly fileService: IFileService,
@@ -147,7 +147,8 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 	) {
 		super(AnythingQuickAccessProvider.PREFIX, {
 			canAcceptInBackground: true,
-			noResultsPick: AnythingQuickAccessProvider.NO_RESULTS_PICK
+			noResultsPick: AnythingQuickAccessProvider.NO_RESULTS_PICK,
+			refresh: folderScopeService.onDidChangeScope
 		});
 
 		this.pickState = this._register(new class extends Disposable {
@@ -227,6 +228,15 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 
 		// Update the pick state for this run
 		this.pickState.set(picker);
+
+		addFolderScopeToggle(picker, this.folderScopeService, disposables);
+
+		// ⚠️ The file cache is built over the folders the scope covered when the picker opened, so
+		// widening from inside it has to build a new one. Everything else about the run is still
+		// good, which is why this is not a `pickState.set`.
+		disposables.add(this.folderScopeService.onDidChangeScope(() => {
+			this.pickState.fileQueryCache = this.createFileQueryCache();
+		}));
 
 		// Add editor decorations for active editor symbol picks
 		const editorDecorationsDisposable = disposables.add(new MutableDisposable());
@@ -501,12 +511,27 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 
 	private readonly labelOnlyEditorHistoryPickAccessor = new QuickPickItemScorerAccessor({ skipDescription: true });
 
+	/**
+	 * What has been open lately, in the folders this window is looking at.
+	 *
+	 * ⚠️ The file search below is narrowed, and this list is offered beside it in the same picker.
+	 * Left unnarrowed it puts back exactly what the narrowing took away, and only for the files
+	 * somebody happened to visit - so the picker would answer the same query two different ways
+	 * depending on where they had been.
+	 *
+	 * ⚠️ `covers` and not the folder list: a file from outside the workspace is covered by every
+	 * scope, and something opened from outside is exactly the kind of thing history is for.
+	 */
+	private recentlyOpenedHere(): ReturnType<IHistoryService['getHistory']> {
+		return this.historyService.getHistory().filter(editor => !editor.resource || this.folderScopeService.covers(editor.resource));
+	}
+
 	private getEditorHistoryPicks(query: IPreparedQuery): Array<IAnythingQuickPickItem> {
 		const configuration = this.configuration;
 
 		// Just return all history entries if not searching
 		if (!query.normalized) {
-			return this.historyService.getHistory().map(editor => this.createAnythingPick(editor, configuration));
+			return this.recentlyOpenedHere().map(editor => this.createAnythingPick(editor, configuration));
 		}
 
 		if (!this.configuration.includeHistory) {
@@ -516,7 +541,7 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 		// Perform filtering
 		const editorHistoryScorerAccessor = query.containsPathSeparator ? quickPickItemScorerAccessor : this.labelOnlyEditorHistoryPickAccessor; // Only match on label of the editor unless the search includes path separators
 		const editorHistoryPicks: Array<IAnythingQuickPickItem> = [];
-		for (const editor of this.historyService.getHistory()) {
+		for (const editor of this.recentlyOpenedHere()) {
 			const resource = editor.resource;
 			if (!resource) {
 				continue;
@@ -557,7 +582,7 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 
 	private createFileQueryCache(): FileQueryCacheState {
 		return new FileQueryCacheState(
-			cacheKey => this.fileQueryBuilder.file(this.contextService.getWorkspace().folders, this.getFileQueryOptions({ cacheKey })),
+			cacheKey => this.fileQueryBuilder.file(this.folderScopeService.folders(), this.getFileQueryOptions({ cacheKey })),
 			query => this.searchService.fileSearch(query),
 			cacheKey => this.searchService.clearCache(cacheKey),
 			this.pickState.fileQueryCache
@@ -706,7 +731,7 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 		const start = Date.now();
 		return this.searchService.fileSearch(
 			this.fileQueryBuilder.file(
-				this.contextService.getWorkspace().folders,
+				this.folderScopeService.folders(),
 				this.getFileQueryOptions({
 					filePattern,
 					cacheKey: this.pickState.fileQueryCache?.cacheKey,
@@ -773,12 +798,12 @@ export class AnythingQuickAccessProvider extends PickerQuickAccessProvider<IAnyt
 			return;
 		}
 
-		// Convert relative paths to absolute paths over all folders of the workspace
+		// Convert relative paths to absolute paths over the folders the search covers
 		// and return them as results if the absolute paths exist
 		const isAbsolutePathQuery = (await this.pathService.path).isAbsolute(query.original);
 		if (!isAbsolutePathQuery) {
 			const resources: URI[] = [];
-			for (const folder of this.contextService.getWorkspace().folders) {
+			for (const folder of this.folderScopeService.folders()) {
 				if (token.isCancellationRequested) {
 					break;
 				}

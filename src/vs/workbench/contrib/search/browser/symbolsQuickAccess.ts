@@ -6,9 +6,10 @@
 import { localize } from '../../../../nls.js';
 import { IPickerQuickAccessItem, PickerQuickAccessProvider, TriggerAction } from '../../../../platform/quickinput/browser/pickerQuickAccess.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
 import { ThrottledDelayer } from '../../../../base/common/async.js';
 import { getWorkspaceSymbols, IWorkspaceSymbol, IWorkspaceSymbolProvider } from '../common/search.js';
+import { addFolderScopeToggle, IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
 import { SymbolKinds, SymbolTag, SymbolKind } from '../../../../editor/common/languages.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { Schemas } from '../../../../base/common/network.js';
@@ -17,7 +18,7 @@ import { IEditorService, SIDE_GROUP, ACTIVE_GROUP } from '../../../services/edit
 import { Range } from '../../../../editor/common/core/range.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IWorkbenchEditorConfiguration } from '../../../common/editor.js';
-import { IKeyMods, IQuickPickItemWithResource } from '../../../../platform/quickinput/common/quickInput.js';
+import { IKeyMods, IQuickPick, IQuickPickItemWithResource } from '../../../../platform/quickinput/common/quickInput.js';
 import { ICodeEditorService } from '../../../../editor/browser/services/codeEditorService.js';
 import { getSelectionSearchString } from '../../../../editor/contrib/find/browser/findController.js';
 import { prepareQuery, IPreparedQuery, scoreFuzzy2, pieceToQuery } from '../../../../base/common/fuzzyScorer.js';
@@ -67,13 +68,15 @@ export class SymbolsQuickAccessProvider extends PickerQuickAccessProvider<ISymbo
 		@IEditorService private readonly editorService: IEditorService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ICodeEditorService private readonly codeEditorService: ICodeEditorService,
-		@IChatWidgetService private readonly chatWidgetService: IChatWidgetService
+		@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,
+		@IFolderScopeService private readonly folderScopeService: IFolderScopeService
 	) {
 		super(SymbolsQuickAccessProvider.PREFIX, {
 			canAcceptInBackground: true,
 			noResultsPick: {
 				label: localize('noSymbolResults', "No matching workspace symbols")
-			}
+			},
+			refresh: folderScopeService.onDidChangeScope
 		});
 	}
 
@@ -84,6 +87,15 @@ export class SymbolsQuickAccessProvider extends PickerQuickAccessProvider<ISymbo
 			openEditorPinned: !editorConfig?.enablePreviewFromQuickOpen || !editorConfig?.enablePreview,
 			openSideBySideDirection: editorConfig?.openSideBySideDirection
 		};
+	}
+
+	override provide(picker: IQuickPick<ISymbolQuickPickItem, { useSeparators: true }>, token: CancellationToken): IDisposable {
+		const disposables = new DisposableStore();
+
+		addFolderScopeToggle(picker, this.folderScopeService, disposables);
+		disposables.add(super.provide(picker, token));
+
+		return disposables;
 	}
 
 	protected _getPicks(filter: string, disposables: DisposableStore, token: CancellationToken): Promise<Array<ISymbolQuickPickItem>> {
@@ -123,6 +135,14 @@ export class SymbolsQuickAccessProvider extends PickerQuickAccessProvider<ISymbo
 		// Convert to symbol picks and apply filtering
 		const openSideBySideDirection = this.configuration.openSideBySideDirection;
 		for (const { symbol, provider } of workspaceSymbols) {
+
+			// ⚠️ Narrowed here rather than in the query: the providers live in the extension host and
+			// are handed the whole workspace, which is the layer split this design turns on. What a
+			// person reads is one folder's symbols; what the extension host indexes is everything, so
+			// widening costs nothing and a folder added to the workspace is searchable at once.
+			if (!this.folderScopeService.covers(symbol.location.uri)) {
+				continue;
+			}
 
 			// Depending on the workspace symbols filter setting, skip over symbols that:
 			// - do not have a container
