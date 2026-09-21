@@ -77,6 +77,9 @@ export class SessionsWorkspaceContextService extends Disposable implements IWork
 		return this.doUpdateFolders([], foldersToRemove);
 	}
 
+	/** This workbench shows one folder at a time, so there is no list here to reorder. */
+	public async moveFolder(): Promise<void> { }
+
 	public async updateFolders(index: number, deleteCount?: number, foldersToAddCandidates?: IWorkspaceFolderCreationData[]): Promise<void> {
 		const folders = this.workspace.folders;
 

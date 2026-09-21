@@ -186,6 +186,18 @@ export abstract class AbstractWorkspaceEditingService extends Disposable impleme
 		}
 	}
 
+	async moveFolder(folder: URI, delta: number, donotNotifyError = false): Promise<void> {
+		try {
+			await this.contextService.moveFolder(folder, delta);
+		} catch (error) {
+			if (donotNotifyError) {
+				throw error;
+			}
+
+			this.handleWorkspaceConfigurationEditingError(error);
+		}
+	}
+
 	addFolders(foldersToAddCandidates: IWorkspaceFolderCreationData[], donotNotifyError = false): Promise<void> {
 
 		// Normalize
