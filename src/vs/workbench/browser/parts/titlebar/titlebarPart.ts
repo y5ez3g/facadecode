@@ -60,6 +60,8 @@ import { IsCompactTitleBarContext, TitleBarVisibleContext } from '../../../commo
 import { ServiceCollection } from '../../../../platform/instantiation/common/serviceCollection.js';
 import { WORKBENCH_MENU_MOTION_CLASS, workbenchMenuCloseAnimation } from '../../actions/menuMotion.js';
 import { PaneCompositeBar } from '../paneCompositeBar.js';
+// Imported for its `registerConfiguration` call as much as for the predicate.
+import { showAppIcon } from './titlebarAppIcon.js';
 import { getTitlebarCompositeBarOptions } from './titlebarCompositeBar.js';
 import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
 import { ViewContainerLocation } from '../../../common/views.js';
@@ -494,7 +496,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 		this.rightContent = append(this.rootContainer, $('.titlebar-right'));
 
 		// App Icon (Windows, Linux)
-		if ((isWindows || isLinux) && !hasNativeTitlebar(this.configurationService, this.titleBarStyle)) {
+		if ((isWindows || isLinux) && !hasNativeTitlebar(this.configurationService, this.titleBarStyle) && showAppIcon(this.configurationService)) {
 			this.appIcon = prepend(this.leftContent, $('a.window-appicon'));
 		}
 

@@ -66,6 +66,7 @@
 		"--facade-folder-ink",
 		"--facade-row-ink",
 		"--facade-band-height",
+		"--facade-header-row",
 		"--facade-divider",
 		"--vscode-charts-red",
 		"--vscode-charts-yellow",

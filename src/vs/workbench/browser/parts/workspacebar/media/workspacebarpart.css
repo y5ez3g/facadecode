@@ -1,9 +1,7 @@
-/*
- * ---------------------------------------------------------------------------------------------
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License. See License.txt in the project root for license information.
- * --------------------------------------------------------------------------------------------
- */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 /*
  * ⚠️ Every distance, radius and size in this file is a registered token, never a number someone
@@ -28,6 +26,12 @@
  *
  * Open, it is this column's own top: the bar is column zero of the window and reaches the very top,
  * so the strip is the bar's background and the title bar begins after it.
+ *
+ * ⚠️ And nothing at all where those buttons are not over this column, which `workspaceBarPart.ts`
+ * decides and hands down as a height of zero. Windows and Linux draw them at the far end of the
+ * row, so the header is the column's own top there and the bar reads as one piece from y=0. Every
+ * rule below that leans on the strip's height reads it through `--facade-band-height`, which is set
+ * from the same number, so they all collapse with it.
  */
 .monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
 	flex: 0 0 auto;
@@ -50,8 +54,13 @@
  * border pixel. Measured in Dark High Contrast, where `contrastBorder` makes every edge visible: the
  * strip stopped at x=36 and the border went on painting at x=36..37. The line is drawn by the rule
  * below instead, which can stop where this strip ends.
+ *
+ * ⚠️ `.banded` as well as `.collapsed`, and `workspaceBarPart.ts` adds it only while the strip has
+ * a height. A `border-box` element cannot be shorter than its own border, so the 1px below still
+ * painted once the strip went to zero: measured, the strip came back 1px tall and pushed the header
+ * to y=1, a hairline of `titleBar.border` across the top of a column with no band beneath it.
  */
-.monaco-workbench .part.workspacebar.collapsed .workspacebar-titlebar-spacer {
+.monaco-workbench .part.workspacebar.collapsed.banded .workspacebar-titlebar-spacer {
 	box-sizing: border-box;
 	background-color: var(--vscode-titleBar-activeBackground);
 	border-bottom: 1px solid var(--vscode-titleBar-border, transparent);
@@ -73,12 +82,18 @@
 /*
  * The column's divider, redrawn as a background stripe for as long as the column is collapsed.
  *
- * ⚠️ Because collapsed it must not run the whole height. The top of this column is then the title
- * bar's strip, and the real title bar carries that strip on to the right with no line in it - so a
- * border down the full height cuts it in two, a few pixels from the window's three buttons, which is
- * the one place a reader's eye is already resting. Measured before this rule existed: a cyan line at
- * x=36 from y=6 downwards, inside the band. Open, the rule does not apply and the border runs the
- * whole height as it should, because open the title bar starts where this column ends.
+ * ⚠️ Because collapsed it must not run the whole height wherever there is a band to interrupt. The
+ * top of this column is then the title bar's strip, and the real title bar carries that strip on to
+ * the right with no line in it - so a border down the full height cuts it in two, a few pixels from
+ * the window's three buttons, which is the one place a reader's eye is already resting. Measured
+ * before this rule existed: a cyan line at x=36 from y=6 downwards, inside the band. Open, the rule
+ * does not apply and the border runs the whole height as it should, because open the title bar
+ * starts where this column ends.
+ *
+ * ⚠️ And where there is no band it runs the whole height again, which is right and is what already
+ * happens: `--facade-band-height` is 0 wherever the window's buttons are not over this column, every
+ * stop below lands at or before 0, and the stripe is `--facade-divider` from y=0. There is no strip
+ * to carry on to the right there, so there is nothing for a line to cut in two.
  *
  * ⚠️ `background-origin: border-box`. A background's positioning area is the padding box by
  * default, which would put the stripe one pixel inside - drawing a line where the layout reserved
@@ -117,7 +132,7 @@
  * ⚠️ And dims with it. The title bar puts `.inactive` on itself when the window loses focus; a
  * strip that stayed lit would be the one bright thing on a window nobody is looking at.
  */
-.monaco-workbench .part.workspacebar.collapsed.window-inactive .workspacebar-titlebar-spacer {
+.monaco-workbench .part.workspacebar.collapsed.banded.window-inactive .workspacebar-titlebar-spacer {
 	background-color: var(--vscode-titleBar-inactiveBackground);
 }
 
@@ -126,10 +141,14 @@
 }
 
 /*
- * The header sits on the same 35px row the side bar gives its title
- * (`parts/media/paneCompositePart.css`, "matches height of composite container"), so with the
- * spacer above holding the title bar's height, `Projects` and `EXPLORER` come out on one line
- * across the seam.
+ * The header sits on the same row the side bar gives its title
+ * (`parts/media/paneCompositePart.css`, "matches height of composite container"), which is what
+ * `--facade-header-row` carries.
+ *
+ * ⚠️ On one line with `EXPLORER` only while the strip above holds the title bar's height, which is
+ * macOS. Where the window's buttons are elsewhere the strip is nothing, this header is the top of
+ * the window and the side bar's title is a row below it - the seam that used to be measured here
+ * is not one any more, and `WORKSPACE` answers to the title bar's row instead.
  *
  * ⚠️ The same type as `EXPLORER`, to the value: 11px, weight 400, upper case, and the side bar's own
  * title colour. Those are `paneview.css` lines 28 and 42 and `sideBarTitle.foreground`, read off the
@@ -150,7 +169,7 @@
 	align-items: center;
 	justify-content: space-between;
 	flex: 0 0 auto;
-	height: 35px;
+	height: var(--facade-header-row);
 	padding: 0 var(--vscode-spacing-size120) 0 var(--vscode-spacing-size160);
 	box-sizing: border-box;
 	font-size: 11px;
@@ -293,6 +312,25 @@
  */
 .monaco-workbench .part.workspacebar {
 	--facade-row-ink: var(--vscode-facadeBar-foreground);
+
+	/*
+	 * The row this column's header occupies, named here because two rules need it: the open header
+	 * is it, and collapsed it is what the toggle is centred inside.
+	 *
+	 * ⚠️ Not from the spacing ramp. 35 is `DEFAULT_CUSTOM_TITLEBAR_HEIGHT`, and the header has
+	 * carried it as a literal since it was written; a token that happened to equal 35 today would be
+	 * the wrong source for a number whose job is to agree with the title bar.
+	 *
+	 * ⚠️ It only agrees while the command center is shown, which is the default and not a promise.
+	 * `titlebarPart.ts` computes `isCommandCenterVisible || wcoEnabled ? 35 : 30`, so with
+	 * `window.commandCenter: false` the title bar is 30 and this is 5 too tall - measured. That
+	 * predates this variable, which is why it is written as a literal rather than derived: the
+	 * header was already 35 and `HEADER_HEIGHT` in `workspaceBarPart.ts` still is. Naming it here
+	 * makes the collapsed toggle agree with the open header, which is the smaller of the two
+	 * disagreements; making either follow the real title bar is its own change, and would have to
+	 * move `HEADER_HEIGHT` with it.
+	 */
+	--facade-header-row: 35px;
 }
 
 /*
@@ -592,10 +630,23 @@
  * there is no room beside anything, so the two buttons stack - and `column-reverse`, because the
  * toolbar's order puts the `+` first and collapsed the toggle belongs on top, nearest the window's
  * own controls.
+ *
+ * ⚠️ Top-aligned rather than centred, so that the toggle sits where the title bar's own row would
+ * put it. Centring two 24px buttons in a 56px header left the toggle's box centre at 16 against the
+ * first menu's 17.5 - measured, and 1.5px is the size of gap that reads as wrong without reading as
+ * anything a person can name. The padding is what it takes to centre one button inside the header
+ * row, so it follows the row rather than being chosen.
+ *
+ * ⚠️ 1px of it is the glyph's and was left alone. With the boxes agreeing, `three-bars` still draws
+ * its ink 0.5px above its own line box while the title bar's codicons draw theirs 0.5px below:
+ * measured, ink centres of 17.0 here against 18.0 there. It is not this rule's to fix - the `+`
+ * below the toggle measures 17.0 too, so nudging the toggle alone would break the pair this column
+ * was tuned as, and moving the column would move everything section 13 of `WORKSPACE.md` measured.
  */
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-header {
 	justify-content: center;
-	padding: 0;
+	align-items: flex-start;
+	padding: calc((var(--facade-header-row) - var(--vscode-spacing-size240)) / 2) 0 0;
 	height: calc(var(--vscode-spacing-size280) * 2);
 }
 
