@@ -2756,10 +2756,392 @@ The next query is answered from the new scope. Unchanged from §8.8.
 P-1..P-24     the agent tier      built-in chat is hidden by default; no fixture exists
 O-1 O-2       the way back        R8 was deliberately not built - "R8别做"
 H-15          a remote authority  no remote this window is not already on
-N-3 N-4       themes and contrast the 19-theme sweep was run in an earlier session on the bar's
-                                  colours; it has not been re-run against this change
+N-3 N-4       themes and contrast run - see §12. The two columns match in all 19; the quiet row
+                                  ink and the orange swatch are open questions, not regressions
 C-4 C-5 C-8   collapse, reveal, a batch of external writes
 D-2 D-8       the Graph pane and the provider entry - the probe could not name their rows
 L-9 L-10      a first run on a new profile, and an editor set orphaned between sessions
 every drop row's stock half       the synthetic drag is unreliable on stock. §10.3
+```
+
+## 12 The 19-theme sweep
+
+`⚠️` **This chapter measures a column that no longer exists.** It was run against the version that
+marked its rows the activity bar's way - a quiet ink at rest, a bright one when live, a leading line
+for both - and §13 replaced all three. The numbers stand as the record of how that version was
+found wanting, and §12.6 stands on its own: every instrument fault in it is one this project will
+make again. What has moved is named at the top of §13.
+
+`N-3` and `N-4`, owed since §11.4. Every built-in colour theme, driven one at a time through a live
+window, reading what the renderer computes rather than what the stylesheet says.
+
+### 12.1 How it was run, and what it is measured against
+
+The plan asks one question - does our ink clear its threshold. That question alone cannot be
+answered usefully here, because this column takes the activity bar's colours whole: a ratio that
+fails where the activity bar fails identically is a number upstream chose, and a ratio that *passes*
+while the column beside us paints something else is the defect this bar has actually shipped, twice.
+So the sweep asks both, and the pair is checked before any threshold is.
+
+`⚠️` **The control is the real activity bar, in the same window, at the same instant.** It is put
+back in the side position for the sweep - this build defaults it into the title bar - so both
+columns are really painted, 220px of ours at x0 and 36 of it at x220. Comparing
+`--vscode-facadeBar-*` against `--vscode-activityBar-*` instead would compare our registration with
+itself and pass whatever the theme did.
+
+`⚠️` **Alpha is composited before the ratio is taken.** Most of these inks are translucent -
+`rgba(248, 248, 242, 0.4)` in Monokai - and measured against the surface they sit on rather than
+flattened onto it, a failing 3.41 reads as 12.63.
+
+```
+themes            19/19 applied, 19 distinct           thresholds   13px row text   4.5
+control           present for all 19                                the active mark 3.0
+preconditions     asserted per theme, not once                      a folder glyph  3.0
+```
+
+### 12.2 The two columns paint identically, in all nineteen
+
+| | background | quiet ink | live ink | block | mark | divider |
+|---|---|---|---|---|---|---|
+| 19/19 | same | same | same | same | same | same |
+
+Nothing here is derived, weighted or branched per theme kind, and the sweep confirms nothing has
+drifted: whatever a theme does to the activity bar happens to this column in the same instant.
+The block is `none` in fifteen themes - `activityBar.activeBackground` is unset and the leading line
+is the whole mark - and painted in Dark 2026 and Light 2026, where our row paints it too.
+
+### 12.3 The quiet ink is an icon's ink, used for text
+
+`⭐` This is the finding. Every number below is upstream's own, and our column is not the reason it
+fails - but the **medium changed**. `activityBar.inactiveForeground` was tuned for a 16px glyph,
+which is held to 3.0. We draw a folder's **name** in it, at 13px, which is held to 4.5.
+
+```
+theme                  quiet   live   button  header   mark  │  the activity bar's own
+Dark Modern             4.88  12.34    4.88   12.34   3.92   │   4.88
+Dark+                   3.41!  12.63   3.41!  12.63  12.63   │   3.41
+Dark (Visual Studio)    3.41!  12.63   3.41!  12.63  12.63   │   3.41
+Dark 2026               5.18   6.99    5.18    9.48   9.48   │   5.18
+Light Modern            5.83  15.52    5.83   15.52   5.94   │   5.83
+Light+                  3.56!  13.97   3.56!  13.97  13.97   │   3.56
+Light (Visual Studio)   3.56!  13.97   3.56!  13.97  13.97   │   3.56
+Light 2026              6.04  11.21    6.04   15.64  20.16   │   6.04
+Dark High Contrast     21.00  21.00   21.00   21.00  10.55   │  21.00
+Light High Contrast    14.55  14.55   14.55   14.55   8.98   │  14.55
+Abyss                   3.75!  18.22   3.75!  18.22  18.22   │   3.75
+Kimbie Dark             2.44!   8.38   2.44!   8.38   8.38   │   2.44!
+Monokai                 3.49!  13.94   3.49!  13.94  13.94   │   3.49
+Monokai Dimmed          3.36!  12.27   3.36!  12.27  12.27   │   3.36
+Quiet Light             1.76!   5.20   1.76!   5.20   5.20   │   1.76!
+Red                     3.17!  14.84   3.17!  14.84  14.84   │   3.17
+Solarized Dark          3.30!  12.68   3.30!  12.68  12.68   │   3.30
+Solarized Light         1.82!   5.84   1.82!   5.84   5.84   │   1.82!
+Tomorrow Night Blue     3.75!  17.94   3.75!  17.94  17.94   │   3.75
+
+!  under its threshold.  quiet = a row the window is not on · live = the row it is on ·
+   button = ☰ and ＋ at rest · header = "WORKSPACE" · mark = the 2px leading line.
+```
+
+**The row the window is on, the header and the mark clear their thresholds in every theme** - 5.20
+at worst, and the mark's worst is 3.92. **The quiet row fails 4.5 in eleven**, and in three of those
+- Kimbie Dark 2.44, Solarized Light 1.82, Quiet Light 1.76 - it is under 3.0, which is the threshold
+upstream holds its own activity bar to and does not meet either.
+
+`⚠️` **Not decided here.** Three ways out, and they are not equivalent:
+
+```
+leave it     the column stays pixel-identical to the activity bar, which is the requirement
+             it was built to. Eleven themes draw a quiet folder name at an icon's contrast.
+name ink     rows take facadeBar.foreground and the quiet ink keeps only the glyph. Clears
+             4.5 everywhere - and the column stops matching the activity bar in eleven themes.
+floor it     blend the quiet ink toward the foreground until it reaches 4.5. Clears the
+             threshold and keeps the pair, but the shade is then ours in eleven themes, which
+             is the per-theme-kind branch this file has twice said not to write.
+```
+
+### 12.4 `charts.orange` is not an ink
+
+`⭐` **A defect, and ours: the palette is our choice.** Five of the six swatches are inks in every
+theme and paint what they promise. Orange is not one, in two different ways, and the swatch is
+offered anyway.
+
+```
+Default High Contrast        charts.orange UNDEFINED → the glyph paints rgb(255,255,255)
+Default High Contrast Light  charts.orange UNDEFINED → the glyph paints rgb(41,41,41)
+                             ⭐ identical to a folder with no colour at all
+the other 17                 charts.orange = minimapFindMatch, a find-highlight FILL:
+                             rgba(234,92,0,0.33) · Abyss rgba(238,238,238,0.27)
+                             · Quiet Light rgba(237,201,216,0.6)
+                             → 1.17 to 2.83 on our background, and in two of them not orange
+```
+
+`chartsColors.ts` aliases red, blue and yellow to the editor's error/info/warning **inks**, and
+writes green and purple as literal quartets. Orange alone is aliased to a **fill**, which is
+translucent by construction and undefined wherever the minimap has no find colour.
+
+The rest of the palette, on our background:
+
+```
+theme                  red    orange   yellow   green    blue   purple
+Dark Modern            4.97    1.58!    7.69    9.74    6.85    5.87
+Dark+                  3.54    1.47!    5.47    6.93    4.88    4.17
+Dark (Visual Studio)   3.54    1.47!    5.47    6.93    4.88    4.17
+Dark 2026              6.96    5.83     9.47    9.36    6.64    5.68
+Light Modern           4.46    1.48!    2.93!   4.07    5.31    8.48
+Light+                 2.95!   1.52!    4.48    3.23    2.48!   1.55!
+Light (Visual Studio)  2.95!   1.52!    4.48    3.23    2.48!   1.55!
+Light 2026             7.17    2.83!    5.01    4.15    5.02    8.65
+Dark High Contrast     8.55     -      14.80   11.52    8.10    6.94
+Light High Contrast    6.61     -       6.24    9.31    5.64    9.01
+Abyss                  5.10    2.20!    7.89    9.99    7.03    6.02
+Kimbie Dark            4.81    1.61!    7.44    9.42    6.63    5.67
+Monokai                4.16    1.54!    6.44    8.16    5.73    4.91
+Monokai Dimmed         3.43    1.46!    5.31    6.73    4.73    4.05
+Quiet Light            4.07    1.17!    2.68!   3.72    4.84    7.73
+Red                    4.15    1.58!    6.43    8.14    5.73    4.90
+Solarized Dark         3.55    1.32!    5.49    6.96    4.89    4.19
+Solarized Light        3.26    1.37!    2.15!   2.98!   3.88    6.20
+Tomorrow Night Blue    5.02    1.48!    7.77    9.85    6.92    5.93
+```
+
+Orange aside, the palette is weakest in the two light `+` themes, where the theme's own inks are
+tuned for text on an editor background and land on ours at 1.55 to 2.95.
+
+`⚠️` **Upstream solved the same problem and we did not copy that part.** The terminal's tab-colour
+picker - `terminalIcon.ts`, the file §4 of the plan already points at - builds its swatches from
+`ansiColorMap` and keeps only the keys the **current theme actually defines**:
+
+```ts
+for (const colorKey in ansiColorMap) {
+    const color = colorTheme.getColor(colorKey);
+    if (color && !colorKey.toLowerCase().includes('bright')) { standardColors.push(colorKey); }
+}
+```
+
+Our six are a fixed list with no such filter, which is exactly how a swatch that paints nothing came
+to be offered in two themes.
+
+### 12.5 The collapsed band takes a colour the title bar really paints
+
+19/19. In every theme `titleBar.activeBackground` is the colour `.part.titlebar` computes, so the
+strip above the header and the bar to the right of it are one surface with no seam. Six themes also
+set `titleBar.border` and thirteen leave it unset, where the rule falls back to `transparent` and
+draws nothing - which is what the title bar does beside it.
+
+### 12.6 What the instrument got wrong first
+
+Recorded because every one of these read as a finding about a theme, and four of them were believed
+for a while.
+
+```
+1  workbench.colorTheme takes a theme's settingsId, not its label. "Dark (Visual Studio)" is
+   `Visual Studio Dark`; "Dark High Contrast" is `Default High Contrast`. Writing the label changes
+   nothing - no notification, no log line - and the row after it measures the theme before it.
+   Four themes were scored twice and two were never measured. ⭐ The run now asserts that the
+   theme class changed and that no two rows share one.
+2  The activity bar's divider is on `.activitybar.bordered::before`, not on the part - the part
+   reserves no pixel for it. Reading the part's own border-right says 0px in every theme, and our
+   column, which sets it inline the way the side bar does, read as the only one with a divider in
+   exactly the six themes that define the token. Six false disagreements.
+3  A CSS custom property reads back as `#1e1f1c`; a computed style reads back as `rgb(30,31,28)`.
+   A parser that only accepted `rgb()` failed every hex, which made five of the six folder colours
+   unmeasurable and every one of the nineteen title bars a mismatch. Section 12.5 was "❌ 19/19"
+   before the parser was fixed and "✅ 19/19" after, with nothing in the product changed.
+4  ⭐ The window is on somebody's screen and changes under the instrument. Mid-run the bar was
+   collapsed and the pointer came to rest on a row: a hovered row is painted with the live ink, and
+   Monokai reported its quiet ink as differing from the activity bar's. It was a mouse position.
+   Preconditions - expanded, one active row, a control with items, nothing hovered - are now
+   asserted before every single reading, not once at the start.
+5  A control that is not on screen is not a result. One run lost the activity bar for nine straight
+   themes and reported nine disagreements. A missing control is now NOT MEASURED, which is neither
+   a pass nor a fail.
+6  Probing a colour class by appending it to an element that already had one measures stylesheet
+   source order, not the colour. Every swatch declared before `blue` read back as blue, which looked
+   exactly like five colours that do nothing. The classes are stripped before each is applied.
+```
+
+
+## 13 What the column is now
+
+§12 measured the column as it was, and the answer it gave - eleven themes drawing a folder's name at
+an icon's contrast - is what started this. What follows replaced it, one question at a time, each
+answered by looking rather than by reasoning about tokens.
+
+### 13.1 One ink, and it is the activity bar's live one
+
+```
+was   facadeBar.inactiveForeground at rest, facadeBar.foreground when live
+now   facadeBar.foreground in every state, for the rows and for the empty line
+```
+
+`⚠️` **Two wrong answers were tried first, and both are worth keeping written down.**
+
+The quiet ink went because it is tuned for a 16px glyph, held to 3.0, and a folder's **name** is
+13px text held to 4.5 - §12.3 measured it missing in eleven of nineteen, down to 1.76.
+
+The first replacement was the **explorer's** ink, on the reasoning that a list of names should read
+like the list of names beside it. Light+ and Light (Visual Studio) put `activityBar.background` at
+`#2c2c2c` and `sideBar.background` at `#f3f3f3` - the only two built-ins on opposite sides of their
+own theme - so the side bar's ink on this surface is dark on dark. Adopting a surface means adopting
+its ink; half of each pair is a ratio nobody chose.
+
+### 13.2 The row says which one it is with a chip, not with ink
+
+The modern activity bar's, which is `modernTab.*` underneath - the fill a **selected editor tab**
+gets, and so the window's one "this is the selected thing" colour rather than one panel's.
+
+```
+marked   modernActivityBarItem.activeBackground     rgba(255,255,255,0.13) in Dark Modern
+hovered  modernActivityBarItem.hoverBackground      rgba(255,255,255,0.07)
+rest     nothing
+high contrast   no fill at all - a solid outline for marked, dashed for hovered,
+                which is what `activityBar.css` does for the same state
+```
+
+`⚠️` Most themes write these as a **lightening of whatever is underneath** rather than as a colour,
+which is why they carry onto this surface: the chip is always one step brighter than the column it
+is on. `list.*` cannot do that. `list.hoverBackground` is tuned to be a small step from
+`sideBar.background`, and measured on this column in Light+ the ink on it came out at **1.23**; the
+inactive-selection band at **1.24**. Four more themes define them with an alpha, so the same state
+showed a different shade here than in the explorer, eight pixels away.
+
+`⚠️` These four tokens are registered unconditionally, so none of this needs the Modern UI
+experiment turned on. Measured with it off.
+
+```
+theme                  marked chip                 ink   hover chip                  ink
+Dark Modern            rgba(255,255,255,0.13)     8.39   rgba(255,255,255,0.07)    10.22
+Dark+                  rgb(30,30,30)             16.67   rgba(30,30,30,0.4)        14.24
+Light Modern           rgb(228,230,241)          13.26   rgb(242,242,242)          14.72
+Light+                 rgba(228,230,241,0.13)     9.70   rgba(232,232,232,0.13)     9.67
+Dark High Contrast     outline                   21.00   outline (dashed)          21.00
+Abyss                  rgb(8,40,107)             13.76   rgba(8,40,107,0.53)       15.94
+Kimbie Dark            rgb(100,83,66)             3.59!  rgba(124,80,33,0.4)        6.07
+Monokai                rgb(65,67,57)              9.44   rgb(62,61,50)             10.27
+Quiet Light            rgb(211,219,205)           4.26!  rgb(224,224,224)           4.59
+Solarized Light        rgb(223,202,136)           5.22   rgba(223,202,136,0.27)     5.66
+Tomorrow Night Blue    rgba(255,255,255,0.25)     8.12   rgba(255,255,255,0.19)    10.10
+
+one ink across all three states: 19 of 19.  under 4.5: Kimbie Dark and Quiet Light.
+```
+
+The two short ones are the price of one ink. Taking the chip's own foreground buys them back and
+costs a name that changes colour as a row becomes the marked one, which is visible in every theme
+where the two inks differ. A ratio that is short in two themes is a number; a name that changes
+colour is a behaviour.
+
+### 13.3 One line, and it belongs to the folder the window is on
+
+The leading 2px line marked the keyboard's row as well, on the reasoning that the activity bar draws
+one indicator for both. In a list you can arrow through, that is **two lines on screen whenever the
+cursor is not on the current folder**, which is most of the time - a right-click put one there, and
+so did Move Folder Up. Two lines is two answers to "which folder am I in".
+
+The keyboard's row takes the hover chip instead, scoped to `.monaco-list:focus`: a list keeps
+`focused` on the last row it put the cursor on whether the keyboard is near it or not, which is how
+a context menu opened over one row while a line appeared beside another.
+
+### 13.4 The six folder colours became ten, and they are ours
+
+`⭐` **`charts.orange` is not an ink**, and §12.4 has the measurement. Five of the six were aliases
+of editor inks and two were literals; orange alone aliased `minimapFindMatch`, a find-highlight
+**fill** - translucent by construction and undefined in both high-contrast themes, where picking it
+gave the same folder as picking nothing.
+
+```
+red #DD443F   orange #C26016   yellow #9A760A   lime #618720    green  #2C8C46
+teal #208986  blue   #277CDC   indigo #7B6CD8   purple #A15FC7  pink   #CA4A9B
+```
+
+`⚠️` **Ten hues, evenly spaced.** The four that came after sit in the gaps the first six left -
+yellow to green, green to blue, blue to purple, purple back to red - so no tag is a shade of
+another. Pink exists because these are ours; `charts` has none to point at.
+
+`⚠️` **One value each, no per-theme-kind branch**, and that is a decision rather than an oversight. A
+tag is not a surface: no theme has an opinion about what colour somebody's tag for `~/work/api`
+should be, so there is nothing to inherit. Each lightness is the one whose worst case across every
+surface the glyph can land on - nineteen backgrounds and the two marked-row chips - is as high as a
+single value can make it: **2.90**. It cannot reach 3.0, because those surfaces fall in two clusters
+with a gap and one value would have to be at once brighter than L=0.2068 and darker than L=0.1908.
+
+`⚠️` **A tag on the marked row is still hard to see** - 1.16 to 2.94 across the themes, because the
+chip moves the background toward the mid-tone the tags sit in. Three ways out were measured and all
+three trade something: a weaker chip (the tag survives, the mark stops reading), the chip in the
+folder's own colour (the conflict disappears, the six need a second darker value), or leaving it.
+Left, knowingly.
+
+### 13.5 Ten glyphs, chosen against three rules
+
+```
+folder rocket beaker server database globe device-mobile book tools package
+```
+
+Out of the 652 the icon font has, and the three rules are why that number is not larger: it has to
+survive 16px, which takes out everything drawn in thin strokes or many of them; it has to be
+distinct from the other nine at a glance, which takes out the second and third square box; and it
+has to say what a folder **is** rather than what it is **doing** - a bug, a check, a play arrow are
+states, and a state that never changes is a lie.
+
+`folder` is first and is stored as nothing at all, so a folder nobody has customised and one set back
+to a plain folder are the same record rather than two.
+
+`⚠️` The dialog is **460px** because the widest row says so: eleven 20px swatches with 8px between
+them need 300, ten 28px icon boxes need 352. At 380 the swatches wrapped and the icons finished 7px
+from the edge.
+
+`⚠️` **`set` dropped the glyph**, and the bug shipped: it kept its fields one named line at a time,
+so a field added to the type and to the dialog was accepted by the type checker and lost on the way
+to storage. The dialog offered it, the renderer was ready to draw it, and Save did nothing that could
+be seen. There is a test for it now, and the test was watched to fail with the bug put back.
+
+### 13.6 The default workspace
+
+A window asked for nothing at all opens one fixed workspace instead of coming up empty.
+
+```
+where      <userData>/User/Default.code-workspace, created on first use with { "folders": [] }
+when       windowsMainService, the arm before "open an empty window":
+           no files, not --new-window, no window opened yet, no remote authority
+also       File > Open Default Workspace, which opens the same file
+```
+
+`⚠️` **Every other way in is untouched**, and that is the whole design. A folder, a workspace, a
+file, anything restored from hot exit - all of them have already left `usedWindows` non-empty by the
+time this arm is reached, so it cannot take a window somebody asked for. Measured on four fresh
+profiles:
+
+```
+code                  Default (Workspace) opened, the file created
+code <folder>         the folder, file untouched
+code --new-window     an empty window, file untouched
+code <file>           the file, file untouched
+```
+
+`⚠️` **`window.restoreWindows` still wins**, and it defaults to `all` - so on a machine with a
+session to restore this arm is not reached. It fills the blank window and nothing else; the menu item
+is the way back to the default workspace at any other time.
+
+`⚠️` **A `vscode-userdata:` URI created the file and then declined to open it.** `resolveLocalWorkspace`
+opens with `if (uri.scheme !== Schemas.file) { return undefined; }` and says nothing - no
+notification, no log line. The path is built from `userDataPath`, a path on disk, and there is a test
+that asserts the scheme.
+
+### 13.7 What the review found
+
+`⚠️` Run after everything above was working, which is the point: none of it was caught by the thing
+being built.
+
+```
+a colour that painted nothing    facadeBar.activeBackground stayed registered after the chip
+                                 replaced it - a colour in the theme picker that does nothing
+a timer nobody could cancel      setTimeout(() => nameBox.focus()) in the dialog, which focuses a
+                                 detached input if the dialog closes inside that tick
+⭐ no tests at all               the `set` bug above was found by a person using it, not by a test.
+                                 13 now, and both bugs were put back to watch them fail
+42 lines hygiene refused         comment continuations indented with spaces to hang under `/*`
+```
+
+```
+tsc · valid-layers · stylelint · eslint · gulp hygiene (12040 files)   clean
+./scripts/test.sh                                 36998 passing · 0 failing · 470 pending
 ```
