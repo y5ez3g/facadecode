@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/workspacebarpart.css';
-import { $, append } from '../../../../base/browser/dom.js';
+import { getWCOTitlebarAreaRect } from '../../../../base/browser/browser.js';
+import { $, append, getWindow } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
 import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
@@ -63,6 +64,45 @@ export function isWorkspaceBarFirstColumn(root: ISerializedNode | undefined): bo
 
 	const first = root.data[0];
 	return first?.type === 'leaf' && (first.data as { type?: Parts } | undefined)?.type === Parts.WORKSPACEBAR_PART;
+}
+
+/**
+ * Whether the window's own buttons are drawn across the top of column zero. It decides where this
+ * bar's content starts: under the title bar where they are, and at the very top of the window where
+ * they are not, which is a row the column gets back on every platform but one.
+ *
+ * ⚠️ Read, not tabulated per platform. Windows puts the three buttons at the end of the row and so
+ * does Linux, but a Linux window manager lets a person move them to the front - elementary OS ships
+ * that way - so a table keyed on the platform is wrong there the moment somebody does. The rect
+ * answers for the window in front of us and keeps answering the day any of that changes.
+ *
+ * ⚠️ `isMac` is a parameter with the real platform as its default rather than a read of
+ * `isMacintosh` inside, so that the macOS branch can be tested from a build that is not on macOS.
+ * Callers pass two arguments.
+ */
+export function controlsOccupyColumnZero(titleBarStyle: TitlebarStyle, titlebarAreaRect: Pick<DOMRect, 'x'> | undefined, isMac = isMacintosh): boolean {
+	// macOS draws the traffic lights at the top left and has no way to draw them anywhere else, so
+	// the platform answers and the rect is not consulted. It would agree - `windows.ts` does set
+	// `titleBarOverlay` on macOS, so a rect does arrive - but a fact that cannot vary is a better
+	// source than a measurement this fork has no macOS build to check.
+	//
+	// ⚠️ `titleBarStyle`, not `hasCustomTitlebar`. Native tabs and simple fullscreen both fall back to
+	// a native title bar, and the lights then sit above the web contents rather than over this column.
+	if (isMac) {
+		return titleBarStyle === TitlebarStyle.CUSTOM;
+	}
+
+	// The rect is the part of the row the buttons left alone, so it starts past them when they are at
+	// the front and at zero when they are at the end - which is where Chromium draws them in a
+	// left-to-right window.
+	if (titlebarAreaRect) {
+		return titlebarAreaRect.x > 0;
+	}
+
+	// No overlay to read, which is `window.controlsStyle` set to `custom` or to `hidden`, or a native
+	// title bar. The first draws the buttons into the title bar's own far end, the second draws none
+	// at all, and the third draws them outside the web contents. None of the three reach this column.
+	return false;
 }
 
 /**
@@ -253,8 +293,16 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// across the top of this column - measured at 70px wide, which is what the title bar reserves
 		// for the same three - and a collapsed column is 36. There is no "beside" left, so the toggle
 		// goes below them. Open, 70 + 24 fits in 220 and it sits beside them as it should.
+		//
+		// ⚠️ Only where those buttons are actually over this column. Where they are not - Windows and
+		// Linux draw them at the far end of the row - the strip was holding a row open for something
+		// that is nowhere near it, and the one part that reaches the top of the window was the one
+		// part not using it: the header began 35px down for no reason a person could see.
 		if (this.titlebarSpacer) {
-			const above = this.layoutService.mainContainerOffset.top;
+			const controlsAbove = controlsOccupyColumnZero(
+				getTitleBarStyle(this.configurationService),
+				getWCOTitlebarAreaRect(getWindow(this.element)));
+			const above = controlsAbove ? this.layoutService.mainContainerOffset.top : 0;
 
 			// ⚠️ Spacing and nothing else. macOS draws the window's three buttons across this row - 70px
 			// of them, over a column that is 36 when collapsed - so nothing of ours goes in it.
@@ -264,6 +312,13 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			// from the one place that computes it. The strip's height and the point the line begins are
 			// the same edge, and two sources for it is two edges a frame apart.
 			this.element.style.setProperty('--facade-band-height', `${above}px`);
+
+			// ⚠️ And the band's skin comes off with the band. The collapsed strip is `border-box` with
+			// a 1px bottom border, so a height of zero still paints that border: measured, the strip
+			// came back 1px tall and the header started at y=1, leaving a hairline of `titleBar.border`
+			// across the top of a column that has no band under it. The class is what the stylesheet
+			// keys the skin off, so it has to go when the height does.
+			this.element.classList.toggle('banded', above > 0);
 		}
 
 		// A virtualised list does not re-flow on its own: without handing the size down the rows stop
