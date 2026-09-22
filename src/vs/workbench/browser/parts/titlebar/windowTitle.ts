@@ -14,6 +14,8 @@ import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.j
 import { EditorResourceAccessor, Verbosity, SideBySideEditor } from '../../../common/editor.js';
 import { IBrowserWorkbenchEnvironmentService } from '../../../services/environment/browser/environmentService.js';
 import { IWorkspaceContextService, WorkbenchState, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { IWorkspaceBarCustomizationService } from '../workspacebar/workspaceBarCustomization.js';
 import { isWindows, isWeb, isMacintosh, isNative } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
 import { trim } from '../../../../base/common/strings.js';
@@ -69,6 +71,21 @@ export class WindowTitle extends Disposable {
 
 	get value() { return this.title ?? ''; }
 	get workspaceName() { return this.labelService.getWorkspaceLabel(this.contextService.getWorkspace()); }
+	/**
+	 * What to call the window to a person: the root it is on.
+	 *
+	 * ⚠️ Separate from `workspaceName`, which still means the workspace. A workspace holding eight
+	 * repositories has one name, and it is not the answer to "what am I looking at".
+	 */
+	/**
+	 * ⚠️ Through `nameFor`, the same call the bar's rows make. A display name that the bar honours
+	 * and the title does not is one folder with two names in one window - and the title is the
+	 * loudest place it would show.
+	 */
+	get rootName() {
+		const active = this.activeFolderService.activeFolder;
+		return active ? this.customizationService.nameFor(active) : this.workspaceName;
+	}
 	get fileName() {
 		const activeEditor = this.editorService.activeEditor;
 		if (!activeEditor) {
@@ -98,7 +115,9 @@ export class WindowTitle extends Disposable {
 		@IProductService private readonly productService: IProductService,
 		@IViewsService private readonly viewsService: IViewsService,
 		@IDecorationsService private readonly decorationsService: IDecorationsService,
-		@IAccessibilityService private readonly accessibilityService: IAccessibilityService
+		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
+		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService
 	) {
 		super();
 
@@ -113,6 +132,18 @@ export class WindowTitle extends Disposable {
 		this._register(this.configurationService.onDidChangeConfiguration(e => this.onConfigurationChanged(e)));
 		this._register(this.editorService.onDidActiveEditorChange(() => this.onActiveEditorChange()));
 		this._register(this.contextService.onDidChangeWorkspaceFolders(() => this.titleUpdater.schedule()));
+		// ⚠️ And a folder being renamed, which changes the title without changing which folder the
+		// window is on. Without this the new name reaches the bar at once and the title on the next
+		// switch, so for a while the window is called two things.
+		this._register(this.customizationService.onDidChange(() => this.titleUpdater.schedule()));
+		this._register(this.activeFolderService.onDidChangeActiveFolder(() => {
+			this.titleUpdater.schedule();
+
+			// ⚠️ And said outright, not left to the title changing. `rootName` is read directly by
+			// the command center, and a custom title format that leaves it out would keep the old
+			// project's name there for ever.
+			this.onDidChangeEmitter.fire();
+		}));
 		this._register(this.contextService.onDidChangeWorkbenchState(() => this.titleUpdater.schedule()));
 		this._register(this.contextService.onDidChangeWorkspaceName(() => this.titleUpdater.schedule()));
 		this._register(this.labelService.onDidChangeFormatters(() => this.titleUpdater.schedule()));
@@ -292,8 +323,9 @@ export class WindowTitle extends Disposable {
 	 * {activeFolderLong}: e.g. /Users/Development/myFolder/myFileFolder
 	 * {activeFolderMedium}: e.g. myFolder/myFileFolder
 	 * {activeFolderShort}: e.g. myFileFolder
-	 * {rootName}: e.g. myFolder1, myFolder2, myFolder3
+	 * {rootName}: the root the window is on, e.g. myFolder
 	 * {rootPath}: e.g. /Users/Development
+	 * {workspaceName}: the workspace that root belongs to, e.g. myWorkspace (Workspace)
 	 * {folderName}: e.g. myFolder
 	 * {folderPath}: e.g. /Users/Development/myFolder
 	 * {appName}: e.g. VS Code
@@ -352,9 +384,20 @@ export class WindowTitle extends Disposable {
 		const activeFolderShort = editorFolderResource ? basename(editorFolderResource) : '';
 		const activeFolderMedium = editorFolderResource ? this.labelService.getUriLabel(editorFolderResource, { relative: true }) : '';
 		const activeFolderLong = editorFolderResource ? this.labelService.getUriLabel(editorFolderResource) : '';
-		const rootName = this.labelService.getWorkspaceLabel(workspace);
-		const rootNameShort = this.labelService.getWorkspaceLabel(workspace, { verbose: LabelVerbosity.SHORT });
-		const rootPath = root ? this.labelService.getUriLabel(root) : '';
+		// ⚠️ The root the window is on, not the workspace it belongs to. A workspace holding eight
+		// repositories is one window that is in one of them, and a title reading "Untitled
+		// (Workspace)" through every switch names the container rather than the work. The
+		// workspace's own name is still reachable, as `${workspaceName}`.
+		const workspaceName = this.labelService.getWorkspaceLabel(workspace);
+		const activeFolder = this.activeFolderService.activeFolder;
+		// ⚠️ Through `nameFor`, like the `rootName` getter above and like the bar's rows. This is the
+		// second place the same value is computed, and repointing only the first left the bar calling
+		// a folder `Prod` while the title went on calling it `alpha`.
+		const activeFolderName = activeFolder ? this.customizationService.nameFor(activeFolder) : undefined;
+		const rootName = activeFolderName ?? workspaceName;
+		const rootNameShort = activeFolderName ?? this.labelService.getWorkspaceLabel(workspace, { verbose: LabelVerbosity.SHORT });
+		const rootResource = activeFolder?.uri ?? root;
+		const rootPath = rootResource ? this.labelService.getUriLabel(rootResource) : '';
 		const folderName = folder ? folder.name : '';
 		const folderPath = folder ? this.labelService.getUriLabel(folder.uri) : '';
 		const dirty = editor?.isDirty() && !editor.isSaving() ? WindowTitle.TITLE_DIRTY : '';
@@ -395,6 +438,7 @@ export class WindowTitle extends Disposable {
 			rootName,
 			rootPath,
 			rootNameShort,
+			workspaceName,
 			folderName,
 			folderPath,
 			dirty,

@@ -27,6 +27,7 @@ import { IMarkerData, IMarkerService } from '../../../../platform/markers/common
 import { IProgressOptions, IProgressService, ProgressLocation } from '../../../../platform/progress/common/progress.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
+import { foldersWithActiveFirst, IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { INamedProblemMatcher, ProblemMatcherRegistry } from '../common/problemMatcher.js';
 
@@ -269,6 +270,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		@IEditorService private readonly _editorService: IEditorService,
 		@IFileService protected readonly _fileService: IFileService,
 		@IWorkspaceContextService protected readonly _contextService: IWorkspaceContextService,
+		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@ITelemetryService protected readonly _telemetryService: ITelemetryService,
 		@ITextFileService private readonly _textFileService: ITextFileService,
 		@IModelService protected readonly _modelService: IModelService,
@@ -1081,8 +1083,14 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		return types;
 	}
 
+	/**
+	 * ⚠️ The folder the window is on sorts first, and every folder's tasks are still listed. Tasks
+	 * are a workspace-level question - a build in one folder is often started from another - so this
+	 * orders rather than narrows.
+	 */
 	public createSorter(): TaskSorter {
-		return new TaskSorter(this._contextService.getWorkspace() ? this._contextService.getWorkspace().folders : []);
+		const folders = this._contextService.getWorkspace() ? this._contextService.getWorkspace().folders : [];
+		return new TaskSorter(foldersWithActiveFirst(folders, this._activeFolderService.activeFolder));
 	}
 
 	private _isActive(): Promise<boolean> {

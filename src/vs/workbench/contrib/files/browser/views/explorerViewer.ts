@@ -11,7 +11,7 @@ import { IProgressService, ProgressLocation, } from '../../../../../platform/pro
 import { INotificationService, Severity } from '../../../../../platform/notification/common/notification.js';
 import { IFileService, FileKind, FileOperationError, FileOperationResult, FileChangeType, FileSystemProviderCapabilities } from '../../../../../platform/files/common/files.js';
 import { IWorkbenchLayoutService } from '../../../../services/layout/browser/layoutService.js';
-import { isTemporaryWorkspace, IWorkspaceContextService, WorkbenchState } from '../../../../../platform/workspace/common/workspace.js';
+import { isTemporaryWorkspace, IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IDisposable, Disposable, dispose, toDisposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { KeyCode } from '../../../../../base/common/keyCodes.js';
 import { IFileLabelOptions, IResourceLabel, ResourceLabels } from '../../../../browser/labels.js';
@@ -27,7 +27,7 @@ import { createSingleCallFunction } from '../../../../../base/common/functional.
 import { IKeyboardEvent } from '../../../../../base/browser/keyboardEvent.js';
 import { equals, deepClone } from '../../../../../base/common/objects.js';
 import * as path from '../../../../../base/common/path.js';
-import { ExplorerItem, NewExplorerItem } from '../../common/explorerModel.js';
+import { ExplorerItem, NewExplorerItem, rootsAreRows } from '../../common/explorerModel.js';
 import { compareFileExtensionsDefault, compareFileNamesDefault, compareFileNamesUpper, compareFileExtensionsUpper, compareFileNamesLower, compareFileExtensionsLower, compareFileNamesUnicode, compareFileExtensionsUnicode } from '../../../../../base/common/comparers.js';
 import { CodeDataTransfers, containsDragType } from '../../../../../platform/dnd/browser/dnd.js';
 import { fillEditorsDragData } from '../../../../browser/dnd.js';
@@ -100,7 +100,6 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
 		@IFileService private readonly fileService: IFileService,
 		@IExplorerService private readonly explorerService: IExplorerService,
-		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IFilesConfigurationService private readonly filesConfigService: IFilesConfigurationService
 	) { }
 
@@ -110,6 +109,16 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 		}
 
 		throw new Error('getParent only supported for cached parents');
+	}
+
+	/**
+	 * Whether the tree is showing one root, which is when that root has no row of its own.
+	 *
+	 * ⚠️ Not `WorkbenchState.FOLDER`, which this used to ask. A window showing one root of a
+	 * workspace that holds several is in `WORKSPACE` state and still has nowhere to put an error.
+	 */
+	private isOnlyRoot(): boolean {
+		return this.explorerService.roots.length === 1;
 	}
 
 	hasChildren(element: ExplorerItem | ExplorerItem[]): boolean {
@@ -136,7 +145,7 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 		const promise = children.then(
 			children => {
 				// Clear previous error decoration on root folder
-				if (element instanceof ExplorerItem && element.isRoot && !element.error && hasError && this.contextService.getWorkbenchState() !== WorkbenchState.FOLDER) {
+				if (element instanceof ExplorerItem && element.isRoot && !element.error && hasError && !this.isOnlyRoot()) {
 					explorerRootErrorEmitter.fire(element.resource);
 				}
 				return children;
@@ -144,8 +153,8 @@ export class ExplorerDataSource implements IAsyncDataSource<ExplorerItem | Explo
 			, e => {
 
 				if (element instanceof ExplorerItem && element.isRoot) {
-					if (this.contextService.getWorkbenchState() === WorkbenchState.FOLDER) {
-						// Single folder create a dummy explorer item to show error
+					if (this.isOnlyRoot()) {
+						// A single root has no row of its own to carry the error, so make a dummy item
 						const placeholder = new ExplorerItem(element.resource, this.fileService, this.configService, this.filesConfigService, undefined, undefined, false);
 						placeholder.error = e;
 						return [placeholder];
@@ -842,7 +851,6 @@ export class FilesRenderer implements ICompressibleTreeRenderer<ExplorerItem, Fu
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IExplorerService private readonly explorerService: IExplorerService,
 		@ILabelService private readonly labelService: ILabelService,
-		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService
 	) {
@@ -1200,7 +1208,9 @@ export class FilesRenderer implements ICompressibleTreeRenderer<ExplorerItem, Fu
 			depth++;
 		}
 
-		if (this.contextService.getWorkbenchState() === WorkbenchState.WORKSPACE) {
+		// ⚠️ Asked of the tree, not of the workbench: the row these sit under only exists when the
+		// explorer is drawing more than one root, and this window can be a workspace showing one.
+		if (rootsAreRows(this.explorerService.roots)) {
 			depth = depth + 1;
 		}
 

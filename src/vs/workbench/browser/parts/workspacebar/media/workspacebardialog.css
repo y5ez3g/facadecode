@@ -1,0 +1,272 @@
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT License. See License.txt in the project root for license information.
+ * --------------------------------------------------------------------------------------------
+ */
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * The shape both of the bar's dialogs have.
+ *
+ * ⚠️ A header, a body and a footer, divided by two rules. The proportions are taken from the design
+ * and written as one width with everything else derived from it, so the three bands keep their
+ * relationship if the width ever changes:
+ *
+ * width                 380       the one number
+ * inset                 0.058 W   20   the column every line starts at
+ * header / footer band  0.09  W   34   title above the first rule, buttons below the second
+ * swatch               0.053 W   20
+ * swatch centres        0.100 W   38   so the gap between them is 16
+ *
+ * ⚠️ The dialog itself carries no padding. The rules have to run edge to edge, so each band pads
+ * itself and the rules are the bands' own borders.
+ *
+ * ⚠️ Nothing here touches the button row's contents. Both dialogs hand their buttons to the host,
+ * which knows the platform's order and sizes the pair together. A footer built by hand for one of
+ * them is how they came to look different in the first place.
+ * -------------------------------------------------------------------------------------------
+ */
+.monaco-dialog-box.workspacebar-dialog {
+	/*
+	 * ⚠️ `border-box`, or the host's padding is added to this and the number stops being the width
+	 * somebody sees - measured, two dialogs from one rule came out 400 and 424.
+	 */
+	box-sizing: border-box;
+	/*
+	 * ⚠️ 460, and it is set by the widest row rather than chosen: eleven 20px swatches with 8px
+	 * between them need 300, and ten 28px icon boxes with the same gap need 352. At 380 the swatches
+	 * wrapped onto a second line and the icons finished 7px from the edge. 460 leaves both on one
+	 * line inside the host's 20px padding, with room to spare. Measured, not guessed.
+	 */
+	width: 460px;
+	min-width: 0;
+	padding: 0;
+}
+
+/* --- the header: the title, and the rule under it -------------------------------------------- */
+
+.monaco-dialog-box.workspacebar-dialog .dialog-message-text {
+	/*
+	 * ⚠️ `width: 100%`, or this box is as wide as the title inside it and the rule under it stops
+	 * in the middle of the dialog - measured, 158 of 380.
+	 */
+	box-sizing: border-box;
+	width: 100%;
+	padding: var(--vscode-spacing-size160) var(--vscode-spacing-size200);
+	border-bottom: 1px solid var(--vscode-widget-border);
+	margin: 0;
+}
+
+/*
+ * ⚠️ The close button sits in the title's own band rather than a row of its own above it. The
+ * host gives it a 24px row, which is 24px of nothing over the title and half again the header the
+ * design asks for. Taken out of the flow and put where the design has it.
+ */
+.monaco-dialog-box.workspacebar-dialog .dialog-toolbar-row {
+	position: absolute;
+	top: 0;
+	right: 0;
+	height: auto;
+	padding: var(--vscode-spacing-size120) var(--vscode-spacing-size160);
+	z-index: 1;
+}
+
+/* --- the body -------------------------------------------------------------------------------- */
+
+/*
+ * No severity glyph, so neither the column it sat in nor the gutter around it.
+ * ⚠️ Not `.dialog-icon.codicon`, which is the host's own selector: for `type: 'none'` the element is
+ * given `no-codicon` instead, and a rule written that way never matches anything.
+ */
+.monaco-dialog-box.workspacebar-dialog .dialog-message-row {
+	padding: 0;
+}
+
+.monaco-dialog-box.workspacebar-dialog .dialog-message-row > .dialog-icon {
+	display: none;
+}
+
+.monaco-dialog-box.workspacebar-dialog .dialog-message-row .dialog-message-container {
+	padding-left: 0;
+	width: 100%;
+}
+
+.monaco-dialog-box.workspacebar-dialog .dialog-message-body,
+.monaco-dialog-box.workspacebar-dialog .dialog-message-detail {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	padding: var(--vscode-spacing-size200);
+}
+
+/*
+ * ⚠️ A band with nothing in it takes no room. The host renders both of these whether or not the
+ * dialog uses them, so Remove Folder - which has a detail and no body - was carrying 40px of padding
+ * around nothing between its sentence and the rule above its buttons.
+ */
+.monaco-dialog-box.workspacebar-dialog .dialog-message-body:empty,
+.monaco-dialog-box.workspacebar-dialog .dialog-message-detail:empty {
+	padding: 0;
+}
+
+/* --- the footer: the rule over it, and the buttons -------------------------------------------- */
+
+.monaco-dialog-box.workspacebar-dialog .dialog-buttons-row {
+	padding: var(--vscode-spacing-size160) var(--vscode-spacing-size200);
+	border-top: 1px solid var(--vscode-widget-border);
+}
+
+/* --- Remove Folder: a question, and nothing to close ------------------------------------------ */
+
+/*
+ * It carried a close button, and the row has a height whether or not it carried one. Customize keeps
+ * its close button: a dialog you are filling in is one you might mean to leave.
+ */
+.monaco-dialog-box.workspacebar-confirm .dialog-toolbar-row {
+	display: none;
+}
+
+/*
+ * ⚠️ A rendered paragraph brings its own margin top and bottom, and the band around it has already
+ * given it room: measured, 13px of paragraph margin stacked on 20px of padding above the path, and
+ * the same again under the sentence. The band spaces the block; the paragraphs space each other.
+ */
+.monaco-dialog-box.workspacebar-dialog .dialog-message-detail .rendered-markdown > p:first-child {
+	margin-top: 0;
+}
+
+.monaco-dialog-box.workspacebar-dialog .dialog-message-detail .rendered-markdown > p:last-child {
+	margin-bottom: 0;
+}
+
+/* --- Customize: a name and a colour ---------------------------------------------------------- */
+
+.workspacebar-customize-body {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.workspacebar-customize-label {
+	font-weight: var(--vscode-fontWeight-semiBold);
+	/* The space above a section heading. The first one needs none - the title is right above it. */
+	margin-top: var(--vscode-spacing-size200);
+	margin-bottom: var(--vscode-spacing-size80);
+}
+
+.workspacebar-customize-label:first-child {
+	margin-top: 0;
+}
+
+.workspacebar-customize-hint {
+	color: var(--vscode-descriptionForeground);
+	font-size: var(--vscode-fontSize-label2);
+	margin-top: var(--vscode-spacing-size60);
+}
+
+.workspacebar-customize-swatches {
+	display: flex;
+	gap: var(--vscode-spacing-size160);
+	flex-wrap: wrap;
+}
+
+.workspacebar-swatch {
+	width: var(--vscode-spacing-size200);
+	height: var(--vscode-spacing-size200);
+	border-radius: 50%;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	/* The ring that marks the selected one sits outside the circle, so it needs room of its own. */
+	outline-offset: 2px;
+}
+
+.workspacebar-swatch:focus-visible,
+.workspacebar-swatch.selected {
+	outline: 1px solid var(--vscode-focusBorder);
+}
+
+.workspacebar-swatch-tick {
+	/*
+	 * ⚠️ `visibility`, not `display`: the codicon class sets `display` itself and wins, so a tick
+	 * hidden that way is a tick on every swatch. Measured - all seven had one.
+	 */
+	visibility: hidden;
+	/* Over a filled circle, so it takes the ink a button's label takes over its own background. */
+	color: var(--vscode-button-foreground);
+	font-size: var(--vscode-codiconFontSize-compact);
+}
+
+.workspacebar-swatch.selected .workspacebar-swatch-tick {
+	visibility: visible;
+}
+
+/*
+ * ⚠️ Darker than the rest, and its tick takes the window's own foreground rather than a button's:
+ * `button.foreground` is near-white on a filled chart colour and near-invisible on this one.
+ */
+.workspacebar-swatch-none { background-color: var(--vscode-dropdown-border); }
+.workspacebar-swatch-none .workspacebar-swatch-tick { color: var(--vscode-foreground); }
+/*
+ * ⚠️ The six the row's glyph reads, and the LIVE one of each pair: a swatch is a filled circle
+ * with nothing quiet about it, and showing the 55% variant here would offer a colour that only ever
+ * appears on a row nobody is pointing at.
+ */
+.workspacebar-swatch-red { background-color: var(--vscode-facadeBar-folderRed); }
+.workspacebar-swatch-orange { background-color: var(--vscode-facadeBar-folderOrange); }
+.workspacebar-swatch-yellow { background-color: var(--vscode-facadeBar-folderYellow); }
+.workspacebar-swatch-lime { background-color: var(--vscode-facadeBar-folderLime); }
+.workspacebar-swatch-green { background-color: var(--vscode-facadeBar-folderGreen); }
+.workspacebar-swatch-teal { background-color: var(--vscode-facadeBar-folderTeal); }
+.workspacebar-swatch-blue { background-color: var(--vscode-facadeBar-folderBlue); }
+.workspacebar-swatch-indigo { background-color: var(--vscode-facadeBar-folderIndigo); }
+.workspacebar-swatch-purple { background-color: var(--vscode-facadeBar-folderPurple); }
+.workspacebar-swatch-pink { background-color: var(--vscode-facadeBar-folderPink); }
+
+/*
+ * The icon row: the same grid the swatches use, one row lower.
+ *
+ * ⚠️ A square with the small corner radius rather than a circle. A circle says "a colour"; these are
+ * glyphs, and a glyph in a circle reads as a badge. The box is the one the modern activity bar puts
+ * behind its checked item, which is where this column takes the rest of its vocabulary from.
+ */
+.workspacebar-customize-icons {
+	display: flex;
+	gap: var(--vscode-spacing-size80);
+	margin-bottom: var(--vscode-spacing-size120);
+}
+
+.workspacebar-icon-choice {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: var(--vscode-spacing-size280);
+	height: var(--vscode-spacing-size280);
+	border: 1px solid var(--vscode-dropdown-border);
+	border-radius: var(--vscode-cornerRadius-small);
+	background-color: var(--vscode-dropdown-background);
+	color: var(--vscode-foreground);
+	cursor: pointer;
+}
+
+.workspacebar-icon-choice .codicon {
+	font-size: var(--vscode-codiconFontSize);
+}
+
+/*
+ * ⚠️ The same outline the swatches take when chosen, so the two rows agree about what "picked"
+ * looks like without either of them naming a colour.
+ */
+.workspacebar-icon-choice.selected {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
+.workspacebar-icon-choice:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}

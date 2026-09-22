@@ -17,7 +17,7 @@ import { WorkbenchCompressibleAsyncDataTree, getSelectionKeyboardEvent } from '.
 import { FastAndSlowPicks, IPickerQuickAccessItem, IPickerQuickAccessSeparator, PickerQuickAccessProvider, Picks, TriggerAction } from '../../../../../platform/quickinput/browser/pickerQuickAccess.js';
 import { DefaultQuickAccessFilterValue, IQuickAccessProviderRunOptions } from '../../../../../platform/quickinput/common/quickAccess.js';
 import { IKeyMods, IQuickPick, IQuickPickItem, QuickInputButtonLocation, QuickInputHideReason } from '../../../../../platform/quickinput/common/quickInput.js';
-import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkbenchEditorConfiguration } from '../../../../common/editor.js';
 import { searchDetailsIcon, searchOpenInFileIcon, searchActivityBarIcon } from '../searchIcons.js';
 import { SearchView, getEditorSelectionFromMatch } from '../searchView.js';
@@ -25,6 +25,7 @@ import { IWorkbenchSearchConfiguration, getOutOfWorkspaceEditorResources } from 
 import { ACTIVE_GROUP, IEditorService, SIDE_GROUP } from '../../../../services/editor/common/editorService.js';
 import { ITextQueryBuilderOptions, QueryBuilder } from '../../../../services/search/common/queryBuilder.js';
 import { IPatternInfo, ISearchComplete, ITextQuery, VIEW_ID } from '../../../../services/search/common/search.js';
+import { addFolderScopeToggle, IFolderScopeService } from '../../../../services/folderScope/common/folderScope.js';
 import { Event } from '../../../../../base/common/event.js';
 import { PickerEditorState } from '../../../../browser/quickaccess.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
@@ -82,13 +83,17 @@ export class TextSearchQuickAccess extends PickerQuickAccessProvider<ITextSearch
 
 	constructor(
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
-		@IWorkspaceContextService private readonly _contextService: IWorkspaceContextService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@ILabelService private readonly _labelService: ILabelService,
 		@IViewsService private readonly _viewsService: IViewsService,
-		@IConfigurationService private readonly _configurationService: IConfigurationService
+		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@IFolderScopeService private readonly _folderScopeService: IFolderScopeService
 	) {
-		super(TEXT_SEARCH_QUICK_ACCESS_PREFIX, { canAcceptInBackground: true, shouldSkipTrimPickFilter: true });
+		super(TEXT_SEARCH_QUICK_ACCESS_PREFIX, {
+			canAcceptInBackground: true,
+			shouldSkipTrimPickFilter: true,
+			refresh: _folderScopeService.onDidChangeScope
+		});
 
 		this.queryBuilder = this._instantiationService.createInstance(QueryBuilder);
 		this.searchModel = this._register(this._instantiationService.createInstance(SearchModelImpl));
@@ -149,6 +154,13 @@ export class TextSearchQuickAccess extends PickerQuickAccessProvider<ITextSearch
 			this.searchModel.searchResult.toggleHighlights(false);
 		}));
 
+		addFolderScopeToggle(picker, this._folderScopeService, disposables);
+
+		// ⚠️ The results already on screen do not re-run when the scope changes under them - this
+		// provider answers first with the matches it already holds, and clearing them ahead of the
+		// refresh was tried and did not reach that path. The scope does change, and the next query or
+		// the next time the picker is opened is answered from it; what is on screen is a query old.
+
 		disposables.add(super.provide(picker, token, runOptions));
 		disposables.add(picker.onDidAccept(() => this.searchModel.searchResult.toggleHighlights(false)));
 		return disposables;
@@ -183,7 +195,10 @@ export class TextSearchQuickAccess extends PickerQuickAccessProvider<ITextSearch
 			return undefined;
 		}
 
-		const folderResources: IWorkspaceFolder[] = this._contextService.getWorkspace().folders;
+		// ⚠️ The folders this window is looking at, the same list Find in Files and Go to File use.
+		// A search that answers from every folder while the picker beside it answers from one is two
+		// answers to the same question.
+		const folderResources: readonly IWorkspaceFolder[] = this._folderScopeService.folders();
 		const content: IPatternInfo = {
 			pattern: contentPattern,
 		};

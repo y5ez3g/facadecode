@@ -244,10 +244,23 @@ export interface ISCMViewService {
 	readonly didFinishLoadingRepositories: IObservable<boolean>;
 
 	visibleRepositories: readonly ISCMRepository[];
+
+	/** Every repository, with the ones in the folder the window is on first. For the choosers. */
+	readonly orderedRepositories: readonly ISCMRepository[];
+
+	/**
+	 * The repositories in the folder the window is on, whether or not the person has them turned on.
+	 * ⚠️ "This folder has no repository" and "you turned its repository off" are different
+	 * sentences, and only one of them should offer to make a repository.
+	 */
+	readonly folderRepositories: readonly ISCMRepository[];
 	readonly onDidChangeVisibleRepositories: Event<ISCMViewVisibleRepositoryChangeEvent>;
 
 	isVisible(repository: ISCMRepository): boolean;
 	toggleVisibility(repository: ISCMRepository, visible?: boolean): void;
+
+	/** Shows these repositories, going to their folder first if the window is not on it. */
+	show(repositories: readonly ISCMRepository[]): Promise<void>;
 
 	toggleSortKey(sortKey: ISCMRepositorySortKey): void;
 	toggleSelectionMode(selectionMode: ISCMRepositorySelectionMode): void;

@@ -10,6 +10,7 @@ import '../editor/editor.all.js';
 import './api/browser/extensionHost.contribution.js';
 import './browser/workbench.contribution.js';
 import './browser/workbench.zenMode.contribution.js';
+import './browser/parts/workspacebar/workspaceBarDrop.js';
 
 // Agent-sessions color tokens — side-effect import so they register in the
 // global color registry and appear in the color-theme JSON schema.
@@ -83,6 +84,9 @@ import './services/aiEmbeddingVector/common/aiEmbeddingVectorService.js';
 import './services/aiRelatedInformation/common/aiRelatedInformationService.js';
 import './services/aiSettingsSearch/common/aiSettingsSearchService.js';
 import './services/history/browser/historyService.js';
+import './services/activeFolder/browser/activeFolderService.js';
+import './services/folderScope/browser/folderScopeService.js';
+import './services/folderScope/browser/folderScope.contribution.js';
 import './services/activity/browser/activityService.js';
 import './services/keybinding/browser/keybindingService.js';
 import './services/untitled/common/untitledTextEditorService.js';

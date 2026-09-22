@@ -380,7 +380,10 @@ export class SCMMenus implements ISCMMenus, IDisposable {
 		@ISCMService scmService: ISCMService,
 		@IInstantiationService private instantiationService: IInstantiationService
 	) {
-		this.titleMenu = instantiationService.createInstance(SCMTitleMenu);
+		// ⚠️ Registered, not merely created. `SCMRepositoryMenus` registers its own on the line after
+		// it builds it; this one was left out, which costs nothing in a window - it lives as long as
+		// the window does - and leaks the moment the owner is disposed in a test.
+		this.titleMenu = this.disposables.add(instantiationService.createInstance(SCMTitleMenu));
 		scmService.onDidRemoveRepository(this.onDidRemoveRepository, this, this.disposables);
 	}
 

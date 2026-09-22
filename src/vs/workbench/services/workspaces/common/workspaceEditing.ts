@@ -41,6 +41,21 @@ export interface IWorkspaceEditingService {
 	addFolders(folders: IWorkspaceFolderCreationData[], donotNotifyError?: boolean): Promise<void>;
 
 	/**
+	 * Moves one folder within the workspace's list.
+	 *
+	 * ⚠️ Not `updateFolders` with the whole list: that removes and re-adds every folder, so every
+	 * path in the `.code-workspace` is written out again and the file's own spelling of them is
+	 * lost. A move changes the order and nothing else.
+	 */
+	/**
+	 * Moves a folder `delta` places along the workspace's list.
+	 *
+	 * ⚠️ The folder by identity and the distance by number: an index would be a fact about the list
+	 * as it was when this was called, and the write it turns into happens later, in a queue.
+	 */
+	moveFolder(folder: URI, delta: number, donotNotifyError?: boolean): Promise<void>;
+
+	/**
 	 * Remove folders from the existing workspace
 	 * When `donotNotifyError` is `true`, error will be bubbled up otherwise, the service handles the error with proper message and action
 	 */

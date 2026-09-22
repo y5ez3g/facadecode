@@ -1190,8 +1190,11 @@ export class CommandCenter {
 
 		const addToWorkspace = l10n.t('Add to Workspace');
 		if (workspace.workspaceFolders) {
-			message = l10n.t('Would you like to open the initialized repository, or add it to the current workspace?');
-			choices.push(addToWorkspace);
+			message = l10n.t('Would you like to add the initialized repository to this workspace, or open it on its own?');
+			// ⚠️ First, so it is the one offered. This window holds a list of folders and a new
+			// repository joining it is the ordinary thing to want; opening it on its own, in a window
+			// with nothing else in it, is the exception. Both are still here.
+			choices.unshift(addToWorkspace);
 		}
 
 		const result = await window.showInformationMessage(message, ...choices);

@@ -21,6 +21,7 @@ import { IMenubarData, IMenubarMenu, IMenubarKeybinding, IMenubarMenuItemSubmenu
 import { IMenubarService } from '../../../../platform/menubar/electron-browser/menubar.js';
 import { INativeHostService } from '../../../../platform/native/common/native.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { OpenRecentAction } from '../../../browser/actions/windowActions.js';
@@ -44,10 +45,11 @@ export class NativeMenubarControl extends MenubarControl {
 		@IAccessibilityService accessibilityService: IAccessibilityService,
 		@IMenubarService private readonly menubarService: IMenubarService,
 		@IHostService hostService: IHostService,
+		@IWorkspaceBarService workspaceBarService: IWorkspaceBarService,
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@ICommandService commandService: ICommandService,
 	) {
-		super(menuService, workspacesService, contextKeyService, keybindingService, configurationService, labelService, updateService, storageService, notificationService, preferencesService, environmentService, accessibilityService, hostService, commandService);
+		super(menuService, workspacesService, contextKeyService, keybindingService, configurationService, labelService, updateService, storageService, notificationService, preferencesService, environmentService, accessibilityService, hostService, workspaceBarService, commandService);
 
 		(async () => {
 			this.recentlyOpened = await this.workspacesService.getRecentlyOpened();

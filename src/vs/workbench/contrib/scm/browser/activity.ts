@@ -163,7 +163,10 @@ export class SCMActiveRepositoryController extends Disposable implements IWorkbe
 		}
 
 		// Source control provider status bar entry
-		if (this.scmViewService.repositories.length > 1) {
+		// ⚠️ What is on screen, not what the window knows about. This entry exists to say which of
+		// several repositories the branch beside it belongs to; a window on one folder with one
+		// repository in it has nothing to disambiguate, and the folder is already named in the bar.
+		if (this.scmViewService.visibleRepositories.length > 1) {
 			const icon = getSCMRepositoryIcon(activeRepository, activeRepository.repository);
 			const repositoryStatusbarEntry: IStatusbarEntry = {
 				name: localize('status.scm.provider', "Source Control Provider"),

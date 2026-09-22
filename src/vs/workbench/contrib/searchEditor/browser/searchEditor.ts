@@ -35,7 +35,6 @@ import { ITelemetryService } from '../../../../platform/telemetry/common/telemet
 import { inputBorder, registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { AbstractTextCodeEditor } from '../../../browser/parts/editor/textCodeEditor.js';
 import { EditorInputCapabilities, IEditorOpenContext } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
@@ -50,6 +49,7 @@ import { serializeSearchResultForEditor } from './searchEditorSerialization.js';
 import { IEditorGroup, IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IPatternInfo, ISearchComplete, ISearchConfigurationProperties, ITextQuery, SearchSortOrder } from '../../../services/search/common/search.js';
+import { IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
 import { searchDetailsIcon } from '../../search/browser/searchIcons.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
@@ -104,7 +104,7 @@ export class SearchEditor extends AbstractTextCodeEditor<SearchEditorViewState> 
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IModelService private readonly modelService: IModelService,
-		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IFolderScopeService private readonly folderScopeService: IFolderScopeService,
 		@ILabelService private readonly labelService: ILabelService,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IContextViewService private readonly contextViewService: IContextViewService,
@@ -585,7 +585,9 @@ export class SearchEditor extends AbstractTextCodeEditor<SearchEditorViewState> 
 			}
 		};
 
-		const folderResources = this.contextService.getWorkspace().folders;
+		// ⚠️ The folders this window is looking at, the same list Find in Files uses. A search editor
+		// opened from that view with the same words in it has to answer the same question.
+		const folderResources = this.folderScopeService.folders();
 		let query: ITextQuery;
 		try {
 			const queryBuilder = this.instantiationService.createInstance(QueryBuilder);

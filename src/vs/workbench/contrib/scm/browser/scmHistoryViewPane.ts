@@ -1475,7 +1475,7 @@ class RepositoryPicker {
 			this._autoQuickPickItem,
 			{ type: 'separator' }];
 
-		picks.push(...this._scmViewService.repositories.map(r => ({
+		picks.push(...this._scmViewService.orderedRepositories.map(r => ({
 			label: r.provider.name,
 			description: r.provider.rootUri?.fsPath,
 			iconClass: ThemeIcon.isThemeIcon(r.provider.iconPath)
@@ -1770,6 +1770,21 @@ export class SCMHistoryViewPane extends ViewPane {
 				const repository = this._treeViewModel.repository.read(reader);
 				const historyProvider = repository?.provider.historyProvider.read(reader);
 				if (!repository || !historyProvider) {
+					// ⚠️ Redraw and forget, rather than return. Upstream could only reach this before
+					// the first repository arrived, so leaving everything alone cost nothing; with a
+					// folder bar "no repository here" is a place the window can be, and returning
+					// leaves the previous folder's history on screen under a header naming its
+					// repository, with that repository's context keys still enabling its menu items.
+					// `getHistoryItems` already answers with nothing and raises the welcome view.
+					this._scmProviderCtx.set(undefined);
+					this._scmCurrentHistoryItemRefHasRemote.set(false);
+					this._scmCurrentHistoryItemRefHasBase.set(false);
+					this._scmCurrentHistoryItemRefInFilter.set(false);
+
+					if (!isFirstRun) {
+						this.refresh();
+					}
+					isFirstRun = false;
 					return;
 				}
 

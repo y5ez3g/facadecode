@@ -1,0 +1,104 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { URI } from '../../../../base/common/uri.js';
+import { getRemoteAuthority } from '../../../../platform/remote/common/remoteHosts.js';
+import { isFolderToOpen, IOpenWindowOptions, IWindowOpenable } from '../../../../platform/window/common/window.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { IHostService } from '../../../services/host/browser/host.js';
+import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+
+/**
+ * What the bar offers the rest of the workbench.
+ *
+ * In its own file so that an action can reach the bar without importing the part that registers it:
+ * the part imports the actions, so the other direction would be a cycle.
+ *
+ * `layout.ts` also resolves this to force the part into existence before the grid is built.
+ */
+export interface IWorkspaceBarService {
+	readonly _serviceBrand: undefined;
+
+	/**
+	 * Puts folders in the workspace, in the order given, skipping the ones already there.
+	 *
+	 * ⚠️ Adds and stops there. Where a folder was dropped is what says whether somebody also meant
+	 * to go to it: on the bar, or through its `+`, they are filling the list and expect to stay where
+	 * they are - often after picking several at once. Dropping onto the window, or naming a folder on
+	 * a command line, means "show me this", and that is `addAndShow`.
+	 */
+	add(uris: readonly URI[]): Promise<void>;
+
+	/**
+	 * Puts folders in the workspace and moves the window onto the last of them.
+	 *
+	 * ⚠️ One edit and one move, however many folders arrive: dropping three folders is one act, not
+	 * three, and walking the window through the first two on the way to the third is a switch nobody
+	 * asked for. The last one, because that is the one somebody's hand let go of.
+	 */
+	addAndShow(uris: readonly URI[]): Promise<void>;
+
+	/** Collapses the bar to a column of icons, or opens it again. */
+	toggleCollapsed(): void;
+
+	/** Takes folders out of the workspace, leaving them where they are on disk. */
+	remove(uris: readonly URI[]): Promise<void>;
+
+	/**
+	 * Shows a folder in this window: puts it in the workspace if it is not there yet, and moves the
+	 * window onto it.
+	 *
+	 * ⚠️ The one decision point for the principle this fork turns on. Everything that means "show me
+	 * this folder" ends up here; everything that means "give me a second window" goes on calling
+	 * `IHostService.openWindow`, and which of the two a caller means stays a decision that caller
+	 * makes rather than a default it inherits. "in New Window", the modifier in Open Recent and an
+	 * extension calling `vscode.openFolder` all still mean a window.
+	 */
+	show(uri: URI): Promise<void>;
+
+	/**
+	 * What a command that was invoked without a folder should act on: the row the list has focus
+	 * on, and failing that the folder the window is currently in.
+	 */
+	folderForCommand(): URI | undefined;
+
+	focus(): void;
+}
+
+export const IWorkspaceBarService = createDecorator<IWorkspaceBarService>('workspaceBarService');
+
+/**
+ * Whether this window could actually show that folder.
+ *
+ * ⚠️ The **remote** authority, not the URI's: a folder on a remote this window is not connected to
+ * needs a window that is, and putting it in the bar here would be a row that cannot be opened. A
+ * `vscode-vfs://github/...` folder carries an authority too and is not remote at all - reading the
+ * URI's own authority sent every one of those to a second window that did not need to exist.
+ */
+export function reaches(uri: URI, environmentService: IWorkbenchEnvironmentService): boolean {
+	return getRemoteAuthority(uri) === environmentService.remoteAuthority;
+}
+
+/**
+ * Opens what somebody asked to open.
+ *
+ * ⚠️ The rule in one place, for the callers that offer "a folder or a workspace or a file" and were
+ * written when a folder could only mean a window: a folder goes into this window, and everything
+ * else goes on being a window. So does a folder when somebody asked for a window in as many words -
+ * `forceNewWindow` is what "in New Window" and the modifier in Open Recent both set.
+ */
+export async function openOrShow(
+	workspaceBarService: IWorkspaceBarService,
+	hostService: IHostService,
+	environmentService: IWorkbenchEnvironmentService,
+	toOpen: IWindowOpenable,
+	options?: IOpenWindowOptions
+): Promise<void> {
+	if (isFolderToOpen(toOpen) && reaches(toOpen.folderUri, environmentService) && !options?.forceNewWindow) {
+		return workspaceBarService.show(toOpen.folderUri);
+	}
+
+	return hostService.openWindow([toOpen], options);
+}

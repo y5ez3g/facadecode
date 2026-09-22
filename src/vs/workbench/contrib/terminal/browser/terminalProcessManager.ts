@@ -30,7 +30,7 @@ import { IBeforeProcessDataEvent, ITerminalProcessManager, ITerminalProfileResol
 import * as terminalEnvironment from '../common/terminalEnvironment.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { TaskSettingId } from '../../tasks/common/tasks.js';
@@ -142,7 +142,7 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 		cwd: string | URI | undefined,
 		environmentVariableCollections: ReadonlyMap<string, IEnvironmentVariableCollection> | undefined,
 		shellIntegrationNonce: string | undefined,
-		@IHistoryService private readonly _historyService: IHistoryService,
+		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@ITerminalLogService private readonly _logService: ITerminalLogService,
 		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
@@ -162,7 +162,7 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 		@ITerminalService private readonly _terminalService: ITerminalService
 	) {
 		super();
-		this._cwdWorkspaceFolder = terminalEnvironment.getWorkspaceForTerminal(cwd, this._workspaceContextService, this._historyService);
+		this._cwdWorkspaceFolder = terminalEnvironment.getWorkspaceForTerminal(cwd, this._workspaceContextService, this._activeFolderService);
 		this.ptyProcessReady = this._createPtyProcessReadyPromise();
 		this._ackDataBufferer = new AckDataBufferer(e => this._process?.acknowledgeDataEvent(e));
 		this._dataFilter = this._register(this._instantiationService.createInstance(SeamlessRelaunchDataFilter));
@@ -451,7 +451,7 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 
 	// Fetch any extension environment additions and apply them
 	private async _resolveEnvironment(backend: ITerminalBackend, variableResolver: terminalEnvironment.VariableResolver | undefined, shellLaunchConfig: IShellLaunchConfig): Promise<IProcessEnvironment> {
-		const workspaceFolder = terminalEnvironment.getWorkspaceForTerminal(shellLaunchConfig.cwd, this._workspaceContextService, this._historyService);
+		const workspaceFolder = terminalEnvironment.getWorkspaceForTerminal(shellLaunchConfig.cwd, this._workspaceContextService, this._activeFolderService);
 		const platformKey = isWindows ? 'windows' : (isMacintosh ? 'osx' : 'linux');
 		const envFromConfigValue = this._configurationService.getValue<ITerminalEnvironment | undefined>(`terminal.integrated.env.${platformKey}`);
 		this._logService.debug(`Resolving environment (useShellEnvironment=${shellLaunchConfig.useShellEnvironment}, platformKey=${platformKey}, envFromConfig=${envFromConfigValue ? Object.keys(envFromConfigValue).join(',') : 'none'})`);
@@ -502,13 +502,13 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 			remoteAuthority: undefined,
 			os: OS
 		});
-		const activeWorkspaceRootUri = this._historyService.getLastActiveWorkspaceRoot(Schemas.file);
+		const activeFolderUri = this._activeFolderService.activeFolderFor(Schemas.file)?.uri;
 
 		const initialCwd = await terminalEnvironment.getCwd(
 			shellLaunchConfig,
 			userHome,
 			variableResolver,
-			activeWorkspaceRootUri,
+			activeFolderUri,
 			this._terminalConfigurationService.config.cwd,
 			this._logService
 		);

@@ -25,15 +25,15 @@ import { IInstantiationService, ServicesAccessor } from '../../platform/instanti
 import { ILabelService } from '../../platform/label/common/label.js';
 import { extractSelection, withSelection } from '../../platform/opener/common/opener.js';
 import { Registry } from '../../platform/registry/common/platform.js';
-import { IWindowOpenable } from '../../platform/window/common/window.js';
-import { IWorkspaceContextService, hasWorkspaceFileExtension, isTemporaryWorkspace } from '../../platform/workspace/common/workspace.js';
+import { IWindowOpenable, isFolderToOpen } from '../../platform/window/common/window.js';
+import { hasWorkspaceFileExtension } from '../../platform/workspace/common/workspace.js';
 import { IWorkspaceFolderCreationData, IWorkspacesService } from '../../platform/workspaces/common/workspaces.js';
 import { EditorResourceAccessor, GroupIdentifier, IEditorIdentifier, isEditorIdentifier, isResourceDiffEditorInput, isResourceMergeEditorInput, isResourceSideBySideEditorInput } from '../common/editor.js';
 import { IEditorGroup } from '../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../services/editor/common/editorService.js';
 import { IHostService } from '../services/host/browser/host.js';
+import { IWorkspaceBarService } from './parts/workspacebar/workspaceBarService.js';
 import { ITextFileService } from '../services/textfile/common/textfiles.js';
-import { IWorkspaceEditingService } from '../services/workspaces/common/workspaceEditing.js';
 import { IEditorOptions } from '../../platform/editor/common/editor.js';
 import { mainWindow } from '../../base/browser/window.js';
 import { BroadcastDataChannel } from '../../base/browser/broadcast.js';
@@ -90,9 +90,8 @@ export class ResourcesDropHandler {
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspacesService private readonly workspacesService: IWorkspacesService,
 		@IEditorService private readonly editorService: IEditorService,
-		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
 		@IHostService private readonly hostService: IHostService,
-		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 	) {
 	}
@@ -180,19 +179,22 @@ export class ResourcesDropHandler {
 			return false;
 		}
 
-		// Open in separate windows if we drop workspaces or just one folder
-		if (toOpen.length > folderURIs.length || folderURIs.length === 1) {
-			await this.hostService.openWindow(toOpen);
+		// ⚠️ Folders dropped here go into this window, however many there are. Upstream opened a
+		// second window for one folder and replaced the workspace for several, both because a window
+		// was a folder; here it is a list of them. A `.code-workspace` is still a window - it carries
+		// its own list of folders, and this window already has one.
+		//
+		// ⚠️ "Here" is not "anywhere in the window". A drag from outside the application is taken by
+		// the bar's own listener, which covers the whole window and answers the same way; what reaches
+		// this handler is a drag that started inside - a tab, an explorer row, another window. The two
+		// paths have to agree, and they do, but they are not the same path.
+		const workspaceOpenables = toOpen.filter(openable => !isFolderToOpen(openable));
+		if (workspaceOpenables.length > 0) {
+			await this.hostService.openWindow(workspaceOpenables);
 		}
 
-		// Add to workspace if we are in a temporary workspace
-		else if (isTemporaryWorkspace(this.contextService.getWorkspace())) {
-			await this.workspaceEditingService.addFolders(folderURIs);
-		}
-
-		// Finally, enter untitled workspace when dropping >1 folders
-		else {
-			await this.workspaceEditingService.createAndEnterWorkspace(folderURIs);
+		if (folderURIs.length > 0) {
+			await this.workspaceBarService.addAndShow(folderURIs.map(folder => folder.uri));
 		}
 
 		return true;

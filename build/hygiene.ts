@@ -6,6 +6,7 @@
 import cp from 'child_process';
 import es from 'event-stream';
 import fs from 'fs';
+import { namesMicrosoftGallery } from './lib/extensionsGallery.ts';
 import { filter } from './lib/gulp/facade.ts';
 import pall from 'p-all';
 import path from 'path';
@@ -92,8 +93,8 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 	const productJson = es.through(function (file: VinylFile) {
 		const product = JSON.parse(file.contents!.toString('utf8'));
 
-		if (product.extensionsGallery) {
-			console.error(`product.json: Contains 'extensionsGallery'`);
+		if (namesMicrosoftGallery(product.extensionsGallery)) {
+			console.error(`product.json: 'extensionsGallery' names Microsoft's marketplace, which a build from this repository may not use`);
 			errorCount++;
 		}
 

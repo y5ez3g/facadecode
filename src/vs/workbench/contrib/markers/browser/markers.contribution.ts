@@ -22,7 +22,8 @@ import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js'
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { Disposable, IDisposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment, IStatusbarEntry } from '../../../services/statusbar/browser/statusbar.js';
-import { IMarkerService, MarkerStatistics } from '../../../../platform/markers/common/markers.js';
+import { IMarkerService, MarkerSeverity, MarkerStatistics } from '../../../../platform/markers/common/markers.js';
+import { FolderScope, IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
 import { ViewContainer, IViewContainersRegistry, Extensions as ViewContainerExtensions, ViewContainerLocation, IViewsRegistry, WindowEnablement } from '../../../common/views.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { getVisbileViewContextKey, FocusedViewContext } from '../../../common/contextkeys.js';
@@ -569,6 +570,36 @@ registerAction2(class extends Action2 {
 	}
 });
 
+/**
+ * How many problems the window is showing.
+ *
+ * ⚠️ Counted rather than taken from `getStatistics()`, which the marker service maintains over every
+ * marker it holds. A window on one folder has to answer about that folder, and the service has no
+ * idea there is such a thing - which is right, because every extension reads it too. Widened, the
+ * maintained answer is exactly the right one, so it is used and nothing is counted.
+ */
+function scopedMarkerStatistics(markerService: IMarkerService, folderScopeService: IFolderScopeService): MarkerStatistics {
+	if (folderScopeService.scope === FolderScope.Workspace) {
+		return markerService.getStatistics();
+	}
+
+	const statistics: MarkerStatistics = { errors: 0, warnings: 0, infos: 0, unknowns: 0 };
+	for (const marker of markerService.read()) {
+		if (!folderScopeService.covers(marker.resource)) {
+			continue;
+		}
+
+		switch (marker.severity) {
+			case MarkerSeverity.Error: statistics.errors++; break;
+			case MarkerSeverity.Warning: statistics.warnings++; break;
+			case MarkerSeverity.Info: statistics.infos++; break;
+			default: statistics.unknowns++; break;
+		}
+	}
+
+	return statistics;
+}
+
 class MarkersStatusBarContributions extends Disposable implements IWorkbenchContribution {
 
 	private markersStatusItem: IStatusbarEntryAccessor;
@@ -577,7 +608,8 @@ class MarkersStatusBarContributions extends Disposable implements IWorkbenchCont
 	constructor(
 		@IMarkerService private readonly markerService: IMarkerService,
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
-		@IConfigurationService private readonly configurationService: IConfigurationService
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IFolderScopeService private readonly folderScopeService: IFolderScopeService
 	) {
 		super();
 		this.markersStatusItem = this._register(this.statusbarService.addEntry(this.getMarkersItem(), 'status.problems', StatusbarAlignment.LEFT, 50 /* Medium Priority */));
@@ -593,6 +625,12 @@ class MarkersStatusBarContributions extends Disposable implements IWorkbenchCont
 		}
 
 		this._register(this.markerService.onMarkerChanged(() => {
+			this.markersStatusItem.update(this.getMarkersItem());
+		}));
+
+		// A window that moved is showing a different set of problems, and the count beside them has
+		// to say so even though not one marker changed.
+		this._register(this.folderScopeService.onDidChangeScope(() => {
 			this.markersStatusItem.update(this.getMarkersItem());
 		}));
 
@@ -613,7 +651,7 @@ class MarkersStatusBarContributions extends Disposable implements IWorkbenchCont
 	}
 
 	private getMarkersItem(): IStatusbarEntry {
-		const markersStatistics = this.markerService.getStatistics();
+		const markersStatistics = scopedMarkerStatistics(this.markerService, this.folderScopeService);
 		const tooltip = this.getMarkersTooltip(markersStatistics);
 		return {
 			name: localize('status.problems', "Problems"),
@@ -699,15 +737,17 @@ class ActivityUpdater extends Disposable implements IWorkbenchContribution {
 
 	constructor(
 		@IActivityService private readonly activityService: IActivityService,
-		@IMarkerService private readonly markerService: IMarkerService
+		@IMarkerService private readonly markerService: IMarkerService,
+		@IFolderScopeService private readonly folderScopeService: IFolderScopeService
 	) {
 		super();
 		this._register(this.markerService.onMarkerChanged(() => this.updateBadge()));
+		this._register(this.folderScopeService.onDidChangeScope(() => this.updateBadge()));
 		this.updateBadge();
 	}
 
 	private updateBadge(): void {
-		const { errors, warnings, infos } = this.markerService.getStatistics();
+		const { errors, warnings, infos } = scopedMarkerStatistics(this.markerService, this.folderScopeService);
 		const total = errors + warnings + infos;
 		if (total > 0) {
 			const message = localize('totalProblems', 'Total {0} Problems', total);

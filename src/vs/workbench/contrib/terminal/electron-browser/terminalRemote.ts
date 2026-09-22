@@ -10,21 +10,20 @@ import { INativeEnvironmentService } from '../../../../platform/environment/comm
 import { IRemoteAuthorityResolverService } from '../../../../platform/remote/common/remoteAuthorityResolver.js';
 import { registerTerminalAction } from '../browser/terminalActions.js';
 import { TerminalCommandId } from '../common/terminal.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 
 export function registerRemoteContributions() {
 	registerTerminalAction({
 		id: TerminalCommandId.NewLocal,
 		title: localize2('workbench.action.terminal.newLocal', 'Create New Integrated Terminal (Local)'),
 		run: async (c, accessor) => {
-			const historyService = accessor.get(IHistoryService);
 			const remoteAuthorityResolverService = accessor.get(IRemoteAuthorityResolverService);
 			const nativeEnvironmentService = accessor.get(INativeEnvironmentService);
 			let cwd: URI | undefined;
 			try {
-				const activeWorkspaceRootUri = historyService.getLastActiveWorkspaceRoot(Schemas.vscodeRemote);
-				if (activeWorkspaceRootUri) {
-					const canonicalUri = await remoteAuthorityResolverService.getCanonicalURI(activeWorkspaceRootUri);
+				const activeFolderUri = accessor.get(IActiveFolderService).activeFolderFor(Schemas.vscodeRemote)?.uri;
+				if (activeFolderUri) {
+					const canonicalUri = await remoteAuthorityResolverService.getCanonicalURI(activeFolderUri);
 					if (canonicalUri.scheme === Schemas.file) {
 						cwd = canonicalUri;
 					}

@@ -30,6 +30,7 @@ import { mnemonicMenuLabel, unmnemonicLabel } from '../../../../base/common/labe
 import { IAccessibilityService } from '../../../../platform/accessibility/common/accessibility.js';
 import { isFullscreen, onDidChangeFullscreen } from '../../../../base/browser/browser.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { IWorkspaceBarService, openOrShow } from '../workspacebar/workspaceBarService.js';
 import { BrowserFeatures } from '../../../../base/browser/canIUse.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
@@ -86,6 +87,7 @@ export abstract class MenubarControl extends Disposable {
 		protected readonly environmentService: IWorkbenchEnvironmentService,
 		protected readonly accessibilityService: IAccessibilityService,
 		protected readonly hostService: IHostService,
+		protected readonly workspaceBarService: IWorkspaceBarService,
 		protected readonly commandService: ICommandService
 	) {
 
@@ -257,7 +259,8 @@ export abstract class MenubarControl extends Disposable {
 			id: commandId, label: unmnemonicLabel(truncateMiddle(label, MenubarControl.MAX_MENU_RECENT_LABEL_LENGTH)), run: (browserEvent: KeyboardEvent) => {
 				const openInNewWindow = browserEvent && ((!isMacintosh && (browserEvent.ctrlKey || browserEvent.shiftKey)) || (isMacintosh && (browserEvent.metaKey || browserEvent.altKey)));
 
-				return this.hostService.openWindow([openable], {
+				// ⚠️ The modifier still means a window; without it a folder is shown in this one.
+				return openOrShow(this.workspaceBarService, this.hostService, this.environmentService, openable, {
 					forceNewWindow: !!openInNewWindow,
 					remoteAuthority: remoteAuthority || null // local window if remoteAuthority is not set or can not be deducted from the openable
 				});
@@ -350,9 +353,10 @@ export class CustomMenubarControl extends MenubarControl {
 		@IAccessibilityService accessibilityService: IAccessibilityService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@IHostService hostService: IHostService,
+		@IWorkspaceBarService workspaceBarService: IWorkspaceBarService,
 		@ICommandService commandService: ICommandService
 	) {
-		super(menuService, workspacesService, contextKeyService, keybindingService, configurationService, labelService, updateService, storageService, notificationService, preferencesService, environmentService, accessibilityService, hostService, commandService);
+		super(menuService, workspacesService, contextKeyService, keybindingService, configurationService, labelService, updateService, storageService, notificationService, preferencesService, environmentService, accessibilityService, hostService, workspaceBarService, commandService);
 
 		this._onVisibilityChange = this._register(new Emitter<boolean>());
 		this._onFocusStateChange = this._register(new Emitter<boolean>());

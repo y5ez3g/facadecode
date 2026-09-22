@@ -102,6 +102,8 @@ import { getPartsSplashColors } from './partsSplash.js';
 			const floatingBorderRadius = 8;
 			const contentTop = layoutInfo.titleBarHeight;
 			const contentBottom = layoutInfo.statusBarHeight;
+			const workspaceBarWidth = layoutInfo.workspaceBarWidth ?? 0;
+			const contentWidth = window.innerWidth - workspaceBarWidth;
 
 			const splash = document.createElement('div');
 			splash.id = 'monaco-parts-splash';
@@ -153,7 +155,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 
 			const fallbackActivityBarBounds: IPartsSplashPartBounds | undefined = layoutInfo.modernUICompact === true && layoutInfo.activityBarWidth > 0 ? {
 				top: contentTop + (contentTop === 0 ? floatingOuterMargin : 0),
-				left: layoutInfo.sideBarSide === 'left' ? floatingOuterMargin : window.innerWidth - layoutInfo.activityBarWidth,
+				left: layoutInfo.sideBarSide === 'left' ? floatingOuterMargin : contentWidth - layoutInfo.activityBarWidth,
 				width: Math.max(0, layoutInfo.activityBarWidth - floatingOuterMargin),
 				height: window.innerHeight - contentTop - contentBottom - floatingOuterMargin - (contentTop === 0 ? floatingOuterMargin : 0),
 			} : undefined;
@@ -246,12 +248,33 @@ import { getPartsSplashColors } from './partsSplash.js';
 			if (layoutInfo.auxiliaryBarWidth === Number.MAX_SAFE_INTEGER) {
 				// if auxiliary bar is maximized, it goes as wide as the
 				// window width but leaving room for activity bar
-				layoutInfo.auxiliaryBarWidth = window.innerWidth - layoutInfo.activityBarWidth;
+				layoutInfo.auxiliaryBarWidth = contentWidth - layoutInfo.activityBarWidth;
 			} else {
 				// otherwise adjust for other parts sizes if not maximized
-				layoutInfo.auxiliaryBarWidth = Math.min(layoutInfo.auxiliaryBarWidth, window.innerWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.sideBarWidth));
+				layoutInfo.auxiliaryBarWidth = Math.min(layoutInfo.auxiliaryBarWidth, contentWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.sideBarWidth));
 			}
-			layoutInfo.sideBarWidth = Math.min(layoutInfo.sideBarWidth, window.innerWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.auxiliaryBarWidth));
+			layoutInfo.sideBarWidth = Math.min(layoutInfo.sideBarWidth, contentWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.auxiliaryBarWidth));
+
+			// part: workspace bar
+			if (workspaceBarWidth > 0) {
+				const workspaceBarDiv = document.createElement('div');
+				setBounds(workspaceBarDiv, { top: 0, bottom: 0, left: 0, width: workspaceBarWidth });
+				// The bar borrows the activity bar's background, so the splash borrows it too.
+				workspaceBarDiv.style.backgroundColor = (modernUI ? modernActivityBarBackground : colorInfo.activityBarBackground) ?? '';
+				if (colorInfo.activityBarBorder) {
+					workspaceBarDiv.style.boxSizing = 'border-box';
+					workspaceBarDiv.style.borderRight = `1px solid ${colorInfo.activityBarBorder}`;
+				}
+				splash.appendChild(workspaceBarDiv);
+			}
+
+			// Everything else is the column beside the bar. Rather than add its width to every
+			// coordinate below, they go into a container that begins where it ends: `position:
+			// absolute` resolves against the nearest positioned ancestor, so the `left: 0` and
+			// `width: 100%` they already use come out right on their own.
+			const content = document.createElement('div');
+			setBounds(content, { top: 0, bottom: 0, left: workspaceBarWidth, right: 0 });
+			splash.appendChild(content);
 
 			// part: title
 			if (layoutInfo.titleBarHeight > 0) {
@@ -263,7 +286,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				titleDiv.style.top = '0';
 				titleDiv.style.backgroundColor = splashColors?.titleBarBackground ?? '';
 				(titleDiv.style as CSSStyleDeclaration & { '-webkit-app-region': string })['-webkit-app-region'] = 'drag';
-				splash.appendChild(titleDiv);
+				content.appendChild(titleDiv);
 
 				if (!modernUI && colorInfo.titleBarBorder) {
 					const titleBorder = document.createElement('div');
@@ -316,7 +339,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				} else {
 					activityDiv.style.backgroundColor = `${colorInfo.activityBarBackground}`;
 				}
-				splash.appendChild(activityDiv);
+				content.appendChild(activityDiv);
 
 				if (!modernUI && colorInfo.activityBarBorder) {
 					const activityBorderDiv = document.createElement('div');
@@ -364,7 +387,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				} else {
 					sideDiv.style.backgroundColor = `${colorInfo.sideBarBackground}`;
 				}
-				splash.appendChild(sideDiv);
+				content.appendChild(sideDiv);
 
 				if (!modernUI && colorInfo.sideBarBorder) {
 					const sideBorderDiv = document.createElement('div');
@@ -409,7 +432,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				} else {
 					auxSideDiv.style.backgroundColor = `${colorInfo.sideBarBackground}`;
 				}
-				splash.appendChild(auxSideDiv);
+				content.appendChild(auxSideDiv);
 
 				if (!modernUI && colorInfo.sideBarBorder) {
 					const auxSideBorderDiv = document.createElement('div');
@@ -444,7 +467,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 					});
 				}
 				applyFloatingCardStyles(editorDiv, colorInfo.editorBackground, layoutInfo.partBounds?.editor, editorFallbackOuterEdges, colorInfo.editorBorder ?? colorInfo.surfaceBorder ?? colorInfo.editorGroupBorder ?? 'transparent');
-				splash.appendChild(editorDiv);
+				content.appendChild(editorDiv);
 			}
 
 			if (modernUI && layoutInfo.partBounds?.panel) {
@@ -452,7 +475,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				setPartBounds(panelDiv, layoutInfo.partBounds.panel);
 				applyFloatingCardStyles(panelDiv, colorInfo.panelBackground ?? colorInfo.editorBackground, layoutInfo.partBounds.panel);
 				panelDiv.style.borderColor = colorInfo.modernPanelBorder ?? colorInfo.surfaceBorder ?? colorInfo.agentsPanelBorder ?? colorInfo.editorGroupBorder ?? 'transparent';
-				splash.appendChild(panelDiv);
+				content.appendChild(panelDiv);
 			}
 
 			// part: statusbar
@@ -464,7 +487,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				statusDiv.style.bottom = '0';
 				statusDiv.style.left = '0';
 				statusDiv.style.backgroundColor = splashColors?.statusBarBackground ?? '';
-				splash.appendChild(statusDiv);
+				content.appendChild(statusDiv);
 
 				if (!modernUI && colorInfo.statusBarBorder) {
 					const statusBorderDiv = document.createElement('div');

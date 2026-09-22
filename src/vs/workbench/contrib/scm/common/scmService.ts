@@ -364,7 +364,6 @@ export class SCMService implements ISCMService {
 	get repositoryCount(): number { return this._repositories.size; }
 
 	private inputHistory: SCMInputHistory;
-	private providerCount: IContextKey<number>;
 	private historyProviderCount: IContextKey<number>;
 
 	private readonly _onDidAddProvider = new Emitter<ISCMRepository>();
@@ -382,7 +381,8 @@ export class SCMService implements ISCMService {
 	) {
 		this.inputHistory = new SCMInputHistory(storageService, workspaceContextService);
 
-		this.providerCount = contextKeyService.createKey('scm.providerCount', 0);
+		// ⚠️ `scm.providerCount` is not set here. It answers a question about what is on screen, and
+		// this window shows one folder at a time, so `SCMViewService` owns it.
 		this.historyProviderCount = contextKeyService.createKey('scm.historyProviderCount', 0);
 	}
 
@@ -404,7 +404,6 @@ export class SCMService implements ISCMService {
 			this._repositories.delete(provider.id);
 			this._onDidRemoveProvider.fire(repository);
 
-			this.providerCount.set(this._repositories.size);
 			this.historyProviderCount.set(historyProviderCount());
 		}));
 
@@ -415,7 +414,6 @@ export class SCMService implements ISCMService {
 			this.historyProviderCount.set(historyProviderCount());
 		}));
 
-		this.providerCount.set(this._repositories.size);
 		this.historyProviderCount.set(historyProviderCount());
 
 		this._onDidAddProvider.fire(repository);

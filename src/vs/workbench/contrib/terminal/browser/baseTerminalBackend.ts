@@ -11,7 +11,7 @@ import { localize } from '../../../../nls.js';
 import { ICrossVersionSerializedTerminalState, IPtyHostController, ISerializedTerminalState, ITerminalLogService } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { TerminalContribCommandId } from '../terminalContribExports.js';
 
@@ -32,7 +32,7 @@ export abstract class BaseTerminalBackend extends Disposable {
 	constructor(
 		private readonly _ptyHostController: IPtyHostController,
 		protected readonly _logService: ITerminalLogService,
-		historyService: IHistoryService,
+		activeFolderService: IActiveFolderService,
 		configurationResolverService: IConfigurationResolverService,
 		statusBarService: IStatusbarService,
 		protected readonly _workspaceContextService: IWorkspaceContextService
@@ -88,10 +88,9 @@ export abstract class BaseTerminalBackend extends Disposable {
 			if (e.workspaceId !== this._workspaceContextService.getWorkspace().id) {
 				return;
 			}
-			const activeWorkspaceRootUri = historyService.getLastActiveWorkspaceRoot(Schemas.file);
-			const lastActiveWorkspaceRoot = activeWorkspaceRootUri ? this._workspaceContextService.getWorkspaceFolder(activeWorkspaceRootUri) ?? undefined : undefined;
+			const activeFolder = activeFolderService.activeFolderFor(Schemas.file);
 			const resolveCalls: Promise<string>[] = e.originalText.map(t => {
-				return configurationResolverService.resolveAsync(lastActiveWorkspaceRoot, t);
+				return configurationResolverService.resolveAsync(activeFolder, t);
 			});
 			const result = await Promise.all(resolveCalls);
 			this._ptyHostController.acceptPtyHostResolvedVariables(e.requestId, result);

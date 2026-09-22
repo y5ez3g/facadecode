@@ -16,6 +16,7 @@ import { ServicesAccessor } from '../../../../../platform/instantiation/common/i
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IQuickInputService, IQuickPickItem, QuickPickInput } from '../../../../../platform/quickinput/common/quickInput.js';
+import { foldersWithActiveFirst, IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { SnippetsAction } from './abstractSnippetsActions.js';
 import { ISnippetsService } from '../snippets.js';
@@ -270,6 +271,7 @@ export class ConfigureSnippetsAction extends SnippetsAction {
 		const fileService = accessor.get(IFileService);
 		const textFileService = accessor.get(ITextFileService);
 		const labelService = accessor.get(ILabelService);
+		const activeFolderService = accessor.get(IActiveFolderService);
 
 		const picks = await computePicks(snippetService, userDataProfileService, languageService, labelService);
 		const existing: QuickPickInput[] = picks.existing;
@@ -282,7 +284,9 @@ export class ConfigureSnippetsAction extends SnippetsAction {
 		}];
 
 		const workspaceSnippetPicks: SnippetPick[] = [];
-		for (const folder of workspaceService.getWorkspace().folders) {
+		// Ordered, not narrowed: a snippet file can be made for any folder, and the one the window is
+		// on is the one to offer first.
+		for (const folder of foldersWithActiveFirst(workspaceService.getWorkspace().folders, activeFolderService.activeFolder)) {
 			workspaceSnippetPicks.push({
 				scope: nls.localize('new.workspace_scope', "{0} workspace", folder.name),
 				label: nls.localize('new.folder', "New Snippets file for '{0}'...", folder.name),

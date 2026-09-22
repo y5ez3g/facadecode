@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as nls from '../../../../nls.js';
-import { IWindowOpenable, isWorkspaceToOpen, isFileToOpen } from '../../../../platform/window/common/window.js';
 import { IPickAndOpenOptions, ISaveDialogOptions, IOpenDialogOptions, FileFilter, IFileDialogService, IDialogService, ConfirmResult, getFileNamesMessage } from '../../../../platform/dialogs/common/dialogs.js';
 import { isSavedWorkspace, isTemporaryWorkspace, IWorkspaceContextService, WorkbenchState, WORKSPACE_EXTENSION } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceBarService, reaches } from '../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IActiveFolderService } from '../../activeFolder/common/activeFolder.js';
 import { IHistoryService } from '../../history/common/history.js';
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -56,7 +57,8 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 		@IEditorService protected readonly editorService: IEditorService,
 		@ICodeEditorService protected readonly codeEditorService: ICodeEditorService,
 		@ILogService private readonly logService: ILogService,
-		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService
+		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService,
+		@IActiveFolderService protected readonly activeFolderService: IActiveFolderService
 	) { }
 
 	async defaultFilePath(schemeFilter = this.getSchemeFilterForWindow(), authorityFilter = this.getAuthorityFilterForWindow()): Promise<URI> {
@@ -70,11 +72,11 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 			candidate = undefined;
 		}
 
-		// ...then for last active file root
+		// ...then for the folder the window is on
 		if (!candidate) {
-			candidate = this.historyService.getLastActiveWorkspaceRoot(schemeFilter, authorityFilter);
+			candidate = this.activeFolderService.activeFolderFor(schemeFilter, authorityFilter)?.uri;
 			if (candidate) {
-				this.logService.debug(`[FileDialogService] Default file path using last active workspace root: ${candidate}`);
+				this.logService.debug(`[FileDialogService] Default file path using the folder the window is on: ${candidate}`);
 			}
 		} else {
 			this.logService.debug(`[FileDialogService] Default file path using parent of last active file: ${candidate}`);
@@ -91,8 +93,8 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 
 	async defaultFolderPath(schemeFilter = this.getSchemeFilterForWindow(), authorityFilter = this.getAuthorityFilterForWindow()): Promise<URI> {
 
-		// Check for last active file root first...
-		let candidate = this.historyService.getLastActiveWorkspaceRoot(schemeFilter, authorityFilter);
+		// The folder the window is on first...
+		let candidate = this.activeFolderService.activeFolderFor(schemeFilter, authorityFilter)?.uri;
 
 		// ...then for last active file
 		if (!candidate) {
@@ -108,7 +110,7 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 				this.logService.debug(`[FileDialogService] Default folder path using parent of last active file: ${candidate}`);
 			}
 		} else {
-			this.logService.debug(`[FileDialogService] Default folder path using last active workspace root: ${candidate}`);
+			this.logService.debug(`[FileDialogService] Default folder path using the folder the window is on: ${candidate}`);
 		}
 
 		if (!candidate) {
@@ -233,19 +235,46 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 		const uri = uris?.[0];
 
 		if (uri) {
-			const stat = await this.fileService.stat(uri);
-
-			const toOpen: IWindowOpenable = stat.isDirectory ? { folderUri: uri } : { fileUri: uri };
-			if (!isWorkspaceToOpen(toOpen) && isFileToOpen(toOpen)) {
-				this.addFileToRecentlyOpened(toOpen.fileUri);
-			}
-
-			if (stat.isDirectory || options.forceNewWindow || preferNewWindow) {
-				await this.hostService.openWindow([toOpen], { forceNewWindow: options.forceNewWindow, remoteAuthority: options.remoteAuthority });
-			} else {
-				await this.editorService.openEditors([{ resource: uri, options: { source: EditorOpenSource.USER, pinned: true } }], undefined, { validateTrust: true });
-			}
+			await this.openPicked([uri], options, preferNewWindow);
 		}
+	}
+
+	/**
+	 * Opens whatever somebody picked from a dialog that offered files and folders both.
+	 *
+	 * ⚠️ Shared by the in-page dialog and the native one, which used to pick *and* open in the
+	 * main process in a single call - and the main process can only answer with a window. Deciding
+	 * here is what lets a folder become a row in this window instead of a second one.
+	 */
+	protected async openPicked(uris: readonly URI[], options: IPickAndOpenOptions, preferNewWindow: boolean): Promise<void> {
+		if (uris.length === 0) {
+			return;
+		}
+
+		// ⚠️ Everything that was picked, not the first of it. The dialog this replaced opened with
+		// `multiSelections`, so somebody could always choose several files at once; asking it for
+		// paths rather than telling it to open them must not quietly take that away.
+		const stats = await Promise.all(uris.map(uri => this.fileService.stat(uri)));
+		const folders = uris.filter((_, at) => stats[at].isDirectory);
+		const files = uris.filter((_, at) => !stats[at].isDirectory);
+
+		if (folders.length) {
+			await this.showFolders(folders, preferNewWindow ? { ...options, forceNewWindow: true } : options);
+		}
+
+		if (files.length === 0) {
+			return;
+		}
+
+		for (const file of files) {
+			this.addFileToRecentlyOpened(file);
+		}
+
+		if (options.forceNewWindow || preferNewWindow) {
+			return this.hostService.openWindow(files.map(fileUri => ({ fileUri })), { forceNewWindow: options.forceNewWindow, remoteAuthority: options.remoteAuthority });
+		}
+
+		await this.editorService.openEditors(files.map(resource => ({ resource, options: { source: EditorOpenSource.USER, pinned: true } })), undefined, { validateTrust: true });
 	}
 
 	protected async pickFileAndOpenSimplified(schema: string, options: IPickAndOpenOptions, preferNewWindow: boolean): Promise<void> {
@@ -269,14 +298,44 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 		this.workspacesService.addRecentlyOpened([{ fileUri: uri, label: this.labelService.getUriLabel(uri, { appendWorkspaceSuffix: true }) }]);
 	}
 
+	/**
+	 * Shows a folder somebody picked.
+	 *
+	 * ⚠️ In this window, by putting it in the workspace and moving onto it, which is the principle
+	 * this fork turns on: one window, many folders. A second window is what somebody asks for in as
+	 * many words, and `forceNewWindow` is those words - it is what "in New Window" sets - so that
+	 * path is untouched.
+	 *
+	 * ⚠️ Asked of the bar rather than done here: the bar owns the folder list, including knowing that
+	 * `/tmp/x` and `/private/tmp/x` are one folder. Two ways to put a folder in a workspace would be
+	 * two answers to that question.
+	 */
+	protected async showFolders(uris: readonly URI[], options: IPickAndOpenOptions): Promise<void> {
+		if (uris.length === 0) {
+			return;
+		}
+
+		// ⚠️ The same question `openOrShow` asks, through the same function: a folder on a remote this
+		// window is not connected to needs a window that is, the same way an explicit "in New Window"
+		// does. Two copies of that test drifted apart once already.
+		if (options.forceNewWindow || !uris.every(uri => reaches(uri, this.environmentService))) {
+			return this.hostService.openWindow(uris.map(folderUri => ({ folderUri })), { forceNewWindow: options.forceNewWindow, remoteAuthority: options.remoteAuthority });
+		}
+
+		// ⚠️ Resolved where it is used, not injected. `IWorkspaceEditingService` asks this service
+		// where to put a new workspace file, and the bar asks `IWorkspaceEditingService` to change the
+		// folder list - taking the bar in the constructor closes that ring, and a window whose
+		// services cannot be built shows nothing at all.
+		return this.instantiationService.invokeFunction(accessor => accessor.get(IWorkspaceBarService).addAndShow(uris));
+	}
+
 	protected async pickFolderAndOpenSimplified(schema: string, options: IPickAndOpenOptions): Promise<void> {
 		const title = nls.localize('openFolder.title', 'Open Folder');
 		const availableFileSystems = this.addFileSchemaIfNeeded(schema, true);
 
 		const uris = await this.pickResource({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: options.defaultUri, title, availableFileSystems });
-		const uri = uris?.[0];
-		if (uri) {
-			return this.hostService.openWindow([{ folderUri: uri }], { forceNewWindow: options.forceNewWindow, remoteAuthority: options.remoteAuthority });
+		if (uris?.length) {
+			return this.showFolders(uris, options);
 		}
 	}
 

@@ -84,7 +84,16 @@ viewsRegistry.registerViewWelcomeContent(VIEW_PANE_ID, {
 
 viewsRegistry.registerViewWelcomeContent(HISTORY_VIEW_PANE_ID, {
 	content: localize('no history items', "The selected source control provider does not have any source control history items."),
-	when: ContextKeys.SCMHistoryItemCount.isEqualTo(0)
+	when: ContextKeyExpr.and(ContextKeys.SCMHistoryItemCount.isEqualTo(0), ContextKeyExpr.has('scmProvider'))
+});
+
+// ⚠️ Ours. Upstream could not reach this: the view is registered only when some provider exists, and
+// with one window per folder the window was always in a folder that provider covered. With a folder
+// bar the window can be on a folder no provider covers, and the message above names a provider that
+// is not there.
+viewsRegistry.registerViewWelcomeContent(HISTORY_VIEW_PANE_ID, {
+	content: localize('no repository in folder', "There is no source control repository in this folder."),
+	when: ContextKeyExpr.and(ContextKeys.SCMHistoryItemCount.isEqualTo(0), ContextKeyExpr.has('scmProvider').negate())
 });
 
 viewsRegistry.registerViews([{
@@ -98,7 +107,10 @@ viewsRegistry.registerViews([{
 	canMoveView: true,
 	weight: 20,
 	order: 0,
-	when: ContextKeyExpr.and(ContextKeyExpr.has('scm.providerCount'), ContextKeyExpr.notEquals('scm.providerCount', 0)),
+	// ⚠️ Asked of the workspace, not of the folder on screen. This is the view that lists every
+	// repository the window has, and it is the way back to one in a folder that is not showing - so
+	// a folder with nothing of its own is the moment it is needed, not the moment to take it away.
+	when: ContextKeyExpr.and(ContextKeyExpr.has('scm.workspaceProviderCount'), ContextKeyExpr.notEquals('scm.workspaceProviderCount', 0)),
 	// readonly when = ContextKeyExpr.or(ContextKeyExpr.equals('config.scm.alwaysShowProviders', true), ContextKeyExpr.and(ContextKeyExpr.notEquals('scm.providerCount', 0), ContextKeyExpr.notEquals('scm.providerCount', 1)));
 	containerIcon: sourceControlViewIcon
 }], viewContainer);

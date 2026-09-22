@@ -5,6 +5,7 @@
 
 import { timeout } from '../../../base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../../base/common/cancellation.js';
+import { Event } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, MutableDisposable } from '../../../base/common/lifecycle.js';
 import { IKeyMods, IQuickPickDidAcceptEvent, IQuickPickSeparator, IQuickPick, IQuickPickItem, IQuickInputButton, isKeyModified } from '../common/quickInput.js';
 import { IQuickAccessProvider, IQuickAccessProviderRunOptions } from '../common/quickAccess.js';
@@ -99,6 +100,15 @@ export interface IPickerQuickAccessProviderOptions<T extends IPickerQuickAccessI
 
 	/** Whether to skip trimming the pick filter string */
 	readonly shouldSkipTrimPickFilter?: boolean;
+
+	/**
+	 * Asks the picker for its picks again while it is open.
+	 *
+	 * For a provider whose answer can change without the person having typed anything - the scope it
+	 * searches, say - where the alternative is a picker showing results to a question that has since
+	 * been changed underneath it.
+	 */
+	readonly refresh?: Event<unknown>;
 }
 
 export type Pick<T> = T | IQuickPickSeparator;
@@ -333,6 +343,9 @@ export abstract class PickerQuickAccessProvider<T extends IPickerQuickAccessItem
 			}
 		};
 		disposables.add(picker.onDidChangeValue(() => updatePickerItems()));
+		if (this.options?.refresh) {
+			disposables.add(this.options.refresh(() => updatePickerItems()));
+		}
 		updatePickerItems();
 
 		// Accept the pick on accept and hide picker

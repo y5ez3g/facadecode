@@ -27,6 +27,7 @@ import { isMacintosh, isWeb, isWindows } from '../../../base/common/platform.js'
 import { ContextKeyExpr } from '../../../platform/contextkey/common/contextkey.js';
 import { inQuickPickContext, getQuickNavigateHandler } from '../quickaccess.js';
 import { IHostService } from '../../services/host/browser/host.js';
+import { IWorkspaceBarService, openOrShow } from '../parts/workspacebar/workspaceBarService.js';
 import { ResourceMap } from '../../../base/common/map.js';
 import { Codicon } from '../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
@@ -97,6 +98,7 @@ abstract class BaseOpenRecentAction extends Action2 {
 		const modelService = accessor.get(IModelService);
 		const languageService = accessor.get(ILanguageService);
 		const hostService = accessor.get(IHostService);
+		const workspaceBarService = accessor.get(IWorkspaceBarService);
 		const dialogService = accessor.get(IDialogService);
 		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 
@@ -204,8 +206,7 @@ abstract class BaseOpenRecentAction extends Action2 {
 					});
 
 					if (confirmed) {
-						hostService.openWindow(
-							[context.item.openable], {
+						openOrShow(workspaceBarService, hostService, environmentService, context.item.openable, {
 							remoteAuthority: context.item.remoteAuthority || null // local window if remoteAuthority is not set or can not be deducted from the openable
 						});
 						quickInputService.cancel();
@@ -215,7 +216,8 @@ abstract class BaseOpenRecentAction extends Action2 {
 		});
 
 		if (pick) {
-			return hostService.openWindow([pick.openable], {
+			// ⚠️ `keyMods.ctrlCmd` is somebody asking for a window, and `openOrShow` leaves that alone.
+			return openOrShow(workspaceBarService, hostService, environmentService, pick.openable, {
 				forceNewWindow: keyMods?.ctrlCmd,
 				forceReuseWindow: keyMods?.alt,
 				remoteAuthority: pick.remoteAuthority || null // local window if remoteAuthority is not set or can not be deducted from the openable

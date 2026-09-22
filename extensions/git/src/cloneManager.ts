@@ -140,7 +140,10 @@ export class CloneManager {
 			action = PostCloneAction.None;
 		} else {
 			if (openAfterClone === 'always') {
-				action = PostCloneAction.Open;
+				// ⚠️ A window that already holds folders takes one more rather than being replaced.
+				// "Always open it" meant losing what was on screen, because opening a folder was
+				// opening a window; here it is one more row.
+				action = workspace.workspaceFolders ? PostCloneAction.AddToWorkspace : PostCloneAction.Open;
 			} else if (openAfterClone === 'alwaysNewWindow') {
 				action = PostCloneAction.OpenNewWindow;
 			} else if (openAfterClone === 'whenNoFolderOpen' && !workspace.workspaceFolders) {
@@ -156,8 +159,10 @@ export class CloneManager {
 
 			const addToWorkspace = l10n.t('Add to Workspace');
 			if (workspace.workspaceFolders) {
-				message = l10n.t('Would you like to open the repository, or add it to the current workspace?');
-				choices.push(addToWorkspace);
+				message = l10n.t('Would you like to add the repository to this workspace, or open it on its own?');
+				// ⚠️ First, so it is the one offered. A window here holds a list of folders, and a
+				// freshly cloned repository joining it is the ordinary thing to want. Both are here.
+				choices.unshift(addToWorkspace);
 			}
 
 			const result = await window.showInformationMessage(message, { modal: true }, ...choices);

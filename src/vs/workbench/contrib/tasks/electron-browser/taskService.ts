@@ -30,6 +30,7 @@ import { IQuickInputService } from '../../../../platform/quickinput/common/quick
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IViewDescriptorService } from '../../../common/views.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IOutputService } from '../../../services/output/common/output.js';
 import { ITerminalGroupService, ITerminalService } from '../../terminal/browser/terminal.js';
@@ -68,6 +69,7 @@ export class TaskService extends AbstractTaskService {
 		@IEditorService editorService: IEditorService,
 		@IFileService fileService: IFileService,
 		@IWorkspaceContextService contextService: IWorkspaceContextService,
+		@IActiveFolderService activeFolderService: IActiveFolderService,
 		@ITelemetryService telemetryService: ITelemetryService,
 		@ITextFileService textFileService: ITextFileService,
 		@ILifecycleService lifecycleService: ILifecycleService,
@@ -109,6 +111,7 @@ export class TaskService extends AbstractTaskService {
 			editorService,
 			fileService,
 			contextService,
+			activeFolderService,
 			telemetryService,
 			textFileService,
 			modelService,

@@ -1,0 +1,31 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.monaco-workbench .workspacebar-drop-overlay {
+	position: absolute;
+	inset: 0;
+	/* The layer the editor's own drop overlay used, which this one stands in for. */
+	z-index: 10000;
+	/* Never take the drag away from the container that is listening for it. */
+	pointer-events: none;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	background-color: var(--vscode-editorGroup-dropBackground);
+	outline: 1px dashed var(--vscode-focusBorder);
+	outline-offset: -2px;
+}
+
+.monaco-workbench .workspacebar-drop-overlay.visible {
+	display: flex;
+}
+
+.monaco-workbench .workspacebar-drop-overlay-message {
+	padding: var(--vscode-spacing-size80) var(--vscode-spacing-size160);
+	border: 1px solid var(--vscode-editorGroup-dropIntoPromptBorder);
+	border-radius: var(--vscode-cornerRadius-medium);
+	background-color: var(--vscode-editorGroup-dropIntoPromptBackground);
+	color: var(--vscode-editorGroup-dropIntoPromptForeground);
+}

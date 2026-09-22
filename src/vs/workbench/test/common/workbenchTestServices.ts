@@ -32,6 +32,7 @@ import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWo
 import { TestWorkspace } from '../../../platform/workspace/test/common/testWorkspace.js';
 import { GroupIdentifier, IRevertOptions, ISaveOptions, SaveReason } from '../../common/editor.js';
 import { EditorInput } from '../../common/editor/editorInput.js';
+import { IActiveFolderService } from '../../services/activeFolder/common/activeFolder.js';
 import { IActivity, IActivityService } from '../../services/activity/common/activity.js';
 import { ChatEntitlement, ChatEntitlementContext, IChatEntitlementService } from '../../services/chat/common/chatEntitlementService.js';
 import { Lazy } from '../../../base/common/lazy.js';
@@ -191,6 +192,34 @@ export class TestHistoryService implements IHistoryService {
 	async openPreviouslyUsedEditor(group?: GroupIdentifier): Promise<void> { }
 	getLastActiveWorkspaceRoot(_schemeFilter: string): URI | undefined { return this.root; }
 	getLastActiveFile(_schemeFilter: string): URI | undefined { return undefined; }
+}
+
+/**
+ * A window sitting on one folder, for a test that only needs to be told which one.
+ *
+ * `setActiveFolder` throws rather than doing nothing: a test that calls it wants the real service.
+ */
+export class TestActiveFolderService implements IActiveFolderService {
+
+	declare readonly _serviceBrand: undefined;
+
+	readonly onWillChangeActiveFolder = Event.None;
+	readonly onDidChangeActiveFolder = Event.None;
+
+	constructor(readonly activeFolder: IWorkspaceFolder | undefined) { }
+
+	activeFolderFor(scheme?: string, authority?: string): IWorkspaceFolder | undefined {
+		const folder = this.activeFolder;
+		if (!folder) {
+			return undefined;
+		}
+
+		return (!scheme || folder.uri.scheme === scheme) && (!authority || folder.uri.authority === authority) ? folder : undefined;
+	}
+
+	async setActiveFolder(): Promise<void> {
+		throw new Error('TestActiveFolderService cannot switch folders');
+	}
 }
 
 export class TestWorkingCopy extends Disposable implements IWorkingCopy {

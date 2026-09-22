@@ -23,6 +23,7 @@ import { IRecentlyOpened, IWorkspacesService } from '../../../../../platform/wor
 import { IOpenRecentAction, MenubarControl } from '../../../../browser/parts/titlebar/menubarControl.js';
 import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
+import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IPreferencesService } from '../../../../services/preferences/common/preferences.js';
 import { TestMenuService, workbenchInstantiationService } from '../../workbenchTestServices.js';
 
@@ -51,9 +52,10 @@ class TestMenubarControl extends MenubarControl {
 		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
 		@IAccessibilityService accessibilityService: IAccessibilityService,
 		@IHostService hostService: IHostService,
+		@IWorkspaceBarService workspaceBarService: IWorkspaceBarService,
 		@ICommandService commandService: ICommandService
 	) {
-		super(menuService, workspacesService, contextKeyService, keybindingService, configurationService, labelService, updateService, storageService, notificationService, preferencesService, environmentService, accessibilityService, hostService, commandService);
+		super(menuService, workspacesService, contextKeyService, keybindingService, configurationService, labelService, updateService, storageService, notificationService, preferencesService, environmentService, accessibilityService, hostService, workspaceBarService, commandService);
 	}
 
 	protected override doUpdateMenubar(_firstTime: boolean): void { }

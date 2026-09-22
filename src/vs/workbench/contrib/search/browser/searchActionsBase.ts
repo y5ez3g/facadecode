@@ -15,9 +15,8 @@ import { searchComparer } from './searchCompare.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { OpenSearchEditorArgs } from '../../searchEditor/browser/searchEditor.contribution.js';
 import { Schemas } from '../../../../base/common/network.js';
 
@@ -99,18 +98,17 @@ export async function findInFilesCommand(accessor: ServicesAccessor, _args: IFin
 		// resolve variables in the same way as in
 		// https://github.com/microsoft/vscode/blob/8b76efe9d317d50cb5b57a7658e09ce6ebffaf36/src/vs/workbench/contrib/searchEditor/browser/searchEditorActions.ts#L152-L158
 		const configurationResolverService = accessor.get(IConfigurationResolverService);
-		const historyService = accessor.get(IHistoryService);
-		const workspaceContextService = accessor.get(IWorkspaceContextService);
-		const activeWorkspaceRootUri = historyService.getLastActiveWorkspaceRoot();
-		const filteredActiveWorkspaceRootUri = activeWorkspaceRootUri?.scheme === Schemas.file || activeWorkspaceRootUri?.scheme === Schemas.vscodeRemote ? activeWorkspaceRootUri : undefined;
-		const lastActiveWorkspaceRoot = filteredActiveWorkspaceRootUri ? workspaceContextService.getWorkspaceFolder(filteredActiveWorkspaceRootUri) ?? undefined : undefined;
+		// ⚠️ Two schemes, either of which will do, so it is asked for twice rather than filtered
+		// after the fact - asking with no filter at all would accept a folder on neither.
+		const activeFolderService = accessor.get(IActiveFolderService);
+		const activeFolder = activeFolderService.activeFolderFor(Schemas.file) ?? activeFolderService.activeFolderFor(Schemas.vscodeRemote);
 
 		for (const entry of Object.entries(_args)) {
 			const name = entry[0];
 			const value = entry[1];
 			if (value !== undefined) {
 				// eslint-disable-next-line local/code-no-any-casts
-				(args as any)[name as any] = (typeof value === 'string') ? await configurationResolverService.resolveAsync(lastActiveWorkspaceRoot, value) : value;
+				(args as any)[name as any] = (typeof value === 'string') ? await configurationResolverService.resolveAsync(activeFolder, value) : value;
 			}
 		}
 	}

@@ -6,9 +6,9 @@
 import { Schemas } from '../../../../base/common/network.js';
 import { env } from '../../../../base/common/process.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IProcessEnvironment, OperatingSystem, OS } from '../../../../base/common/platform.js';
 import { IShellLaunchConfig, ITerminalLogService, ITerminalProfile, TerminalIcon, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IShellLaunchConfigResolveOptions, ITerminalProfileResolverService, ITerminalProfileService } from '../common/terminal.js';
@@ -49,10 +49,9 @@ export abstract class BaseTerminalProfileResolverService extends Disposable impl
 		private readonly _context: IProfileContextProvider,
 		private readonly _configurationService: IConfigurationService,
 		private readonly _configurationResolverService: IConfigurationResolverService,
-		private readonly _historyService: IHistoryService,
+		private readonly _activeFolderService: IActiveFolderService,
 		private readonly _logService: ITerminalLogService,
 		private readonly _terminalProfileService: ITerminalProfileService,
-		private readonly _workspaceContextService: IWorkspaceContextService,
 		private readonly _remoteAgentService: IRemoteAgentService
 	) {
 		super();
@@ -331,25 +330,24 @@ export abstract class BaseTerminalProfileResolverService extends Disposable impl
 		}
 
 		// Resolve path variables
-		const activeWorkspaceRootUri = this._historyService.getLastActiveWorkspaceRoot(options.remoteAuthority ? Schemas.vscodeRemote : Schemas.file);
-		const lastActiveWorkspace = activeWorkspaceRootUri ? this._workspaceContextService.getWorkspaceFolder(activeWorkspaceRootUri) ?? undefined : undefined;
-		profile.path = await this._resolveVariables(profile.path, env, lastActiveWorkspace);
+		const activeFolder = this._activeFolderService.activeFolderFor(options.remoteAuthority ? Schemas.vscodeRemote : Schemas.file);
+		profile.path = await this._resolveVariables(profile.path, env, activeFolder);
 
 		// Resolve args variables
 		if (profile.args) {
 			if (isString(profile.args)) {
-				profile.args = await this._resolveVariables(profile.args, env, lastActiveWorkspace);
+				profile.args = await this._resolveVariables(profile.args, env, activeFolder);
 			} else {
-				profile.args = await Promise.all(profile.args.map(arg => this._resolveVariables(arg, env, lastActiveWorkspace)));
+				profile.args = await Promise.all(profile.args.map(arg => this._resolveVariables(arg, env, activeFolder)));
 			}
 		}
 
 		return profile;
 	}
 
-	private async _resolveVariables(value: string, env: IProcessEnvironment, lastActiveWorkspace: IWorkspaceFolder | undefined) {
+	private async _resolveVariables(value: string, env: IProcessEnvironment, activeFolder: IWorkspaceFolder | undefined) {
 		try {
-			value = await this._configurationResolverService.resolveWithEnvironment(env, lastActiveWorkspace, value);
+			value = await this._configurationResolverService.resolveWithEnvironment(env, activeFolder, value);
 		} catch (e) {
 			this._logService.error(`Could not resolve shell`, e);
 		}
@@ -397,11 +395,10 @@ export class BrowserTerminalProfileResolverService extends BaseTerminalProfileRe
 	constructor(
 		@IConfigurationResolverService configurationResolverService: IConfigurationResolverService,
 		@IConfigurationService configurationService: IConfigurationService,
-		@IHistoryService historyService: IHistoryService,
+		@IActiveFolderService activeFolderService: IActiveFolderService,
 		@ITerminalLogService logService: ITerminalLogService,
 		@ITerminalInstanceService terminalInstanceService: ITerminalInstanceService,
 		@ITerminalProfileService terminalProfileService: ITerminalProfileService,
-		@IWorkspaceContextService workspaceContextService: IWorkspaceContextService,
 		@IRemoteAgentService remoteAgentService: IRemoteAgentService
 	) {
 		super(
@@ -424,10 +421,9 @@ export class BrowserTerminalProfileResolverService extends BaseTerminalProfileRe
 			},
 			configurationService,
 			configurationResolverService,
-			historyService,
+			activeFolderService,
 			logService,
 			terminalProfileService,
-			workspaceContextService,
 			remoteAgentService
 		);
 	}

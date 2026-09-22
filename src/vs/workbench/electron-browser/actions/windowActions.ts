@@ -4,12 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/actions.css';
+import { VSBuffer } from '../../../base/common/buffer.js';
 import { URI } from '../../../base/common/uri.js';
 import { localize, localize2 } from '../../../nls.js';
 import { ApplyZoomTarget, MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL, applyZoom } from '../../../platform/window/electron-browser/window.js';
 import { IKeybindingService } from '../../../platform/keybinding/common/keybinding.js';
 import { getZoomLevel } from '../../../base/browser/browser.js';
-import { FileKind } from '../../../platform/files/common/files.js';
+import { FileKind, IFileService } from '../../../platform/files/common/files.js';
+import { DEFAULT_WORKSPACE_CONTENT, defaultWorkspaceUri } from '../../../platform/workspaces/common/defaultWorkspace.js';
+import { INativeWorkbenchEnvironmentService } from '../../services/environment/electron-browser/environmentService.js';
 import { IModelService } from '../../../editor/common/services/model.js';
 import { ILanguageService } from '../../../editor/common/languages/language.js';
 import { IQuickInputService, IQuickInputButton, IQuickPickItem, QuickPickInput } from '../../../platform/quickinput/common/quickInput.js';
@@ -570,5 +573,49 @@ export class DisableWindowAlwaysOnTopAction extends Action2 {
 		}
 
 		return nativeHostService.setWindowAlwaysOnTop(false, { targetWindowId: targetWindow.vscodeWindowId });
+	}
+}
+
+/**
+ * Opens the one workspace this installation falls back to - the same file the main process opens
+ * when a window was asked for nothing at all.
+ *
+ * ⚠️ No picker and no preference. There is one default workspace, at a path the product decides, and
+ * this opens it. `defaultWorkspaceUri` is shared with `windowsMainService` so the two cannot name
+ * different files.
+ *
+ * ⚠️ Here in the native layer rather than beside the other workspace actions, because the path has
+ * to be a `file:` URI - `resolveLocalWorkspace` refuses every other scheme - and only the native
+ * environment service knows the user data directory as a path on disk. The browser layer has
+ * `userRoamingDataHome`, which names the same directory as `vscode-userdata:` and is silently
+ * declined.
+ *
+ * ⚠️ Creates the file if it is not there, the way `windowsMainService` does, so the first use of the
+ * menu item works on an installation that has never fallen back to it.
+ */
+export class OpenDefaultWorkspaceAction extends Action2 {
+
+	static readonly ID = 'facade.openDefaultWorkspace';
+
+	constructor() {
+		super({
+			id: OpenDefaultWorkspaceAction.ID,
+			title: localize2('openDefaultWorkspace', 'Open Default Workspace'),
+			category: Categories.File,
+			f1: true
+		});
+	}
+
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const environmentService = accessor.get(INativeWorkbenchEnvironmentService);
+		const fileService = accessor.get(IFileService);
+		const hostService = accessor.get(IHostService);
+
+		const workspaceUri = defaultWorkspaceUri(environmentService.userDataPath);
+		if (!(await fileService.exists(workspaceUri))) {
+			await fileService.writeFile(workspaceUri, VSBuffer.fromString(DEFAULT_WORKSPACE_CONTENT));
+		}
+
+		return hostService.openWindow([{ workspaceUri }], { forceReuseWindow: true });
 	}
 }

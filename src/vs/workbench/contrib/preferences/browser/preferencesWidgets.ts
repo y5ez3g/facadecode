@@ -36,6 +36,7 @@ import { IKeybindingService } from '../../../../platform/keybinding/common/keybi
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { asCssVariable, badgeBackground, badgeForeground, contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { isWorkspaceFolder, IWorkspaceContextService, IWorkspaceFolder, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
+import { foldersWithActiveFirst, IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { settingsEditIcon, settingsScopeDropDownIcon } from './preferencesIcons.js';
 
@@ -54,6 +55,7 @@ export class FolderSettingsActionViewItem extends BaseActionViewItem {
 	constructor(
 		action: IAction,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IHoverService private readonly hoverService: IHoverService,
 	) {
@@ -182,7 +184,10 @@ export class FolderSettingsActionViewItem extends BaseActionViewItem {
 
 	private getDropdownMenuActions(): IAction[] {
 		const actions: IAction[] = [];
-		const workspaceFolders = this.contextService.getWorkspace().folders;
+		// ⚠️ Ordered, not narrowed: every folder's settings stay reachable, and the folder the window
+		// is on is offered first. The same question asked from the command palette - Open Folder
+		// Settings - answers the same way, and two doors onto one question have to agree.
+		const workspaceFolders = foldersWithActiveFirst(this.contextService.getWorkspace().folders, this.activeFolderService.activeFolder);
 		if (this.contextService.getWorkbenchState() === WorkbenchState.WORKSPACE && workspaceFolders.length > 0) {
 			actions.push(...workspaceFolders.map((folder, index) => {
 				const folderCount = this._folderSettingCounts.get(folder.uri.toString());

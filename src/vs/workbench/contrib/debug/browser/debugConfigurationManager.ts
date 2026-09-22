@@ -30,7 +30,7 @@ import { IEditorPane } from '../../../common/editor.js';
 import { launchSchemaId } from '../../../services/configuration/common/configuration.js';
 import { ACTIVE_GROUP, IEditorService } from '../../../services/editor/common/editorService.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { activeFirst, IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
@@ -74,7 +74,7 @@ export class ConfigurationManager implements IConfigurationManager {
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IStorageService private readonly storageService: IStorageService,
 		@IExtensionService private readonly extensionService: IExtensionService,
-		@IHistoryService private readonly historyService: IHistoryService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService,
 		@IContextKeyService contextKeyService: IContextKeyService,
@@ -313,7 +313,11 @@ export class ConfigurationManager implements IConfigurationManager {
 
 	getAllConfigurations(): { launch: ILaunch; name: string; presentation?: IConfigPresentation }[] {
 		const all: { launch: ILaunch; name: string; presentation?: IConfigPresentation }[] = [];
-		for (const l of this.launches) {
+		// ⚠️ Through `getLaunches`, like every other list of launches somebody reads. This one is
+		// what "Select and Start Debugging" offers, so the folder the window is on belongs at the top
+		// of it - and `getVisibleAndSorted` leaves configurations that declare no presentation in the
+		// order they arrive.
+		for (const l of this.getLaunches()) {
 			for (const name of l.getConfigurationNames()) {
 				const config = l.getConfiguration(name) || l.getCompound(name);
 				if (config) {
@@ -382,8 +386,19 @@ export class ConfigurationManager implements IConfigurationManager {
 		jsonRegistry.registerSchema(launchSchemaId, launchSchema);
 	}
 
+	/**
+	 * ⚠️ Ordered here rather than in `launches` itself: that list's order is load-bearing - the
+	 * workspace's and the user's `launch.json` sit at the end of it and `getWorkspaceLaunch` takes
+	 * one from there - and it is rebuilt when the folder list changes, not when the window moves.
+	 * Every reader that is not a `find` or a `filter` is a list somebody looks at.
+	 */
 	getLaunches(): ILaunch[] {
-		return this.launches;
+		const active = this.activeFolderService.activeFolder;
+		if (!active) {
+			return this.launches;
+		}
+
+		return activeFirst(this.launches, launch => !!launch.workspace && this.uriIdentityService.extUri.isEqual(launch.workspace.uri, active.uri));
 	}
 
 	getLaunch(workspaceUri: uri | undefined): ILaunch | undefined {
@@ -417,8 +432,7 @@ export class ConfigurationManager implements IConfigurationManager {
 
 	async selectConfiguration(launch: ILaunch | undefined, name?: string, config?: IConfig, dynamicConfig?: { type?: string }): Promise<void> {
 		if (typeof launch === 'undefined') {
-			const rootUri = this.historyService.getLastActiveWorkspaceRoot();
-			launch = this.getLaunch(rootUri);
+			launch = this.getLaunch(this.activeFolderService.activeFolder?.uri);
 			if (!launch || launch.getConfigurationNames().length === 0) {
 				launch = this.launches.find(l => !!(l && l.getConfigurationNames().length)) || launch || this.launches[0];
 			}

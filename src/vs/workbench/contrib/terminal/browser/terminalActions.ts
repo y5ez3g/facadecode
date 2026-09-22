@@ -41,8 +41,8 @@ import { ITerminalProfile, TerminalExitReason, TerminalIcon, TerminalLocation, T
 import { createProfileSchemaEnums } from '../../../../platform/terminal/common/terminalProfiles.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
-import { PICK_WORKSPACE_FOLDER_COMMAND_ID } from '../../../browser/actions/workspaceCommands.js';
 import { CLOSE_EDITOR_COMMAND_ID } from '../../../browser/parts/editor/editorCommands.js';
+import { foldersWithActiveFirst, IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { ConfigurationResolverExpression } from '../../../services/configurationResolver/common/configurationResolverExpression.js';
 import { editorGroupToColumn } from '../../../services/editor/common/editorGroupColumn.js';
@@ -92,26 +92,15 @@ export interface WorkspaceFolderCwdPair {
 export async function getCwdForSplit(
 	instance: ITerminalInstance,
 	folders: IWorkspaceFolder[] | undefined,
-	commandService: ICommandService,
+	activeFolder: IWorkspaceFolder | undefined,
 	configService: ITerminalConfigurationService
 ): Promise<string | URI | undefined> {
 	switch (configService.config.splitCwd) {
 		case 'workspaceRoot':
-			if (folders !== undefined && commandService !== undefined) {
-				if (folders.length === 1) {
-					return folders[0].uri;
-				} else if (folders.length > 1) {
-					// Only choose a path when there's more than 1 folder
-					const options: IPickOptions<IQuickPickItem> = {
-						placeHolder: localize('workbench.action.terminal.newWorkspacePlaceholder', "Select current working directory for new terminal")
-					};
-					const workspace = await commandService.executeCommand<IWorkspaceFolder>(PICK_WORKSPACE_FOLDER_COMMAND_ID, [options]);
-					if (!workspace) {
-						// Don't split the instance if the workspace picker was canceled
-						return undefined;
-					}
-					return Promise.resolve(workspace.uri);
-				}
+			// ⚠️ "The workspace root" is the folder the window is on, not a question to ask. Upstream
+			// asked because a workspace with several folders had no single root; the bar gives it one.
+			if (folders !== undefined && folders.length > 0) {
+				return (activeFolder ?? folders[0]).uri;
 			}
 			return '';
 		case 'initial':
@@ -1066,14 +1055,13 @@ export function registerTerminalActions() {
 		icon: Codicon.splitHorizontal,
 		run: async (c, accessor, args) => {
 			const optionsOrProfile = isObject(args) ? args as ICreateTerminalOptions | ITerminalProfile : undefined;
-			const commandService = accessor.get(ICommandService);
 			const workspaceContextService = accessor.get(IWorkspaceContextService);
 			const options = convertOptionsOrProfileToOptions(optionsOrProfile);
 			const activeInstance = (await c.service.getInstanceHost(options?.location)).activeInstance;
 			if (!activeInstance) {
 				return;
 			}
-			const cwd = await getCwdForSplit(activeInstance, workspaceContextService.getWorkspace().folders, commandService, c.configService);
+			const cwd = await getCwdForSplit(activeInstance, workspaceContextService.getWorkspace().folders, accessor.get(IActiveFolderService).activeFolder, c.configService);
 			if (cwd === undefined) {
 				return;
 			}
@@ -1210,6 +1198,31 @@ export function registerTerminalActions() {
 		run: (xterm) => xterm.selectAll()
 	});
 
+	/**
+	 * ⚠️ Ours. `Create New Terminal` stopped asking which folder to start in, because the bar has
+	 * already said. This is where that question went, for the times somebody wants a terminal in a
+	 * folder they are not looking at - dropping a question is only fair if the answer stays reachable.
+	 */
+	registerTerminalAction({
+		id: 'facade.terminal.newInFolder',
+		title: localize2('facade.terminal.newInFolder', 'Create New Terminal in Another Folder...'),
+		precondition: ContextKeyExpr.or(TerminalContextKeys.processSupported, TerminalContextKeys.webExtensionContributedProfile),
+		run: async (c, accessor) => {
+			const cwd = (await pickTerminalCwd(accessor))?.cwd;
+			if (!cwd) {
+				return;
+			}
+
+			const instance = await c.service.createTerminal({ cwd });
+			if (!instance) {
+				return;
+			}
+
+			c.service.setActiveInstance(instance);
+			await focusActiveTerminal(instance, c);
+		}
+	});
+
 	registerTerminalAction({
 		id: TerminalCommandId.New,
 		title: localize2('workbench.action.terminal.new', 'Create New Terminal'),
@@ -1222,10 +1235,8 @@ export function registerTerminalActions() {
 		},
 		run: async (c, accessor, args) => {
 			let eventOrOptions = isObject(args) ? args as MouseEvent | ICreateTerminalOptions : undefined;
-			const workspaceContextService = accessor.get(IWorkspaceContextService);
-			const commandService = accessor.get(ICommandService);
 			const editorGroupsService = accessor.get(IEditorGroupsService);
-			const folders = workspaceContextService.getWorkspace().folders;
+			const folders = accessor.get(IWorkspaceContextService).getWorkspace().folders;
 			if (eventOrOptions && isMouseEvent(eventOrOptions) && (eventOrOptions.altKey || eventOrOptions.ctrlKey)) {
 				await c.service.createTerminal({ location: { splitActiveTerminal: true } });
 				return;
@@ -1244,17 +1255,22 @@ export function registerTerminalActions() {
 					// single root
 					instance = await c.service.createTerminal(eventOrOptions);
 				} else {
-					const cwd = (await pickTerminalCwd(accessor))?.cwd;
-					if (!cwd) {
-						// Don't create the instance if the workspace picker was canceled
-						return;
+					// ⚠️ Upstream asks which folder to start in whenever the workspace holds more than
+					// one, because it has no way of knowing. This window does: the bar says which folder
+					// it is on, and a question whose answer is already on screen is one nobody wants
+					// asked every time they open a terminal. The picker is still reachable, as
+					// `Terminal: Create New Terminal in Another Folder...` - not asking has to leave the
+					// answer available, or it is a feature taken away rather than a question dropped.
+					const cwd = (await activeFolderTerminalCwd(accessor))?.cwd;
+					if (cwd) {
+						eventOrOptions.cwd = cwd;
 					}
-					eventOrOptions.cwd = cwd;
 					instance = await c.service.createTerminal(eventOrOptions);
 				}
 				c.service.setActiveInstance(instance);
 				await focusActiveTerminal(instance, c);
 			} else {
+				const commandService = accessor.get(ICommandService);
 				if (c.profileService.contributedProfiles.length > 0) {
 					commandService.executeCommand(TerminalCommandId.NewWithProfile);
 				} else {
@@ -1573,13 +1589,9 @@ export function refreshTerminalActions(detectedProfiles: ITerminalProfile[]): ID
 			profile?: ITerminalProfile
 		) {
 			const c = getTerminalServices(accessor);
-			const workspaceContextService = accessor.get(IWorkspaceContextService);
-			const commandService = accessor.get(ICommandService);
-
 			let event: MouseEvent | PointerEvent | KeyboardEvent | undefined;
 			let options: ICreateTerminalOptions | undefined;
 			let instance: ITerminalInstance | undefined;
-			let cwd: string | URI | undefined;
 
 			if (isObject(eventOrOptionsOrProfile) && eventOrOptionsOrProfile && hasKey(eventOrOptionsOrProfile, { profileName: true })) {
 				const config = c.profileService.availableProfiles.find(profile => profile.profileName === eventOrOptionsOrProfile.profileName);
@@ -1612,19 +1624,9 @@ export function refreshTerminalActions(detectedProfiles: ITerminalProfile[]): ID
 				}
 			}
 
-			const folders = workspaceContextService.getWorkspace().folders;
-			if (folders.length > 1) {
-				// multi-root workspace, create root picker
-				const options: IPickOptions<IQuickPickItem> = {
-					placeHolder: localize('workbench.action.terminal.newWorkspacePlaceholder', "Select current working directory for new terminal")
-				};
-				const workspace = await commandService.executeCommand<IWorkspaceFolder>(PICK_WORKSPACE_FOLDER_COMMAND_ID, [options]);
-				if (!workspace) {
-					// Don't create the instance if the workspace picker was canceled
-					return;
-				}
-				cwd = workspace.uri;
-			}
+			// The same question `Create New Terminal` stopped asking, and the same answer: the folder
+			// the bar is on, with its own `terminal.integrated.cwd` honoured.
+			const cwd = (await activeFolderTerminalCwd(accessor))?.cwd;
 
 			if (options) {
 				options.cwd = cwd;
@@ -1646,6 +1648,19 @@ function getResourceOrActiveInstance(c: ITerminalServicesCollection, resource: u
 	return c.service.getInstanceFromResource(toOptionalUri(resource)) || c.service.activeInstance;
 }
 
+/**
+ * Where a terminal opens when nobody is asked: the folder the window is on, with its own
+ * `terminal.integrated.cwd` honoured exactly as the picker would have honoured it.
+ */
+async function activeFolderTerminalCwd(accessor: ServicesAccessor): Promise<WorkspaceFolderCwdPair | undefined> {
+	const folder = accessor.get(IActiveFolderService).activeFolder;
+	if (!folder) {
+		return undefined;
+	}
+
+	return resolveWorkspaceFolderCwd(folder, accessor.get(IConfigurationService), accessor.get(IConfigurationResolverService));
+}
+
 async function pickTerminalCwd(accessor: ServicesAccessor, cancel?: CancellationToken): Promise<WorkspaceFolderCwdPair | undefined> {
 	const quickInputService = accessor.get(IQuickInputService);
 	const labelService = accessor.get(ILabelService);
@@ -1655,7 +1670,8 @@ async function pickTerminalCwd(accessor: ServicesAccessor, cancel?: Cancellation
 	const configurationService = accessor.get(IConfigurationService);
 	const configurationResolverService = accessor.get(IConfigurationResolverService);
 
-	const folders = contextService.getWorkspace().folders;
+	// Ordered, not narrowed: every folder is offered, and the one the window is on comes first.
+	const folders = foldersWithActiveFirst(contextService.getWorkspace().folders, accessor.get(IActiveFolderService).activeFolder);
 	if (!folders.length) {
 		return;
 	}

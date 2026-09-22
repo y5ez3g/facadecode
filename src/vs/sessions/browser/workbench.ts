@@ -2180,6 +2180,7 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
 		}
 	}
 
+
 	setPartHidden(hidden: boolean, part: Parts): void {
 		switch (part) {
 			case Parts.SIDEBAR_PART:

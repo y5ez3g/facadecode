@@ -6,12 +6,11 @@
 import { ErrorNoTelemetry } from '../../../../base/common/errors.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ITerminalLogService } from '../../../../platform/terminal/common/terminal.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { ITerminalInstanceService } from '../browser/terminal.js';
 import { BaseTerminalProfileResolverService } from '../browser/terminalProfileResolverService.js';
 import { ITerminalProfileService } from '../common/terminal.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
-import { IHistoryService } from '../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 
 export class ElectronTerminalProfileResolverService extends BaseTerminalProfileResolverService {
@@ -19,9 +18,8 @@ export class ElectronTerminalProfileResolverService extends BaseTerminalProfileR
 	constructor(
 		@IConfigurationResolverService configurationResolverService: IConfigurationResolverService,
 		@IConfigurationService configurationService: IConfigurationService,
-		@IHistoryService historyService: IHistoryService,
+		@IActiveFolderService activeFolderService: IActiveFolderService,
 		@ITerminalLogService logService: ITerminalLogService,
-		@IWorkspaceContextService workspaceContextService: IWorkspaceContextService,
 		@ITerminalProfileService terminalProfileService: ITerminalProfileService,
 		@IRemoteAgentService remoteAgentService: IRemoteAgentService,
 		@ITerminalInstanceService terminalInstanceService: ITerminalInstanceService
@@ -45,10 +43,9 @@ export class ElectronTerminalProfileResolverService extends BaseTerminalProfileR
 			},
 			configurationService,
 			configurationResolverService,
-			historyService,
+			activeFolderService,
 			logService,
 			terminalProfileService,
-			workspaceContextService,
 			remoteAgentService
 		);
 	}

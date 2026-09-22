@@ -11,8 +11,13 @@ import { ensureNoDisposablesAreLeakedInTestSuite, toResource } from '../../../..
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { TestPathService } from '../../../../test/browser/workbenchTestServices.js';
 import { NullFilesConfigurationService, TestFileService } from '../../../../test/common/workbenchTestServices.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
+import { mock } from '../../../../../base/test/common/mock.js';
+import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
+import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { validateFileName } from '../../browser/fileActions.js';
-import { ExplorerItem } from '../../common/explorerModel.js';
+import { ExplorerItem, ExplorerModel, rootsAreRows } from '../../common/explorerModel.js';
 
 
 suite('Files - View Model', function () {
@@ -279,4 +284,117 @@ suite('Files - View Model', function () {
 	});
 
 	ensureNoDisposablesAreLeakedInTestSuite();
+});
+
+suite('Files - the roots the explorer shows', function () {
+
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+	const fileService = new TestFileService();
+	const configService = new TestConfigurationService();
+
+	function workspaceFolder(path: string, index: number): WorkspaceFolder {
+		return new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) });
+	}
+
+	/** Only what `ExplorerModel` asks of it: the folder list, for `getWorkspaceFolder`. */
+	class TestContextService extends mock<IWorkspaceContextService>() {
+		constructor(private readonly folders: WorkspaceFolder[]) { super(); }
+		override onDidChangeWorkspaceFolders = Event.None;
+		override getWorkspace(): IWorkspace { return { id: 'test', folders: this.folders, transient: false, configuration: null }; }
+	}
+
+	/** The one event the model listens to, and a way to move it. */
+	class TestActiveFolderService extends mock<IActiveFolderService>() {
+		private readonly _onDidChange = new Emitter<void>();
+		override onDidChangeActiveFolder = this._onDidChange.event;
+		constructor(private _activeFolder: IWorkspaceFolder | undefined) { super(); }
+		override get activeFolder(): IWorkspaceFolder | undefined { return this._activeFolder; }
+		moveTo(folder: IWorkspaceFolder | undefined): void { this._activeFolder = folder; this._onDidChange.fire(); }
+		dispose(): void { this._onDidChange.dispose(); }
+	}
+
+	function buildModel(paths: string[], activeIndex: number | undefined) {
+		const folders = paths.map(workspaceFolder);
+		const active = new TestActiveFolderService(activeIndex === undefined ? undefined : folders[activeIndex]);
+		disposables.add({ dispose: () => active.dispose() });
+
+		const model = disposables.add(new ExplorerModel(
+			new TestContextService(folders),
+			disposables.add(new UriIdentityService(fileService)),
+			fileService,
+			configService,
+			NullFilesConfigurationService,
+			active
+		));
+
+		return { model, active, folders };
+	}
+
+	const rootNames = (model: ExplorerModel) => model.roots.map(root => root.name);
+
+	test(`⭐ one root has no row of its own, so its files sit at the top level`, function () {
+		// ⭐ Two places ask this - what the tree is handed, and what level a screen reader is told.
+		// Asked of the workbench state instead, a workspace narrowed to one folder announces its
+		// files as the children of a row that is not on screen, and the two answers drift apart.
+		const { model } = buildModel(['/w/api', '/w/web', '/w/notes'], 0);
+
+		assert.strictEqual(rootsAreRows(model.roots), false);
+	});
+
+	/** A root as the explorer holds one, for the cases this model will not produce on its own. */
+	const root = (path: string) => new ExplorerItem(URI.file(path), fileService, configService, NullFilesConfigurationService,
+		undefined, true, false, false, false, path.slice(path.lastIndexOf('/') + 1), Date.now());
+
+	test('several roots each get a row, and their files sit under it', function () {
+		assert.strictEqual(rootsAreRows([root('/w/api'), root('/w/web'), root('/w/notes')]), true);
+	});
+
+	test('and a root that could not be read keeps its row, which is where the error is shown', function () {
+		const unreachable = root('/w/api');
+		unreachable.error = new Error('not reachable');
+
+		assert.strictEqual(rootsAreRows([unreachable]), true);
+	});
+
+	test('one root, however many the workspace holds', function () {
+		const { model } = buildModel(['/w/api', '/w/web', '/w/notes'], 0);
+
+		assert.deepStrictEqual(rootNames(model), ['api']);
+	});
+
+	test('and it is the one the window is on, not the first', function () {
+		const { model } = buildModel(['/w/api', '/w/web', '/w/notes'], 2);
+
+		assert.deepStrictEqual(rootNames(model), ['notes']);
+	});
+
+	test('the roots follow the window, and say so once', function () {
+		const { model, active, folders } = buildModel(['/w/api', '/w/web'], 0);
+		let changes = 0;
+		disposables.add(model.onDidChangeRoots(() => changes++));
+
+		active.moveTo(folders[1]);
+
+		assert.deepStrictEqual(rootNames(model), ['web']);
+		assert.strictEqual(changes, 1);
+	});
+
+	test('a workspace with no folders shows none', function () {
+		const { model } = buildModel([], undefined);
+
+		assert.deepStrictEqual(rootNames(model), []);
+	});
+
+	test('and the root it shows is named by the workspace, not by its path', function () {
+		// A `.code-workspace` can give a folder a name of its own.
+		const named = new WorkspaceFolder({ uri: URI.file('/w/api'), index: 0, name: 'the api' });
+		const active = new TestActiveFolderService(named);
+		disposables.add({ dispose: () => active.dispose() });
+		const model = disposables.add(new ExplorerModel(
+			new TestContextService([named]), disposables.add(new UriIdentityService(fileService)),
+			fileService, configService, NullFilesConfigurationService, active
+		));
+
+		assert.deepStrictEqual(rootNames(model), ['the api']);
+	});
 });

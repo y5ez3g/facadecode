@@ -19,6 +19,7 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 export const IWorkbenchLayoutService = refineServiceDecorator<ILayoutService, IWorkbenchLayoutService>(ILayoutService);
 
 export const enum Parts {
+	WORKSPACEBAR_PART = 'workbench.parts.workspacebar',
 	TITLEBAR_PART = 'workbench.parts.titlebar',
 	BANNER_PART = 'workbench.parts.banner',
 	ACTIVITYBAR_PART = 'workbench.parts.activitybar',
@@ -584,6 +585,7 @@ export interface IWorkbenchLayoutService extends ILayoutService {
 	 * Set part hidden or not in the target window.
 	 */
 	setPartHidden(hidden: boolean, part: Parts): void;
+
 
 	/**
 	 * Returns whether the layout surface that represents the secondary sidebar is visible.

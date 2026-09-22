@@ -16,9 +16,8 @@ import type { ServicesAccessor } from '../../../../../platform/instantiation/com
 import { KeybindingsRegistry, KeybindingWeight, type IKeybindings } from '../../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { IQuickInputService } from '../../../../../platform/quickinput/common/quickInput.js';
 import { GeneralShellType, TerminalSettingId, WindowsShellType } from '../../../../../platform/terminal/common/terminal.js';
-import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IConfigurationResolverService } from '../../../../services/configurationResolver/common/configurationResolver.js';
-import { IHistoryService } from '../../../../services/history/common/history.js';
+import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { ITerminalService } from '../../../terminal/browser/terminal.js';
 import { registerTerminalAction } from '../../../terminal/browser/terminalActions.js';
 import { TerminalCommandId } from '../../../terminal/common/terminal.js';
@@ -35,8 +34,7 @@ function toOptionalString(obj: unknown): string | undefined {
 export const terminalSendSequenceCommand = async (accessor: ServicesAccessor, args: unknown) => {
 	const quickInputService = accessor.get(IQuickInputService);
 	const configurationResolverService = accessor.get(IConfigurationResolverService);
-	const workspaceContextService = accessor.get(IWorkspaceContextService);
-	const historyService = accessor.get(IHistoryService);
+	const activeFolderService = accessor.get(IActiveFolderService);
 	const terminalService = accessor.get(ITerminalService);
 
 	const instance = terminalService.activeInstance;
@@ -73,9 +71,8 @@ export const terminalSendSequenceCommand = async (accessor: ServicesAccessor, ar
 			text = processedText;
 		}
 
-		const activeWorkspaceRootUri = historyService.getLastActiveWorkspaceRoot(instance.hasRemoteAuthority ? Schemas.vscodeRemote : Schemas.file);
-		const lastActiveWorkspaceRoot = activeWorkspaceRootUri ? workspaceContextService.getWorkspaceFolder(activeWorkspaceRootUri) ?? undefined : undefined;
-		const resolvedText = await configurationResolverService.resolveAsync(lastActiveWorkspaceRoot, text);
+		const activeFolder = activeFolderService.activeFolderFor(instance.hasRemoteAuthority ? Schemas.vscodeRemote : Schemas.file);
+		const resolvedText = await configurationResolverService.resolveAsync(activeFolder, text);
 		instance.sendText(resolvedText, false);
 	}
 };
