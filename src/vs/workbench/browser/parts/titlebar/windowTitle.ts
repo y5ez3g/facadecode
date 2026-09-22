@@ -15,6 +15,7 @@ import { EditorResourceAccessor, Verbosity, SideBySideEditor } from '../../../co
 import { IBrowserWorkbenchEnvironmentService } from '../../../services/environment/browser/environmentService.js';
 import { IWorkspaceContextService, WorkbenchState, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { IWorkspaceBarCustomizationService } from '../workspacebar/workspaceBarCustomization.js';
 import { isWindows, isWeb, isMacintosh, isNative } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
 import { trim } from '../../../../base/common/strings.js';
@@ -76,7 +77,15 @@ export class WindowTitle extends Disposable {
 	 * ⚠️ Separate from `workspaceName`, which still means the workspace. A workspace holding eight
 	 * repositories has one name, and it is not the answer to "what am I looking at".
 	 */
-	get rootName() { return this.activeFolderService.activeFolder?.name ?? this.workspaceName; }
+	/**
+	 * ⚠️ Through `nameFor`, the same call the bar's rows make. A display name that the bar honours
+	 * and the title does not is one folder with two names in one window - and the title is the
+	 * loudest place it would show.
+	 */
+	get rootName() {
+		const active = this.activeFolderService.activeFolder;
+		return active ? this.customizationService.nameFor(active) : this.workspaceName;
+	}
 	get fileName() {
 		const activeEditor = this.editorService.activeEditor;
 		if (!activeEditor) {
@@ -107,7 +116,8 @@ export class WindowTitle extends Disposable {
 		@IViewsService private readonly viewsService: IViewsService,
 		@IDecorationsService private readonly decorationsService: IDecorationsService,
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
-		@IActiveFolderService private readonly activeFolderService: IActiveFolderService
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
+		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService
 	) {
 		super();
 
@@ -122,6 +132,10 @@ export class WindowTitle extends Disposable {
 		this._register(this.configurationService.onDidChangeConfiguration(e => this.onConfigurationChanged(e)));
 		this._register(this.editorService.onDidActiveEditorChange(() => this.onActiveEditorChange()));
 		this._register(this.contextService.onDidChangeWorkspaceFolders(() => this.titleUpdater.schedule()));
+		// ⚠️ And a folder being renamed, which changes the title without changing which folder the
+		// window is on. Without this the new name reaches the bar at once and the title on the next
+		// switch, so for a while the window is called two things.
+		this._register(this.customizationService.onDidChange(() => this.titleUpdater.schedule()));
 		this._register(this.activeFolderService.onDidChangeActiveFolder(() => {
 			this.titleUpdater.schedule();
 
@@ -376,8 +390,12 @@ export class WindowTitle extends Disposable {
 		// workspace's own name is still reachable, as `${workspaceName}`.
 		const workspaceName = this.labelService.getWorkspaceLabel(workspace);
 		const activeFolder = this.activeFolderService.activeFolder;
-		const rootName = activeFolder ? activeFolder.name : workspaceName;
-		const rootNameShort = activeFolder ? activeFolder.name : this.labelService.getWorkspaceLabel(workspace, { verbose: LabelVerbosity.SHORT });
+		// ⚠️ Through `nameFor`, like the `rootName` getter above and like the bar's rows. This is the
+		// second place the same value is computed, and repointing only the first left the bar calling
+		// a folder `Prod` while the title went on calling it `alpha`.
+		const activeFolderName = activeFolder ? this.customizationService.nameFor(activeFolder) : undefined;
+		const rootName = activeFolderName ?? workspaceName;
+		const rootNameShort = activeFolderName ?? this.labelService.getWorkspaceLabel(workspace, { verbose: LabelVerbosity.SHORT });
 		const rootResource = activeFolder?.uri ?? root;
 		const rootPath = rootResource ? this.labelService.getUriLabel(rootResource) : '';
 		const folderName = folder ? folder.name : '';

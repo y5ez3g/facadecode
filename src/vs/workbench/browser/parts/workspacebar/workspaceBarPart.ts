@@ -10,9 +10,11 @@ import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+import { Emitter } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { IStorageService } from '../../../../platform/storage/common/storage.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { getTitleBarStyle, TitlebarStyle } from '../../../../platform/window/common/window.js';
@@ -38,6 +40,18 @@ const HEADER_HEIGHT = 35;
 const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
 
 /**
+ * What the bar is when it is collapsed.
+ *
+ * ⚠️ 36, the compact activity bar's width, and it is not an arbitrary match. Measured: a folder
+ * icon's centre sits at x=18 in this column and an activity bar glyph's centre sits at x=18 in that
+ * one, so collapsing to 36 leaves every icon exactly where it was. The row's padding needs no
+ * collapsed variant of its own - 10 on the left plus a 16px glyph is already dead centre of 36.
+ */
+export const WORKSPACEBAR_COLLAPSED_WIDTH = 36;
+
+const COLLAPSED_STORAGE_KEY = 'facade.workspaceBar.collapsed';
+
+/**
  * Whether the grid has the workspace bar as its first column, which every hard-coded grid coordinate
  * in `layout.ts` rests on. Asked of the grid that was built, not the descriptor: a restored layout
  * comes from storage and can be older than the code reading it.
@@ -59,8 +73,13 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 	declare readonly _serviceBrand: undefined;
 
-	readonly minimumWidth: number = WORKSPACEBAR_WIDTH;
-	readonly maximumWidth: number = WORKSPACEBAR_MAXIMUM_WIDTH;
+	/**
+	 * ⚠️ Getters, not fields: collapsing pins the column to one width, and the grid only asks
+	 * again when `_onDidChange` fires. A field read once at construction is a bar that keeps its old
+	 * width and hides its labels inside it.
+	 */
+	get minimumWidth(): number { return this.collapsed ? WORKSPACEBAR_COLLAPSED_WIDTH : WORKSPACEBAR_WIDTH; }
+	get maximumWidth(): number { return this.collapsed ? WORKSPACEBAR_COLLAPSED_WIDTH : WORKSPACEBAR_MAXIMUM_WIDTH; }
 	readonly minimumHeight: number = 0;
 	readonly maximumHeight: number = Number.POSITIVE_INFINITY;
 
@@ -68,6 +87,12 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	readonly priority: LayoutPriority = LayoutPriority.Low;
 
 	private content: HTMLElement | undefined;
+
+	private _collapsed = false;
+	get collapsed(): boolean { return this._collapsed; }
+
+	private readonly _onDidChangeCollapsed = this._register(new Emitter<void>());
+	readonly onDidChangeCollapsed = this._onDidChangeCollapsed.event;
 
 	/** The strip above the header. Its height is the title bar's, read on every layout. */
 	private titlebarSpacer: HTMLElement | undefined;
@@ -81,9 +106,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
 		@IThemeService themeService: IThemeService,
-		@IStorageService storageService: IStorageService,
+		@IStorageService private readonly storageService: IStorageService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
+		@IHostService private readonly hostService: IHostService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -95,6 +121,18 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 				borderWidth: () => (this.getColor(FACADE_BAR_BORDER) || this.getColor(contrastBorder)) ? 1 : 0
 			},
 			themeService, storageService, layoutService);
+
+		// ⚠️ Read here, before the grid asks what this column's width may be. Restored in `layout`
+		// instead, the first layout happens at the open width and the column snaps a frame later.
+		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, false);
+
+		// ⚠️ The strip above the header is painted in the title bar's colours, and the title bar has
+		// two: it dims when the window loses focus. Without this the column keeps one bright band
+		// across the top of a window nobody is looking at.
+		this._register(this.hostService.onDidChangeFocus(focused => {
+			this.element?.classList.toggle('window-inactive', !focused);
+		}));
+
 
 		// Built here rather than with the content area: an action can run before anything has been
 		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
@@ -115,6 +153,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			this.titlebarSpacer.classList.add('draggable');
 		}
 
+		if (this._collapsed) {
+			this.element.classList.add('collapsed');
+		}
+
 		const header = append(this.content, $('.workspacebar-header'));
 		append(header, $('span.workspacebar-title')).textContent = localize('workspaceBar.title', "Workspace");
 
@@ -133,12 +175,46 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this._register(this.model.onDidChange(() => this.pruneEditors()));
 		this.pruneEditors();
 		this.switcher = this._register(this.instantiationService.createInstance(WorkspaceBarSwitcher, this.model, this.editors));
-		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView, this.content, this.model, this.switcher));
+		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView, this.content, this.model, this.switcher, () => this.collapsed));
 
 		return this.content;
 	}
 
-	/** Whatever took a folder out of the workspace, its editors go with it. */
+	/**
+	 * Collapses the bar to a column of icons, or opens it again.
+	 *
+	 *  + W +  The width is pinned rather than merely suggested: both constraints return the same number
+	 * while collapsed, so nothing can drag the column open by its edge and leave it half a bar wide
+	 * with its labels clipped. The width somebody had chosen is remembered by `layout.ts` under
+	 * `WORKSPACEBAR_SIZE` and comes back when the constraints widen again.
+	 */
+	toggleCollapsed(): void {
+		this.setCollapsed(!this._collapsed);
+	}
+
+	private setCollapsed(collapsed: boolean): void {
+		if (this._collapsed === collapsed) {
+			return;
+		}
+
+		this._collapsed = collapsed;
+
+		this.storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.PROFILE, StorageTarget.USER);
+		this.element?.classList.toggle('collapsed', collapsed);
+		this._onDidChangeCollapsed.fire();
+
+		//  + W +  The grid caches what a view said its constraints were, so it has to be told to ask again.
+		this._onDidChange.fire(undefined);
+	}
+
+	/**
+	 * Whatever took a folder out of the workspace, its editors go with it.
+	 *
+	 * ⚠️ Its display name and colour do **not**. Those live in `StorageScope.PROFILE` because they
+	 * are about the folder rather than about this window, so pruning them against one workspace's
+	 * list would throw away a colour set in another. A folder taken out and put back is the same
+	 * folder and comes back the colour it was.
+	 */
 	private pruneEditors(): void {
 		this.editors?.prune(new Set(this.model.folders.map(folder => this.model.key(folder.uri))));
 	}
@@ -157,8 +233,14 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// inherits the workbench foreground, which is where the explorer's file names get theirs.
 		container.style.color = this.getColor(FACADE_BAR_FOREGROUND) ?? '';
 
+		// ⚠️ The colour and whether there is a line at all; the line itself is drawn by the
+		// stylesheet, the way `activitybarPart.ts` does it. Setting `border-right` inline here instead
+		// is what the first attempt did, and an inline declaration cannot be overridden by a rule - so
+		// the collapsed rule that has to switch this border off for the band silently lost, and the
+		// line went on cutting the band in two while the stylesheet said it should not.
 		const borderColor = this.getColor(FACADE_BAR_BORDER) ?? this.getColor(contrastBorder);
-		container.style.borderRight = borderColor ? `1px solid ${borderColor}` : '';
+		container.classList.toggle('bordered', !!borderColor);
+		container.style.setProperty('--facade-divider', borderColor ? String(borderColor) : '');
 	}
 
 	override layout(width: number, height: number, top: number, left: number): void {
@@ -166,8 +248,22 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 		// Follows the title bar and the banner, however tall they are - including not at all, which
 		// is what full screen and a hidden title bar both come out as.
+		//
+		// ⚠️ And a row of its own under them while collapsed. macOS draws the window's three buttons
+		// across the top of this column - measured at 70px wide, which is what the title bar reserves
+		// for the same three - and a collapsed column is 36. There is no "beside" left, so the toggle
+		// goes below them. Open, 70 + 24 fits in 220 and it sits beside them as it should.
 		if (this.titlebarSpacer) {
-			this.titlebarSpacer.style.height = `${this.layoutService.mainContainerOffset.top}px`;
+			const above = this.layoutService.mainContainerOffset.top;
+
+			// ⚠️ Spacing and nothing else. macOS draws the window's three buttons across this row - 70px
+			// of them, over a column that is 36 when collapsed - so nothing of ours goes in it.
+			this.titlebarSpacer.style.height = `${above}px`;
+
+			// ⚠️ The same number the stylesheet needs to know where the collapsed divider starts, set
+			// from the one place that computes it. The strip's height and the point the line begins are
+			// the same edge, and two sources for it is two edges a frame apart.
+			this.element.style.setProperty('--facade-band-height', `${above}px`);
 		}
 
 		// A virtualised list does not re-flow on its own: without handing the size down the rows stop

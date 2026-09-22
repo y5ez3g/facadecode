@@ -1,7 +1,9 @@
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT License. See License.txt in the project root for license information.
+ * --------------------------------------------------------------------------------------------
+ */
 
 /*
  * ⚠️ Every distance, radius and size in this file is a registered token, never a number someone
@@ -21,8 +23,102 @@
 }
 
 /* Room for the title bar, and on macOS for the window controls drawn over this column. */
+/*
+ * The strip the window's own buttons are drawn across.
+ *
+ * Open, it is this column's own top: the bar is column zero of the window and reaches the very top,
+ * so the strip is the bar's background and the title bar begins after it.
+ */
 .monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
 	flex: 0 0 auto;
+}
+
+/*
+ * ⚠️ Collapsed, it wears the title bar's skin instead, so the row reads as one band across the
+ * window and the column starts under it - the way the activity bar does. A 36px column with its own
+ * top is a notch in the title bar; measured, the two backgrounds met in a step 36px along the row.
+ *
+ * ⚠️ Done here rather than by moving the part in the grid. Moving it works one way - measured,
+ * the title bar did span x0..1440 - but not back: with the bar gone the root has one child, the grid
+ * flattens it, and the root turns from horizontal to vertical. `moveView` needs a reference view and
+ * nothing in the tree spans the full height, so there is no way to ask for column zero again. The
+ * grid is left with one shape and this paints the difference.
+ *
+ * ⚠️ The strip cannot reach the column's own right border, and a `margin-right: -1px` that was
+ * here to make it do so never worked. The part clips its children to its padding box and upstream's
+ * `.content` inside it clips them again, and the padding box is exactly the box that excludes the
+ * border pixel. Measured in Dark High Contrast, where `contrastBorder` makes every edge visible: the
+ * strip stopped at x=36 and the border went on painting at x=36..37. The line is drawn by the rule
+ * below instead, which can stop where this strip ends.
+ */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-titlebar-spacer {
+	box-sizing: border-box;
+	background-color: var(--vscode-titleBar-activeBackground);
+	border-bottom: 1px solid var(--vscode-titleBar-border, transparent);
+}
+
+/*
+ * The column's divider. `workspaceBarPart.ts` resolves the colour - the theme's `facadeBar.border`,
+ * or `contrastBorder` where a theme sets no other - and says whether there is one by adding
+ * `bordered`; the width lives here, which is what `activitybarPart.ts` does for the same line.
+ *
+ * ⚠️ Here rather than inline, so the collapsed rule below can switch it off. An inline
+ * declaration outranks every rule in this file, and the first attempt at the collapsed band set the
+ * border inline and then tried to turn it off from a stylesheet.
+ */
+.monaco-workbench .part.workspacebar.bordered {
+	border-right: 1px solid var(--facade-divider);
+}
+
+/*
+ * The column's divider, redrawn as a background stripe for as long as the column is collapsed.
+ *
+ * ⚠️ Because collapsed it must not run the whole height. The top of this column is then the title
+ * bar's strip, and the real title bar carries that strip on to the right with no line in it - so a
+ * border down the full height cuts it in two, a few pixels from the window's three buttons, which is
+ * the one place a reader's eye is already resting. Measured before this rule existed: a cyan line at
+ * x=36 from y=6 downwards, inside the band. Open, the rule does not apply and the border runs the
+ * whole height as it should, because open the title bar starts where this column ends.
+ *
+ * ⚠️ `background-origin: border-box`. A background's positioning area is the padding box by
+ * default, which would put the stripe one pixel inside - drawing a line where the layout reserved
+ * none and eating the last pixel of every row.
+ *
+ * ⚠️ Four stops, two of them doubled, so every change is a hard edge rather than a gradient: the
+ * title bar's own colour down the band, then one pixel of the title bar's bottom border so the line
+ * under the band runs unbroken across the seam, then the divider.
+ *
+ * ⚠️ A background, not a border, is also what survives `overflow: hidden`: an element's own
+ * background is not clipped by its own overflow, and every other way in reached for a descendant,
+ * which is.
+ */
+.monaco-workbench .part.workspacebar.collapsed.bordered {
+	border-right-color: transparent;
+	background-origin: border-box;
+	background-repeat: no-repeat;
+	background-position: top right;
+	background-size: 1px 100%;
+	background-image: linear-gradient(to bottom,
+			var(--vscode-titleBar-activeBackground) calc(var(--facade-band-height, 0px) - 1px),
+			var(--vscode-titleBar-border, var(--vscode-titleBar-activeBackground)) calc(var(--facade-band-height, 0px) - 1px),
+			var(--vscode-titleBar-border, var(--vscode-titleBar-activeBackground)) var(--facade-band-height, 0px),
+			var(--facade-divider) var(--facade-band-height, 0px));
+}
+
+.monaco-workbench .part.workspacebar.collapsed.bordered.window-inactive {
+	background-image: linear-gradient(to bottom,
+			var(--vscode-titleBar-inactiveBackground) calc(var(--facade-band-height, 0px) - 1px),
+			var(--vscode-titleBar-border, var(--vscode-titleBar-inactiveBackground)) calc(var(--facade-band-height, 0px) - 1px),
+			var(--vscode-titleBar-border, var(--vscode-titleBar-inactiveBackground)) var(--facade-band-height, 0px),
+			var(--facade-divider) var(--facade-band-height, 0px));
+}
+
+/*
+ * ⚠️ And dims with it. The title bar puts `.inactive` on itself when the window loses focus; a
+ * strip that stayed lit would be the one bright thing on a window nobody is looking at.
+ */
+.monaco-workbench .part.workspacebar.collapsed.window-inactive .workspacebar-titlebar-spacer {
+	background-color: var(--vscode-titleBar-inactiveBackground);
 }
 
 .monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer.draggable {
@@ -103,19 +199,37 @@
 	/* ⚠️ Both, or the action bar's own padding is added to the width and the chip comes out 34. */
 	box-sizing: border-box;
 	padding: 0;
-	width: var(--vscode-spacing-size280);
-	height: var(--vscode-spacing-size280);
-	border-radius: var(--vscode-cornerRadius-medium);
-	font-size: var(--vscode-codiconFontSize-compact);
-	color: var(--vscode-facadeBar-titleForeground);
+	/*
+	 * ⚠️ One set of numbers for every button in this column, and they are the column's own rather
+	 * than the reference rail's. Measured before this was written, three treatments stood side by
+	 * side: the toggle at 24/4 with a 12px glyph and the quiet ink, this at 28/6 with a 12px glyph
+	 * and full white, and the folder icons at 16px and the quiet ink. The glyph size is the one the
+	 * rows and the activity bar already use; the box and the radius are the toggle's; the ink is the
+	 * pair everything else in the column takes.
+	 */
+	width: var(--vscode-spacing-size240);
+	height: var(--vscode-spacing-size240);
+	font-size: var(--vscode-codiconFontSize);
+	color: var(--vscode-facadeBar-inactiveForeground);
 }
 
-.monaco-workbench .part.workspacebar .workspacebar-actions .action-label:hover {
-	background-color: var(--vscode-toolbar-hoverBackground);
-}
-
-.monaco-workbench .part.workspacebar .workspacebar-actions .action-label:active {
-	background-color: var(--vscode-toolbar-activeBackground);
+/*
+ * ⚠️ The ink, and nothing behind it. A workbench toolbar paints `toolbar.hoverBackground` under a
+ * hovered button and the activity bar does not - measured side by side, both inks went 97 -> 31 while
+ * only ours grew a chip. This column is read beside that one, so it takes that one's gesture. Its
+ * items are 36x28 and can afford to be aimed at without a target drawn behind them; these are 24x24
+ * in the same column and the same ink change is what says "this one".
+ */
+.monaco-workbench .part.workspacebar .workspacebar-actions .action-label:not(.disabled):hover,
+.monaco-workbench .part.workspacebar .workspacebar-actions .action-label:not(.disabled):focus {
+	color: var(--vscode-facadeBar-foreground);
+	/*
+	 * ⚠️ Said out loud, not left out. Deleting the chip from this rule did nothing: the workbench
+	 * paints it from `.monaco-action-bar:not(.vertical) .action-label:not(.disabled):hover`, which
+	 * `CSS.getMatchedStylesForNode` named once it was asked. Hence the `:not(.disabled)` here too -
+	 * without it that rule is the more specific of the two and wins.
+	 */
+	background-color: transparent;
 }
 
 .monaco-workbench .part.workspacebar .workspacebar-list {
@@ -125,10 +239,17 @@
 	-webkit-app-region: no-drag;
 }
 
+/*
+ * ⚠️ The row ink, not `descriptionForeground`. Measured against the explorer's own "You have not yet
+ * added a folder to the workspace": 13px, 18.2px line height, weight 400, wrapping, start-aligned -
+ * every one of those already agreed, and the ink was the only thing that did not. Ours was the same
+ * colour at 70%, which made the one sentence in the column quieter than the sentence saying the same
+ * kind of thing eight pixels away.
+ */
 .monaco-workbench .part.workspacebar .workspacebar-empty {
 	flex: 0 0 auto;
 	padding: var(--vscode-spacing-size40) var(--vscode-spacing-size160);
-	color: var(--vscode-descriptionForeground);
+	color: var(--facade-row-ink);
 	cursor: default;
 	user-select: none;
 	-webkit-user-select: none;
@@ -139,27 +260,58 @@
 }
 
 /*
- * The fill stops short of each edge and is rounded, so a row is a pill inside the bar rather than a
- * band across it. Moving the row's own box is what does it: the list widget paints hover, selection
- * and the focus outline onto this element and all three want to agree about where the row is.
+ * A row is a band across the column, not a pill inside it.
  *
- * ⚠️ Only safe because the list has `horizontalScrolling: false`, which is the one case where
- * `listView` leaves a row's inline width alone.
+ * ⚠️ Full width on purpose: the mark for the row the window is on is a line down the **leading
+ * edge**, the way the activity bar marks its item, and a line down the edge of a box that is inset
+ * 8px is a line down the middle of nothing. Measured off the compact activity bar - 2px, `left: 0`,
+ * the item's full height - so the two columns agree about what "this one" looks like.
  */
 .monaco-workbench .part.workspacebar .monaco-list-row {
-	left: var(--vscode-spacing-size80);
-	width: calc(100% - var(--vscode-spacing-size160));
-	border-radius: var(--vscode-cornerRadius-small);
+	/* Nothing to move: a row runs the width of the column. */
+	width: 100%;
 }
 
-/* One icon slot, so every name in the column starts on the same vertical line. */
+/*
+ * The ink a folder's name is drawn in: the **live** member of the activity bar's pair, in every
+ * state.
+ *
+ * ⚠️ The activity bar's, not the explorer's, however much this column now behaves like a list.
+ * This surface is `activityBar.background`, and a theme picks that background and
+ * `activityBar.foreground` together. `sideBar.foreground` was tried here on the reasoning that a
+ * list of names should read like the list of names beside it - and a theme is free to make its
+ * activity bar dark and its side bar light, which several do. The side bar's ink on the activity
+ * bar's background is then dark on dark. Adopting a surface means adopting its ink; half of each
+ * pair is a contrast ratio nobody chose.
+ *
+ * ⚠️ The live member, not the quiet one. This column used `activityBar.inactiveForeground` for as
+ * long as it marked its rows the activity bar's way - quiet at rest, bright when live. That ink is
+ * tuned for a 16px glyph, held to 3.0; a folder's NAME is 13px text, held to 4.5, and swept across
+ * the built-in themes it missed in eleven of nineteen, down to 1.76 in Quiet Light. The row says
+ * which row is live with its background now, so the name does not have to be quiet for the live one
+ * to read as live.
+ */
+.monaco-workbench .part.workspacebar {
+	--facade-row-ink: var(--vscode-facadeBar-foreground);
+}
+
+/*
+ * One icon slot, so every name in the column starts on the same vertical line.
+ *
+ * ⚠️ 10 on the left rather than 8: the mark takes the first 2px, and the compact activity bar
+ * leaves 8 clear between its line and its glyph. 8 here would put the icon 6 from the line.
+ */
 .monaco-workbench .part.workspacebar .workspacebar-row {
 	display: flex;
 	align-items: center;
 	gap: var(--vscode-spacing-size80);
 	height: 100%;
-	padding: 0 var(--vscode-spacing-size80);
+	padding: 0 var(--vscode-spacing-size80) 0 var(--vscode-spacing-size100);
 	overflow: hidden;
+	/* ⚠️ One ink, in every state - see `--facade-row-ink` above. */
+	color: var(--facade-row-ink);
+	/* So the mark can be placed against this box's own leading edge. */
+	position: relative;
 }
 
 /*
@@ -173,7 +325,13 @@
 	flex: 0 0 auto;
 	width: var(--vscode-spacing-size160);
 	font-size: var(--vscode-codiconFontSize);
-	color: inherit;
+	/*
+	 * ⚠️ The fallback is the `inherit` this rule always was; a folder that has been given a colour
+	 * sets the variable and this reads it. Written this way rather than as a second rule per colour:
+	 * this one and the hover one below are four and nine classes deep, so a colour rule that had to
+	 * beat them would be a specificity contest restarted on every future change to either.
+	 */
+	color: var(--facade-folder-ink, inherit);
 }
 
 /*
@@ -206,25 +364,133 @@
  * the ink here would put this one column at odds with the rest of the window over a number the
  * theme chose.
  */
+/*
+ * The row the window is on: the chip the modern activity bar marks its checked item with.
+ *
+ * ⚠️ `modernActivityBarItem.*`, which resolves to `modernTab.*` - the fill a **selected editor tab**
+ * gets. It is the window's one "this is the selected thing" colour rather than one panel's, which is
+ * why it carries onto this surface: in most themes it is not a colour at all but a lightening of
+ * whatever is underneath - `rgba(255, 255, 255, 0.13)` in Dark Modern - so it is always one step
+ * brighter than the column it is on.
+ *
+ * ⚠️ Not `list.activeSelectionBackground`, which this was. That one is opaque and tuned to sit a
+ * step away from `sideBar.background`, a different surface: #0060c0 against a #2c2c2c column in
+ * Light+, where the activity bar is dark and the side bar is light. Measured on the chip instead:
+ * 9.70 there.
+ *
+ * ⚠️ These tokens are registered unconditionally, so this does not need the Modern UI experiment
+ * turned on - the values resolve in every theme whether the workbench carries `.modern-ui` or not.
+ * Measured with it off.
+ */
 .monaco-workbench .part.workspacebar .workspacebar-row.active {
-	background-color: var(--vscode-list-activeSelectionBackground);
-	color: var(--vscode-list-activeSelectionForeground);
-	border-radius: inherit;
+	/*
+	 * ⚠️ No colour. `--facade-row-ink` in every state, marked included. The theme offers
+	 * `modernActivityBarItem.activeForeground` with this background and it is not taken: where the
+	 * two inks differ the name changes colour as a row becomes the marked one, which is visible and
+	 * is not what this column does. It can be left alone here precisely because the chip is a
+	 * lightening of the surface rather than a colour of its own - the ink that read on the surface
+	 * still reads on the chip.
+	 */
+	background-color: var(--vscode-modernActivityBarItem-activeBackground);
 }
 
 /*
- * Hover is the theme's business and the theme's answer is "do not change the text".
- *
- * ⚠️ `:not(.active)` and `:not(.focused)` are doing real work, not tidying. A row can be hovered
- * and marked at once, and then the surface under the text is the mark's fill rather than the hover
- * wash - so the mark's foreground has to win. As a bare `:hover` this rule has the same specificity
- * and comes later, so it takes the text back off the mark on the one row the person is most likely
- * to have the pointer over.
+ * ⚠️ High contrast marks with a stroke, not a fill, and `modernActivityBarItem.activeBackground` is
+ * unset there - so a fill would simply not paint. This is `activityBar.css`'s own rule for the same
+ * state, with the shape changed from a 24px box to this row.
  */
-.monaco-workbench .part.workspacebar .monaco-list-row:not(.focused):hover .workspacebar-row:not(.active) .monaco-icon-label,
-.monaco-workbench .part.workspacebar .monaco-list-row:not(.focused):hover .workspacebar-row:not(.active) .workspacebar-icon {
-	color: var(--vscode-list-hoverForeground, inherit);
+.monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .workspacebar-row.active {
+	background-color: transparent;
+	outline: var(--vscode-strokeThickness) solid var(--vscode-contrastActiveBorder);
+	outline-offset: calc(-1 * var(--vscode-strokeThickness));
 }
+
+/*
+ * The mark: a line down the leading edge, and nothing painted behind the row.
+ *
+ * ⚠️ No colour on the border, so it takes `currentColor` - which on a marked row is
+ * `facadeBar.foreground`. That is what the activity bar does, and it is why its line follows the
+ * theme without a token of its own being wired up anywhere.
+ *
+ * ⚠️ Not `:has()`. Upstream took its own `:has()` selectors back out, and this does not need one:
+ * the marked row is the element that knows it is marked, so the mark is its own pseudo-element.
+ *
+ * ⚠️ One line in the column, ever, and it belongs to the folder the window is on. The keyboard's row
+ * had the same line for a while, on the reasoning that the activity bar draws one indicator for both
+ * - and in a list you can arrow through, that is two lines on screen whenever the cursor is not on
+ * the current folder, which is most of the time. A right-click put one there, and so did Move Folder
+ * Up. Two lines is two answers to "which folder am I in". The keyboard's row is marked below
+ * instead, with the chip and no line.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row.active::before {
+	content: "";
+	position: absolute;
+	z-index: 1;
+	top: 0;
+	left: 0;
+	height: 100%;
+	width: 0;
+	border-left: 2px solid;
+}
+
+/*
+ * ⚠️ One line, one colour, for both. The activity bar draws the same indicator for `checked` and
+ * for `:focus` and never introduces a second colour, and a blue line in a column that has none
+ * anywhere else reads as an error rather than as a cursor.
+ *
+/*
+ * ⚠️ `activityBar.activeBorder`, so whatever a theme does to the line beside this column happens to
+ * this one. Themes override it: Dark Modern paints it blue, others leave it as the foreground.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row.active::before {
+	border-left-color: var(--vscode-facadeBar-activeBorder);
+}
+
+/*
+ * The row the keyboard is on: the hover chip, and no line.
+ *
+ * ⚠️ The same weight a pointer gets, because it means the same thing - somewhere you are pointing at
+ * rather than somewhere you are. The heavier chip and the line stay with the current folder, so
+ * arrowing down the column never puts a second "this one" on screen.
+ *
+ * ⚠️ `.monaco-list:focus`, or it would stay behind after a right-click: the list keeps `focused` on
+ * the last row it put the cursor on whether the keyboard is near it or not.
+ */
+.monaco-workbench .part.workspacebar .monaco-list:focus .monaco-list-row.focused .workspacebar-row:not(.active) {
+	background-color: var(--vscode-modernActivityBarItem-hoverBackground);
+}
+
+/*
+ * Hover: the same chip at the lighter of its two weights.
+ *
+ * ⚠️ `modernActivityBarItem.hoverBackground` is the quieter sibling of the one above - 0.07 against
+ * 0.13 in Dark Modern - so the two states are one colour at two strengths rather than two colours.
+ *
+ * ⚠️ The ink is left alone here even though the theme offers `modernActivityBarItem.hoverForeground`
+ * with it. Only the band answers a pointer; the name changing colour under the mouse is the thing
+ * this column is not to do.
+ *
+ * ⚠️ `:not(.active)` so the marked row keeps the heavier chip under the pointer.
+ */
+.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-row:not(.active) {
+	background-color: var(--vscode-modernActivityBarItem-hoverBackground);
+}
+
+/* ⚠️ And a dashed stroke in high contrast, as `activityBar.css` does for the same state. */
+.monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .monaco-list-row:hover .workspacebar-row:not(.active) {
+	background-color: transparent;
+	outline: var(--vscode-strokeThickness) dashed var(--vscode-contrastActiveBorder);
+	outline-offset: calc(-1 * var(--vscode-strokeThickness));
+}
+
+/*
+ * ⚠️ No state rule for the glyph, on purpose. A tag keeps its colour through rest, hover and the
+ * marked row; the base rule above is the only one that colours it. Two shades were tried here - the
+ * tag at 55% at rest, full when live - so the glyph would brighten with its name. On a glyph drawn
+ * as a one-pixel outline that is barely a difference, which the contrast ratio did not say and the
+ * screen did. The row says which row is live with its background now, as the explorer's rows do, and
+ * a tag that also changed shade would be answering the same question twice.
+ */
 
 /*
  * A folder that could not be reached. Dimmed and struck through, never hidden: the row is the only
@@ -237,4 +503,128 @@
 
 .monaco-workbench .part.workspacebar .workspacebar-row.unavailable .monaco-icon-label {
 	text-decoration: line-through;
+}
+
+/*
+ * ⚠️ The colour paints the folder icon and nothing else - not the name, not the row. A row is read
+ * as a name, and a name in six colours is six kinds of emphasis nobody asked for.
+ *
+ * These set a variable rather than a colour, so specificity never enters into it: the rules that
+ * draw the glyph read `--facade-folder-ink` and fall back to what they did before.
+ */
+.workspacebar-icon-red { --facade-folder-ink: var(--vscode-facadeBar-folderRed); }
+.workspacebar-icon-orange { --facade-folder-ink: var(--vscode-facadeBar-folderOrange); }
+.workspacebar-icon-yellow { --facade-folder-ink: var(--vscode-facadeBar-folderYellow); }
+.workspacebar-icon-lime { --facade-folder-ink: var(--vscode-facadeBar-folderLime); }
+.workspacebar-icon-green { --facade-folder-ink: var(--vscode-facadeBar-folderGreen); }
+.workspacebar-icon-teal { --facade-folder-ink: var(--vscode-facadeBar-folderTeal); }
+.workspacebar-icon-blue { --facade-folder-ink: var(--vscode-facadeBar-folderBlue); }
+.workspacebar-icon-indigo { --facade-folder-ink: var(--vscode-facadeBar-folderIndigo); }
+.workspacebar-icon-purple { --facade-folder-ink: var(--vscode-facadeBar-folderPurple); }
+.workspacebar-icon-pink { --facade-folder-ink: var(--vscode-facadeBar-folderPink); }
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Collapsing: the column becomes a strip of icons.
+ *
+ * ⚠️ 36 wide, which is the compact activity bar's width, and it is not an arbitrary match: measured,
+ * a folder icon's centre is at x=18 in this column and an activity bar glyph's centre is at x=18 in
+ * that one. Collapsing moves no icon, so the row's padding needs no collapsed variant.
+ * -------------------------------------------------------------------------------------------
+ */
+
+.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	box-sizing: border-box;
+}
+
+/*
+ * ⚠️ macOS draws the window's three buttons here and nothing in the layout reserves room for
+ * them - `titlebarPart.ts` says so out loud: on macOS native the controls container "is not needed to
+ * make room for something". So this column has to leave the room itself, and 70px is the width the
+ * title bar uses for the same three buttons (`titlebarpart.css`, `.mac .window-controls-container`).
+ *
+ * ⚠️ Not in fullscreen, where macOS takes the buttons away and 70px of nothing would sit where the
+ * toggle should be. `.fullscreen` is the workbench's own class for it.
+ */
+.monaco-workbench.mac:not(.fullscreen) .part.workspacebar:not(.collapsed) .workspacebar-titlebar-spacer.draggable {
+	padding-left: 70px;
+}
+
+/*
+ * ⚠️ The one number this column sets per glyph rather than per rule, and it is not a preference.
+ * Measured with `measureText` against the codicon font at 16px, the drawn ink is:
+ *
+ *     three-bars  12.1 x 9      plus  13 x 13      folder  14 x 12      search  13 x 13
+ *
+ * Three horizontal bars do not reach as tall as a plus does, so at one font size the toggle reads a
+ * size smaller. Matched on **width**, not on area: equal area put it at 20px and 15.1 wide, wider
+ * than either neighbour, and it read a size too big. 18px gives 13.6 x 10.1 against a plus at 13 and
+ * a folder at 14. Box, radius, inks and chip all still come from the shared rule above.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-actions .action-label.codicon-three-bars {
+	font-size: 18px;
+}
+
+/* --- collapsed -------------------------------------------------------------------------------- */
+
+/* The name goes; the icon and its mark stay exactly where they were. */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-row .monaco-icon-label {
+	display: none;
+}
+
+/* The header keeps its `+` and loses the word above the list. */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-title {
+	display: none;
+}
+
+/*
+ * ⚠️ 28 collapsed, not the 35 the open bar uses. Open, 35 is what puts `WORKSPACE` on the same
+ * line as `EXPLORER` across the seam - a measured thing worth keeping. Collapsed there is no word to
+ * line up and the column is read as a stack of glyphs beside the activity bar's, so it takes that
+ * one's step instead. Measured before: 32, 35, 28, 28 down this column against 28, 28, 28 down that
+ * one - four gaps, three different.
+ */
+/*
+ * ⚠️ Two rows collapsed, one open. Open the header reads `WORKSPACE  +  toggle` across; collapsed
+ * there is no room beside anything, so the two buttons stack - and `column-reverse`, because the
+ * toolbar's order puts the `+` first and collapsed the toggle belongs on top, nearest the window's
+ * own controls.
+ */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-header {
+	justify-content: center;
+	padding: 0;
+	height: calc(var(--vscode-spacing-size280) * 2);
+}
+
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-actions .actions-container {
+	flex-direction: column-reverse;
+}
+
+/* And no step between the last button and the first folder that the others do not have. */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-list {
+	margin-top: 0;
+}
+
+/* Nothing to say when there is no room to say it - the empty column keeps its `+` instead. */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-empty {
+	display: none;
+}
+
+/*
+ * ⚠️ Collapsed there is no room beside the window's buttons, so the toggle takes the row the
+ * part gives it underneath - see `TOGGLE_ROW_HEIGHT`. Which is why the rule above says
+ * `:not(.collapsed)` rather than leaving this one to win a specificity argument it would lose:
+ * measured, the toggle landed at x64 in a column 36 wide.
+ */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-titlebar-spacer {
+	justify-content: center;
+}
+
+/* ⚠️ Its own row sits at the bottom of the strip, under whatever the window put above it. */
+.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer.toggle-own-row {
+	align-items: flex-end;
+	padding-bottom: var(--vscode-spacing-size20);
 }

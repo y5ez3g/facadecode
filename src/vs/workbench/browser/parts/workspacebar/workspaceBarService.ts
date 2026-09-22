@@ -40,6 +40,9 @@ export interface IWorkspaceBarService {
 	 */
 	addAndShow(uris: readonly URI[]): Promise<void>;
 
+	/** Collapses the bar to a column of icons, or opens it again. */
+	toggleCollapsed(): void;
+
 	/** Takes folders out of the workspace, leaving them where they are on disk. */
 	remove(uris: readonly URI[]): Promise<void>;
 

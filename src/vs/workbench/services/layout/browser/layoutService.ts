@@ -586,6 +586,7 @@ export interface IWorkbenchLayoutService extends ILayoutService {
 	 */
 	setPartHidden(hidden: boolean, part: Parts): void;
 
+
 	/**
 	 * Returns whether the layout surface that represents the secondary sidebar is visible.
 	 */
