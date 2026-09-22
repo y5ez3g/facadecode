@@ -1328,7 +1328,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 		this._onDidDisposeInstance.fire(instance);
 	}
 
-	public async showBackgroundTerminal(instance: ITerminalInstance, suppressSetActive?: boolean): Promise<void> {
+	public async showBackgroundTerminal(instance: ITerminalInstance, suppressSetActive?: boolean, editorOptions?: TerminalEditorLocation): Promise<void> {
 		const index = this._backgroundedTerminalInstances.findIndex(bg => bg.instance === instance);
 		if (index === -1) {
 			return;
@@ -1344,8 +1344,22 @@ export class TerminalService extends Disposable implements ITerminalService {
 				this._terminalGroupService.setActiveInstanceByIndex(0);
 			}
 		} else {
-			const editorOptions = backgroundTerminal.terminalLocationOptions ? this._getEditorOptions(backgroundTerminal.terminalLocationOptions) : this._getEditorOptions(instance.target);
-			this._terminalEditorService.openEditor(instance, editorOptions);
+			const options = this._getEditorOptions(editorOptions ?? backgroundTerminal.terminalLocationOptions ?? instance.target);
+			const opening = this._terminalEditorService.openEditor(instance, options);
+
+			// Only a caller that passed its own options waits for the editor. Callers that do not are
+			// left as they were, since they treat this as fire and forget.
+			if (editorOptions) {
+				try {
+					await opening;
+				} finally {
+					// The instance has already left the background list, so the change is fired even
+					// when the editor fails to open
+					this._onDidChangeInstances.fire();
+				}
+
+				return;
+			}
 		}
 
 		this._onDidChangeInstances.fire();
