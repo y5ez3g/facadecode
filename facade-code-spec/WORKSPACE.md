@@ -3064,11 +3064,30 @@ surface the glyph can land on - nineteen backgrounds and the two marked-row chip
 single value can make it: **2.90**. It cannot reach 3.0, because those surfaces fall in two clusters
 with a gap and one value would have to be at once brighter than L=0.2068 and darker than L=0.1908.
 
-`⚠️` **A tag on the marked row is still hard to see** - 1.16 to 2.94 across the themes, because the
-chip moves the background toward the mid-tone the tags sit in. Three ways out were measured and all
-three trade something: a weaker chip (the tag survives, the mark stops reading), the chip in the
-folder's own colour (the conflict disappears, the six need a second darker value), or leaving it.
-Left, knowingly.
+`⚠️` **A tag on the marked row is harder to see than on the bar**, because the chip moves the
+background toward the mid-tone the tags sit in. Measured against the chip that is actually there:
+
+```
+                worst tag on the bar    worst tag on the marked chip
+Dark Modern          4.18                    2.85
+Kimbie Dark          4.05                    1.73   ← the worst of the nineteen
+Monokai Dimmed       2.89                    2.89
+Solarized Dark       2.99                    1.84
+Tomorrow Night Blue  4.23                    1.91
+Dark High Contrast   4.95                    4.95   (no chip is painted there)
+
+worst anywhere on the bar   2.89   ·   worst anywhere on a chip   1.73
+under 3.0: four themes on the bar, eleven on the marked row
+```
+
+`⚠️` An earlier draft of this section said 1.16 to 2.94, and that range was measured against
+`list.activeSelectionBackground` - the band this column used before the chip replaced it. The
+numbers above are the surface a tag really lands on. A measurement outlives the thing it measured
+unless somebody goes back for it.
+
+Three ways out were measured and all three trade something: a weaker chip (the tag survives, the
+mark stops reading), the chip in the folder's own colour (the conflict disappears, and the six need a
+second, darker value for the band), or leaving it. Left, knowingly.
 
 ### 13.5 Ten glyphs, chosen against three rules
 
