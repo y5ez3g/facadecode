@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { onUnexpectedError } from '../../../../base/common/errors.js';
-import { Event } from '../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
@@ -37,6 +37,13 @@ export class WorkspaceBarSwitcher extends Disposable {
 
 	/** Resolves when the editors asked for last are actually up. */
 	private settled: Promise<void> = Promise.resolve();
+
+	/**
+	 * Fires once a switch has put the incoming folder's editors on screen. Not fired for a rename,
+	 * where nothing is restored.
+	 */
+	private readonly _onDidRestoreEditors = this._register(new Emitter<void>());
+	readonly onDidRestoreEditors = this._onDidRestoreEditors.event;
 
 	constructor(
 		private readonly model: WorkspaceBarModel,
@@ -98,7 +105,7 @@ export class WorkspaceBarSwitcher extends Disposable {
 			}
 
 			this.showing = key;
-			this.settled = editors.restore(key).then(undefined, onUnexpectedError);
+			this.settled = editors.restore(key).then(() => this._onDidRestoreEditors.fire(), onUnexpectedError);
 		}));
 	}
 

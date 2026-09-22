@@ -11,7 +11,7 @@ import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
-import { Emitter } from '../../../../base/common/event.js';
+import { Emitter, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -142,6 +142,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private editors: WorkspaceBarEditors | undefined;
 	private switcher: WorkspaceBarSwitcher | undefined;
 
+	// A relay because the switcher is created in `createContentArea`, after a listener can arrive
+	private readonly _onDidRestoreEditors = this._register(new Relay<void>());
+	readonly onDidRestoreEditors = this._onDidRestoreEditors.event;
+
 	constructor(
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
@@ -215,6 +219,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this._register(this.model.onDidChange(() => this.pruneEditors()));
 		this.pruneEditors();
 		this.switcher = this._register(this.instantiationService.createInstance(WorkspaceBarSwitcher, this.model, this.editors));
+		this._onDidRestoreEditors.input = this.switcher.onDidRestoreEditors;
 		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView, this.content, this.model, this.switcher, () => this.collapsed));
 
 		return this.content;
