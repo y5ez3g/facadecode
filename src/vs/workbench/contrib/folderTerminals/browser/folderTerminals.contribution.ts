@@ -3,6 +3,27 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '../../../../nls.js';
+import { ConfigurationScope, Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
+import { Registry } from '../../../../platform/registry/common/platform.js';
+import { workbenchConfigurationNodeBase } from '../../../common/configuration.js';
+import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { registerFolderTerminalActions } from './folderTerminalActions.js';
+import { FOLLOW_FOLDER, FolderTerminals } from './folderTerminals.js';
 
 registerFolderTerminalActions();
+
+Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
+	...workbenchConfigurationNodeBase,
+	properties: {
+		[FOLLOW_FOLDER]: {
+			type: 'boolean',
+			description: localize('terminal.followFolder', "Controls whether a terminal in the editor area belongs to the folder it was opened in. When enabled, leaving that folder hides the terminal and returning shows the same shell again. When disabled, a terminal in the editor area is closed by the switch."),
+			default: true,
+			scope: ConfigurationScope.APPLICATION
+		}
+	}
+});
+
+// Nothing can need parking before there are editors to park
+registerWorkbenchContribution2(FolderTerminals.ID, FolderTerminals, WorkbenchPhase.AfterRestored);
