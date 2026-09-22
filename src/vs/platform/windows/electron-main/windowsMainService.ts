@@ -44,6 +44,7 @@ import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWor
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
 import { IRecent } from '../../workspaces/common/workspaces.js';
 import { hasWorkspaceFileExtension, IAnyWorkspaceIdentifier, ISingleFolderWorkspaceIdentifier, isSingleFolderWorkspaceIdentifier, isWorkspaceIdentifier, IWorkspaceIdentifier, toWorkspaceIdentifier } from '../../workspace/common/workspace.js';
+import { DEFAULT_WORKSPACE_CONTENT, defaultWorkspaceUri } from '../../workspaces/common/defaultWorkspace.js';
 import { createEmptyWorkspaceIdentifier, getSingleFolderWorkspaceIdentifier, getWorkspaceIdentifier } from '../../workspaces/node/workspaces.js';
 import { IWorkspacesHistoryMainService } from '../../workspaces/electron-main/workspacesHistoryMainService.js';
 import { IWorkspacesManagementMainService } from '../../workspaces/electron-main/workspacesManagementMainService.js';
@@ -716,17 +717,60 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 			}
 		}
 
+		// The default workspace, if this window was asked to open nothing at all.
+		//
+		// ⚠️ Exactly the case below minus its other two arms: no files, not `--new-window`, and no
+		// window opened yet. Every other way in - a folder, a workspace, a file, something to restore
+		// from hot exit - has already been handled above and left `usedWindows` non-empty, so this
+		// cannot take a window somebody asked for. The one it takes is the blank one.
+		//
+		// ⚠️ And only locally. A remote authority means the window belongs somewhere else, and a
+		// default workspace on this disk is not it.
+		const nothingWasAskedFor = !filesToOpen && !openConfig.forceEmpty && maybeOpenEmptyWindow && usedWindows.length === 0 && !openConfig.remoteAuthority;
+		const defaultWorkspace = nothingWasAskedFor ? await this.resolveDefaultWorkspace() : undefined;
+		if (defaultWorkspace) {
+			addUsedWindow(await this.doOpenFolderOrWorkspace(openConfig, defaultWorkspace, openFolderInNewWindow, undefined));
+		}
+
 		// Finally, open an empty window if
 		// - we still have files to open
 		// - user forces an empty window (e.g. via command line)
 		// - no window has opened yet
-		if (filesToOpen || (maybeOpenEmptyWindow && (openConfig.forceEmpty || usedWindows.length === 0))) {
+		else if (filesToOpen || (maybeOpenEmptyWindow && (openConfig.forceEmpty || usedWindows.length === 0))) {
 			const remoteAuthority = filesToOpen ? filesToOpen.remoteAuthority : openConfig.remoteAuthority;
 
 			addUsedWindow(await this.doOpenEmpty(openConfig, openFolderInNewWindow, remoteAuthority, filesToOpen), !!filesToOpen);
 		}
 
 		return { windows: distinct(usedWindows), filesOpenedInWindow };
+	}
+
+	/**
+	 * The default workspace, created on first use.
+	 *
+	 * ⚠️ Returns `undefined` rather than throwing when anything goes wrong - a disk that will not take
+	 * the file, a file somebody has replaced with a directory. The caller then opens the empty window
+	 * it was always going to open, which is the behaviour without this feature at all.
+	 */
+	private async resolveDefaultWorkspace(): Promise<IWorkspacePathToOpen | undefined> {
+		const configPath = defaultWorkspaceUri(this.environmentMainService.userDataPath);
+		try {
+			if (!(await this.fileService.exists(configPath))) {
+				await this.fileService.writeFile(configPath, VSBuffer.fromString(DEFAULT_WORKSPACE_CONTENT));
+			}
+
+			const workspace = await this.workspacesManagementMainService.resolveLocalWorkspace(configPath);
+			this.logService.trace('windowsManager#resolveDefaultWorkspace', { configPath: configPath.toString(), resolved: !!workspace });
+			if (!workspace) {
+				return undefined;
+			}
+
+			return { workspace: getWorkspaceIdentifier(configPath) };
+		} catch (error) {
+			this.logService.warn('windowsManager#resolveDefaultWorkspace failed', error);
+
+			return undefined;
+		}
 	}
 
 	private doOpenFilesInExistingWindow(configuration: IOpenConfiguration, window: ICodeWindow, filesToOpen?: IFilesToOpen): ICodeWindow {
