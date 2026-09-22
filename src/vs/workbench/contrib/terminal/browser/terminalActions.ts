@@ -1652,7 +1652,7 @@ function getResourceOrActiveInstance(c: ITerminalServicesCollection, resource: u
  * Where a terminal opens when nobody is asked: the folder the window is on, with its own
  * `terminal.integrated.cwd` honoured exactly as the picker would have honoured it.
  */
-async function activeFolderTerminalCwd(accessor: ServicesAccessor): Promise<WorkspaceFolderCwdPair | undefined> {
+export async function activeFolderTerminalCwd(accessor: ServicesAccessor): Promise<WorkspaceFolderCwdPair | undefined> {
 	const folder = accessor.get(IActiveFolderService).activeFolder;
 	if (!folder) {
 		return undefined;
