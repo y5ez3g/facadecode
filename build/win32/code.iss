@@ -8,14 +8,14 @@
 AppId={#AppId}
 AppName={#NameLong}
 AppVerName={#NameVersion}
-AppPublisher=Microsoft Corporation
-AppPublisherURL=https://code.visualstudio.com/
-AppSupportURL=https://code.visualstudio.com/
-AppUpdatesURL=https://code.visualstudio.com/
+AppPublisher={#NameLong}
+AppPublisherURL={#PublisherUrl}
+AppSupportURL={#PublisherUrl}
+AppUpdatesURL={#PublisherUrl}
 DefaultGroupName={#NameLong}
 AllowNoIcons=yes
 OutputDir={#OutputDir}
-OutputBaseFilename=VSCodeSetup
+OutputBaseFilename={#ApplicationName}-setup
 Compression=lzma
 SolidCompression=yes
 AppMutex={code:GetAppMutex}
@@ -30,6 +30,7 @@ MinVersion=10.0
 SourceDir={#SourceDir}
 AppVersion={#Version}
 VersionInfoVersion={#RawVersion}
+VersionInfoCopyright=Copyright (C) 2026 Microsoft Corporation and {#NameLong} contributors. All rights reserved.
 ShowLanguageDialog=auto
 ArchitecturesAllowed={#ArchitecturesAllowed}
 ArchitecturesInstallIn64BitMode={#ArchitecturesInstallIn64BitMode}
@@ -1382,7 +1383,7 @@ begin
 
   #if "user" == InstallTarget
     if not WizardSilent() and IsAdmin() then begin
-      if MsgBox('This User Installer is not meant to be run as an Administrator. If you would like to install VS Code for all users in this system, download the System Installer instead from https://code.visualstudio.com. Are you sure you want to continue?', mbError, MB_OKCANCEL) = IDCANCEL then begin
+      if MsgBox('This User Installer is not meant to be run as an Administrator. If you would like to install {#NameLong} for all users on this system, use the System Installer instead. Are you sure you want to continue?', mbError, MB_OKCANCEL) = IDCANCEL then begin
         Result := False;
       end;
     end;
@@ -1849,7 +1850,7 @@ begin
       if not SessionEndFileExists() and not CancelFileExists() then begin
         StopTunnelServiceIfNeeded();
         Log('Invoking inno_updater for background update');
-        Exec(ExpandConstant('{app}\{#VersionedResourcesFolder}\tools\inno_updater.exe'), ExpandConstant('"{app}\{#ExeBasename}.exe" ' + BoolToStr(LockFileExists()) + ' "{cm:UpdatingVisualStudioCode}"'), '', SW_SHOW, ewWaitUntilTerminated, UpdateResultCode);
+        Exec(ExpandConstant('{app}\{#VersionedResourcesFolder}\tools\inno_updater.exe'), ExpandConstant('"{app}\{#ExeBasename}.exe" ' + BoolToStr(LockFileExists()) + ' "{cm:UpdatingVisualStudioCode,{#NameLong}}"'), '', SW_SHOW, ewWaitUntilTerminated, UpdateResultCode);
         DeleteFile(ExpandConstant('{app}\updating_version'));
         Log('inno_updater completed successfully');
         #if "system" == InstallTarget

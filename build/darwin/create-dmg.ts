@@ -158,22 +158,28 @@ async function main(buildDir?: string, outDir?: string): Promise<void> {
 	const appRoot = path.join(buildDir, `VSCode-darwin-${arch}`);
 	const appName = product.nameLong + '.app';
 	const appPath = path.join(appRoot, appName);
-	const dmgName = `VSCode-darwin-${arch}`;
+	const dmgName = `${product.applicationName}-darwin-${arch}`;
 	const artifactPath = path.join(outDir, `${dmgName}.dmg`);
-	const backgroundPath = path.join(import.meta.dirname, `dmg-background-${quality}.tiff`);
 	const diskIconPath = path.join(root, 'resources', 'darwin', 'code.icns');
-	let title = 'Code OSS';
-	switch (quality) {
-		case 'stable':
-			title = 'VS Code';
-			break;
-		case 'insider':
-			title = 'VS Code Insiders';
-			break;
-		case 'exploration':
-			title = 'VS Code Exploration';
-			break;
-	}
+
+	// The volume is what Finder puts above the window when the disk image is opened, so it is the
+	// product's name. Upstream chose per quality, and the fork has one name at any quality.
+	const title = product.nameLong;
+
+	/*
+	 * ⚠️ A colour, unless there is artwork for this quality.
+	 *
+	 * The backgrounds in this folder are `dmg-background-stable`, `-insider` and `-exploration`, and
+	 * they are pictures of another product - the blue is upstream's and so is what is written in it.
+	 * Any other quality asked for a file that is not here: `dmg-background-undefined.tiff` at the
+	 * default, which dmgbuild would have been handed as a path to nothing.
+	 *
+	 * So a flat background rather than one of those, or one invented to fill the gap. dmgbuild takes
+	 * a colour where it takes an image, and an empty window with the app and the Applications folder
+	 * in it is what a disk image is for.
+	 */
+	const backgroundFile = path.join(import.meta.dirname, `dmg-background-${quality}.tiff`);
+	const background = quality && fs.existsSync(backgroundFile) ? backgroundFile : '#f4f4f4';
 
 	if (!fs.existsSync(appPath)) {
 		throw new Error(`App path does not exist: ${appPath}`);
@@ -196,7 +202,7 @@ async function main(buildDir?: string, outDir?: string): Promise<void> {
 	settingsContent = settingsContent
 		.replace('{{VOLUME_NAME}}', JSON.stringify(title))
 		.replace('{{BADGE_ICON}}', JSON.stringify(diskIconPath))
-		.replace('{{BACKGROUND}}', JSON.stringify(backgroundPath))
+		.replace('{{BACKGROUND}}', JSON.stringify(background))
 		.replace('{{APP_PATH}}', JSON.stringify(appPath))
 		.replace('{{APP_NAME}}', JSON.stringify(product.nameLong + '.app'));
 	fs.writeFileSync(settingsFile, settingsContent);

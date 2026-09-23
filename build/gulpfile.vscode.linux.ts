@@ -33,6 +33,22 @@ function getDebPackageArch(arch: string): string {
 	}
 }
 
+/**
+ * What every Linux packager has to say about the product, from the one file that knows.
+ *
+ * ⚠️ `DESCRIPTION_INDENTED` is Debian's own shape for a long description: every line after the
+ * first belongs to the field only while it starts with a space, and an empty one ends the record.
+ */
+function brandingReplacements(stream: NodeJS.ReadWriteStream): NodeJS.ReadWriteStream {
+	return stream
+		.pipe(replace('@@MAINTAINER@@', product.packageMaintainer))
+		.pipe(replace('@@VENDOR@@', product.nameLong))
+		.pipe(replace('@@HOMEPAGE@@', product.productHomeUrl))
+		.pipe(replace('@@SUMMARY@@', product.productSummary))
+		.pipe(replace('@@DESCRIPTION_INDENTED@@', product.productDescription.replace(/^/gm, ' ')))
+		.pipe(replace('@@DESCRIPTION@@', product.productDescription));
+}
+
 function prepareDebPackage(arch: string) {
 	const binaryDir = '../VSCode-linux-' + arch;
 	const debArch = getDebPackageArch(arch);
@@ -47,7 +63,7 @@ function prepareDebPackage(arch: string) {
 		const desktopUrlHandler = gulp.src('resources/linux/code-url-handler.desktop', { base: '.' })
 			.pipe(rename('usr/share/applications/' + product.applicationName + '-url-handler.desktop'));
 
-		const desktops = es.merge(desktop, desktopUrlHandler)
+		const desktops = brandingReplacements(es.merge(desktop, desktopUrlHandler))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@NAME_SHORT@@', product.nameShort))
 			.pipe(replace('@@NAME@@', product.applicationName))
@@ -55,7 +71,7 @@ function prepareDebPackage(arch: string) {
 			.pipe(replace('@@ICON@@', product.linuxIconName))
 			.pipe(replace('@@URLPROTOCOL@@', product.urlProtocol));
 
-		const appdata = gulp.src('resources/linux/code.appdata.xml', { base: '.' })
+		const appdata = brandingReplacements(gulp.src('resources/linux/code.appdata.xml', { base: '.' }))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@NAME@@', product.applicationName))
 			.pipe(replace('@@LICENSE@@', product.licenseName))
@@ -85,7 +101,7 @@ function prepareDebPackage(arch: string) {
 			function (f) { size += f.isDirectory() ? 4096 : f.contents.length; },
 			function () {
 				const that = this;
-				gulp.src('resources/linux/debian/control.template', { base: '.' })
+				brandingReplacements(gulp.src('resources/linux/debian/control.template', { base: '.' }))
 					.pipe(replace('@@NAME@@', product.applicationName))
 					.pipe(replace('@@VERSION@@', packageJson.version + '-' + linuxPackageRevision))
 					.pipe(replace('@@ARCHITECTURE@@', debArch))
@@ -157,7 +173,7 @@ function prepareRpmPackage(arch: string) {
 		const desktopUrlHandler = gulp.src('resources/linux/code-url-handler.desktop', { base: '.' })
 			.pipe(rename('BUILD/usr/share/applications/' + product.applicationName + '-url-handler.desktop'));
 
-		const desktops = es.merge(desktop, desktopUrlHandler)
+		const desktops = brandingReplacements(es.merge(desktop, desktopUrlHandler))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@NAME_SHORT@@', product.nameShort))
 			.pipe(replace('@@NAME@@', product.applicationName))
@@ -165,7 +181,7 @@ function prepareRpmPackage(arch: string) {
 			.pipe(replace('@@ICON@@', product.linuxIconName))
 			.pipe(replace('@@URLPROTOCOL@@', product.urlProtocol));
 
-		const appdata = gulp.src('resources/linux/code.appdata.xml', { base: '.' })
+		const appdata = brandingReplacements(gulp.src('resources/linux/code.appdata.xml', { base: '.' }))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@NAME@@', product.applicationName))
 			.pipe(replace('@@LICENSE@@', product.licenseName))
@@ -190,7 +206,7 @@ function prepareRpmPackage(arch: string) {
 		const code = gulp.src(binaryDir + '/**/*', { base: binaryDir })
 			.pipe(rename(function (p) { p.dirname = 'BUILD/usr/share/' + product.applicationName + '/' + p.dirname; }));
 
-		const spec = gulp.src('resources/linux/rpm/code.spec.template', { base: '.' })
+		const spec = brandingReplacements(gulp.src('resources/linux/rpm/code.spec.template', { base: '.' }))
 			.pipe(replace('@@NAME@@', product.applicationName))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@ICON@@', product.linuxIconName))
@@ -244,7 +260,7 @@ function prepareSnapPackage(arch: string) {
 		const desktopUrlHandler = gulp.src('resources/linux/code-url-handler.desktop', { base: '.' })
 			.pipe(rename(`snap/gui/${product.applicationName}-url-handler.desktop`));
 
-		const desktops = es.merge(desktop, desktopUrlHandler)
+		const desktops = brandingReplacements(es.merge(desktop, desktopUrlHandler))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@NAME_SHORT@@', product.nameShort))
 			.pipe(replace('@@NAME@@', product.applicationName))
@@ -259,7 +275,7 @@ function prepareSnapPackage(arch: string) {
 		const code = gulp.src(binaryDir + '/**/*', { base: binaryDir })
 			.pipe(rename(function (p) { p.dirname = `usr/share/${product.applicationName}/${p.dirname}`; }));
 
-		const snapcraft = gulp.src('resources/linux/snap/snapcraft.yaml', { base: '.' })
+		const snapcraft = brandingReplacements(gulp.src('resources/linux/snap/snapcraft.yaml', { base: '.' }))
 			.pipe(replace('@@NAME@@', product.applicationName))
 			.pipe(replace('@@VERSION@@', commit!.substr(0, 8)))
 			// Possible run-on values https://snapcraft.io/docs/architectures

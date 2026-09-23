@@ -579,6 +579,12 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 					.pipe(replace('@@AppxPackageName@@', product.win32AppUserModelId))
 					.pipe(replace('@@AppxPackageVersion@@', appxVersion))
 					.pipe(replace('@@AppxPackageDisplayName@@', product.nameLong))
+					// ⚠️ `Identity/Publisher` has to read exactly as the subject of the certificate
+					// the package is signed with, or Windows refuses to install it. It is the
+					// product's name here because that is who ships this, and it moves when a
+					// certificate says something else - it is not a string anybody is free to pick.
+					.pipe(replace('@@AppxPublisher@@', `CN=${product.nameLong}`))
+					.pipe(replace('@@AppxPublisherDisplayName@@', product.nameLong))
 					.pipe(replace('@@AppxPackageDescription@@', product.win32NameVersion))
 					.pipe(replace('@@ApplicationIdShort@@', product.win32RegValueName))
 					.pipe(replace('@@ApplicationExe@@', product.nameShort + '.exe'))
@@ -663,11 +669,11 @@ function patchWin32DependenciesTask(destinationFolderName: string) {
 			await rcedit(fullPath, {
 				'file-version': baseVersion,
 				'version-string': {
-					'CompanyName': 'Microsoft Corporation',
+					'CompanyName': product.nameLong,
 					'FileDescription': product.nameLong,
 					'FileVersion': packageJson.version,
 					'InternalName': basename,
-					'LegalCopyright': 'Copyright (C) 2026 Microsoft. All rights reserved',
+					'LegalCopyright': `Copyright (C) 2026 Microsoft Corporation and ${product.nameLong} contributors. All rights reserved.`,
 					'OriginalFilename': basename,
 					'ProductName': product.nameLong,
 					'ProductVersion': packageJson.version,
