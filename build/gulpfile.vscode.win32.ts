@@ -84,6 +84,7 @@ function buildWin32Setup(arch: string, target: string): task.CallbackTask {
 		const definitions: Record<string, unknown> = {
 			NameLong: product.nameLong,
 			NameShort: product.nameShort,
+			PublisherUrl: product.productHomeUrl,
 			DirName: product.win32DirName,
 			Version: pkg.version,
 			RawVersion: pkg.version.replace(/-\w+$/, ''),
