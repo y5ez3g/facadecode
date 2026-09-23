@@ -42,8 +42,8 @@ suite('Workspace bar - where the window buttons are', () => {
 	/** The same row with the buttons at the front, which is what a rect past zero means. */
 	const buttonsAtTheFront = { x: 70 };
 
-	const onMac = (style: TitlebarStyle, rect?: { x: number }) => controlsOccupyColumnZero(style, rect, true);
-	const offMac = (style: TitlebarStyle, rect?: { x: number }) => controlsOccupyColumnZero(style, rect, false);
+	const onMac = (style: TitlebarStyle, rect?: { x: number }, fullscreen = false) => controlsOccupyColumnZero(style, rect, fullscreen, true);
+	const offMac = (style: TitlebarStyle, rect?: { x: number }, fullscreen = false) => controlsOccupyColumnZero(style, rect, fullscreen, false);
 
 	test('who is allowed to answer, and what they say', () => {
 		assert.deepStrictEqual([
@@ -66,5 +66,19 @@ suite('Workspace bar - where the window buttons are', () => {
 			// into one without this failing.
 			offMac(TitlebarStyle.NATIVE, buttonsAtTheFront)
 		], [true, false, false, true, false, false, true]);
+	});
+
+	test('full screen takes them away, and the row above the header with them', () => {
+		assert.deepStrictEqual([
+			// macOS hides the traffic lights in full screen, so the 35px this column was holding
+			// open for them is 35px of nothing and the header starts at the top, as on Windows.
+			onMac(TitlebarStyle.CUSTOM, undefined, false),
+			onMac(TitlebarStyle.CUSTOM, undefined, true),
+
+			// And off macOS, where the rect is the one that answers: a window manager that puts the
+			// buttons at the front has nowhere to put them once there is no caption row at all.
+			offMac(TitlebarStyle.CUSTOM, buttonsAtTheFront, false),
+			offMac(TitlebarStyle.CUSTOM, buttonsAtTheFront, true)
+		], [true, false, true, false]);
 	});
 });

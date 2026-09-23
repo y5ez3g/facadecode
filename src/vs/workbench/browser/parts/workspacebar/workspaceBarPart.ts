@@ -4,8 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/workspacebarpart.css';
-import { getWCOTitlebarAreaRect } from '../../../../base/browser/browser.js';
-import { $, append, getWindow } from '../../../../base/browser/dom.js';
+import { getWCOTitlebarAreaRect, isFullscreen, onDidChangeFullscreen } from '../../../../base/browser/browser.js';
+import { $, append, getWindow, getWindowId } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
 import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
@@ -78,9 +78,23 @@ export function isWorkspaceBarFirstColumn(root: ISerializedNode | undefined): bo
  *
  * ⚠️ `isMac` is a parameter with the real platform as its default rather than a read of
  * `isMacintosh` inside, so that the macOS branch can be tested from a build that is not on macOS.
- * Callers pass two arguments.
+ * Callers pass three arguments.
  */
-export function controlsOccupyColumnZero(titleBarStyle: TitlebarStyle, titlebarAreaRect: Pick<DOMRect, 'x'> | undefined, isMac = isMacintosh): boolean {
+export function controlsOccupyColumnZero(titleBarStyle: TitlebarStyle, titlebarAreaRect: Pick<DOMRect, 'x'> | undefined, fullscreen: boolean, isMac = isMacintosh): boolean {
+	// Full screen first, and for every platform: the window has no buttons up there to draw.
+	// macOS takes the traffic lights away entirely, and Windows and Linux have no caption row
+	// left to put theirs in - `titlebarpart.css` says the same thing its own way, hiding
+	// `.window-controls-container` under `.fullscreen`.
+	//
+	// ⚠️ The room beside the lights is written the same way one file over: the 70px of padding
+	// the open header leaves for them is `.mac:not(.fullscreen)` in `workspacebarpart.css`. The
+	// row above them is the same fact and belongs in the same condition - without it the header
+	// sits 35px down in full screen with an empty band over it, which is the one place this
+	// column does not look like it does on Windows.
+	if (fullscreen) {
+		return false;
+	}
+
 	// macOS draws the traffic lights at the top left and has no way to draw them anywhere else, so
 	// the platform answers and the rect is not consulted. It would agree - `windows.ts` does set
 	// `titleBarOverlay` on macOS, so a rect does arrive - but a fact that cannot vary is a better
@@ -177,6 +191,16 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			this.element?.classList.toggle('window-inactive', !focused);
 		}));
 
+		// ⚠️ Entering full screen takes the window's buttons away, which changes how much room this
+		// column has to leave above its header - and the grid does not necessarily lay this part out
+		// again to ask. The window resizes for the transition, but macOS fires `enter-full-screen`
+		// when the animation ends, after those resizes, so the last layout of the transition is one
+		// taken while the answer was still the old one.
+		this._register(onDidChangeFullscreen(windowId => {
+			if (this.element && windowId === getWindowId(getWindow(this.element))) {
+				this.relayoutAtCurrentSize();
+			}
+		}));
 
 		// Built here rather than with the content area: an action can run before anything has been
 		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
@@ -288,6 +312,19 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		container.style.setProperty('--facade-divider', borderColor ? String(borderColor) : '');
 	}
 
+	/**
+	 * Lays the column out again at the size it already has.
+	 *
+	 * `Part` has one of these and keeps it private, so this is the same three lines that
+	 * `sessions/browser/parts/auxiliaryBarPart.ts` writes for the same reason: a part told
+	 * something by an event rather than by the grid.
+	 */
+	private relayoutAtCurrentSize(): void {
+		if (this.dimension && this.contentPosition) {
+			this.layout(this.dimension.width, this.dimension.height, this.contentPosition.top, this.contentPosition.left);
+		}
+	}
+
 	override layout(width: number, height: number, top: number, left: number): void {
 		super.layout(width, height, top, left);
 
@@ -300,13 +337,16 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// goes below them. Open, 70 + 24 fits in 220 and it sits beside them as it should.
 		//
 		// ⚠️ Only where those buttons are actually over this column. Where they are not - Windows and
-		// Linux draw them at the far end of the row - the strip was holding a row open for something
-		// that is nowhere near it, and the one part that reaches the top of the window was the one
-		// part not using it: the header began 35px down for no reason a person could see.
+		// Linux draw them at the far end of the row, and full screen draws none at all - the strip
+		// was holding a row open for something that is nowhere near it, and the one part that reaches
+		// the top of the window was the one part not using it: the header began 35px down for no
+		// reason a person could see.
 		if (this.titlebarSpacer) {
+			const targetWindow = getWindow(this.element);
 			const controlsAbove = controlsOccupyColumnZero(
 				getTitleBarStyle(this.configurationService),
-				getWCOTitlebarAreaRect(getWindow(this.element)));
+				getWCOTitlebarAreaRect(targetWindow),
+				isFullscreen(targetWindow));
 			const above = controlsAbove ? this.layoutService.mainContainerOffset.top : 0;
 
 			// ⚠️ Spacing and nothing else. macOS draws the window's three buttons across this row - 70px
