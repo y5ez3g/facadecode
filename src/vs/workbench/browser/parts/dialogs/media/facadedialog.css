@@ -1,0 +1,130 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * The shape this fork's own dialogs have.
+ *
+ * ⚠️ A header, a body and a footer, divided by two rules. The proportions are taken from the design
+ * and written as one width with everything else derived from it, so the three bands keep their
+ * relationship if the width ever changes:
+ *
+ * width                 460       the one number
+ * inset                 size200   the column every line starts at
+ * header / footer band  size160   title above the first rule, buttons below the second
+ *
+ * ⚠️ The dialog itself carries no padding. The rules have to run edge to edge, so each band pads
+ * itself and the rules are the bands' own borders.
+ *
+ * ⚠️ Nothing here touches the button row's contents. Every dialog hands its buttons to the host,
+ * which knows the platform's order and sizes the pair together. A footer built by hand for one of
+ * them is how they came to look different in the first place.
+ *
+ * ⚠️ Shared, and named for the fork rather than for one part, because a dialog that invents its own
+ * bands is a dialog that does not match the others. That happened: the agents dialog was written
+ * with its own paddings in raw pixels and came out a different shape from these two.
+ */
+.monaco-dialog-box.facade-dialog {
+	/*
+	 * ⚠️ `border-box`, or the host's padding is added to this and the number stops being the width
+	 * somebody sees - measured, two dialogs from one rule came out 400 and 424.
+	 */
+	box-sizing: border-box;
+	/*
+	 * ⚠️ 460, and it was set by the widest row rather than chosen: eleven 20px swatches with 8px
+	 * between them need 300, and ten 28px icon boxes with the same gap need 352. At 380 the swatches
+	 * wrapped onto a second line and the icons finished 7px from the edge. 460 leaves both on one
+	 * line inside the host's 20px padding, with room to spare. Measured, not guessed - and now the
+	 * width every dialog here takes, so they are the same object at different depths.
+	 */
+	width: 460px;
+	min-width: 0;
+	padding: 0;
+}
+
+/* --- the header: the title, and the rule under it -------------------------------------------- */
+
+.monaco-dialog-box.facade-dialog .dialog-message-text {
+	/*
+	 * ⚠️ `width: 100%`, or this box is as wide as the title inside it and the rule under it stops
+	 * in the middle of the dialog - measured, 158 of 380.
+	 */
+	box-sizing: border-box;
+	width: 100%;
+	padding: var(--vscode-spacing-size160) var(--vscode-spacing-size200);
+	border-bottom: 1px solid var(--vscode-widget-border);
+	margin: 0;
+}
+
+/*
+ * ⚠️ The close button sits in the title's own band rather than a row of its own above it. The
+ * host gives it a 24px row, which is 24px of nothing over the title and half again the header the
+ * design asks for. Taken out of the flow and put where the design has it.
+ */
+.monaco-dialog-box.facade-dialog .dialog-toolbar-row {
+	position: absolute;
+	top: 0;
+	right: 0;
+	height: auto;
+	padding: var(--vscode-spacing-size120) var(--vscode-spacing-size160);
+	z-index: 1;
+}
+
+/* --- the body -------------------------------------------------------------------------------- */
+
+/*
+ * No severity glyph, so neither the column it sat in nor the gutter around it.
+ * ⚠️ Not `.dialog-icon.codicon`, which is the host's own selector: for `type: 'none'` the element is
+ * given `no-codicon` instead, and a rule written that way never matches anything.
+ */
+.monaco-dialog-box.facade-dialog .dialog-message-row {
+	padding: 0;
+}
+
+.monaco-dialog-box.facade-dialog .dialog-message-row > .dialog-icon {
+	display: none;
+}
+
+.monaco-dialog-box.facade-dialog .dialog-message-row .dialog-message-container {
+	padding-left: 0;
+	width: 100%;
+}
+
+.monaco-dialog-box.facade-dialog .dialog-message-body,
+.monaco-dialog-box.facade-dialog .dialog-message-detail {
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	padding: var(--vscode-spacing-size200);
+}
+
+/*
+ * ⚠️ A band with nothing in it takes no room. The host renders both of these whether or not the
+ * dialog uses them, so Remove Folder - which has a detail and no body - was carrying 40px of padding
+ * around nothing between its sentence and the rule above its buttons.
+ */
+.monaco-dialog-box.facade-dialog .dialog-message-body:empty,
+.monaco-dialog-box.facade-dialog .dialog-message-detail:empty {
+	padding: 0;
+}
+
+/*
+ * ⚠️ A rendered paragraph brings its own margin top and bottom, and the band around it has already
+ * given it room: measured, 13px of paragraph margin stacked on 20px of padding above the path, and
+ * the same again under the sentence. The band spaces the block; the paragraphs space each other.
+ */
+.monaco-dialog-box.facade-dialog .dialog-message-detail .rendered-markdown > p:first-child {
+	margin-top: 0;
+}
+
+.monaco-dialog-box.facade-dialog .dialog-message-detail .rendered-markdown > p:last-child {
+	margin-bottom: 0;
+}
+
+/* --- the footer: the rule over it, and the buttons -------------------------------------------- */
+
+.monaco-dialog-box.facade-dialog .dialog-buttons-row {
+	padding: var(--vscode-spacing-size160) var(--vscode-spacing-size200);
+	border-top: 1px solid var(--vscode-widget-border);
+}

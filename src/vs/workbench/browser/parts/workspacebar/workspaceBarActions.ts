@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import '../dialogs/media/facadedialog.css';
 import './media/workspacebardialog.css';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
@@ -79,7 +80,7 @@ class OpenFolderAction extends Action2 {
 	constructor() {
 		super({
 			id: OpenFolderAction.ID,
-			title: localize2('workspaceBar.openFolder', "Open Folder"),
+			title: localize2('workspaceBar.openFolder', "Open Folder..."),
 			category: CATEGORY,
 			icon: Codicon.add,
 			f1: true,
@@ -204,7 +205,7 @@ class CustomizeFolderAction extends Action2 {
 	constructor() {
 		super({
 			id: CustomizeFolderAction.ID,
-			title: localize2('workspaceBar.customizeFolder', "Customize"),
+			title: localize2('workspaceBar.customizeFolder', "Customize..."),
 			category: CATEGORY,
 			f1: true,
 			keybinding: {
@@ -303,7 +304,7 @@ class RemoveFolderAction extends Action2 {
 			// a native alert renders one run of plain text, and the path is the whole point of asking.
 			// The class is what shapes it - see `media/workspacebardialog.css`.
 			custom: {
-				classes: ['workspacebar-dialog', 'workspacebar-confirm'],
+				classes: ['facade-dialog', 'workspacebar-confirm'],
 				// ⚠️ `disableCloseButton`, not `disableCloseAction`: the latter takes the Escape key
 				// with it and leaves a dialog there is no way out of but a button.
 				disableCloseButton: true

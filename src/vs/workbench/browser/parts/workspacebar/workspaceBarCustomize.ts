@@ -58,7 +58,7 @@ export async function showCustomizeDialog(
 		createWorkbenchDialogOptions({
 			type: 'none',
 			// ⚠️ No severity glyph: nothing here is destroyed and nothing is irreversible.
-			extraClasses: ['workspacebar-dialog', 'workspacebar-customize'],
+			extraClasses: ['facade-dialog', 'workspacebar-customize'],
 			cancelId: 1,
 			renderBody: container => {
 				container.classList.add('workspacebar-customize-body');
