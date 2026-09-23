@@ -1,0 +1,209 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { Event } from '../../../../base/common/event.js';
+import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { URI } from '../../../../base/common/uri.js';
+import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { IContextViewService } from '../../../../platform/contextview/browser/contextView.js';
+import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+import { ILogService } from '../../../../platform/log/common/log.js';
+import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
+import { ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
+import { IHostService } from '../../../services/host/browser/host.js';
+import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { ITerminalService } from '../../terminal/browser/terminal.js';
+import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
+import { AGENT_TERMINAL_ICON, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readConfiguredLaunchers, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
+import { showAgentsDialog } from './terminalLauncherDialog.js';
+
+export const ITerminalLauncherService = createDecorator<ITerminalLauncherService>('terminalLauncherService');
+
+/**
+ * The agent button, as much of it as anything outside the tool bar needs.
+ *
+ * Narrow on purpose: the service holds these so a keybinding can reach one, and holding the view
+ * item itself would make a service of the workbench depend on how the button is drawn.
+ */
+export interface IAgentMenuButton {
+	/** Whether this is the button drawn in that window. */
+	isIn(window: Window): boolean;
+
+	/** Opens its dropdown. */
+	show(): void;
+}
+
+/**
+ * What the agent menu is built on: starting an agent, editing the list, and saying afterwards which
+ * terminals came from here.
+ */
+export interface ITerminalLauncherService {
+
+	readonly _serviceBrand: undefined;
+
+	/**
+	 * Fires when the answer to `isAgentTerminal` may have moved for some terminal.
+	 *
+	 * A tab is active before its terminal exists to be asked about, so whoever is holding an answer
+	 * has to be told to ask again.
+	 */
+	readonly onDidChangeAgentTerminals: Event<void>;
+
+	/** Whether this terminal is one the agent menu started. */
+	isAgentTerminal(resource: URI | undefined): boolean;
+
+	/** Starts an agent in a terminal tab, in the folder the window is on. */
+	open(launcher: ITerminalLauncher): Promise<void>;
+
+	/** Shows the dialog that decides which agents there are, and saves what it answers. */
+	configure(): Promise<void>;
+
+	/**
+	 * Records a button as drawn, until the returned disposable says it is gone.
+	 */
+	registerButton(button: IAgentMenuButton): IDisposable;
+
+	/** Opens the agent menu on the button that window has, if it has one. */
+	showMenu(window: Window): void;
+}
+
+export class TerminalLauncherService extends Disposable implements ITerminalLauncherService {
+
+	declare readonly _serviceBrand: undefined;
+
+	readonly onDidChangeAgentTerminals: Event<void>;
+
+	/**
+	 * Every agent button on screen, across every window this workbench has.
+	 *
+	 * A command cannot reach a tool bar's dropdown, and the alternative - a second, keyboard-only
+	 * way to list the same agents - is a second surface to keep in step with the first.
+	 */
+	private readonly _buttons = new Set<IAgentMenuButton>();
+
+	constructor(
+		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@ITerminalService private readonly _terminalService: ITerminalService,
+		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
+		@IConfigurationResolverService private readonly _configurationResolverService: IConfigurationResolverService,
+		@IWorkbenchLayoutService private readonly _layoutService: IWorkbenchLayoutService,
+		@IKeybindingService private readonly _keybindingService: IKeybindingService,
+		@IHostService private readonly _hostService: IHostService,
+		@IContextViewService private readonly _contextViewService: IContextViewService,
+		@ILogService private readonly _logService: ILogService
+	) {
+		super();
+
+		// A terminal arriving or leaving, and an icon being changed on one that stayed - the second
+		// because the icon is what says a terminal is an agent's, so changing it changes the answer
+		this.onDidChangeAgentTerminals = Event.any(
+			this._terminalService.onDidChangeInstances,
+			Event.map(this._terminalService.onAnyInstanceIconChange, () => undefined)
+		);
+	}
+
+	isAgentTerminal(resource: URI | undefined): boolean {
+		return isAgentTerminalIcon(this._terminalService.getInstanceFromResource(resource)?.icon);
+	}
+
+	registerButton(button: IAgentMenuButton): IDisposable {
+		this._buttons.add(button);
+
+		return toDisposable(() => this._buttons.delete(button));
+	}
+
+	showMenu(window: Window): void {
+		// The one in the window the key was pressed in. An auxiliary window draws a title bar of its
+		// own, so more than one of these is on screen and the first is not always the right one.
+		for (const button of this._buttons) {
+			if (button.isIn(window)) {
+				button.show();
+				return;
+			}
+		}
+	}
+
+	async open(launcher: ITerminalLauncher): Promise<void> {
+		const cwd = (await resolveActiveFolderTerminalCwd(this._activeFolderService, this._configurationService, this._configurationResolverService))?.cwd;
+
+		const instance = await this._terminalService.createTerminal({
+			cwd,
+			location: { viewColumn: ACTIVE_GROUP },
+			config: {
+				// `name` is the fallback rather than the title: with a template set it becomes the
+				// process name, which `computeLabel` returns whenever the template comes out empty.
+				// So the tab reads `Claude Code` until the agent says otherwise, and never `powershell`.
+				name: launcher.label,
+
+				// The agent's own title wins, which is the whole point - a row of tabs all reading
+				// `Claude Code` says nothing, while the titles an agent sets say what each is doing.
+				//
+				// Asked for here rather than left to `terminal.integrated.tabs.allowAgentCliTitle`,
+				// which does this already but only for the five CLIs upstream recognises by name.
+				// Anything somebody puts in the list is an agent as far as this button is concerned.
+				titleTemplate: '${sequence}',
+
+				// One glyph for every agent - and the thing that says this terminal is an agent's,
+				// which is why it comes from a constant. Which agent it is, the tab says in words.
+				icon: AGENT_TERMINAL_ICON
+			}
+		});
+
+		await instance.focusWhenReady();
+
+		const command = launcher.command.trim();
+		if (!command) {
+			return;
+		}
+
+		// Typed at the shell rather than launched as the process, so the command line is the one
+		// somebody wrote - quoting, flags and all - and the shell is still there when the agent exits
+		try {
+			await instance.sendText(command, true);
+		} catch (error) {
+			this._logService.error(`[terminalLaunchers] could not start ${launcher.id}`, error);
+		}
+	}
+
+	async configure(): Promise<void> {
+		// No guard against a second one. Every way in - the menu item, the palette, the command -
+		// needs focus, and taking focus dismisses the dialog that is up, so two of these cannot be
+		// on screen together. A guard was tried and measured: it turned a legitimate second opening
+		// into nothing at all, because the first promise was still settling when the second arrived.
+		const launchers = readConfiguredLaunchers(this._configurationService.getValue(AGENTS_SETTING));
+
+		const kept = await showAgentsDialog(launchers, () => this._detect(), {
+			layoutService: this._layoutService,
+			keybindingService: this._keybindingService,
+			hostService: this._hostService,
+			contextViewService: this._contextViewService
+		});
+
+		if (kept) {
+			await this._configurationService.updateValue(AGENTS_SETTING, toConfiguredLaunchers(kept), ConfigurationTarget.USER);
+		}
+	}
+
+	/**
+	 * What this machine looks like it has, for the dialog to fill an empty list with.
+	 *
+	 * Asked for rather than run on opening. The scan sees the `PATH` this window was started with,
+	 * which Windows does not refresh for a running process - measured here, an installed `agy` was
+	 * absent from it while sitting on the stored `PATH` the whole time. A guess that stale should be
+	 * something somebody reaches for, not something that happens to them.
+	 */
+	private async _detect(): Promise<readonly ITerminalLauncher[]> {
+		const detection = this._instantiationService.createInstance(TerminalLauncherDetection);
+
+		return seedLaunchers(await detection.detect(BUILT_IN_LAUNCHERS));
+	}
+}
+
+registerSingleton(ITerminalLauncherService, TerminalLauncherService, InstantiationType.Delayed);
