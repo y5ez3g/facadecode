@@ -9,6 +9,8 @@ import '../editor/editor.all.js';
 
 import './api/browser/extensionHost.contribution.js';
 import './browser/workbench.contribution.js';
+// The settings this fork answers differently, right after the file that declares them.
+import './common/facadeDefaults.js';
 import './browser/workbench.zenMode.contribution.js';
 import './browser/parts/workspacebar/workspaceBarDrop.js';
 
