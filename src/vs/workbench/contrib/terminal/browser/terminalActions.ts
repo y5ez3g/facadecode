@@ -1653,12 +1653,23 @@ function getResourceOrActiveInstance(c: ITerminalServicesCollection, resource: u
  * `terminal.integrated.cwd` honoured exactly as the picker would have honoured it.
  */
 export async function activeFolderTerminalCwd(accessor: ServicesAccessor): Promise<WorkspaceFolderCwdPair | undefined> {
-	const folder = accessor.get(IActiveFolderService).activeFolder;
+	return resolveActiveFolderTerminalCwd(accessor.get(IActiveFolderService), accessor.get(IConfigurationService), accessor.get(IConfigurationResolverService));
+}
+
+/**
+ * The same, for a caller that holds its own services rather than an accessor.
+ */
+export async function resolveActiveFolderTerminalCwd(
+	activeFolderService: IActiveFolderService,
+	configurationService: IConfigurationService,
+	configurationResolverService: IConfigurationResolverService
+): Promise<WorkspaceFolderCwdPair | undefined> {
+	const folder = activeFolderService.activeFolder;
 	if (!folder) {
 		return undefined;
 	}
 
-	return resolveWorkspaceFolderCwd(folder, accessor.get(IConfigurationService), accessor.get(IConfigurationResolverService));
+	return resolveWorkspaceFolderCwd(folder, configurationService, configurationResolverService);
 }
 
 async function pickTerminalCwd(accessor: ServicesAccessor, cancel?: CancellationToken): Promise<WorkspaceFolderCwdPair | undefined> {
