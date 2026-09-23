@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { getRemoteAuthority } from '../../../../platform/remote/common/remoteHosts.js';
 import { isFolderToOpen, IOpenWindowOptions, IWindowOpenable } from '../../../../platform/window/common/window.js';
@@ -20,6 +21,15 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
  */
 export interface IWorkspaceBarService {
 	readonly _serviceBrand: undefined;
+
+	/**
+	 * Fires once a switch has put the incoming folder's editors on screen. Anything that adds to the
+	 * editor area on a switch has to use this rather than
+	 * `IActiveFolderService.onDidChangeActiveFolder`, which is too early: the restore is started
+	 * there without being awaited, so an editor opened at that point is closed again by the working
+	 * set.
+	 */
+	readonly onDidRestoreEditors: Event<void>;
 
 	/**
 	 * Puts folders in the workspace, in the order given, skipping the ones already there.

@@ -28,20 +28,55 @@
 }
 
 /*
+ * The same 4px the tool bar puts between its own items, so one row of icons has one pitch.
+ * Without it these sit flush - measured, 22px apart against 26 for everything to their right, so
+ * the join between the two groups was the one place in the row where the rhythm changed.
+ *
+ * On the container rather than on the items, because that is where titlebarpart.css puts the tool
+ * bar's, and a margin here would also push the divider that follows the bar.
+ */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container .monaco-action-bar .actions-container {
+	gap: 4px;
+}
+
+/*
+ * One divider in the row, and this is it.
+ *
+ * The tool bar pushes a Separator of its own after the leading actions group, so filling that group
+ * put a second line in the strip - and two 1px hairlines at two different x cannot be made to
+ * render alike. At this display's 1.25 ratio a 1px box covers 1.25 device pixels, which Chrome
+ * snaps to whole columns: measured, the one here landed at device 862.50 and painted one column,
+ * the tool bar's landed at 976.25 and painted two. Which of them is the fat one changes with the
+ * window width, so there is no value to tune - the fix is to draw the line once.
+ *
+ * The group break the Separator was making is still there, as the 8px its collapsed item leaves
+ * against the 4px between icons. A boundary drawn twice in two ways is worse than one drawn in
+ * space.
+ */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .monaco-toolbar .action-item > .action-label.separator {
+	display: none;
+}
+
+/*
  * Divider between the view containers and the commands that follow them. Drawn here rather than
  * pushed into the tool bar as a Separator, because the boundary is at the tool bar's left edge and
  * prepareActions drops a leading separator.
  *
- * The 1px x 16px box, the 4px margins and disabledForeground are taken from
+ * The 1px x 16px box and disabledForeground are taken from
  * .monaco-action-bar .action-item .action-label.separator, so this reads as the same line the tool
  * bar draws. `.has-composites` is toggled in titlebarPart.ts, which already knows the count; see
  * #327052 for why this is a class rather than :has().
+ *
+ * 8px and not that rule's 4px, because the tool bar's separator is an item in a container with a
+ * 4px gap and so gets 4 of its own plus 4 from the gap. Copying the margin alone made one line sit
+ * in 9px and the other in 17 - measured. Both are 17 now, which is also what a divider needs to
+ * read as a boundary when the icons either side of it are already 4px apart.
  */
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container.has-composites::after {
 	content: '';
 	width: 1px;
 	min-width: 1px;
 	height: 16px;
-	margin: 0 4px;
+	margin: 0 8px;
 	background-color: var(--vscode-disabledForeground);
 }

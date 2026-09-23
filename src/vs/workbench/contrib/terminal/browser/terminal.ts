@@ -597,7 +597,7 @@ export interface ITerminalService extends ITerminalInstanceHost {
 	 * @param suppressSetActive Do not set the active instance when there is only one terminal
 	 * @param forceSaveState Used when the window is shutting down and we need to reveal and save hideFromUser terminals
 	 */
-	showBackgroundTerminal(instance: ITerminalInstance, suppressSetActive?: boolean): Promise<void>;
+	showBackgroundTerminal(instance: ITerminalInstance, suppressSetActive?: boolean, editorOptions?: TerminalEditorLocation): Promise<void>;
 	/**
 	 * Moves a visible terminal instance to the background. The terminal process
 	 * remains alive but the instance is removed from its group/editor and tracked

@@ -340,6 +340,12 @@ import './contrib/output/browser/outputView.js';
 // Terminal
 import './contrib/terminal/terminal.all.js';
 
+// Terminals that belong to a folder
+import './contrib/folderTerminals/browser/folderTerminals.contribution.js';
+
+// Agents started in a terminal
+import './contrib/terminalLaunchers/browser/terminalLaunchers.contribution.js';
+
 // External terminal
 import './contrib/externalTerminal/browser/externalTerminal.contribution.js';
 

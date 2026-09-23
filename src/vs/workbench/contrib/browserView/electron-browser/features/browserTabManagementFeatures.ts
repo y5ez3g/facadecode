@@ -5,6 +5,7 @@
 
 import { localize, localize2 } from '../../../../../nls.js';
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../../platform/actions/common/actions.js';
+import { TitleBarLeadingActionsGroup } from '../../../../browser/parts/titlebar/titlebarActions.js';
 import { ServicesAccessor, IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { KeybindingWeight } from '../../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { KeyMod, KeyCode } from '../../../../../base/common/keyCodes.js';
@@ -33,7 +34,6 @@ import { isLocalhostAuthority, isAllInterfacesAuthority } from '../../../../../p
 import { IConfigurationService, isConfigured } from '../../../../../platform/configuration/common/configuration.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
-import { ToggleTitleBarConfigAction } from '../../../../browser/parts/titlebar/titlebarActions.js';
 import { Registry } from '../../../../../platform/registry/common/platform.js';
 import { match } from '../../../../../base/common/glob.js';
 import { $, addDisposableListener, EventType } from '../../../../../base/browser/dom.js';
@@ -487,16 +487,9 @@ class OpenOrListBrowsersAction extends Action2 {
 			},
 			menu: {
 				id: MenuId.TitleBar,
-				group: 'navigation',
-				order: 10,
-				when: ContextKeyExpr.and(
-					ContextKeyExpr.equals('config.workbench.browser.showInTitleBar', false).negate(),
-					ContextKeyExpr.or(
-						CONTEXT_BROWSER_EDITOR_OPEN,
-						// This is a hack to work around `true` just testing for truthiness of the key. It works since `1 == true` in JS.
-						ContextKeyExpr.equals('config.workbench.browser.showInTitleBar', 1)
-					)
-				),
+				// Behind the terminal and agent buttons, and still ahead of the layout controls
+				group: TitleBarLeadingActionsGroup,
+				order: 30,
 			}
 		});
 	}
@@ -549,12 +542,6 @@ registerAction2(OpenOrListBrowsersAction);
 registerAction2(NewTabAction);
 registerAction2(CloseAllBrowserTabsAction);
 registerAction2(CloseAllBrowserTabsInGroupAction);
-
-registerAction2(class ToggleBrowserTitleBarButton extends ToggleTitleBarConfigAction {
-	constructor() {
-		super('workbench.browser.showInTitleBar', localize('toggle.browser', 'Integrated Browser'), localize('toggle.browserDescription', "Toggle visibility of the Integrated Browser button in title bar"), 8);
-	}
-});
 
 /**
  * Tracks whether any browser editor is open across all editor groups and
@@ -905,21 +892,6 @@ BrowserEditor.registerContribution(BrowserTabUrlSuggestions);
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,
 	properties: {
-		'workbench.browser.showInTitleBar': {
-			type: ['boolean', 'string'],
-			enum: [true, false, 'whenOpen'],
-			enumDescriptions: [
-				localize({ comment: ['This is the description for a setting. Values surrounded by single quotes are not to be translated.'], key: 'browser.showInTitleBar.true' }, 'The button is always shown in the title bar.'),
-				localize({ comment: ['This is the description for a setting. Values surrounded by single quotes are not to be translated.'], key: 'browser.showInTitleBar.false' }, 'The button is never shown in the title bar.'),
-				localize({ comment: ['This is the description for a setting. Values surrounded by single quotes are not to be translated.'], key: 'browser.showInTitleBar.whenOpen' }, 'The button is shown in the title bar when a browser editor is open.')
-			],
-			default: 'whenOpen',
-			experiment: { mode: 'startup' },
-			description: localize(
-				{ comment: ['This is the description for a setting.'], key: 'browser.showInTitleBar' },
-				'Controls whether the Integrated Browser button is shown in the title bar.'
-			)
-		},
 		'workbench.browser.openLocalhostLinks': {
 			type: 'boolean',
 			default: false,
