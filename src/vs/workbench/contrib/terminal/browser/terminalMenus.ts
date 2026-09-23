@@ -757,7 +757,14 @@ export function setupTerminalMenus(): void {
 			},
 			group: 'navigation',
 			order: 0,
-			when: ResourceContextKey.Scheme.isEqualTo(Schemas.vscodeTerminal)
+			when: ContextKeyExpr.and(
+				ResourceContextKey.Scheme.isEqualTo(Schemas.vscodeTerminal),
+				// Not on a tab the agent menu opened. A terminal tab keeps this, because making
+				// another terminal from one is the point; an agent's tab is a place something is
+				// already running, and the profile chevron hanging off this item - drawn only
+				// because this item is - offers a list of shells nobody wants from there.
+				TerminalContextKeys.agentTerminal.negate()
+			)
 		});
 		MenuRegistry.appendMenuItem(menuId, {
 			command: {

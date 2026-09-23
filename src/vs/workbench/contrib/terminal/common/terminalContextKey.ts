@@ -48,6 +48,15 @@ export namespace TerminalContextKeys {
 	/** Whether there is at least one opened terminal. */
 	export const isOpen = new RawContextKey<boolean>(TerminalContextKeyStrings.IsOpen, false, true);
 
+	/**
+	 * Whether the editor group's active editor is a terminal the agent menu opened.
+	 *
+	 * Bound per editor group by `contrib/terminalLaunchers`, which is the only thing that knows
+	 * which terminals those are. Declared here so that the menus reading it do not have to reach
+	 * across into another contribution for a key.
+	 */
+	export const agentTerminal = new RawContextKey<boolean>('facadeAgentTerminal', false, localize('facadeAgentTerminalContextKey', "Whether the active terminal editor was started from the agent menu."));
+
 	/** Whether the terminal is focused. */
 	export const focus = new RawContextKey<boolean>(TerminalContextKeyStrings.Focus, false, localize('terminalFocusContextKey', "Whether the terminal is focused."));
 
