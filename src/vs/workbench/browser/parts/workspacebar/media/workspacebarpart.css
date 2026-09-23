@@ -188,6 +188,49 @@
 	-webkit-app-region: no-drag;
 }
 
+/*
+ * The window moves by this row, where this row is the top of the window.
+ *
+ * ⚠️ `:not(.banded)` and not a list of platforms. The band above the header is where the window's
+ * own buttons go, and `workspaceBarPart.ts` adds `banded` only while it has a height - so the
+ * negation is exactly "the header is the window's top row". That is Windows and Linux, where the
+ * buttons are at the far end of the title bar; it is also macOS in full screen, where the lights go
+ * away and the band collapses. A table keyed on the platform would answer the first and miss the
+ * second, and would take the header on windowed macOS - which sits below the band, a row down from
+ * the title bar - along with it.
+ *
+ * ⚠️ The row reads as one strip with the title bar beside it: measured, the header is 219x35 at the
+ * window's origin and the title bar starts at x=220 with the same height. Only one of them could be
+ * grabbed, which is the kind of seam somebody finds by trying.
+ *
+ * ⚠️ Checked with real mouse input rather than a synthesised event, because a synthesised one does
+ * not answer the question: the region is read by the compositor and acted on by the window manager,
+ * and anything injected into the renderer has already gone past both. Pressing at 90,17 and moving
+ * took the window with it, 56 across and 36 down.
+ *
+ * ⚠️ The resize handle at the column's edge keeps one of the two pixels it had in this row. It sits
+ * at x=218..219 up here - past that the title bar's menu is drawn over it - and the header's region
+ * ends at 218, so 219 is left. It is 4px wide and unobstructed for the 850px below this row, which
+ * is where anybody resizing the column actually is.
+ *
+ * ⚠️ Collapsed this rule still applies and there is almost nothing left to grab: the header is
+ * 35x56 and the two stacked buttons take y=6..53 of it, so what stays draggable is the few pixels
+ * of margin around them. Nothing to be done about that - they are the reason the header is there -
+ * and the title bar is 36px to the right.
+ */
+.monaco-workbench .part.workspacebar:not(.banded) .workspacebar-header {
+	-webkit-app-region: drag;
+}
+
+/*
+ * ⚠️ And the buttons come back out of it. A control inside a drag region gets no mouse events at
+ * all on Windows - the `+` and the toggle would stop working, and stop working silently, with the
+ * hover still drawing because that is the compositor's business and not the button's.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-actions {
+	-webkit-app-region: no-drag;
+}
+
 .monaco-workbench .part.workspacebar .workspacebar-title {
 	overflow: hidden;
 	text-overflow: ellipsis;
