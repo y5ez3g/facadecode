@@ -143,14 +143,18 @@ const electronAssetResolver = electronFeed
 export const config = {
 	version: electronVersion,
 	productAppName: product.nameLong,
-	companyName: 'Microsoft Corporation',
-	copyright: 'Copyright (C) 2026 Microsoft. All rights reserved',
+	// ⚠️ The publisher is this fork, because this fork is who ships the binary - it is what
+	// Windows shows in the UAC prompt and in Programs and Features, and naming somebody else
+	// there is a claim about who signed it. The copyright line names both: the executable is
+	// upstream's code plus this fork's, and `LICENSE.txt` beside it is unchanged.
+	companyName: product.nameLong,
+	copyright: `Copyright (C) 2026 Microsoft Corporation and ${product.nameLong} contributors. All rights reserved.`,
 	darwinExecutable: product.nameShort,
 	darwinIcon: 'resources/darwin/code.icns',
 	darwinBundleIdentifier: product.darwinBundleIdentifier,
 	darwinApplicationCategoryType: 'public.app-category.developer-tools',
-	darwinHelpBookFolder: 'VS Code HelpBook',
-	darwinHelpBookName: 'VS Code HelpBook',
+	darwinHelpBookFolder: `${product.nameLong} HelpBook`,
+	darwinHelpBookName: `${product.nameLong} HelpBook`,
 	darwinBundleDocumentTypes: [
 		...darwinBundleDocumentTypes({ 'C header file': 'h', 'C source code': 'c' }, 'c'),
 		...darwinBundleDocumentTypes({ 'Git configuration file': ['gitattributes', 'gitconfig', 'gitignore'] }, 'config'),
