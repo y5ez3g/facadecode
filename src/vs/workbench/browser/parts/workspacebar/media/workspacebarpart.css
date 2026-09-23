@@ -155,14 +155,20 @@
  * running window rather than copied. The two headers sit eight pixels apart across the seam, so any
  * difference in size, case or ink reads as two programs rather than one.
  *
- * ⚠️ The two paddings are not the same number, and neither of them was chosen. The header's label
- * has to start on the column the rows' icons start on, and the header's control has to sit as far
- * from the right edge as that column is from the left - which is the rule the reference rail is
- * built on, measured: its plus centre is 26.75 from the right against a row icon centre 25.75 from
- * the left.
+ * ⚠️ The label starts on the column the rows' icons start on, so the column has one left edge
+ * from its title down through every folder in it. That is the whole of why this padding is 10:
+ * it is the row's own `padding-left`, read from the same token, and the two have to move
+ * together or the title drifts off the icons.
  *
- *     left   1 border + 16 padding                     = 17   the row's icon starts at 1 + 8 + 8
- *     right  1 border + 12 padding + 14 of a 28px box  = 27   the reference's is 26.75
+ * ⚠️ It used to be 16, under an arithmetic that has not been true for a while: it counted a 1px
+ * left border this part does not have - the border is on the right - and an 8px row padding that
+ * became 10 when the active mark took the first two. Measured on the running window before this
+ * was written: the title began at x=16 and the folder glyphs at x=10, six pixels apart down the
+ * length of the column.
+ *
+ * ⚠️ The right padding is not this number and is not a mirror of it: measured, the toggle's glyph
+ * centre sits 25 from the bar's right edge against a row icon centre 18 from its left. That is a
+ * separate question about where the controls sit, and it is left where it was.
  */
 .monaco-workbench .part.workspacebar .workspacebar-header {
 	display: flex;
@@ -170,7 +176,7 @@
 	justify-content: space-between;
 	flex: 0 0 auto;
 	height: var(--facade-header-row);
-	padding: 0 var(--vscode-spacing-size120) 0 var(--vscode-spacing-size160);
+	padding: 0 var(--vscode-spacing-size120) 0 var(--vscode-spacing-size100);
 	box-sizing: border-box;
 	font-size: 11px;
 	font-weight: 400;
@@ -264,6 +270,11 @@
  * every one of those already agreed, and the ink was the only thing that did not. Ours was the same
  * colour at 70%, which made the one sentence in the column quieter than the sentence saying the same
  * kind of thing eight pixels away.
+ *
+ * ⚠️ 16 on the left, where the header and the rows are 10, and it is the only thing in the column
+ * that is. Prose is not a row: it wraps, it is read as a paragraph, and upstream gives its own empty
+ * view more room than its rows for the same reason - `views.css` puts `welcome-view-content` at 20.
+ * Lining this up with the folder icons would be lining a paragraph up with the list it stands in for.
  */
 .monaco-workbench .part.workspacebar .workspacebar-empty {
 	flex: 0 0 auto;
@@ -592,19 +603,26 @@
 }
 
 /*
- * ⚠️ The one number this column sets per glyph rather than per rule, and it is not a preference.
- * Measured with `measureText` against the codicon font at 16px, the drawn ink is:
+ * ⚠️ There is no per-glyph font size here, and the absence is the point.
  *
- *     three-bars  12.1 x 9      plus  13 x 13      folder  14 x 12      search  13 x 13
+ * This glyph used to be set to 18px to match its drawn width against its neighbours - three
+ * horizontal bars do not reach as tall as a plus, so at one size the toggle reads a shade
+ * smaller. The cost of that was not known when it was written: codicon is drawn on a 16px grid,
+ * and 18px is the one thing in this column asking the rasteriser for a size the glyph was not
+ * drawn at. Three hairlines a fraction of a device pixel apart then land on three different
+ * sub-pixel phases, and a mark whose whole content is "three identical lines" is the one mark
+ * where that shows.
  *
- * Three horizontal bars do not reach as tall as a plus does, so at one font size the toggle reads a
- * size smaller. Matched on **width**, not on area: equal area put it at 20px and 15.1 wide, wider
- * than either neighbour, and it read a size too big. 18px gives 13.6 x 10.1 against a plus at 13 and
- * a folder at 14. Box, radius, inks and chip all still come from the shared rule above.
+ * Measured on the running window, ink per bar at 125%: 99.4 / 91.7 / 69.7 - the third bar carries
+ * 70% of the first's and reads crisp and thin beside two that read soft and thick. Swept across
+ * font sizes and device ratios, 16px is the only size that comes out even at every one of 1,
+ * 1.25, 1.5, 1.75 and 2. 19px is even too, but only at 1.25, which is a coincidence of this
+ * display and not a number to keep.
+ *
+ * What it costs: 14 x 9 of ink against a plus at 15 x 13 and a folder at 16 x 12, where 18px gave
+ * 16 x 11. One pixel narrow instead of one pixel wide, for a mark that no longer contradicts
+ * itself. Everything else - box, radius, inks, chip - still comes from the shared rule above.
  */
-.monaco-workbench .part.workspacebar .workspacebar-actions .action-label.codicon-three-bars {
-	font-size: 18px;
-}
 
 /* --- collapsed -------------------------------------------------------------------------------- */
 
