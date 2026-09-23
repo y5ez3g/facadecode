@@ -4,8 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Codicon } from '../../../../base/common/codicons.js';
+import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { localize2 } from '../../../../nls.js';
+import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/titlebarActions.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
@@ -26,14 +29,21 @@ class OpenTerminalTabAction extends Action2 {
 	constructor() {
 		super({
 			id: OPEN_TERMINAL_TAB,
-			title: localize2('facade.terminal.openTab', "New Terminal Tab"),
+			title: localize2('facade.terminal.openTab', "Terminal"),
 			icon: Codicon.terminal,
 			f1: true,
 			precondition: ContextKeyExpr.or(TerminalContextKeys.processSupported, TerminalContextKeys.webExtensionContributedProfile),
+			keybinding: {
+				weight: KeybindingWeight.WorkbenchContrib,
+				// The family the integrated browser started at `Ctrl+Alt+/`: the three buttons that
+				// open something into a tab share a modifier, and the letter is the thing opened.
+				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyT
+			},
 			menu: {
 				id: MenuId.TitleBar,
-				group: 'navigation',
-				// After the integrated browser, which upstream registers at 10
+				// Ahead of the layout controls rather than trailing them: this and the agent button are
+				// what this window is for, and the group exists for exactly that.
+				group: TitleBarLeadingActionsGroup,
 				order: 20
 			}
 		});
