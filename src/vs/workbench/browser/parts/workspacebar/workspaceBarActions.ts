@@ -290,16 +290,18 @@ class RemoveFolderAction extends Action2 {
 		// path is not, because it goes inside a code span - see `asCodeSpan`.
 		const detail = new MarkdownString();
 		detail.appendMarkdown(`${asCodeSpan(labelService.getUriLabel(folder))}\n\n`);
-		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from the workspace and forgets the editors saved for it. The folder itself is left alone.")));
+		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from your workspace and clears its saved editors. Your files on disk will not be deleted.")));
 
 		const { confirmed } = await dialogService.confirm({
 			// ⚠️ No severity glyph. Nothing here is destroyed - the folder is left where it is - and a
 			// warning triangle over a reversible act is a claim the dialog cannot back up. `none` is
 			// the type for it, and it announces the same as `question` does, which is nothing.
 			type: 'none',
-			message: localize('workspaceBar.removeFolderMessage', "Remove folder?"),
+			message: localize('workspaceBar.removeFolderMessage', "Remove Folder?"),
 			detail,
-			primaryButton: localize({ key: 'workspaceBar.removeFolderButton', comment: ['&& denotes a mnemonic'] }, "&&Remove Folder"),
+			// Just the verb: the question above it already named the thing, and a button that repeats
+			// its own dialog is a button asking to be read twice.
+			primaryButton: localize({ key: 'workspaceBar.removeFolderButton', comment: ['&& denotes a mnemonic'] }, "&&Remove"),
 			// ⚠️ The workbench's dialog rather than the system's, whatever `window.dialogStyle` says:
 			// a native alert renders one run of plain text, and the path is the whole point of asking.
 			// The class is what shapes it - see `media/workspacebardialog.css`.

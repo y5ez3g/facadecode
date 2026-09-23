@@ -64,7 +64,7 @@ export async function showCustomizeDialog(
 				container.classList.add('workspacebar-customize-body');
 
 				// --- the name -------------------------------------------------------------------
-				append(container, $('.workspacebar-customize-label', undefined, localize('workspaceBar.displayName', "Display name")));
+				append(container, $('.workspacebar-customize-label', undefined, localize('workspaceBar.displayName', "Display Name")));
 
 				const nameBox = disposables.add(new InputBox(append(container, $('.workspacebar-customize-input')), services.contextViewService, {
 					inputBoxStyles: defaultInputBoxStyles,
@@ -78,9 +78,10 @@ export async function showCustomizeDialog(
 				disposables.add(nameBox.onDidChange(value => { name = value; }));
 
 				// ⚠️ The real folder name is said out loud. "Leave blank to use the folder name" makes
-				// somebody go and look; naming it answers the question where it was asked.
+				// somebody go and look; naming it answers the question where it was asked. And it is
+				// said to be the default, or the name on its own reads as an instruction to type it.
 				append(container, $('.workspacebar-customize-hint', undefined,
-					localize('workspaceBar.displayNameHint', "Leave blank to use {0}.", folder.name)));
+					localize('workspaceBar.displayNameHint', "Leave blank to use default name ({0}).", folder.name)));
 
 				// --- the colour -----------------------------------------------------------------
 				append(container, $('.workspacebar-customize-label', undefined, localize('workspaceBar.color', "Color")));
