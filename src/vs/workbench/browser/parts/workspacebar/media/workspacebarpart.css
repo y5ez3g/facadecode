@@ -585,6 +585,54 @@
  */
 
 /*
+ * ---------------------------------------------------------------------------------------------
+ * Worktrees: a repository's row opens onto its worktrees (WORKTREE.md section 3).
+ * -------------------------------------------------------------------------------------------
+ */
+
+/*
+ * ⚠️ The tree's own triangle never shows. It sits outside the row's box, ahead of it, so drawing it
+ * would push the band and the leading line off the column's edge. The row draws its own instead.
+ * Upstream's sessions list hides it the same way.
+ */
+.monaco-workbench .part.workspacebar .monaco-list-row .force-no-twistie {
+	display: none !important;
+}
+
+/*
+ * The bar's own triangle, last in a repository's row.
+ *
+ * ⚠️ Last, not first. A leading triangle would move every folder icon along, and the icons are where
+ * they are because collapsing is measured to move none of them (below). At the trailing end nothing
+ * that was already in the column moves.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-twistie {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--vscode-spacing-size160);
+	font-size: var(--vscode-codiconFontSize);
+	/* The row's ink, as the folder glyph takes it: see `.workspacebar-icon`. */
+	color: inherit;
+	cursor: pointer;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-twistie.hidden {
+	display: none;
+}
+
+/*
+ * A worktree sits one step in: its glyph starts where its repository's name starts.
+ *
+ * ⚠️ Padding on the row's own box, not the tree's indent, so the band and the leading line keep
+ * running the column's full width on a worktree too.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row.worktree {
+	padding-left: calc(var(--vscode-spacing-size100) + var(--vscode-spacing-size160) + var(--vscode-spacing-size80));
+}
+
+/*
  * A folder that could not be reached. Dimmed and struck through, never hidden: the row is the only
  * place it can be removed from, and a person who unplugged a disk wants to see that the folder is
  * still in their workspace.
@@ -671,6 +719,11 @@
 
 /* The name goes; the icon and its mark stay exactly where they were. */
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-row .monaco-icon-label {
+	display: none;
+}
+
+/* And the triangle with it: collapsed, the bar shows folder rows only (WORKTREE.md WT-1.10). */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-twistie {
 	display: none;
 }
 

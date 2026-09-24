@@ -28,6 +28,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { MenuWorkbenchToolBar } from '../../../../platform/actions/browser/toolbar.js';
 // Imported for its `registerAction2` calls as much as for the menu id.
 import { WorkspaceBarTitleMenu } from './workspaceBarActions.js';
+import { WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
@@ -153,6 +154,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private titlebarSpacer: HTMLElement | undefined;
 
 	private readonly model: WorkspaceBarModel;
+	private readonly git: WorkspaceBarGit;
 	private view: WorkspaceBarView | undefined;
 	private editors: WorkspaceBarEditors | undefined;
 	private switcher: WorkspaceBarSwitcher | undefined;
@@ -206,6 +208,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// Built here rather than with the content area: an action can run before anything has been
 		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
 		this.model = this._register(this.instantiationService.createInstance(WorkspaceBarModel));
+
+		// Which of those folders are one repository, and its worktrees - read from git's own files, so
+		// that the first drawing of the bar already has them (WORKTREE.md section 5).
+		this.git = this._register(this.instantiationService.createInstance(WorkspaceBarGit, this.model));
 	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {
@@ -245,7 +251,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this.pruneEditors();
 		this.switcher = this._register(this.instantiationService.createInstance(WorkspaceBarSwitcher, this.model, this.editors));
 		this._onDidRestoreEditors.input = this.switcher.onDidRestoreEditors;
-		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView, this.content, this.model, this.switcher, () => this.collapsed));
+		// ⚠️ `show` handed in as a function rather than resolved as `IWorkspaceBarService` by the view:
+		// this part is that service, and the view is built while the part is being created.
+		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView,
+			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, (uri: URI) => this.show(uri)));
 
 		return this.content;
 	}

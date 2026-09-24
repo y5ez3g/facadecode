@@ -89,6 +89,16 @@ export class WorkspaceBarGit extends Disposable {
 		return this._groups;
 	}
 
+	private _ready = false;
+
+	/**
+	 * Whether a read has finished. ⚠️ Until then `groups` is empty rather than wrong, and a bar drawn
+	 * from it would start blank and fill in; the bar draws `folders[]` flat instead until this is true.
+	 */
+	get ready(): boolean {
+		return this._ready;
+	}
+
 	/** The directories git writes to, one watcher each, keyed like folders. */
 	private readonly watchers = this._register(new DisposableMap<string>());
 
@@ -110,7 +120,9 @@ export class WorkspaceBarGit extends Disposable {
 	) {
 		super();
 
-		this._register(this.source.onDidChange(() => this.scheduler.schedule()));
+		// ⚠️ Now, not batched: a folder somebody just added should be on the bar in the same moment as
+		// before this reader existed. The batching is for git's own writes.
+		this._register(this.source.onDidChange(() => this.refresh().then(undefined, onUnexpectedError)));
 		this.refresh().then(undefined, onUnexpectedError);
 	}
 
@@ -129,7 +141,8 @@ export class WorkspaceBarGit extends Disposable {
 		this._groups = groups;
 
 		const signature = signatureOf(groups, this.source.key);
-		if (signature !== this.signature) {
+		if (!this._ready || signature !== this.signature) {
+			this._ready = true;
 			this.signature = signature;
 			this._onDidChange.fire();
 		}

@@ -12,7 +12,7 @@ import { IWorkspaceEditingService } from '../../../services/workspaces/common/wo
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+import { ContextKeyExpr, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
@@ -50,6 +50,18 @@ export const WorkspaceBarContextMenu = new MenuId('WorkspaceBarContext');
  */
 export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorkspaceBarFocus', false, localize('workspaceBar.focusContext', "Whether the workspace's list of folders has keyboard focus"));
 
+/**
+ * What the row a menu or a key acts on is: a plain `folder`, a `repository` (a main checkout, which
+ * is a folder too) or a `worktree`. WORKTREE.md WT-1.11.
+ *
+ * ⚠️ Set by the view on the tree's own scope, from the focused row. A right-click moves focus to the
+ * row it lands on before the menu opens, so the menu and the keyboard read the same answer.
+ */
+export const WorkspaceBarRowKindContext = new RawContextKey<'folder' | 'repository' | 'worktree'>('facadeWorkspaceBarRowKind', 'folder', localize('workspaceBar.rowKindContext', "Whether the focused row of the workspace is a folder, a repository or a worktree"));
+
+/** Rows that are folders of the list: everything except a worktree. */
+const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
+
 const CATEGORY = localize2('workspaceBar.category', "Workspace");
 
 /**
@@ -62,12 +74,23 @@ const CATEGORY = localize2('workspaceBar.category', "Workspace");
  */
 export const CONFIRM_REMOVE_FOLDER = 'facade.workspaceBar.confirmRemoveFolder';
 
+/**
+ * The switch for worktrees (WORKTREE.md section 11). Off, the bar is the flat list of `folders[]` it was
+ * before worktrees existed.
+ */
+export const SHOW_WORKTREES = 'facade.workspaceBar.worktrees';
+
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,
 	properties: {
 		[CONFIRM_REMOVE_FOLDER]: {
 			type: 'boolean',
 			description: localize('workspaceBar.confirmRemoveFolder', "Controls whether the workspace asks for confirmation before taking a folder off the list. The folder itself is never deleted."),
+			default: true
+		},
+		[SHOW_WORKTREES]: {
+			type: 'boolean',
+			description: localize('workspaceBar.worktrees', "Controls whether the workspace lists each repository's git worktrees under it."),
 			default: true
 		}
 	}
@@ -210,10 +233,10 @@ class CustomizeFolderAction extends Action2 {
 			f1: true,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
-				when: WorkspaceBarFocusContext,
+				when: ContextKeyExpr.and(WorkspaceBarFocusContext, onFolderRow),
 				primary: KeyCode.F2
 			},
-			menu: { id: WorkspaceBarContextMenu, group: '2_customize', order: 1 }
+			menu: { id: WorkspaceBarContextMenu, group: '2_customize', order: 1, when: onFolderRow }
 		});
 	}
 
@@ -259,7 +282,7 @@ class RemoveFolderAction extends Action2 {
 			category: CATEGORY,
 			icon: Codicon.trash,
 			f1: true,
-			menu: { id: WorkspaceBarContextMenu, group: '9_remove', order: 1 }
+			menu: { id: WorkspaceBarContextMenu, group: '9_remove', order: 1, when: onFolderRow }
 		});
 	}
 
@@ -366,11 +389,11 @@ class MoveFolderUpAction extends MoveFolderAction {
 			category: CATEGORY,
 			f1: true,
 			keybinding: {
-				when: WorkspaceBarFocusContext,
+				when: ContextKeyExpr.and(WorkspaceBarFocusContext, onFolderRow),
 				primary: KeyMod.Alt | KeyCode.UpArrow,
 				weight: KeybindingWeight.WorkbenchContrib
 			},
-			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 1 }
+			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 1, when: onFolderRow }
 		});
 	}
 }
@@ -388,11 +411,11 @@ class MoveFolderDownAction extends MoveFolderAction {
 			category: CATEGORY,
 			f1: true,
 			keybinding: {
-				when: WorkspaceBarFocusContext,
+				when: ContextKeyExpr.and(WorkspaceBarFocusContext, onFolderRow),
 				primary: KeyMod.Alt | KeyCode.DownArrow,
 				weight: KeybindingWeight.WorkbenchContrib
 			},
-			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 2 }
+			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 2, when: onFolderRow }
 		});
 	}
 }
