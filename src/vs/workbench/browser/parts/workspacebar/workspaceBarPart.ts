@@ -11,6 +11,7 @@ import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -39,6 +40,9 @@ export const WORKSPACEBAR_WIDTH = 220;
 
 /** Kept with the stylesheet's `.workspacebar-header` height, which the list is laid out below. */
 const HEADER_HEIGHT = 35;
+
+/** Kept with the stylesheet's `.band-sliding` transition, which the band's skin waits out. */
+const BAND_SLIDE_DURATION = 200;
 const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
 
 /**
@@ -152,6 +156,15 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	/** The strip above the header. Its height is the title bar's, read on every layout. */
 	private titlebarSpacer: HTMLElement | undefined;
 
+	/** The height the strip was last given, which is where a slide starts from. */
+	private bandHeight: number | undefined;
+
+	/** Set by the one change that slides the band rather than snapping it: full screen. */
+	private slideNextBandChange = false;
+
+	/** Takes the slide class off, and the skin with it if the band slid shut, once the slide is over. */
+	private readonly bandSettler = this._register(new RunOnceScheduler(() => this.settleBand(), BAND_SLIDE_DURATION));
+
 	private readonly model: WorkspaceBarModel;
 	private view: WorkspaceBarView | undefined;
 	private editors: WorkspaceBarEditors | undefined;
@@ -199,6 +212,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// taken while the answer was still the old one.
 		this._register(onDidChangeFullscreen(windowId => {
 			if (this.element && windowId === getWindowId(getWindow(this.element))) {
+				this.slideNextBandChange = true;
 				this.relayoutAtCurrentSize();
 			}
 		}));
@@ -357,6 +371,20 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			const bannerHeight = this.layoutService.isVisible(Parts.BANNER_PART) ? BANNER_HEIGHT : 0;
 			const above = controlsAbove ? this.layoutService.mainContainerOffset.top - bannerHeight : 0;
 
+			// ⚠️ Slid rather than snapped, and only when full screen is what moved it. The header
+			// jumped 35px the moment macOS reported the change, which is after its own animation has
+			// finished - so the least this can do is not add a second jolt to the end of the first.
+			// Only full screen: a band that slides at startup or on collapse is a header that drifts
+			// into place every time the window opens.
+			//
+			// ⚠️ And only where the workbench animates at all. With reduced motion the stylesheet has no
+			// transition to run, and holding the skin on for a slide that is not happening leaves the
+			// collapsed strip's bottom border as a hairline across the top for its length.
+			const slide = this.slideNextBandChange && this.bandHeight !== undefined && this.bandHeight !== above
+				&& !!this.element.closest('.monaco-enable-motion');
+			this.slideNextBandChange = false;
+			this.bandHeight = above;
+
 			// ⚠️ Spacing and nothing else. macOS draws the window's three buttons across this row - 70px
 			// of them, over a column that is 36 when collapsed - so nothing of ours goes in it.
 			this.titlebarSpacer.style.height = `${above}px`;
@@ -366,18 +394,40 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			// the same edge, and two sources for it is two edges a frame apart.
 			this.element.style.setProperty('--facade-band-height', `${above}px`);
 
-			// ⚠️ And the band's skin comes off with the band. The collapsed strip is `border-box` with
-			// a 1px bottom border, so a height of zero still paints that border: measured, the strip
-			// came back 1px tall and the header started at y=1, leaving a hairline of `titleBar.border`
-			// across the top of a column that has no band under it. The class is what the stylesheet
-			// keys the skin off, so it has to go when the height does.
-			this.element.classList.toggle('banded', above > 0);
+			if (slide) {
+				// ⚠️ The skin stays on for the length of the slide, whichever way it goes. Taken off at
+				// the start of a slide shut, the band loses its colour and its bottom line in the first
+				// frame and the slide is a gap closing rather than a band.
+				this.element.classList.add('band-sliding', 'banded');
+				this.bandSettler.schedule();
+			} else {
+				this.bandSettler.cancel();
+				this.settleBand();
+			}
 		}
 
 		// A virtualised list does not re-flow on its own: without handing the size down the rows stop
 		// being recycled against the visible area and the scroll height is computed from the old one.
+		//
+		// ⚠️ Given the height the band is going to, not the one it has. Mid-slide the strip's
+		// `clientHeight` is somewhere between the two, and a list laid out against that is the wrong
+		// height for as long as nothing lays it out again - which, after a full screen change, is
+		// until the next resize.
 		const { contentSize } = super.layoutContents(width, height);
-		this.view?.layout(contentSize.width, contentSize.height - (this.titlebarSpacer?.clientHeight ?? 0) - HEADER_HEIGHT);
+		this.view?.layout(contentSize.width, contentSize.height - (this.bandHeight ?? 0) - HEADER_HEIGHT);
+	}
+
+	/**
+	 * The band as it is at rest: no slide under way, and its skin on exactly when it has a height.
+	 *
+	 * ⚠️ The collapsed strip is `border-box` with a 1px bottom border, so a height of zero still
+	 * paints that border: measured, the strip came back 1px tall and the header started at y=1,
+	 * leaving a hairline of `titleBar.border` across the top of a column that has no band under it.
+	 * The class is what the stylesheet keys the skin off, so it has to go when the height does.
+	 */
+	private settleBand(): void {
+		this.element?.classList.remove('band-sliding');
+		this.element?.classList.toggle('banded', (this.bandHeight ?? 0) > 0);
 	}
 
 	async add(uris: readonly URI[]): Promise<void> {

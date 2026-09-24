@@ -625,6 +625,29 @@
  * -------------------------------------------------------------------------------------------
  */
 
+/*
+ * ⚠️ Registered so that it can be animated. A custom property is a string to the browser until it
+ * is told otherwise, and a string does not interpolate: the collapsed divider, which starts where the
+ * band ends, would jump to its new start while the band beside it slid there.
+ */
+@property --facade-band-height {
+	syntax: '<length>';
+	inherits: true;
+	initial-value: 0px;
+}
+
+/*
+ * The band slides when full screen takes the window's buttons away or gives them back - see
+ * `BAND_SLIDE_DURATION`, which is this duration, and why only then.
+ */
+.monaco-workbench.monaco-enable-motion .part.workspacebar.band-sliding {
+	transition: --facade-band-height 200ms ease-out;
+}
+
+.monaco-workbench.monaco-enable-motion .part.workspacebar.band-sliding .workspacebar-titlebar-spacer {
+	transition: height 200ms ease-out;
+}
+
 .monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
 	display: flex;
 	align-items: center;
