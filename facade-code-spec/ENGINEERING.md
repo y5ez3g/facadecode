@@ -72,6 +72,7 @@ build    npm run transpile-client      fast, for iterating on src/
 run      ./scripts/code.sh --user-data-dir=<dir> --extensions-dir=<dir>
 check    npm run valid-layers-check && npm run stylelint && npm run gulp -- hygiene
 test     ./scripts/test.sh --grep <pattern>
+release  npm run release-mac           a notarized .dmg; setup in RELEASE.md
 ```
 
 `stylelint` is the one that is easy to forget and the only one that knows about CSS. It
