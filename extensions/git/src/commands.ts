@@ -20,6 +20,7 @@ import { ApiRepository } from './api/api1';
 import { getRemoteSourceActions, pickRemoteSource } from './remoteSource';
 import { RemoteSourceAction } from './typings/git-base';
 import { CloneManager } from './cloneManager';
+import { createWorktreeAt, CreateWorktreeAtResult, deleteWorktreeAt, DeleteWorktreeAtResult, DeleteWorktreeMode } from './worktreeAt';
 
 abstract class CheckoutCommandItem implements QuickPickItem {
 	abstract get label(): string;
@@ -3805,6 +3806,18 @@ export class CommandCenter {
 
 		const uri = Uri.file(repository.root);
 		await commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+	}
+
+	// Facade Code: the workspace bar's worktrees. Non-interactive, and they answer rather than throw -
+	// everything else is in worktreeAt.ts.
+	@command('git.createWorktreeAt')
+	async createWorktreeAt(root: string, worktreePath: string, branch: string): Promise<CreateWorktreeAtResult> {
+		return createWorktreeAt(this.git, root, worktreePath, branch);
+	}
+
+	@command('git.deleteWorktreeAt')
+	async deleteWorktreeAt(root: string, worktreePath: string, mode: DeleteWorktreeMode): Promise<DeleteWorktreeAtResult> {
+		return deleteWorktreeAt(this.git, root, worktreePath, mode);
 	}
 
 	@command('git.graph.deleteTag', { repository: true })

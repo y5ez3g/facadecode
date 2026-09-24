@@ -181,7 +181,8 @@ git.createWorktreeAt(root, path, branch)
     git worktree add -b <branch> <path> HEAD      with GIT_LFS_SKIP_SMUDGE=1 in the environment
     then copies .worktreeinclude (§8)
     answers { path }, or { error: { code, message } } carrying upstream's own error codes:
-      WorktreeAlreadyExists, WorktreeBranchAlreadyUsed
+      BranchAlreadyExists (always -b, so a branch that exists is this - checked out elsewhere or
+      not), WorktreeAlreadyExists (the path), InvalidBranchName
 
 git.deleteWorktreeAt(root, path, mode)
     'check'    git -C <path> status --porcelain; answers { dirty: files[] } and removes nothing
@@ -254,18 +255,24 @@ local config. The same file Claude Code, Codex and Trae read, so one file serves
 
 - **WT-6.1** A file named `.worktreeinclude` at the root of the main checkout, in gitignore syntax. No
   file, nothing copied.
-- **WT-6.2** A file is copied when it is **both** ignored by the repository **and** matched by
-  `.worktreeinclude`. Git decides both, in the main checkout:
+- **WT-6.2** A path is copied when it is **both** ignored by the repository **and** matched by
+  `.worktreeinclude`:
   ```
-  ignored   git ls-files --others --ignored --exclude-standard
-  matched   git ls-files --others --ignored --exclude-from=.worktreeinclude
-  copied    the intersection
+  candidates  git ls-files --others --ignored --exclude-standard --directory
+              what git ignores, with a wholly ignored directory as one entry
+  matched     each candidate against .worktreeinclude, read as gitignore reads a pattern file:
+              # comments, ! negates, a trailing / for directories, no other / matches at any depth,
+              the last matching rule wins, an included directory brings everything under it
   ```
-  So a tracked file is never copied, an untracked file that is not ignored is never copied, and the
-  matching is git's own (§18.8). ⚠️ That includes gitignore's own limit: a file inside a directory the
-  patterns exclude cannot be re-included with `!`.
-- **WT-6.3** File by file, with `fs.copyFile` and `COPYFILE_EXCL` - never over something git checked
-  out. Parent directories are created; symlinks are skipped.
+  So a tracked file is never copied and an untracked file that is not ignored is never copied.
+  ⚠️ **The candidates are listed with `--directory`, as Claude Code lists them.** A pattern like
+  `*.local.json` then never reaches into `node_modules`, and a file inside a wholly ignored directory is
+  reached by naming the directory. Listing every ignored file instead - the two-`ls-files` intersection
+  this rule first said - took 9.8 s and 22 MB of output on this repository, and matched files deep
+  inside `node_modules` (§18.9).
+- **WT-6.3** A file with `fs.copyFile` and `COPYFILE_EXCL`, a directory with `fs.cp` and
+  `force: false` - never over something git checked out. Parent directories are created; links are
+  skipped.
 - **WT-6.4** A file that fails to copy does not stop anything. One warning names how many failed and
   the first few.
 - **WT-6.5** It is for small files. Listing a dependency directory in it copies every file one by one -
@@ -734,7 +741,24 @@ copied      the intersection: every matched file above. node_modules is not in i
             The same rule the file's syntax promises (WT-6.2)
 ```
 
-### 18.9 Not measured
+### 18.9 Listing the candidates for `.worktreeinclude`
+
+Measured in W3, on this repository, 2026-09-24:
+
+```
+git ls-files --others --ignored --exclude-standard -z               9808 ms · 22 MB of output
+  every ignored file, one by one - 223 thousand of them are node_modules
+git ls-files --others --ignored --exclude-from=<include> -z         4620 ms, and it matched
+  every untracked file the include patterns name, at any depth     node_modules/*/.claude/
+                                                                     settings.local.json among them
+git ls-files --others --ignored --exclude-standard --directory -z    418 ms · 7.6 KB
+  a wholly ignored directory is one entry                           <- what WT-6.2 uses
+```
+
+§18.8's fixture still describes what is copied, with one difference: `secrets/` is a wholly ignored
+directory, so it is one candidate and is copied whole.
+
+### 18.10 Not measured
 
 ```
 a Dev Drive                          there is none, and making one needs admin
