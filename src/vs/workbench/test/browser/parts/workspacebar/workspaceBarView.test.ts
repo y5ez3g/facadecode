@@ -31,9 +31,11 @@ suite('Workspace bar - the rows it draws', () => {
 			const element = row.element;
 			const line = element.kind === 'folder'
 				? `${element.repository ? 'repository' : 'folder'} ${element.uri.path}${element.folder ? '' : ' (not in the workspace)'}`
-				: `  worktree ${element.worktree.label}`;
+				: '?';
 			const children = [...(row.children ?? [])] as IObjectTreeElement<WorkspaceBarRow>[];
-			return [line, ...children.map(child => child.element.kind === 'worktree' ? `  worktree ${child.element.worktree.label}` : '?')];
+			return [line, ...children.map(child => child.element.kind === 'worktree'
+				? `  worktree ${child.element.worktree.label}`
+				: child.element.kind === 'placeholder' ? '  (no worktrees yet)' : '?')];
 		});
 	}
 
@@ -42,8 +44,8 @@ suite('Workspace bar - the rows it draws', () => {
 	const w2 = folder('/wt/w2', 2);
 	const groups: WorkspaceBarGroup[] = [
 		{ kind: 'folder', folder: notes },
-		{ kind: 'repository', main: URI.file('/lab'), folder: lab, commonDir: URI.file('/lab/.git'), worktrees: [worktree('/wt/w2', 'w2', w2), worktree('/wt/w10', 'w10')] },
-		{ kind: 'repository', main: URI.file('/api'), folder: undefined, commonDir: URI.file('/api/.git'), worktrees: [worktree('/wt/fix', 'fix', folder('/wt/fix', 3))] },
+		{ kind: 'repository', main: URI.file('/lab'), folder: lab, branch: 'main', commonDir: URI.file('/lab/.git'), worktrees: [worktree('/wt/w2', 'w2', w2), worktree('/wt/w10', 'w10')] },
+		{ kind: 'repository', main: URI.file('/api'), folder: undefined, branch: 'main', commonDir: URI.file('/api/.git'), worktrees: [worktree('/wt/fix', 'fix', folder('/wt/fix', 3))] },
 	];
 
 	test('a repository opens onto its worktrees; a plain folder has none', () => {
@@ -56,6 +58,21 @@ suite('Workspace bar - the rows it draws', () => {
 			'  worktree w10',
 			'repository /api (not in the workspace)',
 			'  worktree fix',
+		]);
+	});
+
+	test('a repository with no worktrees says so, in a row that makes the first one', () => {
+		const solo = folder('/solo');
+		const rows = workspaceBarRows({
+			folders: [solo],
+			groups: [{ kind: 'repository', main: URI.file('/solo'), folder: solo, branch: 'main', commonDir: URI.file('/solo/.git'), worktrees: [] }],
+			worktrees: true,
+			collapsed: false
+		});
+
+		assert.deepStrictEqual(summary(rows), [
+			'repository /solo',
+			'  (no worktrees yet)',
 		]);
 	});
 

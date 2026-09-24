@@ -62,6 +62,12 @@ export const WorkspaceBarRowKindContext = new RawContextKey<'folder' | 'reposito
 /** Rows that are folders of the list: everything except a worktree. */
 const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
 
+/**
+ * Creates a worktree of a repository (WORKTREE.md section 7). Registered by `contrib/worktrees`, which
+ * can reach the terminal this part cannot; the bar only calls it, with the repository's folder.
+ */
+export const NEW_WORKTREE_COMMAND = 'facade.workspaceBar.newWorktree';
+
 const CATEGORY = localize2('workspaceBar.category', "Workspace");
 
 /**

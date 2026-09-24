@@ -628,8 +628,29 @@
  * ⚠️ Padding on the row's own box, not the tree's indent, so the band and the leading line keep
  * running the column's full width on a worktree too.
  */
-.monaco-workbench .part.workspacebar .workspacebar-row.worktree {
+.monaco-workbench .part.workspacebar .workspacebar-row.worktree,
+.monaco-workbench .part.workspacebar .workspacebar-row.placeholder {
 	padding-left: calc(var(--vscode-spacing-size100) + var(--vscode-spacing-size160) + var(--vscode-spacing-size80));
+}
+
+/*
+ * `New Worktree...` on a repository's row, beside its triangle, while the pointer or the keyboard is
+ * on the row. At rest the row reads as a name, the way every other row does.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-add {
+	flex: 0 0 auto;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: var(--vscode-spacing-size160);
+	font-size: var(--vscode-codiconFontSize);
+	color: inherit;
+	cursor: pointer;
+}
+
+.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-add:not(.hidden),
+.monaco-workbench .part.workspacebar .monaco-list:focus .monaco-list-row.focused .workspacebar-add:not(.hidden) {
+	display: flex;
 }
 
 /*
@@ -722,9 +743,10 @@
 	display: none;
 }
 
-/* And the triangle with it: collapsed, the bar shows folder rows only (WORKTREE.md WT-1.10). */
-.monaco-workbench .part.workspacebar.collapsed .workspacebar-twistie {
-	display: none;
+/* And the triangle and the `+` with it: collapsed, the bar shows folder rows only (WORKTREE.md WT-1.10). */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-twistie,
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-add {
+	display: none !important;
 }
 
 /* The header keeps its `+` and loses the word above the list. */

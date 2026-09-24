@@ -28,7 +28,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { MenuWorkbenchToolBar } from '../../../../platform/actions/browser/toolbar.js';
 // Imported for its `registerAction2` calls as much as for the menu id.
 import { WorkspaceBarTitleMenu } from './workspaceBarActions.js';
-import { WorkspaceBarGit } from './workspaceBarGit.js';
+import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
@@ -438,6 +438,17 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	 */
 	folderForCommand(): URI | undefined {
 		return this.view?.focused() ?? this.switcher?.active;
+	}
+
+	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined {
+		const key = this.model.key(uri);
+		for (const group of this.git.groups) {
+			if (group.kind === 'repository' && (this.model.key(group.main) === key || group.worktrees.some(worktree => this.model.key(worktree.uri) === key))) {
+				return group;
+			}
+		}
+
+		return undefined;
 	}
 
 	focus(): void {

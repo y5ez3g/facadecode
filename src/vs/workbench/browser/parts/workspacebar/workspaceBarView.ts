@@ -7,6 +7,7 @@ import { $, append, isHTMLElement } from '../../../../base/browser/dom.js';
 import { IconLabel } from '../../../../base/browser/ui/iconLabel/iconLabel.js';
 import { HoverStyle } from '../../../../base/browser/ui/hover/hover.js';
 import { IHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate.js';
+import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { HoverPosition } from '../../../../base/browser/ui/hover/hoverWidget.js';
 import { IIdentityProvider, IKeyboardNavigationLabelProvider, IListVirtualDelegate } from '../../../../base/browser/ui/list/list.js';
 import { IListAccessibilityProvider } from '../../../../base/browser/ui/list/listWidget.js';
@@ -21,6 +22,7 @@ import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { localize } from '../../../../nls.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
@@ -28,7 +30,7 @@ import { IHoverService, WorkbenchHoverDelegate } from '../../../../platform/hove
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
-import { SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowKindContext } from './workspaceBarActions.js';
+import { NEW_WORKTREE_COMMAND, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowKindContext } from './workspaceBarActions.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
@@ -56,10 +58,28 @@ interface IWorktreeRow {
 	readonly worktree: IWorkspaceBarWorktree;
 }
 
-export type WorkspaceBarRow = IFolderRow | IWorktreeRow;
+/** What a repository with no worktrees shows under it, and a way to make the first one (WT-1.8). */
+interface IPlaceholderRow {
+	readonly kind: 'placeholder';
+	readonly repository: URI;
+}
+
+export type WorkspaceBarRow = IFolderRow | IWorktreeRow | IPlaceholderRow;
 
 function uriOf(row: WorkspaceBarRow): URI {
-	return row.kind === 'folder' ? row.uri : row.worktree.uri;
+	switch (row.kind) {
+		case 'folder': return row.uri;
+		case 'worktree': return row.worktree.uri;
+		case 'placeholder': return row.repository;
+	}
+}
+
+function nameOf(row: WorkspaceBarRow): string {
+	switch (row.kind) {
+		case 'folder': return row.folder?.name ?? basename(row.uri);
+		case 'worktree': return row.worktree.label;
+		case 'placeholder': return localize('workspaceBar.noWorktrees', "No worktrees yet — create one");
+	}
 }
 
 /**
@@ -87,11 +107,15 @@ export function workspaceBarRows(input: {
 			return flat(group.folder);
 		}
 
+		const children: IObjectTreeElement<WorkspaceBarRow>[] = group.worktrees.length > 0
+			? group.worktrees.map(worktree => ({ element: { kind: 'worktree', worktree } }))
+			: [{ element: { kind: 'placeholder', repository: group.main } }];
+
 		return {
 			element: { kind: 'folder', uri: group.main, folder: group.folder, repository: true, worktrees: group.worktrees.map(worktree => worktree.uri) },
 			// ⚠️ Collapsed to its icons, a column cannot tell a repository from a worktree, so the
 			// worktrees wait for the bar to open (WT-1.10).
-			children: input.collapsed ? [] : group.worktrees.map(worktree => ({ element: { kind: 'worktree' as const, worktree } })),
+			children: input.collapsed ? [] : children,
 			collapsed: ObjectTreeElementCollapseState.PreserveOrExpanded
 		};
 	});
@@ -105,7 +129,7 @@ export function workspaceBarRows(input: {
  * the column never loses its one "you are here".
  */
 export function carriesMark(row: WorkspaceBarRow, active: URI | undefined, worktreesHidden: boolean, key: (uri: URI) => string): boolean {
-	if (!active) {
+	if (!active || row.kind === 'placeholder') {
 		return false;
 	}
 
@@ -126,6 +150,8 @@ interface IRowTemplate {
 	readonly row: HTMLElement;
 	readonly icon: HTMLElement;
 	readonly label: IconLabel;
+	/** `New Worktree...` on a repository's row, shown while the pointer is on it. */
+	readonly add: HTMLElement;
 	/** The bar's own disclosure triangle, last in the row. The tree's is hidden: see `twistieAdditionalCssClass`. */
 	readonly twistie: HTMLElement;
 	/**
@@ -156,9 +182,14 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		const row = append(container, $('.workspacebar-row'));
 		const icon = append(row, $('.workspacebar-icon'));
 		const label = disposables.add(new IconLabel(row, { supportHighlights: true, supportDescriptionHighlights: true }));
+		const add = append(row, $(`.workspacebar-add${ThemeIcon.asCSSSelector(Codicon.add)}`));
 		const twistie = append(row, $('.workspacebar-twistie'));
 
-		const template: IRowTemplate = { row, twistie, icon, label, name: '', templateDisposable: disposables };
+		const template: IRowTemplate = { row, add, twistie, icon, label, name: '', templateDisposable: disposables };
+
+		add.setAttribute('role', 'button');
+		add.setAttribute('aria-label', localize('workspaceBar.newWorktree', "New Worktree..."));
+		disposables.add(this.hoverService.setupManagedHover(getDefaultHoverDelegate('mouse'), add, localize('workspaceBar.newWorktree', "New Worktree...")));
 
 		/*
 		 * The name, on the row itself, while the column is collapsed.
@@ -204,6 +235,16 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		template.twistie.className = twistie ? `workspacebar-twistie ${ThemeIcon.asClassName(twistie)}` : 'workspacebar-twistie hidden';
 
 		template.row.classList.toggle('worktree', element.kind === 'worktree');
+		template.row.classList.toggle('placeholder', element.kind === 'placeholder');
+		template.add.classList.toggle('hidden', element.kind !== 'folder' || !element.repository);
+
+		if (element.kind === 'placeholder') {
+			template.icon.className = `workspacebar-icon ${ThemeIcon.asClassName(Codicon.add)}`;
+			template.name = nameOf(element);
+			template.label.setLabel(template.name);
+			return;
+		}
+
 		if (element.kind === 'worktree') {
 			template.icon.className = `workspacebar-icon ${ThemeIcon.asClassName(Codicon.gitBranch)}`;
 			template.name = element.worktree.label;
@@ -258,7 +299,7 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 	}
 
 	getAriaLabel(row: WorkspaceBarRow): string {
-		const name = row.kind === 'folder' ? (row.folder?.name ?? basename(row.uri)) : row.worktree.label;
+		const name = nameOf(row);
 		if (this.isUnavailable(row)) {
 			return localize('workspaceBar.unavailableAria', "{0}, not on disk", name);
 		}
@@ -270,7 +311,7 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 class WorkspaceBarKeyboardNavigationLabelProvider implements IKeyboardNavigationLabelProvider<WorkspaceBarRow> {
 
 	getKeyboardNavigationLabel(row: WorkspaceBarRow): string {
-		return row.kind === 'folder' ? (row.folder?.name ?? basename(row.uri)) : row.worktree.label;
+		return nameOf(row);
 	}
 }
 
@@ -301,6 +342,7 @@ export class WorkspaceBarView extends Disposable {
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ICommandService private readonly commandService: ICommandService,
 	) {
 		super();
 
@@ -311,7 +353,7 @@ export class WorkspaceBarView extends Disposable {
 
 		const isUnavailable = (row: WorkspaceBarRow) => row.kind === 'worktree'
 			? !row.worktree.exists
-			: !!row.folder && model.isUnavailable(row.folder);
+			: row.kind === 'folder' && !!row.folder && model.isUnavailable(row.folder);
 
 		this.tree = this._register(instantiationService.createInstance(
 			WorkbenchObjectTree<WorkspaceBarRow, void>,
@@ -506,6 +548,12 @@ export class WorkspaceBarView extends Disposable {
 			return;
 		}
 
+		// A repository's `+`, and the row that says it has no worktrees yet, both make one.
+		if (row.kind === 'placeholder' || (row.kind === 'folder' && row.repository && isHTMLElement(target) && target.closest('.workspacebar-add'))) {
+			await this.commandService.executeCommand(NEW_WORKTREE_COMMAND, uriOf(row));
+			return;
+		}
+
 		if (row.kind === 'folder') {
 			return row.folder ? this.switcher.switchTo(row.folder.uri) : this.show(row.uri);
 		}
@@ -524,7 +572,8 @@ export class WorkspaceBarView extends Disposable {
 			return;
 		}
 
-		this.rowKind.set(row.kind === 'worktree' ? 'worktree' : row.repository ? 'repository' : 'folder');
+		// The placeholder stands in for its repository, so its menu is the repository's.
+		this.rowKind.set(row.kind === 'worktree' ? 'worktree' : row.kind === 'placeholder' || row.repository ? 'repository' : 'folder');
 	}
 
 	/**

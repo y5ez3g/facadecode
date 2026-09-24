@@ -37,6 +37,8 @@ export interface IWorkspaceBarRepository {
 	readonly main: URI;
 	/** The workspace folder the main checkout is. Undefined when only a worktree of it was added. */
 	readonly folder: IWorkspaceFolder | undefined;
+	/** The branch the main checkout is on, without `refs/heads/`. Undefined while its HEAD is detached. */
+	readonly branch: string | undefined;
 	/** The shared git directory. It is what makes folders one repository. */
 	readonly commonDir: URI;
 	/** Sorted by label, numerically: `w2` before `w10`. */
@@ -384,7 +386,8 @@ async function readGroups(fileService: IFileService, key: FolderKey, folders: re
 		worktrees.sort((a, b) => compareFileNames(a.label, b.label));
 
 		const mainKey = await canonicalKey(main);
-		groups.push({ kind: 'repository', main, folder: memberKeys.get(mainKey), commonDir: entry.commonDir, worktrees });
+		const mainHead = await readHead(fileService, entry.commonDir);
+		groups.push({ kind: 'repository', main, folder: memberKeys.get(mainKey), branch: mainHead?.branch, commonDir: entry.commonDir, worktrees });
 	}
 
 	return { groups, watch };
