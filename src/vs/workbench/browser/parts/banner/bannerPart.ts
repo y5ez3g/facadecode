@@ -32,13 +32,19 @@ import { BannerFocused } from '../../../common/contextkeys.js';
 
 // Banner Part
 
+/**
+ * The banner's height while it is showing. Named so that a part beside the banner rather than
+ * under it can take it back out of `mainContainerOffset`, which counts it for every column.
+ */
+export const BANNER_HEIGHT = 26;
+
 export class BannerPart extends Part implements IBannerService {
 
 	declare readonly _serviceBrand: undefined;
 
 	// #region IView
 
-	readonly height: number = 26;
+	readonly height: number = BANNER_HEIGHT;
 	readonly minimumWidth: number = 0;
 	readonly maximumWidth: number = Number.POSITIVE_INFINITY;
 

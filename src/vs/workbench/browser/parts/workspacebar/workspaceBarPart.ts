@@ -21,6 +21,7 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { getTitleBarStyle, TitlebarStyle } from '../../../../platform/window/common/window.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { Part } from '../../part.js';
+import { BANNER_HEIGHT } from '../banner/bannerPart.js';
 import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
 import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -328,8 +329,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	override layout(width: number, height: number, top: number, left: number): void {
 		super.layout(width, height, top, left);
 
-		// Follows the title bar and the banner, however tall they are - including not at all, which
-		// is what full screen and a hidden title bar both come out as.
+		// Follows the title bar, however tall it is - including not at all, which is what full
+		// screen and a hidden title bar both come out as.
 		//
 		// ⚠️ And a row of its own under them while collapsed. macOS draws the window's three buttons
 		// across the top of this column - measured at 70px wide, which is what the title bar reserves
@@ -347,7 +348,14 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 				getTitleBarStyle(this.configurationService),
 				getWCOTitlebarAreaRect(targetWindow),
 				isFullscreen(targetWindow));
-			const above = controlsAbove ? this.layoutService.mainContainerOffset.top : 0;
+			// ⚠️ The title bar's row and not the banner's. `mainContainerOffset` counts both, because
+			// every other column has the banner over it - but the banner starts to the right of this
+			// one, and the lights sit in the title bar's row only. Counted, the header dropped 26px
+			// whenever the Restricted Mode banner was up, under a band with nothing in it. It did not
+			// even do that reliably: showing the banner does not lay this column out again, so the
+			// header stayed put until the next resize - maximising and restoring the window - moved it.
+			const bannerHeight = this.layoutService.isVisible(Parts.BANNER_PART) ? BANNER_HEIGHT : 0;
+			const above = controlsAbove ? this.layoutService.mainContainerOffset.top - bannerHeight : 0;
 
 			// ⚠️ Spacing and nothing else. macOS draws the window's three buttons across this row - 70px
 			// of them, over a column that is 36 when collapsed - so nothing of ours goes in it.
