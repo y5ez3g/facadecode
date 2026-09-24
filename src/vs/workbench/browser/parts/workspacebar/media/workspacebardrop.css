@@ -10,16 +10,31 @@
 	z-index: 10000;
 	/* Never take the drag away from the container that is listening for it. */
 	pointer-events: none;
-	display: none;
+	display: flex;
 	align-items: center;
 	justify-content: center;
+	/*
+	 * ⚠️ Drawn the way `editorDropTarget.ts` draws its own, so a drop looks like one thing wherever
+	 * it lands: the drop background and nothing round it, faded in rather than switched on. The
+	 * first version drew a 1px dashed `focusBorder` round the column in every theme - a line the
+	 * editor only draws in high contrast - and appeared in one frame where the editor's takes 150ms.
+	 */
 	background-color: var(--vscode-editorGroup-dropBackground);
-	outline: 1px dashed var(--vscode-focusBorder);
-	outline-offset: -2px;
+	opacity: 0;
+}
+
+.monaco-workbench.monaco-enable-motion .workspacebar-drop-overlay {
+	transition: opacity 150ms ease-out;
 }
 
 .monaco-workbench .workspacebar-drop-overlay.visible {
-	display: flex;
+	opacity: 1;
+}
+
+/* The one line the editor does draw, and only where the theme asks for one: `activeContrastBorder`. */
+.monaco-workbench:is(.hc-black, .hc-light) .workspacebar-drop-overlay {
+	outline: 2px dashed var(--vscode-contrastActiveBorder);
+	outline-offset: -2px;
 }
 
 .monaco-workbench .workspacebar-drop-overlay-message {
