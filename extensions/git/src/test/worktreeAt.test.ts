@@ -111,8 +111,12 @@ suite('worktreeAt', () => {
 
 		const result = await createWorktreeAt(git, main, path.join(dir, 'worktrees', 'two'), 'taken');
 
-		assert.strictEqual(result.kind, 'error');
-		assert.match(result.kind === 'error' ? result.message : '', /already exists/);
+		// The code the bar keys "Go There" on, although upstream's own match for it misses the
+		// lower-case sentence git writes now; and git's reason, without the progress line before it.
+		assert.deepStrictEqual(result.kind === 'error' ? { code: result.code, message: result.message } : result, {
+			code: 'BranchAlreadyExists',
+			message: `a branch named 'taken' already exists`
+		});
 	});
 
 	test('check names what would be lost; remove refuses it; force removes it and keeps the branch', async () => {

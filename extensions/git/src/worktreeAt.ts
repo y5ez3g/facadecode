@@ -48,11 +48,18 @@ export type DeleteWorktreeAtResult =
  */
 function toError(err: unknown): IWorktreeAtError {
 	const failure = err as { gitErrorCode?: string; stderr?: string; message?: string } | undefined;
-	return {
-		kind: 'error',
-		code: failure?.gitErrorCode,
-		message: (failure?.stderr || failure?.message || String(err)).trim()
-	};
+	const output = (failure?.stderr || failure?.message || String(err)).trim();
+
+	// ⚠️ Upstream's `getGitErrorCode` looks for "A branch named '...' already exists", and git writes
+	// it with a lower-case "a" now - measured with git 2.55. Without this the bar cannot tell a taken
+	// branch from any other failure, and cannot offer to go to it.
+	const code = failure?.gitErrorCode ?? (/a branch named '.+' already exists/i.test(output) ? 'BranchAlreadyExists' : undefined);
+
+	// Git's own sentence, without the progress it printed before it: "Preparing worktree (new branch
+	// ...)" is what it was doing, not what went wrong.
+	const reasons = output.split(/\r?\n/).filter(line => /^(?:fatal|error):/.test(line)).map(line => line.replace(/^(?:fatal|error):\s*/, ''));
+
+	return { kind: 'error', code, message: reasons.length > 0 ? reasons.join(' ') : output };
 }
 
 /**

@@ -431,11 +431,16 @@ W3  the git commands   new      extensions/git/src/worktreeAt.ts
                        §6 and §8. No package.json change: the commands are called, not listed.
                        tests: fixture repositories in a temporary directory, as §18.8 did
 
-W4  create             new  browser/parts/workspacebar/workspaceBarWorktrees.ts
+W4  create             new  contrib/worktrees/browser/worktrees.ts, worktrees.contribution.ts
                        §7 and §9: the QuickPick, names (WT-2.2, 2.3), the command, trust, show,
-                       wait for onDidRestoreEditors, the setup terminal
+                       wait for onDidRestoreEditors, the setup terminal. The bar gains the `+` on a
+                       repository's row and the "No worktrees yet" row, both calling the command,
+                       and IWorkspaceBarService.repositoryFor.
+                       ⚠️ In contrib/, not beside the bar as first planned: vs/workbench/browser may
+                       not import contrib/terminal (valid-layers-check), and the setup step needs
+                       it. folderTerminals sits in contrib/ for the same reason
 
-W5  delete             workspaceBarWorktrees.ts
+W5  delete             contrib/worktrees/browser/worktrees.ts
                        §10, in its seven steps
 ```
 
@@ -504,6 +509,9 @@ Each of these cost a wrong answer first, in Kumite or in W0.
 
 ```
 refs/heads/<name>                compare branch names without the prefix
+"a branch named ... already       git 2.55 writes it lower-case; upstream's getGitErrorCode matches
+  exists"                        "A branch named" and misses it. worktreeAt.ts recognises it itself,
+                                 or the bar cannot offer Go There (found live in W4)
 a thrown error in a git command  becomes the git extension's own modal (WT-4.4) - answer, never throw
 an editor opened mid-switch      is closed by the restore of the working set - wait for
                                  onDidRestoreEditors (WT-5.7)
@@ -529,6 +537,9 @@ orphaned worktrees            a repository folder deleted from disk leaves its w
 the .code-workspace file      a visited worktree is in the file, under the person's home. On another
                               machine it is an unavailable row - today's behaviour for any missing
                               folder. Acceptable?
+the mark after a create       measured in W4: the window is on the new worktree 1.07 s after Enter,
+                              its row appears 1.55 s after - half a second with no row marked,
+                              while the reader reads git's files again. Harmless; worth closing
 long names on Windows         whether git operations after creation - a checkout, a stash - also need
                               longpaths past 259 characters (§18.2). Only matters near the limit
 ```
