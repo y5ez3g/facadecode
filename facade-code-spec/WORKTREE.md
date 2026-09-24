@@ -95,6 +95,11 @@ Numbered so that a test can cite the rule it checks.
   create one", which starts §7. A folder without its own `.git` has no second level and no offer.
 - **WT-1.9** A worktree git still records but whose directory is gone is listed, greyed, and can be
   deleted, which runs `git worktree prune`.
+- **WT-1.10** Collapsed to its column of icons, the bar shows folder rows only. When the window is on
+  a worktree, its repository's row carries the active mark. (Decided 2026-09-24. A column of icons
+  cannot tell a repository from a worktree, so the worktrees wait for the bar to open.)
+- **WT-1.11** The context menu follows the row: `New Worktree...` on a repository row, `Delete
+  Worktree...` on a worktree row, and Customize and Move Up/Down on folder rows only, as today.
 
 ---
 
@@ -175,24 +180,34 @@ git extension gets two non-interactive commands:
 git.createWorktreeAt(root, path, branch)
     git worktree add -b <branch> <path> HEAD      with GIT_LFS_SKIP_SMUDGE=1 in the environment
     then copies .worktreeinclude (§8)
-    answers { path }, or { error } carrying upstream's own error codes:
-      WorktreeAlreadyExists, WorktreeBranchAlreadyUsed (with the worktree that uses the branch)
+    answers { path }, or { error: { code, message } } carrying upstream's own error codes:
+      WorktreeAlreadyExists, WorktreeBranchAlreadyUsed
 
-git.deleteWorktreeAt(root, path, { force })
-    git worktree remove [--force] <path>
-    without force, on a worktree with changes: answers { dirty: files[] } and removes nothing
+git.deleteWorktreeAt(root, path, mode)
+    'check'    git -C <path> status --porcelain; answers { dirty: files[] } and removes nothing
+    'remove'   git worktree remove <path>
+    'force'    git worktree remove --force <path>
+    after a remove that git accepted: if the directory is still there, fs.rm it (recursive, force,
+    maxRetries 5), then git worktree prune
+    answers { removed: true }, or { error: { code, message } }
 ```
 
-- **WT-4.1** These two are the only change to `extensions/git`, together in one place in
-  `commands.ts`, so a merge from upstream has one place to look.
-- **WT-4.2** They run git through the extension's own runner (`execFile` with an argument array,
-  ENGINEERING.md) but ❌ do not call upstream's `Repository.createWorktree`. That method also starts
-  the `git.worktreeIncludeFiles` copy, whose upward walk copies tracked directories (§18.4), and
+- **WT-4.1** These two are the only change to `extensions/git`. Their logic lives in one new file;
+  `commands.ts` only registers them, so a merge from upstream has one line to look at.
+- **WT-4.2** ❌ They do not call upstream's `Repository.createWorktree`. That method also starts the
+  `git.worktreeIncludeFiles` copy, whose upward walk copies tracked directories (§18.4), and
   `runOn: worktreeCreated` tasks, without awaiting either. One command, one thing.
-- **WT-4.3** The repository is found with `openRepository(root, true, true)`. ⚠️ Kumite trap: with
-  either flag missing, a repository outside the folder the window is on is not recognised, and the
-  command does nothing, silently.
-- **WT-4.4** ⚠️ `npm run transpile-client` does not build extensions. After changing `extensions/git`,
+- **WT-4.3** They run git with the command centre's own `Git.exec(root, args, { env })` - the
+  extension's runner, `execFile` with an argument array (ENGINEERING.md), the same error codes. No
+  `Repository` object and no `openRepository`, so there is nothing to find or open first. (This
+  replaces Kumite's route through `openRepository(root, true, true)`, whose missing flag made a
+  command do nothing, silently.)
+- **WT-4.4** ⚠️ **They answer, they never throw.** The extension wraps every command it registers,
+  and a thrown error becomes its own modal error box (`createCommand` in `commands.ts`). The bar says
+  what went wrong in its own words (WT-5.3), so the error has to come back to it as a result.
+- **WT-4.5** ⚠️ The leftover directory is removed only after `git worktree remove` succeeded - git has
+  then confirmed the path was a worktree. Nothing else can make this command delete a directory.
+- **WT-4.6** ⚠️ `npm run transpile-client` does not build extensions. After changing `extensions/git`,
   run `npm run gulp compile-extension:git`, or the window runs the old extension.
 
 ---
@@ -214,13 +229,21 @@ Entries: the `+` on a repository row, the empty-state row (WT-1.8), and the comm
   waiting.
 - **WT-5.5** ❌ A failure is never only in the log. Kumite's first version wrote failures to
   `logService` alone, and to the person it looked like a click that did nothing.
-- **WT-5.6** After success, in this order:
+- **WT-5.6** The whole flow, in this order:
   ```
-  1  trust      IWorkspaceTrustManagementService.setUrisTrust([worktree], true), since it was made
+  1  name       the branch asked for (WT-5.2); the path worked out by WT-2.2, and WT-2.3's suffix
+                chosen by asking IFileService whether the path exists
+  2  create     git.createWorktreeAt, under the progress notification (WT-5.4)
+  3  trust      IWorkspaceTrustManagementService.setUrisTrust([worktree], true), since it was made
                 from a trusted repository
-  2  show       IWorkspaceBarService.show(worktree): into folders[], and the window moves onto it
-  3  setup      §9, in a terminal of the worktree
+  4  show       IWorkspaceBarService.show(worktree): into folders[], and the window moves onto it
+  5  wait       for IWorkspaceBarService.onDidRestoreEditors
+  6  setup      §9, in a terminal of the worktree
   ```
+- **WT-5.7** ⚠️ Step 5 is not optional. A switch restores the incoming folder's editors, and the
+  restore closes whatever else is in the editor area; `onDidRestoreEditors` fires once it has
+  finished (`workspaceBarService.ts`). A setup terminal opened as an editor before then is closed by
+  the restore.
 
 ---
 
@@ -268,10 +291,13 @@ repository say what to run, per OS. This uses Cursor's format.
 
 - **WT-7.1** Read from the new worktree first, then from the main checkout - so an uncommitted file in
   main still works. No file, no setup, and nothing is offered.
-- **WT-7.2** Each value is an array of command lines. A JSON schema is registered for the file.
-- **WT-7.3** It runs in **one terminal, opened in the worktree after the switch**, with the person's
-  default terminal profile, named "Worktree Setup". The environment carries `ROOT_WORKTREE_PATH`, the
-  main checkout's path - Cursor's name for it, so a script written for Cursor works here.
+- **WT-7.2** Each value is an array of command lines. A file that does not parse, or a value that is
+  not an array of strings, is said in one warning and nothing runs.
+- **WT-7.3** It runs in **one terminal, opened in the worktree after the switch has restored its
+  editors** (WT-5.7), with the person's default terminal profile, named "Worktree Setup"
+  (`ITerminalService.createTerminal` with `cwd`, `name` and `env`, then `sendText` per line). The
+  environment carries `ROOT_WORKTREE_PATH`, the main checkout's path - Cursor's name for it, so a
+  script written for Cursor works here.
 - **WT-7.4** Each command line is sent as its own line, one after another, whatever the previous line
   did. Steps that depend on each other go into a script, named on one line
   (`./scripts/setup-worktree.sh`, `.\scripts\setup-worktree.ps1`).
@@ -285,20 +311,37 @@ repository say what to run, per OS. This uses Cursor's format.
 
 ## 10 Removing a worktree
 
-- **WT-8.1** `Delete Worktree...` on a worktree row's context menu.
-- **WT-8.2** If the window is on that worktree, it moves to the repository's folder row first.
-  ⚠️ Otherwise `IActiveFolderService` moves it to the neighbour in `folders[]`, which can be another
-  repository entirely.
-- **WT-8.3** With changes: `git.deleteWorktreeAt` answers `{ dirty }`, every file that would be lost is
-  listed by name, and only after confirmation does it run with `--force`. ❌ Never silently.
-- **WT-8.4** Terminals opened in that worktree are closed first, and the confirmation says so when one
-  has something running. ⚠️ On Windows a process whose working directory is inside a folder stops the
-  folder being deleted (§18.7).
-- **WT-8.5** After `git worktree remove`, if the directory is still there, it is removed with Node's
-  `fs.rm` (`recursive`, `force`, `maxRetries: 5`), then `git worktree prune` runs. ⚠️ git can return 0
-  and leave a directory behind (§18.7); `fs.rm` does not follow junctions or links, so nothing outside
-  the worktree is touched (§18.5).
-- **WT-8.6** The worktree leaves `folders[]` through `WorkspaceBarModel.remove`.
+`Delete Worktree...` on a worktree row's context menu runs these steps, in this order. The order is
+the design: everything that can hold the directory open is gone before git is asked to delete it.
+
+```
+1  check      git.deleteWorktreeAt(root, path, 'check') -> the files that would be lost
+2  confirm    always (WT-8.1), naming the files from step 1 if there are any
+3  move off   if the window is on this worktree, it moves to the repository's folder row
+4  leave      WorkspaceBarModel.remove([worktree]) - out of folders[]
+5  terminals  any terminal still working inside the worktree is closed
+6  delete     git.deleteWorktreeAt(root, path, 'remove'), or 'force' when step 1 found changes
+7  refresh    nothing to do: the reader's watchers see git's records change (§5)
+```
+
+- **WT-8.1** The confirmation is always asked, clean or not, and no setting turns it off: this
+  deletes files from the disk. (Decided 2026-09-24. `facade.workspaceBar.confirmRemoveFolder` is not
+  reused - that one guards a list edit that deletes nothing.) It says the branch is kept, and when a
+  terminal of the worktree has something running, it says that too.
+- **WT-8.2** With changes, every file that would be lost is listed by name, and `'force'` is used only
+  after that confirmation. ❌ Never silently.
+- **WT-8.3** ⚠️ Step 3 before step 4: otherwise `IActiveFolderService` moves the window to the
+  neighbour in `folders[]`, which can be another repository entirely.
+- **WT-8.4** ⚠️ Step 4 before step 6, and step 5 as well. On Windows a process whose working directory
+  is inside a folder stops the folder being deleted (§18.7). Leaving `folders[]` makes
+  `folderTerminals.ts` dispose the terminals it had parked for that folder - existing behaviour,
+  nothing new. Step 5 closes the rest: terminals elsewhere (the panel, say) whose working directory is
+  inside the worktree.
+- **WT-8.5** Step 6 may leave a directory that git has let go of (§18.7); the command removes it
+  (WT-4.5). `fs.rm` does not follow junctions or links, so nothing outside the worktree is touched
+  (§18.5).
+- **WT-8.6** If step 6 fails, the error is said in words (WT-5.5). The worktree stays out of
+  `folders[]` and stays listed by git, so its row is still there to try again.
 - **WT-8.7** The branch is kept. ❌ No option to delete it in this plan.
 - **WT-8.8** `Remove Folder` on a repository row - which never touches the disk - takes that
   repository's worktrees out of `folders[]` with it. They stay on disk and in git.
@@ -343,13 +386,50 @@ Each stage is its own `feature/<n>-<name>`, reviewed, merged with `--no-ff`, and
 (ENGINEERING.md).
 
 ```
+the division of work
+
+  the bar - renderer, cannot run git                  the git extension - Node, runs git
+  workspaceBarGit.ts        reads .git, groups rows    git.createWorktreeAt   create + .worktreeinclude
+  workspaceBarView.ts       the two-level tree         git.deleteWorktreeAt   check / remove / force
+  workspaceBarWorktrees.ts  create and delete flows,
+                            the setup terminal
+            |                                                   ^
+            +------------ ICommandService.executeCommand -------+
+```
+
+```
 W0  measure            done - §18
-W1  the reader         workspaceBarGit.ts: §5. Unit-tested on an in-memory file system
-W2  the tree           WorkspaceBarView from WorkbenchList to WorkbenchObjectTree: §3, and the
-                       switch (§11)
-W3  the git commands   §6 in extensions/git, with .worktreeinclude (§8)
-W4  create             §7 and setup (§9)
-W5  delete             §10
+
+W1  the reader         new  browser/parts/workspacebar/workspaceBarGit.ts
+                       §5. Input folders[], output groups: a repository (its main checkout, and
+                       each worktree with branch, in-folders[] and on-disk) or a plain folder.
+                       IFileService reads, createWatcher per directory. No UI, no change to
+                       existing files.
+                       tests: upstream's FileService over an InMemoryFileSystemProvider, with .git
+                       layouts written into it - real reads, not a mocked IFileService
+
+W2  the tree           changed  workspaceBarView.ts, workspaceBarPart.ts, workspaceBarActions.ts,
+                                media/workspacebarpart.css
+                       WorkbenchList -> WorkbenchObjectTree, two levels (§3). The folder row's
+                       renderer and every overrideStyles entry stay as they are; a second template
+                       draws worktree rows with Codicon.gitBranch. One click on a row in folders[]
+                       -> switcher.switchTo; on one that is not -> IWorkspaceBarService.show
+                       (WT-1.4). A context key overlay per row - folder | repository | worktree -
+                       drives the menus (WT-1.11). Collapsed: folder rows only (WT-1.10).
+                       The switch (§11) is registered next to confirmRemoveFolder in
+                       workspaceBarActions.ts
+
+W3  the git commands   new      extensions/git/src/worktreeAt.ts
+                       changed  extensions/git/src/commands.ts - registration only
+                       §6 and §8. No package.json change: the commands are called, not listed.
+                       tests: fixture repositories in a temporary directory, as §18.8 did
+
+W4  create             new  browser/parts/workspacebar/workspaceBarWorktrees.ts
+                       §7 and §9: the QuickPick, names (WT-2.2, 2.3), the command, trust, show,
+                       wait for onDidRestoreEditors, the setup terminal
+
+W5  delete             workspaceBarWorktrees.ts
+                       §10, in its seven steps
 ```
 
 ⚠️ **W2: refresh the tree declaratively.** Kumite's first tree kept object caches, applied collapse
@@ -374,8 +454,14 @@ grouping, order    folder order from folders[] · numeric branch sort · a group
 names              "/" to "-" · Windows-forbidden characters · device names refused · "-1" suffix
 .worktreeinclude   on fixture repositories: ignored AND matched is copied · tracked never · untracked
                    but not ignored never · no overwrite · symlink skipped
-setup              the key chosen per OS · worktree file before main's · no file, no terminal
-the commands       createWorktreeAt's error codes · deleteWorktreeAt answering { dirty } without force
+setup              the key chosen per OS · worktree file before main's · no file, no terminal · a
+                   file that does not parse -> one warning, nothing runs
+the commands       createWorktreeAt's error codes come back as results, never thrown · 'check'
+                   lists dirty files and removes nothing · 'remove' on a dirty worktree -> the
+                   WorktreeContainsChanges code · the leftover directory is removed only after git
+                   accepted the remove
+menus              New Worktree only on repository rows · Delete Worktree only on worktree rows ·
+                   Customize and Move only on folder rows
 ```
 
 **Live, in a running window.** WORKSPACE.md's two standing checks apply to every row: switch folders
@@ -387,12 +473,16 @@ create             row appears · folders[] gained one entry · the window is on
 this repository    a worktree of FacadeCode itself is created (LFS pointers, §18.1)
 .worktreeinclude   a .env is copied; a file git checked out is not overwritten
 setup              the terminal opens in the worktree and runs each line; ROOT_WORKTREE_PATH is set;
-                   a failing line leaves the worktree usable
+                   a failing line leaves the worktree usable; the terminal is still open after the
+                   switch has restored the worktree's editors (WT-5.7)
 git's errors       branch used elsewhere -> only Go There · path exists -> said
 listed, not added  a worktree made on a command line is listed; folders[] unchanged until clicked
 a branch change    git checkout in a worktree's terminal -> its row's label follows
-delete             dirty -> every file listed · a terminal open in it on Windows -> closed first,
-                   deletion succeeds · no directory left behind · the branch still exists
+delete             a clean worktree still asks first · dirty -> every file listed · the window on it
+                   -> moves to its repository row, not a neighbour · a terminal open in it on
+                   Windows, in the editor area and in the panel -> closed first, deletion succeeds ·
+                   no directory left behind · the branch still exists
+collapsed          folder rows only · on a worktree -> its repository row is marked
 the switch         off -> the bar is today's list
 restart            everything above survives a reload
 ```
@@ -407,9 +497,10 @@ Each of these cost a wrong answer first, in Kumite or in W0.
 
 ```
 refs/heads/<name>                compare branch names without the prefix
-openRepository(root, true, true) both flags, or a repository outside the window's folder is not
-                                 found and the command does nothing (WT-4.3)
-transpile-client                 does not build extensions/git (WT-4.4)
+a thrown error in a git command  becomes the git extension's own modal (WT-4.4) - answer, never throw
+an editor opened mid-switch      is closed by the restore of the working set - wait for
+                                 onDidRestoreEditors (WT-5.7)
+transpile-client                 does not build extensions/git (WT-4.6)
 ISCMService                      not a source for the list (§5)
 git worktree remove -> 0         does not mean the directory is gone (§18.7)
 a shell inside the folder        on Windows, blocks deleting it (§18.7)
@@ -458,6 +549,8 @@ status dot, "+N more" folding       Kumite UI; later, on its own
 choosing a base ref, git init,      later, each on its own
   clone, dragging
 other products' config files        .cursor/worktrees.json, .codex/environments - one file of ours
+a JSON schema for worktrees.json    associating a schema with the file is its own plumbing; WT-7.2
+                                    says a bad file in one warning instead
 upstream's git.worktreeIncludeFiles its walk copies tracked directories (§18.4)
   and runOn: worktreeCreated        hidden, and without the main checkout's path (WT-7.6)
 ```
