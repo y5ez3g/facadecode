@@ -555,8 +555,12 @@ export class CodeApplication extends Disposable {
 			this.logService.trace('app#activate');
 
 			// Mac only event: open new window when we get activated
+			//
+			// ⚠️ The default workspace, as at startup. Closing the last window leaves the app running on
+			// macOS, so this - not startup - is how most people come back to it, and it opened an
+			// empty window where launching opened the default workspace.
 			if (!hasVisibleWindows) {
-				await this.windowsMainService?.openEmptyWindow({ context: OpenContext.DOCK });
+				await this.windowsMainService?.openDefaultWindow({ context: OpenContext.DOCK });
 			}
 		});
 
