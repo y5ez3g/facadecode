@@ -281,6 +281,24 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		return this.open({ ...openConfig, cli, forceEmpty, forceNewWindow, forceReuseWindow, remoteAuthority, forceTempProfile: options?.forceTempProfile, forceProfile: options?.forceProfile });
 	}
 
+	/**
+	 * The window to open when somebody asked for a window and nothing in particular: the default
+	 * workspace, or an empty window where there is none to be had.
+	 *
+	 * ⚠️ Not `openEmptyWindow`. That one is for "New Window", which asked for an empty window and
+	 * should get one; it forces `forceEmpty`, and `forceEmpty` is exactly what keeps `doOpen` from
+	 * reaching the default workspace. Clicking the Dock icon of an app with no windows left asked
+	 * for nothing, the same as starting it, and gets what starting it gets.
+	 */
+	async openDefaultWindow(openConfig: IOpenEmptyConfiguration): Promise<ICodeWindow[]> {
+		const defaultWorkspace = await this.resolveDefaultWorkspace();
+		if (!defaultWorkspace) {
+			return this.openEmptyWindow(openConfig);
+		}
+
+		return this.open({ ...openConfig, cli: this.environmentMainService.args, urisToOpen: [{ workspaceUri: defaultWorkspace.workspace.configPath }], forceNewWindow: true });
+	}
+
 	openExistingWindow(window: ICodeWindow, openConfig: IOpenConfiguration): void {
 
 		// Bring window to front
