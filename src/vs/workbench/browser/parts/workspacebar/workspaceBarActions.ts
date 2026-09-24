@@ -5,6 +5,7 @@
 
 import '../dialogs/media/facadedialog.css';
 import './media/workspacebardialog.css';
+import { coalesce } from '../../../../base/common/arrays.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { localize, localize2 } from '../../../../nls.js';
@@ -18,7 +19,9 @@ import { ServicesAccessor } from '../../../../platform/instantiation/common/inst
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
+import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { asCodeSpan } from './workspaceBar.js';
+import type { IWorkspaceBarRepository } from './workspaceBarGit.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { showCustomizeDialog } from './workspaceBarCustomize.js';
@@ -301,14 +304,17 @@ class RemoveFolderAction extends Action2 {
 		const dialogService = accessor.get(IDialogService);
 		const labelService = accessor.get(ILabelService);
 		const configurationService = accessor.get(IConfigurationService);
+		const uriIdentityService = accessor.get(IUriIdentityService);
 
 		const folder = uri ?? workspaceBarService.folderForCommand();
 		if (!folder) {
 			return;
 		}
 
+		const leaving = foldersToRemove(folder, workspaceBarService.repositoryFor(folder), (a, b) => uriIdentityService.extUri.isEqual(a, b));
+
 		if (configurationService.getValue<boolean>(CONFIRM_REMOVE_FOLDER) === false) {
-			return workspaceBarService.remove([folder]);
+			return workspaceBarService.remove(leaving);
 		}
 
 		// The path, then what the two words in the button actually do. Both matter: two folders can
@@ -320,6 +326,12 @@ class RemoveFolderAction extends Action2 {
 		const detail = new MarkdownString();
 		detail.appendMarkdown(`${asCodeSpan(labelService.getUriLabel(folder))}\n\n`);
 		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from your workspace and clears its saved editors. Your files on disk will not be deleted.")));
+		if (leaving.length > 1) {
+			detail.appendMarkdown('\n\n');
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(leaving.length === 2
+				? localize('workspaceBar.removeFolderWorktree', "Its worktree in the workspace leaves with it, and stays on disk.")
+				: localize('workspaceBar.removeFolderWorktrees', "Its {0} worktrees in the workspace leave with it, and stay on disk.", leaving.length - 1)));
+		}
 
 		const { confirmed } = await dialogService.confirm({
 			// ⚠️ No severity glyph. Nothing here is destroyed - the folder is left where it is - and a
@@ -343,9 +355,23 @@ class RemoveFolderAction extends Action2 {
 		});
 
 		if (confirmed) {
-			await workspaceBarService.remove([folder]);
+			await workspaceBarService.remove(leaving);
 		}
 	}
+}
+
+/**
+ * What `Remove Folder` on a row takes out of the workspace: the folder, and - on a repository's row -
+ * every worktree of it that is in the workspace too (WORKTREE.md WT-8.8). Their rows hang under the
+ * repository's, so leaving them would leave rows under a folder the list no longer has. Nothing on
+ * disk is touched either way.
+ */
+export function foldersToRemove(folder: URI, repository: IWorkspaceBarRepository | undefined, isEqual: (a: URI, b: URI) => boolean): URI[] {
+	if (!repository || !isEqual(repository.main, folder)) {
+		return [folder];
+	}
+
+	return [folder, ...coalesce(repository.worktrees.map(worktree => worktree.folder?.uri))];
 }
 
 /**

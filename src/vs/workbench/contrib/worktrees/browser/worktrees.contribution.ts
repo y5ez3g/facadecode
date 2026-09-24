@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { NewWorktreeAction } from './worktrees.js';
+import { DeleteWorktreeAction, NewWorktreeAction } from './worktrees.js';
 
-// The workspace bar's worktrees: making one (WORKTREE.md section 7).
+// The workspace bar's worktrees: making one (WORKTREE.md section 7) and deleting one (section 10).
 registerAction2(NewWorktreeAction);
+registerAction2(DeleteWorktreeAction);

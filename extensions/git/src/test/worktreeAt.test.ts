@@ -5,7 +5,7 @@
 
 import 'mocha';
 import * as assert from 'assert';
-import { execFile, execFileSync } from 'child_process';
+import { execFile, execFileSync, spawn } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -141,6 +141,42 @@ suite('worktreeAt', () => {
 			force: { kind: 'removed' },
 			folder: false,
 			branch: 'dirty',
+		});
+	});
+
+	test('a directory something still has open is waited out, not left behind', async () => {
+		const worktree = path.join(dir, 'worktrees', 'busy');
+		await createWorktreeAt(git, main, worktree, 'busy');
+
+		// A process whose working directory is the worktree, as a shell's is: on Windows git then deletes
+		// the files and its record and fails on the directory with "Permission denied" (found live).
+		const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { cwd: worktree });
+		const exited = new Promise(resolve => holder.on('exit', resolve));
+
+		const result = await deleteWorktreeAt(git, main, worktree, 'remove');
+		await exited;
+
+		assert.deepStrictEqual({ result, folder: existsSync(worktree), listed: run(main, 'worktree', 'list').includes('busy') }, {
+			result: { kind: 'removed' },
+			folder: false,
+			listed: false,
+		});
+	});
+
+	test('a folder git never listed as a worktree, or the main checkout, is refused and left alone', async () => {
+		const plain = path.join(dir, 'plain');
+		write(path.join(plain, 'keep.txt'), 'keep\n');
+
+		const results = [await deleteWorktreeAt(git, main, plain, 'force'), await deleteWorktreeAt(git, main, main, 'force')];
+
+		assert.deepStrictEqual({
+			results: results.map(result => result.kind),
+			plain: existsSync(path.join(plain, 'keep.txt')),
+			main: existsSync(path.join(main, 'tracked.txt')),
+		}, {
+			results: ['error', 'error'],
+			plain: true,
+			main: true,
 		});
 	});
 

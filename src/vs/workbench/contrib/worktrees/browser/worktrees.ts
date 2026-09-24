@@ -6,6 +6,7 @@
 import { raceTimeout } from '../../../../base/common/async.js';
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { Event } from '../../../../base/common/event.js';
+import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { parse, ParseError } from '../../../../base/common/json.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { basename, joinPath } from '../../../../base/common/resources.js';
@@ -15,6 +16,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
@@ -22,12 +24,16 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IProgressService, ProgressLocation } from '../../../../platform/progress/common/progress.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
+import { TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
+import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService } from '../../../../platform/workspace/common/workspaceTrust.js';
+import { asCodeSpan } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { NEW_WORKTREE_COMMAND, WorkspaceBarContextMenu, WorkspaceBarRowKindContext } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
-import { ITerminalService } from '../../terminal/browser/terminal.js';
+import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 
 /*
  * Making a worktree from the workspace bar (WORKTREE.md sections 7 to 9).
@@ -310,6 +316,198 @@ async function runSetup(services: Services, main: URI, worktree: URI): Promise<v
 	for (const line of setup.lines) {
 		await terminal.sendText(line, true);
 	}
+}
+
+/** What `git.deleteWorktreeAt` answers - the shape `extensions/git/src/worktreeAt.ts` returns. */
+type DeleteWorktreeAtResult =
+	| { readonly kind: 'dirty'; readonly files: readonly string[] }
+	| { readonly kind: 'removed' }
+	| { readonly kind: 'error'; readonly code: string | undefined; readonly message: string };
+
+/** How many files a confirmation names before it says how many more there are. */
+const LISTED_FILES = 10;
+
+/** How long to wait for a closed terminal's process to let go of the directory. */
+const TERMINAL_EXIT_TIMEOUT = 3000;
+
+export const DELETE_WORKTREE_COMMAND = 'facade.workspaceBar.deleteWorktree';
+
+export class DeleteWorktreeAction extends Action2 {
+
+	constructor() {
+		super({
+			id: DELETE_WORKTREE_COMMAND,
+			title: localize2('worktrees.deleteWorktree', "Delete Worktree..."),
+			category: localize2('worktrees.category', "Workspace"),
+			f1: true,
+			menu: { id: WorkspaceBarContextMenu, group: '9_remove', order: 2, when: WorkspaceBarRowKindContext.isEqualTo('worktree') }
+		});
+	}
+
+	override async run(accessor: ServicesAccessor, uri?: URI): Promise<void> {
+		// ⚠️ All of them before the first `await`: a `ServicesAccessor` is only good for the synchronous
+		// part of a run.
+		const services = {
+			workspaceBar: accessor.get(IWorkspaceBarService),
+			activeFolder: accessor.get(IActiveFolderService),
+			commands: accessor.get(ICommandService),
+			dialogs: accessor.get(IDialogService),
+			notifications: accessor.get(INotificationService),
+			terminals: accessor.get(ITerminalService),
+			labels: accessor.get(ILabelService),
+			identity: accessor.get(IUriIdentityService),
+			log: accessor.get(ILogService)
+		};
+
+		const target = uri ?? services.workspaceBar.folderForCommand();
+		const repository = target && services.workspaceBar.repositoryFor(target);
+		const worktree = target && repository?.worktrees.find(candidate => services.identity.extUri.isEqual(candidate.uri, target));
+		if (!target || !repository || !worktree) {
+			if (target) {
+				services.notifications.info(localize('worktrees.notWorktree', "{0} is not a worktree the workspace knows.", services.labels.getUriLabel(target)));
+			}
+			return;
+		}
+
+		await deleteWorktree(services, repository.main, worktree.uri, worktree.branch ?? worktree.label);
+	}
+}
+
+type DeleteServices = {
+	readonly workspaceBar: IWorkspaceBarService;
+	readonly activeFolder: IActiveFolderService;
+	readonly commands: ICommandService;
+	readonly dialogs: IDialogService;
+	readonly notifications: INotificationService;
+	readonly terminals: ITerminalService;
+	readonly labels: ILabelService;
+	readonly identity: IUriIdentityService;
+	readonly log: ILogService;
+};
+
+/**
+ * WT-8, in its order. The order is the design: everything that could hold the directory open is gone
+ * before git is asked to delete it.
+ */
+async function deleteWorktree(services: DeleteServices, main: URI, worktree: URI, branch: string): Promise<void> {
+	const run = (mode: 'check' | 'remove' | 'force') => services.commands.executeCommand<DeleteWorktreeAtResult>('git.deleteWorktreeAt', gitPath(main), gitPath(worktree), mode);
+
+	// 1  check: what would be lost, before anybody is asked.
+	let check: DeleteWorktreeAtResult | undefined;
+	try {
+		check = await run('check');
+	} catch (err) {
+		services.notifications.error(localize('worktrees.noGitDelete', "Git could not be reached to delete the worktree: {0}", toErrorMessage(err)));
+		return;
+	}
+
+	if (!check || check.kind !== 'dirty') {
+		services.notifications.error(localize('worktrees.checkFailed', "The worktree could not be checked before deleting it: {0}", check?.kind === 'error' ? check.message : localize('worktrees.noAnswer', "Git did not answer.")));
+		return;
+	}
+
+	const terminals = services.terminals.instances.filter(instance => inside(services.identity, instance, worktree));
+
+	// 2  confirm: always, naming what would be lost (WT-8.1, WT-8.2).
+	if (!(await confirmDelete(services, worktree, branch, check.files, terminals.some(instance => instance.hasChildProcesses)))) {
+		return;
+	}
+
+	// ⚠️ Every terminal working inside it, and a promise for each one's exit, taken now - before step 4.
+	// Leaving folders[] makes folderTerminals dispose the ones it parked, and a terminal disposed there
+	// is gone from `instances` by step 5 while its shell is still exiting with its working directory in
+	// the worktree. Found live: git then failed on the directory with "Permission denied".
+	const closing = new Map(services.terminals.instances
+		.filter(instance => inside(services.identity, instance, worktree))
+		.map(instance => [instance, Event.toPromise(instance.onExit)] as const));
+
+	// 3  move off, to the repository's own row rather than whichever folder is next in the list (WT-8.3).
+	const active = services.activeFolder.activeFolder;
+	if (active && services.identity.extUri.isEqual(active.uri, worktree)) {
+		await services.workspaceBar.show(main);
+	}
+
+	// 4  leave folders[] - which also makes folderTerminals dispose what it parked for it (WT-8.4).
+	await services.workspaceBar.remove([worktree]);
+
+	// 5  close whatever is still working inside it - the panel's terminals, say, or one opened while the
+	//    confirmation was up - and wait for every process to let go: on Windows a working directory
+	//    inside a folder stops it being deleted.
+	for (const instance of services.terminals.instances.filter(candidate => inside(services.identity, candidate, worktree))) {
+		if (!closing.has(instance)) {
+			closing.set(instance, Event.toPromise(instance.onExit));
+		}
+	}
+	for (const instance of closing.keys()) {
+		instance.dispose(TerminalExitReason.User);
+	}
+	await raceTimeout(Promise.all(closing.values()), TERMINAL_EXIT_TIMEOUT);
+
+	// 6  delete. `force` only when the confirmation named the changes it throws away.
+	let result: DeleteWorktreeAtResult | undefined;
+	try {
+		result = await run(check.files.length > 0 ? 'force' : 'remove');
+	} catch (err) {
+		result = { kind: 'error', code: undefined, message: toErrorMessage(err) };
+	}
+
+	// 7  nothing to refresh: the bar's reader sees git's records change (WT-8.6 when it went wrong).
+	if (result?.kind !== 'removed') {
+		const message = result?.kind === 'error' ? result.message : localize('worktrees.noAnswer', "Git did not answer.");
+		services.log.warn(`[worktrees] deleting ${worktree.toString(true)} failed: ${message}`);
+		services.notifications.error(localize('worktrees.deleteFailed', "The worktree could not be deleted: {0}", message));
+	}
+}
+
+/** Whether a terminal is working inside the worktree - where it is now, or where it started. */
+function inside(identity: IUriIdentityService, instance: ITerminalInstance, worktree: URI): boolean {
+	return [instance.cwd, instance.initialCwd].some(cwd => {
+		if (!cwd) {
+			return false;
+		}
+
+		const location = worktree.scheme === Schemas.file ? URI.file(cwd) : worktree.with({ path: cwd });
+		return identity.extUri.isEqualOrParent(location, worktree);
+	});
+}
+
+async function confirmDelete(services: DeleteServices, worktree: URI, branch: string, files: readonly string[], running: boolean): Promise<boolean> {
+	const detail = new MarkdownString();
+	detail.appendMarkdown(`${asCodeSpan(services.labels.getUriLabel(worktree))}\n\n`);
+
+	if (files.length > 0) {
+		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.loses', "These changes have not been committed and will be lost:")));
+		detail.appendMarkdown('\n\n');
+		for (const file of files.slice(0, LISTED_FILES)) {
+			detail.appendMarkdown(`- ${asCodeSpan(file)}\n`);
+		}
+		if (files.length > LISTED_FILES) {
+			detail.appendMarkdown(`- ${escapeMarkdownSyntaxTokens(localize('worktrees.andMore', "and {0} more", files.length - LISTED_FILES))}\n`);
+		}
+		detail.appendMarkdown('\n');
+	}
+
+	if (running) {
+		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.running', "Something is running in one of its terminals; it will be stopped.")));
+		detail.appendMarkdown('\n\n');
+	}
+
+	detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.branchKept', "The branch {0} is kept.", branch)));
+
+	const { confirmed } = await services.dialogs.confirm({
+		type: files.length > 0 ? 'warning' : 'none',
+		message: localize('worktrees.deleteMessage', "Delete Worktree?"),
+		detail,
+		primaryButton: files.length > 0
+			? localize({ key: 'worktrees.deleteDiscardButton', comment: ['&& denotes a mnemonic'] }, "&&Delete and Discard Changes")
+			: localize({ key: 'worktrees.deleteButton', comment: ['&& denotes a mnemonic'] }, "&&Delete"),
+		custom: {
+			classes: ['facade-dialog', 'workspacebar-confirm'],
+			disableCloseButton: true
+		}
+	});
+
+	return confirmed;
 }
 
 /** The first of these files that can be read. */

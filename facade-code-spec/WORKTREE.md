@@ -206,8 +206,10 @@ git.deleteWorktreeAt(root, path, mode)
 - **WT-4.4** ⚠️ **They answer, they never throw.** The extension wraps every command it registers,
   and a thrown error becomes its own modal error box (`createCommand` in `commands.ts`). The bar says
   what went wrong in its own words (WT-5.3), so the error has to come back to it as a result.
-- **WT-4.5** ⚠️ The leftover directory is removed only after `git worktree remove` succeeded - git has
-  then confirmed the path was a worktree. Nothing else can make this command delete a directory.
+- **WT-4.5** ⚠️ The leftover directory is removed only when git has confirmed the path was a worktree:
+  `git worktree remove` succeeded, or it failed but `git worktree list` named the path before it and
+  no longer does (the Windows case in §18.7). A path git never listed fails the same way and is left
+  alone - tested. Nothing else can make this command delete a directory.
 - **WT-4.6** ⚠️ `npm run transpile-client` does not build extensions. After changing `extensions/git`,
   run `npm run gulp compile-extension:git`, or the window runs the old extension.
 
@@ -344,8 +346,14 @@ the design: everything that can hold the directory open is gone before git is as
   `folderTerminals.ts` dispose the terminals it had parked for that folder - existing behaviour,
   nothing new. Step 5 closes the rest: terminals elsewhere (the panel, say) whose working directory is
   inside the worktree.
-- **WT-8.5** Step 6 may leave a directory that git has let go of (§18.7); the command removes it
-  (WT-4.5). `fs.rm` does not follow junctions or links, so nothing outside the worktree is touched
+  ⚠️ Disposed is not exited. A terminal folderTerminals disposes in step 4 has left `instances` by
+  step 5 while its shell is still exiting inside the worktree (found live in W5: git failed on the
+  directory). So the terminals inside the worktree, and a promise for each one's `onExit`, are taken
+  after the confirmation and before step 3; step 5 adds any new ones, disposes them all and waits for
+  every exit, at most 3 s.
+- **WT-8.5** Step 6 may leave a directory that git has let go of (§18.7) - after exit 0, or after
+  "failed to delete ... Permission denied" when something outside the window still has it open; the
+  command removes it (WT-4.5), retrying for about five seconds. `fs.rm` does not follow junctions or links, so nothing outside the worktree is touched
   (§18.5).
 - **WT-8.6** If step 6 fails, the error is said in words (WT-5.5). The worktree stays out of
   `folders[]` and stays listed by git, so its row is still there to try again.
@@ -398,8 +406,8 @@ the division of work
   the bar - renderer, cannot run git                  the git extension - Node, runs git
   workspaceBarGit.ts        reads .git, groups rows    git.createWorktreeAt   create + .worktreeinclude
   workspaceBarView.ts       the two-level tree         git.deleteWorktreeAt   check / remove / force
-  workspaceBarWorktrees.ts  create and delete flows,
-                            the setup terminal
+  contrib/worktrees         create and delete flows,
+    /browser/worktrees.ts   the setup terminal
             |                                                   ^
             +------------ ICommandService.executeCommand -------+
 ```
@@ -440,8 +448,9 @@ W4  create             new  contrib/worktrees/browser/worktrees.ts, worktrees.co
                        not import contrib/terminal (valid-layers-check), and the setup step needs
                        it. folderTerminals sits in contrib/ for the same reason
 
-W5  delete             contrib/worktrees/browser/worktrees.ts
-                       §10, in its seven steps
+W5  delete             contrib/worktrees/browser/worktrees.ts - §10, in its seven steps
+                       workspaceBarActions.ts - Remove Folder on a repository row (WT-8.8)
+                       extensions/git/src/worktreeAt.ts - the Permission denied case (WT-4.5)
 ```
 
 ⚠️ **W2: refresh the tree declaratively.** Kumite's first tree kept object caches, applied collapse
@@ -470,8 +479,9 @@ setup              the key chosen per OS · worktree file before main's · no fi
                    file that does not parse -> one warning, nothing runs
 the commands       createWorktreeAt's error codes come back as results, never thrown · 'check'
                    lists dirty files and removes nothing · 'remove' on a dirty worktree -> the
-                   WorktreeContainsChanges code · the leftover directory is removed only after git
-                   accepted the remove
+                   WorktreeContainsChanges code · a directory a process still has open is removed
+                   once git has let go of it · a folder git never listed, and the main checkout, are
+                   refused and left on disk
 menus              New Worktree only on repository rows · Delete Worktree only on worktree rows ·
                    Customize and Move only on folder rows
 ```
@@ -518,7 +528,12 @@ an editor opened mid-switch      is closed by the restore of the working set - w
 transpile-client                 does not build extensions/git (WT-4.6)
 ISCMService                      not a source for the list (§5)
 git worktree remove -> 0         does not mean the directory is gone (§18.7)
+git worktree remove -> 1         does not mean the worktree is still there: on Windows git deletes
+                                 the files and its record, then fails on the directory (§18.7)
 a shell inside the folder        on Windows, blocks deleting it (§18.7)
+a disposed terminal              is not an exited one: its shell still holds the directory for a
+                                 moment, and it has already left `instances` - take the exit
+                                 promises before anything disposes it (WT-8.4, found live in W5)
 filter.lfs.required=true         Git for Windows' system config: a missing LFS object fails the
                                  whole checkout (§18.1)
 "verified" copy                  Kumite's dependency copy "passed" for a day while copying every
@@ -733,6 +748,13 @@ git worktree remove, no --force      exit 0 for all three - ignored files do not
 ⚠️ deleting the rest failed once      EPERM on the worktree's directory while a shell's working
                                      directory was inside it. With the shell elsewhere, Node's fs.rm
                                      removed it; main's files unchanged (2472 -> 2472)
+⚠️ W5, live: git itself failed        a worktree whose setup terminal had been parked; the delete ran
+                                     while that shell was still exiting. "error: failed to delete
+                                     '...': Permission denied", exit 1 - and git had already deleted
+                                     the files and dropped the worktree from its list, leaving an
+                                     empty directory. After WT-8.4's wait and WT-4.5's fallback: the
+                                     same case, and one with the window on the worktree, both leave
+                                     nothing behind, branches kept, no error
 ```
 
 So removal cannot trust `git worktree remove`'s exit code alone (WT-8.5), and on Windows nothing may

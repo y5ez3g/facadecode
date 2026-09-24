@@ -121,19 +121,30 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 		}
 	}
 
+	const listed = await isListed(git, root, worktreePath);
 	try {
 		await git.exec(root, mode === 'force' ? ['worktree', 'remove', '--force', worktreePath] : ['worktree', 'remove', worktreePath]);
 	} catch (err) {
-		return toError(err);
+		// ⚠️ On Windows git can delete a worktree's files and its record and then fail on the directory
+		// itself, because something still has it open - a shell whose working directory it was, an
+		// indexer, the antivirus. Measured live: "error: failed to delete '...': Permission denied",
+		// exit 1, and `git worktree list` without it. What is left is a directory git has let go of;
+		// it is deleted below, with the waiting git does not do. Only when this remove is what took the
+		// path off git's list: a path git never listed fails the same way and is not a worktree at all.
+		// Any other failure is git's to report.
+		if (listed !== true || (await isListed(git, root, worktreePath)) !== false || !(await exists(worktreePath))) {
+			return toError(err);
+		}
 	}
 
-	// ⚠️ Git can report success and leave the directory behind: links it did not follow are left where
-	// they were (WORKTREE.md section 18.7). Git has just confirmed the path was a worktree, which is the
-	// only reason this ever deletes a directory (WT-4.5). `fs.rm` does not follow links, so nothing
-	// outside the worktree is touched (section 18.5).
+	// ⚠️ Git can also report success and leave the directory behind: links it did not follow are left
+	// where they were (WORKTREE.md section 18.7). Either way git has just confirmed the path was a
+	// worktree, which is the only reason this ever deletes a directory (WT-4.5). `fs.rm` does not follow
+	// links, so nothing outside the worktree is touched (section 18.5), and it retries a directory
+	// that is still busy - for about five seconds, one tenth of a second longer each time.
 	if (await exists(worktreePath)) {
 		try {
-			await fs.rm(worktreePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+			await fs.rm(worktreePath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 		} catch (err) {
 			return toError(err);
 		}
@@ -146,6 +157,25 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 	}
 
 	return { kind: 'removed' };
+}
+
+/**
+ * Whether `git worktree list` names `worktreePath`, or `undefined` when git cannot say. This decides
+ * whether a directory may be deleted, so "not sure" is neither answer.
+ */
+async function isListed(git: IWorktreeGit, root: string, worktreePath: string): Promise<boolean | undefined> {
+	const normalize = (file: string) => {
+		const resolved = path.resolve(file).replace(/[\\/]+$/, '');
+		return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+	};
+
+	try {
+		const { stdout } = await git.exec(root, ['worktree', 'list', '--porcelain']);
+		const wanted = normalize(worktreePath);
+		return stdout.split(/\r?\n/).some(line => line.startsWith('worktree ') && normalize(line.slice('worktree '.length)) === wanted);
+	} catch {
+		return undefined;
+	}
 }
 
 async function exists(file: string): Promise<boolean> {
