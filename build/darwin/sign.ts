@@ -69,9 +69,6 @@ async function main(buildDir?: string): Promise<void> {
 		throw new Error('$AGENT_BUILDDIRECTORY not set');
 	}
 
-	if (!tempDir) {
-		throw new Error('$AGENT_TEMPDIRECTORY not set');
-	}
 
 	const appRoot = path.join(buildDir, `VSCode-darwin-${arch}`);
 	const appName = product.nameLong + '.app';
@@ -86,49 +83,31 @@ async function main(buildDir?: string): Promise<void> {
 		}),
 		preAutoEntitlements: false,
 		preEmbedProvisioningProfile: false,
-		keychain: path.join(tempDir, 'buildagent.keychain'),
+		// ⚠️ The build agent's own keychain on CI. Off it - `release-local.ts` on a developer's Mac -
+		// there is no agent directory, and the identity is in the login keychain, which is where
+		// `codesign` looks when it is not told anywhere else.
+		keychain: tempDir ? path.join(tempDir, 'buildagent.keychain') : undefined,
 		version: getElectronVersion(),
 		identity,
 	};
 
 	// Only overwrite plist entries for x64 and arm64 builds,
 	// universal will get its copy from the x64 build.
+	//
+	// ⚠️ These are the sentences macOS shows when the app asks for a permission, so they carry this
+	// product's name rather than upstream's. And `-replace` for every one: it creates a key that is
+	// not there, where `-insert` fails on a key that is - which is any second run over the same app.
 	if (arch !== 'universal') {
-		await spawn('plutil', [
-			'-insert',
-			'NSAppleEventsUsageDescription',
-			'-string',
-			'An application in Visual Studio Code wants to use AppleScript.',
-			`${infoPlistPath}`
-		]);
-		await spawn('plutil', [
-			'-replace',
-			'NSMicrophoneUsageDescription',
-			'-string',
-			'An application in Visual Studio Code wants to use the Microphone.',
-			`${infoPlistPath}`
-		]);
-		await spawn('plutil', [
-			'-replace',
-			'NSCameraUsageDescription',
-			'-string',
-			'An application in Visual Studio Code wants to use the Camera.',
-			`${infoPlistPath}`
-		]);
-		await spawn('plutil', [
-			'-replace',
-			'NSAudioCaptureUsageDescription',
-			'-string',
-			'An application in Visual Studio Code wants to use Audio Capture.',
-			`${infoPlistPath}`
-		]);
-		await spawn('plutil', [
-			'-insert',
-			'NSLocalNetworkUsageDescription',
-			'-string',
-			'The app uses your local network for DNS resolution and to connect to locally running services.',
-			`${infoPlistPath}`
-		]);
+		const usageDescriptions: [string, string][] = [
+			['NSAppleEventsUsageDescription', `An application in ${product.nameLong} wants to use AppleScript.`],
+			['NSMicrophoneUsageDescription', `An application in ${product.nameLong} wants to use the Microphone.`],
+			['NSCameraUsageDescription', `An application in ${product.nameLong} wants to use the Camera.`],
+			['NSAudioCaptureUsageDescription', `An application in ${product.nameLong} wants to use Audio Capture.`],
+			['NSLocalNetworkUsageDescription', 'The app uses your local network for DNS resolution and to connect to locally running services.'],
+		];
+		for (const [key, value] of usageDescriptions) {
+			await spawn('plutil', ['-replace', key, '-string', value, infoPlistPath]);
+		}
 	}
 
 	await retrySignOnKeychainError(() => sign(appOpts));
