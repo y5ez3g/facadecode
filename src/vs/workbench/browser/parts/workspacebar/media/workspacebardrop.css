@@ -10,9 +10,6 @@
 	z-index: 10000;
 	/* Never take the drag away from the container that is listening for it. */
 	pointer-events: none;
-	display: flex;
-	align-items: center;
-	justify-content: center;
 	/*
 	 * ⚠️ Drawn the way `editorDropTarget.ts` draws its own, so a drop looks like one thing wherever
 	 * it lands: the drop background and nothing round it, faded in rather than switched on. The
@@ -35,12 +32,4 @@
 .monaco-workbench:is(.hc-black, .hc-light) .workspacebar-drop-overlay {
 	outline: 2px dashed var(--vscode-contrastActiveBorder);
 	outline-offset: -2px;
-}
-
-.monaco-workbench .workspacebar-drop-overlay-message {
-	padding: var(--vscode-spacing-size80) var(--vscode-spacing-size160);
-	border: 1px solid var(--vscode-editorGroup-dropIntoPromptBorder);
-	border-radius: var(--vscode-cornerRadius-medium);
-	background-color: var(--vscode-editorGroup-dropIntoPromptBackground);
-	color: var(--vscode-editorGroup-dropIntoPromptForeground);
 }
