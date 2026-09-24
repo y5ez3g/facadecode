@@ -196,7 +196,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 		// ⚠️ Read here, before the grid asks what this column's width may be. Restored in `layout`
 		// instead, the first layout happens at the open width and the column snaps a frame later.
-		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, false);
+		//
+		// Collapsed until somebody opens it: a profile that has never touched the toggle starts with
+		// the column of icons, and the choice is remembered from the first time it is made.
+		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, true);
 
 		// ⚠️ The strip above the header is painted in the title bar's colours, and the title bar has
 		// two: it dims when the window loses focus. Without this the column keeps one bright band
