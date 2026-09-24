@@ -13,7 +13,6 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
-import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { containsDragType, extractEditorsAndFilesDropData, IDraggedResourceEditorInput } from '../../../../platform/dnd/browser/dnd.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -138,8 +137,10 @@ export function splitDrop(dropped: readonly IDraggedResourceEditorInput[], stand
 /**
  * What the window looks like while something from outside is over it.
  *
- * ⚠️ The message cannot name what was picked up: a `DataTransferItem` will not give up a path until
- * the drop, so file and folder are indistinguishable for as long as this is on screen.
+ * ⚠️ The drop background and nothing written on it, as over the editor. A message that said what
+ * letting go would do was tried and taken out; it could not have said which in any case - a
+ * `DataTransferItem` will not give up a path until the drop, so file and folder are
+ * indistinguishable for as long as this is on screen.
  */
 class DropOverlay extends Disposable {
 
@@ -162,7 +163,11 @@ class DropOverlay extends Disposable {
 
 			this.element = append(container, $('.workspacebar-drop-overlay'));
 			this.element.setAttribute('aria-hidden', 'true');
-			append(this.element, $('.workspacebar-drop-overlay-message')).textContent = localize('workspaceBarDrop.message', "Drop files to open, folders to add to the workspace");
+
+			// ⚠️ Resolved once at rest before `visible` goes on. An element that arrives already
+			// visible has no earlier opacity to fade from, so the first drag of a session appeared
+			// in one frame and only the second faded in - measured, 1 at 0ms against 0.49 at 40ms.
+			this.element.getBoundingClientRect();
 		}
 
 		this.element.classList.add('visible');
