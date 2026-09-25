@@ -11,6 +11,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
+import { EditorActivation } from '../../../../../platform/editor/common/editor.js';
 import { FileSystemProviderCapabilities, IFileService } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
@@ -22,7 +23,7 @@ import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService, IActiveFolderWillChangeEvent } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../../services/editor/common/editorGroupsService.js';
 import { AUX_WINDOW_GROUP } from '../../../../services/editor/common/editorService.js';
-import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
+import { ITerminalInstance, ITerminalService, TerminalEditorLocation } from '../../../terminal/browser/terminal.js';
 import { FolderTerminals } from '../../browser/folderTerminals.js';
 
 /** Stands in for any tab, terminal or not: all these tests read off it is where it sits. */
@@ -55,14 +56,28 @@ class TestInstance {
 	asInstance(): ITerminalInstance { return this as unknown as ITerminalInstance; }
 }
 
-/** One column of tabs, in order. */
+/** One column of tabs, in order, and the one in front. */
 class TestGroup extends mock<IEditorGroup>() {
 
 	readonly tabs: TestEditor[] = [];
+	active: TestEditor | undefined;
+	override isLocked = false;
+	/** Tabs moved out of this group into another: upstream closes an editor in the group it leaves. */
+	readonly movedOut: string[] = [];
+	/** The close upstream does in the group a tab leaves; its terminal editor service then stops tracking the terminal. */
+	closeMovedOut: ((name: string) => void) | undefined;
 
 	constructor(override readonly id: number, tabs: TestEditor[]) {
 		super();
 		this.tabs.push(...tabs);
+	}
+
+	override get activeEditor(): EditorInput | null {
+		return this.active?.asInput() ?? null;
+	}
+
+	override get count(): number {
+		return this.tabs.length;
 	}
 
 	override findEditors(resource: URI): EditorInput[] {
@@ -81,6 +96,10 @@ class TestGroup extends mock<IEditorGroup>() {
 
 		const [moved] = this.tabs.splice(from, 1);
 		(target as unknown as TestGroup).tabs.splice(options.index, 0, moved);
+		if (target !== this) {
+			this.movedOut.push(moved.name);
+			this.closeMovedOut?.(moved.name);
+		}
 		return true;
 	}
 
@@ -98,8 +117,11 @@ class TestGroup extends mock<IEditorGroup>() {
 
 class TestPart extends mock<IEditorPart>() {
 
+	override activeGroup: IEditorGroup;
+
 	constructor(override readonly groups: TestGroup[]) {
 		super();
+		this.activeGroup = groups[0];
 	}
 
 	override getGroups(): readonly IEditorGroup[] { return this.groups; }
@@ -121,9 +143,9 @@ class TestEditorGroupsService extends mock<IEditorGroupsService>() {
 }
 
 /**
- * The two calls this contribution makes, behaving as upstream's do: backgrounding takes the tab
- * away but leaves the instance on `instances`, and showing puts it back at the end of whichever
- * window it was asked for.
+ * What this contribution uses of the terminal service, behaving as upstream's does: backgrounding
+ * takes the tab away but leaves the instance on `instances`, off `foregroundInstances`, and showing
+ * opens it again the way an editor opens - see `showBackgroundTerminal`.
  */
 class TestTerminalService extends mock<ITerminalService>() {
 
@@ -131,19 +153,27 @@ class TestTerminalService extends mock<ITerminalService>() {
 
 	readonly backgrounded: string[] = [];
 	readonly shown: string[] = [];
-	readonly askedFor: { preserveFocus?: boolean; viewColumn?: unknown }[] = [];
+	readonly askedFor: TerminalEditorLocation[] = [];
 
 	/** Names that should fail to come back, and one that should block until released. */
 	readonly failing = new Set<string>();
 	blockOn: { name: string; released: DeferredPromise<void> } | undefined;
 
+	/** The names in the background now: taken there, and not yet shown again. */
+	private readonly inBackground = new Set<string>();
+
 	constructor(private readonly groups: TestEditorGroupsService) {
 		super();
+	}
+
+	override get foregroundInstances(): ITerminalInstance[] {
+		return this.instances.filter(instance => !this.inBackground.has((instance as unknown as TestInstance).name));
 	}
 
 	override moveToBackground(instance: ITerminalInstance): void {
 		const named = instance as unknown as TestInstance;
 		this.backgrounded.push(named.name);
+		this.inBackground.add(named.name);
 
 		for (const part of [this.groups.main, this.groups.floated]) {
 			for (const group of part.groups) {
@@ -152,7 +182,7 @@ class TestTerminalService extends mock<ITerminalService>() {
 		}
 	}
 
-	override async showBackgroundTerminal(instance: ITerminalInstance, _suppressSetActive?: boolean, editorOptions?: { preserveFocus?: boolean; viewColumn?: unknown }): Promise<void> {
+	override async showBackgroundTerminal(instance: ITerminalInstance, _suppressSetActive?: boolean, editorOptions?: TerminalEditorLocation): Promise<void> {
 		const named = instance as unknown as TestInstance;
 
 		if (this.blockOn?.name === named.name) {
@@ -164,10 +194,22 @@ class TestTerminalService extends mock<ITerminalService>() {
 		}
 
 		this.shown.push(named.name);
-		this.askedFor.push({ preserveFocus: editorOptions?.preserveFocus, viewColumn: editorOptions?.viewColumn });
+		this.inBackground.delete(named.name);
+		if (editorOptions) {
+			this.askedFor.push({ ...editorOptions });
+		}
 
+		// As an editor opens: in the column asked for - a column number is a column, as upstream's
+		// `columnToEditorGroup` reads it - or else the first, at the tab asked for or else after the one
+		// in front (`workbench.editor.openPositioning`), and in front unless asked not to be.
 		const part = editorOptions?.viewColumn === AUX_WINDOW_GROUP ? this.groups.floated : this.groups.main;
-		part.groups[0].tabs.push(new TestEditor(named.name, named.resource));
+		const column = typeof editorOptions?.viewColumn === 'number' && editorOptions.viewColumn >= 0 ? editorOptions.viewColumn : 0;
+		const group = part.groups[column] ?? part.groups[0];
+		const tab = new TestEditor(named.name, named.resource);
+		group.tabs.splice(editorOptions?.index ?? (group.active ? group.tabs.indexOf(group.active) + 1 : group.tabs.length), 0, tab);
+		if (!editorOptions?.inactive) {
+			group.active = tab;
+		}
 	}
 }
 
@@ -243,14 +285,19 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			}
 		}));
 
-		store.add(new FolderTerminals(
+		const folderTerminals = store.add(new FolderTerminals(
 			folders, bar, terminals, context, groups,
 			new TestConfigurationService(), uriIdentityService, new NullLogService()
 		));
 
 		terminals.instances = live.map(instance => instance.asInstance());
 
-		return { terminals, folders, context, bar, groups };
+		// A terminal whose tab is moved to another group stops being tracked, as upstream's is.
+		for (const column of columns) {
+			column.closeMovedOut = name => terminals.instances = terminals.instances.filter(instance => (instance as unknown as TestInstance).name !== name);
+		}
+
+		return { terminals, folders, context, bar, groups, folderTerminals };
 	}
 
 	/** One switch, with the moment the bar says the incoming folder's editors are up. */
@@ -284,6 +331,55 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		assert.deepStrictEqual([terminals.shown, column.names()], [['one', 'two'], ['one', 'two']]);
 	});
 
+	test('a folder\'s terminals are those parked for it, or while the window is on it those of the editor area', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const one = new TestInstance('one');
+		const column = new TestGroup(0, [tabFor(one)]);
+
+		const { folders, context, bar, folderTerminals } = setup([column], [one]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		const names = (folder: IWorkspaceFolder) => folderTerminals.terminalsOf(folder.uri).map(instance => (instance as unknown as TestInstance).name);
+
+		const onAlpha = { alpha: names(alpha), beta: names(beta) };
+		await switchTo(folders, bar, beta);
+
+		assert.deepStrictEqual({ onAlpha, onBeta: { alpha: names(alpha), beta: names(beta) } }, {
+			onAlpha: { alpha: ['one'], beta: [] },
+			onBeta: { alpha: ['one'], beta: [] },
+		});
+	});
+
+	test('the tab that was in front comes back in front, and the other terminals behind it', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+		const readme = file('readme');
+		const column = new TestGroup(0, [tabFor(agent), readme, tabFor(shell)]);
+
+		const { terminals, folders, context, bar } = setup([column], [agent, shell]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+
+		/** Away and back, leaving `inFront` in front - and, while away, the file in front, as the column is then. */
+		const roundTrip = async (inFront: string) => {
+			column.active = column.tabs.find(tab => tab.name === inFront);
+			const asked = terminals.askedFor.length;
+			await switchTo(folders, bar, beta);
+			column.active = readme;
+			await switchTo(folders, bar, alpha);
+			return { inFront: column.active?.name, tabs: column.names(), behind: terminals.askedFor.slice(asked).map(options => !!options.inactive) };
+		};
+
+		// An agent's terminal left in front comes back in front, not behind the shell opened after it.
+		assert.deepStrictEqual({ agent: await roundTrip('agent'), file: await roundTrip('readme') }, {
+			agent: { inFront: 'agent', tabs: ['agent', 'readme', 'shell'], behind: [false, true] },
+			file: { inFront: 'readme', tabs: ['agent', 'readme', 'shell'], behind: [true, true] },
+		});
+	});
+
 	test('each one comes back to the column and the tab it was at', async () => {
 		const alpha = folder('alpha');
 		const beta = folder('beta');
@@ -301,9 +397,49 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		await switchTo(folders, bar, beta);
 		await switchTo(folders, bar, alpha);
 
-		// Both arrive at the end of the first column and are moved from there, so this also says the
-		// move can cross columns.
+		// Each opens straight in its own column - no group here has a tab in front - and is put back at
+		// its tab within it.
 		assert.deepStrictEqual([left.names(), right.names()], [['readme', 'one', 'notes'], ['two']]);
+	});
+
+	test('one that comes back into a column that is not the active one is still tracked the next time', async () => {
+		// Opened straight in its own column, never moved there: a move between groups closes the editor
+		// in the group it leaves, and a terminal whose editor closes stops being tracked - the next
+		// switch then did not park it, and the working set killed its shell.
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+
+		const left = new TestGroup(0, [file('readme')]);
+		const right = new TestGroup(1, [tabFor(agent), tabFor(shell)]);
+		right.active = right.tabs[0];
+
+		const { terminals, folders, context, bar } = setup([left, right], [agent, shell]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+
+		for (let trip = 0; trip < 2; trip++) {
+			await switchTo(folders, bar, beta);
+			await switchTo(folders, bar, alpha);
+		}
+
+		// Asked for as `PRESERVE`: otherwise opening an editor that is not `inactive` into a group that
+		// is not the active one activates that group (`handleGroupActivation`), and the column moves.
+		const asked = (index: number, inactive: boolean): TerminalEditorLocation => ({ viewColumn: 1, index, preserveFocus: true, inactive, activation: EditorActivation.PRESERVE });
+		assert.deepStrictEqual({
+			right: right.names(),
+			inFront: right.active?.name,
+			parked: terminals.backgrounded,
+			movedAcross: [...left.movedOut, ...right.movedOut],
+			askedFor: terminals.askedFor,
+		}, {
+			right: ['agent', 'shell'],
+			inFront: 'agent',
+			parked: ['agent', 'shell', 'agent', 'shell'],
+			movedAcross: [],
+			askedFor: [asked(0, false), asked(1, true), asked(0, false), asked(1, true)],
+		});
 	});
 
 	test('a floated terminal is parked too, and comes back floated', async () => {
@@ -461,25 +597,87 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		assert.deepStrictEqual(terminals.askedFor.map(asked => asked.preserveFocus), [true]);
 	});
 
-	test('a column that is gone by the time it comes back costs the place, not the shell', async () => {
+	test('terminals whose column is gone come back in their order, at the end of a column that is not locked', async () => {
 		const alpha = folder('alpha');
 		const beta = folder('beta');
 		const one = new TestInstance('one');
+		const two = new TestInstance('two');
 
 		const left = new TestGroup(0, [file('readme')]);
-		const right = new TestGroup(1, [tabFor(one)]);
+		const middle = new TestGroup(1, [file('notes')]);
+		const right = new TestGroup(2, [tabFor(one), tabFor(two)]);
+		left.active = left.tabs[0];
+		middle.active = middle.tabs[0];
 
-		const { terminals, folders, context, bar, groups } = setup([left, right], [one]);
+		const { folders, context, bar, groups } = setup([left, middle, right], [one, two]);
 		context.folders = [alpha, beta];
 		folders.activeFolder = alpha;
 
 		await switchTo(folders, bar, beta);
 
-		// The layout comes back with one column where there were two.
-		groups.main.groups.splice(1, 1);
+		// The layout comes back without the right column, and the active one - the middle - locked.
+		groups.main.groups.splice(2, 1);
+		groups.main.activeGroup = middle;
+		middle.isLocked = true;
 
 		await switchTo(folders, bar, alpha);
 
-		assert.deepStrictEqual([terminals.shown, left.names(), one.disposed], [['one'], ['readme', 'one'], false]);
+		assert.deepStrictEqual({ left: left.names(), middle: middle.names() }, {
+			left: ['readme', 'one', 'two'],
+			middle: ['notes'],
+		});
+	});
+
+	test('a column closed to the left of a terminal\'s own leaves it its own column', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const one = new TestInstance('one');
+		const two = new TestInstance('two');
+
+		const left = new TestGroup(0, [file('readme')]);
+		const middle = new TestGroup(1, [tabFor(one)]);
+		const right = new TestGroup(2, [tabFor(two)]);
+
+		const { folders, context, bar, groups } = setup([left, middle, right], [one, two]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+
+		await switchTo(folders, bar, beta);
+		groups.main.groups.splice(0, 1);
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ middle: middle.names(), right: right.names() }, { middle: ['one'], right: ['two'] });
+	});
+
+	test('a column that is gone by the time it comes back costs the place, not the shell - or the tab in front of the active one', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const one = new TestInstance('one');
+
+		const left = new TestGroup(0, [file('readme')]);
+		const middle = new TestGroup(1, [file('notes')]);
+		const right = new TestGroup(2, [tabFor(one)]);
+		middle.active = middle.tabs[0];
+		right.active = right.tabs[0];
+
+		const { terminals, folders, context, bar, groups } = setup([left, middle, right], [one]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+
+		await switchTo(folders, bar, beta);
+
+		// The layout comes back without the right column, the middle one active.
+		groups.main.groups.splice(2, 1);
+		groups.main.activeGroup = middle;
+
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ shown: terminals.shown, left: left.names(), middle: middle.names(), inFront: middle.active?.name, disposed: one.disposed }, {
+			shown: ['one'],
+			left: ['readme'],
+			middle: ['notes', 'one'],
+			inFront: 'notes',
+			disposed: false,
+		});
 	});
 });
