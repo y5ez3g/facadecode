@@ -761,42 +761,6 @@ suite('WorkspaceContextService - Workspace Editing', () => {
 		assert.strictEqual(basename(actual[0].uri), 'b');
 	}));
 
-	test('move a folder one place along', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
-		await testObject.moveFolder(testObject.getWorkspace().folders[0].uri, 1);
-
-		assert.deepStrictEqual(testObject.getWorkspace().folders.map(folder => basename(folder.uri)), ['b', 'a']);
-	}));
-
-	test('a move that would fall off either end does nothing', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
-		await testObject.moveFolder(testObject.getWorkspace().folders[0].uri, -1);
-		await testObject.moveFolder(testObject.getWorkspace().folders[1].uri, 1);
-
-		assert.deepStrictEqual(testObject.getWorkspace().folders.map(folder => basename(folder.uri)), ['a', 'b']);
-	}));
-
-	test(`⭐ a move and an add in flight together keep both`, () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
-		// ⚠️ Both read the whole folder list and write a whole new one. Outside the queue they read
-		// the same old list, and whichever writes last erases what the other did.
-		const moving = testObject.moveFolder(testObject.getWorkspace().folders[0].uri, 1);
-		const adding = testObject.addFolders([{ uri: joinPath(ROOT, 'd') }]);
-		await Promise.all([moving, adding]);
-
-		assert.deepStrictEqual(testObject.getWorkspace().folders.map(folder => basename(folder.uri)), ['b', 'a', 'd']);
-	}));
-
-	test(`⭐ a move names the folder, not the place it was in`, () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
-		// ⚠️ An index is a fact about the list as it was when the command was invoked. By the time a
-		// queued move runs, a removal in front of it has made that index point at somebody else.
-		const b = testObject.getWorkspace().folders[1].uri;
-		await testObject.addFolders([{ uri: joinPath(ROOT, 'd') }]);
-
-		const removing = testObject.removeFolders([testObject.getWorkspace().folders[0].uri]);
-		const moving = testObject.moveFolder(b, 1);
-		await Promise.all([removing, moving]);
-
-		assert.deepStrictEqual(testObject.getWorkspace().folders.map(folder => basename(folder.uri)), ['d', 'b']);
-	}));
-
 	/** A reorder that moves `folder` `delta` places along the folders it is given, or none past either end. */
 	function moving(folder: URI, delta: number): (folders: readonly URI[]) => URI[] | undefined {
 		return folders => {

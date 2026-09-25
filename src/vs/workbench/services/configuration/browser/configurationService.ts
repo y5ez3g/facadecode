@@ -241,55 +241,6 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
 	}
 
 	/**
-	 * Moves one folder within the list, leaving every entry's own value exactly as the file has it.
-	 *
-	 * ⚠️ Its own operation because the two that exist cannot express it without losing what the file
-	 * said. `doUpdateFolders` keeps `raw` for folders that stay and re-serialises the ones it is
-	 * given to add, so "remove it and add it back" rewrites the moved folder's path, and "delete all,
-	 * add all" rewrites every path in the file - turning somebody's absolute paths into relative ones
-	 * because they reordered a row. Here nothing is added or removed, so no entry's value changes.
-	 *
-	 * ⚠️ What survives is each **entry**, not the file's **formatting**. The whole `folders` array is
-	 * written back through the JSON editing service, so entries written on one line come back on
-	 * several and a comment inside the array is lost. Measured: stock loses the same comment on its
-	 * own Remove Folder, so this is upstream's way of writing the array and not something a move
-	 * makes worse. A comment outside the array survives in both.
-	 */
-	moveFolder(folder: URI, delta: number): Promise<void> {
-		// ⚠️ In the same queue as every other change to the folder list. This reads the whole list and
-		// writes a whole new one, exactly as `doUpdateFolders` does, so two of them outside the queue
-		// read the same old list and whichever writes last erases what the other did.
-		return this.workspaceEditingQueue.queue(() => this.doMoveFolder(folder, delta));
-	}
-
-	private async doMoveFolder(folder: URI, delta: number): Promise<void> {
-		if (this.getWorkbenchState() !== WorkbenchState.WORKSPACE) {
-			return;
-		}
-
-		// ⚠️ Which folder, resolved here rather than where the command was invoked. An index is a fact
-		// about the list as it was then, and by the time a queued move runs a removal in front of it
-		// has made that index point at somebody else.
-		const folders = this.getWorkspace().folders;
-		const from = folders.findIndex(candidate => this.uriIdentityService.extUri.isEqual(candidate.uri, folder));
-		const to = from + delta;
-		if (from === -1 || delta === 0 || to < 0 || to >= folders.length) {
-			return;
-		}
-
-		const stored = folders.map(folder => folder.raw).filter(isStoredWorkspaceFolder);
-		if (stored.length !== folders.length) {
-			return; // an entry this cannot read back is an entry it must not rewrite
-		}
-
-		const reordered = stored.slice();
-		const [moving] = reordered.splice(from, 1);
-		reordered.splice(to, 0, moving);
-
-		return this.setFolders(reordered);
-	}
-
-	/**
 	 * Facade Code: puts the folders in the order `reorder` returns, leaving every entry's own value as the
 	 * file has it.
 	 *

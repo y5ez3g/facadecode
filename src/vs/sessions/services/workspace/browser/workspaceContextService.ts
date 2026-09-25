@@ -77,9 +77,6 @@ export class SessionsWorkspaceContextService extends Disposable implements IWork
 		return this.doUpdateFolders([], foldersToRemove);
 	}
 
-	/** This workbench shows one folder at a time, so there is no list here to reorder. */
-	public async moveFolder(): Promise<void> { }
-
 	/** Facade Code: this workbench shows one folder at a time, so there is no list here to reorder. */
 	public async reorderFolders(): Promise<void> { }
 
