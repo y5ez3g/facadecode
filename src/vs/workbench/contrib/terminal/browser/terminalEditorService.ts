@@ -151,6 +151,10 @@ export class TerminalEditorService extends Disposable implements ITerminalEditor
 						forceReload: true,
 						preserveFocus: editorOptions?.preserveFocus,
 						auxiliary: editorOptions?.auxiliary,
+						// Facade Code: see `TerminalEditorLocation`.
+						inactive: editorOptions?.inactive,
+						activation: editorOptions?.activation,
+						index: editorOptions?.index,
 					}
 				}, editorOptions?.viewColumn ?? ACTIVE_GROUP)
 			};
