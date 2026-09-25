@@ -24,6 +24,14 @@ export interface IDidEnterWorkspaceEvent {
 	join(promise: Promise<void>): void;
 }
 
+/**
+ * Facade Code: how `reorderFolders` asks for an order. Called when the edit runs, after the edits
+ * queued before it, with the folders as they are then; it returns a reordering of them, or `undefined`
+ * to change nothing. Not called at all without a workspace file to edit. One that throws changes
+ * nothing, and is reported as an unexpected error rather than as the workspace file's.
+ */
+export type FolderReorder = (folders: readonly URI[]) => readonly URI[] | undefined;
+
 export interface IWorkspaceEditingService {
 
 	readonly _serviceBrand: undefined;
@@ -54,6 +62,13 @@ export interface IWorkspaceEditingService {
 	 * as it was when this was called, and the write it turns into happens later, in a queue.
 	 */
 	moveFolder(folder: URI, delta: number, donotNotifyError?: boolean): Promise<void>;
+
+	/**
+	 * Facade Code: puts the workspace's folders in the order `reorder` returns, leaving each entry as it was
+	 * written - unlike `updateFolders` with the whole list, which writes every path out again.
+	 * When `donotNotifyError` is `true`, error will be bubbled up otherwise, the service handles the error with proper message and action
+	 */
+	reorderFolders(reorder: FolderReorder, donotNotifyError?: boolean): Promise<void>;
 
 	/**
 	 * Remove folders from the existing workspace

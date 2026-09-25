@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../base/common/uri.js';
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event, Emitter } from '../../../../base/common/event.js';
 import { ResourceMap } from '../../../../base/common/map.js';
 import { equals } from '../../../../base/common/objects.js';
@@ -49,6 +50,7 @@ import { mainWindow } from '../../../../base/browser/window.js';
 import { runWhenWindowIdle } from '../../../../base/browser/dom.js';
 import { renderAsPlaintext } from '../../../../base/browser/markdownRenderer.js';
 import { fixSettingLinks } from '../../preferences/common/preferencesModels.js';
+import { FolderReorder } from '../../workspaces/common/workspaceEditing.js';
 
 function getLocalUserConfigurationScopes(userDataProfile: IUserDataProfile, hasRemote: boolean): ConfigurationScope[] | undefined {
 	const isDefaultProfile = userDataProfile.isDefault || userDataProfile.useDefaultFlags?.settings;
@@ -285,6 +287,55 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
 		reordered.splice(to, 0, moving);
 
 		return this.setFolders(reordered);
+	}
+
+	/**
+	 * Facade Code: puts the folders in the order `reorder` returns, leaving every entry's own value as the
+	 * file has it.
+	 *
+	 * `reorder` runs in the queue of folder edits, with the folders as they are then, so an order worked
+	 * out from an older list - before a move, an add or a removal still in the queue - is never written.
+	 * A result that is not a reordering of those folders, or none, changes nothing.
+	 *
+	 * Its own operation because `doUpdateFolders` re-serialises the folders it adds, so "remove and add
+	 * back" would rewrite the moved paths. As there, the `folders` array is written back as a whole, so a
+	 * comment inside it is lost.
+	 */
+	reorderFolders(reorder: FolderReorder): Promise<void> {
+		return this.workspaceEditingQueue.queue(() => this.doReorderFolders(reorder));
+	}
+
+	private async doReorderFolders(reorder: FolderReorder): Promise<void> {
+		if (this.getWorkbenchState() !== WorkbenchState.WORKSPACE) {
+			return;
+		}
+
+		const folders = this.getWorkspace().folders;
+		let order: readonly URI[] | undefined;
+		try {
+			order = reorder(folders.map(folder => folder.uri));
+		} catch (error) {
+			// The caller's own failure, not the workspace file's: whoever edits the file would say it was.
+			onUnexpectedError(error);
+			return;
+		}
+
+		if (!order || order.length !== folders.length) {
+			return;
+		}
+
+		const indexes = order.map(uri => folders.findIndex(folder => this.uriIdentityService.extUri.isEqual(folder.uri, uri)));
+		const isPermutation = !indexes.includes(-1) && new Set(indexes).size === indexes.length;
+		if (!isPermutation || indexes.every((from, to) => from === to)) {
+			return;
+		}
+
+		const stored = folders.map(folder => folder.raw).filter(isStoredWorkspaceFolder);
+		if (stored.length !== folders.length) {
+			return;
+		}
+
+		return this.setFolders(indexes.map(from => stored[from]));
 	}
 
 	private async doUpdateFolders(foldersToAdd: IWorkspaceFolderCreationData[], foldersToRemove: URI[], index?: number): Promise<void> {

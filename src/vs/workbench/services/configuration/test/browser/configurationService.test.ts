@@ -5,6 +5,7 @@
 
 import assert from 'assert';
 import * as sinon from 'sinon';
+import { errorHandler, setUnexpectedErrorHandler } from '../../../../../base/common/errors.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { Registry } from '../../../../../platform/registry/common/platform.js';
 import { IEnvironmentService } from '../../../../../platform/environment/common/environment.js';
@@ -794,6 +795,73 @@ suite('WorkspaceContextService - Workspace Editing', () => {
 		await Promise.all([removing, moving]);
 
 		assert.deepStrictEqual(testObject.getWorkspace().folders.map(folder => basename(folder.uri)), ['d', 'b']);
+	}));
+
+	/** A reorder that moves `folder` `delta` places along the folders it is given, or none past either end. */
+	function moving(folder: URI, delta: number): (folders: readonly URI[]) => URI[] | undefined {
+		return folders => {
+			const from = folders.findIndex(candidate => candidate.toString() === folder.toString());
+			const to = from + delta;
+			if (from === -1 || to < 0 || to >= folders.length) {
+				return undefined;
+			}
+
+			const order = [...folders];
+			order.splice(to, 0, ...order.splice(from, 1));
+			return order;
+		};
+	}
+
+	test('reorder writes each entry back as it was, in the order returned, and a result that is not a reordering changes nothing', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		await testObject.addFolders([{ uri: joinPath(ROOT, 'd') }]);
+		const [a, b, d] = testObject.getWorkspace().folders.map(folder => folder.uri);
+		const [rawA, rawB, rawD] = testObject.getWorkspace().folders.map(folder => folder.raw);
+
+		await testObject.reorderFolders(() => [d, a, b]);
+		const reordered = testObject.getWorkspace().folders.map(folder => folder.raw);
+		await testObject.reorderFolders(() => [a, b]);
+		await testObject.reorderFolders(() => [a, a, b]);
+		await testObject.reorderFolders(() => undefined);
+
+		assert.deepStrictEqual({ reordered, after: testObject.getWorkspace().folders.map(folder => folder.raw) }, {
+			reordered: [rawD, rawA, rawB],
+			after: [rawD, rawA, rawB],
+		});
+	}));
+
+	test('each reorder is worked out on the folders as they are when it runs, after the edits queued before it', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		await testObject.addFolders([{ uri: joinPath(ROOT, 'd') }]);
+		const [a, b] = testObject.getWorkspace().folders.map(folder => folder.uri);
+		const names = () => testObject.getWorkspace().folders.map(folder => basename(folder.uri));
+
+		// Worked out when it was asked for, the second of two moves in flight together would return what
+		// the first did and move nothing; and a move asked for with a removal still queued would return a
+		// list the removal has made too long.
+		await Promise.all([testObject.reorderFolders(moving(a, 1)), testObject.reorderFolders(moving(a, 1))]);
+		const movedTwice = names();
+		await Promise.all([testObject.removeFolders([b]), testObject.reorderFolders(moving(a, -1))]);
+
+		assert.deepStrictEqual({ movedTwice, afterTheRemoval: names() }, {
+			movedTwice: ['b', 'd', 'a'],
+			afterTheRemoval: ['a', 'd'],
+		});
+	}));
+
+	test('a reorder that throws changes nothing, and is reported as unexpected rather than as the workspace file\'s failure', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		const before = testObject.getWorkspace().folders.map(folder => basename(folder.uri));
+		const reported: string[] = [];
+		const previous = errorHandler.getUnexpectedErrorHandler();
+		setUnexpectedErrorHandler(error => reported.push(error.message));
+		try {
+			await testObject.reorderFolders(() => { throw new Error('the caller\'s own'); });
+		} finally {
+			setUnexpectedErrorHandler(previous);
+		}
+
+		assert.deepStrictEqual({ folders: testObject.getWorkspace().folders.map(folder => basename(folder.uri)), reported }, {
+			folders: before,
+			reported: ['the caller\'s own'],
+		});
 	}));
 
 	test('remove folders triggers change event', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
