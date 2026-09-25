@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import '../../../browser/parts/dialogs/media/facadedialog.css';
 import './media/terminalLaunchers.css';
 import { $, append, clearNode, hide, show } from '../../../../base/browser/dom.js';
 import { Button, IButtonStyles } from '../../../../base/browser/ui/button/button.js';
@@ -16,8 +15,8 @@ import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { IContextViewService } from '../../../../platform/contextview/browser/contextView.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
-import { defaultButtonStyles, defaultInputBoxStyles } from '../../../../platform/theme/browser/defaultStyles.js';
-import { createWorkbenchDialogOptions } from '../../../browser/parts/dialogs/dialog.js';
+import { defaultButtonStyles } from '../../../../platform/theme/browser/defaultStyles.js';
+import { createWorkbenchDialogOptions, facadeDialogButtonStyles, facadeDialogInputBoxStyles } from '../../../browser/parts/dialogs/dialog.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
 import { ITerminalLauncher, uniqueLauncherId } from '../common/terminalLaunchers.js';
@@ -88,7 +87,7 @@ export async function showAgentsDialog(
 				container.classList.add('terminal-launchers-body');
 
 				append(container, $('.terminal-launchers-hint', undefined,
-					localize('terminalLaunchers.hint', "Detected agents and custom commands. Each item will appear in the Agent menu and launch in a new terminal at the current workspace root.")));
+					localize('terminalLaunchers.hint', "Configure detected agents and custom commands. Items appear in the Agent menu and launch in a new terminal at the workspace root.")));
 
 				const list = append(container, $('.terminal-launchers-list'));
 
@@ -115,7 +114,7 @@ export async function showAgentsDialog(
 						const line = append(list, $('.terminal-launchers-row'));
 
 						const labelBox = rowDisposables.add(new InputBox(append(line, $('.terminal-launchers-name')), services.contextViewService, {
-							inputBoxStyles: defaultInputBoxStyles,
+							inputBoxStyles: facadeDialogInputBoxStyles,
 							placeholder: localize('terminalLaunchers.namePlaceholder', "Agent Name"),
 							ariaLabel: localize('terminalLaunchers.nameAria', "Name of agent {0}", index + 1)
 						}));
@@ -127,7 +126,7 @@ export async function showAgentsDialog(
 						}
 
 						const commandBox = rowDisposables.add(new InputBox(append(line, $('.terminal-launchers-command')), services.contextViewService, {
-							inputBoxStyles: defaultInputBoxStyles,
+							inputBoxStyles: facadeDialogInputBoxStyles,
 							// An example rather than a description of the empty case: the field is the one
 							// thing somebody is here to fill in, and a blank one still opens a plain shell
 							placeholder: localize('terminalLaunchers.commandPlaceholder', "Terminal Command (e.g. claude)"),
@@ -162,13 +161,15 @@ export async function showAgentsDialog(
 				// `supportIcons` rather than `Button.icon`, which puts the codicon class on the button
 				// itself and hands its font to the label - measured, `Add Agent` came out 16px of
 				// `codicon` against the 12px the dialog's own buttons use.
+				//
+				// Outlined, as Cancel is: in these dialogs only the button the dialog is for is filled.
 				const actions = append(container, $('.terminal-launchers-actions'));
-				const flat = { ...FLAT_BUTTON_STYLES, secondary: true, supportIcons: true };
+				const outlined = { ...facadeDialogButtonStyles, secondary: true, supportIcons: true };
 
 				// Add first, so the one button that is always there starts where the rows start. The
 				// other way round left it indented by the row's gap whenever Detect was away.
 				const addButton = disposables.add(new Button(append(actions, $('.terminal-launchers-action')), {
-					...flat,
+					...outlined,
 					title: localize('terminalLaunchers.addTitle', "Add an agent")
 				}));
 				addButton.label = `$(add) ${localize('terminalLaunchers.add', "Add Agent")}`;
@@ -178,7 +179,7 @@ export async function showAgentsDialog(
 				// there with one button that does nothing for them.
 				const detectSlot = append(actions, $('.terminal-launchers-action'));
 				const detectButton = disposables.add(new Button(detectSlot, {
-					...flat,
+					...outlined,
 					title: localize('terminalLaunchers.detectTitle', "Look for agents installed on this machine")
 				}));
 				detectButton.label = `$(search) ${localize('terminalLaunchers.detect', "Detect Agents")}`;
