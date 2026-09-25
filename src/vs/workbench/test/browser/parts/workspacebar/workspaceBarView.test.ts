@@ -94,15 +94,24 @@ suite('Workspace bar - the rows it draws', () => {
 		]);
 	});
 
-	test('folders[] ahead of git\'s last read: a folder that left is not drawn, and one not read yet is drawn plain, at the end', () => {
-		// `notes` has left, and `/wt/fix` with it - the only folder of `/api`; `fresh` came in since.
+	test('folders[] ahead of git\'s last read: a folder that left is not drawn, one that joined is where git\'s records put it, and one they do not name is at the end', () => {
+		// `notes` has left, and `/wt/fix` with it - at the last read, all of `/api` in the workspace. Since
+		// then `/wt/w10`, a worktree git records for `/lab`, has joined, and so has `/api` itself; git's
+		// records name `fresh` nowhere.
 		const fresh = folder('/fresh', 4);
-		const ahead = workspaceBarRows({ folders: [lab, w2, fresh], groups, worktrees: true, key });
+		const w10 = folder('/wt/w10', 5);
+		const api = folder('/api', 6);
+		const ahead = workspaceBarRows({ folders: [lab, w2, fresh, w10, api], groups, worktrees: true, key });
 		// Switched on: nothing is read yet.
 		const switchedOn = workspaceBarRows({ folders: [notes, lab], groups: [], worktrees: true, key });
 
-		assert.deepStrictEqual({ ahead: summary(ahead), switchedOn: summary(switchedOn) }, {
-			ahead: ['repository /lab +', '  worktree w2', '  worktree w10', 'folder /fresh +'],
+		assert.deepStrictEqual({
+			ahead: summary(ahead),
+			worktreesInTheWorkspace: ahead.flatMap(row => [...(row.children ?? [])]).flatMap(child => child.element.kind === 'worktree' && child.element.worktree.folder ? [child.element.worktree.folder.uri.path] : []),
+			switchedOn: summary(switchedOn)
+		}, {
+			ahead: ['repository /lab +', '  worktree w2', '  worktree w10', 'repository /api +', '  worktree fix', 'folder /fresh +'],
+			worktreesInTheWorkspace: ['/wt/w2', '/wt/w10'],
 			switchedOn: ['folder /notes +', 'folder /lab +'],
 		});
 	});

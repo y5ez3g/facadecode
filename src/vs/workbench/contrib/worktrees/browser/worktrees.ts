@@ -509,6 +509,10 @@ export class WorktreeService implements IWorktreeService {
 			await this.workspaceTrustManagementService.setUrisTrust([worktree], true);
 		}
 
+		// Its record read before its folder joins the workspace: its row is then under its repository
+		// from the start, not at the end of the list for a moment (WT-3.6), and the repository can open.
+		await this.workspaceBarService.whenListed(worktree);
+
 		// So the row the window is about to go to can be seen.
 		this.workspaceBarService.setExpanded(main, true);
 

@@ -95,6 +95,14 @@ export interface IWorkspaceBarService {
 	 */
 	setExpanded(uri: URI, expanded: boolean): void;
 
+	/**
+	 * Resolves once the bar has read git's record of a worktree git has just made - at once when it
+	 * has, and after reading git's files again when it has not. Git's own writes reach the bar batched,
+	 * and a folder joining the workspace before its record is read is drawn at the end of the list
+	 * until it is (WORKTREE.md WT-3.6).
+	 */
+	whenListed(worktree: URI): Promise<void>;
+
 	focus(): void;
 }
 

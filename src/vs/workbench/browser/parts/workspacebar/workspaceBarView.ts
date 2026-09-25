@@ -101,9 +101,10 @@ function displayNameOf(row: WorkspaceBarRow, customizationService: IWorkspaceBar
  * What the tree holds: `folders[]` flat while `worktrees` is false - switched off (WORKTREE.md
  * section 11), or before git's files were first read.
  *
- * `groups` are git's files as last read, and `folders[]` changes before the next read is in: a folder
- * that has left is not drawn, and one not read yet is drawn on a row of its own at the end, until it
- * has been.
+ * `groups` are git's files as last read, and `folders[]` changes before the next read is in. A folder
+ * that has left is not drawn. One that joined since is drawn where git's records put it - a worktree
+ * or the main checkout of a repository they list (WORKTREE.md WT-3.6) - and one they do not name is
+ * drawn on a row of its own at the end, until it has been read.
  */
 export function workspaceBarRows(input: {
 	readonly folders: readonly IWorkspaceFolder[];
@@ -122,14 +123,21 @@ export function workspaceBarRows(input: {
 
 	const present = new Map(input.folders.map(folder => [input.key(folder.uri), folder]));
 	const drawn = new Set<string>();
-	const stillIn = (folder: IWorkspaceFolder | undefined): IWorkspaceFolder | undefined => {
-		const key = folder && input.key(folder.uri);
-		const current = key !== undefined ? present.get(key) : undefined;
-		if (key !== undefined && current) {
+	const take = (key: string): IWorkspaceFolder | undefined => {
+		const current = present.get(key);
+		if (current) {
 			drawn.add(key);
 		}
 		return current;
 	};
+
+	// The folders the last read placed. Any other folder of folders[] joined since.
+	const read = new Set(input.groups.flatMap(group => group.kind === 'folder' ? [group.folder] : group.members).map(folder => input.key(folder.uri)));
+
+	/** The folder the last read found, while it is still in folders[]. */
+	const stillIn = (folder: IWorkspaceFolder | undefined) => folder ? take(input.key(folder.uri)) : undefined;
+	/** A folder that joined folders[] since the last read, at a path git's records name. */
+	const joined = (uri: URI) => read.has(input.key(uri)) ? undefined : take(input.key(uri));
 
 	const rows: IObjectTreeElement<WorkspaceBarRow>[] = [];
 	for (const group of input.groups) {
@@ -145,12 +153,11 @@ export function workspaceBarRows(input: {
 		// A worktree that has left the workspace is still one of the repository's; a repository with no
 		// folder left in the workspace is not drawn.
 		const remaining = group.members.map(stillIn).filter(member => member !== undefined);
-		if (remaining.length === 0) {
+		const main = stillIn(group.folder) ?? joined(group.main);
+		const worktrees = group.worktrees.map(worktree => ({ ...worktree, folder: stillIn(worktree.folder) ?? joined(worktree.uri) }));
+		if (remaining.length === 0 && !main && !worktrees.some(worktree => worktree.folder)) {
 			continue;
 		}
-
-		const main = stillIn(group.folder);
-		const worktrees = group.worktrees.map(worktree => ({ ...worktree, folder: stillIn(worktree.folder) }));
 
 		// Whether a repository is open is the tree's to keep across rebuilds, and its first drawing is as
 		// it was left (`PreserveOr...`). One without worktrees is neither collapsible nor collapsed

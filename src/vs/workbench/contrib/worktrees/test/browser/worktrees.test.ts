@@ -240,7 +240,8 @@ suite('Worktrees - making and deleting one', () => {
 				restored.fire();
 			},
 			remove: async uris => { steps.push(`remove ${uris.map(uri => uri.path).join(', ')}`); },
-			setExpanded: uri => { steps.push(`open ${uri.path}`); }
+			setExpanded: uri => { steps.push(`open ${uri.path}`); },
+			whenListed: async uri => { steps.push(`listed ${uri.path}`); }
 		});
 		instantiationService.stub(IWorkspaceBarCustomizationService, {
 			get: () => undefined,
@@ -331,7 +332,7 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(ILogService, new NullLogService());
 	});
 
-	test('making one: named and coloured before its row is drawn, trusted, its repository opened, and the window taken to it', async () => {
+	test('making one: named and coloured before its row is drawn, trusted, its record read, its repository opened, and the window taken to it', async () => {
 		trust.enabled = true;
 		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
 		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
@@ -345,6 +346,7 @@ suite('Worktrees - making and deleting one', () => {
 			'customize /home/me/.facade/worktrees/lab/w3 {"name":"Three"}',
 			'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
 			'trust /home/me/.facade/worktrees/lab/w3',
+			'listed /home/me/.facade/worktrees/lab/w3',
 			'open /lab',
 			'show /home/me/.facade/worktrees/lab/w3',
 		]);

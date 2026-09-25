@@ -171,6 +171,11 @@ built on it would flicker on every switch.
 - **WT-3.4** Watching is correlated (`IFileService.createWatcher`) and per directory: `<common>`,
   `<common>/worktrees`, and each `<common>/worktrees/<name>`.
 - **WT-3.5** `git.detectWorktrees` keeps upstream's default. Nothing here depends on it.
+- **WT-3.6** Rows are drawn from the last read, and `folders[]` can change before the next one is in.
+  A folder that joined since is drawn where git's records put it - under its repository, as one of
+  its worktrees or its main checkout - and only a folder they do not name is drawn at the end until
+  it is read. A worktree just made has its record read before its folder joins, since git's writes
+  reach the bar batched: its row never shows at the end first.
 
 The reader is `workspaceBarGit.ts`, next to the bar's model. It knows nothing about the tree.
 
@@ -251,7 +256,8 @@ From the `+` on a folder row (WT-1.13), the row's menu (WT-1.11), or the command
               for that path
   2  create   _git.createWorktreeAt, under the progress notification (WT-5.4)
   3  trust    the new worktree is trusted, as its repository is
-  4  show     IWorkspaceBarService.show(worktree): into folders[], and the window moves onto it
+  4  show     its record read (WT-3.6), then IWorkspaceBarService.show(worktree): into folders[],
+              and the window moves onto it
   5  wait     for IWorkspaceBarService.onDidRestoreEditors
   6  setup    §9, in a terminal of the worktree, once the command has finished - a long setup
               holds up neither this worktree nor the repository's next one

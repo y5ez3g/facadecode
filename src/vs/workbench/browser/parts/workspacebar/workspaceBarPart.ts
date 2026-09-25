@@ -574,6 +574,12 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this.view?.setExpanded(uri, expanded);
 	}
 
+	async whenListed(worktree: URI): Promise<void> {
+		if (areWorktreesShown(this.configurationService) && !this.repositoryFor(worktree)) {
+			await this.git.refresh();
+		}
+	}
+
 	focus(): void {
 		this.view?.focus();
 	}
