@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '../../../../base/common/event.js';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { getRemoteAuthority } from '../../../../platform/remote/common/remoteHosts.js';
 import { isFolderToOpen, IOpenWindowOptions, IWindowOpenable } from '../../../../platform/window/common/window.js';
@@ -94,6 +95,21 @@ export interface IWorkspaceBarService {
 	 * repository's row.
 	 */
 	setExpanded(uri: URI, expanded: boolean): void;
+
+	/**
+	 * Resolves once the bar has read git's record of a worktree git has just made - at once when it
+	 * has, and after reading git's files again when it has not. Git's own writes reach the bar batched,
+	 * and a folder joining the workspace before its record is read is drawn at the end of the list
+	 * until it is (WORKTREE.md WT-3.6).
+	 */
+	whenListed(worktree: URI): Promise<void>;
+
+	/**
+	 * Leaves a worktree's row out of the bar until the result is disposed - while it is being deleted
+	 * (WORKTREE.md WT-8.9). Its row is drawn from git's records, which change only once git has
+	 * deleted the worktree, and that takes seconds for a large one.
+	 */
+	hideWorktree(worktree: URI): IDisposable;
 
 	focus(): void;
 }

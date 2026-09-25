@@ -7,6 +7,7 @@ import assert from 'assert';
 import { ObjectTree } from '../../../../../base/browser/ui/tree/objectTree.js';
 import { IObjectTreeElement } from '../../../../../base/browser/ui/tree/tree.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
+import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { toDisposable } from '../../../../../base/common/lifecycle.js';
@@ -94,17 +95,37 @@ suite('Workspace bar - the rows it draws', () => {
 		]);
 	});
 
-	test('folders[] ahead of git\'s last read: a folder that left is not drawn, and one not read yet is drawn plain, at the end', () => {
-		// `notes` has left, and `/wt/fix` with it - the only folder of `/api`; `fresh` came in since.
+	test('folders[] ahead of git\'s last read: a folder that left is not drawn, one that joined is where git\'s records put it, and one they do not name is at the end', () => {
+		// `notes` has left, and `/wt/fix` with it - at the last read, all of `/api` in the workspace. Since
+		// then `/wt/w10`, a worktree git records for `/lab`, has joined, and so has `/api` itself; git's
+		// records name `fresh` nowhere.
 		const fresh = folder('/fresh', 4);
-		const ahead = workspaceBarRows({ folders: [lab, w2, fresh], groups, worktrees: true, key });
+		const w10 = folder('/wt/w10', 5);
+		const api = folder('/api', 6);
+		const ahead = workspaceBarRows({ folders: [lab, w2, fresh, w10, api], groups, worktrees: true, key });
 		// Switched on: nothing is read yet.
 		const switchedOn = workspaceBarRows({ folders: [notes, lab], groups: [], worktrees: true, key });
 
-		assert.deepStrictEqual({ ahead: summary(ahead), switchedOn: summary(switchedOn) }, {
-			ahead: ['repository /lab +', '  worktree w2', '  worktree w10', 'folder /fresh +'],
+		assert.deepStrictEqual({
+			ahead: summary(ahead),
+			worktreesInTheWorkspace: ahead.flatMap(row => [...(row.children ?? [])]).flatMap(child => child.element.kind === 'worktree' && child.element.worktree.folder ? [child.element.worktree.folder.uri.path] : []),
+			switchedOn: summary(switchedOn)
+		}, {
+			ahead: ['repository /lab +', '  worktree w2', '  worktree w10', 'repository /api +', '  worktree fix', 'folder /fresh +'],
+			worktreesInTheWorkspace: ['/wt/w2', '/wt/w10'],
 			switchedOn: ['folder /notes +', 'folder /lab +'],
 		});
+	});
+
+	test('a worktree being deleted has no row, and its folder is not drawn at the end either; a repository with nothing else in the workspace goes with it', () => {
+		// Both still in folders[]; `fix` is all of `/api` the workspace has.
+		const rows = workspaceBarRows({ folders: [notes, lab, w2, fix], groups, worktrees: true, key, leaving: uri => ['/wt/w2', '/wt/fix'].includes(uri.path) });
+
+		assert.deepStrictEqual(summary(rows), [
+			'folder /notes +',
+			'repository /lab +',
+			'  worktree w10',
+		]);
 	});
 
 	test('a repository added under two spellings is one row: each of its folders is on it, and on no other', () => {
@@ -299,7 +320,18 @@ suite('Workspace bar - the view', () => {
 
 		let current = groups;
 		const gitChanged = store.add(new Emitter<void>());
-		const git = upcastPartial<WorkspaceBarGit>({ get groups() { return current; }, ready: true, onDidChange: gitChanged.event });
+		// Reads of git's files, which the test finishes (`read`).
+		const reads: DeferredPromise<void>[] = [];
+		const git = upcastPartial<WorkspaceBarGit>({
+			get groups() { return current; },
+			ready: true,
+			onDidChange: gitChanged.event,
+			refresh: () => {
+				const read = new DeferredPromise<void>();
+				reads.push(read);
+				return read.p;
+			}
+		});
 		const model = upcastPartial<WorkspaceBarModel>({ folders, key, onDidChange: Event.None, isUnavailable: () => false });
 		const switcher = upcastPartial<WorkspaceBarSwitcher>({ active, onDidChangeActive: Event.None, switchTo: async uri => { asked.push(`switch to ${uri.path}`); } });
 
@@ -321,6 +353,15 @@ suite('Workspace bar - the view', () => {
 			regroup: (groups: WorkspaceBarGroup[]) => {
 				current = groups;
 				gitChanged.fire();
+			},
+			/** Finishes the reads of git's files asked for so far, which found `groups`. */
+			read: async (groups: WorkspaceBarGroup[]) => {
+				current = groups;
+				gitChanged.fire();
+				for (const read of reads.splice(0)) {
+					read.complete();
+				}
+				await timeout(0);
 			}
 		};
 	}
@@ -395,6 +436,30 @@ suite('Workspace bar - the view', () => {
 		click(bar.find('.workspacebar-twistie'));
 
 		assert.deepStrictEqual(bar.asked, ['switch to /lab']);
+	});
+
+	test('a worktree being deleted loses its row at once, and gets it back only if git still lists it when its files are next read', async () => {
+		// After step 4 of a delete: out of folders[], still in git's records.
+		const deleted = view([lab], [repository(undefined)], lab.uri);
+		const failed = view([lab], [repository(undefined)], lab.uri);
+
+		const deleting = deleted.barView.hideWorktree(w2.uri);
+		const failing = failed.barView.hideWorktree(w2.uri);
+		const whileDeleting = deleted.rows();
+		deleting.dispose();
+		failing.dispose();
+		// Git's records still list it until they are read again: a row back before then flashes.
+		await timeout(0);
+		const untilRead = [deleted.rows(), failed.rows()];
+		await deleted.read([{ ...repository(undefined), worktrees: [] }]);
+		await failed.read([repository(undefined)]);
+
+		assert.deepStrictEqual({ whileDeleting, untilRead, deleted: deleted.rows(), failed: failed.rows() }, {
+			whileDeleting: ['lab'],
+			untilRead: [['lab'], ['lab']],
+			deleted: ['lab'],
+			failed: ['lab', 'w2, worktree'],
+		});
 	});
 
 	test('when a rebuild takes the focused row away, the row kind no longer says the row was a worktree', () => {

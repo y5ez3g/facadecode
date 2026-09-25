@@ -171,6 +171,11 @@ built on it would flicker on every switch.
 - **WT-3.4** Watching is correlated (`IFileService.createWatcher`) and per directory: `<common>`,
   `<common>/worktrees`, and each `<common>/worktrees/<name>`.
 - **WT-3.5** `git.detectWorktrees` keeps upstream's default. Nothing here depends on it.
+- **WT-3.6** Rows are drawn from the last read, and `folders[]` can change before the next one is in.
+  A folder that joined since is drawn where git's records put it - under its repository, as one of
+  its worktrees or its main checkout - and only a folder they do not name is drawn at the end until
+  it is read. A worktree just made has its record read before its folder joins, since git's writes
+  reach the bar batched: its row never shows at the end first.
 
 The reader is `workspaceBarGit.ts`, next to the bar's model. It knows nothing about the tree.
 
@@ -251,7 +256,8 @@ From the `+` on a folder row (WT-1.13), the row's menu (WT-1.11), or the command
               for that path
   2  create   _git.createWorktreeAt, under the progress notification (WT-5.4)
   3  trust    the new worktree is trusted, as its repository is
-  4  show     IWorkspaceBarService.show(worktree): into folders[], and the window moves onto it
+  4  show     its record read (WT-3.6), then IWorkspaceBarService.show(worktree): into folders[],
+              and the window moves onto it
   5  wait     for IWorkspaceBarService.onDidRestoreEditors
   6  setup    §9, in a terminal of the worktree, once the command has finished - a long setup
               holds up neither this worktree nor the repository's next one
@@ -328,7 +334,8 @@ directory open is gone before git is asked to delete it.
 1  check      _git.deleteWorktreeAt(root, path, 'check'): the files that would be lost, and
               whether submodules are checked out
 2  confirm    always (WT-8.1)
-3  move off   if the window is on this worktree, it moves to the repository's row
+3  move off   if the window is on this worktree, it moves to the repository's row; from here on
+              the worktree has no row (WT-8.9)
 4  leave      out of folders[]
 5  terminals  any terminal still working inside the worktree is closed
 6  delete     'remove', or 'force' when step 1 found changes or submodules
@@ -348,10 +355,14 @@ directory open is gone before git is asked to delete it.
   second Delete of the same worktree meanwhile does nothing.
 - **WT-8.5** A directory git has let go of but left behind is removed (WT-4.5).
 - **WT-8.6** If step 6 fails, the error is said. The worktree stays out of `folders[]` and listed by
-  git, so its row is there to try again.
+  git, so its row comes back, to try again.
 - **WT-8.7** The branch is kept.
 - **WT-8.8** `Remove Folder` on a repository row - which never touches the disk - takes that
   repository's worktrees out of `folders[]` with it. They stay on disk and in git.
+- **WT-8.9** Once the window is off the worktree, its row leaves the bar, although git's records keep
+  it until step 6 is done - seconds, for a large worktree. When step 6 is over, git's files are read
+  again before the row may come back: after a deletion that worked it does not, after one that
+  failed it does.
 
 ---
 

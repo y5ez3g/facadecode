@@ -7,6 +7,7 @@ import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
+import { toDisposable } from '../../../../../base/common/lifecycle.js';
 import { IMarkdownString } from '../../../../../base/common/htmlContent.js';
 import { KeyCode, KeyMod } from '../../../../../base/common/keyCodes.js';
 import { decodeKeybinding } from '../../../../../base/common/keybindings.js';
@@ -240,7 +241,12 @@ suite('Worktrees - making and deleting one', () => {
 				restored.fire();
 			},
 			remove: async uris => { steps.push(`remove ${uris.map(uri => uri.path).join(', ')}`); },
-			setExpanded: uri => { steps.push(`open ${uri.path}`); }
+			setExpanded: uri => { steps.push(`open ${uri.path}`); },
+			whenListed: async uri => { steps.push(`listed ${uri.path}`); },
+			hideWorktree: uri => {
+				steps.push(`hide ${uri.path}`);
+				return toDisposable(() => steps.push(`unhide ${uri.path}`));
+			}
 		});
 		instantiationService.stub(IWorkspaceBarCustomizationService, {
 			get: () => undefined,
@@ -331,7 +337,7 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(ILogService, new NullLogService());
 	});
 
-	test('making one: named and coloured before its row is drawn, trusted, its repository opened, and the window taken to it', async () => {
+	test('making one: named and coloured before its row is drawn, trusted, its record read, its repository opened, and the window taken to it', async () => {
 		trust.enabled = true;
 		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
 		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
@@ -345,6 +351,7 @@ suite('Worktrees - making and deleting one', () => {
 			'customize /home/me/.facade/worktrees/lab/w3 {"name":"Three"}',
 			'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
 			'trust /home/me/.facade/worktrees/lab/w3',
+			'listed /home/me/.facade/worktrees/lab/w3',
 			'open /lab',
 			'show /home/me/.facade/worktrees/lab/w3',
 		]);
@@ -513,7 +520,7 @@ suite('Worktrees - making and deleting one', () => {
 		]);
 	});
 
-	test('deleting one with changes: asked first, then off it, out of folders[], its terminals closed and only then git, with force; its name, colour, place and trust go with it', async () => {
+	test('deleting one with changes: asked first, then off it and its row gone, out of folders[], its terminals closed and only then git, with force; its name, colour, place and trust go with it', async () => {
 		trust.enabled = true;
 		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['a.txt'], submodules: false });
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
@@ -526,9 +533,11 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'confirm',
 				'show /lab',
+				'hide /home/me/.facade/worktrees/lab/w2',
 				'remove /home/me/.facade/worktrees/lab/w2',
 				'close its terminal',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
+				'unhide /home/me/.facade/worktrees/lab/w2',
 				'customize /home/me/.facade/worktrees/lab/w2 {}',
 				'order /home/me/.facade/worktrees/lab/w3',
 				'untrust /home/me/.facade/worktrees/lab/w2',
@@ -536,6 +545,23 @@ suite('Worktrees - making and deleting one', () => {
 			type: 'warning',
 			detail: true,
 		});
+	});
+
+	test('a delete git refuses brings the row back and says why, and the worktree keeps its name, colour and trust', async () => {
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'error', code: undefined, message: 'fatal: the directory is busy' });
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+
+		assert.deepStrictEqual(steps.slice(steps.indexOf('confirm') + 1), [
+			'show /lab',
+			'hide /home/me/.facade/worktrees/lab/w2',
+			'remove /home/me/.facade/worktrees/lab/w2',
+			'close its terminal',
+			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
+			'unhide /home/me/.facade/worktrees/lab/w2',
+			'error: The worktree could not be deleted: fatal: the directory is busy',
+		]);
 	});
 
 	test('a clean worktree with submodules checked out is warned about them, and deleted with force - git takes it no other way', async () => {

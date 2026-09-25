@@ -15,7 +15,7 @@ import { IObjectTreeElement, ITreeContextMenuEvent, ITreeNode, ITreeRenderer, Ob
 import { Codicon } from '../../../../base/common/codicons.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
-import { Disposable, DisposableStore, IDisposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -101,9 +101,10 @@ function displayNameOf(row: WorkspaceBarRow, customizationService: IWorkspaceBar
  * What the tree holds: `folders[]` flat while `worktrees` is false - switched off (WORKTREE.md
  * section 11), or before git's files were first read.
  *
- * `groups` are git's files as last read, and `folders[]` changes before the next read is in: a folder
- * that has left is not drawn, and one not read yet is drawn on a row of its own at the end, until it
- * has been.
+ * `groups` are git's files as last read, and `folders[]` changes before the next read is in. A folder
+ * that has left is not drawn. One that joined since is drawn where git's records put it - a worktree
+ * or the main checkout of a repository they list (WORKTREE.md WT-3.6) - and one they do not name is
+ * drawn on a row of its own at the end, until it has been read.
  */
 export function workspaceBarRows(input: {
 	readonly folders: readonly IWorkspaceFolder[];
@@ -112,6 +113,8 @@ export function workspaceBarRows(input: {
 	readonly key: FolderKey;
 	/** Whether somebody closed the repository of `main` - kept across a reload, for its first drawing. */
 	readonly closed?: (main: URI) => boolean;
+	/** Whether a worktree is being deleted: its row is left out while git still records it (WT-8.9). */
+	readonly leaving?: (worktree: URI) => boolean;
 }): IObjectTreeElement<WorkspaceBarRow>[] {
 	const flat = (folder: IWorkspaceFolder): IObjectTreeElement<WorkspaceBarRow> =>
 		({ element: { kind: 'folder', uri: folder.uri, folder, repository: false, worktrees: [], offersWorktree: input.worktrees }, collapsible: false });
@@ -122,14 +125,21 @@ export function workspaceBarRows(input: {
 
 	const present = new Map(input.folders.map(folder => [input.key(folder.uri), folder]));
 	const drawn = new Set<string>();
-	const stillIn = (folder: IWorkspaceFolder | undefined): IWorkspaceFolder | undefined => {
-		const key = folder && input.key(folder.uri);
-		const current = key !== undefined ? present.get(key) : undefined;
-		if (key !== undefined && current) {
+	const take = (key: string): IWorkspaceFolder | undefined => {
+		const current = present.get(key);
+		if (current) {
 			drawn.add(key);
 		}
 		return current;
 	};
+
+	// The folders the last read placed. Any other folder of folders[] joined since.
+	const read = new Set(input.groups.flatMap(group => group.kind === 'folder' ? [group.folder] : group.members).map(folder => input.key(folder.uri)));
+
+	/** The folder the last read found, while it is still in folders[]. */
+	const stillIn = (folder: IWorkspaceFolder | undefined) => folder ? take(input.key(folder.uri)) : undefined;
+	/** A folder that joined folders[] since the last read, at a path git's records name. */
+	const joined = (uri: URI) => read.has(input.key(uri)) ? undefined : take(input.key(uri));
 
 	const rows: IObjectTreeElement<WorkspaceBarRow>[] = [];
 	for (const group of input.groups) {
@@ -143,14 +153,26 @@ export function workspaceBarRows(input: {
 
 		// Every folder of it is on this row, under whichever spelling it was added by, and on no other.
 		// A worktree that has left the workspace is still one of the repository's; a repository with no
-		// folder left in the workspace is not drawn.
+		// folder left in the workspace, or none but a worktree being deleted, is not drawn.
 		const remaining = group.members.map(stillIn).filter(member => member !== undefined);
-		if (remaining.length === 0) {
+		const main = stillIn(group.folder) ?? joined(group.main);
+		// A worktree being deleted takes its folder with it: still in folders[] for a moment, it is not
+		// drawn at the end either.
+		const leaving = new Set<string>();
+		const worktrees = group.worktrees.flatMap(worktree => {
+			const folder = stillIn(worktree.folder) ?? joined(worktree.uri);
+			if (input.leaving?.(worktree.uri)) {
+				leaving.add(input.key(worktree.uri));
+				if (folder) {
+					leaving.add(input.key(folder.uri));
+				}
+				return [];
+			}
+			return [{ ...worktree, folder }];
+		});
+		if (!main && !worktrees.some(worktree => worktree.folder) && remaining.every(member => leaving.has(input.key(member.uri)))) {
 			continue;
 		}
-
-		const main = stillIn(group.folder);
-		const worktrees = group.worktrees.map(worktree => ({ ...worktree, folder: stillIn(worktree.folder) }));
 
 		// Whether a repository is open is the tree's to keep across rebuilds, and its first drawing is as
 		// it was left (`PreserveOr...`). One without worktrees is neither collapsible nor collapsed
@@ -424,6 +446,8 @@ export class WorkspaceBarView extends Disposable {
 	private readonly rowExpansion: IContextKey<'' | 'expanded' | 'collapsed'>;
 	/** The repositories somebody closed, by their main checkout's key (`CLOSED_STORAGE_KEY`). */
 	private readonly closed: Set<string>;
+	/** The worktrees being deleted, by key, whose rows are left out (`hideWorktree`). */
+	private readonly leaving = new Set<string>();
 
 	constructor(
 		container: HTMLElement,
@@ -654,7 +678,8 @@ export class WorkspaceBarView extends Disposable {
 				: group),
 			worktrees: areWorktreesShown(this.configurationService) && this.git.ready,
 			key: this.model.key,
-			closed: main => this.closed.has(this.model.key(main))
+			closed: main => this.closed.has(this.model.key(main)),
+			leaving: worktree => this.leaving.has(this.model.key(worktree))
 		}));
 
 		// Without a `diffIdentityProvider` this replaces and redraws every row, the mark with it.
@@ -761,6 +786,27 @@ export class WorkspaceBarView extends Disposable {
 		} else {
 			this.tree.collapse(row);
 		}
+	}
+
+	/**
+	 * Leaves a worktree's row out until the result is disposed: `IWorkspaceBarService.hideWorktree`.
+	 *
+	 * Disposed, git's files are read again before the row can come back. After a delete that worked
+	 * they no longer list the worktree, and a row drawn again from the read before would flash back.
+	 */
+	hideWorktree(worktree: URI): IDisposable {
+		const key = this.model.key(worktree);
+		this.leaving.add(key);
+		this.refresh();
+
+		return toDisposable(() => {
+			this.git.refresh().finally(() => {
+				this.leaving.delete(key);
+				if (!this._store.isDisposed) {
+					this.refresh();
+				}
+			}).then(undefined, onUnexpectedError);
+		});
 	}
 
 	/**
