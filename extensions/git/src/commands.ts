@@ -20,6 +20,7 @@ import { ApiRepository } from './api/api1';
 import { getRemoteSourceActions, pickRemoteSource } from './remoteSource';
 import { RemoteSourceAction } from './typings/git-base';
 import { CloneManager } from './cloneManager';
+import * as worktreeAt from './worktreeAt';
 
 abstract class CheckoutCommandItem implements QuickPickItem {
 	abstract get label(): string;
@@ -3805,6 +3806,23 @@ export class CommandCenter {
 
 		const uri = Uri.file(repository.root);
 		await commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+	}
+
+	// Facade Code: the workspace bar's worktrees. Non-interactive, and they return what happened rather
+	// than throw - everything else is in worktreeAt.ts.
+	@command('_git.createWorktreeAt')
+	async createWorktreeAt(root: Uri, worktree: Uri, branch: string): Promise<worktreeAt.CreateWorktreeAtResult> {
+		return worktreeAt.createWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), branch);
+	}
+
+	@command('_git.deleteWorktreeAt')
+	async deleteWorktreeAt(root: Uri, worktree: Uri, mode: worktreeAt.DeleteWorktreeMode): Promise<worktreeAt.DeleteWorktreeAtResult> {
+		return worktreeAt.deleteWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), mode);
+	}
+
+	@command('_git.prepareWorktreeBaseAt')
+	async prepareWorktreeBaseAt(root: Uri, mode: worktreeAt.WorktreeBaseMode, branch?: string): Promise<worktreeAt.WorktreeBaseAtResult> {
+		return worktreeAt.prepareWorktreeBaseAt(this.git, worktreeAt.folderPath(root), mode, branch);
 	}
 
 	@command('git.graph.deleteTag', { repository: true })

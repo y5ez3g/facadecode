@@ -9,8 +9,7 @@
  * chosen, because nothing relates them - which is what made the first version of this bar look
  * assembled rather than designed. `platform/theme/common/sizes/baseSizes.ts` is the table.
  *
- * The two exceptions are the header's height and its right padding, and both are called out where
- * they appear.
+ * The one exception is the header's height, called out where it appears.
  */
 
 .monaco-workbench .part.workspacebar > .content {
@@ -166,9 +165,9 @@
  * was written: the title began at x=16 and the folder glyphs at x=10, six pixels apart down the
  * length of the column.
  *
- * ⚠️ The right padding is not this number and is not a mirror of it: measured, the toggle's glyph
- * centre sits 25 from the bar's right edge against a row icon centre 18 from its left. That is a
- * separate question about where the controls sit, and it is left where it was.
+ * The right padding mirrors the left by the glyph: 6 puts the last button's glyph centre 18 from the
+ * bar's right edge, as a row's icon centre is 18 from its left. The buttons draw no box, so the eye
+ * pairs the glyphs. Rows take the same padding, so a row's `+` stands in the header buttons' column.
  */
 .monaco-workbench .part.workspacebar .workspacebar-header {
 	display: flex;
@@ -176,7 +175,7 @@
 	justify-content: space-between;
 	flex: 0 0 auto;
 	height: var(--facade-header-row);
-	padding: 0 var(--vscode-spacing-size120) 0 var(--vscode-spacing-size100);
+	padding: 0 var(--vscode-spacing-size60) 0 var(--vscode-spacing-size100);
 	box-sizing: border-box;
 	font-size: 11px;
 	font-weight: 400;
@@ -253,8 +252,7 @@
  *     28px box        its chip is 56 device pixels square on a 2x display
  *     radius 6        11 device pixels of curve, which is `cornerRadius.medium`
  *     codicon compact 12px, whose plus draws 9pt against the reference's 10
- *     right padding   12, which puts the chip's right edge 13 from the bar's edge (theirs: 12.75)
- *                     and the glyph's centre 27 from it (theirs: 26.75)
+ *     right padding   the mirror of the left instead - see `.workspacebar-header`
  *
  * ⚠️ The chip appears under the pointer and not before. Flat at rest is what makes the chip mean
  * "this is what you are about to press" rather than "there is a button here" - the second is
@@ -279,6 +277,8 @@
 	height: var(--vscode-spacing-size240);
 	font-size: var(--vscode-codiconFontSize);
 	color: var(--vscode-facadeBar-inactiveForeground);
+	/* The same motion as the row's `+`. */
+	transition: color var(--facade-motion);
 }
 
 /*
@@ -300,10 +300,14 @@
 	background-color: transparent;
 }
 
+/*
+ * Flush under the header: the header draws no edge, so a lit first row's top continues the title
+ * bar's bottom edge beside it. (A step here also left the list shorter than the height the part
+ * gives it.)
+ */
 .monaco-workbench .part.workspacebar .workspacebar-list {
 	flex: 1 1 auto;
 	min-height: 0;
-	margin-top: var(--vscode-spacing-size40);
 	-webkit-app-region: no-drag;
 }
 
@@ -385,6 +389,30 @@
 	 * move `HEADER_HEIGHT` with it.
 	 */
 	--facade-header-row: 35px;
+
+	/*
+	 * One motion for everything in a row that changes, so a row settles at once rather than in
+	 * instalments: Material 3's `duration.short3` and `easing.standard`. The workbench registers no
+	 * motion tokens.
+	 */
+	--facade-motion: 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* `workbench.reduceMotion`: every state still changes, at once. */
+.monaco-reduce-motion .part.workspacebar {
+	--facade-motion: 0ms;
+}
+
+/*
+ * None in an element the list has just handed a different row (`recycled`, from `RowRenderer`): that
+ * is another row, not a change of state, and fading from the last one flickered. One class deeper than
+ * every rule that sets a transition in a row.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row.recycled,
+.monaco-workbench .part.workspacebar .workspacebar-row.recycled::before,
+.monaco-workbench .part.workspacebar .workspacebar-row.recycled *,
+.monaco-workbench .part.workspacebar .workspacebar-row.recycled *::before {
+	transition: none;
 }
 
 /*
@@ -392,18 +420,21 @@
  *
  * ⚠️ 10 on the left rather than 8: the mark takes the first 2px, and the compact activity bar
  * leaves 8 clear between its line and its glyph. 8 here would put the icon 6 from the line.
+ *
+ * The header's right padding, so a row's buttons stand in the header buttons' column.
  */
 .monaco-workbench .part.workspacebar .workspacebar-row {
 	display: flex;
 	align-items: center;
 	gap: var(--vscode-spacing-size80);
 	height: 100%;
-	padding: 0 var(--vscode-spacing-size80) 0 var(--vscode-spacing-size100);
+	padding: 0 var(--vscode-spacing-size60) 0 var(--vscode-spacing-size100);
 	overflow: hidden;
 	/* ⚠️ One ink, in every state - see `--facade-row-ink` above. */
 	color: var(--facade-row-ink);
 	/* So the mark can be placed against this box's own leading edge. */
 	position: relative;
+	transition: background-color var(--facade-motion);
 }
 
 /*
@@ -500,9 +531,7 @@
 /*
  * The mark: a line down the leading edge, and nothing painted behind the row.
  *
- * ⚠️ No colour on the border, so it takes `currentColor` - which on a marked row is
- * `facadeBar.foreground`. That is what the activity bar does, and it is why its line follows the
- * theme without a token of its own being wired up anywhere.
+ * On every row, transparent until the row is the current one, so the line can fade in with the chip.
  *
  * ⚠️ Not `:has()`. Upstream took its own `:has()` selectors back out, and this does not need one:
  * the marked row is the element that knows it is marked, so the mark is its own pseudo-element.
@@ -514,7 +543,7 @@
  * Up. Two lines is two answers to "which folder am I in". The keyboard's row is marked below
  * instead, with the chip and no line.
  */
-.monaco-workbench .part.workspacebar .workspacebar-row.active::before {
+.monaco-workbench .part.workspacebar .workspacebar-row::before {
 	content: "";
 	position: absolute;
 	z-index: 1;
@@ -522,14 +551,10 @@
 	left: 0;
 	height: 100%;
 	width: 0;
-	border-left: 2px solid;
+	border-left: 2px solid transparent;
+	transition: border-left-color var(--facade-motion);
 }
 
-/*
- * ⚠️ One line, one colour, for both. The activity bar draws the same indicator for `checked` and
- * for `:focus` and never introduces a second colour, and a blue line in a column that has none
- * anywhere else reads as an error rather than as a cursor.
- *
 /*
  * ⚠️ `activityBar.activeBorder`, so whatever a theme does to the line beside this column happens to
  * this one. Themes override it: Dark Modern paints it blue, others leave it as the foreground.
@@ -545,10 +570,11 @@
  * rather than somewhere you are. The heavier chip and the line stay with the current folder, so
  * arrowing down the column never puts a second "this one" on screen.
  *
- * ⚠️ `.monaco-list:focus`, or it would stay behind after a right-click: the list keeps `focused` on
- * the last row it put the cursor on whether the keyboard is near it or not.
+ * Only while the list has focus, and only after the keyboard moved last (`.keyboard`, from
+ * `WorkspaceBarView`): a right-click or the triangle also moves the focused row, and `:focus-visible`
+ * is true after a click too.
  */
-.monaco-workbench .part.workspacebar .monaco-list:focus .monaco-list-row.focused .workspacebar-row:not(.active) {
+.monaco-workbench .part.workspacebar .workspacebar-list.keyboard .monaco-list:focus .monaco-list-row.focused .workspacebar-row:not(.active) {
 	background-color: var(--vscode-modernActivityBarItem-hoverBackground);
 }
 
@@ -568,8 +594,9 @@
 	background-color: var(--vscode-modernActivityBarItem-hoverBackground);
 }
 
-/* ⚠️ And a dashed stroke in high contrast, as `activityBar.css` does for the same state. */
-.monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .monaco-list-row:hover .workspacebar-row:not(.active) {
+/* High contrast has no chip: a dashed stroke instead, as `activityBar.css` does, for the keyboard's row too. */
+.monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .monaco-list-row:hover .workspacebar-row:not(.active),
+.monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .workspacebar-list.keyboard .monaco-list:focus .monaco-list-row.focused .workspacebar-row:not(.active) {
 	background-color: transparent;
 	outline: var(--vscode-strokeThickness) dashed var(--vscode-contrastActiveBorder);
 	outline-offset: calc(-1 * var(--vscode-strokeThickness));
@@ -583,6 +610,99 @@
  * screen did. The row says which row is live with its background now, as the explorer's rows do, and
  * a tag that also changed shade would be answering the same question twice.
  */
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * Worktrees: a repository's row opens onto its worktrees (WORKTREE.md section 3).
+ * -------------------------------------------------------------------------------------------
+ */
+
+/* The row draws its own triangle; the tree's sits outside the row's box. As upstream's sessions list. */
+.monaco-workbench .part.workspacebar .monaco-list-row .force-no-twistie {
+	display: none !important;
+}
+
+/* One slot for a folder's icon or a worktree's dot, so every name starts on one line. */
+.monaco-workbench .part.workspacebar .workspacebar-glyph {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--vscode-spacing-size160);
+}
+
+/*
+ * A worktree's dot: the level is said by the glyph, not an indent. In the quiet glyph ink, or the
+ * colour the worktree was given (`--facade-folder-ink`, as a folder's icon). Transitioned, for the
+ * running state it will show (WORKTREE.md section 13).
+ */
+.monaco-workbench .part.workspacebar .workspacebar-icon.workspacebar-dot {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--facade-folder-ink, var(--vscode-facadeBar-inactiveForeground));
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-dot::before {
+	content: "";
+	width: var(--vscode-spacing-size60);
+	height: var(--vscode-spacing-size60);
+	border-radius: var(--vscode-cornerRadius-circle);
+	background-color: currentColor;
+	transition: background-color var(--facade-motion);
+}
+
+/*
+ * A folder's `New Worktree...` and the triangle, in the same two columns as the header's `+` and
+ * toggle: one box without a gap, as the header's toolbar. Only on rows that offer a worktree (WT-5.8).
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row-actions {
+	flex: 0 0 auto;
+	display: flex;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-row:not(.offers-worktree) .workspacebar-row-actions {
+	display: none;
+}
+
+/* The triangle only with worktrees to open (WT-1.8), hidden in place so the `+` keeps its column. */
+.monaco-workbench .part.workspacebar .workspacebar-row:not(.collapsible) .workspacebar-twistie {
+	visibility: hidden;
+}
+
+/*
+ * Styled as the header's buttons (`.workspacebar-actions .action-label`), and shown only under the
+ * pointer: faded rather than removed, so a long name's ellipsis does not jump. The keyboard has its own
+ * ways to both - Left and Right, and the context menu.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row-toolbar .action-label,
+.monaco-workbench .part.workspacebar .workspacebar-twistie {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: var(--vscode-spacing-size240);
+	height: var(--vscode-spacing-size240);
+	padding: 0;
+	font-size: var(--vscode-codiconFontSize);
+	color: var(--vscode-facadeBar-inactiveForeground);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity var(--facade-motion), color var(--facade-motion);
+}
+
+.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-row-toolbar .action-label,
+.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-twistie {
+	opacity: 1;
+}
+
+/* The ink, and no chip behind it: as the header's buttons, over the toolbar's own hover background. */
+.monaco-workbench .part.workspacebar .monaco-list-row .workspacebar-row-toolbar .action-label:not(.disabled):hover,
+.monaco-workbench .part.workspacebar .monaco-list-row .workspacebar-twistie:hover {
+	color: var(--vscode-facadeBar-foreground);
+	background-color: transparent;
+}
 
 /*
  * A folder that could not be reached. Dimmed and struck through, never hidden: the row is the only
@@ -599,7 +719,7 @@
 
 /*
  * ⚠️ The colour paints the folder icon and nothing else - not the name, not the row. A row is read
- * as a name, and a name in six colours is six kinds of emphasis nobody asked for.
+ * as a name, and a name in ten colours is ten kinds of emphasis nobody asked for.
  *
  * These set a variable rather than a colour, so specificity never enters into it: the rules that
  * draw the glyph read `--facade-folder-ink` and fall back to what they did before.
@@ -668,32 +788,15 @@
 	padding-left: 70px;
 }
 
-/*
- * ⚠️ There is no per-glyph font size here, and the absence is the point.
- *
- * This glyph used to be set to 18px to match its drawn width against its neighbours - three
- * horizontal bars do not reach as tall as a plus, so at one size the toggle reads a shade
- * smaller. The cost of that was not known when it was written: codicon is drawn on a 16px grid,
- * and 18px is the one thing in this column asking the rasteriser for a size the glyph was not
- * drawn at. Three hairlines a fraction of a device pixel apart then land on three different
- * sub-pixel phases, and a mark whose whole content is "three identical lines" is the one mark
- * where that shows.
- *
- * Measured on the running window, ink per bar at 125%: 99.4 / 91.7 / 69.7 - the third bar carries
- * 70% of the first's and reads crisp and thin beside two that read soft and thick. Swept across
- * font sizes and device ratios, 16px is the only size that comes out even at every one of 1,
- * 1.25, 1.5, 1.75 and 2. 19px is even too, but only at 1.25, which is a coincidence of this
- * display and not a number to keep.
- *
- * What it costs: 14 x 9 of ink against a plus at 15 x 13 and a folder at 16 x 12, where 18px gave
- * 16 x 11. One pixel narrow instead of one pixel wide, for a mark that no longer contradicts
- * itself. Everything else - box, radius, inks, chip - still comes from the shared rule above.
- */
-
 /* --- collapsed -------------------------------------------------------------------------------- */
 
 /* The name goes; the icon and its mark stay exactly where they were. */
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-row .monaco-icon-label {
+	display: none;
+}
+
+/* Collapsed, a row is its icon; a repository opens and closes from its menu instead (WT-1.10). */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-row-actions {
 	display: none;
 }
 
@@ -720,12 +823,6 @@
  * first menu's 17.5 - measured, and 1.5px is the size of gap that reads as wrong without reading as
  * anything a person can name. The padding is what it takes to centre one button inside the header
  * row, so it follows the row rather than being chosen.
- *
- * ⚠️ 1px of it is the glyph's and was left alone. With the boxes agreeing, `three-bars` still draws
- * its ink 0.5px above its own line box while the title bar's codicons draw theirs 0.5px below:
- * measured, ink centres of 17.0 here against 18.0 there. It is not this rule's to fix - the `+`
- * below the toggle measures 17.0 too, so nudging the toggle alone would break the pair this column
- * was tuned as, and moving the column would move everything section 13 of `WORKSPACE.md` measured.
  */
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-header {
 	justify-content: center;
@@ -736,11 +833,6 @@
 
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-actions .actions-container {
 	flex-direction: column-reverse;
-}
-
-/* And no step between the last button and the first folder that the others do not have. */
-.monaco-workbench .part.workspacebar.collapsed .workspacebar-list {
-	margin-top: 0;
 }
 
 /* Nothing to say when there is no room to say it - the empty column keeps its `+` instead. */

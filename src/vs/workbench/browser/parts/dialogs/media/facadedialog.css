@@ -4,127 +4,214 @@
  *--------------------------------------------------------------------------------------------*/
 
 /*
- * The shape this fork's own dialogs have.
+ * The product's own dialogs (`facade-dialog`): a box without a shadow and with a hairline edge, parts
+ * spaced on the spacing ramp, and the buttons on a band of their own at the bottom, the primary last
+ * and the only one filled. The colours are `facadeDialog.*` (`../facadeDialogColors.ts`).
  *
- * ⚠️ A header, a body and a footer, divided by two rules. The proportions are taken from the design
- * and written as one width with everything else derived from it, so the three bands keep their
- * relationship if the width ever changes:
+ * ⚠️ `.monaco-workbench` in front of every rule: the host's dialog rules and Modern UI's
+ * (`notificationsDialogs.css`) style the same parts, as specifically, and load later.
  *
- * width                 460       the one number
- * inset                 size200   the column every line starts at
- * header / footer band  size160   title above the first rule, buttons below the second
- *
- * ⚠️ The dialog itself carries no padding. The rules have to run edge to edge, so each band pads
- * itself and the rules are the bands' own borders.
- *
- * ⚠️ Nothing here touches the button row's contents. Every dialog hands its buttons to the host,
- * which knows the platform's order and sizes the pair together. A footer built by hand for one of
- * them is how they came to look different in the first place.
- *
- * ⚠️ Shared, and named for the fork rather than for one part, because a dialog that invents its own
- * bands is a dialog that does not match the others. That happened: the agents dialog was written
- * with its own paddings in raw pixels and came out a different shape from these two.
+ * Inputs and buttons write their colours inline, so those are set in code (`facadeDialogInputBoxStyles`,
+ * `facadeDialogButtonStyles` and `primaryButtonLast` in `../dialog.ts`).
  */
-.monaco-dialog-box.facade-dialog {
-	/*
-	 * ⚠️ `border-box`, or the host's padding is added to this and the number stops being the width
-	 * somebody sees - measured, two dialogs from one rule came out 400 and 424.
-	 */
+.monaco-workbench .monaco-dialog-box.facade-dialog {
 	box-sizing: border-box;
-	/*
-	 * ⚠️ 460, and it was set by the widest row rather than chosen: eleven 20px swatches with 8px
-	 * between them need 300, and ten 28px icon boxes with the same gap need 352. At 380 the swatches
-	 * wrapped onto a second line and the icons finished 7px from the edge. 460 leaves both on one
-	 * line inside the host's 20px padding, with room to spare. Measured, not guessed - and now the
-	 * width every dialog here takes, so they are the same object at different depths.
-	 */
-	width: 460px;
+	/* Wide enough for the ten 28px icon choices 8 apart, with room to spare at any zoom. */
+	width: 400px;
 	min-width: 0;
+	/* Each part pads itself: the footer's band and rule run edge to edge. */
+	padding: 0;
+	overflow: hidden;
+	/* An overlay's tier, which Modern UI would otherwise take down to the large one. */
+	border-radius: var(--vscode-cornerRadius-xLarge);
+	box-shadow: none;
+}
+
+/* The window 10% darker and blurred behind them, rather than the host's black at 50%. */
+.monaco-workbench .monaco-dialog-modal-block.dimmed.facade-dialog-block {
+	background: rgba(0, 0, 0, 0.1);
+	backdrop-filter: blur(4px);
+}
+
+/* --- header ----------------------------------------------------------------------------------- */
+
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-row {
 	padding: 0;
 }
 
-/* --- the header: the title, and the rule under it -------------------------------------------- */
-
-.monaco-dialog-box.facade-dialog .dialog-message-text {
-	/*
-	 * ⚠️ `width: 100%`, or this box is as wide as the title inside it and the rule under it stops
-	 * in the middle of the dialog - measured, 158 of 380.
-	 */
-	box-sizing: border-box;
-	width: 100%;
-	padding: var(--vscode-spacing-size160) var(--vscode-spacing-size200);
-	border-bottom: 1px solid var(--vscode-widget-border);
-	margin: 0;
-}
-
-/*
- * ⚠️ The close button sits in the title's own band rather than a row of its own above it. The
- * host gives it a 24px row, which is 24px of nothing over the title and half again the header the
- * design asks for. Taken out of the flow and put where the design has it.
- */
-.monaco-dialog-box.facade-dialog .dialog-toolbar-row {
-	position: absolute;
-	top: 0;
-	right: 0;
-	height: auto;
-	padding: var(--vscode-spacing-size120) var(--vscode-spacing-size160);
-	z-index: 1;
-}
-
-/* --- the body -------------------------------------------------------------------------------- */
-
-/*
- * No severity glyph, so neither the column it sat in nor the gutter around it.
- * ⚠️ Not `.dialog-icon.codicon`, which is the host's own selector: for `type: 'none'` the element is
- * given `no-codicon` instead, and a rule written that way never matches anything.
- */
-.monaco-dialog-box.facade-dialog .dialog-message-row {
-	padding: 0;
-}
-
-.monaco-dialog-box.facade-dialog .dialog-message-row > .dialog-icon {
+/* `type: 'none'` gives the icon element `no-codicon`. */
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-row > .dialog-icon.no-codicon {
 	display: none;
 }
 
-.monaco-dialog-box.facade-dialog .dialog-message-row .dialog-message-container {
-	padding-left: 0;
-	width: 100%;
+/* A severity icon, such as Delete Worktree's warning when changes would be lost: on the title's line. */
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-row > .dialog-icon.codicon {
+	flex: 0 0 auto;
+	align-self: flex-start;
+	height: auto;
+	margin: var(--vscode-spacing-size160) 0 0 var(--vscode-spacing-size160);
+	font-size: var(--vscode-codiconFontSize);
 }
 
-.monaco-dialog-box.facade-dialog .dialog-message-body,
-.monaco-dialog-box.facade-dialog .dialog-message-detail {
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-row > .dialog-icon.codicon + .dialog-message-container {
+	padding-left: var(--vscode-spacing-size80);
+}
+
+/*
+ * A column whose gaps are margins on the parts that are there: the host renders empty ones too.
+ * `:not(.align-vertical)` as Modern UI's own rule for the column has it, to outrank that too.
+ */
+.monaco-workbench .monaco-dialog-box.facade-dialog:not(.align-vertical) .dialog-message-row .dialog-message-container {
+	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	min-width: 0;
+	padding: var(--vscode-spacing-size160);
+}
+
+/* Clear of the close button in the corner. */
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-row .dialog-message-container .dialog-message {
+	min-height: 0;
+	margin: 0;
+	padding-right: var(--vscode-spacing-size280);
+}
+
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-text {
+	margin: 0;
+	padding: 0;
+	border: none;
+}
+
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-row .dialog-message-container .dialog-message-detail {
+	margin-top: var(--vscode-spacing-size80);
+	padding: 0;
+	color: var(--vscode-descriptionForeground);
+	flex: 0 0 auto;
+}
+
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-body {
 	box-sizing: border-box;
 	width: 100%;
 	min-width: 0;
-	padding: var(--vscode-spacing-size200);
-}
-
-/*
- * ⚠️ A band with nothing in it takes no room. The host renders both of these whether or not the
- * dialog uses them, so Remove Folder - which has a detail and no body - was carrying 40px of padding
- * around nothing between its sentence and the rule above its buttons.
- */
-.monaco-dialog-box.facade-dialog .dialog-message-body:empty,
-.monaco-dialog-box.facade-dialog .dialog-message-detail:empty {
+	margin-top: var(--vscode-spacing-size160);
 	padding: 0;
 }
 
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-body:empty,
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-detail:empty {
+	display: none;
+}
+
 /*
- * ⚠️ A rendered paragraph brings its own margin top and bottom, and the band around it has already
- * given it room: measured, 13px of paragraph margin stacked on 20px of padding above the path, and
- * the same again under the sentence. The band spaces the block; the paragraphs space each other.
+ * The host keeps a plain-text detail's line breaks (`pre-wrap`); in rendered markdown that also showed
+ * the line breaks between list items as blank lines.
  */
-.monaco-dialog-box.facade-dialog .dialog-message-detail .rendered-markdown > p:first-child {
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-detail .rendered-markdown {
+	white-space: normal;
+}
+
+/* The detail's margin spaces the block; its paragraphs only space each other. */
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-detail .rendered-markdown > p:first-child {
 	margin-top: 0;
 }
 
-.monaco-dialog-box.facade-dialog .dialog-message-detail .rendered-markdown > p:last-child {
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-message-detail .rendered-markdown > p:last-child {
 	margin-bottom: 0;
 }
 
-/* --- the footer: the rule over it, and the buttons -------------------------------------------- */
+/* The close button in the corner, rather than on a row of its own over the title. */
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-toolbar-row {
+	position: absolute;
+	top: var(--vscode-spacing-size80);
+	right: var(--vscode-spacing-size80);
+	height: auto;
+	padding: 0;
+	z-index: 1;
+}
 
-.monaco-dialog-box.facade-dialog .dialog-buttons-row {
-	padding: var(--vscode-spacing-size160) var(--vscode-spacing-size200);
-	border-top: 1px solid var(--vscode-widget-border);
+.monaco-workbench .monaco-dialog-box.facade-dialog .dialog-toolbar-row .action-label {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: var(--vscode-spacing-size280);
+	height: var(--vscode-spacing-size280);
+	border-radius: var(--vscode-cornerRadius-medium);
+}
+
+/* --- inputs ----------------------------------------------------------------------------------- */
+
+/* Those a dialog puts in its body, and the host's own (`inputs`), which take the same styles. */
+.monaco-workbench .monaco-dialog-box.facade-dialog :is(.dialog-message-body, .dialog-message-input) .monaco-inputbox {
+	border-radius: var(--vscode-cornerRadius-small);
+	overflow: hidden;
+}
+
+/* A height rather than padding, so the box is 32 like the buttons whatever the font's line height. */
+.monaco-workbench .monaco-dialog-box.facade-dialog :is(.dialog-message-body, .dialog-message-input) .monaco-inputbox > .ibwrapper > .input {
+	box-sizing: border-box;
+	height: calc(var(--vscode-spacing-size320) - 2 * var(--vscode-strokeThickness));
+	padding: 0 var(--vscode-spacing-size100);
+}
+
+/* --- footer ----------------------------------------------------------------------------------- */
+
+.monaco-workbench .monaco-dialog-box.facade-dialog > .dialog-buttons-row {
+	padding: var(--vscode-spacing-size160);
+	border-top: var(--vscode-strokeThickness) solid var(--vscode-facadeDialog-divider);
+	background-color: var(--vscode-facadeDialog-footerBackground);
+}
+
+/*
+ * Buttons of one width - the widest's - at the trailing end: a grid sized to its content, whose `1fr`
+ * columns all come out as wide as the widest. When they do not fit, the grid stops at the band's edge
+ * and a long label keeps its width (`minmax(max-content, 1fr)`). `overflow: visible` so the focus ring
+ * is not clipped.
+ */
+.monaco-workbench .monaco-dialog-box.facade-dialog > .dialog-buttons-row > .dialog-buttons {
+	display: grid;
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(max-content, 1fr);
+	gap: var(--vscode-spacing-size80);
+	width: max-content;
+	max-width: 100%;
+	margin: 0 0 0 auto;
+	overflow: visible;
+}
+
+.monaco-workbench .monaco-dialog-box.facade-dialog > .dialog-buttons-row > .dialog-buttons > .monaco-button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-sizing: border-box;
+	width: auto;
+	height: var(--vscode-spacing-size320);
+	margin: 0;
+	padding: 0 var(--vscode-spacing-size100);
+	border-radius: var(--vscode-cornerRadius-small);
+}
+
+/* The focus ring 2 clear of the button: the host's, 1 out with `!important`, blurred into the fill's edge. */
+.monaco-workbench .monaco-dialog-box.facade-dialog .monaco-button:focus {
+	outline-offset: 2px !important;
+}
+
+/*
+ * A button takes its hover colours on focus too, and the host focuses the primary on open, so it came
+ * up looking pressed. The fill answers the pointer; the ring the keyboard. `!important` over the
+ * inline colours.
+ */
+.monaco-workbench .monaco-dialog-box.facade-dialog .monaco-button:not(.secondary):focus:not(:hover) {
+	background-color: var(--vscode-button-background) !important;
+}
+
+.monaco-workbench .monaco-dialog-box.facade-dialog .monaco-button.secondary:focus:not(:hover) {
+	background-color: transparent !important;
+}
+
+/* High contrast has no hover tint (`toolbar.hoverBackground`), so a dashed outline as toolbars use. */
+.monaco-workbench:is(.hc-black, .hc-light) .monaco-dialog-box.facade-dialog .monaco-button.secondary:hover:not(:focus) {
+	outline: var(--vscode-strokeThickness) dashed var(--vscode-contrastActiveBorder);
+	outline-offset: calc(-1 * var(--vscode-strokeThickness));
 }

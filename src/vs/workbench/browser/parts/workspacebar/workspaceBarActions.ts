@@ -3,30 +3,27 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import '../dialogs/media/facadedialog.css';
 import './media/workspacebardialog.css';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
+import { basename } from '../../../../base/common/resources.js';
 import { localize, localize2 } from '../../../../nls.js';
-import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+import { ContextKeyExpr, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
-import { asCodeSpan } from './workspaceBar.js';
+import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
+import { asCodeSpan, folderKey, orderWorktrees } from './workspaceBar.js';
+import { findWorktree, IWorkspaceBarRepository } from './workspaceBarGit.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
-import { showCustomizeDialog } from './workspaceBarCustomize.js';
+import { IWorkspaceBarDialogService } from './workspaceBarCustomize.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { IContextViewService } from '../../../../platform/contextview/browser/contextView.js';
-import { IHostService } from '../../../services/host/browser/host.js';
-import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
-import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -37,20 +34,73 @@ import { workbenchConfigurationNodeBase } from '../../../common/configuration.js
 /** The toolbar at the right end of the bar's header. */
 export const WorkspaceBarTitleMenu = new MenuId('WorkspaceBarTitle');
 
-/** What the header's `+` opens. */
-
 /** What a right click on a folder opens. */
 export const WorkspaceBarContextMenu = new MenuId('WorkspaceBarContext');
 
 /**
- * True while the keyboard is inside the list of folders.
+ * The buttons at the end of a folder's row, shown while the pointer is on it - its `+`, New
+ * Worktree... (WT-5.1). Run with the row's folder.
+ */
+export const WorkspaceBarRowToolbar = new MenuId('WorkspaceBarRowToolbar');
+
+/*
+ * The row menu's groups (WORKTREE.md WT-1.11), by what an item changes - the explorer's own rule,
+ * where making a thing and seeing it elsewhere share the first group and what makes a thing go is
+ * last:
  *
- * Nothing here is bound to a key - removing a folder is a dialog away, which is not something to
- * put behind a stray keystroke. It is registered so that a keybinding of someone's own can be.
+ *     navigation   what is in the row and where to see it: New Worktree..., Expand or Collapse,
+ *                  Reveal in File Explorer
+ *     ARRANGE      how the row stands in the list: Customize..., Move Up and Down
+ *     9_remove     whether it stays: Remove Folder, Delete Worktree...
+ *
+ * Customize is with the moves, not by the removal as the explorer's Rename is: it changes nothing on
+ * disk, only how the row stands in this list.
+ */
+const ARRANGE = '2_arrange';
+
+/**
+ * True while the keyboard is inside the list of folders, where F2, Alt+Up and Alt+Down act on the
+ * focused row.
+ *
+ * Remove Folder has no key - it is a dialog away, which is not something to put behind a stray
+ * keystroke. Anybody can still bind it themselves, with this as the `when`.
  */
 export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorkspaceBarFocus', false, localize('workspaceBar.focusContext', "Whether the workspace's list of folders has keyboard focus"));
 
-const CATEGORY = localize2('workspaceBar.category', "Workspace");
+/**
+ * What the row a menu or a key acts on is: a plain `folder`, a `repository` (a main checkout, which
+ * is a folder too) or a `worktree`. WORKTREE.md WT-1.11.
+ *
+ * Set by the view from the focused row; a right-click focuses its row first, so menu and keyboard agree.
+ */
+export const WorkspaceBarRowKindContext = new RawContextKey<'folder' | 'repository' | 'worktree'>('facadeWorkspaceBarRowKind', 'folder', localize('workspaceBar.rowKindContext', "Whether the focused row of the workspace is a folder, a repository or a worktree"));
+
+/**
+ * Whether the bar is collapsed to its column of icons - what its toggle draws: `<` to collapse it,
+ * `>` to open it again. Set by `WorkspaceBarPart`.
+ */
+export const WorkspaceBarCollapsedContext = new RawContextKey<boolean>('facadeWorkspaceBarCollapsed', false, localize('workspaceBar.collapsedContext', "Whether the workspace bar is collapsed to its icons"));
+
+/** Rows that are folders of the list: everything except a worktree. */
+const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
+
+/**
+ * Whether the repository the menu's row stands for is open onto its worktrees: `expanded`,
+ * `collapsed`, or empty for a row with nothing under it. WORKTREE.md WT-1.10.
+ * Collapsed to its icons, the bar has no triangles, and the menu is how a repository opens and closes.
+ */
+export const WorkspaceBarRowExpansionContext = new RawContextKey<'' | 'expanded' | 'collapsed'>('facadeWorkspaceBarRowExpansion', '', localize('workspaceBar.rowExpansionContext', "Whether the repository of the focused row of the workspace shows its worktrees"));
+
+/**
+ * Creates a worktree of a repository (WORKTREE.md section 7). Registered by `contrib/worktrees`, which
+ * can reach the terminal this part cannot; the bar only calls it, with the repository's folder.
+ */
+export const NEW_WORKTREE_COMMAND = 'facade.workspaceBar.newWorktree';
+
+/** Deletes a worktree (WORKTREE.md section 10). Registered by `contrib/worktrees`, beside New Worktree. */
+export const DELETE_WORKTREE_COMMAND = 'facade.workspaceBar.deleteWorktree';
+
+export const WORKSPACE_BAR_CATEGORY = localize2('workspaceBar.category', "Workspace");
 
 /**
  * Whether taking a folder off the list asks first.
@@ -62,12 +112,31 @@ const CATEGORY = localize2('workspaceBar.category', "Workspace");
  */
 export const CONFIRM_REMOVE_FOLDER = 'facade.workspaceBar.confirmRemoveFolder';
 
+/**
+ * The switch for worktrees (WORKTREE.md section 11). Off, the bar is the flat list of `folders[]` it was
+ * before worktrees existed.
+ */
+export const SHOW_WORKTREES = 'facade.workspaceBar.worktrees';
+
+/** Whether the bar lists worktrees: `SHOW_WORKTREES`, on unless switched off. */
+export function areWorktreesShown(configurationService: IConfigurationService): boolean {
+	return configurationService.getValue<boolean>(SHOW_WORKTREES) !== false;
+}
+
+/** `areWorktreesShown`, for a menu, a keybinding or a precondition to say. */
+export const WORKTREES_SHOWN = ContextKeyExpr.notEquals(`config.${SHOW_WORKTREES}`, false);
+
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,
 	properties: {
 		[CONFIRM_REMOVE_FOLDER]: {
 			type: 'boolean',
 			description: localize('workspaceBar.confirmRemoveFolder', "Controls whether the workspace asks for confirmation before taking a folder off the list. The folder itself is never deleted."),
+			default: true
+		},
+		[SHOW_WORKTREES]: {
+			type: 'boolean',
+			description: localize('workspaceBar.worktrees', "Controls whether the workspace lists each repository's Git worktrees under it."),
 			default: true
 		}
 	}
@@ -81,7 +150,7 @@ class OpenFolderAction extends Action2 {
 		super({
 			id: OpenFolderAction.ID,
 			title: localize2('workspaceBar.openFolder', "Open Folder..."),
-			category: CATEGORY,
+			category: WORKSPACE_BAR_CATEGORY,
 			icon: Codicon.add,
 			f1: true,
 			/*
@@ -151,8 +220,10 @@ class ToggleCollapsedAction extends Action2 {
 		super({
 			id: ToggleCollapsedAction.ID,
 			title: localize2('workspaceBar.toggleCollapsed', "Toggle Workspace Bar"),
-			category: CATEGORY,
-			icon: Codicon.threeBars,
+			category: WORKSPACE_BAR_CATEGORY,
+			// Where the bar goes: `<` while it is open, `>` while it is collapsed.
+			icon: Codicon.chevronLeft,
+			toggled: { condition: WorkspaceBarCollapsedContext, icon: Codicon.chevronRight },
 			f1: true,
 			// ⚠️ Order 2, so it follows the `+` that is order 1 in the same group.
 			menu: { id: WorkspaceBarTitleMenu, group: 'navigation', order: 2 }
@@ -175,9 +246,9 @@ class RevealFolderAction extends Action2 {
 			title: isWindows ? localize2('workspaceBar.revealInWindows', "Reveal in File Explorer")
 				: isMacintosh ? localize2('workspaceBar.revealInMac', "Reveal in Finder")
 					: localize2('workspaceBar.revealInLinux', "Open Containing Folder"),
-			category: CATEGORY,
+			category: WORKSPACE_BAR_CATEGORY,
 			f1: true,
-			menu: { id: WorkspaceBarContextMenu, group: '1_open', order: 1 }
+			menu: { id: WorkspaceBarContextMenu, group: 'navigation', order: 3 }
 		});
 	}
 
@@ -206,44 +277,55 @@ class CustomizeFolderAction extends Action2 {
 		super({
 			id: CustomizeFolderAction.ID,
 			title: localize2('workspaceBar.customizeFolder', "Customize..."),
-			category: CATEGORY,
+			category: WORKSPACE_BAR_CATEGORY,
 			f1: true,
 			keybinding: {
 				weight: KeybindingWeight.WorkbenchContrib,
 				when: WorkspaceBarFocusContext,
 				primary: KeyCode.F2
 			},
-			menu: { id: WorkspaceBarContextMenu, group: '2_customize', order: 1 }
+			// Every row, worktrees included: a worktree has a name and a colour of its own to give.
+			menu: { id: WorkspaceBarContextMenu, group: ARRANGE, order: 1 }
 		});
 	}
 
 	override async run(accessor: ServicesAccessor, uri?: URI): Promise<void> {
-		// ⚠️ All of them before the first `await`: a `ServicesAccessor` is only good for the
-		// synchronous part of a run, and this one has a dialog in the middle of it.
 		const workspaceBarService = accessor.get(IWorkspaceBarService);
 		const customizationService = accessor.get(IWorkspaceBarCustomizationService);
+		const workspaceBarDialogService = accessor.get(IWorkspaceBarDialogService);
 		const contextService = accessor.get(IWorkspaceContextService);
-		const services = {
-			layoutService: accessor.get(IWorkbenchLayoutService),
-			keybindingService: accessor.get(IKeybindingService),
-			hostService: accessor.get(IHostService),
-			contextViewService: accessor.get(IContextViewService)
-		};
+		const uriIdentityService = accessor.get(IUriIdentityService);
 
 		const target = uri ?? workspaceBarService.folderForCommand();
 		if (!target) {
 			return;
 		}
 
-		const folder = contextService.getWorkspace().folders.find(candidate => candidate.uri.toString() === target.toString())
-			?? contextService.getWorkspaceFolder(target);
-		if (!folder) {
+		// A worktree first: once visited it is also a workspace folder, but it is named by its branch.
+		const repository = workspaceBarService.repositoryFor(target);
+		const worktree = findWorktree(repository, target, uriIdentityService.extUri);
+		if (worktree) {
+			const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: worktree.label, worktree: true }, customizationService.get(worktree.uri));
+			if (answer) {
+				customizationService.set(worktree.uri, answer);
+			}
 			return;
 		}
 
-		const answer = await showCustomizeDialog(folder, customizationService.get(folder.uri), services);
+		// The row's own folder - never one it is inside of, which is a row of its own. A repository whose
+		// own checkout is not in the workspace, only worktrees of it, has a row all the same, named for
+		// its folder on disk.
+		const folder = contextService.getWorkspace().folders.find(candidate => uriIdentityService.extUri.isEqual(candidate.uri, target));
+		const row = folder ? { uri: folder.uri, name: folder.name }
+			: repository && uriIdentityService.extUri.isEqual(repository.main, target) ? { uri: repository.main, name: basename(repository.main) }
+				: undefined;
+		if (!row) {
+			return;
+		}
+
+		const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: row.name, worktree: false }, customizationService.get(row.uri));
 		if (answer) {
-			customizationService.set(folder.uri, answer);
+			customizationService.set(row.uri, answer);
 		}
 	}
 }
@@ -256,10 +338,10 @@ class RemoveFolderAction extends Action2 {
 		super({
 			id: RemoveFolderAction.ID,
 			title: localize2('workspaceBar.removeFolder', "Remove Folder"),
-			category: CATEGORY,
+			category: WORKSPACE_BAR_CATEGORY,
 			icon: Codicon.trash,
 			f1: true,
-			menu: { id: WorkspaceBarContextMenu, group: '9_remove', order: 1 }
+			menu: { id: WorkspaceBarContextMenu, group: '9_remove', order: 1, when: onFolderRow }
 		});
 	}
 
@@ -272,14 +354,17 @@ class RemoveFolderAction extends Action2 {
 		const dialogService = accessor.get(IDialogService);
 		const labelService = accessor.get(ILabelService);
 		const configurationService = accessor.get(IConfigurationService);
+		const uriIdentityService = accessor.get(IUriIdentityService);
 
 		const folder = uri ?? workspaceBarService.folderForCommand();
 		if (!folder) {
 			return;
 		}
 
+		const leaving = foldersToRemove(folder, workspaceBarService.repositoryFor(folder), (a, b) => uriIdentityService.extUri.isEqual(a, b));
+
 		if (configurationService.getValue<boolean>(CONFIRM_REMOVE_FOLDER) === false) {
-			return workspaceBarService.remove([folder]);
+			return workspaceBarService.remove(leaving);
 		}
 
 		// The path, then what the two words in the button actually do. Both matter: two folders can
@@ -290,7 +375,13 @@ class RemoveFolderAction extends Action2 {
 		// path is not, because it goes inside a code span - see `asCodeSpan`.
 		const detail = new MarkdownString();
 		detail.appendMarkdown(`${asCodeSpan(labelService.getUriLabel(folder))}\n\n`);
-		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from your workspace and clears its saved editors. Your files on disk will not be deleted.")));
+		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from the workspace, and the editors kept open for it. Files on disk will not be deleted.")));
+		if (leaving.length > 1) {
+			detail.appendMarkdown('\n\n');
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(leaving.length === 2
+				? localize('workspaceBar.removeFolderWorktree', "The associated worktree will also be removed from the workspace, but remains on disk.")
+				: localize('workspaceBar.removeFolderWorktrees', "The {0} associated worktrees will also be removed from the workspace, but remain on disk.", leaving.length - 1)));
+		}
 
 		const { confirmed } = await dialogService.confirm({
 			// ⚠️ No severity glyph. Nothing here is destroyed - the folder is left where it is - and a
@@ -314,10 +405,31 @@ class RemoveFolderAction extends Action2 {
 		});
 
 		if (confirmed) {
-			await workspaceBarService.remove([folder]);
+			await workspaceBarService.remove(leaving);
 		}
 	}
 }
+
+/**
+ * What `Remove Folder` on a row takes out of the workspace: the folder, and - on a repository's row -
+ * every other folder on that row: its worktrees in the workspace (WORKTREE.md WT-8.8), and the
+ * checkout under any other spelling it was added by. Their rows hang under the repository's, so
+ * leaving them would leave rows under a folder the list no longer has. Nothing on disk is touched
+ * either way.
+ */
+export function foldersToRemove(folder: URI, repository: IWorkspaceBarRepository | undefined, isEqual: (a: URI, b: URI) => boolean): URI[] {
+	if (!repository || !isEqual(repository.main, folder)) {
+		return [folder];
+	}
+
+	return [folder, ...repository.members.map(member => member.uri).filter(uri => !isEqual(uri, folder))];
+}
+
+/**
+ * The weight of Alt+Up and Alt+Down on a row: one above `list.focusAnyUp` and `list.focusAnyDown`
+ * (`listCommands.ts`), which take those keys in every focused list and otherwise win.
+ */
+const MOVE_WEIGHT = KeybindingWeight.WorkbenchContrib + 1;
 
 /**
  * Moves a folder one place up or down the list.
@@ -325,7 +437,7 @@ class RemoveFolderAction extends Action2 {
  * ⚠️ The list is `folders[]`, so the order is the one the `.code-workspace` file holds and the one
  * anybody opening that file sees. There is nothing of ours to keep in step.
  *
- * ⚠️ `moveFolder`, which exists because neither `addFolders` nor `updateFolders` can express a move
+ * ⚠️ `reorderFolders`, which exists because neither `addFolders` nor `updateFolders` can express a move
  * without loss: both re-serialise whatever they are handed, so a reorder written with them rewrites
  * paths the person put in the file themselves. Measured before it existed - `updateFolders` over the
  * whole list turned five absolute paths into relative ones.
@@ -340,16 +452,14 @@ abstract class MoveFolderAction extends Action2 {
 
 	override async run(accessor: ServicesAccessor, uri?: URI): Promise<void> {
 		const workspaceBarService = accessor.get(IWorkspaceBarService);
-		const workspaceEditingService = accessor.get(IWorkspaceEditingService);
 
 		const folder = uri ?? workspaceBarService.folderForCommand();
 		if (!folder) {
 			return;
 		}
 
-		// ⚠️ The folder and how far, not two indices: where it sits is worked out when the move runs,
-		// behind whatever else is changing the list.
-		await workspaceEditingService.moveFolder(folder, this.offset);
+		// The whole row: a repository moves with its worktrees in the workspace.
+		await workspaceBarService.moveFolder(folder, this.offset);
 	}
 }
 
@@ -363,14 +473,14 @@ class MoveFolderUpAction extends MoveFolderAction {
 		super({
 			id: MoveFolderUpAction.ID,
 			title: localize2('workspaceBar.moveFolderUp', "Move Folder Up"),
-			category: CATEGORY,
+			category: WORKSPACE_BAR_CATEGORY,
 			f1: true,
 			keybinding: {
-				when: WorkspaceBarFocusContext,
+				when: ContextKeyExpr.and(WorkspaceBarFocusContext, onFolderRow),
 				primary: KeyMod.Alt | KeyCode.UpArrow,
-				weight: KeybindingWeight.WorkbenchContrib
+				weight: MOVE_WEIGHT
 			},
-			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 1 }
+			menu: { id: WorkspaceBarContextMenu, group: ARRANGE, order: 2, when: onFolderRow }
 		});
 	}
 }
@@ -385,14 +495,147 @@ class MoveFolderDownAction extends MoveFolderAction {
 		super({
 			id: MoveFolderDownAction.ID,
 			title: localize2('workspaceBar.moveFolderDown', "Move Folder Down"),
-			category: CATEGORY,
+			category: WORKSPACE_BAR_CATEGORY,
 			f1: true,
 			keybinding: {
-				when: WorkspaceBarFocusContext,
+				when: ContextKeyExpr.and(WorkspaceBarFocusContext, onFolderRow),
 				primary: KeyMod.Alt | KeyCode.DownArrow,
-				weight: KeybindingWeight.WorkbenchContrib
+				weight: MOVE_WEIGHT
 			},
-			menu: { id: WorkspaceBarContextMenu, group: '5_order', order: 2 }
+			menu: { id: WorkspaceBarContextMenu, group: ARRANGE, order: 3, when: onFolderRow }
+		});
+	}
+}
+
+/**
+ * Moves a worktree one place up or down among its repository's worktrees (WORKTREE.md WT-1.7) - never
+ * out of them, since a worktree's place is under its repository. The first move in a repository keeps
+ * the whole order as it then stands; until then they are in the order they were made.
+ */
+abstract class MoveWorktreeAction extends Action2 {
+
+	protected abstract readonly offset: number;
+
+	override run(accessor: ServicesAccessor, uri?: URI): void {
+		const workspaceBarService = accessor.get(IWorkspaceBarService);
+		const customizationService = accessor.get(IWorkspaceBarCustomizationService);
+		const uriIdentityService = accessor.get(IUriIdentityService);
+
+		const worktree = uri ?? workspaceBarService.folderForCommand();
+		const repository = worktree && workspaceBarService.repositoryFor(worktree);
+		if (!worktree || !repository) {
+			return;
+		}
+
+		const key = (candidate: URI) => folderKey(uriIdentityService, candidate);
+		const order = orderWorktrees(repository.worktrees.map(candidate => candidate.uri), customizationService.worktreeOrder(repository.main), candidate => candidate, key);
+		const from = order.findIndex(candidate => key(candidate) === key(worktree));
+		const to = from + this.offset;
+
+		// The main checkout is not in the list, and the ends do not wrap round.
+		if (from < 0 || to < 0 || to >= order.length) {
+			return;
+		}
+
+		[order[from], order[to]] = [order[to], order[from]];
+		customizationService.setWorktreeOrder(repository.main, order);
+	}
+}
+
+const onWorktreeRow = WorkspaceBarRowKindContext.isEqualTo('worktree');
+
+class MoveWorktreeUpAction extends MoveWorktreeAction {
+
+	static readonly ID = 'facade.workspaceBar.moveWorktreeUp';
+
+	protected readonly offset = -1;
+
+	constructor() {
+		super({
+			id: MoveWorktreeUpAction.ID,
+			title: localize2('workspaceBar.moveWorktreeUp', "Move Worktree Up"),
+			category: WORKSPACE_BAR_CATEGORY,
+			f1: true,
+			precondition: WORKTREES_SHOWN,
+			keybinding: {
+				when: ContextKeyExpr.and(WorkspaceBarFocusContext, onWorktreeRow),
+				primary: KeyMod.Alt | KeyCode.UpArrow,
+				weight: MOVE_WEIGHT
+			},
+			menu: { id: WorkspaceBarContextMenu, group: ARRANGE, order: 2, when: onWorktreeRow }
+		});
+	}
+}
+
+class MoveWorktreeDownAction extends MoveWorktreeAction {
+
+	static readonly ID = 'facade.workspaceBar.moveWorktreeDown';
+
+	protected readonly offset = 1;
+
+	constructor() {
+		super({
+			id: MoveWorktreeDownAction.ID,
+			title: localize2('workspaceBar.moveWorktreeDown', "Move Worktree Down"),
+			category: WORKSPACE_BAR_CATEGORY,
+			f1: true,
+			precondition: WORKTREES_SHOWN,
+			keybinding: {
+				when: ContextKeyExpr.and(WorkspaceBarFocusContext, onWorktreeRow),
+				primary: KeyMod.Alt | KeyCode.DownArrow,
+				weight: MOVE_WEIGHT
+			},
+			menu: { id: WorkspaceBarContextMenu, group: ARRANGE, order: 3, when: onWorktreeRow }
+		});
+	}
+}
+
+/**
+ * Opens or closes a repository's row onto its worktrees, from its menu - the only way while the bar
+ * is collapsed to its icons.
+ */
+abstract class SetExpandedAction extends Action2 {
+
+	protected abstract readonly expanded: boolean;
+
+	override run(accessor: ServicesAccessor, uri?: URI): void {
+		const workspaceBarService = accessor.get(IWorkspaceBarService);
+
+		const folder = uri ?? workspaceBarService.folderForCommand();
+		if (folder) {
+			workspaceBarService.setExpanded(folder, this.expanded);
+		}
+	}
+}
+
+class ExpandFolderAction extends SetExpandedAction {
+
+	static readonly ID = 'facade.workspaceBar.expandFolder';
+
+	protected readonly expanded = true;
+
+	constructor() {
+		super({
+			id: ExpandFolderAction.ID,
+			title: localize2('workspaceBar.expandFolder', "Expand"),
+			category: WORKSPACE_BAR_CATEGORY,
+			menu: { id: WorkspaceBarContextMenu, group: 'navigation', order: 2, when: WorkspaceBarRowExpansionContext.isEqualTo('collapsed') }
+		});
+	}
+}
+
+class CollapseFolderAction extends SetExpandedAction {
+
+	static readonly ID = 'facade.workspaceBar.collapseFolder';
+
+	protected readonly expanded = false;
+
+	constructor() {
+		super({
+			id: CollapseFolderAction.ID,
+			title: localize2('workspaceBar.collapseFolder', "Collapse"),
+			category: WORKSPACE_BAR_CATEGORY,
+			menu: { id: WorkspaceBarContextMenu, group: 'navigation', order: 2, when: WorkspaceBarRowExpansionContext.isEqualTo('expanded') }
 		});
 	}
 }
@@ -405,7 +648,7 @@ class FocusWorkspaceAction extends Action2 {
 		super({
 			id: FocusWorkspaceAction.ID,
 			title: localize2('workspaceBar.focus', "Focus on Workspace"),
-			category: CATEGORY,
+			category: WORKSPACE_BAR_CATEGORY,
 			f1: true
 		});
 	}
@@ -422,4 +665,8 @@ registerAction2(CustomizeFolderAction);
 registerAction2(RemoveFolderAction);
 registerAction2(MoveFolderUpAction);
 registerAction2(MoveFolderDownAction);
+registerAction2(MoveWorktreeUpAction);
+registerAction2(MoveWorktreeDownAction);
+registerAction2(ExpandFolderAction);
+registerAction2(CollapseFolderAction);
 registerAction2(FocusWorkspaceAction);

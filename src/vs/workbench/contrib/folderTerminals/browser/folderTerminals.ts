@@ -7,16 +7,19 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { EditorActivation } from '../../../../platform/editor/common/editor.js';
+import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { folderKey } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
-import { IWorkbenchContribution } from '../../../common/contributions.js';
+import { getWorkbenchContribution, IWorkbenchContribution } from '../../../common/contributions.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { GroupsOrder, IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
-import { ACTIVE_GROUP, AUX_WINDOW_GROUP } from '../../../services/editor/common/editorService.js';
+import { EditorGroupColumn } from '../../../services/editor/common/editorGroupColumn.js';
+import { AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 
 /**
@@ -24,8 +27,32 @@ import { ITerminalInstance, ITerminalService } from '../../terminal/browser/term
  */
 export const FOLLOW_FOLDER = 'facade.terminal.followFolder';
 
+export const IFolderTerminalsService = createDecorator<IFolderTerminalsService>('folderTerminalsService');
+
+/** Which terminals belong to a folder of the workspace (`FolderTerminals`). */
+export interface IFolderTerminalsService {
+	readonly _serviceBrand: undefined;
+
+	/**
+	 * The terminals `folder` has in the editor area: put away while the window is elsewhere, or there
+	 * now while it is on it - the ones leaving it puts away, or without {@link FOLLOW_FOLDER} closes,
+	 * and taking it out of the workspace stops.
+	 */
+	terminalsOf(folder: URI): readonly ITerminalInstance[];
+}
+
+/** `IFolderTerminalsService`, served by the `FolderTerminals` contribution that keeps the terminals. */
+export class FolderTerminalsService implements IFolderTerminalsService {
+
+	declare readonly _serviceBrand: undefined;
+
+	terminalsOf(folder: URI): readonly ITerminalInstance[] {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).terminalsOf(folder);
+	}
+}
+
 /**
- * The column recorded for a terminal whose tab was in an auxiliary window rather than the main
+ * The group recorded for a terminal whose tab was in an auxiliary window rather than the main
  * editor grid.
  */
 const AUXILIARY_WINDOW = -1;
@@ -36,14 +63,23 @@ const AUXILIARY_WINDOW = -1;
 interface IParkedTerminal {
 	readonly instance: ITerminalInstance;
 
-	/** The column of the main editor grid, or {@link AUXILIARY_WINDOW}. */
-	readonly column: number;
+	/**
+	 * The id of its group in the main editor grid, or {@link AUXILIARY_WINDOW}. By id, not by column:
+	 * closing a column to its left moves the column along.
+	 */
+	readonly group: number;
 
-	/** The index within that column. Not meaningful for an auxiliary window. */
+	/** The index within that group. Not meaningful for an auxiliary window. */
 	readonly index: number;
 
 	/** The `forcePersist` value to restore once the terminal is shown again. */
 	readonly persisted: boolean | undefined;
+
+	/**
+	 * Whether its tab was the one in front of its group. Only that one comes back in front: the rest
+	 * return behind whatever the group shows, so the tab somebody left on is the tab they come back to.
+	 */
+	readonly active: boolean;
 }
 
 /**
@@ -104,6 +140,19 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		this._register(toDisposable(() => this._forgetAll()));
 	}
 
+	/** {@link IFolderTerminalsService.terminalsOf}. */
+	terminalsOf(folder: URI): readonly ITerminalInstance[] {
+		const key = this._key(folder);
+		const held = (this._parked.get(key) ?? []).map(parked => parked.instance);
+
+		// On the folder now, the editor area's terminals are the ones leaving it will put away. Not
+		// `instances`: those put away for other folders are in it too, and still say `Editor`.
+		const active = this._activeFolderService.activeFolder;
+		const shown = active && this._key(active.uri) === key ? this._terminalService.foregroundInstances.filter(instance => instance.target === TerminalLocation.Editor) : [];
+
+		return [...held, ...shown];
+	}
+
 	private _isEnabled(): boolean {
 		return this._configurationService.getValue<boolean>(FOLLOW_FOLDER) !== false;
 	}
@@ -155,15 +204,14 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	}
 
 	/**
-	 * The position of a terminal's tab, or `undefined` when it does not have one.
+	 * The position of a terminal's tab, and whether it is the one in front of its group, or
+	 * `undefined` when it does not have one.
 	 */
-	private _placeOf(instance: ITerminalInstance): { column: number; index: number } | undefined {
-		const columns = this._editorGroupsService.mainPart.getGroups(GroupsOrder.GRID_APPEARANCE);
-
-		for (const [column, group] of columns.entries()) {
+	private _placeOf(instance: ITerminalInstance): { group: number; index: number; active: boolean } | undefined {
+		for (const group of this._editorGroupsService.mainPart.getGroups(GroupsOrder.GRID_APPEARANCE)) {
 			const [editor] = group.findEditors(instance.resource);
 			if (editor) {
-				return { column, index: group.getIndexOfEditor(editor) };
+				return { group: group.id, index: group.getIndexOfEditor(editor), active: group.activeEditor === editor };
 			}
 		}
 
@@ -173,8 +221,9 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			}
 
 			for (const group of part.groups) {
-				if (group.findEditors(instance.resource).length > 0) {
-					return { column: AUXILIARY_WINDOW, index: -1 };
+				const [editor] = group.findEditors(instance.resource);
+				if (editor) {
+					return { group: AUXILIARY_WINDOW, index: -1, active: group.activeEditor === editor };
 				}
 			}
 		}
@@ -185,7 +234,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	/**
 	 * Shows the folder's terminals again, in the columns and at the tabs they were at.
 	 *
-	 * Entries are shown lowest index first so that each move lands in a column whose earlier tabs
+	 * Entries are shown lowest index first so that each lands in a column whose earlier tabs
 	 * are already in place, and each one stays in the queue until it is actually back so that a
 	 * failure or a second switch does not leave a live shell untracked.
 	 */
@@ -196,18 +245,27 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		}
 
 		const generation = this._generation;
-		const queue = [...parked].sort((a, b) => a.index - b.index);
+		// Floated ones last: a new auxiliary window takes the focus.
+		const queue = [...parked].sort((a, b) => Number(a.group === AUXILIARY_WINDOW) - Number(b.group === AUXILIARY_WINDOW) || a.index - b.index);
 		this._parked.set(key, queue);
 
 		while (queue.length) {
 			const entry = queue[0];
 
 			try {
-				// `preserveFocus` because the workspace bar restores its own editors that way and a
-				// switch should not move the caret
+				// Straight into its own column and at its own tab: moving it between groups closes its
+				// editor, and the terminal editor service then stops tracking it. In another column, at
+				// its end, in the order they come back - an editor opened without an index goes after
+				// the one in front, which reverses them. In front only if it was the tab in front, and
+				// only in its own column: in another, the tab in front is that column's, and stays in front.
+				// `activation: PRESERVE` and `preserveFocus` so neither the column nor the caret moves.
+				const place = this._placeFor(entry);
 				await this._terminalService.showBackgroundTerminal(entry.instance, true, {
-					viewColumn: entry.column === AUXILIARY_WINDOW ? AUX_WINDOW_GROUP : ACTIVE_GROUP,
-					preserveFocus: true
+					viewColumn: place.column,
+					index: place.own ? (entry.index >= 0 ? entry.index : undefined) : place.end,
+					preserveFocus: true,
+					inactive: !entry.active || !place.own,
+					activation: EditorActivation.PRESERVE
 				});
 			} catch (error) {
 				this._logService.error(`[folderTerminals] could not reopen a terminal for ${key}`, error);
@@ -223,7 +281,6 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			}
 
 			entry.instance.shellLaunchConfig.forcePersist = entry.persisted;
-			this._restorePosition(entry);
 			queue.shift();
 		}
 
@@ -235,30 +292,25 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	}
 
 	/**
-	 * Moves a terminal that has just been shown to the tab it was at. A separate move because the
-	 * options a background terminal is shown with carry a column but no index.
+	 * Where a parked terminal is shown: a floated one in a new window of its own, else in the column of
+	 * the group it was in, found by id. That group gone, at the `end` of the main window's active column,
+	 * or of the first one not locked if that one is - named by its number, as `ACTIVE_GROUP` would be
+	 * another window's while that one has the focus, and a number is taken as given, lock or no lock.
 	 */
-	private _restorePosition({ instance, column, index }: IParkedTerminal): void {
-		if (column === AUXILIARY_WINDOW || index < 0) {
-			return;
+	private _placeFor(entry: IParkedTerminal): { readonly column: EditorGroupColumn | AUX_WINDOW_GROUP_TYPE; readonly own: boolean; readonly end: number | undefined } {
+		if (entry.group === AUXILIARY_WINDOW) {
+			return { column: AUX_WINDOW_GROUP, own: true, end: undefined };
 		}
 
-		const columns = this._editorGroupsService.mainPart.getGroups(GroupsOrder.GRID_APPEARANCE);
-		const target = columns[column];
-		if (!target) {
-			// The layout has fewer columns than it had; the terminal keeps the one it arrived in
-			return;
+		const mainPart = this._editorGroupsService.mainPart;
+		const columns = mainPart.getGroups(GroupsOrder.GRID_APPEARANCE);
+		const own = columns.findIndex(group => group.id === entry.group);
+		if (own !== -1) {
+			return { column: own, own: true, end: undefined };
 		}
 
-		const source = columns.find(group => group.findEditors(instance.resource).length > 0);
-		if (!source) {
-			return;
-		}
-
-		const [editor] = source.findEditors(instance.resource);
-		if (editor && (source !== target || source.getIndexOfEditor(editor) !== index)) {
-			source.moveEditor(editor, target, { index });
-		}
+		const other = [mainPart.activeGroup, ...columns].find(group => !group.isLocked) ?? mainPart.activeGroup;
+		return { column: columns.indexOf(other), own: false, end: other.count };
 	}
 
 	private _forget(key: string, instance: ITerminalInstance): void {

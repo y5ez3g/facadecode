@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IDidEnterWorkspaceEvent, IWorkspaceEditingService } from '../common/workspaceEditing.js';
+import { FolderReorder, IDidEnterWorkspaceEvent, IWorkspaceEditingService } from '../common/workspaceEditing.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { hasWorkspaceFileExtension, IAnyWorkspaceIdentifier, isSavedWorkspace, isUntitledWorkspace, isWorkspaceIdentifier, IWorkspaceContextService, IWorkspaceIdentifier, toWorkspaceIdentifier, WorkbenchState, WORKSPACE_EXTENSION, WORKSPACE_FILTER } from '../../../../platform/workspace/common/workspace.js';
@@ -186,9 +186,10 @@ export abstract class AbstractWorkspaceEditingService extends Disposable impleme
 		}
 	}
 
-	async moveFolder(folder: URI, delta: number, donotNotifyError = false): Promise<void> {
+	/** Facade Code: see `IWorkspaceEditingService.reorderFolders`. */
+	async reorderFolders(reorder: FolderReorder, donotNotifyError = false): Promise<void> {
 		try {
-			await this.contextService.moveFolder(folder, delta);
+			await this.contextService.reorderFolders(reorder);
 		} catch (error) {
 			if (donotNotifyError) {
 				throw error;

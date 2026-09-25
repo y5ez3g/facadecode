@@ -35,6 +35,13 @@
 	 */
 	max-height: 40vh;
 	overflow-y: auto;
+
+	/*
+	 * Room for a focus ring, given back as a margin so the rows stay put: a scrolling list clips at its
+	 * edges, and a focused remove button's ring stands 3 outside it (`facadedialog.css`).
+	 */
+	padding: var(--vscode-spacing-size40);
+	margin: calc(-1 * var(--vscode-spacing-size40));
 }
 
 .terminal-launchers-empty {
@@ -98,10 +105,17 @@
 	display: flex;
 }
 
+/*
+ * Outlined, as the footer's Cancel is, a size down from it - 28 high rather than 32 - and rounded as
+ * every button is, at the control tier.
+ */
 .terminal-launchers-action > .monaco-button {
 	display: flex;
 	align-items: center;
 	gap: var(--vscode-spacing-size40);
+	box-sizing: border-box;
 	width: auto;
-	padding: var(--vscode-spacing-size40) var(--vscode-spacing-size120);
+	height: var(--vscode-spacing-size280);
+	padding: 0 var(--vscode-spacing-size100);
+	border-radius: var(--vscode-cornerRadius-small);
 }

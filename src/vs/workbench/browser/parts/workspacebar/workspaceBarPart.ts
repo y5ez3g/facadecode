@@ -7,12 +7,14 @@ import './media/workspacebarpart.css';
 import { getWCOTitlebarAreaRect, isFullscreen, onDidChangeFullscreen } from '../../../../base/browser/browser.js';
 import { $, append, getWindow, getWindowId } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
+import { coalesce } from '../../../../base/common/arrays.js';
 import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
-import { Emitter, Relay } from '../../../../base/common/event.js';
+import { Emitter, Event, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -28,7 +30,10 @@ import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/action
 import { URI } from '../../../../base/common/uri.js';
 import { MenuWorkbenchToolBar } from '../../../../platform/actions/browser/toolbar.js';
 // Imported for its `registerAction2` calls as much as for the menu id.
-import { WorkspaceBarTitleMenu } from './workspaceBarActions.js';
+import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarCollapsedContext, WorkspaceBarTitleMenu } from './workspaceBarActions.js';
+import { moveRow, rowsOfFolders } from './workspaceBar.js';
+import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
+import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
@@ -148,6 +153,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private content: HTMLElement | undefined;
 
 	private _collapsed = false;
+	/** What the header's toggle draws from: `<` or `>` (`WorkspaceBarCollapsedContext`). */
+	private readonly collapsedContext: IContextKey<boolean>;
 	get collapsed(): boolean { return this._collapsed; }
 
 	private readonly _onDidChangeCollapsed = this._register(new Emitter<void>());
@@ -166,6 +173,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private readonly bandSettler = this._register(new RunOnceScheduler(() => this.settleBand(), BAND_SLIDE_DURATION));
 
 	private readonly model: WorkspaceBarModel;
+	private readonly git: WorkspaceBarGit;
 	private view: WorkspaceBarView | undefined;
 	private editors: WorkspaceBarEditors | undefined;
 	private switcher: WorkspaceBarSwitcher | undefined;
@@ -182,6 +190,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
 		@IHostService private readonly hostService: IHostService,
+		@IContextKeyService contextKeyService: IContextKeyService,
+		@IWorkspaceBarCustomizationService customizationService: IWorkspaceBarCustomizationService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -200,6 +210,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// Collapsed until somebody opens it: a profile that has never touched the toggle starts with
 		// the column of icons, and the choice is remembered from the first time it is made.
 		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, true);
+		this.collapsedContext = WorkspaceBarCollapsedContext.bindTo(contextKeyService);
+		this.collapsedContext.set(this._collapsed);
 
 		// ⚠️ The strip above the header is painted in the title bar's colours, and the title bar has
 		// two: it dims when the window loses focus. Without this the column keeps one bright band
@@ -223,6 +235,22 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// Built here rather than with the content area: an action can run before anything has been
 		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
 		this.model = this._register(this.instantiationService.createInstance(WorkspaceBarModel));
+
+		// Which of those folders are one repository, and its worktrees - read from git's own files, so
+		// that the first drawing of the bar already has them (WORKTREE.md section 5). While the bar lists
+		// no worktrees (section 11) the reader is handed no folders, and reads and watches nothing.
+		const model = this.model;
+		this.git = this._register(this.instantiationService.createInstance(WorkspaceBarGit, {
+			get folders() { return areWorktreesShown(configurationService) ? model.folders : []; },
+			onDidChange: Event.any(model.onDidChange, Event.signal(Event.filter(this.configurationService.onDidChangeConfiguration, e => e.affectsConfiguration(SHOW_WORKTREES)))),
+			key: model.key
+		}));
+
+		// WT-1.12: a worktree in folders[] that nobody has named is called by its branch - in the window's
+		// title as in the bar, both through `nameFor`.
+		this._register(this.git.onDidChange(() => customizationService.setDefaultNames(this.git.groups.flatMap(group => group.kind === 'repository'
+			? coalesce(group.worktrees.map(worktree => worktree.folder && { uri: worktree.folder.uri, name: worktree.label }))
+			: []))));
 	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {
@@ -262,7 +290,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this.pruneEditors();
 		this.switcher = this._register(this.instantiationService.createInstance(WorkspaceBarSwitcher, this.model, this.editors));
 		this._onDidRestoreEditors.input = this.switcher.onDidRestoreEditors;
-		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView, this.content, this.model, this.switcher, () => this.collapsed));
+		// `show` handed in rather than resolved as `IWorkspaceBarService`: this part is that service,
+		// and the view is built while the part is being created.
+		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView,
+			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, (uri: URI) => this.show(uri)));
 
 		return this.content;
 	}
@@ -285,6 +316,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		}
 
 		this._collapsed = collapsed;
+		this.collapsedContext.set(collapsed);
 
 		this.storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.PROFILE, StorageTarget.USER);
 		this.element?.classList.toggle('collapsed', collapsed);
@@ -442,7 +474,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			return;
 		}
 
-		await this.model.add(uris);
+		await this.addForShow(uris);
 		await this.show(uris[uris.length - 1]);
 	}
 
@@ -451,7 +483,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// `/private/tmp/x` are one folder, so a folder opened twice under two spellings is one row
 		// rather than two. `add` skips what is already there, which makes this the same call whether
 		// the folder is new to the window or one it already has.
-		await this.model.add([uri]);
+		await this.addForShow([uri]);
 
 		// ⚠️ Switched to the row, not to the spelling that was asked for. A folder the workspace
 		// took in long ago under the other spelling of the same place is a row `setActiveFolder`
@@ -469,11 +501,49 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		await this.switcher?.switchTo(folder.uri);
 	}
 
+	/**
+	 * Puts folders in the workspace for the window to move onto, and when any were added, waits for
+	 * git's files to be read again: the rows come from that read, and moving onto a folder before its
+	 * row exists left no row marked for a moment.
+	 */
+	private async addForShow(uris: readonly URI[]): Promise<void> {
+		const added = await this.model.add(uris);
+		if (added.length > 0) {
+			await this.git.refresh();
+		}
+	}
+
 	async remove(uris: readonly URI[]): Promise<void> {
 		// ⚠️ Nothing to forget here. Taking the folders out of the workspace is what moves the window
 		// off one that is leaving, and `pruneEditors` drops what they left behind - which is the same
 		// work whether the removal came from this bar or from someone editing the workspace file.
 		await this.model.remove(uris);
+	}
+
+	async moveFolder(uri: URI, offset: number): Promise<void> {
+		// Worked out when the edit runs, on the folders as they are then: an order worked out now would
+		// undo a move still in the queue, and leave out a folder being added.
+		await this.model.reorder(folders => moveRow(rowsOfFolders(folders, folder => this.rowRepositoryOf(folder), this.model.key), uri, offset, this.model.key));
+	}
+
+	/**
+	 * The repository whose row `folder` is drawn on, or undefined for a folder on a row of its own. Not
+	 * `repositoryFor`, which also knows a folder git records as a worktree but the bar draws on its
+	 * own, its `.git` gone.
+	 */
+	private rowRepositoryOf(folder: URI): URI | undefined {
+		if (!areWorktreesShown(this.configurationService)) {
+			return undefined;
+		}
+
+		const key = this.model.key(folder);
+		for (const group of this.git.groups) {
+			if (group.kind === 'repository' && group.members.some(member => this.model.key(member.uri) === key)) {
+				return group.main;
+			}
+		}
+
+		return undefined;
 	}
 
 	/**
@@ -482,6 +552,26 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	 */
 	folderForCommand(): URI | undefined {
 		return this.view?.focused() ?? this.switcher?.active;
+	}
+
+	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined {
+		// None while worktrees are switched off (WORKTREE.md section 11): every row is then a folder.
+		if (!areWorktreesShown(this.configurationService)) {
+			return undefined;
+		}
+
+		const key = this.model.key(uri);
+		for (const group of this.git.groups) {
+			if (group.kind === 'repository' && (this.model.key(group.main) === key || group.worktrees.some(worktree => this.model.key(worktree.uri) === key))) {
+				return group;
+			}
+		}
+
+		return undefined;
+	}
+
+	setExpanded(uri: URI, expanded: boolean): void {
+		this.view?.setExpanded(uri, expanded);
 	}
 
 	focus(): void {

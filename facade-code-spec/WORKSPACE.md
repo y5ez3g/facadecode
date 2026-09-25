@@ -939,10 +939,11 @@ F1  move a folder up and down       the order of `folders[]` is the order in the
                                     bar, and the command palette. ⚠️ Not `updateFolders`: a
                                     read-modify-write of the whole list runs outside the workspace
                                     write queue, so it loses whatever landed between the read and
-                                    the write, and re-serialises every entry. `moveFolder`
-                                    instead - queued behind every other workspace edit, by
-                                    identity rather than by index, and each entry keeps its `raw`
-                                    so nothing else in the file moves. ⚠️ No drag to reorder - two
+                                    the write, and re-serialises every entry. `reorderFolders`
+                                    instead - queued behind every other workspace edit, the new
+                                    order worked out inside the queue on the folders as they are
+                                    then (WORKTREE.md: a row moves with its worktrees), and each
+                                    entry keeps its `raw` so nothing else in the file moves. ⚠️ No drag to reorder - two
                                     ways to move a row is two sets of edge cases for something
                                     people do a handful of times
     measured                        six rows, window on the last: up, up, down. The folder moves,

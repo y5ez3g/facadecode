@@ -10,6 +10,7 @@ import { isFolderToOpen, IOpenWindowOptions, IWindowOpenable } from '../../../..
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import type { IWorkspaceBarRepository } from './workspaceBarGit.js';
 
 /**
  * What the bar offers the rest of the workbench.
@@ -57,6 +58,12 @@ export interface IWorkspaceBarService {
 	remove(uris: readonly URI[]): Promise<void>;
 
 	/**
+	 * Moves the row `uri` is - a folder's, or a repository's with its worktrees in the workspace -
+	 * `offset` rows along the bar, taking every folder of `folders[]` that row stands for with it.
+	 */
+	moveFolder(uri: URI, offset: number): Promise<void>;
+
+	/**
 	 * Shows a folder in this window: puts it in the workspace if it is not there yet, and moves the
 	 * window onto it.
 	 *
@@ -73,6 +80,20 @@ export interface IWorkspaceBarService {
 	 * on, and failing that the folder the window is currently in.
 	 */
 	folderForCommand(): URI | undefined;
+
+	/**
+	 * The repository `uri` belongs to - as its main checkout or as one of its worktrees - the way the
+	 * bar last read it from git's own files (WORKTREE.md section 5). Undefined for a folder the bar
+	 * does not know as part of a repository, and for every folder while the bar lists no worktrees.
+	 */
+	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined;
+
+	/**
+	 * Opens or closes a repository's row onto its worktrees (WORKTREE.md WT-1.10). The state is the
+	 * bar's and outlives a collapse of the bar to its icons. Nothing happens for a folder that is not a
+	 * repository's row.
+	 */
+	setExpanded(uri: URI, expanded: boolean): void;
 
 	focus(): void;
 }

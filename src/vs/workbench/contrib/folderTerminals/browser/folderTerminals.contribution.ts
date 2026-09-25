@@ -5,11 +5,12 @@
 
 import { localize } from '../../../../nls.js';
 import { ConfigurationScope, Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
+import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { workbenchConfigurationNodeBase } from '../../../common/configuration.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { registerFolderTerminalActions } from './folderTerminalActions.js';
-import { FOLLOW_FOLDER, FolderTerminals } from './folderTerminals.js';
+import { FOLLOW_FOLDER, FolderTerminals, FolderTerminalsService, IFolderTerminalsService } from './folderTerminals.js';
 
 registerFolderTerminalActions();
 
@@ -27,3 +28,4 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 
 // Nothing can need parking before there are editors to park
 registerWorkbenchContribution2(FolderTerminals.ID, FolderTerminals, WorkbenchPhase.AfterRestored);
+registerSingleton(IFolderTerminalsService, FolderTerminalsService, InstantiationType.Delayed);

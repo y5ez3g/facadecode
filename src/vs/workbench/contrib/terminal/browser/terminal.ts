@@ -772,6 +772,10 @@ export interface TerminalEditorLocation {
 	viewColumn: GroupIdentifier | SIDE_GROUP_TYPE | ACTIVE_GROUP_TYPE | AUX_WINDOW_GROUP_TYPE;
 	preserveFocus?: boolean;
 	auxiliary?: IEditorOptions['auxiliary'];
+	// Facade Code: how `folderTerminals` puts a terminal back - behind the active tab, where it was.
+	inactive?: IEditorOptions['inactive'];
+	activation?: IEditorOptions['activation'];
+	index?: IEditorOptions['index'];
 }
 
 /**

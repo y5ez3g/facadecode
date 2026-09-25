@@ -10,7 +10,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
-import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
+import { FolderReorder, IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { canonicalUri, folderKey, FolderKey } from './workspaceBar.js';
 
 /**
@@ -179,5 +179,13 @@ export class WorkspaceBarModel extends Disposable {
 		}
 
 		return removing;
+	}
+
+	/**
+	 * Puts the workspace's folders in the order `reorder` returns, each written as it was.
+	 * `reorder` gets the folders as they are when the edit runs (`IWorkspaceEditingService.reorderFolders`).
+	 */
+	async reorder(reorder: FolderReorder): Promise<void> {
+		await this.workspaceEditingService.reorderFolders(reorder);
 	}
 }

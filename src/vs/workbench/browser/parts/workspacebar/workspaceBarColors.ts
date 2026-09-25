@@ -69,13 +69,13 @@ export const FACADE_BAR_BORDER = registerColor('facadeBar.border',
 	localize('facadeBarBorder', "Border colour separating the workspace bar from what is beside it."));
 
 /**
- * The six colours a folder can be tagged with.
+ * The ten colours a folder can be tagged with.
  *
  * ⚠️ Written down here, not pointed at another token, and that is the opposite of what every colour
  * above this line does. The difference is what the colour *is*. The ones above are a **surface** -
  * this column's background, its ink, the line down its marked row - and a theme has an opinion about
  * every one of them, so taking anything but the theme's own answer is inventing a shade nobody
- * chose. These six are a **label somebody stuck on their own folder**. No theme has an opinion about
+ * chose. These ten are a **label somebody stuck on their own folder**. No theme has an opinion about
  * what colour a person's tag for `~/work/api` should be, so there is nothing to inherit, and
  * following the theme means the colour a person picked is not the colour they get.
  *
@@ -85,7 +85,7 @@ export const FACADE_BAR_BORDER = registerColor('facadeBar.border',
  * themes, where the minimap has no find colour. Measured, the orange tag came out at 1.17-2.83
  * against this column in seventeen themes, and in the other two it painted nothing at all: picking
  * orange and picking no colour gave the same folder. In Abyss and Quiet Light it was not even
- * orange, because their find highlight is grey and pink. §12.4.
+ * orange, because their find highlight is grey and pink. WORKSPACE.md section 12.4.
  *
  * ⚠️ Ten, and the four that came after the first six - lime, teal, indigo, pink - sit in the gaps
  * those six left on the hue wheel: yellow to green, green to blue, blue to purple, purple back to
@@ -97,7 +97,8 @@ export const FACADE_BAR_BORDER = registerColor('facadeBar.border',
  * can land on - the column's background in nineteen themes, and the block behind the marked row - is
  * as high as a single value can make it: 2.90. It cannot reach 3.0, because those surfaces fall in
  * two clusters with a gap, and one value would have to be at once brighter than L=0.2068 (to clear
- * Monokai Dimmed) and darker than L=0.1908 (to clear Light 2026's marked row). §12.4.
+ * Monokai Dimmed) and darker than L=0.1908 (to clear Light 2026's marked row). WORKSPACE.md
+ * section 12.4.
  *
  * ⚠️ **And one state.** A second, quieter variant was tried - the same colour at 55% on a row at
  * rest, full under the pointer - so the glyph would brighten with its name. On a glyph drawn as a

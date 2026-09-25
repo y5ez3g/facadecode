@@ -70,6 +70,16 @@ export interface IDialogOptions {
 	readonly disableCloseButton?: boolean;
 	readonly disableDefaultAction?: boolean;
 	/**
+	 * Facade Code: the primary button last, after Cancel, on every platform - as on macOS and Linux.
+	 */
+	readonly primaryButtonLast?: boolean;
+	/**
+	 * Facade Code: Tab and Shift+Tab also walk the controls a custom body renders, and the arrow keys
+	 * are left to composite widgets in it (radio groups, lists, toolbars). Off, only the message's links
+	 * are walked with the buttons.
+	 */
+	readonly navigateBody?: boolean;
+	/**
 	 * Temporary escape hatch for dialogs that embed widgets whose popups mount
 	 * at window root (outside the dialog DOM). Needed because the focus trap
 	 * would otherwise immediately reclaim focus from context views and pickers.
@@ -104,6 +114,12 @@ interface ButtonMapEntry {
 	readonly label: string;
 	readonly index: number;
 }
+
+/** Facade Code: what Tab walks with `navigateBody` - the message's links and the body's controls. */
+const BODY_FOCUSABLE = 'a, .dialog-message-body :is(input, select, textarea, button, [tabindex], [contenteditable]:not([contenteditable="false"]))';
+
+/** Facade Code: widgets that move between their own items with the arrow keys. */
+const COMPOSITE_WIDGET = '[role="radiogroup"], [role="listbox"], [role="tablist"], [role="toolbar"], [role="menu"], [role="menubar"], [role="grid"], [role="tree"], [role="treegrid"]';
 
 export class Dialog extends Disposable {
 
@@ -409,13 +425,32 @@ export class Dialog extends Disposable {
 				// Focus: Next / Previous
 				const isArrowNavigation = evt.equals(KeyCode.RightArrow) || evt.equals(KeyCode.LeftArrow);
 				const isEditableTarget = isHTMLElement(e.target) && (isEditableElement(e.target) || e.target.isContentEditable);
-				if (evt.equals(KeyCode.Tab) || evt.equals(KeyMod.Shift | KeyCode.Tab) || isArrowNavigation && !isEditableTarget) {
+				// Facade Code: a composite widget moves between its own items with the arrow keys (`navigateBody`).
+				const isCompositeTarget = !!this.options.navigateBody && isHTMLElement(e.target) && !!e.target.closest(COMPOSITE_WIDGET);
+				if (evt.equals(KeyCode.Tab) || evt.equals(KeyMod.Shift | KeyCode.Tab) || isArrowNavigation && !isEditableTarget && !isCompositeTarget) {
 
 					// Build a list of focusable elements in their visual order
 					const focusableElements: { focus: () => void }[] = [];
 					let focusedIndex = -1;
 
-					if (this.messageContainer) {
+					if (this.messageContainer && this.options.navigateBody) {
+						// Facade Code: the body's controls as well as the links, in document order, leaving
+						// out what is not in the tab order, disabled or hidden.
+						// eslint-disable-next-line no-restricted-syntax
+						const focusables = this.messageContainer.querySelectorAll<HTMLElement>(BODY_FOCUSABLE);
+						for (const focusable of focusables) {
+							// The focused one is kept whatever it is now - disabled since it was focused, say -
+							// so that Tab moves on from it rather than to either end.
+							const focused = isActiveElement(focusable);
+							if (!focused && (focusable.tabIndex < 0 || focusable.matches(':disabled, [aria-disabled="true"]') || focusable.getClientRects().length === 0)) {
+								continue;
+							}
+							focusableElements.push(focusable);
+							if (focused) {
+								focusedIndex = focusableElements.length - 1;
+							}
+						}
+					} else if (this.messageContainer) {
 						// eslint-disable-next-line no-restricted-syntax
 						const links = this.messageContainer.querySelectorAll('a');
 						for (const link of links) {
@@ -670,7 +705,7 @@ export class Dialog extends Disposable {
 			return buttonMap; // only need to rearrange if there are 2+ buttons and the alignment is left-to-right
 		}
 
-		if (isMacintosh || isLinux) {
+		if (isMacintosh || isLinux || this.options.primaryButtonLast) {
 
 			// Linux: the GNOME HIG (https://developer.gnome.org/hig/patterns/feedback/dialogs.html?highlight=dialog)
 			// recommend the following:

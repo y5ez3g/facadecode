@@ -345,6 +345,9 @@ import './contrib/terminal/terminal.all.js';
 // Terminals that belong to a folder
 import './contrib/folderTerminals/browser/folderTerminals.contribution.js';
 
+// Worktrees made and removed from the workspace bar
+import './contrib/worktrees/browser/worktrees.contribution.js';
+
 // Agents started in a terminal
 import './contrib/terminalLaunchers/browser/terminalLaunchers.contribution.js';
 
