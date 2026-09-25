@@ -668,8 +668,7 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
-		// 3 to 6 under one progress: a large tree takes a while to delete, and its row stays until git's
-		// records change.
+		// 3 to 6 under one progress: a large tree takes a while to delete.
 		const force = check.files.length > 0 || check.submodules;
 		const result = await this.progressService.withProgress(
 			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree {0}...", name) },
@@ -680,24 +679,31 @@ export class WorktreeService implements IWorktreeService {
 					await this.workspaceBarService.show(main);
 				}
 
-				// 4  leave folders[] - which also makes folderTerminals dispose what it parked for it (WT-8.4).
-				await this.workspaceBarService.remove([worktree]);
-
-				// 5  close whatever else works inside it - the panel's terminals, say. A shell can take a moment
-				//    to let go of the folder after its terminal is disposed; the git extension's delete allows for that.
-				for (const instance of await this.terminalsInside(worktree)) {
-					instance.dispose(TerminalExitReason.User);
-				}
-
-				// 6  delete. `force` only when the confirmation named what it throws away.
+				// Its row goes with the window off it, rather than once git has deleted it - which takes
+				// seconds for a large worktree - and comes back if the deletion fails (WT-8.9).
+				const hidden = this.workspaceBarService.hideWorktree(worktree);
 				try {
-					return await run(force ? 'force' : 'remove');
-				} catch (err) {
-					return { kind: 'error', code: undefined, message: toErrorMessage(err) };
+					// 4  leave folders[] - which also makes folderTerminals dispose what it parked for it (WT-8.4).
+					await this.workspaceBarService.remove([worktree]);
+
+					// 5  close whatever else works inside it - the panel's terminals, say. A shell can take a moment
+					//    to let go of the folder after its terminal is disposed; the git extension's delete allows for that.
+					for (const instance of await this.terminalsInside(worktree)) {
+						instance.dispose(TerminalExitReason.User);
+					}
+
+					// 6  delete. `force` only when the confirmation named what it throws away.
+					try {
+						return await run(force ? 'force' : 'remove');
+					} catch (err) {
+						return { kind: 'error', code: undefined, message: toErrorMessage(err) };
+					}
+				} finally {
+					hidden.dispose();
 				}
 			});
 
-		// 7  nothing to refresh: the bar's reader sees git's records change (WT-8.6 when it went wrong).
+		// 7  nothing to refresh: letting the row go read git's records again (WT-8.9, and WT-8.6 when it went wrong).
 		if (result?.kind !== 'removed') {
 			const error = result?.kind === 'error' ? result : undefined;
 			const message = gitMessage(error);

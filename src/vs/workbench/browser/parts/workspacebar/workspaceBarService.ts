@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '../../../../base/common/event.js';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { getRemoteAuthority } from '../../../../platform/remote/common/remoteHosts.js';
 import { isFolderToOpen, IOpenWindowOptions, IWindowOpenable } from '../../../../platform/window/common/window.js';
@@ -102,6 +103,13 @@ export interface IWorkspaceBarService {
 	 * until it is (WORKTREE.md WT-3.6).
 	 */
 	whenListed(worktree: URI): Promise<void>;
+
+	/**
+	 * Leaves a worktree's row out of the bar until the result is disposed - while it is being deleted
+	 * (WORKTREE.md WT-8.9). Its row is drawn from git's records, which change only once git has
+	 * deleted the worktree, and that takes seconds for a large one.
+	 */
+	hideWorktree(worktree: URI): IDisposable;
 
 	focus(): void;
 }

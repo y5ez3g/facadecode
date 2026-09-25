@@ -8,6 +8,7 @@ import { getWCOTitlebarAreaRect, isFullscreen, onDidChangeFullscreen } from '../
 import { $, append, getWindow, getWindowId } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
 import { coalesce } from '../../../../base/common/arrays.js';
+import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
 import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -578,6 +579,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		if (areWorktreesShown(this.configurationService) && !this.repositoryFor(worktree)) {
 			await this.git.refresh();
 		}
+	}
+
+	hideWorktree(worktree: URI): IDisposable {
+		return this.view?.hideWorktree(worktree) ?? Disposable.None;
 	}
 
 	focus(): void {

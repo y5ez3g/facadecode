@@ -334,7 +334,8 @@ directory open is gone before git is asked to delete it.
 1  check      _git.deleteWorktreeAt(root, path, 'check'): the files that would be lost, and
               whether submodules are checked out
 2  confirm    always (WT-8.1)
-3  move off   if the window is on this worktree, it moves to the repository's row
+3  move off   if the window is on this worktree, it moves to the repository's row; from here on
+              the worktree has no row (WT-8.9)
 4  leave      out of folders[]
 5  terminals  any terminal still working inside the worktree is closed
 6  delete     'remove', or 'force' when step 1 found changes or submodules
@@ -354,10 +355,14 @@ directory open is gone before git is asked to delete it.
   second Delete of the same worktree meanwhile does nothing.
 - **WT-8.5** A directory git has let go of but left behind is removed (WT-4.5).
 - **WT-8.6** If step 6 fails, the error is said. The worktree stays out of `folders[]` and listed by
-  git, so its row is there to try again.
+  git, so its row comes back, to try again.
 - **WT-8.7** The branch is kept.
 - **WT-8.8** `Remove Folder` on a repository row - which never touches the disk - takes that
   repository's worktrees out of `folders[]` with it. They stay on disk and in git.
+- **WT-8.9** Once the window is off the worktree, its row leaves the bar, although git's records keep
+  it until step 6 is done - seconds, for a large worktree. When step 6 is over, git's files are read
+  again before the row may come back: after a deletion that worked it does not, after one that
+  failed it does.
 
 ---
 
