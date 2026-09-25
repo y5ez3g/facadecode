@@ -15,15 +15,14 @@ import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspac
 /**
  * The colours a folder can be given.
  *
- * ⚠️ Names of the six tokens in `workspaceBarColors.ts`, which write their values down rather than
+ * ⚠️ Names of the ten tokens in `workspaceBarColors.ts`, which write their values down rather than
  * pointing at another theme colour - see the note there for why a tag is not a surface, and for the
  * measurement that says one value per colour cannot cover both a dark column and a light one.
  *
  * ⚠️ This list used to name `charts.<name>`, on the reasoning that "every theme defines it and a
  * hex here would be one person's dark theme baked into everybody else's". Both halves were wrong.
  * Two themes do not define `charts.orange` at all, and the hex being avoided is what upstream itself
- * writes for `charts.green` and `charts.purple`. There is no pink because six is the number that
- * was designed, not because `charts` has none to point at.
+ * writes for `charts.green` and `charts.purple`.
  */
 export const FOLDER_COLORS = ['red', 'orange', 'yellow', 'lime', 'green', 'teal', 'blue', 'indigo', 'purple', 'pink'] as const;
 
@@ -72,7 +71,7 @@ export interface IWorkspaceBarCustomizationService {
 	get(uri: URI): IFolderCustomization | undefined;
 
 	/**
-	 * The name to draw for a folder.
+	 * The name to draw for a folder: the one somebody gave it, else its default name, else its own.
 	 *
 	 * ⚠️ The one place that decides it. The bar draws it and so does the window title, and a second
 	 * copy of `customization?.name ?? folder.name` is a second copy that stops agreeing with the
@@ -80,14 +79,42 @@ export interface IWorkspaceBarCustomizationService {
 	 */
 	nameFor(folder: IWorkspaceFolder): string;
 
+	/**
+	 * What folders are called when nobody has named them, where that is not their own name: a
+	 * worktree's branch (WT-1.12), which the bar reads from git's files. Replaces what was set before.
+	 */
+	setDefaultNames(names: readonly { readonly uri: URI; readonly name: string }[]): void;
+
 	/** Sets, or clears what is left out. */
 	set(uri: URI, customization: IFolderCustomization): void;
+
+	/**
+	 * The order somebody put a repository's worktrees in with Move Worktree Up and Down (WORKTREE.md
+	 * WT-1.7), or undefined until they have moved one. A worktree deleted since may still be in it,
+	 * and one made since is not: a reader places what it finds and skips what it does not.
+	 */
+	worktreeOrder(repository: URI): readonly URI[] | undefined;
+
+	/** Keeps `worktrees` - the whole list, as it now stands - as a repository's order. */
+	setWorktreeOrder(repository: URI, worktrees: readonly URI[]): void;
+}
+
+/**
+ * What a worktree is called: while it is a folder of the workspace, what `nameFor` calls that folder, as
+ * the window title does; else the name somebody gave it, or its branch (WT-1.12).
+ */
+export function worktreeNameFor(customizationService: IWorkspaceBarCustomizationService, worktree: { readonly uri: URI; readonly label: string; readonly folder: IWorkspaceFolder | undefined }): string {
+	return worktree.folder ? customizationService.nameFor(worktree.folder) : customizationService.get(worktree.uri)?.name || worktree.label;
 }
 
 const STORAGE_KEY = 'facade.workspaceBar.customization';
 
+/** Kept apart from the customisations: a record of those is replaced whole on every Save of the dialog. */
+const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
+
 /**
- * Display names and colours, per folder, kept where the person is rather than in their workspace file.
+ * Display names and colours, per folder, and the order of each repository's worktrees, kept where the
+ * person is rather than in their workspace file.
  *
  * ⚠️ `StorageScope.PROFILE`. A folder's colour is something about the folder, not about one window,
  * so it follows the person into every workspace that lists it. And it is deliberately **not** written
@@ -107,6 +134,9 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	readonly onDidChange = this._onDidChange.event;
 
 	private readonly byFolder = new Map<string, IFolderCustomization>();
+	private readonly worktreesByRepository = new Map<string, readonly URI[]>();
+	/** `setDefaultNames`, by folder: read from git's files, so never stored. */
+	private defaultNames = new Map<string, { readonly uri: URI; readonly name: string }>();
 
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
@@ -114,6 +144,7 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	) {
 		super();
 		this.load();
+		this.loadWorktreeOrder();
 	}
 
 	private key(uri: URI): string {
@@ -170,7 +201,23 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	}
 
 	nameFor(folder: IWorkspaceFolder): string {
-		return this.get(folder.uri)?.name || folder.name;
+		return this.get(folder.uri)?.name || this.defaultNames.get(this.key(folder.uri))?.name || folder.name;
+	}
+
+	setDefaultNames(names: readonly { readonly uri: URI; readonly name: string }[]): void {
+		const previous = this.defaultNames;
+		this.defaultNames = new Map(names.map(entry => [this.key(entry.uri), entry]));
+
+		for (const [key, entry] of this.defaultNames) {
+			if (previous.get(key)?.name !== entry.name) {
+				this._onDidChange.fire(entry.uri);
+			}
+		}
+		for (const [key, entry] of previous) {
+			if (!this.defaultNames.has(key)) {
+				this._onDidChange.fire(entry.uri);
+			}
+		}
 	}
 
 	/**
@@ -201,6 +248,58 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 
 		this.save();
 		this._onDidChange.fire(uri);
+	}
+
+	worktreeOrder(repository: URI): readonly URI[] | undefined {
+		return this.worktreesByRepository.get(this.key(repository));
+	}
+
+	setWorktreeOrder(repository: URI, worktrees: readonly URI[]): void {
+		const key = this.key(repository);
+		const before = this.worktreesByRepository.get(key) ?? [];
+		if (before.length === worktrees.length && before.every((uri, index) => this.key(uri) === this.key(worktrees[index]))) {
+			return;
+		}
+
+		// An order with nothing left in it - its last worktree deleted - is no record at all.
+		if (worktrees.length > 0) {
+			this.worktreesByRepository.set(key, [...worktrees]);
+		} else {
+			this.worktreesByRepository.delete(key);
+		}
+
+		// This machine's paths, so kept off Settings Sync.
+		if (this.worktreesByRepository.size > 0) {
+			this.storageService.store(WORKTREE_ORDER_STORAGE_KEY,
+				JSON.stringify(Object.fromEntries([...this.worktreesByRepository].map(([repositoryKey, uris]) => [repositoryKey, uris.map(uri => uri.toString())]))),
+				StorageScope.PROFILE, StorageTarget.MACHINE);
+		} else {
+			this.storageService.remove(WORKTREE_ORDER_STORAGE_KEY, StorageScope.PROFILE);
+		}
+		this._onDidChange.fire(repository);
+	}
+
+	private loadWorktreeOrder(): void {
+		const raw = this.storageService.get(WORKTREE_ORDER_STORAGE_KEY, StorageScope.PROFILE);
+		if (!raw) {
+			return;
+		}
+
+		try {
+			const stored = JSON.parse(raw);
+			if (!stored || typeof stored !== 'object') {
+				return;
+			}
+
+			for (const [key, value] of Object.entries(stored as Record<string, unknown>)) {
+				// Each entry checked on the way in: one that is not a list of strings is dropped.
+				if (Array.isArray(value) && value.every(entry => typeof entry === 'string')) {
+					this.worktreesByRepository.set(key, value.map(entry => URI.parse(entry)));
+				}
+			}
+		} catch {
+			// A value this cannot read costs the order, which falls back to the order they were made in.
+		}
 	}
 }
 

@@ -47,50 +47,96 @@
 	margin-top: var(--vscode-spacing-size60);
 }
 
+/* What New Worktree does to a folder first (WORKTREE.md WT-5.8), boxed above the fields: an inner surface. */
+.workspacebar-customize-notice {
+	margin-bottom: var(--vscode-spacing-size200);
+	padding: var(--vscode-spacing-size80) var(--vscode-spacing-size100);
+	border: var(--vscode-strokeThickness) solid var(--vscode-facadeDialog-divider);
+	border-radius: var(--vscode-cornerRadius-medium);
+}
+
+.workspacebar-customize-notice p {
+	margin: 0 0 var(--vscode-spacing-size60);
+}
+
+.workspacebar-customize-notice p:last-child {
+	margin-bottom: 0;
+}
+
+/* The notice's margin is the gap before the first field. */
+.workspacebar-customize-notice + .workspacebar-customize-label {
+	margin-top: 0;
+}
+
+/* Why it cannot be done now, such as no name and email to commit with. */
+.workspacebar-customize-notice p.error {
+	color: var(--vscode-errorForeground);
+}
+
+/* A branch that cannot be made. */
+.workspacebar-customize-hint.error {
+	color: var(--vscode-errorForeground);
+}
+
+/*
+ * Lines rewritten as the branch is typed stay one line each, so the dialog does not grow while
+ * typing; the whole text is in the hover.
+ */
+.workspacebar-customize-line {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* The Location line directly under the origin line. */
+.workspacebar-customize-hint.workspacebar-customize-where {
+	margin-top: 0;
+}
+
+/* 12 apart, so eleven swatches fit on one line of the 400px dialog (`facadedialog.css`). */
 .workspacebar-customize-swatches {
 	display: flex;
-	gap: var(--vscode-spacing-size160);
+	gap: var(--vscode-spacing-size120);
 	flex-wrap: wrap;
 }
 
 .workspacebar-swatch {
 	width: var(--vscode-spacing-size200);
 	height: var(--vscode-spacing-size200);
-	border-radius: 50%;
+	border-radius: var(--vscode-cornerRadius-circle);
 	cursor: pointer;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	/* The ring that marks the selected one sits outside the circle, so it needs room of its own. */
-	outline-offset: 2px;
 }
 
-.workspacebar-swatch:focus-visible,
-.workspacebar-swatch.selected {
-	outline: 1px solid var(--vscode-focusBorder);
-}
-
-.workspacebar-swatch-tick {
-	/*
-	 * ⚠️ `visibility`, not `display`: the codicon class sets `display` itself and wins, so a tick
-	 * hidden that way is a tick on every swatch. Measured - all seven had one.
-	 */
+/*
+ * The tick is the only mark of the chosen colour. `.monaco-workbench` and `.codicon` in front, to
+ * outrank the workbench's own ink and size for every codicon (`icon.foreground`, 16px), which would
+ * leave a grey tick on a coloured circle.
+ */
+.monaco-workbench .workspacebar-swatch > .workspacebar-swatch-tick.codicon {
+	/* ⚠️ `visibility`, not `display`: the codicon class sets `display` itself and wins. */
 	visibility: hidden;
 	/* Over a filled circle, so it takes the ink a button's label takes over its own background. */
 	color: var(--vscode-button-foreground);
 	font-size: var(--vscode-codiconFontSize-compact);
 }
 
-.workspacebar-swatch.selected .workspacebar-swatch-tick {
+.monaco-workbench .workspacebar-swatch.selected > .workspacebar-swatch-tick.codicon {
 	visibility: visible;
 }
 
-/*
- * ⚠️ Darker than the rest, and its tick takes the window's own foreground rather than a button's:
- * `button.foreground` is near-white on a filled chart colour and near-invisible on this one.
- */
-.workspacebar-swatch-none { background-color: var(--vscode-dropdown-border); }
-.workspacebar-swatch-none .workspacebar-swatch-tick { color: var(--vscode-foreground); }
+/* No colour: an empty circle in the control stroke, with the tick in the foreground ink. */
+.workspacebar-swatch-none {
+	box-sizing: border-box;
+	border: var(--vscode-strokeThickness) solid var(--vscode-facadeDialog-controlBorder);
+}
+
+.monaco-workbench .workspacebar-swatch-none > .workspacebar-swatch-tick.codicon {
+	color: var(--vscode-foreground);
+}
+
 /*
  * ⚠️ The six the row's glyph reads, and the LIVE one of each pair: a swatch is a filled circle
  * with nothing quiet about it, and showing the 55% variant here would offer a colour that only ever
@@ -108,16 +154,12 @@
 .workspacebar-swatch-pink { background-color: var(--vscode-facadeBar-folderPink); }
 
 /*
- * The icon row: the same grid the swatches use, one row lower.
- *
- * ⚠️ A square with the small corner radius rather than a circle. A circle says "a colour"; these are
- * glyphs, and a glyph in a circle reads as a badge. The box is the one the modern activity bar puts
- * behind its checked item, which is where this column takes the rest of its vocabulary from.
+ * The icon choices: squares (a circle says "a colour"), outlined like the dialog's other controls so
+ * only the primary button is filled.
  */
 .workspacebar-customize-icons {
 	display: flex;
 	gap: var(--vscode-spacing-size80);
-	margin-bottom: var(--vscode-spacing-size120);
 }
 
 .workspacebar-icon-choice {
@@ -128,26 +170,57 @@
 	box-sizing: border-box;
 	width: var(--vscode-spacing-size280);
 	height: var(--vscode-spacing-size280);
-	border: 1px solid var(--vscode-dropdown-border);
+	border: var(--vscode-strokeThickness) solid var(--vscode-facadeDialog-controlBorder);
 	border-radius: var(--vscode-cornerRadius-small);
-	background-color: var(--vscode-dropdown-background);
-	color: var(--vscode-foreground);
+	background-color: transparent;
 	cursor: pointer;
 }
 
-.workspacebar-icon-choice .codicon {
-	font-size: var(--vscode-codiconFontSize);
+/* The outlined buttons' hover tint. */
+.workspacebar-icon-choice:hover {
+	background-color: var(--vscode-toolbar-hoverBackground);
 }
 
 /*
- * ⚠️ The same outline the swatches take when chosen, so the two rows agree about what "picked"
- * looks like without either of them naming a colour.
+ * The chosen one: the focus colour's stroke over a toggle's "on" fill, after the hover so the pointer
+ * does not undo it. Not `inputOption.activeBorder`: themes that draw it quieter than the unchosen
+ * choices' stroke, as the 2026 themes do, left the chosen one the least marked of them.
  */
 .workspacebar-icon-choice.selected {
-	outline: 1px solid var(--vscode-focusBorder);
-	outline-offset: 1px;
+	border-color: var(--vscode-focusBorder);
+	background-color: var(--vscode-inputOption-activeBackground);
 }
 
-.workspacebar-icon-choice:hover {
-	background-color: var(--vscode-list-hoverBackground);
+/* The glyph takes the toggle's "on" ink; the workbench colours every codicon itself (`icon.foreground`). */
+.monaco-workbench .workspacebar-icon-choice.selected > .codicon {
+	color: var(--vscode-inputOption-activeForeground);
+}
+
+/*
+ * High contrast has no hover tint, and draws every choice's stroke in the contrast border: dashed for
+ * hover as toolbars do, and the active border for the chosen one.
+ */
+.monaco-workbench:is(.hc-black, .hc-light) .workspacebar-icon-choice:hover {
+	border-style: dashed;
+	border-color: var(--vscode-contrastActiveBorder);
+}
+
+.monaco-workbench:is(.hc-black, .hc-light) .workspacebar-icon-choice.selected {
+	border-style: solid;
+	border-color: var(--vscode-contrastActiveBorder);
+}
+
+/*
+ * Chosen is the tick or the tint; focus is a ring 2 out, from the keyboard only. `.monaco-workbench`
+ * in front to outrank the workbench's focus ring on anything with a tabindex.
+ */
+.monaco-workbench .workspacebar-customize-swatches > .workspacebar-swatch:focus,
+.monaco-workbench .workspacebar-customize-icons > .workspacebar-icon-choice:focus {
+	outline: none;
+}
+
+.monaco-workbench .workspacebar-customize-swatches > .workspacebar-swatch:focus-visible,
+.monaco-workbench .workspacebar-customize-icons > .workspacebar-icon-choice:focus-visible {
+	outline: var(--vscode-strokeThickness) solid var(--vscode-focusBorder);
+	outline-offset: 2px;
 }

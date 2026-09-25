@@ -10,7 +10,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
-import { InMemoryStorageService, StorageScope } from '../../../../../platform/storage/common/storage.js';
+import { InMemoryStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { FOLDER_COLORS, FOLDER_ICONS, WorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
@@ -118,6 +118,27 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		assert.strictEqual(service.nameFor(folder), 'API');
 	});
 
+	test('a default name - a worktree\'s branch - comes between a given name and the folder\'s own, and its changes are announced', () => {
+		const { service, folder } = setup();
+		const heard: string[] = [];
+		disposables.add(service.onDidChange(uri => heard.push(uri.path)));
+
+		service.setDefaultNames([{ uri: folder.uri, name: 'feature/login' }]);
+		const byBranch = service.nameFor(folder);
+		service.setDefaultNames([{ uri: folder.uri, name: 'feature/login' }]);
+		service.set(folder.uri, { name: 'Login' });
+		const named = service.nameFor(folder);
+		service.set(folder.uri, {});
+		service.setDefaultNames([]);
+
+		assert.deepStrictEqual({ byBranch, named, own: service.nameFor(folder), heard }, {
+			byBranch: 'feature/login',
+			named: 'Login',
+			own: 'api',
+			heard: ['/w/api', '/w/api', '/w/api', '/w/api'],
+		});
+	});
+
 	test('a change is announced once, for the folder that changed', () => {
 		const { service, folder } = setup();
 
@@ -128,6 +149,38 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		service.set(folder.uri, { color: 'pink' });   // the same thing again
 
 		assert.deepStrictEqual(heard, [folder.uri.toString()], 'a no-op was announced');
+	});
+
+	test('a repository\'s worktree order survives a reload, is announced once, and a record it cannot read is dropped', () => {
+		const { service, storage, reopen } = setup();
+		const repository = URI.file('/w/api');
+		const [a, b, c] = ['/wt/a', '/wt/b', '/wt/c'].map(path => URI.file(path));
+
+		const heard: string[] = [];
+		disposables.add(service.onDidChange(uri => heard.push(uri.toString())));
+		service.setWorktreeOrder(repository, [b, a, c]);
+		service.setWorktreeOrder(repository, [b, a, c]);   // the same thing again
+		const reloaded = reopen().worktreeOrder(repository)?.map(uri => uri.path);
+		service.setWorktreeOrder(repository, []);   // its last worktree deleted
+		const emptied = { order: service.worktreeOrder(repository), stored: storage.get('facade.workspaceBar.worktreeOrder', StorageScope.PROFILE) };
+
+		storage.store('facade.workspaceBar.worktreeOrder', '{not json', StorageScope.PROFILE, StorageTarget.MACHINE);
+
+		assert.deepStrictEqual({
+			reloaded,
+			emptied,
+			heard,
+			'another repository': service.worktreeOrder(URI.file('/w/web')),
+			'unreadable': reopen().worktreeOrder(repository),
+			'the folder customisations untouched': service.get(repository),
+		}, {
+			reloaded: ['/wt/b', '/wt/a', '/wt/c'],
+			emptied: { order: undefined, stored: undefined },
+			heard: [repository.toString(), repository.toString()],
+			'another repository': undefined,
+			'unreadable': undefined,
+			'the folder customisations untouched': undefined,
+		});
 	});
 
 	test('⭐ the palettes and their labels cannot drift apart', () => {

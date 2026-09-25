@@ -21,6 +21,69 @@ export function folderKey(uriIdentityService: IUriIdentityService, uri: URI): st
 	return uriIdentityService.extUri.getComparisonKey(uri);
 }
 
+/**
+ * A repository's worktrees in the order the bar draws them (WORKTREE.md WT-1.7): the ones somebody has
+ * placed, in their order, then the rest in the order given - oldest first, as git's files
+ * are read. So a worktree made after the last move comes after the ones that were moved.
+ *
+ * Shared by the rows and by Move Worktree Up and Down, so "one up" is worked out on the order on screen.
+ */
+export function orderWorktrees<T>(items: readonly T[], placed: readonly URI[] | undefined, uriOf: (item: T) => URI, key: FolderKey): T[] {
+	if (!placed || placed.length === 0) {
+		return [...items];
+	}
+
+	const rank = new Map(placed.map((uri, index) => [key(uri), index]));
+	const at = (item: T) => rank.get(key(uriOf(item)));
+
+	return [
+		...items.filter(item => at(item) !== undefined).sort((a, b) => (at(a) ?? 0) - (at(b) ?? 0)),
+		...items.filter(item => at(item) === undefined)
+	];
+}
+
+/** A row of the bar, and the folders of `folders[]` it stands for, in their order there. */
+interface IRowOfFolders {
+	readonly uri: URI;
+	readonly folders: readonly URI[];
+}
+
+/**
+ * The bar's rows over `folders`, in their order: a folder of a repository (`repositoryOf` answers its
+ * main checkout) is on that repository's row, which sits where its first folder is (WT-1.6); any
+ * other folder is a row of its own.
+ */
+export function rowsOfFolders(folders: readonly URI[], repositoryOf: (folder: URI) => URI | undefined, key: FolderKey): IRowOfFolders[] {
+	const rows = new Map<string, { readonly uri: URI; readonly folders: URI[] }>();
+	for (const folder of folders) {
+		const uri = repositoryOf(folder) ?? folder;
+		const row = rows.get(key(uri)) ?? { uri, folders: [] };
+		rows.set(key(uri), row);
+		row.folders.push(folder);
+	}
+
+	return [...rows.values()];
+}
+
+/**
+ * `folders[]` with the row `uri` is - named by its own folder or any it stands for - moved `offset`
+ * rows along, taking all its folders with it: a repository's row is where its first folder is (WT-1.6),
+ * so moving that one folder alone could leave the row where it was. Undefined when nothing moves.
+ */
+export function moveRow(rows: readonly IRowOfFolders[], uri: URI, offset: number, key: FolderKey): URI[] | undefined {
+	const wanted = key(uri);
+	const from = rows.findIndex(row => key(row.uri) === wanted || row.folders.some(folder => key(folder) === wanted));
+	const to = from + offset;
+	if (from === -1 || offset === 0 || to < 0 || to >= rows.length) {
+		return undefined;
+	}
+
+	const moved = [...rows];
+	const [row] = moved.splice(from, 1);
+	moved.splice(to, 0, row);
+	return moved.flatMap(candidate => candidate.folders);
+}
+
 /** Deep enough for any path, and a stop if a file system answers a parent with itself. */
 const MAX_CANONICAL_DEPTH = 32;
 

@@ -3,75 +3,281 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, append } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, EventType, getWindow, isHTMLElement, scheduleAtNextAnimationFrame } from '../../../../base/browser/dom.js';
 import { IconLabel } from '../../../../base/browser/ui/iconLabel/iconLabel.js';
 import { HoverStyle } from '../../../../base/browser/ui/hover/hover.js';
 import { IHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate.js';
 import { HoverPosition } from '../../../../base/browser/ui/hover/hoverWidget.js';
-import { IIdentityProvider, IKeyboardNavigationLabelProvider, IListContextMenuEvent, IListRenderer, IListVirtualDelegate } from '../../../../base/browser/ui/list/list.js';
+import { IIdentityProvider, IKeyboardNavigationLabelProvider, IListVirtualDelegate } from '../../../../base/browser/ui/list/list.js';
 import { IListAccessibilityProvider } from '../../../../base/browser/ui/list/listWidget.js';
+import { RenderIndentGuides } from '../../../../base/browser/ui/tree/abstractTree.js';
+import { IObjectTreeElement, ITreeContextMenuEvent, ITreeNode, ITreeRenderer, ObjectTreeElementCollapseState } from '../../../../base/browser/ui/tree/tree.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
-import { Disposable, DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
+import { Event } from '../../../../base/common/event.js';
+import { Disposable, DisposableStore, IDisposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
+import { basename } from '../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { localize } from '../../../../nls.js';
+import { HiddenItemStrategy, MenuWorkbenchToolBar } from '../../../../platform/actions/browser/toolbar.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { IContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IHoverService, WorkbenchHoverDelegate } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
-import { WorkbenchList } from '../../../../platform/list/browser/listService.js';
-import { FolderKey } from './workspaceBar.js';
-import { WorkspaceBarContextMenu, WorkspaceBarFocusContext } from './workspaceBarActions.js';
-import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
+import { WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { FolderKey, orderWorktrees } from './workspaceBar.js';
+import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
+import { IWorkspaceBarCustomizationService, worktreeNameFor } from './workspaceBarCustomization.js';
+import { IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 
 /** ⚠️ 28, the compact activity bar's item height, measured. Not the workbench's usual 22: a dozen rows pointed at, not hundreds scanned. */
 const ROW_HEIGHT = 28;
 
-const TEMPLATE_ID = 'workspaceBar.folder';
+const TEMPLATE_ID = 'workspaceBar.row';
 
-class WorkspaceBarDelegate implements IListVirtualDelegate<IWorkspaceFolder> {
+/** The repositories somebody closed in this workspace (WT-1.10), as a list of their main checkouts' keys. */
+const CLOSED_STORAGE_KEY = 'facade.workspaceBar.closedRepositories';
+
+/** What `CLOSED_STORAGE_KEY` holds; nothing when it cannot be read, which costs only the state. */
+function readClosed(storageService: IStorageService): string[] {
+	try {
+		const stored: unknown = JSON.parse(storageService.get(CLOSED_STORAGE_KEY, StorageScope.WORKSPACE, '[]'));
+		return Array.isArray(stored) ? stored.filter((key): key is string => typeof key === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
+/** A folder of the list: a plain folder, or a repository's main checkout. */
+interface IFolderRow {
+	readonly kind: 'folder';
+	readonly uri: URI;
+	/** Undefined for a repository whose main checkout is not in `folders[]`: only a worktree of it was added. */
+	readonly folder: IWorkspaceFolder | undefined;
+	readonly repository: boolean;
+	/** Its worktrees, so that it can carry the mark for one of them that cannot be seen (WT-1.10). */
+	readonly worktrees: readonly URI[];
+	/**
+	 * Whether its row offers `New Worktree...` - every folder while the bar lists worktrees, a folder
+	 * with no repository of its own included, which becomes one first (WT-5.8). None while they are
+	 * switched off: the bar is then the list it was before them.
+	 */
+	readonly offersWorktree: boolean;
+}
+
+/** A worktree of a repository, under the repository's row. */
+interface IWorktreeRow {
+	readonly kind: 'worktree';
+	readonly worktree: IWorkspaceBarWorktree;
+}
+
+export type WorkspaceBarRow = IFolderRow | IWorktreeRow;
+
+function uriOf(row: WorkspaceBarRow): URI {
+	return row.kind === 'folder' ? row.uri : row.worktree.uri;
+}
+
+/**
+ * What a row is called on screen, to a screen reader and to type-to-find alike - for a folder of the
+ * workspace, what `nameFor` calls it, as the window title does: the name somebody gave it, else a
+ * worktree's branch, else the folder's own name.
+ */
+function displayNameOf(row: WorkspaceBarRow, customizationService: IWorkspaceBarCustomizationService): string {
+	if (row.kind === 'worktree') {
+		return worktreeNameFor(customizationService, row.worktree);
+	}
+
+	return row.folder ? customizationService.nameFor(row.folder) : customizationService.get(row.uri)?.name || basename(row.uri);
+}
+
+/**
+ * What the tree holds: `folders[]` flat while `worktrees` is false - switched off (WORKTREE.md
+ * section 11), or before git's files were first read.
+ *
+ * `groups` are git's files as last read, and `folders[]` changes before the next read is in: a folder
+ * that has left is not drawn, and one not read yet is drawn on a row of its own at the end, until it
+ * has been.
+ */
+export function workspaceBarRows(input: {
+	readonly folders: readonly IWorkspaceFolder[];
+	readonly groups: readonly WorkspaceBarGroup[];
+	readonly worktrees: boolean;
+	readonly key: FolderKey;
+	/** Whether somebody closed the repository of `main` - kept across a reload, for its first drawing. */
+	readonly closed?: (main: URI) => boolean;
+}): IObjectTreeElement<WorkspaceBarRow>[] {
+	const flat = (folder: IWorkspaceFolder): IObjectTreeElement<WorkspaceBarRow> =>
+		({ element: { kind: 'folder', uri: folder.uri, folder, repository: false, worktrees: [], offersWorktree: input.worktrees }, collapsible: false });
+
+	if (!input.worktrees) {
+		return input.folders.map(flat);
+	}
+
+	const present = new Map(input.folders.map(folder => [input.key(folder.uri), folder]));
+	const drawn = new Set<string>();
+	const stillIn = (folder: IWorkspaceFolder | undefined): IWorkspaceFolder | undefined => {
+		const key = folder && input.key(folder.uri);
+		const current = key !== undefined ? present.get(key) : undefined;
+		if (key !== undefined && current) {
+			drawn.add(key);
+		}
+		return current;
+	};
+
+	const rows: IObjectTreeElement<WorkspaceBarRow>[] = [];
+	for (const group of input.groups) {
+		if (group.kind === 'folder') {
+			const folder = stillIn(group.folder);
+			if (folder) {
+				rows.push(flat(folder));
+			}
+			continue;
+		}
+
+		// Every folder of it is on this row, under whichever spelling it was added by, and on no other.
+		// A worktree that has left the workspace is still one of the repository's; a repository with no
+		// folder left in the workspace is not drawn.
+		const remaining = group.members.map(stillIn).filter(member => member !== undefined);
+		if (remaining.length === 0) {
+			continue;
+		}
+
+		const main = stillIn(group.folder);
+		const worktrees = group.worktrees.map(worktree => ({ ...worktree, folder: stillIn(worktree.folder) }));
+
+		// Whether a repository is open is the tree's to keep across rebuilds, and its first drawing is as
+		// it was left (`PreserveOr...`). One without worktrees is neither collapsible nor collapsed
+		// (WT-1.8): collapsible, Left and Space closed a row with nothing in it; left collapsed, its
+		// first worktree arrived hidden.
+		const hasWorktrees = worktrees.length > 0;
+		rows.push({
+			element: { kind: 'folder', uri: group.main, folder: main, repository: true, worktrees: worktrees.map(worktree => worktree.uri), offersWorktree: true },
+			children: worktrees.map(worktree => ({ element: { kind: 'worktree', worktree } })),
+			collapsible: hasWorktrees,
+			collapsed: !hasWorktrees ? ObjectTreeElementCollapseState.Expanded
+				: input.closed?.(group.main) ? ObjectTreeElementCollapseState.PreserveOrCollapsed : ObjectTreeElementCollapseState.PreserveOrExpanded
+		});
+	}
+
+	for (const folder of input.folders) {
+		if (!drawn.has(input.key(folder.uri))) {
+			rows.push(flat(folder));
+		}
+	}
+
+	return rows;
+}
+
+/**
+ * Whether a row carries the mark for where the window is.
+ *
+ * Its own folder, always. And a repository's row stands in for a worktree of it while that worktree's
+ * row cannot be seen - the repository's row closed, whether the bar is open or collapsed to its icons
+ * (WT-1.10) - so the column never loses its one "you are here".
+ */
+export function carriesMark(row: WorkspaceBarRow, active: URI | undefined, worktreesHidden: boolean, key: (uri: URI) => string): boolean {
+	if (!active) {
+		return false;
+	}
+
+	if (key(uriOf(row)) === key(active)) {
+		return true;
+	}
+
+	return worktreesHidden && isOnWorktreeOf(row, active, key);
+}
+
+/**
+ * Whether the window is on one of the worktrees under a repository's row - which closing that row
+ * would hide, and so sends the window to the repository itself (WT-1.5).
+ */
+export function isOnWorktreeOf(row: WorkspaceBarRow, active: URI | undefined, key: (uri: URI) => string): boolean {
+	if (!active || row.kind !== 'folder') {
+		return false;
+	}
+
+	const activeKey = key(active);
+	return row.worktrees.some(worktree => key(worktree) === activeKey);
+}
+
+class WorkspaceBarDelegate implements IListVirtualDelegate<WorkspaceBarRow> {
 	getHeight(): number { return ROW_HEIGHT; }
 	getTemplateId(): string { return TEMPLATE_ID; }
 }
 
 interface IRowTemplate {
 	readonly row: HTMLElement;
+	/** A folder's icon, or a worktree's dot. */
 	readonly icon: HTMLElement;
 	readonly label: IconLabel;
+	/** A folder's own buttons (`WorkspaceBarRowToolbar`) - its `+` - shown while the pointer is on it. */
+	readonly toolbar: MenuWorkbenchToolBar;
+	/**
+	 * The bar's own disclosure triangle, after the `+` at the end of a repository's row - the pair the
+	 * header has, `+` and its toggle. The tree's is hidden: see `twistieAdditionalCssClass`.
+	 */
+	readonly twistie: HTMLElement;
 	/**
 	 * ⚠️ Mutable, and read by the hover rather than handed to it. A template is reused for whatever
 	 * row scrolls into it, so a hover closed over the folder it was built with would name the folder
 	 * that used to be there.
 	 */
 	name: string;
+	/** What pressing the triangle does, `Expand` or `Collapse` - mutable for the same reason as `name`. */
+	twistieLabel: string;
+	/** The row this template drew last (`WorkspaceBarIdentityProvider`), to know when it is handed another. */
+	id: string | undefined;
+	/** Taking `recycled` back off, two frames after the template was handed another row. */
+	readonly recycled: MutableDisposable<IDisposable>;
 	readonly templateDisposable: IDisposable;
 }
 
-class FolderRenderer implements IListRenderer<IWorkspaceFolder, IRowTemplate> {
+class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> {
 
 	readonly templateId = TEMPLATE_ID;
 
 	constructor(
-		private readonly isUnavailable: (folder: IWorkspaceFolder) => boolean,
-		private readonly isActive: (folder: IWorkspaceFolder) => boolean,
+		private readonly isUnavailable: (row: WorkspaceBarRow) => boolean,
+		private readonly isActive: (node: ITreeNode<WorkspaceBarRow, void>) => boolean,
 		private readonly isCollapsed: () => boolean,
 		private readonly hoverDelegate: IHoverDelegate,
+		/** The row's id, as the tree knows it (`WorkspaceBarIdentityProvider`). */
+		private readonly idOf: (row: WorkspaceBarRow) => string,
 		@ILabelService private readonly labelService: ILabelService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
 		@IHoverService private readonly hoverService: IHoverService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
 	) { }
 
 	renderTemplate(container: HTMLElement): IRowTemplate {
 		const disposables = new DisposableStore();
 		const row = append(container, $('.workspacebar-row'));
-		const icon = append(row, $('.workspacebar-icon'));
+		// The one slot every row draws its glyph in, so every name in the column starts on one line.
+		const glyph = append(row, $('.workspacebar-glyph'));
+		const icon = append(glyph, $('.workspacebar-icon'));
 		const label = disposables.add(new IconLabel(row, { supportHighlights: true, supportDescriptionHighlights: true }));
+		// A folder's buttons, the header's pair one row down: its toolbar's `+`, then the triangle.
+		const actions = append(row, $('.workspacebar-row-actions'));
+		const toolbar = disposables.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, append(actions, $('.workspacebar-row-toolbar')), WorkspaceBarRowToolbar, {
+			menuOptions: { shouldForwardArgs: true },
+			hiddenItemStrategy: HiddenItemStrategy.NoHide
+		}));
+		// Pointer only, as the triangle: a stop in every row would make Tab walk the list. The keyboard
+		// has the row's menu.
+		toolbar.setFocusable(false);
+		const twistie = append(actions, $('.workspacebar-twistie'));
 
-		const template: IRowTemplate = { row, icon, label, name: '', templateDisposable: disposables };
+		const template: IRowTemplate = { row, toolbar, twistie, icon, label, name: '', twistieLabel: '', id: undefined, recycled: disposables.add(new MutableDisposable()), templateDisposable: disposables };
+
+		twistie.setAttribute('role', 'button');
+		disposables.add(this.hoverService.setupDelayedHover(twistie, () => ({ content: template.twistieLabel })));
 
 		/*
 		 * The name, on the row itself, while the column is collapsed.
@@ -97,31 +303,68 @@ class FolderRenderer implements IListRenderer<IWorkspaceFolder, IRowTemplate> {
 		return template;
 	}
 
-	renderElement(folder: IWorkspaceFolder, _index: number, template: IRowTemplate): void {
-		template.row.classList.toggle('unavailable', this.isUnavailable(folder));
+	renderElement(node: ITreeNode<WorkspaceBarRow, void>, _index: number, template: IRowTemplate): void {
+		const element = node.element;
+
+		// A template handed a different row - the list reuses its elements when the row count changes or
+		// it scrolls - shows it at once instead of transitioning from the last row it drew. `recycled`
+		// turns the transitions off (`workspacebarpart.css`) for two frames, so the first is drawn with it.
+		const id = this.idOf(element);
+		if (template.id !== undefined && template.id !== id) {
+			template.row.classList.add('recycled');
+			const targetWindow = getWindow(template.row);
+			template.recycled.value = scheduleAtNextAnimationFrame(targetWindow, () => {
+				template.recycled.value = scheduleAtNextAnimationFrame(targetWindow, () => template.row.classList.remove('recycled'));
+			});
+		}
+		template.id = id;
+
+		template.row.classList.toggle('unavailable', this.isUnavailable(element));
 
 		// ⚠️ The bar's own mark, not the list's selection. Which folder the window is in is a fact
 		// about the window; a list's selection is the person's, and the list clears it when a
 		// pointer lands anywhere on it that is not a row (`MouseController.onViewPointer`, where
 		// `e.index` is undefined). That is right for a list and wrong for this.
-		template.row.classList.toggle('active', this.isActive(folder));
+		template.row.classList.toggle('active', this.isActive(node));
+
+		// The bar's own triangle, inside the row after its `+`: the tree's sits outside the row's box and
+		// would push the row's band and mark off the column's edge. `^` while open, `v` while closed, like
+		// the header's toggle. Only repositories with worktrees are collapsible (`workspaceBarRows`).
+		template.row.classList.toggle('collapsible', node.collapsible);
+		template.twistie.className = `workspacebar-twistie ${ThemeIcon.asClassName(node.collapsed ? Codicon.chevronDown : Codicon.chevronUp)}`;
+		template.twistieLabel = node.collapsed ? localize('workspaceBar.expand', "Expand") : localize('workspaceBar.collapse', "Collapse");
+		template.twistie.setAttribute('aria-label', template.twistieLabel);
+
+		// The `+` on every folder of the list while the bar lists worktrees - a plain one included (WT-5.8).
+		template.row.classList.toggle('offers-worktree', element.kind === 'folder' && element.offersWorktree);
+		template.toolbar.context = uriOf(element);
+
+		// A dot in the folder icon's slot rather than an indent: the glyph says the depth, and the column
+		// keeps one left edge. A worktree's name and colour are its own; unnamed, it is called by its branch.
+		if (element.kind === 'worktree') {
+			const customization = this.customizationService.get(element.worktree.uri);
+			template.icon.className = 'workspacebar-icon workspacebar-dot'
+				+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
+			template.name = displayNameOf(element, this.customizationService);
+			template.label.setLabel(template.name, undefined, {
+				title: this.labelService.getUriLabel(element.worktree.uri)
+			});
+			return;
+		}
 
 		// ⚠️ The colour paints the icon and nothing else. Not the name, not the chevron: a row is
-		// read as a name, and a name in six colours is six kinds of emphasis nobody asked for.
+		// read as a name, and a name in ten colours is ten kinds of emphasis nobody asked for.
 		// ⚠️ And the glyph is a choice too now. `folder` is the fallback rather than a stored value,
 		// so a folder nobody has customised and one set back to a plain folder draw the same.
-		const customization = this.customizationService.get(folder.uri);
+		const customization = this.customizationService.get(element.uri);
 		const glyph = customization?.icon ? ThemeIcon.fromId(customization.icon) : Codicon.folder;
 		template.icon.className = `workspacebar-icon ${ThemeIcon.asClassName(glyph)}`
 			+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
 
-		// ⚠️ Through `nameFor`, which the window title also calls. The workspace's own name for the
-		// root is the fallback - a `.code-workspace` can name a folder and that name is somebody's
-		// too - but a display name set here wins over it.
 		// The full path on hover is what tells two rows with the same name apart.
-		template.name = this.customizationService.nameFor(folder);
+		template.name = displayNameOf(element, this.customizationService);
 		template.label.setLabel(template.name, undefined, {
-			title: this.labelService.getUriLabel(folder.uri)
+			title: this.labelService.getUriLabel(element.uri)
 		});
 	}
 
@@ -130,67 +373,111 @@ class FolderRenderer implements IListRenderer<IWorkspaceFolder, IRowTemplate> {
 	}
 }
 
-class WorkspaceBarIdentityProvider implements IIdentityProvider<IWorkspaceFolder> {
+export class WorkspaceBarIdentityProvider implements IIdentityProvider<WorkspaceBarRow> {
 
-	constructor(private readonly key: FolderKey) { }
+	constructor(private readonly key: (uri: URI) => string) { }
 
-	getId(folder: IWorkspaceFolder): string {
-		return this.key(folder.uri);
+	getId(row: WorkspaceBarRow): string {
+		return `${row.kind}:${this.key(uriOf(row))}`;
 	}
 }
 
-class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<IWorkspaceFolder> {
+class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<WorkspaceBarRow> {
+
+	constructor(
+		private readonly isUnavailable: (row: WorkspaceBarRow) => boolean,
+		private readonly nameOf: (row: WorkspaceBarRow) => string
+	) { }
 
 	getWidgetAriaLabel(): string {
 		return localize('workspaceBar.ariaLabel', "Workspace folders");
 	}
 
-	constructor(private readonly isUnavailable: (folder: IWorkspaceFolder) => boolean) { }
+	getAriaLabel(row: WorkspaceBarRow): string {
+		const name = this.nameOf(row);
+		if (this.isUnavailable(row)) {
+			return localize('workspaceBar.unavailableAria', "{0}, not on disk", name);
+		}
 
-	getAriaLabel(folder: IWorkspaceFolder): string {
-		return this.isUnavailable(folder)
-			? localize('workspaceBar.unavailableAria', "{0}, not on disk", folder.name)
-			: folder.name;
+		return row.kind === 'worktree' ? localize('workspaceBar.worktreeAria', "{0}, worktree", name) : name;
 	}
 }
 
-class WorkspaceBarKeyboardNavigationLabelProvider implements IKeyboardNavigationLabelProvider<IWorkspaceFolder> {
+class WorkspaceBarKeyboardNavigationLabelProvider implements IKeyboardNavigationLabelProvider<WorkspaceBarRow> {
 
-	getKeyboardNavigationLabel(folder: IWorkspaceFolder): string {
-		return folder.name;
+	constructor(private readonly nameOf: (row: WorkspaceBarRow) => string) { }
+
+	getKeyboardNavigationLabel(row: WorkspaceBarRow): string {
+		return this.nameOf(row);
 	}
 }
 
-/** The list of folders. */
+/**
+ * The folders, and the worktrees of each repository among them. Every change rebuilds the whole tree
+ * with one `setChildren`; the tree keeps what was expanded by the rows' identity (WORKTREE.md WT-1.10).
+ */
 export class WorkspaceBarView extends Disposable {
 
-	private readonly list: WorkbenchList<IWorkspaceFolder>;
+	private readonly tree: WorkbenchObjectTree<WorkspaceBarRow, void>;
 	private readonly empty: HTMLElement;
+	private readonly rowKind: IContextKey<'folder' | 'repository' | 'worktree'>;
+	private readonly rowExpansion: IContextKey<'' | 'expanded' | 'collapsed'>;
+	/** The repositories somebody closed, by their main checkout's key (`CLOSED_STORAGE_KEY`). */
+	private readonly closed: Set<string>;
 
 	constructor(
 		container: HTMLElement,
 		private readonly model: WorkspaceBarModel,
+		private readonly git: WorkspaceBarGit,
 		private readonly switcher: WorkspaceBarSwitcher,
 		private readonly isCollapsed: () => boolean,
+		onDidChangeCollapsed: Event<void>,
+		/** Puts a folder in the workspace and moves the window onto it: `IWorkspaceBarService.show`. */
+		private readonly show: (uri: URI) => Promise<void>,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IStorageService private readonly storageService: IStorageService,
 	) {
 		super();
+
+		this.closed = new Set(readClosed(this.storageService));
 
 		this.empty = append(container, $('.workspacebar-empty'));
 		// ⚠️ Says what to do next, and names both ways of doing it - the column is a drop target over
 		// its whole height, which nothing else on screen says.
 		this.empty.textContent = localize('workspaceBar.empty', "Open a folder or drag one here.");
 
-		this.list = this._register(instantiationService.createInstance(
-			WorkbenchList<IWorkspaceFolder>,
+		const isUnavailable = (row: WorkspaceBarRow) => row.kind === 'worktree'
+			? !row.worktree.exists
+			: row.kind === 'folder' && !!row.folder && model.isUnavailable(row.folder);
+
+		const list = append(container, $('.workspacebar-list'));
+
+		// Whether the keyboard moved last in the list, for the keyboard row's highlight (`workspacebarpart.css`):
+		// a key in the list, or arriving by Tab (its key comes up here), turns it on; a pointer turns it off.
+		// Captured, because the list stops the keys it handles from bubbling.
+		this._register(addDisposableListener(list, EventType.KEY_DOWN, () => list.classList.add('keyboard'), true));
+		this._register(addDisposableListener(list, EventType.KEY_UP, e => {
+			if (e.key === 'Tab') {
+				list.classList.add('keyboard');
+			}
+		}, true));
+		this._register(addDisposableListener(list, EventType.POINTER_DOWN, () => list.classList.remove('keyboard'), true));
+
+		// One identity for the tree and for the renderer, which tells by it when one of its templates is
+		// handed a different row.
+		const identity = new WorkspaceBarIdentityProvider(model.key);
+
+		this.tree = this._register(instantiationService.createInstance(
+			WorkbenchObjectTree<WorkspaceBarRow, void>,
 			'WorkspaceBar',
-			append(container, $('.workspacebar-list')),
+			list,
 			new WorkspaceBarDelegate(),
-			[instantiationService.createInstance(FolderRenderer,
-				(folder: IWorkspaceFolder) => model.isUnavailable(folder),
-				(folder: IWorkspaceFolder) => this.isActive(folder),
+			[instantiationService.createInstance(RowRenderer,
+				isUnavailable,
+				(node: ITreeNode<WorkspaceBarRow, void>) => this.isActive(node),
 				this.isCollapsed,
 				/*
 				 * The activity bar's card: beside the icon, pointing back at it, with no wait.
@@ -219,17 +506,30 @@ export class WorkspaceBarView extends Disposable {
 					{
 						style: HoverStyle.Pointer,
 						position: { hoverPosition: HoverPosition.RIGHT }
-					})))],
+					})),
+				(row: WorkspaceBarRow) => identity.getId(row))],
 			{
-				// ⚠️ The bar's own rule, not `uri.toString()`: the list keeps focus and selection on
-				// the right row across a redraw with it, so it has to agree with everything else.
-				identityProvider: new WorkspaceBarIdentityProvider(model.key),
-				accessibilityProvider: new WorkspaceBarAccessibilityProvider(folder => model.isUnavailable(folder)),
-				keyboardNavigationLabelProvider: new WorkspaceBarKeyboardNavigationLabelProvider(),
+				// The bar's own folder key, so rebuilds keep focus, selection and expansion on the right rows.
+				identityProvider: identity,
+				accessibilityProvider: new WorkspaceBarAccessibilityProvider(isUnavailable, row => displayNameOf(row, this.customizationService)),
+				keyboardNavigationLabelProvider: new WorkspaceBarKeyboardNavigationLabelProvider(row => displayNameOf(row, this.customizationService)),
 				// One click. Left alone this follows `workbench.list.openMode`, which is about files.
 				openOnSingleClick: true,
 				multipleSelectionSupport: false,
 				horizontalScrolling: false,
+				// A click on a row goes there. The tree's own triangle is hidden, so it never expands;
+				// `onDidOpen` below toggles on the row's own triangle.
+				expandOnlyOnTwistieClick: true,
+				expandOnDoubleClick: false,
+				// No triangle, indent or guides from the tree, which draws them outside the row's box
+				// (as upstream's `sessionsList.ts` does).
+				indent: 0,
+				defaultIndent: 0,
+				renderIndentGuides: RenderIndentGuides.None,
+				twistieAdditionalCssClass: () => 'force-no-twistie',
+				// A repository's row stuck over its worktrees would be drawn with its buttons, but the tree
+				// only scrolls to a stuck row: a click there would neither go to it nor reach them.
+				enableStickyScroll: false,
 				overrideStyles: {
 					// ⚠️ `undefined` is not "use the default" here, it is "paint nothing":
 					// `computeStyles` passes it straight through and `listWidget` guards every rule
@@ -285,22 +585,47 @@ export class WorkspaceBarView extends Disposable {
 					listSelectionOutline: undefined
 				}
 			}
-		)) as WorkbenchList<IWorkspaceFolder>;
+		)) as WorkbenchObjectTree<WorkspaceBarRow, void>;
 
-		this._register(this.list.onDidOpen(e => {
+		this._register(this.tree.onDidOpen(e => {
 			if (e.element) {
-				this.switcher.switchTo(e.element.uri).then(undefined, onUnexpectedError);
+				this.open(e.element, e.browserEvent).then(undefined, onUnexpectedError);
 			}
 		}));
 
-		// ⚠️ On the list's own scope, not a scope of ours around it. A keybinding resolves the context
-		// of the focused element, which is inside the list, and that context's parent is the root -
-		// a sibling scope wrapped around the list is never on the way and is never consulted.
-		WorkspaceBarFocusContext.bindTo(this.list.contextKeyService).set(true);
+		// On the tree's own scope: keybindings resolve the focused element's context, and a scope wrapped
+		// around the tree is not among its parents.
+		WorkspaceBarFocusContext.bindTo(this.tree.contextKeyService).set(true);
+		this.rowKind = WorkspaceBarRowKindContext.bindTo(this.tree.contextKeyService);
+		this.rowExpansion = WorkspaceBarRowExpansionContext.bindTo(this.tree.contextKeyService);
+		this._register(this.tree.onDidChangeFocus(e => this.setRowKind(e.elements[0] ?? undefined)));
 
-		this._register(this.list.onContextMenu(e => this.onContextMenu(e)));
+		this._register(this.tree.onContextMenu(e => this.onContextMenu(e)));
+
+		// A repository row carries the mark for a worktree of it only while that worktree is hidden,
+		// so expanding or collapsing it changes how it is drawn - and what its menu offers.
+		this._register(this.tree.onDidChangeCollapseState(e => {
+			const row = e.node.element;
+			if (row) {
+				this.tree.rerender(row);
+			}
+			this.setRowKind(this.tree.getFocus()[0] ?? undefined);
+
+			// Kept for the next time the window opens (WT-1.10): rebuilds preserve it, so only an open or
+			// a close gets here.
+			if (row?.kind === 'folder' && row.repository && e.node.collapsible) {
+				this.rememberClosed(row.uri, e.node.collapsed);
+			}
+
+			// Closing the repository whose worktree the window is on takes the window to the repository
+			// (WT-1.5), however it was closed. Rebuilds preserve the state, so only a person gets here.
+			if (row?.kind === 'folder' && e.node.collapsed && isOnWorktreeOf(row, this.switcher.active, this.model.key)) {
+				this.goToFolder(row).then(undefined, onUnexpectedError);
+			}
+		}));
 
 		this._register(this.model.onDidChange(() => this.refresh()));
+		this._register(this.git.onDidChange(() => this.refresh()));
 		// ⚠️ A redraw, not a class toggled on whatever happens to be rendered: the list is
 		// virtualised, so the rows are recycled and the mark has to come from the renderer.
 		this._register(this.switcher.onDidChangeActive(() => this.refresh()));
@@ -308,63 +633,167 @@ export class WorkspaceBarView extends Disposable {
 		// the same way a change to the folder list does. Without this the dialog saves and the bar
 		// goes on showing what it showed before, until something else happens to redraw it.
 		this._register(this.customizationService.onDidChange(() => this.refresh()));
+		// Collapsed to its icons the rows are the same (WT-1.10), and drawn again for the new shape.
+		this._register(onDidChangeCollapsed(() => this.refresh()));
+		this._register(this.configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration(SHOW_WORKTREES)) {
+				this.refresh();
+			}
+		}));
 		this.refresh();
 	}
 
-	/**
-	 * Redraws the rows.
-	 *
-	 * ⚠️ `splice`, not `rerender`: `ListView.rerender` only resets dynamic row heights and returns
-	 * immediately for a list that has none, so it reads like a redraw and is not one.
-	 */
+	/** Rebuilds the tree. */
 	private refresh(): void {
-		const folders = this.model.folders;
-		const focus = this.list.length > 0 ? this.list.getFocus() : [];
-		const scrollTop = this.list.scrollTop;
+		this.empty.classList.toggle('hidden', this.model.folders.length > 0);
+		this.tree.setChildren(null, workspaceBarRows({
+			folders: this.model.folders,
+			// Each repository's worktrees in the order somebody put them in, if they have (WT-1.7).
+			groups: this.git.groups.map(group => group.kind === 'repository'
+				? { ...group, worktrees: orderWorktrees(group.worktrees, this.customizationService.worktreeOrder(group.main), worktree => worktree.uri, this.model.key) }
+				: group),
+			worktrees: areWorktreesShown(this.configurationService) && this.git.ready,
+			key: this.model.key,
+			closed: main => this.closed.has(this.model.key(main))
+		}));
 
-		this.empty.classList.toggle('hidden', folders.length > 0);
-		this.list.splice(0, this.list.length, [...folders]);
-
-		this.list.setFocus(focus.filter(index => index < folders.length));
-		this.list.scrollTop = scrollTop;
+		// Without a `diffIdentityProvider` this replaces and redraws every row, the mark with it.
+		// A rebuild moves focus onto the new rows without a focus event, so the row kind is set again:
+		// left saying "worktree" on a folder, Alt+Up ran Move Worktree Up on it.
+		this.setRowKind(this.tree.getFocus()[0] ?? undefined);
 	}
 
-	/** Whether `folder` is the one the window is in. */
-	private isActive(folder: IWorkspaceFolder): boolean {
-		const active = this.switcher.active;
+	/** Keeps whether the repository of `main` is closed, for its first drawing after a reload. */
+	private rememberClosed(main: URI, closed: boolean): void {
+		const key = this.model.key(main);
+		if (closed === this.closed.has(key)) {
+			return;
+		}
 
-		return !!active && this.model.key(active) === this.model.key(folder.uri);
+		if (closed) {
+			this.closed.add(key);
+		} else {
+			this.closed.delete(key);
+		}
+
+		if (this.closed.size > 0) {
+			this.storageService.store(CLOSED_STORAGE_KEY, JSON.stringify([...this.closed]), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this.storageService.remove(CLOSED_STORAGE_KEY, StorageScope.WORKSPACE);
+		}
+	}
+
+	private isActive(node: ITreeNode<WorkspaceBarRow, void>): boolean {
+		return carriesMark(node.element, this.switcher.active, node.collapsed, this.model.key);
 	}
 
 	/**
-	 * The menu for one folder.
+	 * Goes to a row, or opens and closes it when the click was on its triangle. A folder not in the
+	 * workspace goes through `show`, which adds it first; a worktree whose folder is gone, through the
+	 * switcher, which says so rather than add a missing folder.
+	 */
+	private async open(row: WorkspaceBarRow, browserEvent: UIEvent | undefined): Promise<void> {
+		// The list opens on a click and again on the `dblclick` that follows it: the click has done it,
+		// and a second toggle or a second New Worktree would undo or repeat it.
+		if (browserEvent?.type === 'dblclick') {
+			return;
+		}
+
+		const target = browserEvent?.target;
+		if (isHTMLElement(target) && target.closest('.workspacebar-twistie') && this.tree.isCollapsible(row)) {
+			this.tree.toggleCollapsed(row);
+			return;
+		}
+
+		if (row.kind === 'folder') {
+			return this.goToFolder(row);
+		}
+
+		const { worktree } = row;
+		if (worktree.folder || !worktree.exists) {
+			return this.switcher.switchTo(worktree.folder?.uri ?? worktree.uri);
+		}
+
+		return this.show(worktree.uri);
+	}
+
+	/** A folder row's own place: through the switcher when it is in the workspace, `show` when not. */
+	private goToFolder(row: IFolderRow): Promise<void> {
+		return row.folder ? this.switcher.switchTo(row.folder.uri) : this.show(row.uri);
+	}
+
+	private setRowKind(row: WorkspaceBarRow | undefined): void {
+		if (!row) {
+			this.rowKind.set('folder');
+			this.rowExpansion.set('');
+			return;
+		}
+
+		this.rowKind.set(row.kind === 'worktree' ? 'worktree' : row.repository ? 'repository' : 'folder');
+		this.rowExpansion.set(this.expansionOf(row));
+	}
+
+	/**
+	 * Whether a repository's row is open onto its worktrees, for its menu (WT-1.10); empty for a row
+	 * with nothing under it (WT-1.8).
+	 */
+	private expansionOf(row: WorkspaceBarRow): '' | 'expanded' | 'collapsed' {
+		if (row.kind !== 'folder' || !this.tree.hasElement(row)) {
+			return '';
+		}
+
+		const node = this.tree.getNode(row);
+		return node.children.length === 0 ? '' : node.collapsed ? 'collapsed' : 'expanded';
+	}
+
+	/** Opens or closes a repository's row onto its worktrees: `IWorkspaceBarService.setExpanded`. */
+	setExpanded(uri: URI, expanded: boolean): void {
+		const key = this.model.key(uri);
+		const row = this.tree.getNode().children
+			.map(node => node.element)
+			.find(element => element?.kind === 'folder' && this.model.key(element.uri) === key);
+		if (!row) {
+			return;
+		}
+
+		if (expanded) {
+			this.tree.expand(row);
+		} else {
+			this.tree.collapse(row);
+		}
+	}
+
+	/**
+	 * The menu for one row.
 	 *
-	 * The clicked row, not the active one: the list has already moved focus onto it, so what the
+	 * The clicked row, not the active one: the tree has already moved focus onto it, so what the
 	 * menu acts on is what is highlighted behind it.
 	 */
-	private onContextMenu(e: IListContextMenuEvent<IWorkspaceFolder>): void {
+	private onContextMenu(e: ITreeContextMenuEvent<WorkspaceBarRow | null>): void {
 		if (!e.element) {
 			return;
 		}
 
+		this.setRowKind(e.element);
 		this.contextMenuService.showContextMenu({
 			menuId: WorkspaceBarContextMenu,
-			menuActionOptions: { shouldForwardArgs: true, arg: e.element.uri },
-			contextKeyService: this.list.contextKeyService,
+			menuActionOptions: { shouldForwardArgs: true, arg: uriOf(e.element) },
+			contextKeyService: this.tree.contextKeyService,
 			getAnchor: () => e.anchor
 		});
 	}
 
-	/** The folder the list has focus on, for an action that arrived without one. */
+	/** The row the tree has focus on, for an action that arrived without one. */
 	focused(): URI | undefined {
-		return this.list.getFocusedElements()[0]?.uri;
+		const row = this.tree.getFocus()[0];
+		return row ? uriOf(row) : undefined;
 	}
 
 	layout(width: number, height: number): void {
-		this.list.layout(height, width);
+		this.tree.layout(height, width);
 	}
 
 	focus(): void {
-		this.list.domFocus();
+		this.tree.domFocus();
 	}
 }

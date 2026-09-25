@@ -63,11 +63,6 @@
 		"--vscode-charts-lines",
 		"--vscode-charts-orange",
 		"--vscode-charts-purple",
-		"--facade-folder-ink",
-		"--facade-row-ink",
-		"--facade-band-height",
-		"--facade-header-row",
-		"--facade-divider",
 		"--vscode-charts-red",
 		"--vscode-charts-yellow",
 		"--vscode-chat-avatarBackground",
@@ -1275,7 +1270,13 @@
 		"--vg-ring-width",
 		"--vg-ring-opacity",
 		"--vg-corner-alpha",
-		"--vg-inner-fade"
+		"--vg-inner-fade",
+		"--facade-folder-ink",
+		"--facade-row-ink",
+		"--facade-band-height",
+		"--facade-header-row",
+		"--facade-divider",
+		"--facade-motion"
 	],
 	"sizes": [
 		"--segmented-icon-toggle-cell-radius",
