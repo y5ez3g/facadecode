@@ -14,7 +14,7 @@ import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../services/editor/common/editorGroupsService.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
 import { AGENTS_SETTING, readConfiguredLaunchers } from '../common/terminalLaunchers.js';
-import { AGENT_MENU, AGENT_MENU_GROUP, createAgentMenuActionViewItem, SHOW_AGENT_MENU } from './terminalLauncherActions.js';
+import { AGENT_MENU, AGENT_MENU_GROUP, createAgentMenuActionViewItem } from './terminalLauncherActions.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
 /** What an agent's command is called. The id somebody chose is the last part. */
@@ -45,9 +45,9 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 	) {
 		super();
 
-		// The button draws itself, because a tool bar builds a plain icon for an action and this one
-		// has to open the menu the agents are registered into
-		this._register(actionViewItemService.register(MenuId.TitleBar, SHOW_AGENT_MENU, createAgentMenuActionViewItem));
+		// The button draws itself, for the count on its corner and the keybinding in its tooltip, which a
+		// tool bar's own dropdown for a submenu has neither of
+		this._register(actionViewItemService.register(MenuId.TitleBar, AGENT_MENU, createAgentMenuActionViewItem));
 
 		this._editorGroupsService.whenReady.then(() => this._watchGroups(), onUnexpectedError);
 		this._update();

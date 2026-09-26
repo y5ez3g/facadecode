@@ -75,8 +75,8 @@ export interface ITerminalLauncherService {
 	 */
 	registerButton(button: IAgentMenuButton): IDisposable;
 
-	/** Opens the agent menu on the button that window has, if it has one. */
-	showMenu(window: Window): void;
+	/** Opens the agent menu on the button that window has, and answers whether it had one on screen. */
+	showMenu(window: Window): boolean;
 }
 
 export class TerminalLauncherService extends Disposable implements ITerminalLauncherService {
@@ -133,15 +133,17 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		return toDisposable(() => this._buttons.delete(button));
 	}
 
-	showMenu(window: Window): void {
+	showMenu(window: Window): boolean {
 		// The one in the window the key was pressed in. An auxiliary window draws a title bar of its
 		// own, so more than one of these is on screen and the first is not always the right one.
 		for (const button of this._buttons) {
 			if (button.isIn(window)) {
 				button.show();
-				return;
+				return true;
 			}
 		}
+
+		return false;
 	}
 
 	async open(launcher: ITerminalLauncher): Promise<void> {
