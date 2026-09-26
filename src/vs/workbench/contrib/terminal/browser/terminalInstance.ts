@@ -1060,6 +1060,10 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	detachFromElement(): void {
 		this._wrapperElement.remove();
 		this._container = undefined;
+		// Facade Code: and stop taking the drops made on the container, which stays behind for others - a
+		// terminal editor's serves every terminal of its group - or a file dropped onto the terminal in
+		// front sends its path to each terminal shown there before as well.
+		this._dndObserver.clear();
 	}
 
 	attachToElement(container: HTMLElement): void {
@@ -1084,7 +1088,8 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		this.xterm?.refresh();
 
 		setTimeout(() => {
-			if (this._store.isDisposed) {
+			// Facade Code: nor when the terminal has left the container since, as above.
+			if (this._store.isDisposed || this._container !== container) {
 				return;
 			}
 			this._initDragAndDrop(container);

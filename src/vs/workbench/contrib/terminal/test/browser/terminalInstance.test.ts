@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { deepStrictEqual, ok, strictEqual } from 'assert';
+import { timeout } from '../../../../../base/common/async.js';
 import { Event } from '../../../../../base/common/event.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../../base/common/network.js';
@@ -13,6 +14,7 @@ import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
+import { CodeDataTransfers } from '../../../../../platform/dnd/browser/dnd.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ResultKind } from '../../../../../platform/keybinding/common/keybindingResolver.js';
 import { TerminalCapability, type ICwdDetectionCapability } from '../../../../../platform/terminal/common/capabilities/capabilities.js';
@@ -435,6 +437,38 @@ suite('Workbench - TerminalInstance', () => {
 				);
 			} finally {
 				keybindingService.softDispatch = originalSoftDispatch;
+				container.remove();
+			}
+		});
+
+		test('a file dropped where terminals take turns, as in a terminal editor, goes to the one shown there and not to those shown before', async () => {
+			const container = document.createElement('div');
+			document.body.appendChild(container);
+			const earlier = await createTerminalInstance();
+			const passing = await createTerminalInstance();
+			const shown = await createTerminalInstance();
+			// Taking a drop starts with focusing the terminal.
+			const tookTheDrop: string[] = [];
+			earlier.focus = () => tookTheDrop.push('earlier');
+			passing.focus = () => tookTheDrop.push('passing');
+			shown.focus = () => tookTheDrop.push('shown');
+			try {
+				earlier.attachToElement(container);
+				await timeout(0);
+				earlier.detachFromElement();
+				// Shown and gone again before it was due to take drops
+				passing.attachToElement(container);
+				passing.detachFromElement();
+				shown.attachToElement(container);
+				await timeout(0);
+
+				const dataTransfer = new DataTransfer();
+				dataTransfer.setData(CodeDataTransfers.FILES, JSON.stringify(['/a.txt']));
+				container.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer }));
+				await timeout(0);
+
+				deepStrictEqual(tookTheDrop, ['shown']);
+			} finally {
 				container.remove();
 			}
 		});
