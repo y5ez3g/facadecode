@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -12,18 +13,24 @@ import { InstantiationType, registerSingleton } from '../../../../platform/insta
 import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
-import { AGENT_TERMINAL_ICON, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readConfiguredLaunchers, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
 import { showAgentsDialog } from './terminalLauncherDialog.js';
 
 export const ITerminalLauncherService = createDecorator<ITerminalLauncherService>('terminalLauncherService');
+
+/** Where the names of the agents a window has running are kept across a reload (`readAgentNames`). */
+export const AGENT_NAMES_STORAGE_KEY = 'facade.agent.names';
 
 /**
  * The agent button, as much of it as anything outside the tool bar needs.
@@ -93,6 +100,14 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	 */
 	private readonly _buttons = new Set<IAgentMenuButton>();
 
+	/**
+	 * Which agent each agent's terminal is, by the terminal's shell integration nonce.
+	 *
+	 * A terminal forgets the name it was started with when a reload reconnects it, and the nonce is
+	 * what it carries across: made once for each terminal, it goes with the process.
+	 */
+	private readonly _names: Map<string, string>;
+
 	constructor(
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@ITerminalService private readonly _terminalService: ITerminalService,
@@ -103,6 +118,8 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		@IKeybindingService private readonly _keybindingService: IKeybindingService,
 		@IHostService private readonly _hostService: IHostService,
 		@IContextViewService private readonly _contextViewService: IContextViewService,
+		@IStorageService private readonly _storageService: IStorageService,
+		@ILifecycleService private readonly _lifecycleService: ILifecycleService,
 		@ILogService private readonly _logService: ILogService
 	) {
 		super();
@@ -116,6 +133,49 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 			Event.map(this._terminalService.onDidDisposeInstance, () => undefined),
 			Event.map(this._terminalService.onAnyInstanceIconChange, () => undefined)
 		);
+
+		// ⚠️ Given back as each terminal is made, which is before it works out its title - on the
+		// terminal's own, from a reload's `attachPersistentProcess`. Afterwards is too late: its tab
+		// would read the process's name until the agent next set a title.
+		this._names = readAgentNames(this._storageService.get(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE));
+		this._register(this._terminalService.onDidCreateInstance(instance => restoreAgentLaunch(instance.shellLaunchConfig, this._names)));
+
+		// An agent ended is forgotten; one the window closing takes away comes back with a reload
+		this._register(this._terminalService.onDidDisposeInstance(instance => {
+			if (instance.exitReason !== TerminalExitReason.Shutdown) {
+				this._names.delete(instance.shellIntegrationNonce);
+			}
+		}));
+		this._register(this._storageService.onWillSaveState(() => this._saveNames()));
+
+		// And so is one that did not come back
+		this._forgetAgentsNotBack().then(undefined, onUnexpectedError);
+	}
+
+	/**
+	 * Forgets the names of the agents that did not come back: an agent does not outlive the app. Asked
+	 * once every terminal the window had is back, those of floating windows included, which come last.
+	 */
+	private async _forgetAgentsNotBack(): Promise<void> {
+		await Promise.all([this._terminalService.whenConnected, this._lifecycleService.when(LifecyclePhase.Eventually)]);
+		if (this._store.isDisposed) {
+			return;
+		}
+
+		const running = new Set(this.agentTerminals.map(instance => instance.shellIntegrationNonce));
+		for (const nonce of [...this._names.keys()]) {
+			if (!running.has(nonce)) {
+				this._names.delete(nonce);
+			}
+		}
+	}
+
+	private _saveNames(): void {
+		if (this._names.size) {
+			this._storageService.store(AGENT_NAMES_STORAGE_KEY, JSON.stringify(Object.fromEntries(this._names)), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this._storageService.remove(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE);
+		}
 	}
 
 	isAgentTerminal(resource: URI | undefined): boolean {
@@ -164,13 +224,14 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 				// Asked for here rather than left to `terminal.integrated.tabs.allowAgentCliTitle`,
 				// which does this already but only for the five CLIs upstream recognises by name.
 				// Anything somebody puts in the list is an agent as far as this button is concerned.
-				titleTemplate: '${sequence}',
+				titleTemplate: AGENT_TITLE_TEMPLATE,
 
 				// One glyph for every agent - and the thing that says this terminal is an agent's,
 				// which is why it comes from a constant. Which agent it is, the tab says in words.
 				icon: AGENT_TERMINAL_ICON
 			}
 		});
+		this._names.set(instance.shellIntegrationNonce, launcher.label);
 
 		await instance.focusWhenReady();
 
@@ -222,4 +283,6 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	}
 }
 
-registerSingleton(ITerminalLauncherService, TerminalLauncherService, InstantiationType.Delayed);
+// ⚠️ Eager: made with the agent menu, before the editors are restored, so that it is listening when
+// the agents' terminals are made again (`restoreAgentLaunch`). Delayed, it was made on first use.
+registerSingleton(ITerminalLauncherService, TerminalLauncherService, InstantiationType.Eager);

@@ -5,7 +5,8 @@
 
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
-import { TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
+import { isObject, isString } from '../../../../base/common/types.js';
+import { IShellLaunchConfig, TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
 import { StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 
 /**
@@ -37,6 +38,54 @@ export function isAgentTerminalIcon(icon: TerminalIcon | undefined): boolean {
  */
 export function isAgentGoneAtStartup(icon: TerminalIcon | undefined, startupKind: StartupKind): boolean {
 	return startupKind !== StartupKind.ReloadedWindow && isAgentTerminalIcon(icon);
+}
+
+/** The title every agent terminal takes: the one the agent sets for itself, its name standing in until it has. */
+export const AGENT_TITLE_TEMPLATE = '${sequence}';
+
+/**
+ * The names of the agents a window had running, out of what was kept for them: by each terminal's
+ * shell integration nonce, which its process carries across a reload. Storage that cannot be read
+ * gives none rather than a wrong one.
+ */
+export function readAgentNames(value: string | undefined): Map<string, string> {
+	const names = new Map<string, string>();
+
+	let stored: unknown;
+	try {
+		stored = value ? JSON.parse(value) : undefined;
+	} catch {
+		return names;
+	}
+
+	if (isObject(stored)) {
+		for (const [nonce, name] of Object.entries(stored)) {
+			if (isString(name) && name) {
+				names.set(nonce, name);
+			}
+		}
+	}
+
+	return names;
+}
+
+/**
+ * Gives an agent's terminal that a reload brought back the name and title template the agent button
+ * started it with, found by its nonce, and answers whether it did. A terminal carries neither across
+ * reconnecting, and without them its tab reads the name of the process rather than the agent's title.
+ *
+ * ⚠️ Only one still drawn as an agent's: given another icon since, it is no longer one.
+ */
+export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names: ReadonlyMap<string, string>): boolean {
+	const reconnecting = shellLaunchConfig.attachPersistentProcess;
+	const name = reconnecting && isAgentTerminalIcon(reconnecting.icon) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
+	if (!name) {
+		return false;
+	}
+
+	shellLaunchConfig.name = name;
+	shellLaunchConfig.titleTemplate = AGENT_TITLE_TEMPLATE;
+	return true;
 }
 
 /**
