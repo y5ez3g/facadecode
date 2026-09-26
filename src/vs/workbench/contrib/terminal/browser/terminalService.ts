@@ -43,6 +43,7 @@ import { ACTIVE_GROUP, ACTIVE_GROUP_TYPE, AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYP
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { ILifecycleService, ShutdownReason, StartupKind, WillShutdownEvent } from '../../../services/lifecycle/common/lifecycle.js';
+import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { XtermTerminal } from './xterm/xtermTerminal.js';
 import { TerminalInstance } from './terminalInstance.js';
@@ -527,6 +528,11 @@ export class TerminalService extends Disposable implements ITerminalService {
 			if (!attachPersistentProcess) {
 				continue;
 			}
+			// Facade Code: an agent put away by a folder switch is gone once the app restarted, and revived
+			// it would be held where nothing shows it (`isAgentGoneAtStartup`)
+			if (isAgentGoneAtStartup(attachPersistentProcess.icon, this._lifecycleService.startupKind)) {
+				continue;
+			}
 			const instance = await this.createTerminal({ config: { attachPersistentProcess, hideFromUser: true, forcePersist: true }, location: TerminalLocation.Panel });
 			instances.push(instance);
 		}
@@ -538,6 +544,10 @@ export class TerminalService extends Disposable implements ITerminalService {
 		for (const terminalLayout of terminalLayouts) {
 			const attachPersistentProcess = terminalLayout.terminal!;
 			if (this._lifecycleService.startupKind !== StartupKind.ReloadedWindow && attachPersistentProcess.type === 'Task') {
+				continue;
+			}
+			// Facade Code: nor an agent's, which is gone once the app restarted as a task's is (`isAgentGoneAtStartup`)
+			if (isAgentGoneAtStartup(attachPersistentProcess.icon, this._lifecycleService.startupKind)) {
 				continue;
 			}
 			mark(`code/terminal/willRecreateTerminal/${attachPersistentProcess.id}-${attachPersistentProcess.pid}`);
