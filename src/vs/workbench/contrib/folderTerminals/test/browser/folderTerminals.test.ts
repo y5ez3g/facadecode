@@ -14,7 +14,8 @@ import { TestConfigurationService } from '../../../../../platform/configuration/
 import { EditorActivation } from '../../../../../platform/editor/common/editor.js';
 import { FileSystemProviderCapabilities, IFileService } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
+import { StorageScope, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
+import { TerminalExitReason, TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
@@ -23,8 +24,9 @@ import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService, IActiveFolderWillChangeEvent } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../../services/editor/common/editorGroupsService.js';
 import { AUX_WINDOW_GROUP } from '../../../../services/editor/common/editorService.js';
+import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { ITerminalInstance, ITerminalService, TerminalEditorLocation } from '../../../terminal/browser/terminal.js';
-import { FolderTerminals } from '../../browser/folderTerminals.js';
+import { FolderTerminals, PARKED_STORAGE_KEY } from '../../browser/folderTerminals.js';
 
 /** Stands in for any tab, terminal or not: all these tests read off it is where it sits. */
 class TestEditor {
@@ -32,7 +34,7 @@ class TestEditor {
 	asInput(): EditorInput { return this as unknown as EditorInput; }
 }
 
-/** A terminal that knows its resource, whether it persists, and whether it is still alive. */
+/** A terminal that knows its resource, whether it persists, and whether it is still alive - and why not. */
 class TestInstance {
 
 	private readonly _onDisposed = new Emitter<ITerminalInstance>();
@@ -41,19 +43,28 @@ class TestInstance {
 	readonly resource: URI;
 	readonly shellLaunchConfig: { forcePersist?: boolean } = {};
 
+	/** Made from its name: the same for the same terminal a reload brings back, as a real one's is. */
+	readonly shellIntegrationNonce: string;
+
 	disposed = false;
+	exitReason: TerminalExitReason | undefined;
 	focused = false;
 
-	constructor(readonly name: string, readonly target = TerminalLocation.Editor) {
+	target: TerminalLocation;
+
+	constructor(readonly name: string, target = TerminalLocation.Editor) {
+		this.target = target;
 		this.resource = URI.from({ scheme: 'vscode-terminal', path: '/' + name });
+		this.shellIntegrationNonce = 'nonce-' + name;
 	}
 
 	async focusWhenReady(): Promise<void> {
 		this.focused = true;
 	}
 
-	dispose(): void {
+	dispose(reason = TerminalExitReason.Unknown): void {
 		this.disposed = true;
+		this.exitReason = reason;
 		this._onDisposed.fire(this as unknown as ITerminalInstance);
 	}
 
@@ -167,11 +178,24 @@ class TestTerminalService extends mock<ITerminalService>() {
 	active: string | undefined;
 	readonly revealed: string[] = [];
 
+	/** Those shown again in the panel, as one that says it is the panel's is. */
+	readonly toPanel: string[] = [];
+
 	/** The names in the background now: taken there, and not yet shown again. */
 	private readonly inBackground = new Set<string>();
 
+	override whenConnected = Promise.resolve();
+
 	constructor(private readonly groups: TestEditorGroupsService) {
 		super();
+	}
+
+	/** Terminals a reload brought back, in the background as upstream's `_reviveBackgroundTerminalInstances` puts them. */
+	revive(instances: TestInstance[]): void {
+		this.instances.push(...instances.map(instance => instance.asInstance()));
+		for (const instance of instances) {
+			this.inBackground.add(instance.name);
+		}
 	}
 
 	override get foregroundInstances(): ITerminalInstance[] {
@@ -207,6 +231,13 @@ class TestTerminalService extends mock<ITerminalService>() {
 
 		if (this.failing.has(named.name)) {
 			throw new Error(`no editor for ${named.name}`);
+		}
+
+		// One that says it is the panel's goes to the panel, whatever tab it is asked for
+		if (named.target === TerminalLocation.Panel) {
+			this.toPanel.push(named.name);
+			this.inBackground.delete(named.name);
+			return;
 		}
 
 		this.shown.push(named.name);
@@ -295,11 +326,23 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 	const file = (name: string) => new TestEditor(name, URI.file('/w/' + name));
 	const tabFor = (instance: TestInstance) => new TestEditor(instance.name, instance.resource);
 
-	function setup(columns: TestGroup[], live: TestInstance[], floatedTabs: TestEditor[] = []) {
+	/**
+	 * The contribution and what it stands on. `reload` is a window opening again: on the storage the
+	 * last one kept its state in and on the folder `opensOn`, with the terminals it had parked back in
+	 * the background once the terminal service is `connected` - at once unless that is given.
+	 */
+	function setup(columns: TestGroup[], live: TestInstance[], floatedTabs: TestEditor[] = [], reload?: { storage: TestStorageService; revived: TestInstance[]; opensOn: IWorkspaceFolder; connected?: Promise<void> }) {
 		const store = disposables.add(new DisposableStore());
 		const groups = new TestEditorGroupsService(columns, floatedTabs);
 		const terminals = new TestTerminalService(groups);
+		terminals.instances = live.map(instance => instance.asInstance());
+		terminals.revive(reload?.revived ?? []);
+		if (reload?.connected) {
+			terminals.whenConnected = reload.connected;
+		}
+		const storage = reload?.storage ?? store.add(new TestStorageService());
 		const folders = new TestActiveFolderService();
+		folders.activeFolder = reload?.opensOn;
 		const context = new TestContextService();
 		const bar = new TestWorkspaceBarService();
 		const uriIdentityService: IUriIdentityService = store.add(new UriIdentityService(new class extends mock<IFileService>() {
@@ -315,17 +358,15 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 
 		const folderTerminals = store.add(new FolderTerminals(
 			folders, bar, terminals, context, groups,
-			new TestConfigurationService(), uriIdentityService, new NullLogService()
+			new TestConfigurationService(), uriIdentityService, storage, new NullLogService()
 		));
-
-		terminals.instances = live.map(instance => instance.asInstance());
 
 		// A terminal whose tab is moved to another group stops being tracked, as upstream's is.
 		for (const column of columns) {
 			column.closeMovedOut = name => terminals.instances = terminals.instances.filter(instance => (instance as unknown as TestInstance).name !== name);
 		}
 
-		return { terminals, folders, context, bar, groups, folderTerminals };
+		return { terminals, folders, context, bar, groups, folderTerminals, storage };
 	}
 
 	/** One switch, with the moment the bar says the incoming folder's editors are up. */
@@ -341,6 +382,21 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 	 */
 	function moveThroughTheBar(bar: TestWorkspaceBarService, folders: TestActiveFolderService, context: TestContextService): void {
 		bar.moving = uri => folders.switchTo(context.folders.find(candidate => candidate.uri.path === uri.path)!);
+	}
+
+	/** Parks `parked` for alpha by moving onto beta, then closes the window: the terminals go, and the state is kept. */
+	async function closeWithParked(parked: TestInstance[], alpha: IWorkspaceFolder, beta: IWorkspaceFolder) {
+		const before = setup([new TestGroup(0, parked.map(tabFor))], parked);
+		before.context.folders = [alpha, beta];
+		before.folders.activeFolder = alpha;
+		await switchTo(before.folders, before.bar, beta);
+
+		// Taken away before the state is kept, the order that would lose them
+		for (const instance of parked) {
+			instance.dispose(TerminalExitReason.Shutdown);
+		}
+		before.storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+		return before.storage;
 	}
 
 	test('switching away parks them alive, and switching back brings the same ones', async () => {
@@ -847,5 +903,105 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			focused: false,
 			parkedFor: '/w/alpha',
 		});
+	});
+
+	test('the terminals parked for a folder are parked for it again when a reload brings them back, and come back to their tabs', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const storage = await closeWithParked([new TestInstance('agent'), new TestInstance('shell')], alpha, beta);
+
+		// Brought back as upstream brings back a background terminal: the panel's
+		const agent = new TestInstance('agent', TerminalLocation.Panel);
+		const shell = new TestInstance('shell', TerminalLocation.Panel);
+		const column = new TestGroup(0, []);
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [], [], { storage, revived: [agent, shell], opensOn: beta });
+		context.folders = [alpha, beta];
+		await timeout(0);
+
+		const parkedFor = (instance: TestInstance) => folderTerminals.folderOf(instance.asInstance())?.uri.path;
+		const onBeta = { agent: parkedFor(agent), shell: parkedFor(shell), tabs: column.names() };
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ onBeta, backOnAlpha: column.names(), inPanel: terminals.toPanel }, {
+			onBeta: { agent: '/w/alpha', shell: '/w/alpha', tabs: [] },
+			backOnAlpha: ['agent', 'shell'],
+			inPanel: [],
+		});
+	});
+
+	test('a reload onto the folder they were parked for shows them at once, and one that did not come back is forgotten', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const storage = await closeWithParked([new TestInstance('agent'), new TestInstance('shell')], alpha, beta);
+
+		// The agent does not come back, as after a restart of the app
+		const shell = new TestInstance('shell', TerminalLocation.Panel);
+		const column = new TestGroup(0, []);
+		const { context } = setup([column], [], [], { storage, revived: [shell], opensOn: alpha });
+		context.folders = [alpha, beta];
+		await timeout(0);
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		assert.deepStrictEqual({ tabs: column.names(), kept: storage.get(PARKED_STORAGE_KEY, StorageScope.WORKSPACE) }, {
+			tabs: ['shell'],
+			kept: undefined,
+		});
+	});
+
+	test('a parked terminal that ends is not kept for the next window, and one the window closing takes away is', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+
+		const { folders, context, bar, storage } = setup([new TestGroup(0, [tabFor(agent), tabFor(shell)])], [agent, shell]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+		shell.dispose(TerminalExitReason.User);
+		agent.dispose(TerminalExitReason.Shutdown);
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		const kept: Record<string, { nonce: string }[]> = JSON.parse(storage.get(PARKED_STORAGE_KEY, StorageScope.WORKSPACE) ?? '{}');
+		assert.deepStrictEqual(Object.values(kept).flat().map(entry => entry.nonce), ['nonce-agent']);
+	});
+
+	test('a switch still putting its folder\'s editors up when the terminals are back does not show them before it has', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const storage = await closeWithParked([new TestInstance('agent')], alpha, beta);
+
+		const column = new TestGroup(0, []);
+		const connected = new DeferredPromise<void>();
+		const { folders, context, bar } = setup([column], [], [], { storage, revived: [new TestInstance('agent', TerminalLocation.Panel)], opensOn: beta, connected: connected.p });
+		context.folders = [alpha, beta];
+
+		// Onto alpha while the terminal service is still bringing them back. The working set that is
+		// putting alpha's editors up would close a tab shown now, and the shell in it.
+		await folders.switchTo(alpha);
+		connected.complete();
+		await timeout(0);
+		const whileSwitching = column.names();
+		bar.restored();
+		await timeout(0);
+
+		assert.deepStrictEqual({ whileSwitching, onceUp: column.names() }, { whileSwitching: [], onceUp: ['agent'] });
+	});
+
+	test('a switch that has put its folder\'s editors up by the time the terminals are back shows them at once', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const storage = await closeWithParked([new TestInstance('agent')], alpha, beta);
+
+		const column = new TestGroup(0, []);
+		const connected = new DeferredPromise<void>();
+		const { folders, context, bar } = setup([column], [], [], { storage, revived: [new TestInstance('agent', TerminalLocation.Panel)], opensOn: beta, connected: connected.p });
+		context.folders = [alpha, beta];
+
+		await switchTo(folders, bar, alpha);
+		connected.complete();
+		await timeout(0);
+
+		assert.deepStrictEqual(column.names(), ['agent']);
 	});
 });

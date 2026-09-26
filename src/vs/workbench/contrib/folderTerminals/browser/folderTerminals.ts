@@ -7,11 +7,13 @@ import { DeferredPromise } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+import { isBoolean, isNumber, isObject, isString } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { EditorActivation } from '../../../../platform/editor/common/editor.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
@@ -104,6 +106,57 @@ interface IParkedTerminal {
 	readonly active: boolean;
 }
 
+/** Where the terminals parked for each folder are kept while the window is closed (`IStoredParkedTerminal`). */
+export const PARKED_STORAGE_KEY = 'facade.folderTerminals.parked';
+
+/**
+ * A parked terminal as it is kept: its place, and the terminal by its shell integration nonce.
+ *
+ * ⚠️ The nonce rather than `persistentProcessId`. Made once for each terminal, it goes with the process:
+ * a reload reconnects to the same one, and a restart of the app revives it with the options it had,
+ * the nonce among them - under a new id.
+ */
+interface IStoredParkedTerminal {
+	readonly nonce: string;
+	readonly group: number;
+	readonly index: number;
+	readonly persisted: boolean | undefined;
+	readonly active: boolean;
+}
+
+function isStoredParkedTerminal(candidate: unknown): candidate is IStoredParkedTerminal {
+	if (!isObject(candidate)) {
+		return false;
+	}
+
+	const { nonce, group, index, persisted, active } = candidate as Record<string, unknown>;
+	return isString(nonce) && isNumber(group) && isNumber(index) && isBoolean(active)
+		&& (persisted === undefined || isBoolean(persisted));
+}
+
+/** What was kept of the parked terminals, by folder. Storage that cannot be read keeps nothing. */
+function readParkedTerminals(value: string | undefined): Map</*folder*/string, IStoredParkedTerminal[]> {
+	const kept = new Map<string, IStoredParkedTerminal[]>();
+
+	let stored: unknown;
+	try {
+		stored = value ? JSON.parse(value) : undefined;
+	} catch {
+		return kept;
+	}
+
+	if (isObject(stored)) {
+		for (const [key, entries] of Object.entries(stored)) {
+			const valid = Array.isArray(entries) ? entries.filter(isStoredParkedTerminal) : [];
+			if (valid.length) {
+				kept.set(key, valid);
+			}
+		}
+	}
+
+	return kept;
+}
+
 /**
  * Keeps a terminal editor alive across a folder switch and puts it back where it was.
  *
@@ -134,6 +187,19 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	/** Fires with a folder when showing its terminals again stops, whether or not all came back. */
 	private readonly _onDidStopUnparking = this._register(new Emitter</*folder*/string>());
 
+	/**
+	 * What was kept of the parked terminals, until the terminal service has brought them back and
+	 * `_restore` has parked them again. Kept again meanwhile, or a reload before then would lose them.
+	 */
+	private _unrestored: ReadonlyMap</*folder*/string, readonly IStoredParkedTerminal[]> | undefined;
+
+	/**
+	 * The folder whose editors are up: the one the window opened on, whose editors the workbench
+	 * restored, then each one the bar has put up since. Not the folder the window is on while a switch
+	 * is still putting them there.
+	 */
+	private _editorsUpFor: string | undefined;
+
 	constructor(
 		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@IWorkspaceBarService private readonly _workspaceBarService: IWorkspaceBarService,
@@ -142,9 +208,15 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		@IEditorGroupsService private readonly _editorGroupsService: IEditorGroupsService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IUriIdentityService private readonly _uriIdentityService: IUriIdentityService,
+		@IStorageService private readonly _storageService: IStorageService,
 		@ILogService private readonly _logService: ILogService
 	) {
 		super();
+
+		// Made once the workbench has restored the editors (`WorkbenchPhase.AfterRestored`): those of the
+		// folder the window opened on are up
+		const opened = this._activeFolderService.activeFolder;
+		this._editorsUpFor = opened && this._key(opened.uri);
 
 		this._register(this._activeFolderService.onWillChangeActiveFolder(e => {
 			// Every switch, including one that has nothing to park, so that a restore in flight stops
@@ -159,14 +231,20 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		// awaiting it, so terminals shown at that point are closed again by the working set
 		this._register(this._workspaceBarService.onDidRestoreEditors(() => {
 			const folder = this._activeFolderService.activeFolder;
-			if (folder) {
-				this._unpark(this._key(folder.uri)).then(undefined, onUnexpectedError);
+			this._editorsUpFor = folder && this._key(folder.uri);
+			if (this._editorsUpFor !== undefined) {
+				this._unpark(this._editorsUpFor).then(undefined, onUnexpectedError);
 			}
 		}));
 
 		// A folder can leave the workspace without the active folder service announcing it first, in
 		// which case nothing parks and the terminals would be held for a folder that is gone
 		this._register(this._contextService.onDidChangeWorkspaceFolders(() => this._pruneRemovedFolders()));
+
+		// Kept while the window is closed: a reload, or a restart of the app, brings the terminals back
+		// in the background with nothing to say which folder they were put away for
+		this._register(this._storageService.onWillSaveState(() => this._saveParked()));
+		this._restore().then(undefined, onUnexpectedError);
 
 		this._register(toDisposable(() => this._forgetAll()));
 	}
@@ -313,15 +391,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			return;
 		}
 
-		const held = this._parked.get(key) ?? [];
-		this._parked.set(key, [...held, ...parking]);
-
-		const store = this._watching.get(key) ?? new DisposableStore();
-		this._watching.set(key, store);
-
-		for (const { instance } of parking) {
-			store.add(instance.onDisposed(() => this._forget(key, instance)));
-		}
+		this._hold(key, parking);
 
 		for (const { instance } of parking) {
 			// `setTerminalLayoutInfo` only persists backgrounded terminals that carry this, so without
@@ -331,6 +401,106 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		}
 
 		this._logService.trace(`[folderTerminals] parked ${parking.length} terminal(s) for ${key}`);
+	}
+
+	/** Records terminals as parked for a folder, until they are shown again or end. */
+	private _hold(key: string, parking: readonly IParkedTerminal[]): void {
+		const held = this._parked.get(key) ?? [];
+		this._parked.set(key, [...held, ...parking]);
+
+		const store = this._watching.get(key) ?? new DisposableStore();
+		this._watching.set(key, store);
+
+		for (const { instance } of parking) {
+			// ⚠️ Not when the window closing takes it away: it comes back with a reload or a restart of
+			// the app, and has to find its folder again then (`_saveParked`)
+			store.add(instance.onDisposed(() => {
+				if (instance.exitReason !== TerminalExitReason.Shutdown) {
+					this._forget(key, instance);
+				}
+			}));
+		}
+	}
+
+	/** Keeps the parked terminals, and those not yet parked again since the window opened, for `_restore`. */
+	private _saveParked(): void {
+		const stored: Record</*folder*/string, IStoredParkedTerminal[]> = {};
+		for (const [key, kept] of this._unrestored ?? []) {
+			stored[key] = [...kept];
+		}
+		for (const [key, parked] of this._parked) {
+			stored[key] = [...stored[key] ?? [], ...parked.map(({ instance, group, index, persisted, active }) => ({ nonce: instance.shellIntegrationNonce, group, index, persisted, active }))];
+		}
+
+		if (Object.keys(stored).length) {
+			this._storageService.store(PARKED_STORAGE_KEY, JSON.stringify(stored), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this._storageService.remove(PARKED_STORAGE_KEY, StorageScope.WORKSPACE);
+		}
+	}
+
+	/**
+	 * Parks again the terminals kept as parked when the window closed, once the terminal service has
+	 * brought them back, and shows those of the folder the window is on once its editors are up. One
+	 * that did not come back is dropped - an agent's after a restart of the app, which the agent does
+	 * not outlive.
+	 */
+	private async _restore(): Promise<void> {
+		const kept = readParkedTerminals(this._storageService.get(PARKED_STORAGE_KEY, StorageScope.WORKSPACE));
+		if (!kept.size) {
+			return;
+		}
+
+		this._unrestored = kept;
+		try {
+			await this._terminalService.whenConnected;
+		} finally {
+			this._unrestored = undefined;
+		}
+
+		if (this._store.isDisposed) {
+			return;
+		}
+
+		// Brought back in the background, with nothing parking them since
+		const background = new Map(this._terminalService.instances
+			.filter(instance => !this._terminalService.foregroundInstances.includes(instance) && this._keyParkedFor(instance) === undefined)
+			.map(instance => [instance.shellIntegrationNonce, instance]));
+
+		let restored = 0;
+		for (const [key, entries] of kept) {
+			const parked = entries.flatMap(({ nonce, ...place }) => {
+				const instance = background.get(nonce);
+				return instance ? [{ instance, ...place }] : [];
+			});
+			if (!parked.length) {
+				continue;
+			}
+
+			// ⚠️ Brought back as the panel's, and shown again a terminal goes where its target says - the
+			// panel, whatever tab it is asked for (`showBackgroundTerminal`). It was a tab when it was parked.
+			for (const { instance } of parked) {
+				instance.target = TerminalLocation.Editor;
+			}
+			this._hold(key, parked);
+			restored += parked.length;
+		}
+
+		this._logService.trace(`[folderTerminals] parked ${restored} terminal(s) again`);
+
+		// A folder that left the workspace while the window was closed takes its terminals with it, as
+		// one leaving now does
+		this._pruneRemovedFolders();
+
+		// ⚠️ The folder the window is on shows its own only once its editors are up. The terminal service
+		// can take seconds to have them all back, replaying each one's buffer, and a switch made meanwhile
+		// closes whatever tab it did not put there itself - the shells in them with them. It shows these
+		// when it is done (`onDidRestoreEditors`).
+		const active = this._activeFolderService.activeFolder;
+		const key = active && this._key(active.uri);
+		if (key !== undefined && key === this._editorsUpFor) {
+			await this._unpark(key);
+		}
 	}
 
 	/**
