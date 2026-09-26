@@ -3,8 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { Codicon } from '../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { basename } from '../../../../base/common/resources.js';
+import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
@@ -105,6 +108,36 @@ export interface IWorkspaceBarCustomizationService {
  */
 export function worktreeNameFor(customizationService: IWorkspaceBarCustomizationService, worktree: { readonly uri: URI; readonly label: string; readonly folder: IWorkspaceFolder | undefined }): string {
 	return worktree.folder ? customizationService.nameFor(worktree.folder) : customizationService.get(worktree.uri)?.name || worktree.label;
+}
+
+/**
+ * What a folder's row is called, the folder being at `uri` and, when it is one of the workspace's,
+ * `folder` - a repository whose main checkout was not added has a row and no folder. What `nameFor`
+ * calls the folder, else the name somebody gave it, else its own.
+ */
+export function folderRowNameFor(customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'>, uri: URI, folder: IWorkspaceFolder | undefined): string {
+	return folder ? customizationService.nameFor(folder) : customizationService.get(uri)?.name || basename(uri);
+}
+
+/**
+ * The glyph a folder's row is drawn with: the one chosen in Customize, else a folder.
+ *
+ * ⚠️ `folder` is the fallback rather than a stored value, so a folder nobody has customised and one
+ * set back to a plain folder draw the same.
+ */
+export function folderGlyphFor(customization: IFolderCustomization | undefined): ThemeIcon {
+	return customization?.icon ? ThemeIcon.fromId(customization.icon) : Codicon.folder;
+}
+
+/**
+ * A glyph in a folder's colour, as an icon a line of text can carry - the agent list's rows, say.
+ *
+ * ⚠️ `$(...)` takes an icon's id and one modifier and nothing else, so the colour goes as a modifier
+ * of its own: `codicon-modifier-folder<colour>`, which `workspacebarpart.css` paints with the tokens
+ * the bar's `workspacebar-icon-<colour>` uses.
+ */
+export function glyphInFolderColor(glyph: ThemeIcon, color: FolderColor | undefined): ThemeIcon {
+	return color ? ThemeIcon.fromId(`${glyph.id}~folder${color}`) : glyph;
 }
 
 const STORAGE_KEY = 'facade.workspaceBar.customization';

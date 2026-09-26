@@ -16,7 +16,6 @@ import { Codicon } from '../../../../base/common/codicons.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
-import { basename } from '../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
@@ -32,7 +31,7 @@ import { WorkbenchObjectTree } from '../../../../platform/list/browser/listServi
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { FolderKey, orderWorktrees } from './workspaceBar.js';
 import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
-import { IWorkspaceBarCustomizationService, worktreeNameFor } from './workspaceBarCustomization.js';
+import { folderGlyphFor, folderRowNameFor, IWorkspaceBarCustomizationService, worktreeNameFor } from './workspaceBarCustomization.js';
 import { IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
@@ -94,7 +93,7 @@ function displayNameOf(row: WorkspaceBarRow, customizationService: IWorkspaceBar
 		return worktreeNameFor(customizationService, row.worktree);
 	}
 
-	return row.folder ? customizationService.nameFor(row.folder) : customizationService.get(row.uri)?.name || basename(row.uri);
+	return folderRowNameFor(customizationService, row.uri, row.folder);
 }
 
 /**
@@ -376,11 +375,8 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 
 		// ⚠️ The colour paints the icon and nothing else. Not the name, not the chevron: a row is
 		// read as a name, and a name in ten colours is ten kinds of emphasis nobody asked for.
-		// ⚠️ And the glyph is a choice too now. `folder` is the fallback rather than a stored value,
-		// so a folder nobody has customised and one set back to a plain folder draw the same.
 		const customization = this.customizationService.get(element.uri);
-		const glyph = customization?.icon ? ThemeIcon.fromId(customization.icon) : Codicon.folder;
-		template.icon.className = `workspacebar-icon ${ThemeIcon.asClassName(glyph)}`
+		template.icon.className = `workspacebar-icon ${ThemeIcon.asClassName(folderGlyphFor(customization))}`
 			+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
 
 		// The full path on hover is what tells two rows with the same name apart.
@@ -786,6 +782,13 @@ export class WorkspaceBarView extends Disposable {
 		} else {
 			this.tree.collapse(row);
 		}
+	}
+
+	/** Every row's folder, top to bottom, a closed repository's worktrees included: `IWorkspaceBarService.rowOrder`. */
+	rowOrder(): URI[] {
+		return this.tree.getNode().children
+			.flatMap(node => [node, ...node.children])
+			.flatMap(node => node.element ? [uriOf(node.element)] : []);
 	}
 
 	/**

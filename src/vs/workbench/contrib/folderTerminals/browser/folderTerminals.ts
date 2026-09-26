@@ -3,7 +3,9 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { DeferredPromise } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
+import { Emitter } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -12,7 +14,7 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { folderKey } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { getWorkbenchContribution, IWorkbenchContribution } from '../../../common/contributions.js';
@@ -39,6 +41,18 @@ export interface IFolderTerminalsService {
 	 * and taking it out of the workspace stops.
 	 */
 	terminalsOf(folder: URI): readonly ITerminalInstance[];
+
+	/**
+	 * The folder a terminal belongs to: the one it is put away for, or while it has a tab, the one the
+	 * window is on. `undefined` for a terminal that belongs to the window, in the panel.
+	 */
+	folderOf(instance: ITerminalInstance): IWorkspaceFolder | undefined;
+
+	/**
+	 * Puts a terminal in front and focuses it. One put away for another folder is brought back by
+	 * moving the window onto that folder first, as a click on its row does.
+	 */
+	reveal(instance: ITerminalInstance): Promise<void>;
 }
 
 /** `IFolderTerminalsService`, served by the `FolderTerminals` contribution that keeps the terminals. */
@@ -48,6 +62,14 @@ export class FolderTerminalsService implements IFolderTerminalsService {
 
 	terminalsOf(folder: URI): readonly ITerminalInstance[] {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).terminalsOf(folder);
+	}
+
+	folderOf(instance: ITerminalInstance): IWorkspaceFolder | undefined {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).folderOf(instance);
+	}
+
+	reveal(instance: ITerminalInstance): Promise<void> {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).reveal(instance);
 	}
 }
 
@@ -103,6 +125,15 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 */
 	private _generation = 0;
 
+	/** The folders whose terminals are being shown again right now. */
+	private readonly _unparking = new Set</*folder*/string>();
+
+	/** Fires with each terminal as it is shown again. */
+	private readonly _onDidUnpark = this._register(new Emitter<ITerminalInstance>());
+
+	/** Fires with a folder when showing its terminals again stops, whether or not all came back. */
+	private readonly _onDidStopUnparking = this._register(new Emitter</*folder*/string>());
+
 	constructor(
 		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@IWorkspaceBarService private readonly _workspaceBarService: IWorkspaceBarService,
@@ -151,6 +182,105 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		const shown = active && this._key(active.uri) === key ? this._terminalService.foregroundInstances.filter(instance => instance.target === TerminalLocation.Editor) : [];
 
 		return [...held, ...shown];
+	}
+
+	/** {@link IFolderTerminalsService.folderOf}. */
+	folderOf(instance: ITerminalInstance): IWorkspaceFolder | undefined {
+		const key = this._keyParkedFor(instance);
+		if (key !== undefined) {
+			return this._folderFor(key);
+		}
+
+		// With a tab, it is the folder on screen's: leaving that folder is what would put it away - or
+		// without `FOLLOW_FOLDER`, close it
+		if (instance.target === TerminalLocation.Editor && this._terminalService.foregroundInstances.includes(instance)) {
+			return this._activeFolderService.activeFolder;
+		}
+
+		return undefined;
+	}
+
+	/** {@link IFolderTerminalsService.reveal}. */
+	async reveal(instance: ITerminalInstance): Promise<void> {
+		const key = this._keyParkedFor(instance);
+		if (key !== undefined && !await this._bringBack(key, instance)) {
+			return;
+		}
+
+		this._terminalService.setActiveInstance(instance);
+		await this._terminalService.revealTerminal(instance);
+		await instance.focusWhenReady(true);
+	}
+
+	/**
+	 * Shows a parked terminal again, and answers whether it is back. It comes back with the rest of
+	 * its folder's terminals, once the bar has put that folder's editors up, which moving onto the
+	 * folder starts but does not wait for - so it is waited for itself.
+	 *
+	 * `false` when it will not be back: the move was refused, the window moved on again first, or the
+	 * terminal could not be shown or went away.
+	 */
+	private async _bringBack(key: string, instance: ITerminalInstance): Promise<boolean> {
+		const folder = this._folderFor(key);
+		if (!folder) {
+			return false;
+		}
+
+		// Listened for before the move, which can be done restoring by the time it returns
+		const store = new DisposableStore();
+		const back = new DeferredPromise<boolean>();
+		store.add(this._onDidUnpark.event(shown => {
+			if (shown === instance) {
+				back.complete(true);
+			}
+		}));
+		store.add(this._onDidStopUnparking.event(stopped => {
+			if (stopped === key) {
+				back.complete(this._keyParkedFor(instance) === undefined);
+			}
+		}));
+		store.add(instance.onDisposed(() => back.complete(false)));
+
+		try {
+			if (!this._isActive(key)) {
+				await this._workspaceBarService.show(folder.uri);
+
+				// Refused, as a folder that is gone from disk is
+				if (!this._isActive(key)) {
+					return false;
+				}
+			} else if (!this._unparking.has(key)) {
+				// On it already with nothing bringing it back: a restore that failed left it parked
+				this._unpark(key).then(undefined, onUnexpectedError);
+			}
+
+			// Moving on again first leaves it parked, for its own folder
+			store.add(this._activeFolderService.onWillChangeActiveFolder(() => back.complete(false)));
+
+			return await back.p;
+		} finally {
+			store.dispose();
+		}
+	}
+
+	/** The folder a terminal is parked for, if it is parked. */
+	private _keyParkedFor(instance: ITerminalInstance): string | undefined {
+		for (const [key, parked] of this._parked) {
+			if (parked.some(entry => entry.instance === instance)) {
+				return key;
+			}
+		}
+
+		return undefined;
+	}
+
+	private _folderFor(key: string): IWorkspaceFolder | undefined {
+		return this._contextService.getWorkspace().folders.find(folder => this._key(folder.uri) === key);
+	}
+
+	private _isActive(key: string): boolean {
+		const active = this._activeFolderService.activeFolder;
+		return !!active && this._key(active.uri) === key;
 	}
 
 	private _isEnabled(): boolean {
@@ -248,47 +378,54 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		// Floated ones last: a new auxiliary window takes the focus.
 		const queue = [...parked].sort((a, b) => Number(a.group === AUXILIARY_WINDOW) - Number(b.group === AUXILIARY_WINDOW) || a.index - b.index);
 		this._parked.set(key, queue);
+		this._unparking.add(key);
 
-		while (queue.length) {
-			const entry = queue[0];
+		try {
+			while (queue.length) {
+				const entry = queue[0];
 
-			try {
-				// Straight into its own column and at its own tab: moving it between groups closes its
-				// editor, and the terminal editor service then stops tracking it. In another column, at
-				// its end, in the order they come back - an editor opened without an index goes after
-				// the one in front, which reverses them. In front only if it was the tab in front, and
-				// only in its own column: in another, the tab in front is that column's, and stays in front.
-				// `activation: PRESERVE` and `preserveFocus` so neither the column nor the caret moves.
-				const place = this._placeFor(entry);
-				await this._terminalService.showBackgroundTerminal(entry.instance, true, {
-					viewColumn: place.column,
-					index: place.own ? (entry.index >= 0 ? entry.index : undefined) : place.end,
-					preserveFocus: true,
-					inactive: !entry.active || !place.own,
-					activation: EditorActivation.PRESERVE
-				});
-			} catch (error) {
-				this._logService.error(`[folderTerminals] could not reopen a terminal for ${key}`, error);
-				return;
+				try {
+					// Straight into its own column and at its own tab: moving it between groups closes its
+					// editor, and the terminal editor service then stops tracking it. In another column, at
+					// its end, in the order they come back - an editor opened without an index goes after
+					// the one in front, which reverses them. In front only if it was the tab in front, and
+					// only in its own column: in another, the tab in front is that column's, and stays in front.
+					// `activation: PRESERVE` and `preserveFocus` so neither the column nor the caret moves.
+					const place = this._placeFor(entry);
+					await this._terminalService.showBackgroundTerminal(entry.instance, true, {
+						viewColumn: place.column,
+						index: place.own ? (entry.index >= 0 ? entry.index : undefined) : place.end,
+						preserveFocus: true,
+						inactive: !entry.active || !place.own,
+						activation: EditorActivation.PRESERVE
+					});
+				} catch (error) {
+					this._logService.error(`[folderTerminals] could not reopen a terminal for ${key}`, error);
+					return;
+				}
+
+				// The open cannot be cancelled once it is in flight, so a terminal that arrives after the
+				// window has moved on is put straight back rather than left in the wrong folder
+				if (this._generation !== generation) {
+					this._terminalService.moveToBackground(entry.instance);
+					this._logService.trace(`[folderTerminals] switch during restore, ${queue.length} terminal(s) still parked for ${key}`);
+					return;
+				}
+
+				entry.instance.shellLaunchConfig.forcePersist = entry.persisted;
+				queue.shift();
+				this._onDidUnpark.fire(entry.instance);
 			}
 
-			// The open cannot be cancelled once it is in flight, so a terminal that arrives after the
-			// window has moved on is put straight back rather than left in the wrong folder
-			if (this._generation !== generation) {
-				this._terminalService.moveToBackground(entry.instance);
-				this._logService.trace(`[folderTerminals] switch during restore, ${queue.length} terminal(s) still parked for ${key}`);
-				return;
-			}
+			this._parked.delete(key);
+			this._watching.get(key)?.dispose();
+			this._watching.delete(key);
 
-			entry.instance.shellLaunchConfig.forcePersist = entry.persisted;
-			queue.shift();
+			this._logService.trace(`[folderTerminals] reopened ${parked.length} terminal(s) for ${key}`);
+		} finally {
+			this._unparking.delete(key);
+			this._onDidStopUnparking.fire(key);
 		}
-
-		this._parked.delete(key);
-		this._watching.get(key)?.dispose();
-		this._watching.delete(key);
-
-		this._logService.trace(`[folderTerminals] reopened ${parked.length} terminal(s) for ${key}`);
 	}
 
 	/**

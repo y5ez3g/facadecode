@@ -1,0 +1,30 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * How many agents are open, on the agent button's corner.
+ *
+ * The title bar's other icon buttons carry a count the same way - the compact badge in
+ * `titlebarpart.css`, in the activity bar's badge colors - so this is that pill, drawn by the
+ * button itself because a dropdown has no badge of its own.
+ */
+
+.monaco-action-bar .action-item > .agent-count {
+	position: absolute;
+	top: 10px;
+	right: 0;
+	min-width: 12px;
+	height: 12px;
+	padding: 0 var(--vscode-spacing-size20);
+	box-sizing: border-box;
+	border-radius: var(--vscode-cornerRadius-circle);
+	background-color: var(--vscode-activityBarBadge-background);
+	color: var(--vscode-activityBarBadge-foreground);
+	font-size: var(--vscode-fontSize-label3);
+	font-weight: var(--vscode-fontWeight-semiBold);
+	line-height: 12px;
+	text-align: center;
+	pointer-events: none;
+}

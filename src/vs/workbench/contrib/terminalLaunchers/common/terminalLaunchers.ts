@@ -6,6 +6,7 @@
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
+import { StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 
 /**
  * The glyph every agent terminal is drawn with, and how one is recognised afterwards.
@@ -26,6 +27,16 @@ export const AGENT_TERMINAL_ICON = Codicon.robot;
  */
 export function isAgentTerminalIcon(icon: TerminalIcon | undefined): boolean {
 	return ThemeIcon.isThemeIcon(icon) && icon.id === AGENT_TERMINAL_ICON.id;
+}
+
+/**
+ * Whether a terminal being brought back as the window starts is an agent's that is gone: the agent
+ * did not outlive the app, and only a reload finds it still running. Brought back anyway, its tab
+ * would be a fresh shell under the old output, looking like the agent - so it is left out, as
+ * upstream leaves out a task's terminal (`TerminalService._recreateTerminalGroup`).
+ */
+export function isAgentGoneAtStartup(icon: TerminalIcon | undefined, startupKind: StartupKind): boolean {
+	return startupKind !== StartupKind.ReloadedWindow && isAgentTerminalIcon(icon);
 }
 
 /**

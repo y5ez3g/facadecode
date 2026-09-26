@@ -9,10 +9,13 @@ import { IEditorSerializer } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { ISerializedTerminalEditorInput, ITerminalEditorService, ITerminalInstance, type IDeserializedTerminalEditorInput } from './terminal.js';
 import { TerminalEditorInput } from './terminalEditorInput.js';
+import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
+import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
 
 export class TerminalInputSerializer implements IEditorSerializer {
 	constructor(
-		@ITerminalEditorService private readonly _terminalEditorService: ITerminalEditorService
+		@ITerminalEditorService private readonly _terminalEditorService: ITerminalEditorService,
+		@ILifecycleService private readonly _lifecycleService: ILifecycleService
 	) { }
 
 	public canSerialize(editorInput: TerminalEditorInput): editorInput is TerminalEditorInput & { readonly terminalInstance: ITerminalInstance } {
@@ -30,6 +33,13 @@ export class TerminalInputSerializer implements IEditorSerializer {
 		const editorInput = JSON.parse(serializedEditorInput) as unknown;
 		if (!isDeserializedTerminalEditorInput(editorInput)) {
 			throw new Error(`Could not revive terminal editor input, ${editorInput}`);
+		}
+		// Facade Code: an agent's tab that is gone after the app restarted is not brought back, rather
+		// than brought back and closed, which would flash it (`isAgentGoneAtStartup`). ⚠️ Later in the
+		// session too, deliberately: what deserializes then is above all a folder's working set, and an
+		// agent tab in one was closed - its agent with it - when the window left that folder
+		if (isAgentGoneAtStartup(editorInput.icon, this._lifecycleService.startupKind)) {
+			return undefined;
 		}
 		return this._terminalEditorService.reviveInput(editorInput);
 	}
