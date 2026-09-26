@@ -3,14 +3,15 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { getActiveWindow, getWindow } from '../../../../base/browser/dom.js';
+import './media/terminalLauncherButton.css';
+import { $, append, getActiveWindow, getWindow } from '../../../../base/browser/dom.js';
 import { IActionViewItemOptions } from '../../../../base/browser/ui/actionbar/actionViewItems.js';
 import { DropdownMenuActionViewItem } from '../../../../base/browser/ui/dropdown/dropdownActionViewItem.js';
 import { IAction } from '../../../../base/common/actions.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
-import { localize2 } from '../../../../nls.js';
+import { localize, localize2 } from '../../../../nls.js';
 import { getFlatActionBarActions } from '../../../../platform/actions/browser/menuEntryActionViewItem.js';
 import { Action2, IMenuService, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ContextKeyExpr, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
@@ -54,7 +55,7 @@ class AgentMenuActionViewItem extends DropdownMenuActionViewItem implements IAge
 		@IMenuService menuService: IMenuService,
 		@IContextKeyService private readonly _contextKeyService: IContextKeyService,
 		@IKeybindingService private readonly _keybindingService: IKeybindingService,
-		@ITerminalLauncherService launcherService: ITerminalLauncherService
+		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService
 	) {
 		// Rebuilt on every opening, because the agents are commands that come and go with the setting
 		const menus = new DisposableStore();
@@ -74,17 +75,45 @@ class AgentMenuActionViewItem extends DropdownMenuActionViewItem implements IAge
 		});
 
 		this._register(menus);
-		this._register(launcherService.registerButton(this));
+		this._register(this._launcherService.registerButton(this));
+	}
+
+	override render(container: HTMLElement): void {
+		super.render(container);
+
+		// How many agents are active, on the button's corner the way the title bar's other buttons carry
+		// a count. For the eye only: the label says it too.
+		const badge = append(container, $('.agent-count'));
+		badge.setAttribute('aria-hidden', 'true');
+
+		const update = () => {
+			const count = this._launcherService.agentTerminals.length;
+			badge.textContent = String(count);
+			badge.style.display = count ? '' : 'none';
+			this.updateTooltip();
+		};
+		update();
+		this._register(this._launcherService.onDidChangeAgentTerminals(update));
 	}
 
 	/**
-	 * The label with the keybinding after it, the way every other button in the row reads it.
+	 * The label with the keybinding after it, the way every other button in the row reads it, and
+	 * then how many agents are active - the word `Show Active Agents...` uses.
 	 *
 	 * A dropdown does not do this for itself: `keybindingProvider` reaches the items inside the
 	 * menu and never the button that opens it.
 	 */
 	protected override getTooltip(): string {
-		return this._keybindingService.appendKeybinding(this.action.tooltip || this.action.label, this.action.id, this._contextKeyService);
+		const tooltip = this._keybindingService.appendKeybinding(this.action.tooltip || this.action.label, this.action.id, this._contextKeyService);
+
+		const count = this._launcherService.agentTerminals.length;
+		if (count === 0) {
+			return tooltip;
+		}
+
+		return count === 1
+			? localize('facade.agent.oneActive', "{0} - 1 active agent", tooltip)
+			: localize('facade.agent.someActive', "{0} - {1} active agents", tooltip, count);
 	}
 
 	protected override setAriaLabelAttributes(element: HTMLElement): void {
