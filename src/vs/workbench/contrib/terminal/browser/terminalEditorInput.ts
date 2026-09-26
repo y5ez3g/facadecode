@@ -60,7 +60,9 @@ export class TerminalEditorInput extends EditorInput implements IEditorCloseHand
 	}
 
 	override get capabilities(): EditorInputCapabilities {
-		return EditorInputCapabilities.Readonly | EditorInputCapabilities.ForceReveal | EditorInputCapabilities.CanDropIntoEditor | EditorInputCapabilities.ForceDescription;
+		// Facade Code: `TakesDroppedFiles`, so a file dropped onto a terminal in the editor area gives it its
+		// path, as a file dropped onto one in the panel does.
+		return EditorInputCapabilities.Readonly | EditorInputCapabilities.ForceReveal | EditorInputCapabilities.CanDropIntoEditor | EditorInputCapabilities.ForceDescription | EditorInputCapabilities.TakesDroppedFiles;
 	}
 
 	setTerminalInstance(instance: ITerminalInstance): void {

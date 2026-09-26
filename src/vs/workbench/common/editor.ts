@@ -880,7 +880,14 @@ export const enum EditorInputCapabilities {
 	 * click, or close commands. Callers with an explicit lifecycle
 	 * requirement can force the editor to close.
 	 */
-	CannotClose = 1 << 13
+	CannotClose = 1 << 13,
+
+	/**
+	 * Facade Code: signals that files dropped onto the editor go into it without shift held, which
+	 * `CanDropIntoEditor` alone asks for - as they go into a terminal in the panel, which takes their
+	 * paths.
+	 */
+	TakesDroppedFiles = 1 << 14
 }
 
 export type IUntypedEditorInput = IResourceEditorInput | ITextResourceEditorInput | IUntitledTextResourceEditorInput | IResourceDiffEditorInput | IResourceMultiDiffEditorInput | IResourceSideBySideEditorInput | IResourceMergeEditorInput;

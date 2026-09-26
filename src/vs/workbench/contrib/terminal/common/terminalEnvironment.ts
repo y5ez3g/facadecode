@@ -315,9 +315,13 @@ export async function createTerminalEnvironment(
  * @param backend The backend for the terminal.
  * @param isWindowsFrontend Whether the frontend is Windows, this is only exposed for injection via
  * tests.
+ * @param forExecution Facade Code: whether the path may be written as PowerShell's command to run
+ * it, `& '...'`. Not where a program the shell runs reads the input, like the agent in an agent's
+ * terminal, which takes that command for text: there it is quoted as for any other Windows shell,
+ * as Windows Terminal writes a dropped file's path.
  * @returns An escaped version of the path to be executed in the terminal.
  */
-export async function preparePathForShell(resource: string | URI, executable: string | undefined, title: string, shellType: TerminalShellType | undefined, backend: Pick<ITerminalBackend, 'getWslPath'> | undefined, os: OperatingSystem | undefined, isWindowsFrontend: boolean = isWindows): Promise<string> {
+export async function preparePathForShell(resource: string | URI, executable: string | undefined, title: string, shellType: TerminalShellType | undefined, backend: Pick<ITerminalBackend, 'getWslPath'> | undefined, os: OperatingSystem | undefined, isWindowsFrontend: boolean = isWindows, forExecution: boolean = true): Promise<string> {
 	let originalPath: string;
 	if (isString(resource)) {
 		originalPath = resource;
@@ -344,11 +348,11 @@ export async function preparePathForShell(resource: string | URI, executable: st
 		pathBasename === 'powershell' ||
 		title === 'powershell';
 
-	if (isPowerShell && (hasSpace || originalPath.includes('\''))) {
+	if (forExecution && isPowerShell && (hasSpace || originalPath.includes('\''))) {
 		return `& '${originalPath.replace(/'/g, '\'\'')}'`;
 	}
 
-	if (hasParens && isPowerShell) {
+	if (forExecution && hasParens && isPowerShell) {
 		return `& '${originalPath}'`;
 	}
 

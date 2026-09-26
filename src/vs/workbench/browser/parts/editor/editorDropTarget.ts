@@ -654,11 +654,31 @@ export class EditorDropTarget extends Themable {
 			// Create overlay over target
 			if (!this.overlay) {
 				const targetGroupView = this.findTargetGroupView(target);
-				if (targetGroupView) {
+				// Facade Code: none over an editor that takes the files dropped onto it, which then gets the drop.
+				if (targetGroupView && !this.takesDroppedFiles(event, targetGroupView)) {
 					this._overlay = this.instantiationService.createInstance(DropOverlay, targetGroupView, this.delegate.supportsSplitting !== false);
 				}
 			}
 		}
+	}
+
+	/**
+	 * Facade Code: whether files dragged over `groupView` go into its editor without holding shift - where
+	 * its input says so (`EditorInputCapabilities.TakesDroppedFiles`). Editors and groups being moved, and
+	 * drags a contribution handles, still get the overlay.
+	 */
+	private takesDroppedFiles(event: DragEvent, groupView: IEditorGroupView): boolean {
+		if (!isDropIntoEditorEnabledGlobally(this.configurationService) || !groupView.activeEditor?.hasCapability(EditorInputCapabilities.TakesDroppedFiles)) {
+			return false;
+		}
+
+		if (this.editorTransfer.hasData(DraggedEditorIdentifier.prototype) || this.groupTransfer.hasData(DraggedEditorGroupIdentifier.prototype)) {
+			return false;
+		}
+
+		const dndContributionKeys = Array.from(Registry.as<IDragAndDropContributionRegistry>(DragAndDropExtensions.DragAndDropContribution).getAll()).map(e => e.dataFormatKey);
+
+		return containsDragType(event, DataTransfers.FILES, CodeDataTransfers.FILES, DataTransfers.RESOURCES) && !containsDragType(event, ...dndContributionKeys);
 	}
 
 	private onDragLeave(): void {

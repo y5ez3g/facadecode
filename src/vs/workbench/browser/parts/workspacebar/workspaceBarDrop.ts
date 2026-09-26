@@ -51,7 +51,8 @@ const TEXT_FIELD = 'input, textarea, [contenteditable="true"]';
  * Whether the drop is asking for the path as text rather than for somewhere to go, which is not this
  * handler's business. Three ways to ask:
  *
- * - the terminal, which sends it to the shell (`terminalInstance.ts`, `onDropFile`)
+ * - a terminal, which sends it to the shell - or to the agent, in an agent's terminal
+ *   (`terminalInstance.ts`, `sendPath`)
  * - a text field, which takes it as typing
  * - `Shift` over a document, the editor's own gesture for writing the path in
  *   (`editor.dropIntoEditor.enabled`, "Insert Relative Path" and the rest of `defaultProviders.ts`)

@@ -73,6 +73,7 @@ import { ITerminalProcessManager, ITerminalProfileResolverService, ProcessState,
 import { TERMINAL_BACKGROUND_COLOR } from '../common/terminalColorRegistry.js';
 import { TerminalContextKeys } from '../common/terminalContextKey.js';
 import { getUriLabelForShell, getShellIntegrationTimeout, getWorkspaceForTerminal, preparePathForShell } from '../common/terminalEnvironment.js';
+import { isAgentTerminalIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -1060,6 +1061,10 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	detachFromElement(): void {
 		this._wrapperElement.remove();
 		this._container = undefined;
+		// Facade Code: and stop taking the drops made on the container, which stays behind for others - a
+		// terminal editor's serves every terminal of its group - or a file dropped onto the terminal in
+		// front sends its path to each terminal shown there before as well.
+		this._dndObserver.clear();
 	}
 
 	attachToElement(container: HTMLElement): void {
@@ -1084,7 +1089,8 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		this.xterm?.refresh();
 
 		setTimeout(() => {
-			if (this._store.isDisposed) {
+			// Facade Code: nor when the terminal has left the container since, as above.
+			if (this._store.isDisposed || this._container !== container) {
 				return;
 			}
 			this._initDragAndDrop(container);
@@ -1422,13 +1428,20 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	}
 
 	async sendPath(originalPath: string | URI, shouldExecute: boolean): Promise<void> {
+		// Facade Code: a path inserted into an agent's terminal, as a dropped file's is, is read by the
+		// agent rather than the shell. So it is not made PowerShell's command to run it, `& '...'`, which
+		// the agent takes for text, and it goes pasted - both as Windows Terminal inserts one. Other
+		// terminals, and a path sent to be run, keep upstream's form.
+		if (!shouldExecute && isAgentTerminalIcon(this.icon)) {
+			return this.sendText(await this.preparePathForShell(originalPath, false), false, true);
+		}
 		return this.sendText(await this.preparePathForShell(originalPath), shouldExecute);
 	}
 
-	async preparePathForShell(originalPath: string | URI): Promise<string> {
+	async preparePathForShell(originalPath: string | URI, forExecution?: boolean): Promise<string> {
 		// Wait for shell type to be ready
 		await this.processReady;
-		return preparePathForShell(originalPath, this.shellLaunchConfig.executable, this.title, this.shellType, this._processManager.backend, this._processManager.os);
+		return preparePathForShell(originalPath, this.shellLaunchConfig.executable, this.title, this.shellType, this._processManager.backend, this._processManager.os, undefined, forExecution);
 	}
 
 	async getUriLabelForShell(uri: URI): Promise<string> {
