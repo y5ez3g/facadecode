@@ -5,7 +5,7 @@
 
 import { deepStrictEqual, ok, strictEqual } from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
-import { Event } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { isWindows, OperatingSystem, type IProcessEnvironment } from '../../../../../base/common/platform.js';
@@ -20,7 +20,7 @@ import { ResultKind } from '../../../../../platform/keybinding/common/keybinding
 import { TerminalCapability, type ICwdDetectionCapability } from '../../../../../platform/terminal/common/capabilities/capabilities.js';
 import { PromptInputState } from '../../../../../platform/terminal/common/capabilities/commandDetection/promptInputModel.js';
 import { TerminalCapabilityStore } from '../../../../../platform/terminal/common/capabilities/terminalCapabilityStore.js';
-import { GeneralShellType, ITerminalChildProcess, ITerminalProfile, PosixShellType, remoteResolverTerminal, TitleEventSource, type IShellLaunchConfig, type ITerminalBackend, type ITerminalProcessOptions } from '../../../../../platform/terminal/common/terminal.js';
+import { GeneralShellType, ITerminalChildProcess, ITerminalProfile, PosixShellType, remoteResolverTerminal, TitleEventSource, type IProcessReadyEvent, type IShellLaunchConfig, type ITerminalBackend, type ITerminalProcessOptions } from '../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustRequestService } from '../../../../../platform/workspace/common/workspaceTrust.js';
 import { Workspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
@@ -32,6 +32,7 @@ import { IEnvironmentVariableService } from '../../common/environmentVariable.js
 import { EnvironmentVariableService } from '../../common/environmentVariableService.js';
 import { ITerminalProfileResolverService, ProcessState, DEFAULT_COMMANDS_TO_SKIP_SHELL } from '../../common/terminal.js';
 import { TestViewDescriptorService } from './xterm/xtermTerminal.test.js';
+import { AGENT_TERMINAL_ICON } from '../../../terminalLaunchers/common/terminalLaunchers.js';
 import { fixPath } from '../../../../services/search/test/browser/queryBuilder.test.js';
 import { TestTerminalProfileResolverService, workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
@@ -103,12 +104,30 @@ class TestTerminalChildProcess extends Disposable implements ITerminalChildProce
 	refreshProperty(property: any): Promise<any> { return Promise.resolve(''); }
 }
 
+/** A process that is ready once started, and keeps what it is sent. */
+class ReadyTestTerminalChildProcess extends TestTerminalChildProcess {
+	readonly sent: string[] = [];
+	private readonly _onReady = this._register(new Emitter<IProcessReadyEvent>());
+	override onProcessReady = this._onReady.event;
+
+	override async start(): Promise<undefined> {
+		setTimeout(() => this._onReady.fire({ pid: 1, cwd: '', windowsPty: undefined }));
+		return undefined;
+	}
+
+	override input(data: string): void {
+		this.sent.push(data);
+	}
+}
+
 class TestTerminalInstanceService extends Disposable implements Partial<ITerminalInstanceService> {
 	createProcessCount = 0;
 	private readonly _processCreatedPromise: Promise<void>;
 	private _resolveProcessCreated!: () => void;
 
-	constructor() {
+	constructor(
+		private readonly _createProcess: (shouldPersist: boolean) => TestTerminalChildProcess = shouldPersist => new TestTerminalChildProcess(shouldPersist)
+	) {
 		super();
 		this._processCreatedPromise = new Promise(resolve => this._resolveProcessCreated = resolve);
 	}
@@ -138,7 +157,7 @@ class TestTerminalInstanceService extends Disposable implements Partial<ITermina
 			) => {
 				this.createProcessCount++;
 				this._resolveProcessCreated();
-				return this._register(new TestTerminalChildProcess(shouldPersist));
+				return this._register(this._createProcess(shouldPersist));
 			},
 			getLatency: () => Promise.resolve([])
 		} as unknown as ITerminalBackend;
@@ -179,6 +198,11 @@ suite('Workbench - TerminalInstance', () => {
 							commandsToSkipShell: [],
 							shellIntegration: {
 								enabled: true
+							},
+							tabs: {
+								separator: ' - ',
+								title: '${process}',
+								description: ''
 							}
 						}
 					},
@@ -471,6 +495,23 @@ suite('Workbench - TerminalInstance', () => {
 			} finally {
 				container.remove();
 			}
+		});
+
+		test('a path inserted into an agent\'s terminal is not PowerShell\'s command to run it, as it is in any other terminal', async () => {
+			const path = isWindows ? 'c:\\Screenshots\\Screenshot 2026-09-24 171704.png' : '/Screenshots/Screenshot 2026-09-24 171704.png';
+			const sent: Record<string, string[]> = {};
+			for (const [name, icon] of [['agent', AGENT_TERMINAL_ICON], ['plain', undefined]] as const) {
+				const process = new ReadyTestTerminalChildProcess(false);
+				const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => process)), undefined, { executable: 'pwsh', icon });
+				await instance.processReady;
+				await instance.sendPath(path, false);
+				sent[name] = process.sent;
+			}
+
+			deepStrictEqual(sent, {
+				agent: [isWindows ? `"${path}"` : `'${path}'`],
+				plain: [`& '${path}'`],
+			});
 		});
 	});
 	suite('DEFAULT_COMMANDS_TO_SKIP_SHELL', () => {

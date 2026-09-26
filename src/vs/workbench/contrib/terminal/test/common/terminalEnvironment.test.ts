@@ -309,6 +309,30 @@ suite('Workbench - TerminalEnvironment', () => {
 				strictEqual(await preparePathForShell('/foo/bar$(echo evil)baz', 'fish', 'fish', PosixShellType.Fish, wslPathBackend, OperatingSystem.Linux, false), `'/foo/bar(echo evil)baz'`);
 			});
 		});
+		suite('Not for execution', () => {
+			test('never PowerShell\'s command to run the path, and otherwise as for execution', async () => {
+				const screenshot = 'c:\\Screenshots\\Screenshot 2026-09-24 171704.png';
+				deepStrictEqual(await Promise.all([
+					// PowerShell, reading the input itself, or running a program that does - known or not
+					preparePathForShell(screenshot, 'pwsh', 'pwsh', GeneralShellType.PowerShell, wslPathBackend, OperatingSystem.Windows, true, false),
+					preparePathForShell(screenshot, 'pwsh', 'pwsh', GeneralShellType.Claude, wslPathBackend, OperatingSystem.Windows, true, false),
+					preparePathForShell(screenshot, 'pwsh', 'pwsh', undefined, wslPathBackend, OperatingSystem.Windows, true, false),
+					preparePathForShell('c:\\foo\\bar(1)\'baz', 'pwsh', 'pwsh', GeneralShellType.PowerShell, wslPathBackend, OperatingSystem.Windows, true, false),
+					preparePathForShell('/foo/bar baz', 'pwsh', 'pwsh', GeneralShellType.PowerShell, wslPathBackend, OperatingSystem.Linux, true, false),
+					// The path is still made one the shell can open
+					preparePathForShell('c:\\foo\\bar baz', 'bash', 'bash', WindowsShellType.GitBash, wslPathBackend, OperatingSystem.Windows, true, false),
+					preparePathForShell('c:\\foo\\bar', 'bash', 'bash', WindowsShellType.Wsl, wslPathBackend, OperatingSystem.Windows, true, false),
+				]), [
+					'"c:\\Screenshots\\Screenshot 2026-09-24 171704.png"',
+					'"c:\\Screenshots\\Screenshot 2026-09-24 171704.png"',
+					'"c:\\Screenshots\\Screenshot 2026-09-24 171704.png"',
+					'c:\\foo\\bar(1)\'baz',
+					`'/foo/bar baz'`,
+					`'c:/foo/bar baz'`,
+					'/mnt/c/foo/bar',
+				]);
+			});
+		});
 	});
 	suite('createTerminalEnvironment', () => {
 		const commonVariables = {
