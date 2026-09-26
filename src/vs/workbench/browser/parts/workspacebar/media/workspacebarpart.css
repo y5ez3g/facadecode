@@ -736,6 +736,25 @@
 .workspacebar-icon-pink { --facade-folder-ink: var(--vscode-facadeBar-folderPink); }
 
 /*
+ * The same colours on a glyph in a line of text, where the one class an icon can carry past its own
+ * is its modifier (`glyphInFolderColor`).
+ *
+ * ⚠️ On the glyph rather than on its box. A list recolours the icons of its focused row by their box
+ * (`listWidget.ts`), and a folder's colour is the folder's wherever the row is - as a quick pick
+ * item's own `iconColor` stays on the focus band.
+ */
+.codicon.codicon-modifier-folderred::before { color: var(--vscode-facadeBar-folderRed); }
+.codicon.codicon-modifier-folderorange::before { color: var(--vscode-facadeBar-folderOrange); }
+.codicon.codicon-modifier-folderyellow::before { color: var(--vscode-facadeBar-folderYellow); }
+.codicon.codicon-modifier-folderlime::before { color: var(--vscode-facadeBar-folderLime); }
+.codicon.codicon-modifier-foldergreen::before { color: var(--vscode-facadeBar-folderGreen); }
+.codicon.codicon-modifier-folderteal::before { color: var(--vscode-facadeBar-folderTeal); }
+.codicon.codicon-modifier-folderblue::before { color: var(--vscode-facadeBar-folderBlue); }
+.codicon.codicon-modifier-folderindigo::before { color: var(--vscode-facadeBar-folderIndigo); }
+.codicon.codicon-modifier-folderpurple::before { color: var(--vscode-facadeBar-folderPurple); }
+.codicon.codicon-modifier-folderpink::before { color: var(--vscode-facadeBar-folderPink); }
+
+/*
  * ---------------------------------------------------------------------------------------------
  * Collapsing: the column becomes a strip of icons.
  *

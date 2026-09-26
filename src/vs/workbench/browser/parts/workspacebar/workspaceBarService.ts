@@ -90,6 +90,13 @@ export interface IWorkspaceBarService {
 	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined;
 
 	/**
+	 * The folder of every row of the bar, top to bottom: a repository's row and then its worktrees', in
+	 * the order somebody put them in (WT-1.7), a closed repository's included. What a list of things
+	 * that live in folders is sorted by, to read in the bar's order.
+	 */
+	rowOrder(): readonly URI[];
+
+	/**
 	 * Opens or closes a repository's row onto its worktrees (WORKTREE.md WT-1.10). The state is the
 	 * bar's and outlives a collapse of the bar to its icons. Nothing happens for a folder that is not a
 	 * repository's row.

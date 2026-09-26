@@ -571,6 +571,11 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		return undefined;
 	}
 
+	rowOrder(): readonly URI[] {
+		// Before the bar is drawn its rows are the folders, in their order
+		return this.view?.rowOrder() ?? this.model.folders.map(folder => folder.uri);
+	}
+
 	setExpanded(uri: URI, expanded: boolean): void {
 		this.view?.setExpanded(uri, expanded);
 	}
