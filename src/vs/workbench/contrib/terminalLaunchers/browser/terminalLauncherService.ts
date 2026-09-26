@@ -17,7 +17,7 @@ import { ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
-import { ITerminalService } from '../../terminal/browser/terminal.js';
+import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
 import { AGENT_TERMINAL_ICON, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readConfiguredLaunchers, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
@@ -57,6 +57,12 @@ export interface ITerminalLauncherService {
 
 	/** Whether this terminal is one the agent menu started. */
 	isAgentTerminal(resource: URI | undefined): boolean;
+
+	/**
+	 * The terminals the agent menu started that are open now, in every folder: showing, and put away
+	 * by a folder switch. Changes with `onDidChangeAgentTerminals`.
+	 */
+	readonly agentTerminals: readonly ITerminalInstance[];
 
 	/** Starts an agent in a terminal tab, in the folder the window is on. */
 	open(launcher: ITerminalLauncher): Promise<void>;
@@ -102,15 +108,23 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		super();
 
 		// A terminal arriving or leaving, and an icon being changed on one that stayed - the second
-		// because the icon is what says a terminal is an agent's, so changing it changes the answer
+		// because the icon is what says a terminal is an agent's, so changing it changes the answer.
+		// Leaving is heard on its own as well: one put in the background by a folder switch ends
+		// without `onDidChangeInstances`, and went on being counted among the agents.
 		this.onDidChangeAgentTerminals = Event.any(
 			this._terminalService.onDidChangeInstances,
+			Event.map(this._terminalService.onDidDisposeInstance, () => undefined),
 			Event.map(this._terminalService.onAnyInstanceIconChange, () => undefined)
 		);
 	}
 
 	isAgentTerminal(resource: URI | undefined): boolean {
 		return isAgentTerminalIcon(this._terminalService.getInstanceFromResource(resource)?.icon);
+	}
+
+	get agentTerminals(): readonly ITerminalInstance[] {
+		// `instances` rather than the ones on screen: those a folder switch put away are in it too
+		return this._terminalService.instances.filter(instance => isAgentTerminalIcon(instance.icon));
 	}
 
 	registerButton(button: IAgentMenuButton): IDisposable {

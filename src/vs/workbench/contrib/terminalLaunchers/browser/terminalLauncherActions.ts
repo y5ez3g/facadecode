@@ -20,6 +20,7 @@ import { IKeybindingService } from '../../../../platform/keybinding/common/keybi
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/titlebarActions.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
+import { TerminalLauncherQuickPick } from './terminalLauncherQuickPick.js';
 import { IAgentMenuButton, ITerminalLauncherService } from './terminalLauncherService.js';
 
 /** The dropdown the agent button opens. Filled from the setting by `TerminalLauncherMenu`. */
@@ -28,7 +29,11 @@ export const AGENT_MENU = new MenuId('FacadeAgentMenu');
 /** The group the agents themselves sit in, above the separator. */
 export const AGENT_MENU_GROUP = 'agents';
 
+/** The group below the separator: the active agents, and the dialog that edits the list. */
+const AGENT_MENU_MANAGE_GROUP = 'z_configure';
+
 export const SHOW_AGENT_MENU = 'facade.agent.showMenu';
+const SHOW_ACTIVE_AGENTS = 'facade.agent.showActive';
 export const CONFIGURE_AGENTS = 'facade.agent.configure';
 
 const AGENTS_PRECONDITION = ContextKeyExpr.or(TerminalContextKeys.processSupported, TerminalContextKeys.webExtensionContributedProfile);
@@ -128,6 +133,35 @@ class ShowAgentMenuAction extends Action2 {
 	}
 }
 
+/**
+ * Every active agent, whichever folder it is in, in a picker: somebody running several in several
+ * folders otherwise has no one place that says how many there are, or where.
+ *
+ * ⚠️ No keybinding of its own. It is a row of the agent menu, which has one, and the chord that
+ * would go with that one's - Ctrl+Shift+Alt+A - is upstream's for Open Agents Window while a screen
+ * reader is on.
+ */
+class ShowActiveAgentsAction extends Action2 {
+
+	constructor() {
+		super({
+			id: SHOW_ACTIVE_AGENTS,
+			title: localize2('facade.agent.showActive', "Show Active Agents..."),
+			f1: true,
+			precondition: AGENTS_PRECONDITION,
+			menu: {
+				id: AGENT_MENU,
+				group: AGENT_MENU_MANAGE_GROUP,
+				order: 0
+			}
+		});
+	}
+
+	override run(accessor: ServicesAccessor): void {
+		accessor.get(IInstantiationService).createInstance(TerminalLauncherQuickPick).show();
+	}
+}
+
 /** The dialog on its own, for somebody who wants to change an agent rather than start one. */
 class ConfigureAgentsAction extends Action2 {
 
@@ -139,7 +173,7 @@ class ConfigureAgentsAction extends Action2 {
 			precondition: AGENTS_PRECONDITION,
 			menu: {
 				id: AGENT_MENU,
-				group: 'z_configure',
+				group: AGENT_MENU_MANAGE_GROUP,
 				order: 1
 			}
 		});
@@ -152,5 +186,6 @@ class ConfigureAgentsAction extends Action2 {
 
 export function registerTerminalLauncherActions(): void {
 	registerAction2(ShowAgentMenuAction);
+	registerAction2(ShowActiveAgentsAction);
 	registerAction2(ConfigureAgentsAction);
 }
