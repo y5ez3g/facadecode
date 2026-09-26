@@ -39,13 +39,17 @@ class TestInstance {
 	readonly onDisposed = this._onDisposed.event;
 
 	readonly resource: URI;
-	readonly target = TerminalLocation.Editor;
 	readonly shellLaunchConfig: { forcePersist?: boolean } = {};
 
 	disposed = false;
+	focused = false;
 
-	constructor(readonly name: string) {
+	constructor(readonly name: string, readonly target = TerminalLocation.Editor) {
 		this.resource = URI.from({ scheme: 'vscode-terminal', path: '/' + name });
+	}
+
+	async focusWhenReady(): Promise<void> {
+		this.focused = true;
 	}
 
 	dispose(): void {
@@ -159,6 +163,10 @@ class TestTerminalService extends mock<ITerminalService>() {
 	readonly failing = new Set<string>();
 	blockOn: { name: string; released: DeferredPromise<void> } | undefined;
 
+	/** The terminal made the active one, and those put in front, in order. */
+	active: string | undefined;
+	readonly revealed: string[] = [];
+
 	/** The names in the background now: taken there, and not yet shown again. */
 	private readonly inBackground = new Set<string>();
 
@@ -168,6 +176,14 @@ class TestTerminalService extends mock<ITerminalService>() {
 
 	override get foregroundInstances(): ITerminalInstance[] {
 		return this.instances.filter(instance => !this.inBackground.has((instance as unknown as TestInstance).name));
+	}
+
+	override setActiveInstance(instance: ITerminalInstance): void {
+		this.active = (instance as unknown as TestInstance).name;
+	}
+
+	override async revealTerminal(instance: ITerminalInstance): Promise<void> {
+		this.revealed.push((instance as unknown as TestInstance).name);
 	}
 
 	override moveToBackground(instance: ITerminalInstance): void {
@@ -233,13 +249,25 @@ class TestActiveFolderService extends mock<IActiveFolderService>() {
 	}
 }
 
-/** Only the one signal this contribution listens to: the editors of the new folder are up. */
+/**
+ * The one signal this contribution listens to - the editors of the new folder are up - and moving
+ * onto a folder, which the tests say the meaning of.
+ */
 class TestWorkspaceBarService extends mock<IWorkspaceBarService>() {
 
 	private readonly _onDidRestoreEditors = new Emitter<void>();
 	override readonly onDidRestoreEditors = this._onDidRestoreEditors.event;
 
+	/** The folders moved onto, and what a move does. */
+	readonly moves: string[] = [];
+	moving: (uri: URI) => Promise<void> = async () => { };
+
 	restored(): void { this._onDidRestoreEditors.fire(); }
+
+	override async show(uri: URI): Promise<void> {
+		this.moves.push(uri.path);
+		await this.moving(uri);
+	}
 }
 
 class TestContextService extends mock<IWorkspaceContextService>() {
@@ -305,6 +333,14 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		await folders.switchTo(to);
 		bar.restored();
 		await timeout(0);
+	}
+
+	/**
+	 * Moving onto a folder through the bar, as the bar does it: settled once the window is on the
+	 * folder, before its editors are up - which is when the test calls `bar.restored()`.
+	 */
+	function moveThroughTheBar(bar: TestWorkspaceBarService, folders: TestActiveFolderService, context: TestContextService): void {
+		bar.moving = uri => folders.switchTo(context.folders.find(candidate => candidate.uri.path === uri.path)!);
 	}
 
 	test('switching away parks them alive, and switching back brings the same ones', async () => {
@@ -678,6 +714,138 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			middle: ['notes', 'one'],
 			inFront: 'notes',
 			disposed: false,
+		});
+	});
+
+	test('a terminal belongs to the folder it is parked for, with a tab to the folder on screen, and in the panel to none', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const parked = new TestInstance('parked');
+		const opened = new TestInstance('opened');
+		const panel = new TestInstance('panel', TerminalLocation.Panel);
+		const column = new TestGroup(0, [tabFor(parked)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [parked, panel]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+
+		// Opened on beta, after the switch
+		terminals.instances.push(opened.asInstance());
+		column.tabs.push(tabFor(opened));
+
+		const folderOf = (instance: TestInstance) => folderTerminals.folderOf(instance.asInstance())?.uri.path;
+		assert.deepStrictEqual({ parked: folderOf(parked), opened: folderOf(opened), panel: folderOf(panel) }, {
+			parked: '/w/alpha',
+			opened: '/w/beta',
+			panel: undefined,
+		});
+	});
+
+	test('revealing a terminal parked for another folder moves the window onto that folder, and puts it in front once it is back', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+		moveThroughTheBar(bar, folders, context);
+
+		const revealing = folderTerminals.reveal(agent.asInstance());
+		await timeout(0);
+		const beforeItIsBack = { revealed: [...terminals.revealed], focused: agent.focused };
+		bar.restored();
+		await revealing;
+
+		assert.deepStrictEqual({ on: folders.activeFolder?.name, moves: bar.moves, beforeItIsBack, tabs: column.names(), active: terminals.active, revealed: terminals.revealed, focused: agent.focused }, {
+			on: 'alpha',
+			moves: ['/w/alpha'],
+			beforeItIsBack: { revealed: [], focused: false },
+			tabs: ['agent'],
+			active: 'agent',
+			revealed: ['agent'],
+			focused: true,
+		});
+	});
+
+	test('revealing a terminal of the folder on screen puts it in front without moving the window', async () => {
+		const alpha = folder('alpha');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(agent), tabFor(shell)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent, shell]);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+
+		await folderTerminals.reveal(agent.asInstance());
+
+		assert.deepStrictEqual({ moves: bar.moves, active: terminals.active, revealed: terminals.revealed, focused: agent.focused }, {
+			moves: [],
+			active: 'agent',
+			revealed: ['agent'],
+			focused: true,
+		});
+	});
+
+	test('a terminal that cannot be shown again is not revealed, and stays parked for its folder', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+		moveThroughTheBar(bar, folders, context);
+		terminals.failing.add('agent');
+
+		const revealing = folderTerminals.reveal(agent.asInstance());
+		await timeout(0);
+		bar.restored();
+		await revealing;
+
+		assert.deepStrictEqual({ active: terminals.active, revealed: terminals.revealed, focused: agent.focused, parkedFor: folderTerminals.folderOf(agent.asInstance())?.uri.path }, {
+			active: undefined,
+			revealed: [],
+			focused: false,
+			parkedFor: '/w/alpha',
+		});
+	});
+
+	test('moving on again before the terminal is back leaves it parked for its folder, unrevealed', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+		moveThroughTheBar(bar, folders, context);
+
+		// Held half way back, while the window leaves for beta again
+		terminals.blockOn = { name: 'agent', released: new DeferredPromise<void>() };
+		const revealing = folderTerminals.reveal(agent.asInstance());
+		await timeout(0);
+		bar.restored();
+		await timeout(0);
+		await folders.switchTo(beta);
+		terminals.blockOn.released.complete();
+		await revealing;
+		await timeout(0);
+
+		assert.deepStrictEqual({ on: folders.activeFolder?.name, active: terminals.active, revealed: terminals.revealed, focused: agent.focused, parkedFor: folderTerminals.folderOf(agent.asInstance())?.uri.path }, {
+			on: 'beta',
+			active: undefined,
+			revealed: [],
+			focused: false,
+			parkedFor: '/w/alpha',
 		});
 	});
 });
