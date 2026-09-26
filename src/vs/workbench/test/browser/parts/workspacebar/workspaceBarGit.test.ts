@@ -14,8 +14,10 @@ import { FileSystemProviderCapabilities } from '../../../../../platform/files/co
 import { FileService } from '../../../../../platform/files/common/fileService.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { StorageScope, StorageTarget, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
 import { WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
-import { WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
+import { GROUPS_STORAGE_KEY, WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
+import { TestStorageService } from '../../../common/workbenchTestServices.js';
 
 /** The in-memory disk, with links: each of `links` resolves to the path it maps to, as a disk's real path. */
 class LinkedFileSystemProvider extends InMemoryFileSystemProvider {
@@ -49,10 +51,13 @@ suite('Workspace bar - worktrees as git records them', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	let fileService: FileService;
+	/** The workspace's storage, which every window of the workspace in a test shares. */
+	let storage: TestStorageService;
 
 	setup(() => {
 		fileService = disposables.add(new FileService(new NullLogService()));
 		disposables.add(fileService.registerProvider(Schemas.file, disposables.add(new InMemoryFileSystemProvider())));
+		storage = disposables.add(new TestStorageService());
 	});
 
 	async function write(path: string, content: string): Promise<void> {
@@ -79,9 +84,14 @@ suite('Workspace bar - worktrees as git records them', () => {
 		}
 	}
 
-	async function read(...paths: string[]): Promise<{ git: WorkspaceBarGit; groups: unknown[] }> {
+	/** The reader of a window onto `paths`, as the window makes it: its first read started, not finished. */
+	function open(...paths: string[]): WorkspaceBarGit {
 		const folders = paths.map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) }));
-		const git = disposables.add(new WorkspaceBarGit({ folders, onDidChange: Event.None, key: uri => uri.toString() }, fileService));
+		return disposables.add(new WorkspaceBarGit({ folders, onDidChange: Event.None, key: uri => uri.toString() }, fileService, storage));
+	}
+
+	async function read(...paths: string[]): Promise<{ git: WorkspaceBarGit; groups: unknown[] }> {
+		const git = open(...paths);
 		await git.refresh();
 
 		return { git, groups: summary(git.groups) };
@@ -205,7 +215,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 			await linked.writeFile(URI.file(`${root}/.git/HEAD`), VSBuffer.fromString('ref: refs/heads/main\n'));
 		}
 		const folders = ['/lab', '/link-lab'].map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(1) }));
-		const git = disposables.add(new WorkspaceBarGit({ folders, onDidChange: Event.None, key: uri => uri.toString() }, linked));
+		const git = disposables.add(new WorkspaceBarGit({ folders, onDidChange: Event.None, key: uri => uri.toString() }, linked, storage));
 		await git.refresh();
 
 		assert.deepStrictEqual(git.groups.map(group => group.kind === 'repository'
@@ -278,7 +288,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		await worktree('/lab', 'w2', '/wt/w2');
 		const folder = (path: string, index: number) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) });
 		const source = { folders: [folder('/lab', 0)], onDidChange: Event.None, key: (uri: URI) => uri.toString() };
-		const git = disposables.add(new WorkspaceBarGit(source, fileService));
+		const git = disposables.add(new WorkspaceBarGit(source, fileService, storage));
 		await git.refresh();
 
 		// Two reads in flight, the way a folder added to the workspace starts one and the window's move
@@ -292,5 +302,63 @@ suite('Workspace bar - worktrees as git records them', () => {
 		await newer;
 
 		assert.deepStrictEqual(groupsWhenOlderResolved, summary(git.groups));
+	});
+
+	test('the next window has the groups the last one read before its own first read, which finds the same and fires nothing (WT-3.7)', async () => {
+		await repository('/lab');
+		await worktree('/lab', 'w2', '/wt/w2');
+		await read('/lab', '/wt/w2');
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		const git = open('/lab', '/wt/w2');
+		let fired = 0;
+		disposables.add(git.onDidChange(() => fired++));
+		const drawn = { ready: git.ready, groups: summary(git.groups) };
+		await git.refresh();
+
+		assert.deepStrictEqual({ drawn, fired }, {
+			drawn: {
+				ready: true,
+				groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/w2', label: 'w2', branch: 'w2', exists: true, folder: '/wt/w2' }] }]
+			},
+			fired: 0
+		});
+	});
+
+	test('a folder that left the workspace between two windows is not on the kept groups, nor a repository none of whose folders is left', async () => {
+		await repository('/lab');
+		await worktree('/lab', 'w2', '/wt/w2');
+		await repository('/other');
+		await read('/lab', '/wt/w2', '/other');
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		const git = open('/lab');
+		const drawn = summary(git.groups);
+		await git.refresh();
+
+		assert.deepStrictEqual(drawn, [
+			{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/w2', label: 'w2', branch: 'w2', exists: true, folder: undefined }] },
+		]);
+	});
+
+	test('a kept record that cannot be read, or names none of the folders, is not drawn from: the bar starts flat, as with none kept', async () => {
+		await repository('/lab');
+		const records = [
+			'{ not json',
+			JSON.stringify({ kind: 'folder', folder: 'file:///lab' }),
+			JSON.stringify([{ kind: 'repository', main: 7 }]),
+			JSON.stringify([{ kind: 'folder', folder: 'file:///gone' }]),
+			JSON.stringify([{ kind: 'folder', folder: 'file:///lab' }, { kind: 'folder', folder: 'file:////lab' }]),	// the second not a URI: URI.parse throws
+		];
+
+		const ready: boolean[] = [];
+		for (const record of records) {
+			storage.store(GROUPS_STORAGE_KEY, record, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+			const git = open('/lab');
+			ready.push(git.ready);
+			await git.refresh();
+		}
+
+		assert.deepStrictEqual(ready, [false, false, false, false, false]);
 	});
 });

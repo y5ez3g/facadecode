@@ -11,8 +11,10 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { basename, dirname, IExtUri, joinPath } from '../../../../base/common/resources.js';
+import { isBoolean, isObject, isString } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { canonicalUri, FolderKey } from './workspaceBar.js';
 
@@ -95,7 +97,10 @@ export class WorkspaceBarGit extends Disposable {
 
 	private _groups: readonly WorkspaceBarGroup[] = [];
 
-	/** The first level of the bar, in `folders[]` order. Empty until the first read finishes. */
+	/**
+	 * The first level of the bar, in `folders[]` order. The last window's until the first read finishes
+	 * (WT-3.7), and empty until then when none was kept.
+	 */
 	get groups(): readonly WorkspaceBarGroup[] {
 		return this._groups;
 	}
@@ -103,8 +108,8 @@ export class WorkspaceBarGit extends Disposable {
 	private _ready = false;
 
 	/**
-	 * Whether a read has finished. Until then `groups` is empty, and the bar draws `folders[]` flat
-	 * rather than start blank.
+	 * Whether there are groups to draw: a read has finished, or the last window's were kept. Until then
+	 * `groups` is empty, and the bar draws `folders[]` flat rather than start blank.
 	 */
 	get ready(): boolean {
 		return this._ready;
@@ -131,12 +136,33 @@ export class WorkspaceBarGit extends Disposable {
 	constructor(
 		private readonly source: IWorkspaceBarFolders,
 		@IFileService private readonly fileService: IFileService,
+		@IStorageService private readonly storageService: IStorageService,
 	) {
 		super();
+
+		// WT-3.7: the rows the last window had, until this one's first read is in. That read comes after
+		// the bar is first drawn, and a bar drawn without it showed every folder flat until then - a
+		// worktree as a folder, then as a dot under its repository. One that finds the same changes nothing.
+		const kept = keptGroups(this.storageService.get(GROUPS_STORAGE_KEY, StorageScope.WORKSPACE), this.source.folders, this.source.key);
+		if (kept) {
+			this._groups = kept;
+			this._ready = true;
+			this.signature = signatureOf(kept, this.source.key);
+		}
+		this._register(this.storageService.onWillSaveState(() => this.saveState()));
 
 		// A change of folders is read at once; the batching is for git's own writes.
 		this._register(this.source.onDidChange(() => this.refresh().then(undefined, onUnexpectedError)));
 		this.refresh().then(undefined, onUnexpectedError);
+	}
+
+	/** Keeps the last read for the window that opens next (WT-3.7). */
+	private saveState(): void {
+		if (this._ready && this._groups.length) {
+			this.storageService.store(GROUPS_STORAGE_KEY, JSON.stringify(storedGroupsOf(this._groups)), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this.storageService.remove(GROUPS_STORAGE_KEY, StorageScope.WORKSPACE);
+		}
 	}
 
 	/**
@@ -524,4 +550,112 @@ function signatureOf(groups: readonly WorkspaceBarGroup[], key: FolderKey): stri
 	return JSON.stringify(groups.map(group => group.kind === 'folder'
 		? [key(group.folder.uri), group.folder.name]
 		: [key(group.main), group.folder?.name, group.worktrees.map(worktree => [key(worktree.uri), worktree.label, worktree.exists, worktree.folder?.name])]));
+}
+
+/** Where the last read is kept, for the window that opens next to draw its rows from (WT-3.7). */
+export const GROUPS_STORAGE_KEY = 'facade.workspaceBar.groups';
+
+/** A worktree as it is kept: its URI as a string, and its folder by its URI. */
+interface IStoredWorktree {
+	readonly uri: string;
+	readonly branch?: string;
+	readonly label: string;
+	readonly exists: boolean;
+	readonly folder?: string;
+}
+
+/** A group as it is kept: URIs as strings, and folders by their URI, found again in `folders[]` when read back. */
+type StoredGroup =
+	| { readonly kind: 'folder'; readonly folder: string }
+	| { readonly kind: 'repository'; readonly main: string; readonly folder?: string; readonly branch?: string; readonly members: readonly string[]; readonly worktrees: readonly IStoredWorktree[] };
+
+function storedGroupsOf(groups: readonly WorkspaceBarGroup[]): StoredGroup[] {
+	return groups.map<StoredGroup>(group => group.kind === 'folder'
+		? { kind: 'folder', folder: group.folder.uri.toString() }
+		: {
+			kind: 'repository',
+			main: group.main.toString(),
+			folder: group.folder?.uri.toString(),
+			branch: group.branch,
+			members: group.members.map(member => member.uri.toString()),
+			worktrees: group.worktrees.map(worktree => ({ uri: worktree.uri.toString(), branch: worktree.branch, label: worktree.label, exists: worktree.exists, folder: worktree.folder?.uri.toString() }))
+		});
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+	return value === undefined || isString(value);
+}
+
+function isStoredWorktree(candidate: unknown): candidate is IStoredWorktree {
+	if (!isObject(candidate)) {
+		return false;
+	}
+
+	const { uri, branch, label, exists, folder } = candidate as Record<string, unknown>;
+	return isString(uri) && isString(label) && isBoolean(exists) && isOptionalString(branch) && isOptionalString(folder);
+}
+
+function isStoredGroup(candidate: unknown): candidate is StoredGroup {
+	if (!isObject(candidate)) {
+		return false;
+	}
+
+	const { kind, folder, main, branch, members, worktrees } = candidate as Record<string, unknown>;
+	if (kind === 'folder') {
+		return isString(folder);
+	}
+
+	return kind === 'repository' && isString(main) && isOptionalString(folder) && isOptionalString(branch)
+		&& Array.isArray(members) && members.every(isString)
+		&& Array.isArray(worktrees) && worktrees.every(isStoredWorktree);
+}
+
+/**
+ * The groups the last window read, found again among `folders`: a folder no longer in the workspace is
+ * left out, as a read leaves it out, and a repository none of whose folders are is not a row. Undefined
+ * when nothing usable was kept - a record that cannot be read is not a partial one.
+ */
+function keptGroups(value: string | undefined, folders: readonly IWorkspaceFolder[], key: FolderKey): WorkspaceBarGroup[] | undefined {
+	if (!value) {
+		return undefined;
+	}
+
+	// ⚠️ All of it inside the `try`, not only the `JSON.parse`: `URI.parse` throws on a string that is
+	// not a URI, and a record somebody edited by hand must cost the kept rows, never the bar.
+	try {
+		const stored: unknown = JSON.parse(value);
+		if (!Array.isArray(stored) || !stored.every(isStoredGroup)) {
+			return undefined;
+		}
+
+		const present = new Map(folders.map(folder => [key(folder.uri), folder]));
+		const folderAt = (uri: string | undefined) => uri === undefined ? undefined : present.get(key(URI.parse(uri)));
+
+		const groups: WorkspaceBarGroup[] = [];
+		for (const group of stored) {
+			if (group.kind === 'folder') {
+				const folder = folderAt(group.folder);
+				if (folder) {
+					groups.push({ kind: 'folder', folder });
+				}
+				continue;
+			}
+
+			const members = coalesce(group.members.map(folderAt));
+			if (members.length) {
+				groups.push({
+					kind: 'repository',
+					main: URI.parse(group.main),
+					folder: folderAt(group.folder),
+					branch: group.branch,
+					members,
+					worktrees: group.worktrees.map(worktree => ({ uri: URI.parse(worktree.uri), branch: worktree.branch, label: worktree.label, exists: worktree.exists, folder: folderAt(worktree.folder) }))
+				});
+			}
+		}
+
+		return groups.length ? groups : undefined;
+	} catch {
+		return undefined;
+	}
 }

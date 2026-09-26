@@ -176,6 +176,13 @@ built on it would flicker on every switch.
   its worktrees or its main checkout - and only a folder they do not name is drawn at the end until
   it is read. A worktree just made has its record read before its folder joins, since git's writes
   reach the bar batched: its row never shows at the end first.
+- **WT-3.7** A window's first read comes after the bar is first drawn, so the last read is kept for
+  the next window of the workspace (workspace storage, this machine only) and the bar is drawn from
+  it until then. Without it a reload drew every folder flat first: a worktree as a folder of its
+  own, then as a dot under its repository. The kept read is an old read like any other (WT-3.6): a
+  folder that has left the workspace since is not on it, and one that joined since is drawn where
+  git's records put it. A first read that finds the same redraws nothing. A record that cannot be
+  read is not drawn from, and the bar starts flat, as with none kept.
 
 The reader is `workspaceBarGit.ts`, next to the bar's model. It knows nothing about the tree.
 

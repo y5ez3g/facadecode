@@ -248,10 +248,13 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		}));
 
 		// WT-1.12: a worktree in folders[] that nobody has named is called by its branch - in the window's
-		// title as in the bar, both through `nameFor`.
-		this._register(this.git.onDidChange(() => customizationService.setDefaultNames(this.git.groups.flatMap(group => group.kind === 'repository'
+		// title as in the bar, both through `nameFor`. Named at once from the groups kept from the last
+		// window as well (WT-3.7): a first read that finds the same fires nothing.
+		const setDefaultNames = () => customizationService.setDefaultNames(this.git.groups.flatMap(group => group.kind === 'repository'
 			? coalesce(group.worktrees.map(worktree => worktree.folder && { uri: worktree.folder.uri, name: worktree.label }))
-			: []))));
+			: []));
+		setDefaultNames();
+		this._register(this.git.onDidChange(setDefaultNames));
 	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {
