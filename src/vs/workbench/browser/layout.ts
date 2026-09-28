@@ -47,7 +47,7 @@ import { DeferredPromise, Promises } from '../../base/common/async.js';
 import { IBannerService } from '../services/banner/browser/bannerService.js';
 import { IPaneCompositePartService } from '../services/panecomposite/browser/panecomposite.js';
 import { AuxiliaryBarPart } from './parts/auxiliarybar/auxiliaryBarPart.js';
-import { isWorkspaceBarFirstColumn, WORKSPACEBAR_WIDTH } from './parts/workspacebar/workspaceBarPart.js';
+import { isWorkspaceBarFirstInMiddleRow, WORKSPACEBAR_WIDTH } from './parts/workspacebar/workspaceBarPart.js';
 import { IWorkspaceBarService } from './parts/workspacebar/workspaceBarService.js';
 import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
 import { IAuxiliaryWindowService } from '../services/auxiliaryWindow/browser/auxiliaryWindowService.js';
@@ -295,14 +295,14 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 	private workspaceBarPartView!: ISerializableView;
 
 	/**
-	 * Which child of the grid root holds everything but the workspace bar, so that the coordinates
-	 * below read as the numbers they were before the bar gained a level rather than as new ones.
+	 * The first column of the middle row that upstream's coordinates mean by `0`. The workspace bar
+	 * is the row's column zero, so theirs start one along.
 	 *
-	 * A coordinate is the one kind of edit that fails silently: if a level is inserted above these
-	 * they keep addressing something, just not what they meant to, and the symptom is a side bar in
-	 * a strange place with nothing in the log. `verifyWorkspaceBarIsColumnZero` checks it.
+	 * A coordinate is the one kind of edit that fails silently: addressed at `0`, the auxiliary bar
+	 * lands to the left of the workspace bar rather than failing, and nothing says so in the log.
+	 * `verifyWorkspaceBarIsFirstInMiddleRow` checks the shape this rests on.
 	 */
-	private static readonly MAIN_GRID_INDEX = 1;
+	private static readonly MIDDLE_FIRST_COLUMN = 1;
 
 	private environmentService!: IBrowserWorkbenchEnvironmentService;
 	private extensionService!: IExtensionService;
@@ -1711,7 +1711,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		this.mainContainer.prepend(workbenchGrid.element);
 		this.mainContainer.setAttribute('role', 'application');
 		this.workbenchGrid = workbenchGrid;
-		this.verifyWorkspaceBarIsColumnZero();
+		this.verifyWorkspaceBarIsFirstInMiddleRow();
 		this.workbenchGrid.edgeSnapping = this.state.runtime.mainWindowFullscreen;
 
 		for (const part of [titleBar, editorPart, activityBar, panelPart, sideBar, statusBar, auxiliaryBarPart, bannerPart]) {
@@ -2051,26 +2051,21 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 
 		const focusedPart = [Parts.PANEL_PART, Parts.SIDEBAR_PART, Parts.AUXILIARYBAR_PART].find(part => this.hasFocus(part)) as SINGLE_WINDOW_PARTS | undefined;
 
-		// Everything but the workspace bar lives one level in, under `main`. The numbers are left as
-		// they read without it so that a merge conflicts on them normally; only the level that was
-		// added is named.
-		const underMain = (...rest: number[]) => [Layout.MAIN_GRID_INDEX, ...rest];
-
 		if (sideBarPosition === Position.LEFT) {
-			this.workbenchGrid.moveViewTo(this.activityBarPartView, underMain(2, 0));
+			this.workbenchGrid.moveViewTo(this.activityBarPartView, [2, Layout.MIDDLE_FIRST_COLUMN]);
 			this.workbenchGrid.moveView(this.sideBarPartView, preMoveSideBarSize, sideBarSiblingToEditor ? this.editorPartView : this.activityBarPartView, sideBarSiblingToEditor ? Direction.Left : Direction.Right);
 			if (auxiliaryBarSiblingToEditor) {
 				this.workbenchGrid.moveView(this.auxiliaryBarPartView, preMoveAuxiliaryBarSize, this.editorPartView, Direction.Right);
 			} else {
-				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, underMain(2, -1));
+				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, [2, -1]);
 			}
 		} else {
-			this.workbenchGrid.moveViewTo(this.activityBarPartView, underMain(2, -1));
+			this.workbenchGrid.moveViewTo(this.activityBarPartView, [2, -1]);
 			this.workbenchGrid.moveView(this.sideBarPartView, preMoveSideBarSize, sideBarSiblingToEditor ? this.editorPartView : this.activityBarPartView, sideBarSiblingToEditor ? Direction.Right : Direction.Left);
 			if (auxiliaryBarSiblingToEditor) {
 				this.workbenchGrid.moveView(this.auxiliaryBarPartView, preMoveAuxiliaryBarSize, this.editorPartView, Direction.Left);
 			} else {
-				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, underMain(2, 0));
+				this.workbenchGrid.moveViewTo(this.auxiliaryBarPartView, [2, Layout.MIDDLE_FIRST_COLUMN]);
 			}
 		}
 
@@ -2721,9 +2716,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 	 * workbench with its side bar in the wrong column is still usable, and refusing to start would
 	 * be a worse answer than a line someone can find.
 	 */
-	private verifyWorkspaceBarIsColumnZero(): void {
-		if (!isWorkspaceBarFirstColumn(this.workbenchGrid.serialize().root)) {
-			this.logService.error(`[layout] The workspace bar is not the grid's first column, so the coordinates in adjustPartPositions (MAIN_GRID_INDEX = ${Layout.MAIN_GRID_INDEX}) address the wrong node. Expected a ${Parts.WORKSPACEBAR_PART} leaf at root index 0.`);
+	private verifyWorkspaceBarIsFirstInMiddleRow(): void {
+		if (!isWorkspaceBarFirstInMiddleRow(this.workbenchGrid.serialize().root)) {
+			this.logService.error(`[layout] The workspace bar is not the middle row's first column, so the coordinates in adjustPartPositions (MIDDLE_FIRST_COLUMN = ${Layout.MIDDLE_FIRST_COLUMN}) address the wrong node. Expected a ${Parts.WORKSPACEBAR_PART} leaf at [2, 0].`);
 		}
 	}
 
@@ -2797,44 +2792,37 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 			visible: !this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN)
 		};
 
-		const middleSection: ISerializedNode[] = this.arrangeMiddleSectionNodes({
+		// The workspace bar is the middle row's column zero, between the title bar and the status bar
+		// the way the activity bar is: both of those run the width of the window over it. The row is
+		// horizontal already, so inserting it there leaves every orientation as upstream has it.
+		const middleSection: ISerializedNode[] = [workspaceBarNode, ...this.arrangeMiddleSectionNodes({
 			activityBar: activityBarNode,
 			auxiliaryBar: auxiliaryBarNode,
 			editor: editorNode,
 			panel: panelNode,
 			sideBar: sideBarNode
-		}, width - workspaceBarWidth, middleSectionHeight);
-
-		// The workspace bar is column zero of the window and everything else is the column beside
-		// it, so the root is horizontal where it would otherwise be vertical. Orientation alternates
-		// with depth, so the rest falls out: `main` is vertical (title over middle over status) and
-		// the middle section is horizontal as before.
-		const main: ISerializedNode = {
-			type: 'branch',
-			size: width - workspaceBarWidth,
-			data: [
-				...(this.shouldShowBannerFirst() ? titleAndBanner.reverse() : titleAndBanner),
-				{
-					type: 'branch',
-					data: middleSection,
-					size: middleSectionHeight
-				},
-				{
-					type: 'leaf',
-					data: { type: Parts.STATUSBAR_PART },
-					size: statusBarHeight,
-					visible: !this.stateModel.getRuntimeValue(LayoutStateKeys.STATUSBAR_HIDDEN)
-				}
-			]
-		};
+		}, width - workspaceBarWidth, middleSectionHeight)];
 
 		const result: ISerializedGrid = {
 			root: {
 				type: 'branch',
-				size: height,
-				data: [workspaceBarNode, main]
+				size: width,
+				data: [
+					...(this.shouldShowBannerFirst() ? titleAndBanner.reverse() : titleAndBanner),
+					{
+						type: 'branch',
+						data: middleSection,
+						size: middleSectionHeight
+					},
+					{
+						type: 'leaf',
+						data: { type: Parts.STATUSBAR_PART },
+						size: statusBarHeight,
+						visible: !this.stateModel.getRuntimeValue(LayoutStateKeys.STATUSBAR_HIDDEN)
+					}
+				]
 			},
-			orientation: Orientation.HORIZONTAL,
+			orientation: Orientation.VERTICAL,
 			width,
 			height
 		};

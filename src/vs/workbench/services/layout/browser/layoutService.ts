@@ -737,7 +737,8 @@ export function shouldShowCustomTitleBar(configurationService: IConfigurationSer
 		}
 	}
 
-	if (!isTitleBarEmpty(configurationService)) {
+	// Facade Code: the main window's title bar always carries the workspace bar's toggle, so it is never empty
+	if (!isTitleBarEmpty(configurationService) || !isAuxiliaryWindow(window)) {
 		return true;
 	}
 

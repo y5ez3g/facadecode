@@ -255,10 +255,10 @@ import { getPartsSplashColors } from './partsSplash.js';
 			}
 			layoutInfo.sideBarWidth = Math.min(layoutInfo.sideBarWidth, contentWidth - (layoutInfo.activityBarWidth + layoutInfo.editorPartMinWidth + layoutInfo.auxiliaryBarWidth));
 
-			// part: workspace bar
+			// part: workspace bar, between the title bar and the status bar as in the workbench
 			if (workspaceBarWidth > 0) {
 				const workspaceBarDiv = document.createElement('div');
-				setBounds(workspaceBarDiv, { top: 0, bottom: 0, left: 0, width: workspaceBarWidth });
+				setBounds(workspaceBarDiv, { top: contentTop, bottom: contentBottom, left: 0, width: workspaceBarWidth });
 				// The bar borrows the activity bar's background, so the splash borrows it too.
 				workspaceBarDiv.style.backgroundColor = (modernUI ? modernActivityBarBackground : colorInfo.activityBarBackground) ?? '';
 				if (colorInfo.activityBarBorder) {
@@ -268,10 +268,11 @@ import { getPartsSplashColors } from './partsSplash.js';
 				splash.appendChild(workspaceBarDiv);
 			}
 
-			// Everything else is the column beside the bar. Rather than add its width to every
-			// coordinate below, they go into a container that begins where it ends: `position:
+			// The rest of the middle row is beside the bar. Rather than add its width to every
+			// coordinate below, those parts go into a container that begins where it ends: `position:
 			// absolute` resolves against the nearest positioned ancestor, so the `left: 0` and
-			// `width: 100%` they already use come out right on their own.
+			// `width: 100%` they already use come out right on their own. The title bar and the status
+			// bar run the width of the window over and under it, so they stay on the splash itself.
 			const content = document.createElement('div');
 			setBounds(content, { top: 0, bottom: 0, left: workspaceBarWidth, right: 0 });
 			splash.appendChild(content);
@@ -286,7 +287,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				titleDiv.style.top = '0';
 				titleDiv.style.backgroundColor = splashColors?.titleBarBackground ?? '';
 				(titleDiv.style as CSSStyleDeclaration & { '-webkit-app-region': string })['-webkit-app-region'] = 'drag';
-				content.appendChild(titleDiv);
+				splash.appendChild(titleDiv);
 
 				if (!modernUI && colorInfo.titleBarBorder) {
 					const titleBorder = document.createElement('div');
@@ -487,7 +488,7 @@ import { getPartsSplashColors } from './partsSplash.js';
 				statusDiv.style.bottom = '0';
 				statusDiv.style.left = '0';
 				statusDiv.style.backgroundColor = splashColors?.statusBarBackground ?? '';
-				content.appendChild(statusDiv);
+				splash.appendChild(statusDiv);
 
 				if (!modernUI && colorInfo.statusBarBorder) {
 					const statusBorderDiv = document.createElement('div');

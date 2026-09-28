@@ -59,8 +59,8 @@ record and leave the directory behind).
 📁 solo                         a repository with no worktrees: nothing to open
 📁 notes                        no .git of its own: no second level
 
-under the pointer, a folder's row shows the header's pair of buttons, in the header's columns:
-WORKSPACE                 + <   the header: Open Folder..., and the toggle (> while collapsed)
+under the pointer, a folder's row shows its pair of buttons, the last of them under the header's `+`:
+WORKSPACE                   +   the header: Open Folder...; the collapse toggle is the title bar's first button
 📁 FacadeCode             + ^   New Worktree..., and ^ to close it while it is open
 📁 api-gateway            + v   v to open it while it is closed
 📁 solo                   +     no worktrees: the + alone, still in its column
@@ -115,10 +115,10 @@ WORKSPACE                 + <   the header: Open Folder..., and the toggle (> wh
   so every name in the column starts on one line. Customize... gives a worktree a display name
   (unnamed, it is called by its branch) and a colour, which paints the dot. No glyph to choose: the
   dot is what says worktree.
-- **WT-1.13** A folder's row has the header's two buttons, in the header's two columns: `+` (New
-  Worktree..., there while it can be used) and the triangle - `^` while open, `v` while closed. The
-  triangle only on a repository with worktrees; elsewhere its column stays empty, so the `+` stays in
-  place. Both show under the pointer only; the keyboard opens and closes with Left and Right. The
+- **WT-1.13** A folder's row ends in two buttons, styled as the header's `+`: `+` (New Worktree...,
+  there while it can be used) and the triangle - `^` while open, `v` while closed - which stands under
+  the header's `+`. The triangle only on a repository with worktrees; elsewhere its column stays
+  empty, so the `+` stays in place. Both show under the pointer only; the keyboard opens and closes with Left and Right. The
   glyph is swapped, never rotated.
 - **WT-1.14** Everything in a row that changes takes one duration, `--facade-motion` (150ms, standard
   easing); `workbench.reduceMotion` sets it to 0. A row element the list hands to a different row

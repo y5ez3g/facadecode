@@ -60,3 +60,22 @@
 .monaco-workbench.mac:not(.fullscreen) .part.titlebar > .titlebar-container > .titlebar-left > .left-toolbar-container.after-window-controls {
 	padding-left: calc(70px + var(--vscode-spacing-size80));
 }
+
+/*
+ * The menu bar's `···` is an icon button, so it is drawn as the title bar draws every other one:
+ * a 16px glyph in 3px of padding, a 22px chip, `cornerRadius.medium` - the numbers upstream's
+ * action bar gives the toggle beside it, the Back and Forward arrows and every icon at the other end
+ * of the row.
+ *
+ * ⚠️ Upstream draws it as a text menu instead - a 22px box inside the 8px of padding `File` and
+ * `Edit` have, radius 5 - so it came out a 38x22 pill next to a 22x22 square. It sits right beside
+ * the toggle whenever no menu fits, and the two read as one button drawn twice at different sizes.
+ *
+ * Not in `compact`, where the button fills the activity bar's cell and is sized by that.
+ */
+.monaco-workbench .part.titlebar .menubar:not(.compact) .toolbar-toggle-more {
+	width: var(--vscode-codiconFontSize);
+	height: var(--vscode-codiconFontSize);
+	padding: 3px;
+	border-radius: var(--vscode-cornerRadius-medium);
+}

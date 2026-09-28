@@ -19,135 +19,26 @@
 	overflow: hidden;
 }
 
-/* Room for the title bar, and on macOS for the window controls drawn over this column. */
-/*
- * The strip the window's own buttons are drawn across.
- *
- * Open, it is this column's own top: the bar is column zero of the window and reaches the very top,
- * so the strip is the bar's background and the title bar begins after it.
- *
- * ⚠️ And nothing at all where those buttons are not over this column, which `workspaceBarPart.ts`
- * decides and hands down as a height of zero. Windows and Linux draw them at the far end of the
- * row, so the header is the column's own top there and the bar reads as one piece from y=0. Every
- * rule below that leans on the strip's height reads it through `--facade-band-height`, which is set
- * from the same number, so they all collapse with it.
- */
-.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
-	flex: 0 0 auto;
-}
-
-/*
- * ⚠️ Collapsed, it wears the title bar's skin instead, so the row reads as one band across the
- * window and the column starts under it - the way the activity bar does. A 36px column with its own
- * top is a notch in the title bar; measured, the two backgrounds met in a step 36px along the row.
- *
- * ⚠️ Done here rather than by moving the part in the grid. Moving it works one way - measured,
- * the title bar did span x0..1440 - but not back: with the bar gone the root has one child, the grid
- * flattens it, and the root turns from horizontal to vertical. `moveView` needs a reference view and
- * nothing in the tree spans the full height, so there is no way to ask for column zero again. The
- * grid is left with one shape and this paints the difference.
- *
- * ⚠️ The strip cannot reach the column's own right border, and a `margin-right: -1px` that was
- * here to make it do so never worked. The part clips its children to its padding box and upstream's
- * `.content` inside it clips them again, and the padding box is exactly the box that excludes the
- * border pixel. Measured in Dark High Contrast, where `contrastBorder` makes every edge visible: the
- * strip stopped at x=36 and the border went on painting at x=36..37. The line is drawn by the rule
- * below instead, which can stop where this strip ends.
- *
- * ⚠️ `.banded` as well as `.collapsed`, and `workspaceBarPart.ts` adds it only while the strip has
- * a height. A `border-box` element cannot be shorter than its own border, so the 1px below still
- * painted once the strip went to zero: measured, the strip came back 1px tall and pushed the header
- * to y=1, a hairline of `titleBar.border` across the top of a column with no band beneath it.
- */
-.monaco-workbench .part.workspacebar.collapsed.banded .workspacebar-titlebar-spacer {
-	box-sizing: border-box;
-	background-color: var(--vscode-titleBar-activeBackground);
-	border-bottom: 1px solid var(--vscode-titleBar-border, transparent);
-}
-
 /*
  * The column's divider. `workspaceBarPart.ts` resolves the colour - the theme's `facadeBar.border`,
  * or `contrastBorder` where a theme sets no other - and says whether there is one by adding
- * `bordered`; the width lives here, which is what `activitybarPart.ts` does for the same line.
- *
- * ⚠️ Here rather than inline, so the collapsed rule below can switch it off. An inline
- * declaration outranks every rule in this file, and the first attempt at the collapsed band set the
- * border inline and then tried to turn it off from a stylesheet.
+ * `bordered`; the width lives here, which is what `activitybarPart.ts` does for the same line. It
+ * runs the column's whole height, open or collapsed: the title bar is above the column and the
+ * status bar below it, so there is nothing for the line to cross.
  */
 .monaco-workbench .part.workspacebar.bordered {
 	border-right: 1px solid var(--facade-divider);
 }
 
 /*
- * The column's divider, redrawn as a background stripe for as long as the column is collapsed.
+ * The header is one row of the list, 28, open and collapsed alike - the list's `ROW_HEIGHT`, and a
+ * compact activity bar item (`COMPACT_ACTION_HEIGHT`). So the column is one 28px grid from its top,
+ * level with the compact activity bar beside it, and toggling changes only its width: with the
+ * header at 35 open and 28 collapsed, every row jumped 7px each time.
  *
- * ⚠️ Because collapsed it must not run the whole height wherever there is a band to interrupt. The
- * top of this column is then the title bar's strip, and the real title bar carries that strip on to
- * the right with no line in it - so a border down the full height cuts it in two, a few pixels from
- * the window's three buttons, which is the one place a reader's eye is already resting. Measured
- * before this rule existed: a cyan line at x=36 from y=6 downwards, inside the band. Open, the rule
- * does not apply and the border runs the whole height as it should, because open the title bar
- * starts where this column ends.
- *
- * ⚠️ And where there is no band it runs the whole height again, which is right and is what already
- * happens: `--facade-band-height` is 0 wherever the window's buttons are not over this column, every
- * stop below lands at or before 0, and the stripe is `--facade-divider` from y=0. There is no strip
- * to carry on to the right there, so there is nothing for a line to cut in two.
- *
- * ⚠️ `background-origin: border-box`. A background's positioning area is the padding box by
- * default, which would put the stripe one pixel inside - drawing a line where the layout reserved
- * none and eating the last pixel of every row.
- *
- * ⚠️ Four stops, two of them doubled, so every change is a hard edge rather than a gradient: the
- * title bar's own colour down the band, then one pixel of the title bar's bottom border so the line
- * under the band runs unbroken across the seam, then the divider.
- *
- * ⚠️ A background, not a border, is also what survives `overflow: hidden`: an element's own
- * background is not clipped by its own overflow, and every other way in reached for a descendant,
- * which is.
- */
-.monaco-workbench .part.workspacebar.collapsed.bordered {
-	border-right-color: transparent;
-	background-origin: border-box;
-	background-repeat: no-repeat;
-	background-position: top right;
-	background-size: 1px 100%;
-	background-image: linear-gradient(to bottom,
-			var(--vscode-titleBar-activeBackground) calc(var(--facade-band-height, 0px) - 1px),
-			var(--vscode-titleBar-border, var(--vscode-titleBar-activeBackground)) calc(var(--facade-band-height, 0px) - 1px),
-			var(--vscode-titleBar-border, var(--vscode-titleBar-activeBackground)) var(--facade-band-height, 0px),
-			var(--facade-divider) var(--facade-band-height, 0px));
-}
-
-.monaco-workbench .part.workspacebar.collapsed.bordered.window-inactive {
-	background-image: linear-gradient(to bottom,
-			var(--vscode-titleBar-inactiveBackground) calc(var(--facade-band-height, 0px) - 1px),
-			var(--vscode-titleBar-border, var(--vscode-titleBar-inactiveBackground)) calc(var(--facade-band-height, 0px) - 1px),
-			var(--vscode-titleBar-border, var(--vscode-titleBar-inactiveBackground)) var(--facade-band-height, 0px),
-			var(--facade-divider) var(--facade-band-height, 0px));
-}
-
-/*
- * ⚠️ And dims with it. The title bar puts `.inactive` on itself when the window loses focus; a
- * strip that stayed lit would be the one bright thing on a window nobody is looking at.
- */
-.monaco-workbench .part.workspacebar.collapsed.banded.window-inactive .workspacebar-titlebar-spacer {
-	background-color: var(--vscode-titleBar-inactiveBackground);
-}
-
-.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer.draggable {
-	-webkit-app-region: drag;
-}
-
-/*
- * The header sits on the same row the side bar gives its title
- * (`parts/media/paneCompositePart.css`, "matches height of composite container"), which is what
- * `--facade-header-row` carries.
- *
- * ⚠️ On one line with `EXPLORER` only while the strip above holds the title bar's height, which is
- * macOS. Where the window's buttons are elsewhere the strip is nothing, this header is the top of
- * the window and the side bar's title is a row below it - the seam that used to be measured here
- * is not one any more, and `WORKSPACE` answers to the title bar's row instead.
+ * ⚠️ Not on `EXPLORER`'s line, on purpose. The side bar's title row is 35
+ * (`paneCompositePart.css`), so beside the side bar `WORKSPACE` sits 3.5px higher than `EXPLORER`.
+ * The grid and a column that stays put were chosen over that.
  *
  * ⚠️ The same type as `EXPLORER`, to the value: 11px, weight 400, upper case, and the side bar's own
  * title colour. Those are `paneview.css` lines 28 and 42 and `sideBarTitle.foreground`, read off the
@@ -159,22 +50,32 @@
  * it is the row's own `padding-left`, read from the same token, and the two have to move
  * together or the title drifts off the icons.
  *
+ * ⚠️ Not 20, the inset every view title has (`part.css`: 8 on `.part > .title`, 12 on its
+ * `.title-label`, so `EXPLORER` is 20 from its column's edge). Tried, and it read as too far in -
+ * a title floating between the icons and the names rather than heading either.
+ *
  * ⚠️ It used to be 16, under an arithmetic that has not been true for a while: it counted a 1px
  * left border this part does not have - the border is on the right - and an 8px row padding that
  * became 10 when the active mark took the first two. Measured on the running window before this
  * was written: the title began at x=16 and the folder glyphs at x=10, six pixels apart down the
  * length of the column.
  *
- * The right padding mirrors the left by the glyph: 6 puts the last button's glyph centre 18 from the
- * bar's right edge, as a row's icon centre is 18 from its left. The buttons draw no box, so the eye
- * pairs the glyphs. Rows take the same padding, so a row's `+` stands in the header buttons' column.
+ * The right padding mirrors the left by the glyph: 6 puts the `+`'s glyph centre 18 from the bar's
+ * right edge, as a row's icon centre is 18 from its left. The button draws no box, so the eye pairs
+ * the glyphs. Rows take the same padding, so a row's last button - its triangle - stands in the
+ * header's `+` column, and the row's own `+` one column in from it.
  */
 .monaco-workbench .part.workspacebar .workspacebar-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	flex: 0 0 auto;
-	height: var(--facade-header-row);
+	/*
+	 * ⚠️ A literal, the one this file allows: it is `HEADER_HEIGHT` in `workspaceBarPart.ts`, which
+	 * lays the list out below it, and the list's `ROW_HEIGHT`. Taken from the spacing ramp it would be
+	 * a second source for that number, free to change without the other two.
+	 */
+	height: 28px;
 	padding: 0 var(--vscode-spacing-size60) 0 var(--vscode-spacing-size100);
 	box-sizing: border-box;
 	font-size: 11px;
@@ -184,50 +85,6 @@
 	cursor: default;
 	user-select: none;
 	-webkit-user-select: none;
-	-webkit-app-region: no-drag;
-}
-
-/*
- * The window moves by this row, where this row is the top of the window.
- *
- * ⚠️ `:not(.banded)` and not a list of platforms. The band above the header is where the window's
- * own buttons go, and `workspaceBarPart.ts` adds `banded` only while it has a height - so the
- * negation is exactly "the header is the window's top row". That is Windows and Linux, where the
- * buttons are at the far end of the title bar; it is also macOS in full screen, where the lights go
- * away and the band collapses. A table keyed on the platform would answer the first and miss the
- * second, and would take the header on windowed macOS - which sits below the band, a row down from
- * the title bar - along with it.
- *
- * ⚠️ The row reads as one strip with the title bar beside it: measured, the header is 219x35 at the
- * window's origin and the title bar starts at x=220 with the same height. Only one of them could be
- * grabbed, which is the kind of seam somebody finds by trying.
- *
- * ⚠️ Checked with real mouse input rather than a synthesised event, because a synthesised one does
- * not answer the question: the region is read by the compositor and acted on by the window manager,
- * and anything injected into the renderer has already gone past both. Pressing at 90,17 and moving
- * took the window with it, 56 across and 36 down.
- *
- * ⚠️ The resize handle at the column's edge keeps one of the two pixels it had in this row. It sits
- * at x=218..219 up here - past that the title bar's menu is drawn over it - and the header's region
- * ends at 218, so 219 is left. It is 4px wide and unobstructed for the 850px below this row, which
- * is where anybody resizing the column actually is.
- *
- * ⚠️ Collapsed this rule still applies and there is almost nothing left to grab: the header is
- * 35x56 and the two stacked buttons take y=6..53 of it, so what stays draggable is the few pixels
- * of margin around them. Nothing to be done about that - they are the reason the header is there -
- * and the title bar is 36px to the right.
- */
-.monaco-workbench .part.workspacebar:not(.banded) .workspacebar-header {
-	-webkit-app-region: drag;
-}
-
-/*
- * ⚠️ And the buttons come back out of it. A control inside a drag region gets no mouse events at
- * all on Windows - the `+` and the toggle would stop working, and stop working silently, with the
- * hover still drawing because that is the compositor's business and not the button's.
- */
-.monaco-workbench .part.workspacebar .workspacebar-actions {
-	-webkit-app-region: no-drag;
 }
 
 .monaco-workbench .part.workspacebar .workspacebar-title {
@@ -268,10 +125,10 @@
 	/*
 	 * ⚠️ One set of numbers for every button in this column, and they are the column's own rather
 	 * than the reference rail's. Measured before this was written, three treatments stood side by
-	 * side: the toggle at 24/4 with a 12px glyph and the quiet ink, this at 28/6 with a 12px glyph
-	 * and full white, and the folder icons at 16px and the quiet ink. The glyph size is the one the
-	 * rows and the activity bar already use; the box and the radius are the toggle's; the ink is the
-	 * pair everything else in the column takes.
+	 * side: the collapse toggle (in this header then) at 24/4 with a 12px glyph and the quiet ink,
+	 * this at 28/6 with a 12px glyph and full white, and the folder icons at 16px and the quiet ink.
+	 * The glyph size is the one the rows and the activity bar already use; the box and the radius are
+	 * the toggle's; the ink is the pair everything else in the column takes.
 	 */
 	width: var(--vscode-spacing-size240);
 	height: var(--vscode-spacing-size240);
@@ -301,14 +158,12 @@
 }
 
 /*
- * Flush under the header: the header draws no edge, so a lit first row's top continues the title
- * bar's bottom edge beside it. (A step here also left the list shorter than the height the part
- * gives it.)
+ * Flush under the header, which draws no edge. (A step here also left the list shorter than the
+ * height the part gives it.)
  */
 .monaco-workbench .part.workspacebar .workspacebar-list {
 	flex: 1 1 auto;
 	min-height: 0;
-	-webkit-app-region: no-drag;
 }
 
 /*
@@ -370,25 +225,6 @@
  */
 .monaco-workbench .part.workspacebar {
 	--facade-row-ink: var(--vscode-facadeBar-foreground);
-
-	/*
-	 * The row this column's header occupies, named here because two rules need it: the open header
-	 * is it, and collapsed it is what the toggle is centred inside.
-	 *
-	 * ⚠️ Not from the spacing ramp. 35 is `DEFAULT_CUSTOM_TITLEBAR_HEIGHT`, and the header has
-	 * carried it as a literal since it was written; a token that happened to equal 35 today would be
-	 * the wrong source for a number whose job is to agree with the title bar.
-	 *
-	 * ⚠️ It only agrees while the command center is shown, which is the default and not a promise.
-	 * `titlebarPart.ts` computes `isCommandCenterVisible || wcoEnabled ? 35 : 30`, so with
-	 * `window.commandCenter: false` the title bar is 30 and this is 5 too tall - measured. That
-	 * predates this variable, which is why it is written as a literal rather than derived: the
-	 * header was already 35 and `HEADER_HEIGHT` in `workspaceBarPart.ts` still is. Naming it here
-	 * makes the collapsed toggle agree with the open header, which is the smaller of the two
-	 * disagreements; making either follow the real title bar is its own change, and would have to
-	 * move `HEADER_HEIGHT` with it.
-	 */
-	--facade-header-row: 35px;
 
 	/*
 	 * One motion for everything in a row that changes, so a row settles at once rather than in
@@ -653,8 +489,9 @@
 }
 
 /*
- * A folder's `New Worktree...` and the triangle, in the same two columns as the header's `+` and
- * toggle: one box without a gap, as the header's toolbar. Only on rows that offer a worktree (WT-5.8).
+ * A folder's `New Worktree...` and the triangle, in the last two columns of the row, the triangle's
+ * being the header `+`'s: one box without a gap, as the header's toolbar. Only on rows that offer a
+ * worktree (WT-5.8).
  */
 .monaco-workbench .part.workspacebar .workspacebar-row-actions {
 	flex: 0 0 auto;
@@ -760,54 +597,10 @@
  *
  * ⚠️ 36 wide, which is the compact activity bar's width, and it is not an arbitrary match: measured,
  * a folder icon's centre is at x=18 in this column and an activity bar glyph's centre is at x=18 in
- * that one. Collapsing moves no icon, so the row's padding needs no collapsed variant.
+ * that one. Collapsing moves no icon, so the row's padding needs no collapsed variant. The toggle is
+ * the title bar's first button, whose glyph sits over the same x=18.
  * -------------------------------------------------------------------------------------------
  */
-
-/*
- * ⚠️ Registered so that it can be animated. A custom property is a string to the browser until it
- * is told otherwise, and a string does not interpolate: the collapsed divider, which starts where the
- * band ends, would jump to its new start while the band beside it slid there.
- */
-@property --facade-band-height {
-	syntax: '<length>';
-	inherits: true;
-	initial-value: 0px;
-}
-
-/*
- * The band slides when full screen takes the window's buttons away or gives them back - see
- * `BAND_SLIDE_DURATION`, which is this duration, and why only then.
- */
-.monaco-workbench.monaco-enable-motion .part.workspacebar.band-sliding {
-	transition: --facade-band-height 200ms ease-out;
-}
-
-.monaco-workbench.monaco-enable-motion .part.workspacebar.band-sliding .workspacebar-titlebar-spacer {
-	transition: height 200ms ease-out;
-}
-
-.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer {
-	display: flex;
-	align-items: center;
-	justify-content: flex-start;
-	box-sizing: border-box;
-}
-
-/*
- * ⚠️ macOS draws the window's three buttons here and nothing in the layout reserves room for
- * them - `titlebarPart.ts` says so out loud: on macOS native the controls container "is not needed to
- * make room for something". So this column has to leave the room itself, and 70px is the width the
- * title bar uses for the same three buttons (`titlebarpart.css`, `.mac .window-controls-container`).
- *
- * ⚠️ Not in fullscreen, where macOS takes the buttons away and 70px of nothing would sit where the
- * toggle should be. `.fullscreen` is the workbench's own class for it.
- */
-.monaco-workbench.mac:not(.fullscreen) .part.workspacebar:not(.collapsed) .workspacebar-titlebar-spacer.draggable {
-	padding-left: 70px;
-}
-
-/* --- collapsed -------------------------------------------------------------------------------- */
 
 /* The name goes; the icon and its mark stay exactly where they were. */
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-row .monaco-icon-label {
@@ -825,52 +618,15 @@
 }
 
 /*
- * ⚠️ 28 collapsed, not the 35 the open bar uses. Open, 35 is what puts `WORKSPACE` on the same
- * line as `EXPLORER` across the seam - a measured thing worth keeping. Collapsed there is no word to
- * line up and the column is read as a stack of glyphs beside the activity bar's, so it takes that
- * one's step instead. Measured before: 32, 35, 28, 28 down this column against 28, 28, 28 down that
- * one - four gaps, three different.
- */
-/*
- * ⚠️ Two rows collapsed, one open. Open the header reads `WORKSPACE  +  toggle` across; collapsed
- * there is no room beside anything, so the two buttons stack - and `column-reverse`, because the
- * toolbar's order puts the `+` first and collapsed the toggle belongs on top, nearest the window's
- * own controls.
- *
- * ⚠️ Top-aligned rather than centred, so that the toggle sits where the title bar's own row would
- * put it. Centring two 24px buttons in a 56px header left the toggle's box centre at 16 against the
- * first menu's 17.5 - measured, and 1.5px is the size of gap that reads as wrong without reading as
- * anything a person can name. The padding is what it takes to centre one button inside the header
- * row, so it follows the row rather than being chosen.
+ * The same row, with the `+` alone in it and centred: a 24px box in a 36px column puts its glyph at
+ * x=18, on the line the folder icons below it are centred on.
  */
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-header {
 	justify-content: center;
-	align-items: flex-start;
-	padding: calc((var(--facade-header-row) - var(--vscode-spacing-size240)) / 2) 0 0;
-	height: calc(var(--vscode-spacing-size280) * 2);
-}
-
-.monaco-workbench .part.workspacebar.collapsed .workspacebar-actions .actions-container {
-	flex-direction: column-reverse;
+	padding: 0;
 }
 
 /* Nothing to say when there is no room to say it - the empty column keeps its `+` instead. */
 .monaco-workbench .part.workspacebar.collapsed .workspacebar-empty {
 	display: none;
-}
-
-/*
- * ⚠️ Collapsed there is no room beside the window's buttons, so the toggle takes the row the
- * part gives it underneath - see `TOGGLE_ROW_HEIGHT`. Which is why the rule above says
- * `:not(.collapsed)` rather than leaving this one to win a specificity argument it would lose:
- * measured, the toggle landed at x64 in a column 36 wide.
- */
-.monaco-workbench .part.workspacebar.collapsed .workspacebar-titlebar-spacer {
-	justify-content: center;
-}
-
-/* ⚠️ Its own row sits at the bottom of the strip, under whatever the window put above it. */
-.monaco-workbench .part.workspacebar .workspacebar-titlebar-spacer.toggle-own-row {
-	align-items: flex-end;
-	padding-bottom: var(--vscode-spacing-size20);
 }
