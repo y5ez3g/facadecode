@@ -5,6 +5,7 @@
 
 import './media/titlebarpart.css';
 import './media/titlebarCompositeBar.css';
+import './media/titlebarDrag.css';
 import { localize, localize2 } from '../../../../nls.js';
 import { MultiWindowParts, Part } from '../../part.js';
 import { ITitleService } from '../../../services/title/browser/titleService.js';
@@ -63,6 +64,7 @@ import { PaneCompositeBar } from '../paneCompositeBar.js';
 // Imported for its `registerConfiguration` call as much as for the predicate.
 import { showAppIcon } from './titlebarAppIcon.js';
 import { getTitlebarCompositeBarOptions } from './titlebarCompositeBar.js';
+import { TitleBarLeftMenu } from './titlebarLeftToolbar.js';
 import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
 import { ViewContainerLocation } from '../../../common/views.js';
 
@@ -283,6 +285,9 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 	private readonly titlebarCompositeBarDisposable = this._register(new MutableDisposable());
 	private titlebarCompositeBarContainer: HTMLElement | undefined;
 
+	// The actions at the front of the row (`TitleBarLeftMenu`), main window only.
+	private leftToolBarElement: HTMLElement | undefined;
+
 	protected readonly customMenubar = this._register(new MutableDisposable<CustomMenubarControl>());
 	private readonly customMenubarDisposables = this._register(new DisposableStore());
 	protected appIcon: HTMLElement | undefined;
@@ -500,6 +505,21 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 			this.appIcon = prepend(this.leftContent, $('a.window-appicon'));
 		}
 
+		// Facade Code: the actions at the front of the row, after the app icon and before the menus,
+		// which are appended below and again whenever the menu bar is reinstalled
+		if (!this.isAuxiliary && hasCustomTitlebar(this.configurationService, this.titleBarStyle)) {
+			this.leftToolBarElement = append(this.leftContent, $('div.left-toolbar-container'));
+			this._register(this.instantiationService.createInstance(MenuWorkbenchToolBar, this.leftToolBarElement, TitleBarLeftMenu, {
+				contextMenu: MenuId.TitleBarContext,
+				hiddenItemStrategy: HiddenItemStrategy.NoHide,
+				toolbarOptions: {
+					primaryGroup: () => true,
+				},
+				actionViewItemProvider: (action, options) => createActionViewItem(this.instantiationService, action, options),
+				hoverDelegate: this.hoverDelegate
+			}));
+		}
+
 		// Draggable region that we can manipulate for #52522
 		this.dragRegion = prepend(this.rootContainer, $('div.titlebar-drag-region'));
 
@@ -580,6 +600,8 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 				// for something, except for web where a custom menu being supported). not putting the
 				// container helps with allowing to move the window when clicking very close to the
 				// window control buttons.
+				// Facade Code: which is why the actions at the front of the row leave room for them
+				this.leftToolBarElement?.classList.add('after-window-controls');
 			} else if (getWindowControlsStyle(this.configurationService) === WindowControlsStyle.HIDDEN) {
 				// Linux/Windows: controls are explicitly disabled
 			} else {
@@ -1024,7 +1046,9 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 		const hasMenubar = !(this.currentMenubarVisibility === 'hidden' || this.currentMenubarVisibility === 'compact' || (!isWeb && isMacintosh));
 		const hasCommandCenter = this.isCommandCenterVisible;
 		const hasToolBarActions = this.globalActionsEnabled || this.layoutControlEnabled || this.editorActionsEnabled || this.activityActionsEnabled;
-		return hasMenubar || hasCommandCenter || hasToolBarActions;
+		// Facade Code: the actions at the front of the row, which line up with a column that zooms
+		const hasLeftToolBar = this.leftToolBarElement !== undefined;
+		return hasMenubar || hasCommandCenter || hasToolBarActions || hasLeftToolBar;
 	}
 
 	get preventZoom(): boolean {

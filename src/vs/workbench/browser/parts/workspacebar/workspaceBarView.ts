@@ -37,7 +37,7 @@ import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 
 /** ⚠️ 28, the compact activity bar's item height, measured. Not the workbench's usual 22: a dozen rows pointed at, not hundreds scanned. */
-const ROW_HEIGHT = 28;
+export const ROW_HEIGHT = 28;
 
 const TEMPLATE_ID = 'workspaceBar.row';
 
@@ -284,7 +284,7 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		const glyph = append(row, $('.workspacebar-glyph'));
 		const icon = append(glyph, $('.workspacebar-icon'));
 		const label = disposables.add(new IconLabel(row, { supportHighlights: true, supportDescriptionHighlights: true }));
-		// A folder's buttons, the header's pair one row down: its toolbar's `+`, then the triangle.
+		// A folder's buttons: its toolbar's `+`, then the triangle, which is under the header's `+`.
 		const actions = append(row, $('.workspacebar-row-actions'));
 		const toolbar = disposables.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, append(actions, $('.workspacebar-row-toolbar')), WorkspaceBarRowToolbar, {
 			menuOptions: { shouldForwardArgs: true },

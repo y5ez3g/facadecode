@@ -13,9 +13,9 @@ import { workbenchConfigurationNodeBase } from '../../../common/configuration.js
  * Whether the product's mark is drawn at the left of the title bar.
  *
  * ⚠️ Off by default. The mark was the first thing in the window's top left because nothing else
- * was; the workspace bar is column zero now and reaches the top, so that corner is taken and the
- * mark sat 36px along from it, between the column and the menus. Two marks in one corner is one
- * mark and one thing to look past on the way to File.
+ * was; that corner is the workspace bar's toggle now, over the column it collapses. Turned on, the
+ * mark goes first and the toggle after it - one more thing to look past on the way to File, and
+ * the toggle no longer over its column.
  */
 export const SHOW_APP_ICON = 'facade.titleBar.showAppIcon';
 
@@ -37,7 +37,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		[SHOW_APP_ICON]: {
 			type: 'boolean',
-			description: localize('titleBar.showAppIcon', "Controls whether the product icon is shown at the left of the title bar. The workspace bar occupies that corner, so it is hidden by default. Applies to windows opened after the change, and only where the title bar is custom, on Windows and Linux."),
+			description: localize('titleBar.showAppIcon', "Controls whether the product icon is shown at the left of the title bar. The workspace bar's toggle occupies that corner, so it is hidden by default. Applies to windows opened after the change, and only where the title bar is custom, on Windows and Linux."),
 			default: false,
 			scope: ConfigurationScope.APPLICATION
 		}

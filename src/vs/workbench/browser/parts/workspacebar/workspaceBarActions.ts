@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/workspacebardialog.css';
+import './media/workspacebartoggle.css';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -30,6 +31,9 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { workbenchConfigurationNodeBase } from '../../../common/configuration.js';
+import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
+import { InEditorZenModeContext } from '../../../common/contextkeys.js';
+import { TitleBarLeftMenu } from '../titlebar/titlebarLeftToolbar.js';
 
 /** The toolbar at the right end of the bar's header. */
 export const WorkspaceBarTitleMenu = new MenuId('WorkspaceBarTitle');
@@ -76,8 +80,8 @@ export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorksp
 export const WorkspaceBarRowKindContext = new RawContextKey<'folder' | 'repository' | 'worktree'>('facadeWorkspaceBarRowKind', 'folder', localize('workspaceBar.rowKindContext', "Whether the focused row of the workspace is a folder, a repository or a worktree"));
 
 /**
- * Whether the bar is collapsed to its column of icons - what its toggle draws: `<` to collapse it,
- * `>` to open it again. Set by `WorkspaceBarPart`.
+ * Whether the bar is collapsed to its column of icons - what its toggle in the title bar says it
+ * will do: collapse it, or expand it again. Set by `WorkspaceBarPart`.
  */
 export const WorkspaceBarCollapsedContext = new RawContextKey<boolean>('facadeWorkspaceBarCollapsed', false, localize('workspaceBar.collapsedContext', "Whether the workspace bar is collapsed to its icons"));
 
@@ -191,26 +195,29 @@ class OpenFolderAction extends Action2 {
 }
 
 /**
- * ⚠️ Remove, not Delete. The folder stays on disk - this is a bookmark leaving a list, and one
- * column to the right, in the explorer, Delete already means the other thing.
- */
-/**
- * Shows the folder where it lives.
+ * The toggle's glyph: `menu`, the three bars that open a window's navigation pane out of a column of
+ * icons and back - WinUI's NavigationView in Windows' own apps, Outlook's folder pane, Gmail. The bar
+ * is this window's navigation and collapses to exactly that column, so it is that button.
  *
- * ⚠️ Through upstream's own `revealFileInOS` rather than the native host service: this file is
- * in `browser/`, and reaching for an electron-only service from here is a layer violation that the
- * checker catches - and a command is what the explorer's own menu item uses anyway.
+ * ⚠️ Which takes `menu` from the application menu, the one other thing that drew it: see
+ * `workspacebartoggle.css`, where the menu bar keeps `more` instead.
+ *
+ * ⚠️ Not a chevron. In the title bar a `<` reads as Back - the command center has its own Back and
+ * Forward arrows in the same row - and it says which way something moves without saying what. And
+ * not `layout-sidebar-left`, because the layout controls at the other end of the same row already
+ * draw that glyph for the primary side bar.
  */
+const toggleCollapsedIcon = registerIcon('workspace-bar-toggle', Codicon.menu, localize('workspaceBar.toggleIcon', "Icon for collapsing and expanding the workspace bar."));
+
 /**
  * Collapses the bar to a column of icons, or opens it again.
  *
- * ⚠️ An action in the header's own toolbar, beside the `+`. Hand-rolled as an anchor in the strip
- * above, it came out with the browser's own focus ring and, worse, kept `:focus` after a click - so it
- * sat lit, chip and all, while the `+` beside it was quiet. Measured: `bg rgba(90,93,94,0.31)` at rest
- * against the `+`'s transparent. In the same toolbar the two are the same object and cannot drift.
+ * ⚠️ At the front of the title bar, not in the bar's header. The title bar runs the width of the
+ * window above the bar, so its first button is the one nearest the column - and a header with room
+ * for one button fewer is a header with room for the `+`.
  *
- * ⚠️ And out of the strip for a second reason: macOS draws the window's three buttons across it,
- * 70px of them over a column that is 36 when collapsed. Nothing of ours belongs in that row.
+ * ⚠️ One glyph in both states: the column under it says which state it is in. The tooltip says what
+ * a click will do, and `toggled` is on while the bar is open, so it reads as pressed then.
  */
 class ToggleCollapsedAction extends Action2 {
 
@@ -220,13 +227,15 @@ class ToggleCollapsedAction extends Action2 {
 		super({
 			id: ToggleCollapsedAction.ID,
 			title: localize2('workspaceBar.toggleCollapsed', "Toggle Workspace Bar"),
+			tooltip: localize('workspaceBar.expand', "Expand Workspace Bar"),
 			category: WORKSPACE_BAR_CATEGORY,
-			// Where the bar goes: `<` while it is open, `>` while it is collapsed.
-			icon: Codicon.chevronLeft,
-			toggled: { condition: WorkspaceBarCollapsedContext, icon: Codicon.chevronRight },
+			icon: toggleCollapsedIcon,
+			toggled: { condition: WorkspaceBarCollapsedContext.toNegated(), tooltip: localize('workspaceBar.collapse', "Collapse Workspace Bar") },
 			f1: true,
-			// ⚠️ Order 2, so it follows the `+` that is order 1 in the same group.
-			menu: { id: WorkspaceBarTitleMenu, group: 'navigation', order: 2 }
+			// ⚠️ `NoHide` on that tool bar: hidden, the command palette would be the only way back.
+			// ⚠️ Not in Zen Mode, which hides the bar: a click there would flip a column nobody can see,
+			// and it would come back the other way on leaving.
+			menu: { id: TitleBarLeftMenu, group: 'navigation', order: 0, when: InEditorZenModeContext.toNegated() }
 		});
 	}
 
@@ -235,6 +244,13 @@ class ToggleCollapsedAction extends Action2 {
 	}
 }
 
+/**
+ * Shows the folder where it lives.
+ *
+ * ⚠️ Through upstream's own `revealFileInOS` rather than the native host service: this file is
+ * in `browser/`, and reaching for an electron-only service from here is a layer violation that the
+ * checker catches - and a command is what the explorer's own menu item uses anyway.
+ */
 class RevealFolderAction extends Action2 {
 
 	static readonly ID = 'facade.workspaceBar.revealFolder';
@@ -330,6 +346,10 @@ class CustomizeFolderAction extends Action2 {
 	}
 }
 
+/**
+ * ⚠️ Remove, not Delete. The folder stays on disk - this is a bookmark leaving a list, and one
+ * column to the right, in the explorer, Delete already means the other thing.
+ */
 class RemoveFolderAction extends Action2 {
 
 	static readonly ID = 'facade.workspaceBar.removeFolder';

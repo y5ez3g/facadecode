@@ -4,28 +4,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/workspacebarpart.css';
-import { getWCOTitlebarAreaRect, isFullscreen, onDidChangeFullscreen } from '../../../../base/browser/browser.js';
-import { $, append, getWindow, getWindowId } from '../../../../base/browser/dom.js';
+import { $, append } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
 import { coalesce } from '../../../../base/common/arrays.js';
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
-import { isMacintosh } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
-import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
-import { IHostService } from '../../../services/host/browser/host.js';
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
-import { getTitleBarStyle, TitlebarStyle } from '../../../../platform/window/common/window.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { Part } from '../../part.js';
-import { BANNER_HEIGHT } from '../banner/bannerPart.js';
 import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
 import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -39,16 +33,17 @@ import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
-import { WorkspaceBarView } from './workspaceBarView.js';
+import { ROW_HEIGHT, WorkspaceBarView } from './workspaceBarView.js';
 
 /** The width the bar opens at and the narrowest it can be dragged to. Measured: 219 and a divider. */
 export const WORKSPACEBAR_WIDTH = 220;
 
-/** Kept with the stylesheet's `.workspacebar-header` height, which the list is laid out below. */
-const HEADER_HEIGHT = 35;
+/**
+ * The header is one row of the list, open and collapsed alike. Kept with the stylesheet's
+ * `.workspacebar-header` height, which the list is laid out below.
+ */
+const HEADER_HEIGHT = ROW_HEIGHT;
 
-/** Kept with the stylesheet's `.band-sliding` transition, which the band's skin waits out. */
-const BAND_SLIDE_DURATION = 200;
 const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
 
 /**
@@ -64,75 +59,29 @@ export const WORKSPACEBAR_COLLAPSED_WIDTH = 36;
 const COLLAPSED_STORAGE_KEY = 'facade.workspaceBar.collapsed';
 
 /**
- * Whether the grid has the workspace bar as its first column, which every hard-coded grid coordinate
- * in `layout.ts` rests on. Asked of the grid that was built, not the descriptor: a restored layout
- * comes from storage and can be older than the code reading it.
+ * Whether the grid has the workspace bar as the middle row's first column, which every hard-coded
+ * grid coordinate in `layout.ts` rests on: the root is title, banner, middle row, status bar, and
+ * the middle row is where upstream's `[2, ...]` coordinates point. Asked of the grid that was built,
+ * not of the descriptor it was built from.
  */
-export function isWorkspaceBarFirstColumn(root: ISerializedNode | undefined): boolean {
+export function isWorkspaceBarFirstInMiddleRow(root: ISerializedNode | undefined): boolean {
 	if (root?.type !== 'branch') {
 		return false;
 	}
 
-	const first = root.data[0];
+	const middle = root.data[2];
+	if (middle?.type !== 'branch') {
+		return false;
+	}
+
+	const first = middle.data[0];
 	return first?.type === 'leaf' && (first.data as { type?: Parts } | undefined)?.type === Parts.WORKSPACEBAR_PART;
 }
 
 /**
- * Whether the window's own buttons are drawn across the top of column zero. It decides where this
- * bar's content starts: under the title bar where they are, and at the very top of the window where
- * they are not, which is a row the column gets back on every platform but one.
- *
- * ⚠️ Read, not tabulated per platform. Windows puts the three buttons at the end of the row and so
- * does Linux, but a Linux window manager lets a person move them to the front - elementary OS ships
- * that way - so a table keyed on the platform is wrong there the moment somebody does. The rect
- * answers for the window in front of us and keeps answering the day any of that changes.
- *
- * ⚠️ `isMac` is a parameter with the real platform as its default rather than a read of
- * `isMacintosh` inside, so that the macOS branch can be tested from a build that is not on macOS.
- * Callers pass three arguments.
- */
-export function controlsOccupyColumnZero(titleBarStyle: TitlebarStyle, titlebarAreaRect: Pick<DOMRect, 'x'> | undefined, fullscreen: boolean, isMac = isMacintosh): boolean {
-	// Full screen first, and for every platform: the window has no buttons up there to draw.
-	// macOS takes the traffic lights away entirely, and Windows and Linux have no caption row
-	// left to put theirs in - `titlebarpart.css` says the same thing its own way, hiding
-	// `.window-controls-container` under `.fullscreen`.
-	//
-	// ⚠️ The room beside the lights is written the same way one file over: the 70px of padding
-	// the open header leaves for them is `.mac:not(.fullscreen)` in `workspacebarpart.css`. The
-	// row above them is the same fact and belongs in the same condition - without it the header
-	// sits 35px down in full screen with an empty band over it, which is the one place this
-	// column does not look like it does on Windows.
-	if (fullscreen) {
-		return false;
-	}
-
-	// macOS draws the traffic lights at the top left and has no way to draw them anywhere else, so
-	// the platform answers and the rect is not consulted. It would agree - `windows.ts` does set
-	// `titleBarOverlay` on macOS, so a rect does arrive - but a fact that cannot vary is a better
-	// source than a measurement this fork has no macOS build to check.
-	//
-	// ⚠️ `titleBarStyle`, not `hasCustomTitlebar`. Native tabs and simple fullscreen both fall back to
-	// a native title bar, and the lights then sit above the web contents rather than over this column.
-	if (isMac) {
-		return titleBarStyle === TitlebarStyle.CUSTOM;
-	}
-
-	// The rect is the part of the row the buttons left alone, so it starts past them when they are at
-	// the front and at zero when they are at the end - which is where Chromium draws them in a
-	// left-to-right window.
-	if (titlebarAreaRect) {
-		return titlebarAreaRect.x > 0;
-	}
-
-	// No overlay to read, which is `window.controlsStyle` set to `custom` or to `hidden`, or a native
-	// title bar. The first draws the buttons into the title bar's own far end, the second draws none
-	// at all, and the third draws them outside the web contents. None of the three reach this column.
-	return false;
-}
-
-/**
- * The workspace bar: column zero of the window. The shell only - what a folder is belongs to
- * `WorkspaceBarModel`, switching to `WorkspaceBarSwitcher`, how one looks to `WorkspaceBarView`.
+ * The workspace bar: the middle row's first column, between the title bar and the status bar. The
+ * shell only - what a folder is belongs to `WorkspaceBarModel`, switching to `WorkspaceBarSwitcher`,
+ * how one looks to `WorkspaceBarView`.
  */
 export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
@@ -154,24 +103,12 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private content: HTMLElement | undefined;
 
 	private _collapsed = false;
-	/** What the header's toggle draws from: `<` or `>` (`WorkspaceBarCollapsedContext`). */
+	/** What the title bar's toggle says it will do (`WorkspaceBarCollapsedContext`). */
 	private readonly collapsedContext: IContextKey<boolean>;
 	get collapsed(): boolean { return this._collapsed; }
 
 	private readonly _onDidChangeCollapsed = this._register(new Emitter<void>());
 	readonly onDidChangeCollapsed = this._onDidChangeCollapsed.event;
-
-	/** The strip above the header. Its height is the title bar's, read on every layout. */
-	private titlebarSpacer: HTMLElement | undefined;
-
-	/** The height the strip was last given, which is where a slide starts from. */
-	private bandHeight: number | undefined;
-
-	/** Set by the one change that slides the band rather than snapping it: full screen. */
-	private slideNextBandChange = false;
-
-	/** Takes the slide class off, and the skin with it if the band slid shut, once the slide is over. */
-	private readonly bandSettler = this._register(new RunOnceScheduler(() => this.settleBand(), BAND_SLIDE_DURATION));
 
 	private readonly model: WorkspaceBarModel;
 	private readonly git: WorkspaceBarGit;
@@ -190,7 +127,6 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@IStorageService private readonly storageService: IStorageService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILogService private readonly logService: ILogService,
-		@IHostService private readonly hostService: IHostService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkspaceBarCustomizationService customizationService: IWorkspaceBarCustomizationService,
 	) {
@@ -213,25 +149,6 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, true);
 		this.collapsedContext = WorkspaceBarCollapsedContext.bindTo(contextKeyService);
 		this.collapsedContext.set(this._collapsed);
-
-		// ⚠️ The strip above the header is painted in the title bar's colours, and the title bar has
-		// two: it dims when the window loses focus. Without this the column keeps one bright band
-		// across the top of a window nobody is looking at.
-		this._register(this.hostService.onDidChangeFocus(focused => {
-			this.element?.classList.toggle('window-inactive', !focused);
-		}));
-
-		// ⚠️ Entering full screen takes the window's buttons away, which changes how much room this
-		// column has to leave above its header - and the grid does not necessarily lay this part out
-		// again to ask. The window resizes for the transition, but macOS fires `enter-full-screen`
-		// when the animation ends, after those resizes, so the last layout of the transition is one
-		// taken while the answer was still the old one.
-		this._register(onDidChangeFullscreen(windowId => {
-			if (this.element && windowId === getWindowId(getWindow(this.element))) {
-				this.slideNextBandChange = true;
-				this.relayoutAtCurrentSize();
-			}
-		}));
 
 		// Built here rather than with the content area: an action can run before anything has been
 		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
@@ -261,15 +178,6 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// Must come first: the grid reads `view.element`.
 		this.element = parent;
 		this.content = append(this.element, $('.content'));
-
-		// The bar starts at the top of the window, so the header needs the title bar's height above it,
-		// which is also where macOS draws the traffic lights. ⚠️ `getTitleBarStyle`, not
-		// `hasCustomTitlebar`: native tabs and simple fullscreen keep the lights off column zero.
-		this.titlebarSpacer = append(this.content, $('.workspacebar-titlebar-spacer'));
-		this.titlebarSpacer.setAttribute('aria-hidden', 'true');
-		if (isMacintosh && getTitleBarStyle(this.configurationService) === TitlebarStyle.CUSTOM) {
-			this.titlebarSpacer.classList.add('draggable');
-		}
 
 		if (this._collapsed) {
 			this.element.classList.add('collapsed');
@@ -356,117 +264,20 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// inherits the workbench foreground, which is where the explorer's file names get theirs.
 		container.style.color = this.getColor(FACADE_BAR_FOREGROUND) ?? '';
 
-		// ⚠️ The colour and whether there is a line at all; the line itself is drawn by the
-		// stylesheet, the way `activitybarPart.ts` does it. Setting `border-right` inline here instead
-		// is what the first attempt did, and an inline declaration cannot be overridden by a rule - so
-		// the collapsed rule that has to switch this border off for the band silently lost, and the
-		// line went on cutting the band in two while the stylesheet said it should not.
+		// The colour and whether there is a line at all; the line itself is drawn by the stylesheet,
+		// the way `activitybarPart.ts` does it.
 		const borderColor = this.getColor(FACADE_BAR_BORDER) ?? this.getColor(contrastBorder);
 		container.classList.toggle('bordered', !!borderColor);
 		container.style.setProperty('--facade-divider', borderColor ? String(borderColor) : '');
 	}
 
-	/**
-	 * Lays the column out again at the size it already has.
-	 *
-	 * `Part` has one of these and keeps it private, so this is the same three lines that
-	 * `sessions/browser/parts/auxiliaryBarPart.ts` writes for the same reason: a part told
-	 * something by an event rather than by the grid.
-	 */
-	private relayoutAtCurrentSize(): void {
-		if (this.dimension && this.contentPosition) {
-			this.layout(this.dimension.width, this.dimension.height, this.contentPosition.top, this.contentPosition.left);
-		}
-	}
-
 	override layout(width: number, height: number, top: number, left: number): void {
 		super.layout(width, height, top, left);
 
-		// Follows the title bar, however tall it is - including not at all, which is what full
-		// screen and a hidden title bar both come out as.
-		//
-		// ⚠️ And a row of its own under them while collapsed. macOS draws the window's three buttons
-		// across the top of this column - measured at 70px wide, which is what the title bar reserves
-		// for the same three - and a collapsed column is 36. There is no "beside" left, so the toggle
-		// goes below them. Open, 70 + 24 fits in 220 and it sits beside them as it should.
-		//
-		// ⚠️ Only where those buttons are actually over this column. Where they are not - Windows and
-		// Linux draw them at the far end of the row, and full screen draws none at all - the strip
-		// was holding a row open for something that is nowhere near it, and the one part that reaches
-		// the top of the window was the one part not using it: the header began 35px down for no
-		// reason a person could see.
-		if (this.titlebarSpacer) {
-			const targetWindow = getWindow(this.element);
-			const controlsAbove = controlsOccupyColumnZero(
-				getTitleBarStyle(this.configurationService),
-				getWCOTitlebarAreaRect(targetWindow),
-				isFullscreen(targetWindow));
-			// ⚠️ The title bar's row and not the banner's. `mainContainerOffset` counts both, because
-			// every other column has the banner over it - but the banner starts to the right of this
-			// one, and the lights sit in the title bar's row only. Counted, the header dropped 26px
-			// whenever the Restricted Mode banner was up, under a band with nothing in it. It did not
-			// even do that reliably: showing the banner does not lay this column out again, so the
-			// header stayed put until the next resize - maximising and restoring the window - moved it.
-			const bannerHeight = this.layoutService.isVisible(Parts.BANNER_PART) ? BANNER_HEIGHT : 0;
-			const above = controlsAbove ? this.layoutService.mainContainerOffset.top - bannerHeight : 0;
-
-			// ⚠️ Slid rather than snapped, and only when full screen is what moved it. The header
-			// jumped 35px the moment macOS reported the change, which is after its own animation has
-			// finished - so the least this can do is not add a second jolt to the end of the first.
-			// Only full screen: a band that slides at startup or on collapse is a header that drifts
-			// into place every time the window opens.
-			//
-			// ⚠️ And only where the workbench animates at all. With reduced motion the stylesheet has no
-			// transition to run, and holding the skin on for a slide that is not happening leaves the
-			// collapsed strip's bottom border as a hairline across the top for its length.
-			const slide = this.slideNextBandChange && this.bandHeight !== undefined && this.bandHeight !== above
-				&& !!this.element.closest('.monaco-enable-motion');
-			this.slideNextBandChange = false;
-			this.bandHeight = above;
-
-			// ⚠️ Spacing and nothing else. macOS draws the window's three buttons across this row - 70px
-			// of them, over a column that is 36 when collapsed - so nothing of ours goes in it.
-			this.titlebarSpacer.style.height = `${above}px`;
-
-			// ⚠️ The same number the stylesheet needs to know where the collapsed divider starts, set
-			// from the one place that computes it. The strip's height and the point the line begins are
-			// the same edge, and two sources for it is two edges a frame apart.
-			this.element.style.setProperty('--facade-band-height', `${above}px`);
-
-			if (slide) {
-				// ⚠️ The skin stays on for the length of the slide, whichever way it goes. Taken off at
-				// the start of a slide shut, the band loses its colour and its bottom line in the first
-				// frame and the slide is a gap closing rather than a band.
-				this.element.classList.add('band-sliding', 'banded');
-				this.bandSettler.schedule();
-			} else {
-				this.bandSettler.cancel();
-				this.settleBand();
-			}
-		}
-
 		// A virtualised list does not re-flow on its own: without handing the size down the rows stop
 		// being recycled against the visible area and the scroll height is computed from the old one.
-		//
-		// ⚠️ Given the height the band is going to, not the one it has. Mid-slide the strip's
-		// `clientHeight` is somewhere between the two, and a list laid out against that is the wrong
-		// height for as long as nothing lays it out again - which, after a full screen change, is
-		// until the next resize.
 		const { contentSize } = super.layoutContents(width, height);
-		this.view?.layout(contentSize.width, contentSize.height - (this.bandHeight ?? 0) - HEADER_HEIGHT);
-	}
-
-	/**
-	 * The band as it is at rest: no slide under way, and its skin on exactly when it has a height.
-	 *
-	 * ⚠️ The collapsed strip is `border-box` with a 1px bottom border, so a height of zero still
-	 * paints that border: measured, the strip came back 1px tall and the header started at y=1,
-	 * leaving a hairline of `titleBar.border` across the top of a column that has no band under it.
-	 * The class is what the stylesheet keys the skin off, so it has to go when the height does.
-	 */
-	private settleBand(): void {
-		this.element?.classList.remove('band-sliding');
-		this.element?.classList.toggle('banded', (this.bandHeight ?? 0) > 0);
+		this.view?.layout(contentSize.width, contentSize.height - HEADER_HEIGHT);
 	}
 
 	async add(uris: readonly URI[]): Promise<void> {
