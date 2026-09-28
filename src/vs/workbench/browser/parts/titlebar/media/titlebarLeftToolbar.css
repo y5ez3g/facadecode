@@ -1,0 +1,62 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * The actions at the front of the title bar (`TitleBarLeftMenu`), drawn like the title bar's own
+ * action tool bar at the other end of the row - `.action-toolbar-container` in `titlebarpart.css` -
+ * so the two ends of one row read as one set of buttons.
+ *
+ * `order: 1` is the app icon's, and the tool bar is inserted after it, so the icon stays first when
+ * someone turns it on; the menu bar is `order: 2` and follows both.
+ *
+ * ⚠️ A 36px cell, the collapsed workspace bar's width, with the 22px button centred in it: 7 either
+ * side. So the glyph's centre is at x=18, over the collapsed column's icons, and the menus begin at
+ * x=36, where that column ends - the seam below carries on up to `File`.
+ *
+ * ⚠️ Not the title bar's 4px gap between buttons on the right, which is what it was. That left the
+ * glyph 12 from the window's edge and 18 from `File`'s first letter, where two menus are 16 apart,
+ * so the toggle read as the first menu. Measured from the pixels, as ink rather than boxes.
+ */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-toolbar-container {
+	display: none;
+	flex: 0 0 auto;
+	order: 1;
+	align-items: center;
+	height: 100%;
+	padding-left: 7px;
+	padding-right: 7px;
+	color: var(--vscode-titleBar-activeForeground);
+	position: relative;
+	z-index: 2500;
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-toolbar-container:not(.has-no-actions) {
+	display: flex;
+}
+
+.monaco-workbench .part.titlebar.inactive > .titlebar-container > .titlebar-left > .left-toolbar-container {
+	color: var(--vscode-titleBar-inactiveForeground);
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-toolbar-container .codicon {
+	color: inherit;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .left-toolbar-container .monaco-action-bar .action-item {
+	display: flex;
+}
+
+/*
+ * ⚠️ macOS draws the traffic lights over the start of this row and nothing in the layout reserves
+ * room for them (`titlebarPart.ts` adds `after-window-controls` only where they are there). 70 is
+ * what the title bar gives the same three buttons (`.mac .window-controls-container`), and 8 is the
+ * gap the sessions window leaves after them before its own sidebar toggle.
+ *
+ * ⚠️ Not in full screen, where macOS takes the lights away and the button goes to the edge.
+ */
+.monaco-workbench.mac:not(.fullscreen) .part.titlebar > .titlebar-container > .titlebar-left > .left-toolbar-container.after-window-controls {
+	padding-left: calc(70px + var(--vscode-spacing-size80));
+}
