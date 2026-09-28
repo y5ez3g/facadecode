@@ -1,311 +1,72 @@
-# L1 plan — identity and the window
+# L1 — identity and the window
 
-Baseline is the `vendor/1.138.0` root commit. Every step stands on its own: it can be built,
-checked and reverted by itself. Each lands on `feature/<n>-<name>`, gets reviewed, then merges
-into `main` with `--no-ff`.
+L1 is the first release level of Facade Code: a VS Code fork that looks like its own product, and
+whose window is organised around the workspace - one window, many folders. It starts from the
+`vendor/1.138.0` root commit and is three steps. Each step stands on its own, lands on
+`feature/<n>-<name>`, and merges into `main` after review (ENGINEERING.md).
 
 ```
-0  identity   drop Copilot, new icon, rename to Facade Code
-1  top bar    the activity bar can live in the title bar, and does by default
-2  workspace  -> WORKSPACE.md
+0  identity    Copilot off by default · renamed Facade Code · its own icon          done
+1  top bar     the activity bar can live in the title bar, and does by default      done
+2  workspace   the workspace bar, one window for many folders, worktrees            WORKSPACE.md
+                                                                                    WORKTREE.md
 ```
 
-⭐ **The workspace is the product, and it has its own document: [`WORKSPACE.md`](./WORKSPACE.md).**
-Design, what VS Code's workspace already is, what we extend it with, every workspace feature
-before and after, the performance measurements, the implementation order and the tests are all
-there. What is left here is what the workspace does not own.
-
-Naming, so that it is settled once:
+## Names
 
 ```
 the surface     "workspace bar" wherever a person reads it
-the part        Parts.WORKSPACEBAR_PART, WorkspaceBarPart - like ActivitybarPart, no vendor
-                prefix on a part
-settings        facade.*        upstream owns workbench.*, so ours cannot collide with it
-colour tokens   facadeBar.*     same reason. ⚠️ Not `workspaceBar.*`, tempting as it is: a
-                                theme token is a name a theme author writes, and upstream is
-                                free to add a `workspaceBar.*` of its own tomorrow
+the part        Parts.WORKSPACEBAR_PART, WorkspaceBarPart - no vendor prefix on a part
+settings        facade.*       upstream owns workbench.*
+colour tokens   facadeBar.*    a theme author writes these, and upstream is free to add a
+                               workspaceBar.* of its own
 ```
-
----
 
 ## Step 0 — Identity
 
-Smallest and most independent. Do it first to get a baseline that already looks like its
-own product.
-
-### 0.1 Turn Copilot off by default
-
-The chat extension ships in-tree at `extensions/copilot` — 4136 files, 57 MB, built by
-`compileCopilotExtensionBuildTask` and listed in `build/lib/extensions.ts`. It is **not**
-in `product.json`'s `builtInExtensions`, which holds only the js-debug trio.
-
-The approach is to **stop showing the AI features, not to tear them out**:
-
 ```
-✓ do not register the chat views and contributions by default
-✓ keep the extension in the tree and the build
-✓ keep product.json's defaultChatAgent
-✓ one setting turns the whole thing back on
+Copilot         not registered by default, and one setting turns it back on. Hidden, not deleted:
+                the extension stays in the tree and the build, and product.json keeps
+                defaultChatAgent, which 129 call sites read. No visible control may lead to
+                something we hide
+name            19 identity fields in product.json, plus resources/server/manifest.json and
+                resources/win32/VisualElementsManifest.xml. The four upstream URLs stay. Costs,
+                once: the data folder moves, and macOS treats the new bundle id as a new app
+icon            app (opaque square) -> code.icns · web-icon (transparent) -> linux, server,
+                win32, favicon · web-inline (silhouette) -> the empty-editor watermark. Each target
+                keeps its existing size set. The watermark keeps its depth: each layer's ink
+                against white, normalised to the frontmost, as fill-opacity; the whole at 0.15
+                light, 0.45 dark; the high-contrast themes keep fixed colours
 ```
 
-⚠️ **Why not delete it.** `defaultChatAgent` is typed non-optional
-(`readonly defaultChatAgent: IDefaultChatAgent`) and read at **129 non-test call sites**,
-72 of them in `vs/workbench/contrib` and 32 in `vs/workbench/services`. Removing it is
-not a deletion, it is a refactor of the chat plumbing — a different project with a
-different risk, and it would conflict with every upstream merge.
+Done means: the name and the icon are asserted where a person sees them, not where they are set; the
+bundle is `Facade Code.app`; the watermark is checked in Dark Modern, Light Modern, HC Dark and HC
+Light; the dock icon is checked as the system renders it; no chat view is registered. How the `.icns`
+is built, and why, is in `build/lib/facade/icns.ts`.
 
-⚠️ **Do not leave a dead entrance.** Hiding must mean not registering, not "registering a
-view that shows an install prompt for something we do not ship". A visible control that
-leads nowhere is worse than no control.
+## Step 1 — The activity bar in the title bar
 
-### 0.2 Rename
+`workbench.activityBar.location` gains a fifth value, `toolbar`: the view container icons move into
+the title bar, left of the layout controls, behind a divider, and the side bar draws no strip. The host
+is upstream's `PaneCompositeBar`, so dragging, badges, the context menu and a click on the active icon
+behave as they do in the activity bar. The default is `toolbar`: the window's first column is the
+workspace bar, and a second strip of icons beside it is one too many. `default` puts them back.
 
-19 identity fields in `product.json` — display names, executable names, data folders,
-system identity — plus two files that spell the name out and never read `product.json`:
+Not doing: letting each icon choose its own bar. One bar with one position needs no filtering and no
+drag between bars, and the divider already says where navigation ends and commands begin.
 
-```
-resources/server/manifest.json             PWA name / short_name
-resources/win32/VisualElementsManifest.xml
-```
+Done means: all five locations crossed with the switch on and off, every cell - one value per axis
+passes while the broken combination goes unvisited.
 
-⚠️ Leave the four upstream URLs alone (`licenseUrl`, `serverLicenseUrl`,
-`reportIssueUrl`, `webviewContentExternalBaseUrlTemplate`). Changing them either lies or
-breaks.
+## Step 2 — The workspace
 
-⚠️ Two one-off costs: `dataFolderName` moves, so an existing profile is not found;
-`darwinBundleIdentifier` changes, so macOS treats this as a new application and window
-state and permissions start over.
+[`WORKSPACE.md`](./WORKSPACE.md) and [`WORKTREE.md`](./WORKTREE.md).
 
-### 0.3 Icon
-
-Source art comes in three variants, each with its own job:
+## Every step
 
 ```
-app          opaque square, generous margin   -> resources/darwin/code.icns
-web-icon     transparent outside and in gaps  -> linux / server / win32 / favicon
-web-inline   silhouette only                  -> empty-editor watermark
-```
-
-Keep each target file's existing size set rather than inventing new ones.
-
-**⚠️ The `.icns` trap.** Slots `ic04` (16px) and `ic05` (32px) can only hold ARGB, not
-PNG, and `iconutil`'s ARGB encoder loses colour and can add a yellow artefact — a whole
-bottom row on an opaque full-bleed image, a single pixel on a transparent one. The fix:
-**leave `icon_16x16.png` and `icon_32x32.png` out of the iconset** and supply only the
-`@2x` files, so they land in the PNG slots `ic11`/`ic12` and macOS downscales for 1x.
-The result is eight PNG slots, bit-identical to the source. A vendor-supplied `.icns`
-hits this too, so rebuild from the iconset rather than shipping theirs.
-
-**⚠️ A watermark with depth layers must not be flattened to one colour.** Take each
-layer's ink weight against white, normalise to the frontmost, and express it as
-`fill-opacity`. The root keeps a letterpress opacity — **0.15** light, **0.45** dark.
-The two high-contrast themes use fixed colours and are left alone.
-
-**⚠️ Verify the app icon by asking the system, not by diffing the file.** macOS 26 clips
-app icons to a rounded superellipse and insets them, so a pixel diff between the system
-render and the source is meaningless — judge by colour and geometry. After changing the
-file, `touch` the bundle, re-register it with `lsregister -f` and restart the Dock, or
-the old icon stays.
-
-### 0.4 Acceptance
-
-```
-19 product.json fields plus the two files that spell the name out
-the bundle is named Facade Code.app with the right CFBundle* values
-icns has eight PNG slots, bit-identical to the source iconset
-watermark checked in four themes: Dark Modern, Light Modern, HC Dark, HC Light
-dock icon checked by capturing what the system actually renders
-no chat view registered, and nothing on screen pointing at an extension we hide
-```
-
----
-
-## Step 1 — The activity bar can live in the title bar
-
-Upstream has `workbench.activityBar.location: default|top|bottom|hidden` — four places,
-and all four keep the view container icons inside the side bar's own frame. None of them
-puts navigation on the same row as the layout controls.
-
-The step is in two parts. **1a** adds a fifth position and moves the whole bar there.
-**1b** breaks the bar apart so each icon picks its own side. 1a is a complete change on
-its own and ships without 1b.
-
-### 1a — A fifth position: `toolbar`  ✅ done
-
-One row, in this order:
-
-```
-[command center]  ......empty......  ⬚ ⬚ ⬚ ⬚ ⬚ │ ▭ ▤ ▥ ▦ ⊙ ⚙
-                                     navigation   layout    account
-```
-
-The icons are hosted by a second `PaneCompositeBar`, prepended into the title bar's
-`.action-toolbar-container`, and the side bar draws no strip while this position is
-chosen. Everything else about the icons — drag to reorder, badges, hover, the context
-menu, what a click does — is upstream's, because the host is upstream's class.
-
-```
-layoutService.ts          ActivityBarPosition.TOOLBAR
-workbench.contribution.ts the setting's enum and its description
-activitybarPart.ts        the fifth entry in the position menu
-layout.ts                 toolbar joins top/bottom: no standalone activity bar part
-sidebarPart.ts            toolbar looks like hidden from here - draw no strip
-titlebarPart.ts           create, size and dispose the host
-titlebarCompositeBar.ts   its options                                      (new)
-media/titlebarCompositeBar.css  its box, and the divider                   (new)
-panecomposite.ts          getPartByLocation, no longer private
-```
-
-**⚠️ `Parts.ACTIVITYBAR_PART`, not `SIDEBAR_PART`.** `ViewContainerActivityAction` reads
-that argument to decide whether clicking the active icon collapses the side bar. Passing
-the side bar - which is what `SidebarPart` does for its own strip - silently drops that
-behaviour, and the setting named `workbench.activityBar.iconClickBehavior` stops applying
-to the activity bar.
-
-**⚠️ Size the bar on creation, not only on layout.** `CompositeBar.layout` returns early
-on a zero dimension and nothing lays the part out again just because a setting changed, so
-a bar built at that moment renders no icons until the next resize. The part's own element
-carries the current size; `this.dimension` does not, because `Part.layout` is never
-reached from `BrowserTitlebarPart.layout`.
-
-**⚠️ Never measure our own container when budgeting the bar.** It is sized by its content,
-so reading it back is a layout feedback loop, and it reports zero on the first layout,
-which collapses every icon into the overflow chevron. Budget from the width the part was
-handed minus the neighbours that are sized by their own content, capped at half the title
-bar - `.titlebar-right` is `min-width: min-content`, so a bar that always asks for its
-natural width pushes the region into the command center and then under the
-adjacent-center toolbar, which macOS offsets 8px further left than flex puts it.
-
-**⚠️ The bar has to carry its own way out.** A `PaneCompositeBar` with no
-`fillExtraContextMenuActions` offers the view containers and nothing else, so right-clicking
-the icons cannot move them anywhere: the only routes back are the settings editor and the
-command palette, neither of which the person is looking at. Upstream keeps those entries in
-`ActivityBarCompositeBar.getActivityBarContextMenuActions`; it is lifted out into a function
-both bars call, rather than copied.
-
-**The submenu label and the setting value are the same word.** The full command title says
-where the bar goes ("Move Activity Bar to Title Bar", matching upstream's "Move Activity Bar
-to Side"); the short title is the position's name and reads `Toolbar`, because a menu entry
-saying "Title Bar" beside a setting saying `toolbar` leaves nothing to search for.
-
-**⚠️ The divider is `::after` on the bar's container, not a `Separator` in the toolbar.**
-The boundary is at the toolbar's *left* edge and `prepareActions` deletes a leading
-separator - correctly, since a separator with nothing before it separates nothing.
-
-**⚠️ A class, not `:has()`.** `:not(:empty)` does not work - the container always holds the
-bar's action bar even when that bar shows nothing - and `:has(.action-item)` is the trap
-upstream closed in #327052: a `:has()` whose anchor is live makes Blink re-evaluate it on
-every DOM mutation in the document, and `build/stylelint.ts` now rejects the root-anchored
-form outright. Toggle a class from the part, which already knows the count. That needs a
-change signal, so `PaneCompositeBar` forwards its `CompositeBar`'s `onDidChange` - the one
-event that fires from `updateCompositeSwitcher`, the single funnel for what is rendered.
-
-**The storage keys are the activity bar's, on purpose.** One position for one bar, so only
-one of them is ever on screen, and what a person pinned, hid and reordered has to survive
-being moved - the same way upstream's `top` and `bottom` share these keys with `default`.
-**⚠️ 1b must split them** before two bars can be visible at once: each `CompositeBar` saves
-the whole list it knows about, so two bars over one key take turns erasing each other.
-
-Measured, in a dev window at `toolbar`:
-
-```
-nav icons          5, draggable, reorder survives a switch back to default
-divider            drawn in all four theme kinds, and keyed off a class, not the icons
-side bar strip     absent;  activity bar part  0 wide
-title actions      4 layout toggles, Accounts, Manage
-click active icon  collapses the side bar;  click another  switches to it
-context menu       Activity Bar Position (5 entries, toolbar checked) + Move Primary Side
-                   Bar Right;  round trip toolbar -> default -> toolbar from the menu alone
-                   default and top menus unchanged by the extraction
-window 1440 -> 480 icons fold into the chevron at 480, never overlap the command center
-5 locations x 14 live switches  every cell as specified
-```
-
-### 1b — Each activity icon picks its bar  ❌ not doing this
-
-An earlier design gave every icon its own position and let it be dragged between the two
-bars. Against a bar that moves as a whole, none of it is needed: one bar has one position,
-so there is nothing to filter and nowhere to drag to, and `layout.ts` already hides the
-side strip. It also carries the worst failure in this step - a precondition that has to
-read `enabled && location === 'toolbar'`, where dropping the second half does not degrade
-but empties the window - and that failure only exists if the split does.
-
-What it was for was real: with launcher buttons on this row, the first few icons were
-draggable and the rest were not, with nothing to say where that changed. **1a's divider
-answers that.** It sits on the boundary - view containers left, commands right - so a
-launcher to the right of the line is consistent rather than inconsistent.
-
-`workbench.activityBar.location` defaults to `toolbar`, because the window's first column
-is the workspace bar and a second strip of icons beside it is one column too many. Setting
-it back to `default` puts them where upstream has them.
-
-### Acceptance
-
-Five locations × switch on and off — the **cross product**, every cell. Testing one value
-per axis passes while the broken combination goes unvisited.
-
-⚠️ An HTML5 drag cannot be driven over CDP on macOS: `Input.dispatchMouseEvent` with a
-button held produces no `dragover` at all. Reordering has to be checked with real OS mouse
-events.
-
----
-
-## Step 2 — The workspace and its bar
-
-Moved to [`WORKSPACE.md`](./WORKSPACE.md), which carries the whole of it: what a VS Code
-workspace already is, what we extend it with, every workspace feature before and after, the
-performance measurements, the implementation order and the tests.
-
-What stays here is what the workspace does not own: identity, and where the activity bar lives.
-
-Two things that were decided here and are still true, kept because `WORKSPACE.md` is about the
-workspace and these are about the bar as a piece of the window:
-
-```
-The bar is a real Part: the `Parts` enum plus the grid shape in `layout.ts`.
-  ⚠️ A part missing from the enum is a whole class of silent no-op. There is a test asserting
-  the shape `layout.ts` addresses into.
-The bar owns its model. ⚠️ Do NOT derive it from `ISCMService`. That service records which
-  repositories the git extension happens to have loaded right now, and the extension closes and
-  reopens them as the window changes folder. A list rendered from it collapses and refills on
-  every switch. Treat git as one source of fact, not as the model.
-The workbench cannot run git - the renderer is sandboxed, so there is no `execFile` to reach
-  for. Reading `git worktree` bookkeeping is four small reads through `IFileService`, which is
-  what the git extension does for it too. Writing goes through the git extension's commands.
-```
-
-## Running through every step
-
-### Tests
-
-Each step lands with tests:
-
-```
-step 0   the icon and the name are asserted where a person sees them, not where they are set
-step 1   pure-logic tests for the position service
-         a truth table for visibility across five locations x switch on/off
-step 2   in WORKSPACE.md §7
-```
-
-### Build-failing checks
-
-Bare `ms` durations, bare `cubic-bezier`/`ease`, bare `box-shadow` numbers, literal
-`#hex` / `rgb()` colours, and any call site for `rebase`, `reset --hard` or
-`push --force`.
-
-### Instruments
-
-Written when needed. The fuller list of traps, each of which cost a wrong answer first, is in
-WORKSPACE.md §7.2. Three that are about the window rather than the workspace:
-
-```
-⚠️ A CDP driver must refuse to guess when more than one workbench window is open.
-   /json/list is not stably ordered, so a probe and a screenshot taken seconds apart can
-   read two different windows
-⚠️ OS-level drag needs the window frontmost, or the first mouse-down only activates it
-   and the whole event stream is wasted. CDP cannot drive an HTML5 drag on macOS
-⚠️ Theme switching needs no restart - write workbench.colorTheme - but the switch must be
-   asserted, because the workbench carries the theme's file name in a class. Not waiting
-   long enough produces identical rows that look like a finding
+tests               step 0 and 1 as above; step 2 in WORKSPACE.md §8
+build-failing       bare ms durations, bare cubic-bezier/ease, bare box-shadow numbers, literal
+checks              #hex / rgb() colours, and any call site for rebase, reset --hard, push --force
+measuring a window  WORKSPACE.md §8.4
 ```
