@@ -195,17 +195,6 @@ class OpenFolderAction extends Action2 {
 }
 
 /**
- * ⚠️ Remove, not Delete. The folder stays on disk - this is a bookmark leaving a list, and one
- * column to the right, in the explorer, Delete already means the other thing.
- */
-/**
- * Shows the folder where it lives.
- *
- * ⚠️ Through upstream's own `revealFileInOS` rather than the native host service: this file is
- * in `browser/`, and reaching for an electron-only service from here is a layer violation that the
- * checker catches - and a command is what the explorer's own menu item uses anyway.
- */
-/**
  * The toggle's glyph: `menu`, the three bars that open a window's navigation pane out of a column of
  * icons and back - WinUI's NavigationView in Windows' own apps, Outlook's folder pane, Gmail. The bar
  * is this window's navigation and collapses to exactly that column, so it is that button.
@@ -255,6 +244,13 @@ class ToggleCollapsedAction extends Action2 {
 	}
 }
 
+/**
+ * Shows the folder where it lives.
+ *
+ * ⚠️ Through upstream's own `revealFileInOS` rather than the native host service: this file is
+ * in `browser/`, and reaching for an electron-only service from here is a layer violation that the
+ * checker catches - and a command is what the explorer's own menu item uses anyway.
+ */
 class RevealFolderAction extends Action2 {
 
 	static readonly ID = 'facade.workspaceBar.revealFolder';
@@ -350,6 +346,10 @@ class CustomizeFolderAction extends Action2 {
 	}
 }
 
+/**
+ * ⚠️ Remove, not Delete. The folder stays on disk - this is a bookmark leaving a list, and one
+ * column to the right, in the explorer, Delete already means the other thing.
+ */
 class RemoveFolderAction extends Action2 {
 
 	static readonly ID = 'facade.workspaceBar.removeFolder';
