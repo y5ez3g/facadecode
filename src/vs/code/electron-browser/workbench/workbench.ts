@@ -105,6 +105,17 @@ import { getPartsSplashColors } from './partsSplash.js';
 			const workspaceBarWidth = layoutInfo.workspaceBarWidth ?? 0;
 			const contentWidth = window.innerWidth - workspaceBarWidth;
 
+			// Saved part bounds are page coordinates (`partsSplash.ts` reads them off the page), and every
+			// part they place is drawn in the container beside the workspace bar below, which already
+			// begins at its width. Taken off once here, so the two do not add up to twice the bar.
+			if (workspaceBarWidth > 0 && layoutInfo.partBounds) {
+				for (const bounds of Object.values(layoutInfo.partBounds)) {
+					if (bounds) {
+						bounds.left -= workspaceBarWidth;
+					}
+				}
+			}
+
 			const splash = document.createElement('div');
 			splash.id = 'monaco-parts-splash';
 			splash.className = baseTheme ?? 'vs-dark';
