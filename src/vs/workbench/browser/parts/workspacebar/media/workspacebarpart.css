@@ -542,6 +542,19 @@
 }
 
 /*
+ * The `+`, header and row alike, moved half a pixel right and down: a pixel of padding on one side
+ * moves a centred glyph by half of it.
+ *
+ * ⚠️ Because the codicon's cross is not in the middle of its square. Measured from the pixels at
+ * 125%: in a 16px box at 10..26 its ink ran 10.4..23.6, centre 17 where every other glyph in this
+ * column is centred on 18, and 0.5 higher than the activity bar's first icon beside it - with its
+ * bottom 2px above that icon's, which the eye reads as sitting high.
+ */
+.monaco-workbench .part.workspacebar .monaco-action-bar .action-label.codicon-add {
+	padding: 1px 0 0 1px;
+}
+
+/*
  * A folder that could not be reached. Dimmed and struck through, never hidden: the row is the only
  * place it can be removed from, and a person who unplugged a disk wants to see that the folder is
  * still in their workspace.
