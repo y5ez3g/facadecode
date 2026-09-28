@@ -1,0 +1,25 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * Room to move the window by, either side of the command center.
+ *
+ * The title bar is dragged by whatever it does not cover: every button, the menus and the command
+ * center are holes in the drag region, and what is left over is what a person can grab. This fork
+ * puts the activity icons and the layout controls in the same row, and the row fills. Asked of
+ * Windows point by point (`WM_NCHITTEST`) along the middle of a 1387px window, the parts that moved
+ * it were 36px after the menus and the 10px upstream leaves after the command center - and the
+ * 36 was only the space the menus had overflowed out of, so it came and went with the width.
+ *
+ * ⚠️ So the gap is the command center's margin, not whatever the flex layout leaves: 40 either side,
+ * the top of the spacing ramp and a little wider than the row is tall. The row shrinks the menus
+ * (into `···`) and the command center to pay for it, and never the gap.
+ *
+ * Not in full screen, and not in a browser: in neither is there a window to move, and the row would
+ * give up 80px for nothing.
+ */
+.monaco-workbench:not(.fullscreen):not(.web) .part.titlebar > .titlebar-container.has-center > .titlebar-center {
+	margin: 0 var(--vscode-spacing-size400);
+}
