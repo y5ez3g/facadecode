@@ -21,6 +21,12 @@ import type { IWorkspaceBarRepository } from './workspaceBarGit.js';
  *
  * `layout.ts` also resolves this to force the part into existence before the grid is built.
  */
+/** A note for {@link IWorkspaceBarService.setNotes}. */
+export interface IRowNote {
+	readonly uri: URI;
+	readonly note: string;
+}
+
 export interface IWorkspaceBarService {
 	readonly _serviceBrand: undefined;
 
@@ -117,6 +123,13 @@ export interface IWorkspaceBarService {
 	 * deleted the worktree, and that takes seconds for a large one.
 	 */
 	hideWorktree(worktree: URI): IDisposable;
+
+	/**
+	 * Short notes drawn after rows' names: what is going on in those folders, such as the agents
+	 * working in them (L2-PLAN, step 31). Replaces all the notes there were, so a row left out loses
+	 * its note. Kept for this window only. `$(name)` draws a codicon.
+	 */
+	setNotes(notes: readonly IRowNote[]): void;
 
 	focus(): void;
 }

@@ -19,7 +19,7 @@ import { IQuickInputButton, IQuickInputService, IQuickPick, IQuickPickItem, Item
 import { TerminalExitReason, TerminalLocation, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
-import { FolderColor, folderGlyphFor, folderRowNameFor, glyphInFolderColor, IWorkspaceBarCustomizationService } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { FolderColor, folderGlyphFor, folderRowNameFor, glyphInFolderColor, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -78,21 +78,39 @@ export function agentPicks(agents: readonly ITerminalInstance[], placeOf: (agent
  * row the bar draws it under.
  */
 export function placeOfFolder(folder: IWorkspaceFolder, repository: IWorkspaceBarRepository | undefined, customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'>, extUri: IExtUri): IPlaceStep[] {
-	const folderRow = (uri: URI, name: string): IPlaceStep => {
-		const customization = customizationService.get(uri);
-		return { glyph: folderGlyphFor(customization), color: customization?.color, name };
-	};
-
 	const worktree = findWorktree(repository, folder.uri, extUri);
 	if (!repository || !worktree) {
-		return [folderRow(folder.uri, customizationService.nameFor(folder))];
+		return [folderRowStep(folder.uri, customizationService.nameFor(folder), customizationService)];
 	}
 
 	// A worktree's row is a dot in the colour the worktree was given, as in the bar (`workspaceBarView.ts`)
 	return [
-		folderRow(repository.main, folderRowNameFor(customizationService, repository.main, repository.folder)),
+		folderRowStep(repository.main, folderRowNameFor(customizationService, repository.main, repository.folder), customizationService),
 		{ glyph: WORKTREE_GLYPH, color: customizationService.get(worktree.uri)?.color, name: customizationService.nameFor(folder) }
 	];
+}
+
+/**
+ * Where a worktree that has a row but no folder in the workspace is - one an agent was started in that
+ * nobody has gone to yet - drawn as the bar draws it: its repository's row, then its own, by the name
+ * somebody gave it or else its branch.
+ */
+export function placeOfRow(uri: URI, repository: IWorkspaceBarRepository | undefined, customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'>, extUri: IExtUri): IPlaceStep[] {
+	const worktree = findWorktree(repository, uri, extUri);
+	if (!repository || !worktree) {
+		return [folderRowStep(uri, folderRowNameFor(customizationService, uri, undefined), customizationService)];
+	}
+
+	return [
+		folderRowStep(repository.main, folderRowNameFor(customizationService, repository.main, repository.folder), customizationService),
+		{ glyph: WORKTREE_GLYPH, color: customizationService.get(worktree.uri)?.color, name: worktreeNameFor(customizationService, worktree) }
+	];
+}
+
+/** A folder's row as a step on the way to an agent: its glyph, its colour and `name`. */
+function folderRowStep(uri: URI, name: string, customizationService: Pick<IWorkspaceBarCustomizationService, 'get'>): IPlaceStep {
+	const customization = customizationService.get(uri);
+	return { glyph: folderGlyphFor(customization), color: customization?.color, name };
 }
 
 /** What an agent's tab says: the title the agent gave it, or before it has, the agent's name. */
@@ -248,6 +266,15 @@ export class TerminalLauncherQuickPick extends Disposable {
 			return {
 				steps: placeOfFolder(folder, this._workspaceBarService.repositoryFor(folder.uri), this._customizationService, this._uriIdentityService.extUri),
 				row: rowOf(folder.uri)
+			};
+		}
+
+		// Held under a worktree's row with no folder in the workspace yet: an agent's, till somebody goes there
+		const row = this._folderTerminalsService.rowOf(agent);
+		if (row) {
+			return {
+				steps: placeOfRow(row, this._workspaceBarService.repositoryFor(row), this._customizationService, this._uriIdentityService.extUri),
+				row: rowOf(row)
 			};
 		}
 

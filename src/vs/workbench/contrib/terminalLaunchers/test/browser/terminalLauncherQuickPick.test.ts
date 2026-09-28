@@ -14,7 +14,7 @@ import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/works
 import { glyphInFolderColor, IFolderCustomization, IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { ITerminalInstance } from '../../../terminal/browser/terminal.js';
-import { agentPicks, IAgentPlace, IPlaceStep, placeOfFolder } from '../../browser/terminalLauncherQuickPick.js';
+import { agentPicks, IAgentPlace, IPlaceStep, placeOfFolder, placeOfRow } from '../../browser/terminalLauncherQuickPick.js';
 
 /** An agent's terminal, as much of one as the picker reads: when it was made, its title, its agent's name, and where it is. */
 class TestAgent extends mock<ITerminalInstance>() {
@@ -116,6 +116,36 @@ suite('Agent picker - every agent open, in one list', () => {
 			['folder FacadeCode', 'circle-small-filled feature-16'],
 			['rocket~foldergreen My shop'],
 			['server API', 'circle-small-filled~folderpink fix-login'],
+		]);
+	});
+
+	test('a worktree with a row and no folder in the workspace is drawn after its repository, by the name it was given or else its branch', () => {
+		const main = URI.file('/code/FacadeCode');
+		const worktree = (path: string, branch: string) => ({ uri: URI.file(path), branch, label: branch, exists: true, folder: undefined });
+		const repository: IWorkspaceBarRepository = {
+			kind: 'repository',
+			main,
+			folder: new WorkspaceFolder({ uri: main, name: 'FacadeCode', index: 0 }),
+			branch: 'main',
+			members: [],
+			worktrees: [worktree('/code/p1', 'p1'), worktree('/code/p1-clamp', 'p1-clamp')]
+		};
+		const customizations = new Map<string, IFolderCustomization>([['/code/p1-clamp', { name: 'Clamp', color: 'pink' }]]);
+		const customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'> = {
+			nameFor: candidate => candidate.name,
+			get: uri => customizations.get(uri.path)
+		};
+		const placeOf = (uri: URI, of: IWorkspaceBarRepository | undefined) =>
+			placeOfRow(uri, of, customizationService, extUriBiasedIgnorePathCase).map(step => `${glyphInFolderColor(step.glyph, step.color).id} ${step.name}`);
+
+		assert.deepStrictEqual([
+			placeOf(URI.file('/code/p1'), repository),
+			placeOf(URI.file('/code/p1-clamp'), repository),
+			placeOf(URI.file('/code/elsewhere'), undefined),
+		], [
+			['folder FacadeCode', 'circle-small-filled p1'],
+			['folder FacadeCode', 'circle-small-filled~folderpink Clamp'],
+			['folder elsewhere'],
 		]);
 	});
 

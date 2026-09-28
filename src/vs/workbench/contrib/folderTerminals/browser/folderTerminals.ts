@@ -14,7 +14,7 @@ import { EditorActivation } from '../../../../platform/editor/common/editor.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
-import { TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
+import { IShellLaunchConfig, TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { folderKey } from '../../../browser/parts/workspacebar/workspaceBar.js';
@@ -23,7 +23,7 @@ import { getWorkbenchContribution, IWorkbenchContribution } from '../../../commo
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { GroupsOrder, IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { EditorGroupColumn } from '../../../services/editor/common/editorGroupColumn.js';
-import { AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
+import { ACTIVE_GROUP, AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 
 /**
@@ -46,15 +46,32 @@ export interface IFolderTerminalsService {
 
 	/**
 	 * The folder a terminal belongs to: the one it is put away for, or while it has a tab, the one the
-	 * window is on. `undefined` for a terminal that belongs to the window, in the panel.
+	 * window is on. `undefined` for a terminal that belongs to the window, in the panel - and for one
+	 * held under a row that is not a folder of the workspace, which {@link rowOf} answers.
 	 */
 	folderOf(instance: ITerminalInstance): IWorkspaceFolder | undefined;
+
+	/**
+	 * The worktree a terminal is held for while that worktree has a row on the bar and no folder in the
+	 * workspace: an agent's, opened for the worktree made for it (`openFor`). Going to the row puts the
+	 * worktree in the workspace and brings the terminal up. `undefined` for every other terminal.
+	 */
+	rowOf(instance: ITerminalInstance): URI | undefined;
 
 	/**
 	 * Puts a terminal in front and focuses it. One put away for another folder is brought back by
 	 * moving the window onto that folder first, as a click on its row does.
 	 */
 	reveal(instance: ITerminalInstance): Promise<void>;
+
+	/**
+	 * A terminal opened for `folder` as if somebody on it had opened it, without moving the window:
+	 * in the editor area when the window is on it; kept for it in the background, to come up when the
+	 * window goes there, when it is another folder of the workspace or a worktree the bar has a row for
+	 * that is not in the workspace yet; in the panel, the window's own, when it is neither or terminals
+	 * do not follow folders.
+	 */
+	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance>;
 }
 
 /** `IFolderTerminalsService`, served by the `FolderTerminals` contribution that keeps the terminals. */
@@ -70,10 +87,24 @@ export class FolderTerminalsService implements IFolderTerminalsService {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).folderOf(instance);
 	}
 
+	rowOf(instance: ITerminalInstance): URI | undefined {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).rowOf(instance);
+	}
+
 	reveal(instance: ITerminalInstance): Promise<void> {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).reveal(instance);
 	}
+
+	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance> {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).openFor(folder, config);
+	}
 }
+
+/**
+ * The group a terminal opened for another folder is recorded in: none, so that coming back puts it at
+ * the end of whichever column is in front, behind that column's own tab.
+ */
+const NO_GROUP = -2;
 
 /**
  * The group recorded for a terminal whose tab was in an auxiliary window rather than the main
@@ -122,6 +153,9 @@ interface IStoredParkedTerminal {
 	readonly index: number;
 	readonly persisted: boolean | undefined;
 	readonly active: boolean;
+
+	/** The worktree it was held for as a row that was not a folder of the workspace, as a URI (`FolderTerminals._rows`). */
+	readonly row?: string;
 }
 
 function isStoredParkedTerminal(candidate: unknown): candidate is IStoredParkedTerminal {
@@ -129,9 +163,9 @@ function isStoredParkedTerminal(candidate: unknown): candidate is IStoredParkedT
 		return false;
 	}
 
-	const { nonce, group, index, persisted, active } = candidate as Record<string, unknown>;
+	const { nonce, group, index, persisted, active, row } = candidate as Record<string, unknown>;
 	return isString(nonce) && isNumber(group) && isNumber(index) && isBoolean(active)
-		&& (persisted === undefined || isBoolean(persisted));
+		&& (persisted === undefined || isBoolean(persisted)) && (row === undefined || isString(row));
 }
 
 /** What was kept of the parked terminals, by folder. Storage that cannot be read keeps nothing. */
@@ -171,6 +205,15 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 	private readonly _parked = new Map</*folder*/string, IParkedTerminal[]>();
 	private readonly _watching = new Map</*folder*/string, DisposableStore>();
+
+	/**
+	 * The worktrees terminals are held for while each has a row on the bar and no folder in the
+	 * workspace (`openFor`): an agent's, opened for the worktree made for it. Going to the row puts the
+	 * worktree in the workspace and brings them up. Until then no change to the workspace's folders takes
+	 * them away, as taking a folder out of it takes that folder's: the row is still there to go to.
+	 * Deleting the worktree ends them with whatever else works inside it.
+	 */
+	private readonly _rows = new Map</*folder*/string, URI>();
 
 	/**
 	 * Incremented by every folder switch. A restore in flight compares against it and stops when it
@@ -278,6 +321,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		return undefined;
 	}
 
+	/** {@link IFolderTerminalsService.rowOf}. */
+	rowOf(instance: ITerminalInstance): URI | undefined {
+		const key = this._keyParkedFor(instance);
+		return key !== undefined && !this._folderFor(key) ? this._rows.get(key) : undefined;
+	}
+
 	/** {@link IFolderTerminalsService.reveal}. */
 	async reveal(instance: ITerminalInstance): Promise<void> {
 		const key = this._keyParkedFor(instance);
@@ -290,6 +339,32 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		await instance.focusWhenReady(true);
 	}
 
+	/** {@link IFolderTerminalsService.openFor}. */
+	async openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance> {
+		const key = this._key(folder);
+		const target = this._folderFor(key);
+		if (target && this._isActive(key)) {
+			return this._terminalService.createTerminal({ config, location: { viewColumn: ACTIVE_GROUP } });
+		}
+
+		// A worktree with a row on the bar and no folder in the workspace yet - one made for an agent -
+		// keeps its terminals as another folder does, under its row
+		const row = !target && this._workspaceBarService.repositoryFor(folder) ? folder : undefined;
+		if ((!target && !row) || !this._isEnabled()) {
+			return this._terminalService.createTerminal({ config, location: TerminalLocation.Panel });
+		}
+
+		// Made in the background and held for its folder, as if it had been open there when the window
+		// left: never shown in the folder on screen, not even for a moment.
+		const instance = await this._terminalService.createTerminal({ config: { ...config, hideFromUser: true, forcePersist: true }, location: TerminalLocation.Editor });
+		if (row) {
+			this._rows.set(key, row);
+		}
+		this._hold(key, [{ instance, group: NO_GROUP, index: -1, persisted: config.forcePersist, active: false }]);
+		this._logService.trace(`[folderTerminals] opened a terminal for ${key}, held until the window goes there`);
+		return instance;
+	}
+
 	/**
 	 * Shows a parked terminal again, and answers whether it is back. It comes back with the rest of
 	 * its folder's terminals, once the bar has put that folder's editors up, which moving onto the
@@ -299,8 +374,9 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 * terminal could not be shown or went away.
 	 */
 	private async _bringBack(key: string, instance: ITerminalInstance): Promise<boolean> {
-		const folder = this._folderFor(key);
-		if (!folder) {
+		// A folder of the workspace, or a row that is not one yet, which going to puts in it
+		const target = this._folderFor(key)?.uri ?? this._rows.get(key);
+		if (!target) {
 			return false;
 		}
 
@@ -321,7 +397,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 		try {
 			if (!this._isActive(key)) {
-				await this._workspaceBarService.show(folder.uri);
+				await this._workspaceBarService.show(target);
 
 				// Refused, as a folder that is gone from disk is
 				if (!this._isActive(key)) {
@@ -429,7 +505,8 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			stored[key] = [...kept];
 		}
 		for (const [key, parked] of this._parked) {
-			stored[key] = [...stored[key] ?? [], ...parked.map(({ instance, group, index, persisted, active }) => ({ nonce: instance.shellIntegrationNonce, group, index, persisted, active }))];
+			const row = this._rows.get(key)?.toString();
+			stored[key] = [...stored[key] ?? [], ...parked.map(({ instance, group, index, persisted, active }) => ({ nonce: instance.shellIntegrationNonce, group, index, persisted, active, row }))];
 		}
 
 		if (Object.keys(stored).length) {
@@ -482,6 +559,10 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			for (const { instance } of parked) {
 				instance.target = TerminalLocation.Editor;
 			}
+			const row = entries.find(entry => entry.row)?.row;
+			if (row) {
+				this._rows.set(key, URI.parse(row));
+			}
 			this._hold(key, parked);
 			restored += parked.length;
 		}
@@ -489,7 +570,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		this._logService.trace(`[folderTerminals] parked ${restored} terminal(s) again`);
 
 		// A folder that left the workspace while the window was closed takes its terminals with it, as
-		// one leaving now does
+		// one leaving now does - a row's stay
 		this._pruneRemovedFolders();
 
 		// ⚠️ The folder the window is on shows its own only once its editors are up. The terminal service
@@ -590,6 +671,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			this._parked.delete(key);
 			this._watching.get(key)?.dispose();
 			this._watching.delete(key);
+			this._rows.delete(key);
 
 			this._logService.trace(`[folderTerminals] reopened ${parked.length} terminal(s) for ${key}`);
 		} finally {
@@ -630,13 +712,15 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		this._parked.delete(key);
 		this._watching.get(key)?.dispose();
 		this._watching.delete(key);
+		this._rows.delete(key);
 	}
 
 	private _pruneRemovedFolders(): void {
 		const present = new Set(this._contextService.getWorkspace().folders.map(folder => this._key(folder.uri)));
 
 		for (const [key, parked] of [...this._parked]) {
-			if (present.has(key)) {
+			// A row's are not a removed folder's: they were never in the workspace, and the row is there to go to
+			if (present.has(key) || this._rows.has(key)) {
 				continue;
 			}
 
@@ -658,6 +742,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 		this._watching.clear();
 		this._parked.clear();
+		this._rows.clear();
 	}
 
 	private _key(uri: URI): string {

@@ -260,6 +260,12 @@ interface IRowTemplate {
 	readonly templateDisposable: IDisposable;
 }
 
+/** The rows' notes (`IWorkspaceBarService.setNotes`), as the view reads them. */
+export interface IWorkspaceBarNotes {
+	noteFor(uri: URI): string | undefined;
+	readonly onDidChange: Event<void>;
+}
+
 class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> {
 
 	readonly templateId = TEMPLATE_ID;
@@ -271,6 +277,8 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		private readonly hoverDelegate: IHoverDelegate,
 		/** The row's id, as the tree knows it (`WorkspaceBarIdentityProvider`). */
 		private readonly idOf: (row: WorkspaceBarRow) => string,
+		/** The note drawn after the row's name, if it has one. */
+		private readonly noteFor: (uri: URI) => string | undefined,
 		@ILabelService private readonly labelService: ILabelService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
 		@IHoverService private readonly hoverService: IHoverService,
@@ -367,8 +375,9 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 			template.icon.className = 'workspacebar-icon workspacebar-dot'
 				+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
 			template.name = displayNameOf(element, this.customizationService);
-			template.label.setLabel(template.name, undefined, {
-				title: this.labelService.getUriLabel(element.worktree.uri)
+			template.label.setLabel(template.name, this.noteFor(element.worktree.uri), {
+				title: this.labelService.getUriLabel(element.worktree.uri),
+				supportIcons: true
 			});
 			return;
 		}
@@ -381,8 +390,9 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 
 		// The full path on hover is what tells two rows with the same name apart.
 		template.name = displayNameOf(element, this.customizationService);
-		template.label.setLabel(template.name, undefined, {
-			title: this.labelService.getUriLabel(element.uri)
+		template.label.setLabel(template.name, this.noteFor(element.uri), {
+			title: this.labelService.getUriLabel(element.uri),
+			supportIcons: true
 		});
 	}
 
@@ -454,6 +464,8 @@ export class WorkspaceBarView extends Disposable {
 		onDidChangeCollapsed: Event<void>,
 		/** Puts a folder in the workspace and moves the window onto it: `IWorkspaceBarService.show`. */
 		private readonly show: (uri: URI) => Promise<void>,
+		/** The rows' notes: `IWorkspaceBarService.setNotes`. */
+		private readonly notes: IWorkspaceBarNotes,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
@@ -527,7 +539,8 @@ export class WorkspaceBarView extends Disposable {
 						style: HoverStyle.Pointer,
 						position: { hoverPosition: HoverPosition.RIGHT }
 					})),
-				(row: WorkspaceBarRow) => identity.getId(row))],
+				(row: WorkspaceBarRow) => identity.getId(row),
+				(uri: URI) => this.notes.noteFor(uri))],
 			{
 				// The bar's own folder key, so rebuilds keep focus, selection and expansion on the right rows.
 				identityProvider: identity,
@@ -653,6 +666,7 @@ export class WorkspaceBarView extends Disposable {
 		// the same way a change to the folder list does. Without this the dialog saves and the bar
 		// goes on showing what it showed before, until something else happens to redraw it.
 		this._register(this.customizationService.onDidChange(() => this.refresh()));
+		this._register(this.notes.onDidChange(() => this.refresh()));
 		// Collapsed to its icons the rows are the same (WT-1.10), and drawn again for the new shape.
 		this._register(onDidChangeCollapsed(() => this.refresh()));
 		this._register(this.configurationService.onDidChangeConfiguration(e => {

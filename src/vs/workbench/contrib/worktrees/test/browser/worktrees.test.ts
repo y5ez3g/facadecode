@@ -357,6 +357,77 @@ suite('Worktrees - making and deleting one', () => {
 		]);
 	});
 
+	test('made without asking, for an agent: no dialog, from the commit it is given, its row there, and the window left where it is', async () => {
+		trust.enabled = true;
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		const commit = 'a'.repeat(40);
+
+		const made = await instantiationService.createInstance(WorktreeService).makeWorktree(main, ' w3 ', { startPoint: commit });
+
+		assert.deepStrictEqual({ made: made.path, steps }, {
+			made: '/home/me/.facade/worktrees/lab/w3',
+			steps: [
+				'_git.prepareWorktreeBaseAt /lab inspect',
+				'customize /home/me/.facade/worktrees/lab/w3 {}',
+				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
+				'trust /home/me/.facade/worktrees/lab/w3',
+				'listed /home/me/.facade/worktrees/lab/w3',
+				'open /lab',
+			],
+		});
+	});
+
+	test('made without asking, what would have been asked is refused instead: trust, a first commit, a name that is no folder, a branch that exists', async () => {
+		const service = instantiationService.createInstance(WorktreeService);
+		const attempt = (branch: string) => service.makeWorktree(main, branch).then(() => 'made', (err: Error) => err.message);
+		trust.enabled = true;
+		trust.trusted = false;
+		const untrusted = await attempt('w3');
+		trust.trusted = true;
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'unborn', files: 2, identity: true });
+		const unborn = await attempt('w3');
+		const notAFolder = await attempt('con');
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w2', { kind: 'error', code: 'BranchAlreadyExists', message: 'fatal: a branch named w2 already exists' });
+		const taken = await attempt('w2');
+
+		assert.deepStrictEqual({ untrusted, unborn, notAFolder, taken, asked: steps.filter(step => step === 'ask' || step === 'ask for trust' || step.startsWith('prompt')) }, {
+			untrusted: 'The workspace is in Restricted Mode, where Git does not run. Trust the workspace first.',
+			unborn: '"lab" has no commit for a worktree to branch off from. Make its first commit first.',
+			notAFolder: '"con" cannot be the name of a folder on Windows.',
+			taken: 'A branch named w2 already exists. Choose another name.',
+			asked: [],
+		});
+	});
+
+	test('deleted without asking: one with changes is refused unless forced, and forced it goes the way Delete Worktree takes it', async () => {
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['a.txt'], submodules: false });
+		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
+		const service = instantiationService.createInstance(WorktreeService);
+
+		const refused = await service.removeWorktree(w2).then(() => 'deleted', (err: Error) => err.message);
+		const unknown = await service.removeWorktree(URI.file('/elsewhere')).then(() => 'deleted', (err: Error) => err.message);
+		const beforeForce = steps.splice(0);
+		await service.removeWorktree(w2, { force: true });
+
+		assert.deepStrictEqual({ refused, unknown, beforeForce, steps }, {
+			refused: '/home/me/.facade/worktrees/lab/w2 has changes that are not committed: a.txt. Delete it with force to throw them away.',
+			unknown: '/elsewhere is not a worktree the workspace knows.',
+			beforeForce: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
+			steps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'show /lab',
+				'hide /home/me/.facade/worktrees/lab/w2',
+				'remove /home/me/.facade/worktrees/lab/w2',
+				'close its terminal',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
+				'unhide /home/me/.facade/worktrees/lab/w2',
+				'customize /home/me/.facade/worktrees/lab/w2 {}',
+			],
+		});
+	});
+
 	test('setup lines run one at a time: each once the shell says that line\'s own command finished', async () => {
 		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
 		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });

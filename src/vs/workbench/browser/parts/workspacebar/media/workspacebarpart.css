@@ -470,6 +470,16 @@
 }
 
 /*
+ * A row's note (`IWorkspaceBarService.setNotes`): what is going on in the folder, such as the agents
+ * working in it. After the name, in the bar's quieter ink, a step smaller.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-row .monaco-icon-label .label-description {
+	color: var(--vscode-facadeBar-inactiveForeground);
+	margin-left: 6px;
+	font-size: 0.9em;
+}
+
+/*
  * The row the window is in.
  *
  * ⚠️ The bar's own mark, painted here rather than left to the list's selection. A list clears its

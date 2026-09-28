@@ -36,7 +36,7 @@ import { moveRow, rowsOfFolders } from './workspaceBar.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
-import { IWorkspaceBarService } from './workspaceBarService.js';
+import { IRowNote, IWorkspaceBarService } from './workspaceBarService.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 import { WorkspaceBarView } from './workspaceBarView.js';
@@ -181,6 +181,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 	// A relay because the switcher is created in `createContentArea`, after a listener can arrive
 	private readonly _onDidRestoreEditors = this._register(new Relay<void>());
+
+	/** The rows' notes (`setNotes`), by folder key. */
+	private readonly notes = new Map<string, string>();
+	private readonly _onDidChangeNotes = this._register(new Emitter<void>());
 	readonly onDidRestoreEditors = this._onDidRestoreEditors.event;
 
 	constructor(
@@ -297,7 +301,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// `show` handed in rather than resolved as `IWorkspaceBarService`: this part is that service,
 		// and the view is built while the part is being created.
 		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView,
-			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, (uri: URI) => this.show(uri)));
+			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, (uri: URI) => this.show(uri),
+			{ noteFor: (uri: URI) => this.notes.get(this.model.key(uri)), onDidChange: this._onDidChangeNotes.event }));
 
 		return this.content;
 	}
@@ -587,6 +592,27 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		if (areWorktreesShown(this.configurationService) && !this.repositoryFor(worktree)) {
 			await this.git.refresh();
 		}
+	}
+
+	setNotes(notes: readonly IRowNote[]): void {
+		const next = new Map<string, string>();
+		for (const { uri, note } of notes) {
+			const text = note.trim();
+			if (text) {
+				const key = this.model.key(uri);
+				const before = next.get(key);
+				next.set(key, before ? `${before}  ${text}` : text);
+			}
+		}
+		if (next.size === this.notes.size && [...next].every(([key, text]) => this.notes.get(key) === text)) {
+			return;
+		}
+
+		this.notes.clear();
+		for (const [key, text] of next) {
+			this.notes.set(key, text);
+		}
+		this._onDidChangeNotes.fire();
 	}
 
 	hideWorktree(worktree: URI): IDisposable {

@@ -3811,8 +3811,8 @@ export class CommandCenter {
 	// Facade Code: the workspace bar's worktrees. Non-interactive, and they return what happened rather
 	// than throw - everything else is in worktreeAt.ts.
 	@command('_git.createWorktreeAt')
-	async createWorktreeAt(root: Uri, worktree: Uri, branch: string): Promise<worktreeAt.CreateWorktreeAtResult> {
-		return worktreeAt.createWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), branch);
+	async createWorktreeAt(root: Uri, worktree: Uri, branch: string, startPoint?: string): Promise<worktreeAt.CreateWorktreeAtResult> {
+		return worktreeAt.createWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), branch, startPoint);
 	}
 
 	@command('_git.deleteWorktreeAt')

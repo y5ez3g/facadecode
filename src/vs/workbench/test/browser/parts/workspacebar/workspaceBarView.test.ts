@@ -337,7 +337,10 @@ suite('Workspace bar - the view', () => {
 
 		const container = mainWindow.document.body.appendChild(mainWindow.document.createElement('div'));
 		store.add(toDisposable(() => container.remove()));
-		const barView = store.add(instantiationService.createInstance(WorkspaceBarView, container, model, git, switcher, () => false, Event.None, async (uri: URI) => { asked.push(`show ${uri.path}`); }));
+		const noted = store.add(new Emitter<void>());
+		const notesByPath = new Map<string, string>();
+		const barView = store.add(instantiationService.createInstance(WorkspaceBarView, container, model, git, switcher, () => false, Event.None, async (uri: URI) => { asked.push(`show ${uri.path}`); },
+			{ noteFor: (uri: URI) => notesByPath.get(uri.path), onDidChange: noted.event }));
 		barView.layout(300, 400);
 
 		return {
@@ -353,6 +356,15 @@ suite('Workspace bar - the view', () => {
 			regroup: (groups: WorkspaceBarGroup[]) => {
 				current = groups;
 				gitChanged.fire();
+			},
+			/** Sets a row's note, as `IWorkspaceBarService.setNotes` does. */
+			note: (path: string, text: string | undefined) => {
+				if (text) {
+					notesByPath.set(path, text);
+				} else {
+					notesByPath.delete(path);
+				}
+				noted.fire();
 			},
 			/** Finishes the reads of git's files asked for so far, which found `groups`. */
 			read: async (groups: WorkspaceBarGroup[]) => {
@@ -376,6 +388,20 @@ suite('Workspace bar - the view', () => {
 		click(element, 2);
 		element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }));
 	}
+
+	test('a row\'s note is drawn after its name, codicons included, and goes when it is taken away', () => {
+		const bar = view([lab, w2], [repository(w2)], lab.uri);
+		const description = (index: number) => bar.find('.label-description', index)?.textContent ?? '';
+
+		bar.note('/wt/w2', '$(robot) f2 working');
+		const noted = { text: description(1), icon: bar.has('.label-description .codicon-robot', 1), folder: description(0) };
+		bar.note('/wt/w2', undefined);
+
+		assert.deepStrictEqual({ noted, after: description(1) }, {
+			noted: { text: ' f2 working', icon: true, folder: '' },
+			after: '',
+		});
+	});
 
 	test('the triangle opens and closes a repository, and a double-click on it is one click', () => {
 		const bar = view([lab], [repository(undefined)], lab.uri, new Map([['/wt/w2', 'Payments']]));
