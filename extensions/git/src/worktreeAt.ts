@@ -148,6 +148,11 @@ function isBranchName(branch: unknown): branch is string {
 	return typeof branch === 'string' && branch.length > 0;
 }
 
+/** A full commit id, SHA-1 or SHA-256: never a ref name, and never something git could read as an option. */
+function isCommitId(value: unknown): value is string {
+	return typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+}
+
 /**
  * How a directory is deleted: whole, and retried while something still has a file in it open - for
  * about five and a half seconds, a tenth of a second longer each time.
@@ -383,19 +388,24 @@ async function hasCommits(git: IWorktreeGit, root: string): Promise<boolean> {
 }
 
 /**
- * `git worktree add -b <branch> <worktreePath> HEAD` in `root`, then `.worktreeinclude`.
+ * `git worktree add -b <branch> <worktreePath> <startPoint>` in `root`, then `.worktreeinclude`.
+ * The start point is `HEAD` unless a commit is given, as Facade's agents do for a child's worktree,
+ * which starts at its parent worktree's HEAD (WORKTREE-AGENTS.md, WA-3.2).
  *
  * With `GIT_LFS_SKIP_SMUDGE=1`, so an LFS object that is missing does not fail the whole checkout
  * (WORKTREE.md section 2), then `git lfs checkout` to put back the objects that are here - it
  * downloads nothing.
  */
-export async function createWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, branch: string): Promise<CreateWorktreeAtResult> {
+export async function createWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, branch: string, startPoint?: string): Promise<CreateWorktreeAtResult> {
 	const refused = validateArguments([root, worktreePath]);
 	if (refused) {
 		return refused;
 	}
 	if (!isBranchName(branch)) {
 		return invalidArgument(`Not a branch name: ${String(branch)}`);
+	}
+	if (startPoint !== undefined && !isCommitId(startPoint)) {
+		return invalidArgument(`Not a commit id: ${String(startPoint)}`);
 	}
 
 	// `worktree add -b` makes the branch before it checks the path and checks out, and a failure after
@@ -409,7 +419,7 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 
 	let hookFailure: string | undefined;
 	try {
-		await git.exec(root, ['worktree', 'add', '-b', branch, '--', worktreePath, 'HEAD'], { env: { GIT_LFS_SKIP_SMUDGE: '1' } });
+		await git.exec(root, ['worktree', 'add', '-b', branch, '--', worktreePath, startPoint ?? 'HEAD'], { env: { GIT_LFS_SKIP_SMUDGE: '1' } });
 	} catch (err) {
 		// A failed checkout takes the half-made worktree away with it; only the post-checkout hook runs
 		// after git has kept it. Listed now, it was made, and the hook's failure is said as a warning.
