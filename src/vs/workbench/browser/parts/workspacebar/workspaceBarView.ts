@@ -31,7 +31,7 @@ import { WorkbenchObjectTree } from '../../../../platform/list/browser/listServi
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { FolderKey, orderWorktrees } from './workspaceBar.js';
 import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
-import { folderGlyphFor, folderRowNameFor, IWorkspaceBarCustomizationService, worktreeNameFor } from './workspaceBarCustomization.js';
+import { folderGlyphFor, folderRowNameFor, IWorkspaceBarCustomizationService, worktreeIcon, worktreeNameFor } from './workspaceBarCustomization.js';
 import { IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
@@ -235,7 +235,7 @@ class WorkspaceBarDelegate implements IListVirtualDelegate<WorkspaceBarRow> {
 
 interface IRowTemplate {
 	readonly row: HTMLElement;
-	/** A folder's icon, or a worktree's dot. */
+	/** A folder's icon, or a worktree's glyph. */
 	readonly icon: HTMLElement;
 	readonly label: IconLabel;
 	/** A folder's own buttons (`WorkspaceBarRowToolbar`) - its `+` - shown while the pointer is on it. */
@@ -360,11 +360,11 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		template.row.classList.toggle('offers-worktree', element.kind === 'folder' && element.offersWorktree);
 		template.toolbar.context = uriOf(element);
 
-		// A dot in the folder icon's slot rather than an indent: the glyph says the depth, and the column
+		// A glyph in the folder icon's slot rather than an indent: the glyph says the depth, and the column
 		// keeps one left edge. A worktree's name and colour are its own; unnamed, it is called by its branch.
 		if (element.kind === 'worktree') {
 			const customization = this.customizationService.get(element.worktree.uri);
-			template.icon.className = 'workspacebar-icon workspacebar-dot'
+			template.icon.className = `workspacebar-icon workspacebar-worktree ${ThemeIcon.asClassName(worktreeIcon)}`
 				+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
 			template.name = displayNameOf(element, this.customizationService);
 			template.label.setLabel(template.name, undefined, {

@@ -19,7 +19,7 @@ import { IQuickInputButton, IQuickInputService, IQuickPick, IQuickPickItem, Item
 import { TerminalExitReason, TerminalLocation, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
-import { FolderColor, folderGlyphFor, folderRowNameFor, glyphInFolderColor, IWorkspaceBarCustomizationService } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { FolderColor, folderGlyphFor, folderRowNameFor, glyphInFolderColor, IWorkspaceBarCustomizationService, worktreeIcon } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -48,12 +48,6 @@ export interface IAgentPlace {
 	/** Its row in the bar, counted from the top; past the last row for an agent on none, one in the panel say. */
 	readonly row: number;
 }
-
-/**
- * A worktree's glyph. The bar draws a worktree as a dot of its own (`workspacebar-dot`), which lives in
- * the bar's style sheet and cannot go into a line of text; this is the glyph drawn most like it.
- */
-const WORKTREE_GLYPH = Codicon.circleSmallFilled;
 
 const closeButton: IQuickInputButton = {
 	iconClass: ThemeIcon.asClassName(Codicon.close),
@@ -88,10 +82,10 @@ export function placeOfFolder(folder: IWorkspaceFolder, repository: IWorkspaceBa
 		return [folderRow(folder.uri, customizationService.nameFor(folder))];
 	}
 
-	// A worktree's row is a dot in the colour the worktree was given, as in the bar (`workspaceBarView.ts`)
+	// A worktree's row is its glyph in the colour the worktree was given, as in the bar (`workspaceBarView.ts`)
 	return [
 		folderRow(repository.main, folderRowNameFor(customizationService, repository.main, repository.folder)),
-		{ glyph: WORKTREE_GLYPH, color: customizationService.get(worktree.uri)?.color, name: customizationService.nameFor(folder) }
+		{ glyph: worktreeIcon, color: customizationService.get(worktree.uri)?.color, name: customizationService.nameFor(folder) }
 	];
 }
 

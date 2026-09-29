@@ -111,10 +111,11 @@ WORKSPACE                   +   the header: Open Folder...; the collapse toggle 
 
   Collapse or Expand only on a repository with worktrees (WT-1.8). Collapsed to its icons, the menu
   is the only way to open or close a repository.
-- **WT-1.12** A worktree row is not indented. Its glyph is a 6px dot in the slot a folder's icon takes,
-  so every name in the column starts on one line. Customize... gives a worktree a display name
-  (unnamed, it is called by its branch) and a colour, which paints the dot. No glyph to choose: the
-  dot is what says worktree.
+- **WT-1.12** A worktree row is not indented. Its glyph is a dot in the slot a folder's icon takes,
+  so every name in the column starts on one line: the `circle-small-filled` codicon, registered as
+  `workspace-bar-worktree` so a product icon theme can replace it, and the one glyph the agent picker
+  draws a worktree with too. Customize... gives a worktree a display name (unnamed, it is called by
+  its branch) and a colour, which paints the dot. No glyph to choose: the dot is what says worktree.
 - **WT-1.13** A folder's row ends in two buttons, styled as the header's `+`: `+` (New Worktree...,
   there while it can be used) and the triangle - `^` while open, `v` while closed - which stands under
   the header's `+`. The triangle only on a repository with worktrees; elsewhere its column stays

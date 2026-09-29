@@ -9,9 +9,11 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
+import { localize } from '../../../../nls.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 
@@ -128,6 +130,12 @@ export function folderRowNameFor(customizationService: Pick<IWorkspaceBarCustomi
 export function folderGlyphFor(customization: IFolderCustomization | undefined): ThemeIcon {
 	return customization?.icon ? ThemeIcon.fromId(customization.icon) : Codicon.folder;
 }
+
+/**
+ * The glyph a worktree's row is drawn with. Not chosen in Customize (WORKTREE.md WT-1.12): the glyph is
+ * what says worktree, and only its colour is the worktree's own.
+ */
+export const worktreeIcon = registerIcon('workspace-bar-worktree', Codicon.circleSmallFilled, localize('workspaceBar.worktreeIcon', "Icon for a worktree in the workspace bar."));
 
 /**
  * A glyph in a folder's colour, as an icon a line of text can carry - the agent list's rows, say.

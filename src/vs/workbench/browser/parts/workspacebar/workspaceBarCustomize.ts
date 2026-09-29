@@ -77,7 +77,7 @@ export interface IWorkspaceBarDialogService {
 	 * ⚠️ One dialog for both, and it is the only way to rename a row - a second, inline way to change
 	 * the same thing is a second set of edge cases for something people do twice a year.
 	 *
-	 * A worktree is not offered a glyph (WORKTREE.md WT-1.12): its dot says "worktree", in its colour.
+	 * A worktree is not offered a glyph (WORKTREE.md WT-1.12): its glyph says "worktree", in its colour.
 	 */
 	showCustomizeDialog(target: ICustomizeTarget, current: IFolderCustomization | undefined): Promise<IFolderCustomization | undefined>;
 
