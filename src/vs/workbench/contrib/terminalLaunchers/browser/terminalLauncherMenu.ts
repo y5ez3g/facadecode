@@ -13,7 +13,7 @@ import { ServicesAccessor } from '../../../../platform/instantiation/common/inst
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../services/editor/common/editorGroupsService.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
-import { AGENTS_SETTING, readConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { agentIcon, AGENTS_SETTING, readConfiguredLaunchers } from '../common/terminalLaunchers.js';
 import { AGENT_MENU, AGENT_MENU_GROUP, createAgentMenuActionViewItem } from './terminalLauncherActions.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
@@ -121,11 +121,10 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 			store.add(CommandsRegistry.registerCommand(id, (accessor: ServicesAccessor) =>
 				accessor.get(ITerminalLauncherService).open(launcher)));
 
-			// No icon. A menu of names reads as a list; the same names behind a column of glyphs read
-			// as a toolbar, and the accounts menu next door sets the pattern. The glyph is still what
-			// the terminal tab carries, which is where it says which agent is running.
+			// With the agent's logo, the icon its terminal tab will carry: the button's dropdown draws it
+			// (`AgentMenuActionViewItem`), and the title bar's overflow, a context menu, leaves it out
 			store.add(MenuRegistry.appendMenuItem(AGENT_MENU, {
-				command: { id, title: launcher.label },
+				command: { id, title: launcher.label, icon: agentIcon(launcher.command) },
 				group: AGENT_MENU_GROUP,
 				order
 			}));

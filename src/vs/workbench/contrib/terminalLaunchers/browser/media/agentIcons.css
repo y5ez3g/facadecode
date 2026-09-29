@@ -36,9 +36,10 @@
 	background-position: center;
 	background-repeat: no-repeat;
 	/*
-	 * ⚠️ The glyph's size, whatever the place draws its icons at - 13px on an editor tab, 16px in a
-	 * picker. Not `contain`: a tab's box has 3px of padding either side, which a background fills, and
-	 * the logo came out 22px. Not a fixed size: a box smaller than it crops the logo's edges.
+	 * ⚠️ The glyph's size, whatever the place draws its icons at - 13px on an editor tab, 12px in the
+	 * agent button's dropdown, 16px in a picker. Not `contain`: a tab's box has 3px of padding either
+	 * side, which a background fills, and the logo came out 22px. Not a fixed size: a box smaller than
+	 * it crops the logo's edges.
 	 */
 	background-size: 1em;
 }
