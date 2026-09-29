@@ -19,6 +19,7 @@ import { IShellLaunchConfig, TerminalExitReason, TerminalLocation } from '../../
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService, IActiveFolderWillChangeEvent } from '../../../../services/activeFolder/common/activeFolder.js';
@@ -308,11 +309,19 @@ class TestWorkspaceBarService extends mock<IWorkspaceBarService>() {
 	readonly moves: string[] = [];
 	moving: (uri: URI) => Promise<void> = async () => { };
 
+	/** The worktrees git lists that are not folders of the workspace: each a row of the bar all the same. */
+	readonly rows: URI[] = [];
+
 	restored(): void { this._onDidRestoreEditors.fire(); }
 
 	override async show(uri: URI): Promise<void> {
 		this.moves.push(uri.path);
 		await this.moving(uri);
+	}
+
+	override repositoryFor(uri: URI): IWorkspaceBarRepository | undefined {
+		const row = this.rows.find(candidate => candidate.path === uri.path);
+		return row && { kind: 'repository', main: URI.file('/w/main'), folder: undefined, branch: 'main', members: [], worktrees: [{ uri: row, branch: 'p1', label: 'p1', exists: true, folder: undefined }] };
 	}
 }
 
@@ -329,6 +338,11 @@ class TestContextService extends mock<IWorkspaceContextService>() {
 
 	removeFolder(folder: IWorkspaceFolder): void {
 		this.folders = this.folders.filter(candidate => candidate !== folder);
+		this._onDidChangeFolders.fire(undefined as never);
+	}
+
+	addFolder(folder: IWorkspaceFolder): void {
+		this.folders = [...this.folders, folder];
 		this._onDidChangeFolders.fire(undefined as never);
 	}
 }
@@ -435,7 +449,7 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		});
 	});
 
-	test('a terminal opened for the folder on screen is one of its editor terminals; for a folder not in the workspace, the panel\'s', async () => {
+	test('a terminal opened for the folder on screen is one of its editor terminals; for a folder neither in the workspace nor a row of the bar, the panel\'s', async () => {
 		const alpha = folder('alpha');
 		const { terminals, folders, context, folderTerminals } = setup([new TestGroup(0, [])], []);
 		context.folders = [alpha];
@@ -448,6 +462,90 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			{ name: 'here', location: { viewColumn: ACTIVE_GROUP }, hidden: false },
 			{ name: 'there', location: TerminalLocation.Panel, hidden: false },
 		]);
+	});
+
+	test('a terminal opened for a worktree with a row and no folder in the workspace is held under the row, and revealing it goes there', async () => {
+		const alpha = folder('alpha');
+		const p1 = folder('p1');
+		const column = new TestGroup(0, []);
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], []);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+		bar.rows.push(p1.uri);
+		// Going to a worktree's row puts it in the workspace, then moves the window onto it
+		bar.moving = async () => {
+			context.addFolder(p1);
+			await folders.switchTo(p1);
+		};
+
+		const agent = await folderTerminals.openFor(p1.uri, { name: 'agent' });
+		const held = {
+			hidden: !!(terminals.created[0].config as IShellLaunchConfig).hideFromUser,
+			row: folderTerminals.rowOf(agent)?.path,
+			folder: folderTerminals.folderOf(agent)?.name,
+			terminalsOfRow: folderTerminals.terminalsOf(p1.uri).length,
+			tabs: column.names()
+		};
+		const revealing = folderTerminals.reveal(agent);
+		await timeout(0);
+		bar.restored();
+		await revealing;
+
+		assert.deepStrictEqual({ held, moves: bar.moves, tabs: column.names(), revealed: terminals.revealed, row: folderTerminals.rowOf(agent)?.path, folder: folderTerminals.folderOf(agent)?.name }, {
+			held: { hidden: true, row: '/w/p1', folder: undefined, terminalsOfRow: 1, tabs: [] },
+			moves: ['/w/p1'],
+			tabs: ['agent'],
+			revealed: ['agent'],
+			row: undefined,
+			folder: 'p1',
+		});
+	});
+
+	test('a terminal held under a row outlives the workspace\'s folders changing and a reload, still under its row', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const row = URI.file('/w/p1');
+		const before = setup([new TestGroup(0, [])], []);
+		before.context.folders = [alpha, beta];
+		before.folders.activeFolder = alpha;
+		before.bar.rows.push(row);
+
+		const agent = await before.folderTerminals.openFor(row, { name: 'agent' });
+		before.context.removeFolder(beta);
+		const afterRemoval = { ended: (agent as unknown as TestInstance).disposed, row: before.folderTerminals.rowOf(agent)?.path };
+
+		// The window closes, and opening again brings the agent back in the background - before git's rows are read
+		(agent as unknown as TestInstance).dispose(TerminalExitReason.Shutdown);
+		before.storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+		const revived = new TestInstance('agent', TerminalLocation.Panel);
+		const after = setup([new TestGroup(0, [])], [], [], { storage: before.storage, revived: [revived], opensOn: alpha });
+		after.context.folders = [alpha];
+		await timeout(0);
+
+		assert.deepStrictEqual({ afterRemoval, afterReload: { ended: revived.disposed, row: after.folderTerminals.rowOf(revived.asInstance())?.path } }, {
+			afterRemoval: { ended: false, row: '/w/p1' },
+			afterReload: { ended: false, row: '/w/p1' },
+		});
+	});
+
+	test('a terminal held under a row that ends is forgotten, row and all', async () => {
+		const alpha = folder('alpha');
+		const row = URI.file('/w/p1');
+		const { folders, context, bar, folderTerminals, storage } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+		bar.rows.push(row);
+
+		// As deleting the worktree ends whatever works inside it
+		const agent = await folderTerminals.openFor(row, { name: 'agent' });
+		(agent as unknown as TestInstance).dispose(TerminalExitReason.User);
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		assert.deepStrictEqual({ row: folderTerminals.rowOf(agent), terminalsOfRow: folderTerminals.terminalsOf(row).length, kept: storage.get(PARKED_STORAGE_KEY, StorageScope.WORKSPACE) }, {
+			row: undefined,
+			terminalsOfRow: 0,
+			kept: undefined,
+		});
 	});
 
 	test('switching away parks them alive, and switching back brings the same ones', async () => {
