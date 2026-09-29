@@ -98,6 +98,8 @@ the code                six layers, a folder each, imports only pointing down (�
   after the child, starting at the parent worktree's HEAD. It is made through the window's New
   Worktree, without its dialog (WORKTREE.md §7), so it lands under
   `~/.facade/worktrees/<repo>/<branch>` with its row, its `.worktreeinclude` files and its setup.
+  The window stays where it is: the worktree joins the workspace when somebody goes to its row. Such
+  a spawn names the child, since the branch is named after it.
 - **WA-3.3** Facade records each worktree's parent worktree when it makes one. A worktree made by
   the person or by git counts as well, with no parent.
 - **WA-3.4** A worktree may hold any number of agents, or none. They share its files and its branch;
@@ -122,9 +124,10 @@ committed does not go with the child.
   name; a second agent in the same worktree takes `<worktree>-2`, then `-3`. A name takes the rules
   of `names.ts`: lower case, letters, digits, `.`, `_` and `-`.
 - **WA-4.3** Its parent is fixed when it starts: the calling agent, or the person.
-- **WA-4.4** Each start under a name is a new incarnation, with a token of its own. Only a caller's
-  own child, or an agent that has stopped, may be started again under its name; the running one is
-  stopped first.
+- **WA-4.4** Each start under a name is a new incarnation, with a token of its own, heard while it
+  runs: once it stops or fails, or a new incarnation takes its name, its calls are refused. Only a
+  caller's own child, or an agent that has stopped, may be started again under its name; the running
+  one is stopped first.
 - **WA-4.5** Its state comes from its hooks (§7):
 
   ```
@@ -151,7 +154,7 @@ spawn    cli       the CLI, as `claude`, `codex`, `agy`, `muse`, `grok`
          model     one of that CLI's models, as `sonnet`, `gemini-3.1-pro-high`, `muse-spark-1.3`
          prompt    its first message, passed as the CLI takes one (§7)
          worktree  omitted: the caller's own; "new": a new one (WA-3.2); a name: that worktree
-         name      optional (WA-4.2)
+         name      optional (WA-4.2); required with "new", whose branch it names
          →         its name, worktree, folder and branch
 
 send     to        the caller's parent or one of its children, as @name
@@ -320,7 +323,8 @@ Grok keeps its first-pass launch: `.grok/config.toml` in the worktree, `--allow`
 and no hooks (WA-6.9).
 
 - **WA-7.1** Claude's hooks call Facade's MCP server directly (`mcp_tool` hooks), with no process
-  per hook, where a hook's answer can be returned that way (§16). The others run the hook launcher.
+  per hook, where a hook's answer can be returned that way (§16). Until then, and for the others, a
+  hook runs its launch's launcher under `~/.facade/hooks`, which starts the shim's hook mode.
 - **WA-7.2** PostToolUse runs after every tool call, so its handler must return within about 300
   milliseconds when nothing waits. Hooks in the launcher's path are measured on Windows before they
   are relied on (§16).
@@ -409,8 +413,8 @@ is not done either: a running Claude rewrites that file.
       read_terminal    name, lines?         the last lines a terminal shows: 50, at most 2,000
       send_terminal    name, text, enter?   typing into a terminal, then Enter unless enter is false
       command          id, args?            any VS Code command, its arguments as a list
-  M1  delete_worktree  name                 Delete Worktree without its dialog, stopping the agents
-                                            in it (WA-3.5)
+  M1  delete_worktree  name, force?         Delete Worktree without its dialog, stopping the agents
+                                            in it (WA-3.5); changes not committed only with force
       read_terminal and send_terminal take @name for the terminal of that agent
   M4  read_charter                          the charter, whole, with its version (§11)
       write_charter    text, version        the whole charter, if that is still its version
@@ -465,7 +469,8 @@ message.delivered    seq, way (PostToolUse, Stop, terminal, result)
   to let go of it and of the ledger; finds each running agent's terminal again by its name or its
   process id; and marks stopped only the agents whose terminal is gone.
 - **WA-10.3** A window reload loses no agent, message, name or token; neither does a folder window
-  becoming a workspace.
+  becoming a workspace. A tool call that finds no window cannot have run, so it waits for the window,
+  up to a minute; one the window drops halfway may have run, so it is not made again, and says so.
 
 ---
 
@@ -515,7 +520,9 @@ facade-superpowers   loaded only when the person chose it: a way of working, ada
   it in its own output when the parent has left; that it already runs in its worktree's folder; that
   files Facade put in the worktree are not its to commit; that the charter is loaded, and changes go
   through `write_charter` on its latest version, keeping what others wrote; that `spawn` needs a CLI
-  and a model, and `list_clis` shows what there is. Nothing about how to work.
+  and a model, and `list_clis` shows what there is. Nothing about how to work. Its opening (WA-7.4)
+  names the agent and its parent, says that a parent sees only what its child sends it, and that the
+  agent reports when done or stuck and never waits for a message.
 - **WA-12.2** `facade-superpowers` adapts Superpowers' process to worktrees and the four tools:
 
   ```
@@ -563,6 +570,10 @@ facade-superpowers   loaded only when the person chose it: a way of working, ada
   running agent keeps the version it started with.
 - **WA-12.6** Superpowers' copyright notice goes into `ThirdPartyNotices.txt`; `facade-superpowers`
   carries its name as credit (L2-PLAN, Borrowed code).
+
+⚠️ A skill in a plugin is loaded when the model chooses to. In M1's first smoke run a Haiku child
+never loaded `facade`, finished its task and said so only in its own output, and its parent waited:
+the opening is what every agent holds.
 
 ---
 
@@ -778,7 +789,7 @@ The workbench's commands, kept out of the Command Palette like the git extension
 ```
 M0  _facade.folder.active        the folder the window is on, for Start Agent
     _facade.terminal.create      a terminal for a folder, held under its row; an agent's with the
-                                 robot icon
+                                 robot icon, and its name as its title across a reload
     _facade.terminal.read        a terminal's last lines, for read_terminal
 M1  _facade.worktree.create      New Worktree's flow without its dialog, for spawn
     _facade.worktree.delete      Delete Worktree's, for delete_worktree
@@ -792,11 +803,12 @@ The files:
 ```
 extensions/facade-agents/src/
   extension.ts    the switch
-  contract/       instructions.ts  tools.ts  ide.ts; spawn.ts  send.ts  stop.ts from M1
-  core/           facade.ts  ports.ts  errors.ts; delivery.ts from M1
+  contract/       instructions.ts  tools.ts  ide.ts; args.ts  spawn.ts  send.ts  stop.ts  skill.ts
+                  from M1
+  core/           facade.ts  ports.ts  errors.ts; delivery.ts  firstRun.ts from M1
   record/         ledger.ts  events.ts  registry.ts  names.ts  paths.ts  windowState.ts
   clis/           cli.ts  claude.ts  index.ts  which.ts
   transport/      shim.ts  stdio.ts  pipe.ts  endpoint.ts
-  host/           service.ts  startAgent.ts  terminals.ts  ide.ts  git.ts
+  host/           service.ts  startAgent.ts  terminals.ts  ide.ts  git.ts; person.ts from M1
   test/           a suite per layer, and layers.test.ts for WA-18.1
 ```

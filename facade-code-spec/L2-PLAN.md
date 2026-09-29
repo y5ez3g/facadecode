@@ -380,7 +380,8 @@ turn.
 - **The `facade` skill**, first version (WA-12.1 without the charter): who the agent is, the four
   tools, that messages arrive on their own and waiting is ending the turn, a report to the parent
   when done or stuck, that it already runs in its folder, that files Facade put there are not its to
-  commit. Claude gets it as a plugin.
+  commit. Claude gets it as a plugin, and its opening at every SessionStart (WA-7.4); the charter
+  joins the opening in M4.
 - **First run** (§8), for Claude: once the person agreed, Facade answers Claude's question whether
   it trusts the folder, in the worktrees Facade made and nowhere else.
 
@@ -405,7 +406,7 @@ turn.
 Automated: the four tools' arguments, addresses and codes, through the real shim; the worktree
 rules - beside, new from the parent's HEAD, one that exists, another repository's refused; the
 parent's notices; delivery at a stop and when idle, with a fake agent; the `facade` skill in
-Claude's launch.
+Claude's launch, and its opening at SessionStart.
 
 ---
 
