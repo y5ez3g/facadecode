@@ -142,7 +142,7 @@ export class WorkspaceBarGit extends Disposable {
 
 		// WT-3.7: the rows the last window had, until this one's first read is in. That read comes after
 		// the bar is first drawn, and a bar drawn without it showed every folder flat until then - a
-		// worktree as a folder, then as a dot under its repository. One that finds the same changes nothing.
+		// worktree as a folder, then under its repository. One that finds the same changes nothing.
 		const kept = keptGroups(this.storageService.get(GROUPS_STORAGE_KEY, StorageScope.WORKSPACE), this.source.folders, this.source.key);
 		if (kept) {
 			this._groups = kept;

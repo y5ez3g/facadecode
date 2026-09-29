@@ -11,7 +11,7 @@ import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IShellLaunchConfig, TerminalIcon, TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
-import { glyphInFolderColor, IFolderCustomization, IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { glyphInFolderColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeIcon } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { ITerminalInstance } from '../../../terminal/browser/terminal.js';
 import { agentPicks, IAgentPlace, IPlaceStep, placeOfFolder } from '../../browser/terminalLauncherQuickPick.js';
@@ -33,7 +33,7 @@ suite('Agent picker - every agent open, in one list', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	const facade: IPlaceStep = { glyph: Codicon.rocket, color: 'red', name: 'FacadeCode' };
-	const feature: IPlaceStep = { glyph: Codicon.circleSmallFilled, color: 'blue', name: 'feature-16' };
+	const feature: IPlaceStep = { glyph: worktreeIcon, color: 'blue', name: 'feature-16' };
 
 	test('in the order of the rows of the bar, on one row in the order they were started, each read as the way to it', () => {
 		const cart = new TestAgent(1, 'Refactoring the cart', 'Claude Code');
@@ -59,18 +59,18 @@ suite('Agent picker - every agent open, in one list', () => {
 		assert.deepStrictEqual(picks.map(pick => pick.label), [
 			'$(rocket~folderred) FacadeCode $(chevron-right) $(robot) Codex \u00b7 Codex',
 			'$(rocket~folderred) FacadeCode $(chevron-right) $(robot) Antigravity \u00b7 Antigravity',
-			'$(rocket~folderred) FacadeCode $(chevron-right) $(circle-small-filled~folderblue) feature-16 $(chevron-right) $(robot) Fixing drag and drop \u00b7 Claude Code',
-			'$(rocket~folderred) FacadeCode $(chevron-right) $(circle-small-filled~folderblue) feature-16 $(chevron-right) $(robot) Writing tests \u00b7 Codex',
+			'$(rocket~folderred) FacadeCode $(chevron-right) $(workspace-bar-worktree~folderblue) feature-16 $(chevron-right) $(robot) Fixing drag and drop \u00b7 Claude Code',
+			'$(rocket~folderred) FacadeCode $(chevron-right) $(workspace-bar-worktree~folderblue) feature-16 $(chevron-right) $(robot) Writing tests \u00b7 Codex',
 			'$(folder) My shop $(chevron-right) $(robot) Refactoring the cart \u00b7 Claude Code',
 			'$(layout-panel) Panel $(chevron-right) $(robot) \u2733 Claude Code \u00b7 Claude Code',
 		]);
 	});
 
 	test('a row reads out in words, and a name that looks like a glyph is drawn as the text it is', () => {
-		const [pick] = agentPicks([new TestAgent(1, 'Fixing $(bug) reports', 'Claude Code')], () => ({ steps: [facade, { glyph: Codicon.circleSmallFilled, name: '$(star) ideas' }], row: 0 }));
+		const [pick] = agentPicks([new TestAgent(1, 'Fixing $(bug) reports', 'Claude Code')], () => ({ steps: [facade, { glyph: worktreeIcon, name: '$(star) ideas' }], row: 0 }));
 
 		assert.deepStrictEqual({ label: pick.label, ariaLabel: pick.ariaLabel }, {
-			label: '$(rocket~folderred) FacadeCode $(chevron-right) $(circle-small-filled) \\$(star) ideas $(chevron-right) $(robot) Fixing \\$(bug) reports \u00b7 Claude Code',
+			label: '$(rocket~folderred) FacadeCode $(chevron-right) $(workspace-bar-worktree) \\$(star) ideas $(chevron-right) $(robot) Fixing \\$(bug) reports \u00b7 Claude Code',
 			ariaLabel: 'FacadeCode, $(star) ideas, Fixing $(bug) reports, Claude Code'
 		});
 	});
@@ -128,9 +128,9 @@ suite('Agent picker - every agent open, in one list', () => {
 			placeOf(orphan, repository(URI.file('/code/api'), undefined, orphan)),
 		], [
 			['folder FacadeCode'],
-			['folder FacadeCode', 'circle-small-filled feature-16'],
+			['folder FacadeCode', 'workspace-bar-worktree feature-16'],
 			['rocket~foldergreen My shop'],
-			['server API', 'circle-small-filled~folderpink fix-login'],
+			['server API', 'workspace-bar-worktree~folderpink fix-login'],
 		]);
 	});
 

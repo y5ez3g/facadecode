@@ -458,7 +458,7 @@
 	display: none !important;
 }
 
-/* One slot for a folder's icon or a worktree's dot, so every name starts on one line. */
+/* One slot for a folder's icon or a worktree's glyph, so every name starts on one line. */
 .monaco-workbench .part.workspacebar .workspacebar-glyph {
 	flex: 0 0 auto;
 	display: flex;
@@ -468,24 +468,21 @@
 }
 
 /*
- * A worktree's dot: the level is said by the glyph, not an indent. In the quiet glyph ink, or the
- * colour the worktree was given (`--facade-folder-ink`, as a folder's icon). Transitioned, for the
- * running state it will show (WORKTREE.md section 13).
+ * A worktree's glyph (`worktreeIcon`): the level is said by the glyph, not an indent. In the quiet
+ * glyph ink, or the colour the worktree was given (`--facade-folder-ink`, as a folder's icon).
  */
-.monaco-workbench .part.workspacebar .workspacebar-icon.workspacebar-dot {
-	display: flex;
-	align-items: center;
-	justify-content: center;
+.monaco-workbench .part.workspacebar .workspacebar-icon.workspacebar-worktree {
 	color: var(--facade-folder-ink, var(--vscode-facadeBar-inactiveForeground));
 }
 
-.monaco-workbench .part.workspacebar .workspacebar-dot::before {
-	content: "";
-	width: var(--vscode-spacing-size60);
-	height: var(--vscode-spacing-size60);
-	border-radius: var(--vscode-cornerRadius-circle);
-	background-color: currentColor;
-	transition: background-color var(--facade-motion);
+/*
+ * Transitioned, for the running state it will show (WORKTREE.md section 13).
+ *
+ * ⚠️ A rule of its own, one class shallower than the colour's: a transition has to lose to
+ * `.workspacebar-row.recycled *` above, and the colour has to beat `.workspacebar-icon`.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-worktree {
+	transition: color var(--facade-motion);
 }
 
 /*
