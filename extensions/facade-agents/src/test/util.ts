@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -32,5 +33,19 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			clearTimeout(timer);
 			reject(new Error('Cancelled'));
 		}, { once: true });
+	});
+}
+
+/** Runs a hook's command line through the shell a CLI runs it with, `input` on its stdin. */
+export function runHook(line: string, input: string): Promise<{ status: number | null; stdout: string }> {
+	return new Promise((resolve, reject) => {
+		const child = process.platform === 'win32'
+			? spawn('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { windowsVerbatimArguments: true })
+			: spawn('/bin/sh', ['-c', line]);
+		let stdout = '';
+		child.stdout.setEncoding('utf8').on('data', (chunk: string) => stdout += chunk);
+		child.on('error', reject);
+		child.on('exit', status => resolve({ status, stdout }));
+		child.stdin.end(input);
 	});
 }

@@ -37,17 +37,20 @@ export interface PipeHandlers<P> {
 	authenticate(token: string): P | undefined;
 	hello(caller: P): unknown;
 	call(caller: P, tool: string, args: unknown, context: CallContext): Promise<unknown>;
+	/** What a hook of the caller's CLI prints, for `event` and what the CLI gave the hook. */
+	hook(caller: P, event: string, payload: unknown): string | Promise<string>;
 }
 
 /**
- * The pipe between each agent's MCP process and the window: HTTP over a named pipe on Windows and a
- * Unix socket elsewhere, like the git extension's askpass IPC. Nothing listens on TCP, so no firewall
- * ever asks. Every request carries a bearer token that names its caller.
+ * The pipe between each agent's CLI and the window: HTTP over a named pipe on Windows and a Unix
+ * socket elsewhere, like the git extension's askpass IPC. Nothing listens on TCP, so no firewall ever
+ * asks. Every request carries a bearer token that names its caller.
  *
  * `POST /hello` answers with what the caller's MCP server offers. `POST /call` runs a tool and
  * answers in newline-delimited JSON: progress lines while it works, then one result line. When the
- * caller goes away, the call's signal aborts. The pipe carries a tool's name and arguments as they
- * are: which tools there are is for the handlers to know (WORKTREE-AGENTS.md, section 18).
+ * caller goes away, the call's signal aborts. `POST /hook` answers with what one of the caller's
+ * hooks prints. The pipe carries names and arguments as they are: which tools and hooks there are is
+ * for the handlers to know (WORKTREE-AGENTS.md, section 18).
  */
 export class PipeServer<P> {
 
@@ -106,7 +109,7 @@ export class PipeServer<P> {
 			if (res.writableEnded) {
 				return;
 			}
-			let body: { tool?: unknown; args?: unknown };
+			let body: { tool?: unknown; args?: unknown; event?: unknown; payload?: unknown };
 			try {
 				body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
 			} catch {
@@ -119,6 +122,10 @@ export class PipeServer<P> {
 			}
 			if (req.url === '/call' && typeof body.tool === 'string') {
 				void this.onCall(caller, body.tool, body.args, res);
+				return;
+			}
+			if (req.url === '/hook' && typeof body.event === 'string') {
+				void this.onHook(caller, body.event, body.payload, res);
 				return;
 			}
 			res.writeHead(404).end();
@@ -148,6 +155,17 @@ export class PipeServer<P> {
 		res.end();
 	}
 
+	private async onHook(caller: P, event: string, payload: unknown, res: http.ServerResponse): Promise<void> {
+		let answer: string;
+		try {
+			answer = await this.handlers.hook(caller, event, payload);
+		} catch (err) {
+			res.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: (err as Error).message }));
+			return;
+		}
+		res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ answer }));
+	}
+
 	dispose(): void {
 		this.server.close();
 		for (const socket of this.sockets) {
@@ -166,14 +184,41 @@ export class PipeClientError extends Error {
 	}
 }
 
-/** An MCP process's end of the pipe, calling as the holder of `token`. */
+/**
+ * Why a request failed on the pipe: `UNREACHABLE` when it never reached the window - nothing listens,
+ * as while the window reloads - so that it did not run; `NOT_CONNECTED` when the connection broke
+ * once it had, so that it may have run.
+ */
+function failureOf(req: http.ClientRequest): () => string {
+	let reached = false;
+	req.on('socket', socket => {
+		if (socket.connecting) {
+			socket.once('connect', () => reached = true);
+		} else {
+			reached = true;
+		}
+	});
+	return () => reached ? 'NOT_CONNECTED' : 'UNREACHABLE';
+}
+
+/** An agent's end of the pipe - its MCP server, or one of its hooks - calling as the holder of `token`. */
 export class PipeClient {
 
 	constructor(private readonly pipe: string, private readonly token: string) { }
 
 	hello<T>(): Promise<T> {
+		return this.post<T>('/hello', {});
+	}
+
+	/** What the window has the hook print for `event`. */
+	async hook(event: string, payload: unknown): Promise<string> {
+		const { answer } = await this.post<{ answer?: unknown }>('/hook', { event, payload });
+		return typeof answer === 'string' ? answer : '';
+	}
+
+	private post<T>(path: string, body: object): Promise<T> {
 		return new Promise((resolve, reject) => {
-			const req = http.request({ socketPath: this.pipe, path: '/hello', method: 'POST', headers: { 'Authorization': `Bearer ${this.token}`, 'Content-Type': 'application/json' } }, res => {
+			const req = http.request({ socketPath: this.pipe, path, method: 'POST', headers: { 'Authorization': `Bearer ${this.token}`, 'Content-Type': 'application/json' } }, res => {
 				const chunks: Buffer[] = [];
 				res.on('data', (chunk: Buffer) => chunks.push(chunk));
 				res.on('end', () => {
@@ -188,8 +233,9 @@ export class PipeClient {
 					}
 				});
 			});
-			req.on('error', err => reject(new PipeClientError(err.message, 'NOT_CONNECTED')));
-			req.end('{}');
+			const failure = failureOf(req);
+			req.on('error', err => reject(new PipeClientError(err.message, failure())));
+			req.end(JSON.stringify(body));
 		});
 	}
 
@@ -233,7 +279,8 @@ export class PipeClient {
 				res.on('end', () => settle(() => reject(new PipeClientError('Facade closed the call without a result.', 'NOT_CONNECTED'))));
 				res.on('error', err => settle(() => reject(new PipeClientError(err.message, 'NOT_CONNECTED'))));
 			});
-			req.on('error', err => settle(() => reject(new PipeClientError(err.message, 'NOT_CONNECTED'))));
+			const failure = failureOf(req);
+			req.on('error', err => settle(() => reject(new PipeClientError(err.message, failure()))));
 			signal?.addEventListener('abort', () => {
 				req.destroy();
 				settle(() => reject(new PipeClientError('Cancelled', 'CANCELLED')));

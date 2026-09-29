@@ -93,6 +93,50 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		return !!terminal && terminal.exitStatus === undefined;
 	}
 
+	async stop(name: string): Promise<void> {
+		(await this.find(name))?.dispose();
+	}
+
+	async type(name: string, text: string): Promise<boolean> {
+		const terminal = await this.find(name);
+		terminal?.sendText(text, false);
+		return !!terminal;
+	}
+
+	async read(name: string, lines: number): Promise<string | undefined> {
+		const processId = await this.processIdOfAgent(name);
+		return processId === undefined ? undefined : vscode.commands.executeCommand<string | undefined>('_facade.terminal.read', processId, lines);
+	}
+
+	async lastInputAt(name: string): Promise<number | undefined> {
+		const processId = await this.processIdOfAgent(name);
+		return processId === undefined ? undefined : vscode.commands.executeCommand<number | undefined>('_facade.terminal.lastInput', processId);
+	}
+
+	/** Through its worktree's row, which the window goes to; in the panel's way when the window has no such command. */
+	async reveal(name: string): Promise<boolean> {
+		const terminal = await this.find(name);
+		if (!terminal) {
+			return false;
+		}
+		const processId = await processIdOf(terminal);
+		let revealed = false;
+		try {
+			revealed = processId !== undefined && !!await vscode.commands.executeCommand<boolean>('_facade.terminal.reveal', processId);
+		} catch {
+			// A window without Facade's workbench.
+		}
+		if (!revealed) {
+			terminal.show();
+		}
+		return true;
+	}
+
+	private async processIdOfAgent(name: string): Promise<number | undefined> {
+		const terminal = await this.find(name);
+		return terminal && processIdOf(terminal);
+	}
+
 	/**
 	 * The agent's terminal opened by the workbench for the folder it works in: under that folder's row,
 	 * coming up when the window goes there, as a terminal somebody opened there would. Undefined when

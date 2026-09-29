@@ -70,17 +70,20 @@ suite('Record: agents, their names and their tokens', () => {
 		});
 	});
 
-	test('each incarnation\'s token is written to its run folder; a new incarnation\'s takes over, and a stopped one does not come back', () => {
+	test('each incarnation\'s token is written to its run folder; a new incarnation\'s takes over, and one that stopped or failed is no longer heard', () => {
 		const first = registry.add(inWorktree('main'));
 		registry.setState('main', 1, 'stopped');
 		const second = registry.add(inWorktree('main'));
 		registry.setState('main', 1, 'working');
+		const failed = registry.add(inWorktree('parser', 'parser'));
+		registry.setState('parser', 1, 'failed');
 
 		assert.deepStrictEqual({
 			files: [first.tokenFile, second.tokenFile].map(file => path.relative(temp.dir, file)),
 			written: fs.readFileSync(second.tokenFile, 'utf8') === second.token,
 			first: registry.authenticate(first.token),
 			second: registry.authenticate(second.token),
+			failed: registry.authenticate(failed.token),
 			person: registry.authenticate(registry.youToken),
 			stranger: registry.authenticate('nobody'),
 			state: registry.agent('main')?.state
@@ -89,9 +92,31 @@ suite('Record: agents, their names and their tokens', () => {
 			written: true,
 			first: undefined,
 			second: { name: 'main', incarnation: 2 },
+			failed: undefined,
 			person: PERSON,
 			stranger: undefined,
 			state: 'starting'
+		});
+	});
+
+	test('a message waits for its recipient until it is delivered, oldest first; a parent\'s children are the agents it started', () => {
+		registry.add(inWorktree('main'));
+		registry.add({ ...inWorktree('clamp', 'clamp'), parent: 'main' });
+		registry.add({ ...inWorktree('slug', 'slug'), parent: 'main' });
+		const first = registry.sendMessage('clamp', 'main', 'Done.');
+		registry.sendMessage('slug', 'main', 'Stuck.');
+		registry.sendMessage('main', 'clamp', 'Thanks.');
+		registry.markDelivered(first, 'stop');
+		registry.markDelivered(first, 'terminal');
+
+		assert.deepStrictEqual({
+			forMain: registry.pendingFor('main').map(message => `${message.from}: ${message.text}`),
+			forClamp: registry.pendingFor('clamp').map(message => message.text),
+			children: registry.childrenOf('main').map(child => child.name)
+		}, {
+			forMain: ['slug: Stuck.'],
+			forClamp: ['Thanks.'],
+			children: ['clamp', 'slug']
 		});
 	});
 });
@@ -108,10 +133,13 @@ suite('Record: on disk', () => {
 		temp.remove();
 	});
 
-	test('a reload loses nothing: agents, their states, their tokens and the person\'s', () => {
+	test('a reload loses nothing: agents, their states, their tokens and the person\'s, the worktrees made, the messages waiting', () => {
 		let registry = AgentRegistry.open({ dir: temp.dir });
 		const added = registry.add(inWorktree('main'));
-		registry.setState('main', 1, 'stopped', 'its terminal closed');
+		registry.setState('main', 1, 'waiting', 'a permission prompt');
+		registry.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: 'main' });
+		registry.markDelivered(registry.sendMessage('clamp', 'main', 'Done.'), 'result');
+		registry.sendMessage('clamp', 'main', 'And tested.');
 		const youToken = registry.youToken;
 		registry.dispose();
 
@@ -121,15 +149,19 @@ suite('Record: on disk', () => {
 			agent: agent && { cli: agent.cli, worktree: agent.worktree, folder: agent.folder, model: agent.model, parent: agent.parent, state: agent.state, detail: agent.stateDetail },
 			token: registry.authenticate(added.token),
 			youToken: registry.youToken === youToken,
-			youTokenFile: fs.existsSync(path.join(temp.dir, YOU_TOKEN_FILE))
+			youTokenFile: fs.existsSync(path.join(temp.dir, YOU_TOKEN_FILE)),
+			worktrees: [...registry.state.worktrees.values()],
+			waiting: registry.pendingFor('main').map(message => message.text)
 		};
 		registry.dispose();
 
 		assert.deepStrictEqual(reloaded, {
-			agent: { cli: 'claude', worktree: 'main', folder: '/lab', model: 'sonnet', parent: YOU, state: 'stopped', detail: 'its terminal closed' },
+			agent: { cli: 'claude', worktree: 'main', folder: '/lab', model: 'sonnet', parent: YOU, state: 'waiting', detail: 'a permission prompt' },
 			token: { name: 'main', incarnation: 1 },
 			youToken: true,
-			youTokenFile: true
+			youTokenFile: true,
+			worktrees: [{ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: 'main' }],
+			waiting: ['And tested.']
 		});
 	});
 

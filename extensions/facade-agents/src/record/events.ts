@@ -5,8 +5,10 @@
 
 /** The person: the parent of the agents they start, with a token of their own. */
 export const YOU = 'you';
+/** Facade itself, as the sender of the notices it gives a parent (WA-6.11). */
+export const FACADE = 'facade';
 /** Names no agent may take. */
-export const RESERVED_NAMES: ReadonlySet<string> = new Set([YOU, 'facade', 'all', 'everyone', 'me']);
+export const RESERVED_NAMES: ReadonlySet<string> = new Set([YOU, FACADE, 'all', 'everyone', 'me']);
 
 /**
  * WA-4.5:
@@ -38,6 +40,36 @@ export interface Agent {
 	readonly startedAt: number;
 }
 
+/** A worktree Facade made for a child, and the one it was branched from (WA-3.3). */
+export interface MadeWorktree {
+	/** Its branch, which names it. */
+	readonly name: string;
+	readonly folder: string;
+	/** The repository's main checkout. */
+	readonly repository: string;
+	/** The name of the worktree it was branched from. */
+	readonly parentWorktree: string;
+	/** The agent, or the person, it was made for the child of. */
+	readonly madeBy: string;
+}
+
+/** A message from its sending until it is delivered (WORKTREE-AGENTS.md, section 6). */
+export interface Message {
+	/** The number of the event that sent it. */
+	readonly seq: number;
+	readonly from: string;
+	readonly to: string;
+	readonly text: string;
+	readonly sentAt: number;
+}
+
+/**
+ * How a message reached its recipient (WA-6.2): with a tool's result, blocking its Stop hook, typed
+ * into its terminal, or as a notification to the person. `dropped` when its recipient stopped before
+ * it could be delivered.
+ */
+export type DeliveryWay = 'result' | 'stop' | 'terminal' | 'notification' | 'dropped';
+
 /**
  * What a workspace records of its agents (WORKTREE-AGENTS.md, section 10). Every change is an event
  * in the ledger first; the state is what replaying the ledger gives.
@@ -54,7 +86,10 @@ export type LedgerEventBody =
 		readonly parent: string;
 		readonly tokenHash: string;
 	}
-	| { readonly type: 'agent.state'; readonly name: string; readonly incarnation: number; readonly state: AgentState; readonly detail?: string };
+	| { readonly type: 'agent.state'; readonly name: string; readonly incarnation: number; readonly state: AgentState; readonly detail?: string }
+	| { readonly type: 'worktree.made' } & MadeWorktree
+	| { readonly type: 'message.sent'; readonly from: string; readonly to: string; readonly text: string }
+	| { readonly type: 'message.delivered'; readonly message: number; readonly way: DeliveryWay };
 
 export type LedgerEvent = LedgerEventBody & { readonly seq: number; readonly ts: number };
 
@@ -68,12 +103,16 @@ export interface WorkspaceState {
 	seq: number;
 	/** Each name's latest incarnation. */
 	readonly agents: Map<string, Agent>;
-	/** A token's hash, to the incarnation it belongs to: the latest of each name only. */
+	/** A token's hash, to the incarnation it belongs to: the latest of each name only, while it runs. */
 	readonly tokens: Map<string, Caller>;
+	/** The worktrees Facade made, by folder. */
+	readonly worktrees: Map<string, MadeWorktree>;
+	/** The messages not delivered yet, by number, in the order they were sent. */
+	readonly pending: Map<number, Message>;
 }
 
 export function createState(): WorkspaceState {
-	return { seq: 0, agents: new Map(), tokens: new Map() };
+	return { seq: 0, agents: new Map(), tokens: new Map(), worktrees: new Map(), pending: new Map() };
 }
 
 /** Applies one event of the ledger to the state it is replayed into. */
@@ -109,6 +148,27 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				agent.stateDetail = event.detail;
 				agent.stateAt = event.ts;
 			}
+			// An agent that stopped or failed is no longer heard, even if its process is still there.
+			if (event.state === 'stopped' || event.state === 'failed') {
+				for (const [hash, caller] of state.tokens) {
+					if (caller.name === event.name && caller.incarnation === event.incarnation) {
+						state.tokens.delete(hash);
+					}
+				}
+			}
+			break;
+		}
+		case 'worktree.made': {
+			const { name, folder, repository, parentWorktree, madeBy } = event;
+			state.worktrees.set(folder, { name, folder, repository, parentWorktree, madeBy });
+			break;
+		}
+		case 'message.sent': {
+			state.pending.set(event.seq, { seq: event.seq, from: event.from, to: event.to, text: event.text, sentAt: event.ts });
+			break;
+		}
+		case 'message.delivered': {
+			state.pending.delete(event.message);
 			break;
 		}
 	}

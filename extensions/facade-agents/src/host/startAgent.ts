@@ -6,7 +6,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { InstalledCli } from '../clis';
-import { StartAgent } from '../core/facade';
+import { SpawnRequest } from '../core/facade';
 
 /**
  * Facade: Start Agent: the person picks the CLI, a model and a first message for the worktree on
@@ -14,7 +14,7 @@ import { StartAgent } from '../core/facade';
  * model, prompt, folder }`, and is asked only for the rest; `prompt: ''` starts the agent without a
  * first message.
  */
-export async function askStartAgent(rawArgs: unknown, installed: readonly InstalledCli[]): Promise<StartAgent | undefined> {
+export async function askStartAgent(rawArgs: unknown, installed: readonly InstalledCli[]): Promise<SpawnRequest | undefined> {
 	const args = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
 	const title = vscode.l10n.t("Start Agent");
 	if (!installed.length) {

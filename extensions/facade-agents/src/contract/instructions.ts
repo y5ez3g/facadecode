@@ -6,13 +6,13 @@
 import { Facade } from '../core/facade';
 import { Caller, YOU } from '../record/events';
 
-const TOOLS = 'ide does what the person can do in the IDE.';
+const TOOLS = 'spawn starts a child agent; send messages your parent or a child; stop stops a child; ide does what the person can do in the IDE.';
+const MESSAGES = 'Messages to you arrive by themselves. Never wait or poll for them: when you have nothing to do, end your turn.';
 
 /**
  * What an agent's MCP server tells the model when it starts (WORKTREE-AGENTS.md, WA-5.2): who it is,
- * who started it, where it runs, and what the tools do. Nothing about how to work: that is a skill's.
- * With M1 the tools line names spawn, send and stop too, and a line says that messages arrive by
- * themselves.
+ * who started it, where it runs, what the tools do, and that messages come by themselves. Nothing
+ * about how to work: that is a skill's.
  */
 export function instructionsFor(facade: Facade, caller: Caller): string {
 	const agent = facade.agentOf(caller);
@@ -23,6 +23,7 @@ export function instructionsFor(facade: Facade, caller: Caller): string {
 	return [
 		`You are @${agent.name}, ${/^[aeiou]/i.test(cli) ? 'an' : 'a'} ${cli} agent in Facade Code, started by ${agent.parent === YOU ? 'the person' : `@${agent.parent}`}.`,
 		`You run in ${agent.folder}: the worktree ${agent.worktree}. You are in that folder already: run commands there without cd.`,
-		TOOLS
+		TOOLS,
+		MESSAGES
 	].join('\n');
 }

@@ -27,24 +27,21 @@ export class HostIde implements Ide {
 		return opened.name;
 	}
 
-	async sendTerminal(name: string, text: string, enter: boolean): Promise<FoundTerminal | undefined> {
-		const terminal = terminalNamed(name);
-		if (!terminal) {
-			return undefined;
-		}
-		terminal.sendText(text, enter);
-		return { name: terminal.name };
+	async findTerminal(name: string): Promise<FoundTerminal | undefined> {
+		const terminals = vscode.window.terminals;
+		const terminal = terminals.find(each => each.name === name || each.creationOptions.name === name) ?? terminals.find(each => each.name.startsWith(name));
+		return terminal && { name: terminal.name };
 	}
 
-	async readTerminal(name: string, lines: number): Promise<(FoundTerminal & { readonly text?: string }) | undefined> {
+	async sendTerminal(name: string, text: string, enter: boolean): Promise<void> {
+		terminalNamed(name)?.sendText(text, enter);
+	}
+
+	async readTerminal(name: string, lines: number): Promise<string | undefined> {
 		const terminal = terminalNamed(name);
-		if (!terminal) {
-			return undefined;
-		}
 		// Some terminals never tell their process id: one that has not within a moment has shown nothing.
-		const processId = await processIdOf(terminal, PID_WAIT_MS);
-		const text = processId === undefined ? undefined : await vscode.commands.executeCommand<string | undefined>('_facade.terminal.read', processId, lines);
-		return { name: terminal.name, text };
+		const processId = terminal && await processIdOf(terminal, PID_WAIT_MS);
+		return processId === undefined ? undefined : vscode.commands.executeCommand<string | undefined>('_facade.terminal.read', processId, lines);
 	}
 
 	async runCommand(id: string, args: readonly unknown[]): Promise<unknown> {
@@ -52,8 +49,7 @@ export class HostIde implements Ide {
 	}
 }
 
-/** A terminal by the name it was opened with, or by the start of its name. */
+/** The terminal of that whole name, as `findTerminal` answered it. */
 function terminalNamed(name: string): vscode.Terminal | undefined {
-	const terminals = vscode.window.terminals;
-	return terminals.find(terminal => terminal.name === name || terminal.creationOptions.name === name) ?? terminals.find(terminal => terminal.name.startsWith(name));
+	return vscode.window.terminals.find(terminal => terminal.name === name);
 }

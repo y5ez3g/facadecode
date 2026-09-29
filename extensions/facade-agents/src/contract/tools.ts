@@ -3,11 +3,15 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { renderMessages } from '../core/delivery';
 import { FacadeError } from '../core/errors';
 import { Facade } from '../core/facade';
-import { Caller } from '../record/events';
+import { Caller, Message } from '../record/events';
 import { ideTool } from './ide';
 import { instructionsFor } from './instructions';
+import { sendTool } from './send';
+import { spawnTool } from './spawn';
+import { stopTool } from './stop';
 
 /** A tool as `tools/list` shows it. */
 export interface Tool {
@@ -40,14 +44,13 @@ export interface Hello {
 	readonly instructions: string;
 }
 
-const TOOLS: readonly ContractTool[] = [ideTool];
+const TOOLS: readonly ContractTool[] = [spawnTool, sendTool, stopTool, ideTool];
 
 /**
  * The tools of Facade's MCP server, `facade`, as the model sees them (WORKTREE-AGENTS.md, section 5).
- * Each result is text the model reads whole, with the same facts as data. A failure is a result too,
- * marked as an error: it says what is wrong and what would be right, and its data carries one of five
- * codes (WA-5.7). M0 has one tool, `ide`; spawn, send and stop come with M1, and with them the
- * messages every result carries (WA-5.3).
+ * Each result is text the model reads whole, with the same facts as data, and ends with the messages
+ * the caller has not had yet (WA-5.3). A failure is a result too, marked as an error: it says what is
+ * wrong and what would be right, and its data carries one of five codes (WA-5.7).
  */
 export class Contract {
 
@@ -59,14 +62,29 @@ export class Contract {
 
 	/** Runs one tool for one caller. Whatever happens, the answer is a result the model reads. */
 	async call(caller: Caller, name: string, args: unknown): Promise<ToolResult> {
+		this.facade.heard(caller);
+		let result: ToolResult;
 		try {
 			const tool = TOOLS.find(each => each.definition.name === name);
 			if (!tool) {
 				throw new FacadeError('INVALID', `Unknown tool ${name}. The tools: ${TOOLS.map(each => each.definition.name).join(', ')}.`);
 			}
-			return await tool.call(this.facade, caller, args);
+			result = await tool.call(this.facade, caller, args);
 		} catch (err) {
-			return { text: (err as Error).message, isError: true, data: { code: err instanceof FacadeError ? err.code : 'FAILED' } };
+			result = { text: (err as Error).message, isError: true, data: { code: err instanceof FacadeError ? err.code : 'FAILED' } };
 		}
+		return withMessages(result, this.facade.messagesFor(caller));
 	}
+}
+
+/** A result with the messages that came for its caller after it (WA-5.3). */
+function withMessages(result: ToolResult, messages: readonly Message[]): ToolResult {
+	if (!messages.length) {
+		return result;
+	}
+	return {
+		...result,
+		text: `${result.text}\n\nMessages for you:\n${renderMessages(messages)}`,
+		data: { ...result.data, messages: messages.map(message => ({ from: message.from, text: message.text })) }
+	};
 }

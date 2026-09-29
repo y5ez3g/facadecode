@@ -5,10 +5,11 @@
 
 import * as assert from 'assert';
 import * as path from 'path';
+import { openingFor } from '../contract/skill';
 import { Contract, ToolResult } from '../contract/tools';
 import { Caller } from '../record/events';
 import { PERSON } from '../record/registry';
-import { fakeWorld } from './fakes';
+import { fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
 suite('Contract: what the model sees, word for word, over the real core with the window faked', () => {
@@ -18,12 +19,15 @@ suite('Contract: what the model sees, word for word, over the real core with the
 	let contract: Contract;
 	let main: Caller;
 
+	/** A result as the model reads it: its code when it failed, then its text. */
+	const read = (result: ToolResult) => `${result.isError ? (result.data as { code: string }).code : 'OK'}: ${result.text}`;
+
 	setup(async () => {
 		temp = tempDir('facade-contract-');
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { '/lab': 'main' });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { '/lab': [] } });
 		contract = new Contract(world.facade);
-		const agent = await world.facade.startAgent(PERSON, { cli: 'claude', model: 'sonnet', folder: '/lab' });
-		main = { name: agent.name, incarnation: agent.incarnation };
+		const spawned = await world.facade.spawn(PERSON, { cli: 'claude', model: 'sonnet', folder: '/lab' });
+		main = { name: spawned.name, incarnation: 1 };
 	});
 
 	teardown(() => {
@@ -31,38 +35,97 @@ suite('Contract: what the model sees, word for word, over the real core with the
 		temp.remove();
 	});
 
-	test('an agent is told who it is, who started it, where it runs and what ide does; the ide tool lists its actions and their arguments', () => {
+	test('an agent is told who it is, who started it, where it runs, what the tools do and that messages come by themselves', () => {
 		const hello = contract.hello(main);
-		const ide = hello.tools[0] as { name: string; description: string; inputSchema: { properties: { action: { enum: string[] } } } };
+		const ide = hello.tools.find(tool => tool.name === 'ide') as { description: string; inputSchema: { properties: { action: { enum: string[] } } } };
 
 		assert.deepStrictEqual({
 			name: hello.name,
 			tools: hello.tools.map(tool => tool.name),
 			actions: ide.inputSchema.properties.action.enum,
-			description: ide.description,
+			ide: ide.description,
 			instructions: hello.instructions.split('\n'),
 			person: contract.hello(PERSON).instructions.split('\n')
 		}, {
 			name: 'main',
-			tools: ['ide'],
-			actions: ['open_file', 'open_terminal', 'read_terminal', 'send_terminal', 'command'],
-			description: 'Does in the IDE what the person can do there. The actions, with their args: '
+			tools: ['spawn', 'send', 'stop', 'ide'],
+			actions: ['open_file', 'open_terminal', 'read_terminal', 'send_terminal', 'delete_worktree', 'command'],
+			ide: 'Does in the IDE what the person can do there. The actions, with their args: '
 				+ 'open_file (path, line?): open a file in the editor, at a line; '
 				+ 'open_terminal (path, name?): open a terminal in a folder, held under its row, and get its name; '
-				+ 'read_terminal (name, lines?): the last lines a terminal shows: 50, or as many as lines says up to 2000; '
-				+ 'send_terminal (name, text, enter?): type text into a terminal, then Enter unless enter is false; '
+				+ 'read_terminal (name, lines?): the last lines a terminal shows, or @name for an agent\'s: 50, or as many as lines says up to 2000; '
+				+ 'send_terminal (name, text, enter?): type text into a terminal, or @name for a child\'s, then Enter unless enter is false; '
+				+ 'delete_worktree (name, force?): Delete Worktree without its dialog, stopping your children in it; changes not committed are thrown away only with force; '
 				+ 'command (id, args?): run any VS Code command, its arguments as a list. '
 				+ 'A path is absolute.',
 			instructions: [
 				'You are @main, a Claude Code agent in Facade Code, started by the person.',
 				'You run in /lab: the worktree main. You are in that folder already: run commands there without cd.',
-				'ide does what the person can do in the IDE.'
+				'spawn starts a child agent; send messages your parent or a child; stop stops a child; ide does what the person can do in the IDE.',
+				'Messages to you arrive by themselves. Never wait or poll for them: when you have nothing to do, end your turn.'
 			],
-			person: ['You act as the person, @you, in Facade Code.', 'ide does what the person can do in the IDE.']
+			person: [
+				'You act as the person, @you, in Facade Code.',
+				'spawn starts a child agent; send messages your parent or a child; stop stops a child; ide does what the person can do in the IDE.'
+			]
 		});
 	});
 
-	test('each action does what it says, and says what it did', async () => {
+	test('the facade skill\'s opening tells a lead and a child who sees what they do, and to report to their parent when done or stuck', () => {
+		assert.deepStrictEqual([openingFor({ name: 'main', parent: 'you' }).split('\n'), openingFor({ name: 'clamp', parent: 'main' }).split('\n')], [
+			[
+				'You work in Facade Code as @main, started by the person, @you: they see your terminal and answer you there, and get what you send them as a notification wherever they are in the window.',
+				'When your task is done, or you are stuck, call the facade tool send with to "@you" and a short report - what you did and where, your branch and commit, how you tested it, what is left open. Only then end your turn.',
+				'Messages to you arrive by themselves. Never wait or poll for them: when you have nothing to do, end your turn.',
+				'The facade skill says the rest.'
+			],
+			[
+				'You work in Facade Code as @clamp. Your parent is @main, the agent that started you. @main sees nothing of your terminal: what you write there reaches the person, never @main.',
+				'When your task is done, or you are stuck, call the facade tool send with to "@main" and a short report - what you did and where, your branch and commit, how you tested it, what is left open. Only then end your turn.',
+				'Messages to you arrive by themselves. Never wait or poll for them: when you have nothing to do, end your turn.',
+				'The facade skill says the rest.'
+			]
+		]);
+	});
+
+	test('spawn, send and stop do what they say, and say what they did', async () => {
+		const results = [
+			await contract.call(main, 'spawn', { cli: 'claude', model: 'haiku', prompt: 'Add clamp.', worktree: 'new', name: 'clamp' }),
+			await contract.call(main, 'spawn', { cli: 'claude', model: 'haiku', prompt: 'Review.' }),
+			await contract.call(main, 'send', { to: '@clamp', text: 'Use the tests in test/.' }),
+			await contract.call(main, 'send', { to: '@you', text: 'Started two children.' }),
+			await contract.call(main, 'stop', { name: '@main-2' }),
+			await contract.call(main, 'stop', { name: 'main-2' })
+		];
+
+		assert.deepStrictEqual(results.map(read), [
+			`OK: Started @clamp: Claude Code on haiku, in the new worktree clamp at ${worktreeFolder('/lab', 'clamp')}, on the branch clamp. Its messages reach you by themselves.`,
+			'OK: Started @main-2: Claude Code on haiku, in the worktree main at /lab. Its messages reach you by themselves.',
+			'OK: Sent to @clamp.',
+			'OK: Sent to the person, as a notification in the window.',
+			'OK: Stopped @main-2. Its worktree main stays as it is.',
+			'OK: Stopped @main-2. Its worktree main stays as it is.'
+		]);
+	});
+
+	test('every result ends with the messages that came for its caller, and hands them over', async () => {
+		const clamp = { name: (await world.facade.spawn(main, { cli: 'claude', model: 'haiku', prompt: 'Work.', name: 'clamp' })).name, incarnation: 1 };
+		await contract.call(clamp, 'send', { to: '@main', text: 'Done: clamp() and its tests.\nOn the branch clamp.' });
+		const withMessages = await contract.call(main, 'ide', { action: 'command', args: { id: 'nothing' } });
+		const after = await contract.call(main, 'ide', { action: 'command', args: { id: 'nothing' } });
+		const failed = await contract.call(clamp, 'send', { to: '@nobody', text: 'Hi.' });
+
+		assert.deepStrictEqual({ withMessages, after, failed: read(failed) }, {
+			withMessages: {
+				text: 'Ran nothing; it returned nothing.\n\nMessages for you:\n[from @clamp] Done: clamp() and its tests.\nOn the branch clamp.',
+				data: { messages: [{ from: 'clamp', text: 'Done: clamp() and its tests.\nOn the branch clamp.' }] }
+			},
+			after: { text: 'Ran nothing; it returned nothing.' },
+			failed: 'REFUSED: @nobody is not your parent or one of your children. Yours: @main, your parent.'
+		});
+	});
+
+	test('each ide action does what it says, and says what it did', async () => {
 		const file = path.join(temp.dir, 'src', 'a.ts');
 		world.ide.terminals.set('build', 'npm test\n3 passing');
 		const ide = (action: string, args?: object) => contract.call(main, 'ide', { action, args });
@@ -108,6 +171,13 @@ suite('Contract: what the model sees, word for word, over the real core with the
 	test('a wrong argument is INVALID, and the result says what is right', async () => {
 		const file = path.join(temp.dir, 'a.ts');
 		const calls: [string, unknown][] = [
+			['dance', {}],
+			['spawn', { cli: 'claude', model: 'haiku' }],
+			['spawn', { cli: 'claude', model: 'haiku', prompt: 'Go.', agent: 'claude' }],
+			['spawn', { cli: 'claude', model: 'haiku', prompt: 'Go.', worktree: 'new' }],
+			['send', { to: '@main' }],
+			['send', { to: ['@a', '@b'], text: 'Hi.' }],
+			['stop', {}],
 			['ide', { action: 'dance' }],
 			['ide', { action: 'open_file' }],
 			['ide', { action: 'open_file', args: { path: 'src/a.ts' } }],
@@ -117,19 +187,26 @@ suite('Contract: what the model sees, word for word, over the real core with the
 			['ide', { action: 'send_terminal', args: { name: 'checks', text: 3 } }],
 			['ide', { action: 'send_terminal', args: { name: ' ', text: 'x' } }],
 			['ide', { action: 'send_terminal', args: { name: 'checks', text: 'x', enter: 'yes' } }],
+			['ide', { action: 'delete_worktree', args: { name: 'clamp', force: 'yes' } }],
 			['ide', { action: 'command', args: { id: 'x', args: 'y' } }],
 			['ide', { action: 'open_file', verbose: true }],
-			['ide', 'open_file'],
-			['spawn', { cli: 'claude' }]
+			['ide', 'open_file']
 		];
 		const results: ToolResult[] = [];
 		for (const [tool, args] of calls) {
 			results.push(await contract.call(main, tool, args));
 		}
 
-		assert.deepStrictEqual({ results: results.map(result => `${result.isError ? (result.data as { code: string }).code : 'OK'}: ${result.text}`), steps: world.ide.steps }, {
+		assert.deepStrictEqual({ results: results.map(read), steps: world.ide.steps, agents: world.registry.state.agents.size }, {
 			results: [
-				'INVALID: Unknown action dance. The actions: open_file, open_terminal, read_terminal, send_terminal, command.',
+				'INVALID: Unknown tool dance. The tools: spawn, send, stop, ide.',
+				'INVALID: prompt is required.',
+				'INVALID: spawn takes cli, model, prompt, worktree?, name?; not agent.',
+				'INVALID: name is required with worktree "new": the new worktree\'s branch is named after the child.',
+				'INVALID: text is required.',
+				'INVALID: to must be a string.',
+				'INVALID: name is required.',
+				'INVALID: Unknown action dance. The actions: open_file, open_terminal, read_terminal, send_terminal, delete_worktree, command.',
 				'INVALID: path is required.',
 				'INVALID: path must be an absolute path, not src/a.ts.',
 				'INVALID: line must be a whole number above 0.',
@@ -138,12 +215,13 @@ suite('Contract: what the model sees, word for word, over the real core with the
 				'INVALID: text must be a string.',
 				'INVALID: name must not be empty.',
 				'INVALID: enter must be true or false.',
+				'INVALID: force must be true or false.',
 				'INVALID: args must be a list.',
 				'INVALID: ide takes action, args?; not verbose.',
-				'INVALID: ide takes an object of arguments: action, args?.',
-				'INVALID: Unknown tool spawn. The tools: ide.'
+				'INVALID: ide takes an object of arguments: action, args?.'
 			],
-			steps: []
+			steps: [],
+			agents: 1
 		});
 	});
 

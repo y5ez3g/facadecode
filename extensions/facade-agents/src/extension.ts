@@ -25,7 +25,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					log.info('Facade agents need a folder or workspace open; nothing started.');
 					return;
 				}
-				const created = new AgentsService(log);
+				const created = new AgentsService(log, context.globalState);
 				try {
 					await created.start();
 					service = created;

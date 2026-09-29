@@ -4,10 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { PipeHandlers, PipeServer } from './pipe';
 
 const WINDOW_FILE = 'window.json';
+/** Where the launchers of agents' hooks go (WORKTREE-AGENTS.md, section 7). */
+const HOOKS_DIR = path.join(os.homedir(), '.facade', 'hooks');
 
 export interface WindowRecord {
 	readonly pipe: string;
@@ -31,13 +34,13 @@ export interface McpServerLaunch {
  */
 export class PipeEndpoint<C> {
 
-	private constructor(private readonly dir: string, private readonly server: PipeServer<C>) { }
+	private constructor(private readonly dir: string, private readonly server: PipeServer<C>, private readonly hooksDir: string) { }
 
 	/** Listens on `pipe` and records it in `dir`, the workspace's folder under ~/.facade/workspaces. */
-	static async start<C>(pipe: string, dir: string, handlers: PipeHandlers<C>): Promise<PipeEndpoint<C>> {
+	static async start<C>(pipe: string, dir: string, handlers: PipeHandlers<C>, hooksDir = HOOKS_DIR): Promise<PipeEndpoint<C>> {
 		const server = await PipeServer.listen(pipe, handlers);
 		writeWindowRecord(dir, { pipe: server.path, pid: process.pid, updatedAt: Date.now() });
-		return new PipeEndpoint(dir, server);
+		return new PipeEndpoint(dir, server, hooksDir);
 	}
 
 	get pipe(): string {
@@ -55,6 +58,24 @@ export class PipeEndpoint<C> {
 			args: [path.join(__dirname, 'shim.js'), 'mcp', '--pipe', this.pipe, '--token-file', tokenFile],
 			env: { ELECTRON_RUN_AS_NODE: '1' }
 		};
+	}
+
+	/**
+	 * The command an agent's hooks run, with their event after it: a launcher under ~/.facade/hooks,
+	 * one per run, that starts the shim in its hook mode on this pipe with the agent's token file
+	 * (WORKTREE-AGENTS.md, section 7). A CLI runs a hook's command through a shell, which cannot set
+	 * the environment the same way everywhere: the launcher sets it.
+	 */
+	hookCommand(tokenFile: string, run: string): string {
+		fs.mkdirSync(this.hooksDir, { recursive: true });
+		const command = [process.execPath, path.join(__dirname, 'shim.js'), 'hook', '--pipe', this.pipe, '--token-file', tokenFile];
+		const file = path.join(this.hooksDir, `${path.basename(this.dir)}-${run}${process.platform === 'win32' ? '.cmd' : '.sh'}`);
+		const script = process.platform === 'win32'
+			? ['@echo off', 'set "ELECTRON_RUN_AS_NODE=1"', `${command.map(arg => `"${arg}"`).join(' ')} %*`, ''].join('\r\n')
+			: ['#!/bin/sh', `ELECTRON_RUN_AS_NODE=1 exec ${command.map(arg => `'${arg.replace(/'/g, `'\\''`)}'`).join(' ')} "$@"`, ''].join('\n');
+		fs.writeFileSync(file, script, { mode: 0o700 });
+		const launcher = file.split(path.sep).join('/');
+		return /\s/.test(launcher) ? `"${launcher}"` : launcher;
 	}
 
 	dispose(): void {

@@ -6,7 +6,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Agent, AgentState, Caller, LedgerEvent, WorkspaceState, YOU } from './events';
+import { Agent, AgentState, Caller, DeliveryWay, LedgerEvent, MadeWorktree, Message, WorkspaceState, YOU } from './events';
 import { Ledger } from './ledger';
 import { agentName, MAX_NAME_CHARS, nameOfWorktree } from './names';
 
@@ -167,6 +167,34 @@ export class AgentRegistry {
 			return;
 		}
 		this.ledger.append({ type: 'agent.state', name, incarnation, state, detail });
+	}
+
+	/** The agents `name` started, each by its latest incarnation, running or not. */
+	childrenOf(name: string): Agent[] {
+		return [...this.state.agents.values()].filter(agent => agent.parent === name);
+	}
+
+	/** Records a worktree Facade made for a child (WA-3.3). */
+	recordWorktree(worktree: MadeWorktree): void {
+		this.ledger.append({ type: 'worktree.made', ...worktree });
+	}
+
+	/** Records a message sent; it waits until it is delivered (WA-6.2). */
+	sendMessage(from: string, to: string, text: string): Message {
+		const event = this.ledger.append({ type: 'message.sent', from, to, text });
+		return this.state.pending.get(event.seq)!;
+	}
+
+	/** Records how a message went, which ends its wait. */
+	markDelivered(message: Message, way: DeliveryWay): void {
+		if (this.state.pending.has(message.seq)) {
+			this.ledger.append({ type: 'message.delivered', message: message.seq, way });
+		}
+	}
+
+	/** The messages waiting for `name`, oldest first. */
+	pendingFor(name: string): Message[] {
+		return [...this.state.pending.values()].filter(message => message.to === name);
 	}
 }
 

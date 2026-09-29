@@ -7,6 +7,7 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { installedClis } from '../clis';
+import { FACADE_SKILL, openingFor } from '../contract/skill';
 import { Contract } from '../contract/tools';
 import { Facade } from '../core/facade';
 import { Caller } from '../record/events';
@@ -18,6 +19,7 @@ import { PipeEndpoint } from '../transport/endpoint';
 import { PipeHandlers, pipePath } from '../transport/pipe';
 import { HostGit } from './git';
 import { HostIde } from './ide';
+import { HostPerson } from './person';
 import { askStartAgent } from './startAgent';
 import { HostTerminals } from './terminals';
 
@@ -41,7 +43,8 @@ export class AgentsService implements vscode.Disposable {
 	private facade: Facade | undefined;
 	private endpoint: PipeEndpoint<Caller> | undefined;
 
-	constructor(private readonly log: vscode.LogOutputChannel) { }
+	/** `globalState` keeps the person's answers across windows. */
+	constructor(private readonly log: vscode.LogOutputChannel, private readonly globalState: vscode.Memento) { }
 
 	async start(): Promise<void> {
 		const folders = (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file');
@@ -71,10 +74,13 @@ export class AgentsService implements vscode.Disposable {
 
 		const facade = new Facade({
 			registry,
-			ports: { terminals, ide: new HostIde(), git: new HostGit() },
+			ports: { terminals, ide: new HostIde(), git: new HostGit(), person: new HostPerson(this.globalState, terminals) },
 			clis: () => installedClis(),
-			// No agent starts before the endpoint below listens: their MCP servers call it.
+			// No agent starts before the endpoint below listens: their MCP servers and hooks call it.
 			mcpServer: tokenFile => this.endpoint!.mcpServer(tokenFile),
+			hookCommand: (tokenFile, run) => this.endpoint!.hookCommand(tokenFile, run),
+			skills: [FACADE_SKILL],
+			opening: openingFor,
 			log: message => this.log.info(message)
 		});
 		this.disposables.push(facade);
@@ -83,7 +89,8 @@ export class AgentsService implements vscode.Disposable {
 		const endpoint = this.endpoint = await this.listen(windowState, dir, {
 			authenticate: token => registry.authenticate(token),
 			hello: caller => contract.hello(caller),
-			call: (caller, tool, args) => contract.call(caller, tool, args)
+			call: (caller, tool, args) => contract.call(caller, tool, args),
+			hook: (caller, event, payload) => facade.hook(caller, event, payload)
 		});
 		this.disposables.push(endpoint);
 
@@ -117,7 +124,7 @@ export class AgentsService implements vscode.Disposable {
 			return undefined;
 		}
 		try {
-			return (await facade.startAgent(PERSON, request)).name;
+			return (await facade.spawn(PERSON, request)).name;
 		} catch (err) {
 			this.log.error(`Starting an agent failed: ${(err as Error).stack ?? err}`);
 			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", (err as Error).message));

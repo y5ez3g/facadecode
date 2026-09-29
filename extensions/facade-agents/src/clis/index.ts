@@ -27,9 +27,14 @@ export function installedClis(env: Environment = process.env): InstalledCli[] {
 	return installed;
 }
 
+/** A CLI Facade knows by its id, installed or not. */
+export function agentCli(id: string): AgentCli | undefined {
+	return AGENT_CLIS.find(cli => cli.id === id);
+}
+
 /** A CLI's name for people: `Claude Code` for `claude`; the id itself for one Facade does not know. */
 export function cliName(id: string): string {
-	return AGENT_CLIS.find(cli => cli.id === id)?.displayName ?? id;
+	return agentCli(id)?.displayName ?? id;
 }
 
 /** The name of an agent's terminal: its handle, unique per incarnation, kept across a reload. */

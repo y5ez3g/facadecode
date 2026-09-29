@@ -6,22 +6,53 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { Git } from '../core/ports';
+import { Git, ListedWorktree, Repository } from '../core/ports';
 
-/** The core's Git port, with the git the git extension uses: the one the person set, or the one on PATH. */
+/**
+ * The core's Git port: git's own records, read with the git the git extension uses - the one the
+ * person set, or the one on PATH - and worktrees made and deleted through the window's New Worktree
+ * and Delete Worktree, without their dialogs (WORKTREE.md sections 7 and 10).
+ */
 export class HostGit implements Git {
 
-	async worktreeOf(folder: string): Promise<string> {
+	async repositoryOf(folder: string): Promise<Repository | undefined> {
 		const git = await gitPath();
 		try {
-			const [gitDir, commonDir] = (await run(git, ['-C', folder, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'])).split(/\r?\n/);
+			const [gitDir, commonDir, head] = (await run(git, ['-C', folder, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir', 'HEAD'])).split(/\r?\n/);
+			const main = path.dirname(path.normalize(commonDir));
 			if (comparable(gitDir) === comparable(commonDir)) {
-				return 'main';
+				return { main, worktree: 'main', head };
 			}
-			return (await run(git, ['-C', folder, 'branch', '--show-current'])).trim() || path.basename(folder);
+			const branch = (await run(git, ['-C', folder, 'branch', '--show-current'])).trim();
+			return { main, worktree: branch || path.basename(folder), head };
 		} catch {
-			return path.basename(folder);
+			return undefined;
 		}
+	}
+
+	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
+		const listed = await run(await gitPath(), ['-C', main, 'worktree', 'list', '--porcelain']);
+		const worktrees: ListedWorktree[] = [];
+		for (const record of listed.split(/\r?\n\r?\n/)) {
+			const lines = record.split(/\r?\n/);
+			const folder = lines.find(line => line.startsWith('worktree '))?.slice('worktree '.length);
+			if (!folder) {
+				continue;
+			}
+			const branch = lines.find(line => line.startsWith('branch '))?.slice('branch '.length).replace(/^refs\/heads\//, '');
+			// git lists the main worktree first.
+			worktrees.push({ name: worktrees.length ? branch ?? path.basename(folder) : 'main', folder: path.normalize(folder) });
+		}
+		return worktrees;
+	}
+
+	async makeWorktree(main: string, branch: string, startPoint: string): Promise<string> {
+		const made = await vscode.commands.executeCommand<{ readonly path: string }>('_facade.worktree.create', vscode.Uri.file(main), branch, startPoint, false);
+		return made.path;
+	}
+
+	async deleteWorktree(folder: string, force: boolean): Promise<void> {
+		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder), force);
 	}
 }
 
