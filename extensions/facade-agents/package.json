@@ -1,0 +1,74 @@
+{
+  "name": "facade-agents",
+  "publisher": "vscode",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "10.0.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.5.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension",
+  "scripts": {
+    "compile": "gulp compile-extension:facade-agents",
+    "watch": "gulp watch-extension:facade-agents",
+    "test": "node ../../node_modules/mocha/bin/mocha --ui tdd --timeout 30000 \"out/test/**/*.test.js\""
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "facade.agents.startAgent",
+        "title": "%command.startAgent%",
+        "category": "%command.category%",
+        "enablement": "config.facade.orchestration.enabled"
+      },
+      {
+        "command": "facade.agents.showLog",
+        "title": "%command.showLog%",
+        "category": "%command.category%"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "facade.agents.startAgent",
+          "when": "config.facade.orchestration.enabled"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "%config.title%",
+      "properties": {
+        "facade.orchestration.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "%config.enabled%"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
+  }
+}
