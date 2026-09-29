@@ -9,19 +9,20 @@ import { extUriBiasedIgnorePathCase } from '../../../../../base/common/resources
 import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { IShellLaunchConfig, TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
+import { IShellLaunchConfig, TerminalIcon, TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { glyphInFolderColor, IFolderCustomization, IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { ITerminalInstance } from '../../../terminal/browser/terminal.js';
 import { agentPicks, IAgentPlace, IPlaceStep, placeOfFolder } from '../../browser/terminalLauncherQuickPick.js';
+import { agentIcon } from '../../common/terminalLaunchers.js';
 
-/** An agent's terminal, as much of one as the picker reads: when it was made, its title, its agent's name, and where it is. */
+/** An agent's terminal, as much of one as the picker reads: when it was made, its title, its agent's name, where it is, and its tab's glyph. */
 class TestAgent extends mock<ITerminalInstance>() {
 
 	override readonly shellLaunchConfig: IShellLaunchConfig;
 
-	constructor(override readonly instanceId: number, override readonly title: string, name: string, override readonly target = TerminalLocation.Editor) {
+	constructor(override readonly instanceId: number, override readonly title: string, name: string, override readonly target = TerminalLocation.Editor, override readonly icon?: TerminalIcon) {
 		super();
 		this.shellLaunchConfig = { name };
 	}
@@ -72,6 +73,20 @@ suite('Agent picker - every agent open, in one list', () => {
 			label: '$(rocket~folderred) FacadeCode $(chevron-right) $(circle-small-filled) \\$(star) ideas $(chevron-right) $(robot) Fixing \\$(bug) reports \u00b7 Claude Code',
 			ariaLabel: 'FacadeCode, $(star) ideas, Fixing $(bug) reports, Claude Code'
 		});
+	});
+
+	test('a row carries the glyph its tab does: the agent\'s logo, or the robot', () => {
+		const picks = agentPicks([
+			new TestAgent(1, 'Refactoring the cart', 'Claude Code', TerminalLocation.Editor, agentIcon('claude')),
+			new TestAgent(2, 'Writing tests', 'My Agent', TerminalLocation.Editor, agentIcon('my-agent --fast')),
+			new TestAgent(3, 'Fixing drag and drop', 'Codex', TerminalLocation.Editor, { id: agentIcon('codex').id })	// rebuilt from a stored record
+		], () => ({ steps: [facade], row: 0 }));
+
+		assert.deepStrictEqual(picks.map(pick => pick.label), [
+			'$(rocket~folderred) FacadeCode $(chevron-right) $(agent-claude) Refactoring the cart · Claude Code',
+			'$(rocket~folderred) FacadeCode $(chevron-right) $(robot) Writing tests · My Agent',
+			'$(rocket~folderred) FacadeCode $(chevron-right) $(agent-codex) Fixing drag and drop · Codex',
+		]);
 	});
 
 	test('a folder is drawn as the bar draws it, and a worktree after its repository', () => {

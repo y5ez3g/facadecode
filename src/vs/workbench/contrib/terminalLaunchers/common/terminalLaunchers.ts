@@ -6,28 +6,65 @@
 import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { isObject, isString } from '../../../../base/common/types.js';
+import { localize } from '../../../../nls.js';
 import { IShellLaunchConfig, TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
+import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 
-/**
- * The glyph every agent terminal is drawn with, and how one is recognised afterwards.
- *
- * The recognising is why this is a constant rather than a choice. A terminal has nowhere to carry
- * a flag of ours: `reconnectionProperties` is the field upstream built for an owner to mark one,
- * and setting it takes the terminal out of `shouldPersist` unless `task.reconnection` is on - a
- * worse bug traded for a smaller one. The icon is what survives, so the icon is the marker.
- */
+/** The glyph of an agent without a logo of its own (`agentIcon`). */
 export const AGENT_TERMINAL_ICON = Codicon.robot;
+
+/**
+ * Each built-in agent's logo, by the program its command starts. Icons, so that every surface that
+ * draws one draws these, each at the size of the glyph it stands for.
+ *
+ * Every logo is painted by `media/agentIcons.css` over the default here, which is what shows where
+ * that stylesheet does not reach: the maker's mark in the icon font where it has one - the codicons
+ * upstream's agent sessions use for Claude and Codex (`iconForAgentProvider`) - and the robot where it
+ * has none. A product icon theme's glyph for one is painted over the same way.
+ */
+const AGENT_ICONS: ReadonlyMap<string, ThemeIcon> = new Map([
+	['claude', registerIcon('agent-claude', Codicon.claude, localize('agentIcon.claude', "Icon for a terminal running Claude Code."))],
+	['codex', registerIcon('agent-codex', Codicon.openai, localize('agentIcon.codex', "Icon for a terminal running Codex."))],
+	['agy', registerIcon('agent-antigravity', Codicon.robot, localize('agentIcon.antigravity', "Icon for a terminal running Antigravity."))],
+	['muse', registerIcon('agent-muse', Codicon.robot, localize('agentIcon.muse', "Icon for a terminal running Muse Code."))],
+	['grok', registerIcon('agent-grok', Codicon.xai, localize('agentIcon.grok', "Icon for a terminal running Grok Build."))]
+]);
+
+/**
+ * The icon an agent's terminal is drawn with: its logo when it runs one of the built-in agents, the
+ * robot otherwise - and for a command that is only a shell.
+ *
+ * By the program the command starts rather than by the agent's id, so a row somebody adds to the list
+ * that runs `claude` is drawn as Claude, and a renamed built-in keeps its mark. The name is read as the
+ * last segment of a path, without an extension: `C:\tools\claude.cmd` is `claude`.
+ */
+export function agentIcon(command: string): ThemeIcon {
+	const executable = commandExecutable(command);
+	const name = executable?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, '').toLowerCase();
+	return (name && AGENT_ICONS.get(name)) || AGENT_TERMINAL_ICON;
+}
+
+/**
+ * Every icon an agent's terminal can have, which is how one is recognised afterwards.
+ *
+ * A terminal has nowhere to carry a flag of ours: `reconnectionProperties` is the field upstream built
+ * for an owner to mark one, and setting it takes the terminal out of `shouldPersist` unless
+ * `task.reconnection` is on - a worse bug traded for a smaller one. The icon is what survives a reload,
+ * so the icon is the marker.
+ */
+const AGENT_ICON_IDS: ReadonlySet<string> = new Set([AGENT_TERMINAL_ICON.id, ...[...AGENT_ICONS.values()].map(icon => icon.id)]);
 
 /**
  * Whether a terminal is drawn as an agent's, which is what makes it one.
  *
- * ⚠️ It reads both ways, and that is the price of the marker. Changing an agent tab's icon stops
- * it being an agent tab, and giving a plain terminal the robot starts it being one. A terminal
- * that looks like an agent behaves like one, which is at least a rule somebody can see.
+ * ⚠️ It reads both ways, and that is the price of the marker. Changing an agent tab's icon to something
+ * else stops it being an agent tab, and giving a plain terminal the robot or an agent's logo starts it
+ * being one. A terminal that looks like an agent behaves like one, which is at least a rule somebody can
+ * see.
  */
 export function isAgentTerminalIcon(icon: TerminalIcon | undefined): boolean {
-	return ThemeIcon.isThemeIcon(icon) && icon.id === AGENT_TERMINAL_ICON.id;
+	return ThemeIcon.isThemeIcon(icon) && AGENT_ICON_IDS.has(icon.id);
 }
 
 /**
@@ -103,8 +140,8 @@ export interface ITerminalLauncher {
  * The launchers this fork knows about. A table rather than a fixed set of buttons, so that adding
  * one costs a row.
  *
- * A name and a command, and nothing else. No glyph, because every agent is drawn with the robot
- * the button carries, so there is no per-agent icon to pick, to store, or to get wrong.
+ * A name and a command, and nothing else. No glyph to store: an agent's is worked out from its
+ * command (`agentIcon`), so there is no per-agent icon to pick, to keep, or to get wrong.
  *
  * And nothing about where the thing is installed. An earlier version carried a list of directories
  * per launcher and it was a list of Windows paths copied off one machine: `%LOCALAPPDATA%` means

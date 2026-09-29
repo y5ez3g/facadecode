@@ -1,0 +1,81 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * Each built-in agent's logo, painted over the glyph its icon falls back to (`AGENT_ICONS` in
+ * `terminalLaunchers.ts`), which is hidden. Everywhere an icon is drawn - a terminal tab, a line of
+ * `$(...)` text - carries `codicon-<id>`, so this reaches all of them.
+ *
+ * Logos in colour are images. Logos in one colour are masks painted in the text's colour, so they
+ * read in every theme the way a glyph does - a black logo is invisible on a dark tab.
+ *
+ * ⚠️ The glyph is hidden with `-webkit-text-fill-color`, not `color`: a mask is painted in
+ * `currentColor`, and that has to stay the text's.
+ *
+ * ⚠️ Behind the glyph rather than instead of it. An editor tab's label is not a `.codicon`, and the
+ * terminal draws its glyph there with `content` and `font-family` set `!important`; the glyph keeps
+ * its box, which is the one a file icon theme paints its images into, and the logo is drawn in it.
+ *
+ * The logos are their makers' marks, drawn to say which agent a terminal runs, each taken from the
+ * icons its own site declares:
+ *
+ *     claude.svg        claude.ai, its `icon`
+ *     codex.svg         chatgpt.com/codex, its `icon` - the bare mark, no tile behind it
+ *     antigravity.png   antigravity.google, its `antigravity-logo.png`
+ *     muse.png          dev.meta.ai/docs/muse-code, its `favicon.ico`, the 64px image as a PNG
+ *     grok.svg          grok.com, its `/images/favicon.svg` - the mark's two paths, without the tile
+ */
+.monaco-workbench .codicon-agent-claude::before,
+.monaco-workbench .codicon-agent-codex::before,
+.monaco-workbench .codicon-agent-antigravity::before,
+.monaco-workbench .codicon-agent-muse::before,
+.monaco-workbench .codicon-agent-grok::before {
+	-webkit-text-fill-color: transparent;
+	background-position: center;
+	background-repeat: no-repeat;
+	/*
+	 * ⚠️ The glyph's size, whatever the place draws its icons at - 13px on an editor tab, 16px in a
+	 * picker. Not `contain`: a tab's box has 3px of padding either side, which a background fills, and
+	 * the logo came out 22px. Not a fixed size: a box smaller than it crops the logo's edges.
+	 */
+	background-size: 1em;
+}
+
+/*
+ * ⚠️ `!important`, and one class more specific than upstream on a terminal tab, where it clears every
+ * background image on a glyph icon (`.terminal-tab:not(.terminal-uri-icon)::before`) - which is the
+ * thing this puts back.
+ */
+.monaco-workbench .codicon-agent-claude::before,
+.monaco-workbench .monaco-icon-label.terminal-tab.codicon-agent-claude::before {
+	background-image: url('./agents/claude.svg') !important;
+}
+
+.monaco-workbench .codicon-agent-antigravity::before,
+.monaco-workbench .monaco-icon-label.terminal-tab.codicon-agent-antigravity::before {
+	background-image: url('./agents/antigravity.png') !important;
+}
+
+.monaco-workbench .codicon-agent-muse::before,
+.monaco-workbench .monaco-icon-label.terminal-tab.codicon-agent-muse::before {
+	background-image: url('./agents/muse.png') !important;
+}
+
+/* The one-colour logos: the text's colour, through the logo's shape. */
+.monaco-workbench .codicon-agent-codex::before,
+.monaco-workbench .codicon-agent-grok::before {
+	background-color: currentColor;
+	mask-position: center;
+	mask-repeat: no-repeat;
+	mask-size: 1em;
+}
+
+.monaco-workbench .codicon-agent-codex::before {
+	mask-image: url('./agents/codex.svg');
+}
+
+.monaco-workbench .codicon-agent-grok::before {
+	mask-image: url('./agents/grok.svg');
+}
