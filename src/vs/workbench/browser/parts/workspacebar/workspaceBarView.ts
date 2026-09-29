@@ -241,8 +241,8 @@ interface IRowTemplate {
 	/** A folder's own buttons (`WorkspaceBarRowToolbar`) - its `+` - shown while the pointer is on it. */
 	readonly toolbar: MenuWorkbenchToolBar;
 	/**
-	 * The bar's own disclosure triangle, after the `+` at the end of a repository's row - the pair the
-	 * header has, `+` and its toggle. The tree's is hidden: see `twistieAdditionalCssClass`.
+	 * The bar's own disclosure triangle, in a repository's icon slot, which it takes under the pointer.
+	 * The tree's is hidden: see `twistieAdditionalCssClass`.
 	 */
 	readonly twistie: HTMLElement;
 	/**
@@ -283,8 +283,10 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		// The one slot every row draws its glyph in, so every name in the column starts on one line.
 		const glyph = append(row, $('.workspacebar-glyph'));
 		const icon = append(glyph, $('.workspacebar-icon'));
+		// A repository's triangle, over its icon: under the pointer the folder gives way to it.
+		const twistie = append(glyph, $(`.workspacebar-twistie${ThemeIcon.asCSSSelector(Codicon.treeItemExpanded)}`));
 		const label = disposables.add(new IconLabel(row, { supportHighlights: true, supportDescriptionHighlights: true }));
-		// A folder's buttons: its toolbar's `+`, then the triangle, which is under the header's `+`.
+		// A folder's button: its toolbar's `+`, under the header's `+`.
 		const actions = append(row, $('.workspacebar-row-actions'));
 		const toolbar = disposables.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, append(actions, $('.workspacebar-row-toolbar')), WorkspaceBarRowToolbar, {
 			menuOptions: { shouldForwardArgs: true },
@@ -293,7 +295,6 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		// Pointer only, as the triangle: a stop in every row would make Tab walk the list. The keyboard
 		// has the row's menu.
 		toolbar.setFocusable(false);
-		const twistie = append(actions, $('.workspacebar-twistie'));
 
 		const template: IRowTemplate = { row, toolbar, twistie, icon, label, name: '', twistieLabel: '', id: undefined, recycled: disposables.add(new MutableDisposable()), templateDisposable: disposables };
 
@@ -348,11 +349,12 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		// `e.index` is undefined). That is right for a list and wrong for this.
 		template.row.classList.toggle('active', this.isActive(node));
 
-		// The bar's own triangle, inside the row after its `+`: the tree's sits outside the row's box and
-		// would push the row's band and mark off the column's edge. `^` while open, `v` while closed, like
-		// the header's toggle. Only repositories with worktrees are collapsible (`workspaceBarRows`).
+		// The bar's own triangle, in the row's icon slot: the tree's sits outside the row's box and would
+		// push the row's band and mark off the column's edge. Drawn as every tree in the workbench draws
+		// its own, down while open and turned to point right while closed. Only repositories with
+		// worktrees are collapsible (`workspaceBarRows`).
 		template.row.classList.toggle('collapsible', node.collapsible);
-		template.twistie.className = `workspacebar-twistie ${ThemeIcon.asClassName(node.collapsed ? Codicon.chevronDown : Codicon.chevronUp)}`;
+		template.twistie.classList.toggle('collapsed', node.collapsed);
 		template.twistieLabel = node.collapsed ? localize('workspaceBar.expand', "Expand") : localize('workspaceBar.collapse', "Collapse");
 		template.twistie.setAttribute('aria-label', template.twistieLabel);
 

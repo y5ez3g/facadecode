@@ -59,12 +59,12 @@ record and leave the directory behind).
 📁 solo                         a repository with no worktrees: nothing to open
 📁 notes                        no .git of its own: no second level
 
-under the pointer, a folder's row shows its pair of buttons, the last of them under the header's `+`:
+under the pointer, a folder's row shows its `+` under the header's, and a repository's icon its triangle:
 WORKSPACE                   +   the header: Open Folder...; the collapse toggle is the title bar's first button
-📁 FacadeCode             + ^   New Worktree..., and ^ to close it while it is open
-📁 api-gateway            + v   v to open it while it is closed
-📁 solo                   +     no worktrees: the + alone, still in its column
-📁 notes                  +     no .git: the + makes it a repository first (WT-5.8)
+v  FacadeCode               +   New Worktree..., and v in the icon's slot to close it while it is open
+>  api-gateway              +   > to open it while it is closed
+📁 solo                     +   no worktrees: the folder stays a folder
+📁 notes                    +   no .git: the + makes it a repository first (WT-5.8)
 ```
 
 - **WT-1.1** Two levels: folder, then worktree. No third level.
@@ -116,11 +116,12 @@ WORKSPACE                   +   the header: Open Folder...; the collapse toggle 
   `workspace-bar-worktree` so a product icon theme can replace it, and the one glyph the agent picker
   draws a worktree with too. Customize... gives a worktree a display name (unnamed, it is called by
   its branch) and a colour, which paints the dot. No glyph to choose: the dot is what says worktree.
-- **WT-1.13** A folder's row ends in two buttons, styled as the header's `+`: `+` (New Worktree...,
-  there while it can be used) and the triangle - `^` while open, `v` while closed - which stands under
-  the header's `+`. The triangle only on a repository with worktrees; elsewhere its column stays
-  empty, so the `+` stays in place. Both show under the pointer only; the keyboard opens and closes with Left and Right. The
-  glyph is swapped, never rotated.
+- **WT-1.13** A folder's row ends in one button, styled as the header's `+` and standing under it:
+  `+`, New Worktree..., there while it can be used. A repository with worktrees has its triangle in
+  its icon's slot, drawn over the icon and taking its place under the pointer, so nothing on the row
+  moves: `v` while open, turned to `>` while closed, as the workbench's trees draw theirs, in the
+  row's ink, its target the slot's full height. Both show under the pointer only; the keyboard opens
+  and closes with Left and Right. Collapsed to its icons, the bar shows no triangle (WT-1.10).
 - **WT-1.14** Everything in a row that changes takes one duration, `--facade-motion` (150ms, standard
   easing); `workbench.reduceMotion` sets it to 0. A row element the list hands to a different row
   shows that row at once.
