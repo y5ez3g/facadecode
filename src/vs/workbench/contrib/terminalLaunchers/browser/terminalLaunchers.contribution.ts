@@ -13,12 +13,16 @@ import { AGENTS_SETTING } from '../common/terminalLaunchers.js';
 import { registerTerminalLauncherActions } from './terminalLauncherActions.js';
 import './terminalLauncherService.js';
 import { TerminalLauncherMenu } from './terminalLauncherMenu.js';
+import { TerminalLauncherWorkspaceBar } from './terminalLauncherWorkspaceBar.js';
 
 registerTerminalLauncherActions();
 
 // The button itself is there whatever happens, because Configure Agents is always in the menu.
 // This is what puts the agents beside it, and it runs early so the first opening is the real list.
 registerWorkbenchContribution2(TerminalLauncherMenu.ID, TerminalLauncherMenu, WorkbenchPhase.BlockRestore);
+
+// After the folder terminals, which it asks where each agent is and which start `AfterRestored`.
+registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.Eventually);
 
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,

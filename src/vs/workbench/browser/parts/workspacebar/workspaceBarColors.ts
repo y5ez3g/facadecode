@@ -141,3 +141,24 @@ export const FACADE_FOLDER_PURPLE = folderColor('Purple', '#A15FC7',
 
 export const FACADE_FOLDER_PINK = folderColor('Pink', '#CA4A9B',
 	localize('facadeBarFolderPink', "The pink a folder in the workspace bar can be tagged with."));
+
+/**
+ * The agents' colour: the `+N` of agents past a row's logos, the dot a row with agents carries while
+ * the bar is collapsed to its icons, and the count on the title bar's agent button (WORKTREE.md
+ * WT-1.15).
+ *
+ * ⚠️ A colour of its own rather than the badges'. The default themes (`Dark 2026`, `Light 2026`) give
+ * `badge.background` and `activityBarBadge.background` one blue, which a closed repository's
+ * worktree count already is, and the agents would read as more of the same count.
+ *
+ * ⚠️ Green, the workbench's "passed, started, running" (`testing.iconPassed`, the debug start
+ * button); orange is its "warning, modified", and Claude's logo beside it. Darker than the folder
+ * green, so that 11px white text clears 4.5:1 on it (4.97; the folder green gives 4.25).
+ */
+export const FACADE_AGENT_BADGE_BACKGROUND = registerColor('facadeAgentBadge.background',
+	'#23803C',
+	localize('facadeAgentBadgeBackground', "Background colour of what marks agents: the count on a row of the workspace bar and on the title bar's agent button, and a row's dot while the bar is collapsed."));
+
+export const FACADE_AGENT_BADGE_FOREGROUND = registerColor('facadeAgentBadge.foreground',
+	'#FFFFFF',
+	localize('facadeAgentBadgeForeground', "Foreground colour of the counts that mark agents."));

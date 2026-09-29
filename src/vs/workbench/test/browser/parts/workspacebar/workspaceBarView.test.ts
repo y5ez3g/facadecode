@@ -11,6 +11,7 @@ import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { toDisposable } from '../../../../../base/common/lifecycle.js';
+import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
@@ -23,6 +24,7 @@ import { ContextKeyExpr, ContextKeyValue, IContextKeyService } from '../../../..
 import { IStorageService } from '../../../../../platform/storage/common/storage.js';
 import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { NEW_WORKTREE_COMMAND, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
+import { IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { moveRow, orderWorktrees, rowsOfFolders } from '../../../../browser/parts/workspacebar/workspaceBar.js';
@@ -292,7 +294,7 @@ suite('Workspace bar - the view', () => {
 	 * The bar's view over `groups`, with the window on `active` and `contextKeys` set: what it asked the
 	 * commands and the switcher to do, and its rows as a screen reader hears them.
 	 */
-	function view(folders: IWorkspaceFolder[], groups: WorkspaceBarGroup[], active: URI, names = new Map<string, string>(), contextKeys: Record<string, ContextKeyValue> = {}, storage?: IStorageService) {
+	function view(folders: IWorkspaceFolder[], groups: WorkspaceBarGroup[], active: URI, names = new Map<string, string>(), contextKeys: Record<string, ContextKeyValue> = {}, storage?: IStorageService, agents = new Map<string, readonly ThemeIcon[]>()) {
 		// Real context keys and menus: what a row's toolbar offers is decided by them.
 		const instantiationService = workbenchInstantiationService({ contextKeyService: () => store.add(new ContextKeyService(new TestConfigurationService())) }, store);
 		if (storage) {
@@ -316,6 +318,11 @@ suite('Workspace bar - the view', () => {
 			get: uri => names.has(uri.path) ? { name: names.get(uri.path) } : undefined,
 			nameFor: folder => names.get(folder.uri.path) ?? folder.name,
 			worktreeOrder: () => undefined
+		});
+		const agentsChanged = store.add(new Emitter<void>());
+		instantiationService.stub(IWorkspaceBarAgentsService, {
+			onDidChange: agentsChanged.event,
+			agentsIn: uri => agents.get(uri.path) ?? []
 		});
 
 		let current = groups;
@@ -354,6 +361,11 @@ suite('Workspace bar - the view', () => {
 				current = groups;
 				gitChanged.fire();
 			},
+			/** Says that `folder` now runs `icons`, as the agent launchers do when a terminal comes or goes. */
+			runs: (folder: string, icons: readonly ThemeIcon[]) => {
+				agents.set(folder, icons);
+				agentsChanged.fire();
+			},
 			/** Finishes the reads of git's files asked for so far, which found `groups`. */
 			read: async (groups: WorkspaceBarGroup[]) => {
 				current = groups;
@@ -389,7 +401,7 @@ suite('Workspace bar - the view', () => {
 
 		assert.deepStrictEqual({ open, closed, afterDoubleClick, asked: bar.asked }, {
 			open: ['lab', 'Payments, worktree'],
-			closed: ['lab'],
+			closed: ['lab, 1 worktree'],
 			afterDoubleClick: ['lab', 'Payments, worktree'],
 			asked: [],
 		});
@@ -409,6 +421,95 @@ suite('Workspace bar - the view', () => {
 			open: { slot: 'workspacebar-glyph', glyph: 'workspacebar-twistie codicon codicon-tree-item-expanded' },
 			closed: { slot: 'workspacebar-glyph', glyph: 'workspacebar-twistie codicon codicon-tree-item-expanded collapsed' },
 		});
+	});
+
+	test('a closed repository counts its worktrees on its icon, and an open one lists them instead', () => {
+		const bar = view([lab], [repository(undefined)], lab.uri);
+		const count = () => {
+			const badge = bar.find('.workspacebar-glyph > .workspacebar-worktree-count');
+			return badge.hidden ? undefined : badge.textContent;
+		};
+
+		const open = count();
+		click(bar.find('.workspacebar-twistie'));
+
+		assert.deepStrictEqual({ open, closed: count() }, { open: undefined, closed: '1' });
+	});
+
+	test('a row shows the agents its own folder runs, three by their logos and the rest counted in the agents\' green, with a dot for the collapsed bar', () => {
+		const agents = new Map<string, readonly ThemeIcon[]>([
+			['/lab', [ThemeIcon.fromId('agent-claude')]],
+			['/wt/w2', ['agent-claude', 'agent-codex', 'agent-antigravity', 'agent-grok', 'robot'].map(id => ThemeIcon.fromId(id))],
+		]);
+		const bar = view([lab, notes, w2], [repository(w2), { kind: 'folder', folder: notes }], lab.uri, undefined, undefined, undefined, agents);
+		const drawn = (index: number) => {
+			const more = bar.find('.workspacebar-more-agents', index);
+			return {
+				logos: [...bar.find('.workspacebar-agent-logos', index).children].map(logo => logo.className),
+				more: more.hidden ? undefined : more.textContent,
+				dot: !bar.find('.workspacebar-glyph > .workspacebar-agent-dot', index).hidden
+			};
+		};
+		const moreBadge = bar.find('.workspacebar-more-agents .monaco-count-badge', 1);
+
+		assert.deepStrictEqual({ rows: bar.rows(), agents: [drawn(0), drawn(1), drawn(2)], moreColors: [moreBadge.style.backgroundColor, moreBadge.style.color] }, {
+			rows: ['lab, 1 agent', 'w2, worktree, 5 agents', 'notes'],
+			agents: [
+				{ logos: ['workspacebar-agent codicon codicon-agent-claude'], more: undefined, dot: true },
+				{ logos: ['workspacebar-agent codicon codicon-agent-claude', 'workspacebar-agent codicon codicon-agent-codex', 'workspacebar-agent codicon codicon-agent-antigravity'], more: '+2', dot: true },
+				{ logos: [], more: undefined, dot: false },
+			],
+			moreColors: ['var(--vscode-facadeAgentBadge-background)', 'var(--vscode-facadeAgentBadge-foreground)'],
+		});
+	});
+
+	test('a closed repository shows its worktrees\' agents after its own, and marks them when only a worktree runs any; an open one only its own', () => {
+		const both = view([lab, w2], [repository(w2)], lab.uri, undefined, undefined, undefined, new Map([
+			['/lab', [ThemeIcon.fromId('agent-claude')]],
+			['/wt/w2', [ThemeIcon.fromId('agent-codex'), ThemeIcon.fromId('agent-grok')]],
+		]));
+		const onlyTheWorktree = view([lab, w2], [repository(w2)], lab.uri, undefined, undefined, undefined, new Map([['/wt/w2', [ThemeIcon.fromId('agent-codex')]]]));
+		const repositoryRows = () => [both, onlyTheWorktree].map(bar => ({
+			label: bar.rows()[0],
+			logos: [...bar.find('.workspacebar-agent-logos').children].map(logo => logo.className.replace('workspacebar-agent codicon codicon-', '')),
+			dot: !bar.find('.workspacebar-glyph > .workspacebar-agent-dot').hidden
+		}));
+
+		const open = repositoryRows();
+		click(both.find('.workspacebar-twistie'));
+		click(onlyTheWorktree.find('.workspacebar-twistie'));
+
+		assert.deepStrictEqual({ open, closed: repositoryRows() }, {
+			open: [
+				{ label: 'lab, 1 agent', logos: ['agent-claude'], dot: true },
+				{ label: 'lab', logos: [], dot: false },
+			],
+			closed: [
+				{ label: 'lab, 1 worktree, 3 agents', logos: ['agent-claude', 'agent-codex', 'agent-grok'], dot: true },
+				{ label: 'lab, 1 worktree, 1 agent', logos: ['agent-codex'], dot: true },
+			],
+		});
+	});
+
+	test('a worktree git records under another spelling of its folder still shows the agents running in that folder', () => {
+		// As `/private/tmp/w2` and `/tmp/w2`: git wrote down `/wt/w2` (`repository`), the workspace opened the other
+		const realW2 = new WorkspaceFolder({ uri: URI.file('/real/wt/w2'), index: 1, name: 'w2' });
+		const bar = view([lab, realW2], [repository(realW2)], lab.uri, undefined, undefined, undefined, new Map([['/real/wt/w2', [ThemeIcon.fromId('agent-codex')]]]));
+
+		assert.deepStrictEqual({ rows: bar.rows(), logos: [...bar.find('.workspacebar-agent-logos', 1).children].map(logo => logo.className) }, {
+			rows: ['lab', 'w2, worktree, 1 agent'],
+			logos: ['workspacebar-agent codicon codicon-agent-codex'],
+		});
+	});
+
+	test('an agent started in a folder after the bar is drawn shows on its row', () => {
+		const bar = view([lab], [repository(undefined)], lab.uri);
+		const logos = () => [...bar.find('.workspacebar-agent-logos').children].map(logo => logo.className);
+
+		const before = logos();
+		bar.runs('/lab', [ThemeIcon.fromId('agent-codex')]);
+
+		assert.deepStrictEqual({ before, after: logos() }, { before: [], after: ['workspacebar-agent codicon codicon-agent-codex'] });
 	});
 
 	test('a folder\'s + is New Worktree... from its row\'s menu, run for that folder - and not there while the menu leaves it out', () => {
@@ -441,7 +542,7 @@ suite('Workspace bar - the view', () => {
 		click(reloaded.find('.workspacebar-twistie'));
 
 		assert.deepStrictEqual({ afterClosing, afterOpening: reload().rows() }, {
-			afterClosing: ['lab'],
+			afterClosing: ['lab, 1 worktree'],
 			afterOpening: ['lab', 'w2, worktree'],
 		});
 	});

@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { $, addDisposableListener, append, EventType, getWindow, isHTMLElement, scheduleAtNextAnimationFrame } from '../../../../base/browser/dom.js';
+import { $, addDisposableListener, append, EventType, getWindow, isHTMLElement, reset, scheduleAtNextAnimationFrame } from '../../../../base/browser/dom.js';
+import { CountBadge } from '../../../../base/browser/ui/countBadge/countBadge.js';
 import { IconLabel } from '../../../../base/browser/ui/iconLabel/iconLabel.js';
 import { HoverStyle } from '../../../../base/browser/ui/hover/hover.js';
 import { IHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate.js';
@@ -29,8 +30,12 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { defaultCountBadgeStyles } from '../../../../platform/theme/browser/defaultStyles.js';
+import { asCssVariable } from '../../../../platform/theme/common/colorUtils.js';
 import { FolderKey, orderWorktrees } from './workspaceBar.js';
 import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
+import { IWorkspaceBarAgentsService } from './workspaceBarAgents.js';
+import { FACADE_AGENT_BADGE_BACKGROUND, FACADE_AGENT_BADGE_FOREGROUND } from './workspaceBarColors.js';
 import { folderGlyphFor, folderRowNameFor, IWorkspaceBarCustomizationService, worktreeIcon, worktreeNameFor } from './workspaceBarCustomization.js';
 import { IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
@@ -40,6 +45,9 @@ import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 export const ROW_HEIGHT = 28;
 
 const TEMPLATE_ID = 'workspaceBar.row';
+
+/** How many agents a row draws by their logos; the rest are counted, `+N` (WT-1.15). */
+const MAX_AGENT_LOGOS = 3;
 
 /** The repositories somebody closed in this workspace (WT-1.10), as a list of their main checkouts' keys. */
 const CLOSED_STORAGE_KEY = 'facade.workspaceBar.closedRepositories';
@@ -81,6 +89,37 @@ export type WorkspaceBarRow = IFolderRow | IWorktreeRow;
 
 function uriOf(row: WorkspaceBarRow): URI {
 	return row.kind === 'folder' ? row.uri : row.worktree.uri;
+}
+
+/**
+ * The folder of the workspace a row is, when it is one: what the agent launchers report agents by
+ * (`IFolderTerminalsService.folderOf`).
+ *
+ * ⚠️ Not `uriOf`, which for a worktree is the path git recorded. The two name one directory and can
+ * be spelled apart - `/tmp/x` and `/private/tmp/x`, a junction - and the row would show none of the
+ * agents running in it.
+ */
+function workspaceFolderUriOf(row: WorkspaceBarRow): URI {
+	return row.kind === 'folder' ? row.folder?.uri ?? row.uri : row.worktree.folder?.uri ?? row.worktree.uri;
+}
+
+/** What a row says is in it (WT-1.15), on screen and to a screen reader alike. */
+interface IRowContents {
+	/** A closed repository's worktrees; none for any other row, whose worktrees are rows of their own. */
+	readonly worktrees: number;
+	/** The icons of the agents running in its folder, and while it is a closed repository in its worktrees too. */
+	readonly agents: readonly ThemeIcon[];
+}
+
+function rowContentsOf(node: ITreeNode<WorkspaceBarRow | null, void>, agentsService: IWorkspaceBarAgentsService): IRowContents {
+	// A closed repository speaks for its worktrees, as its count does: their agents after its own
+	const closed = node.collapsible && node.collapsed;
+	const rows = closed ? [node.element, ...node.children.map(child => child.element)] : [node.element];
+	return {
+		worktrees: closed ? node.children.length : 0,
+		// Only the tree's root has no element, and it is never a row
+		agents: rows.flatMap(row => row ? agentsService.agentsIn(workspaceFolderUriOf(row)) : [])
+	};
 }
 
 /**
@@ -245,6 +284,15 @@ interface IRowTemplate {
 	 * The tree's is hidden: see `twistieAdditionalCssClass`.
 	 */
 	readonly twistie: HTMLElement;
+	/** A closed repository's worktrees, counted in a badge on its icon (WT-1.15). */
+	readonly worktreeCount: HTMLElement;
+	/** That the row's folder runs agents, on its icon while the bar is collapsed to icons (WT-1.15). */
+	readonly agentDot: HTMLElement;
+	/** The logos of the agents running in the row's folder, up to `MAX_AGENT_LOGOS` (WT-1.15). */
+	readonly agentLogos: HTMLElement;
+	/** `+N` after them, for the agents past the last logo; hidden while there are none. */
+	readonly moreAgents: HTMLElement;
+	readonly moreAgentsBadge: CountBadge;
 	/**
 	 * ⚠️ Mutable, and read by the hover rather than handed to it. A template is reused for whatever
 	 * row scrolls into it, so a hover closed over the folder it was built with would name the folder
@@ -273,6 +321,7 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		private readonly idOf: (row: WorkspaceBarRow) => string,
 		@ILabelService private readonly labelService: ILabelService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
+		@IWorkspaceBarAgentsService private readonly agentsService: IWorkspaceBarAgentsService,
 		@IHoverService private readonly hoverService: IHoverService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 	) { }
@@ -285,9 +334,23 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		const icon = append(glyph, $('.workspacebar-icon'));
 		// A repository's triangle, over its icon: under the pointer the folder gives way to it.
 		const twistie = append(glyph, $(`.workspacebar-twistie${ThemeIcon.asCSSSelector(Codicon.treeItemExpanded)}`));
+		// A closed repository's worktrees, counted on its icon as the activity bar counts on its own.
+		const worktreeCount = append(glyph, $('.workspacebar-worktree-count'));
+		// Collapsed to icons the logos are gone: a dot on the icon says its folder runs agents.
+		const agentDot = append(glyph, $('.workspacebar-agent-dot'));
 		const label = disposables.add(new IconLabel(row, { supportHighlights: true, supportDescriptionHighlights: true }));
-		// A folder's button: its toolbar's `+`, under the header's `+`.
+		// The row's end: the agents its folder runs, and a folder's `+` in the same place, under the
+		// header's `+`, taking theirs under the pointer.
 		const actions = append(row, $('.workspacebar-row-actions'));
+		const agents = append(actions, $('.workspacebar-agents'));
+		const agentLogos = append(agents, $('.workspacebar-agent-logos'));
+		const moreAgents = append(agents, $('.workspacebar-more-agents'));
+		// Its hover says how many, singular or plural, as each row draws it.
+		const moreAgentsBadge = disposables.add(new CountBadge(moreAgents, { countFormat: '+{0}' }, {
+			...defaultCountBadgeStyles,
+			badgeBackground: asCssVariable(FACADE_AGENT_BADGE_BACKGROUND),
+			badgeForeground: asCssVariable(FACADE_AGENT_BADGE_FOREGROUND)
+		}));
 		const toolbar = disposables.add(this.instantiationService.createInstance(MenuWorkbenchToolBar, append(actions, $('.workspacebar-row-toolbar')), WorkspaceBarRowToolbar, {
 			menuOptions: { shouldForwardArgs: true },
 			hiddenItemStrategy: HiddenItemStrategy.NoHide
@@ -296,7 +359,7 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		// has the row's menu.
 		toolbar.setFocusable(false);
 
-		const template: IRowTemplate = { row, toolbar, twistie, icon, label, name: '', twistieLabel: '', id: undefined, recycled: disposables.add(new MutableDisposable()), templateDisposable: disposables };
+		const template: IRowTemplate = { row, toolbar, twistie, worktreeCount, agentDot, agentLogos, moreAgents, moreAgentsBadge, icon, label, name: '', twistieLabel: '', id: undefined, recycled: disposables.add(new MutableDisposable()), templateDisposable: disposables };
 
 		twistie.setAttribute('role', 'button');
 		disposables.add(this.hoverService.setupDelayedHover(twistie, () => ({ content: template.twistieLabel })));
@@ -358,9 +421,22 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		template.twistieLabel = node.collapsed ? localize('workspaceBar.expand', "Expand") : localize('workspaceBar.collapse', "Collapse");
 		template.twistie.setAttribute('aria-label', template.twistieLabel);
 
+		// A closed repository counts its worktrees on its icon, where an open one lists them (WT-1.15).
+		const { worktrees, agents } = rowContentsOf(node, this.agentsService);
+		template.worktreeCount.textContent = worktrees ? String(worktrees) : '';
+		template.worktreeCount.hidden = !worktrees;
+
 		// The `+` on every folder of the list while the bar lists worktrees - a plain one included (WT-5.8).
 		template.row.classList.toggle('offers-worktree', element.kind === 'folder' && element.offersWorktree);
 		template.toolbar.context = uriOf(element);
+
+		// Each agent by its logo, oldest first; past the last logo, how many more (WT-1.15).
+		reset(template.agentLogos, ...agents.slice(0, MAX_AGENT_LOGOS).map(agent => $(`span.workspacebar-agent${ThemeIcon.asCSSSelector(agent)}`)));
+		const more = Math.max(0, agents.length - MAX_AGENT_LOGOS);
+		template.moreAgentsBadge.setCount(more);
+		template.moreAgentsBadge.setTitleFormat(more === 1 ? localize('workspaceBar.oneMoreAgent', "1 more agent") : localize('workspaceBar.moreAgents', "{0} more agents"));
+		template.moreAgents.hidden = more === 0;
+		template.agentDot.hidden = agents.length === 0;
 
 		// A glyph in the folder icon's slot rather than an indent: the glyph says the depth, and the column
 		// keeps one left edge. A worktree's name and colour are its own; unnamed, it is called by its branch.
@@ -406,7 +482,9 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 
 	constructor(
 		private readonly isUnavailable: (row: WorkspaceBarRow) => boolean,
-		private readonly nameOf: (row: WorkspaceBarRow) => string
+		private readonly nameOf: (row: WorkspaceBarRow) => string,
+		/** What the row shows is in it: asked of its tree node, which knows whether it is closed. */
+		private readonly contentsOf: (row: WorkspaceBarRow) => IRowContents
 	) { }
 
 	getWidgetAriaLabel(): string {
@@ -415,11 +493,20 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 
 	getAriaLabel(row: WorkspaceBarRow): string {
 		const name = this.nameOf(row);
-		if (this.isUnavailable(row)) {
-			return localize('workspaceBar.unavailableAria', "{0}, not on disk", name);
-		}
+		const label = this.isUnavailable(row)
+			? localize('workspaceBar.unavailableAria', "{0}, not on disk", name)
+			: row.kind === 'worktree' ? localize('workspaceBar.worktreeAria', "{0}, worktree", name) : name;
 
-		return row.kind === 'worktree' ? localize('workspaceBar.worktreeAria', "{0}, worktree", name) : name;
+		// What the row shows at its end and on its icon, read out after its name (WT-1.15)
+		const { worktrees, agents } = this.contentsOf(row);
+		const counts: string[] = [];
+		if (worktrees) {
+			counts.push(worktrees === 1 ? localize('workspaceBar.oneWorktreeAria', "1 worktree") : localize('workspaceBar.worktreesAria', "{0} worktrees", worktrees));
+		}
+		if (agents.length) {
+			counts.push(agents.length === 1 ? localize('workspaceBar.oneAgentAria', "1 agent") : localize('workspaceBar.agentsAria', "{0} agents", agents.length));
+		}
+		return [label, ...counts].join(', ');
 	}
 }
 
@@ -459,6 +546,7 @@ export class WorkspaceBarView extends Disposable {
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IContextMenuService private readonly contextMenuService: IContextMenuService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
+		@IWorkspaceBarAgentsService agentsService: IWorkspaceBarAgentsService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IStorageService private readonly storageService: IStorageService,
 	) {
@@ -533,7 +621,8 @@ export class WorkspaceBarView extends Disposable {
 			{
 				// The bar's own folder key, so rebuilds keep focus, selection and expansion on the right rows.
 				identityProvider: identity,
-				accessibilityProvider: new WorkspaceBarAccessibilityProvider(isUnavailable, row => displayNameOf(row, this.customizationService)),
+				// ⚠️ `this.tree` is read when a row is labelled, which is after it has been assigned.
+				accessibilityProvider: new WorkspaceBarAccessibilityProvider(isUnavailable, row => displayNameOf(row, this.customizationService), row => rowContentsOf(this.tree.getNode(row), agentsService)),
 				keyboardNavigationLabelProvider: new WorkspaceBarKeyboardNavigationLabelProvider(row => displayNameOf(row, this.customizationService)),
 				// One click. Left alone this follows `workbench.list.openMode`, which is about files.
 				openOnSingleClick: true,
@@ -655,6 +744,9 @@ export class WorkspaceBarView extends Disposable {
 		// the same way a change to the folder list does. Without this the dialog saves and the bar
 		// goes on showing what it showed before, until something else happens to redraw it.
 		this._register(this.customizationService.onDidChange(() => this.refresh()));
+		// ⚠️ The same redraw, although only what the rows draw has changed: `tree.rerender()` with no
+		// row is the list's redraw for rows of changing height, and does nothing in this one.
+		this._register(agentsService.onDidChange(() => this.refresh()));
 		// Collapsed to its icons the rows are the same (WT-1.10), and drawn again for the new shape.
 		this._register(onDidChangeCollapsed(() => this.refresh()));
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
