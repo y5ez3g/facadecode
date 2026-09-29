@@ -23,7 +23,7 @@ import { IActiveFolderService } from '../../../services/activeFolder/common/acti
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
-import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { agentIcon, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
 import { showAgentsDialog } from './terminalLauncherDialog.js';
 
@@ -226,9 +226,9 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 				// Anything somebody puts in the list is an agent as far as this button is concerned.
 				titleTemplate: AGENT_TITLE_TEMPLATE,
 
-				// One glyph for every agent - and the thing that says this terminal is an agent's,
-				// which is why it comes from a constant. Which agent it is, the tab says in words.
-				icon: AGENT_TERMINAL_ICON
+				// The agent's logo, or the robot - and the thing that says this terminal is an agent's
+				// (`isAgentTerminalIcon`), which is why it comes from the one function
+				icon: agentIcon(launcher.command)
 			}
 		});
 		this._names.set(instance.shellIntegrationNonce, launcher.label);

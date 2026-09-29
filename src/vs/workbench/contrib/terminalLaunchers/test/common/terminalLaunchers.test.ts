@@ -8,7 +8,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IShellLaunchConfig, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
-import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentTerminalIcon, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
+import { AGENT_TERMINAL_ICON, agentIcon, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentTerminalIcon, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
 
 suite('Terminal launchers - what to look for', () => {
 
@@ -89,14 +89,41 @@ suite('Terminal launchers - what to look for', () => {
 		]);
 	});
 
-	test('a terminal is an agent\'s when it is drawn with the agent glyph', () => {
+	test('a terminal is an agent\'s when it is drawn with an agent\'s icon', () => {
 		assert.deepStrictEqual([
 			isAgentTerminalIcon(AGENT_TERMINAL_ICON),
+			isAgentTerminalIcon(agentIcon('claude')),	// a built-in agent's logo
 			isAgentTerminalIcon(Codicon.terminal),		// a plain terminal
+			isAgentTerminalIcon(Codicon.claude),		// the font's mark, which is not an agent's icon
 			isAgentTerminalIcon(undefined),				// one that never had an icon
 			isAgentTerminalIcon(URI.file('/robot.png')),	// an icon that is a file, not a glyph
-			isAgentTerminalIcon({ id: AGENT_TERMINAL_ICON.id })	// the same glyph, rebuilt from a stored record
-		], [true, false, false, false, true]);
+			isAgentTerminalIcon({ id: AGENT_TERMINAL_ICON.id }),	// the same glyph, rebuilt from a stored record
+			isAgentTerminalIcon({ id: agentIcon('codex').id })		// and a logo, rebuilt the same way
+		], [true, true, false, false, false, false, true, true]);
+	});
+
+	test('an agent is drawn with the logo of the program its command starts', () => {
+		assert.deepStrictEqual([
+			agentIcon('claude').id,
+			agentIcon('codex --yolo').id,
+			agentIcon('agy').id,
+			agentIcon('muse').id,
+			agentIcon('grok').id,
+			agentIcon('"C:\\Program Files\\Claude\\Claude.EXE" --resume').id,	// a path, an extension, any case
+			agentIcon('/usr/local/bin/codex').id,
+			agentIcon('my-agent --fast').id,	// not one of ours: the robot
+			agentIcon('').id					// only a shell: the robot
+		], [
+			'agent-claude',
+			'agent-codex',
+			'agent-antigravity',
+			'agent-muse',
+			'agent-grok',
+			'agent-claude',
+			'agent-codex',
+			AGENT_TERMINAL_ICON.id,
+			AGENT_TERMINAL_ICON.id
+		]);
 	});
 });
 

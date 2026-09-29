@@ -7,20 +7,28 @@ import './media/terminalLauncherButton.css';
 import { $, append, getActiveWindow, getWindow } from '../../../../base/browser/dom.js';
 import { IActionViewItemOptions } from '../../../../base/browser/ui/actionbar/actionViewItems.js';
 import { AnchorAlignment } from '../../../../base/browser/ui/contextview/contextview.js';
-import { DropdownMenuActionViewItem } from '../../../../base/browser/ui/dropdown/dropdownActionViewItem.js';
+import type { IManagedHover } from '../../../../base/browser/ui/hover/hover.js';
+import { IHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate.js';
+import { getBaseLayerHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate2.js';
+import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { IAction } from '../../../../base/common/actions.js';
 import { Codicon } from '../../../../base/common/codicons.js';
+import { isCancellationError } from '../../../../base/common/errors.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
-import { getFlatActionBarActions } from '../../../../platform/actions/browser/menuEntryActionViewItem.js';
-import { Action2, IMenuService, MenuId, MenuRegistry, registerAction2, SubmenuItemAction } from '../../../../platform/actions/common/actions.js';
+import { ActionWidgetDropdownActionViewItem } from '../../../../platform/actions/browser/actionWidgetDropdownActionViewItem.js';
+import { Action2, IMenuService, MenuId, MenuItemAction, MenuRegistry, registerAction2, SubmenuItemAction } from '../../../../platform/actions/common/actions.js';
+import { IActionWidgetService } from '../../../../platform/actionWidget/browser/actionWidget.js';
+import { IActionWidgetDropdownAction } from '../../../../platform/actionWidget/browser/actionWidgetDropdown.js';
 import { ContextKeyExpr, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
+import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/titlebarActions.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
@@ -43,44 +51,55 @@ export const CONFIGURE_AGENTS = 'facade.agent.configure';
 const AGENTS_PRECONDITION = ContextKeyExpr.or(TerminalContextKeys.processSupported, TerminalContextKeys.webExtensionContributedProfile);
 
 /**
- * The agent button, drawn as a dropdown anchored to itself.
+ * The agent button, drawn as a dropdown anchored to itself: upstream's action widget, as its own
+ * pickers of agents are (`ChatContinueInSessionActionItem`), because a context menu draws no icons
+ * and each agent's row carries its logo. The agents above, the rest of `AGENT_MENU` below a line.
  *
  * A submenu rather than an action: where the title bar has no room for the button its overflow draws
  * a submenu as one, with the agents under it, while an action there is a row that runs
- * `SHOW_AGENT_MENU` - which has no button to drop the menu from. `ISubmenuItem` carries no keybinding,
- * so the tooltip asks that command for its own.
+ * `SHOW_AGENT_MENU` - which has no button to drop the menu from. So the rows come from `AGENT_MENU`
+ * here too, and the overflow and this list cannot disagree about what is in it. `ISubmenuItem` carries
+ * no keybinding, so the tooltip asks that command for its own.
  */
-class AgentMenuActionViewItem extends DropdownMenuActionViewItem implements IAgentMenuButton {
+class AgentMenuActionViewItem extends ActionWidgetDropdownActionViewItem implements IAgentMenuButton {
+
+	/** The title bar's, which the base takes no options to be given. */
+	private readonly _hoverDelegate: IHoverDelegate | undefined;
+	private _hover: IManagedHover | undefined;
 
 	constructor(
 		action: IAction,
 		options: IActionViewItemOptions,
-		@IContextMenuService contextMenuService: IContextMenuService,
 		@IMenuService menuService: IMenuService,
-		@IContextKeyService private readonly _contextKeyService: IContextKeyService,
-		@IKeybindingService private readonly _keybindingService: IKeybindingService,
+		@IActionWidgetService actionWidgetService: IActionWidgetService,
+		@IContextKeyService private readonly contextKeyService: IContextKeyService,
+		@IKeybindingService private readonly keybindingService: IKeybindingService,
+		@INotificationService notificationService: INotificationService,
+		@ITelemetryService telemetryService: ITelemetryService,
 		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService
 	) {
-		// Rebuilt on every opening, because the agents are commands that come and go with the setting
-		const menus = new DisposableStore();
+		// Read on every opening, because the agents are commands that come and go with the setting
+		const rows = () => agentMenuRows(menuService.getMenuActions(AGENT_MENU, contextKeyService), notificationService);
 
 		super(action, {
-			getActions: () => {
-				menus.clear();
-				const menu = menus.add(menuService.createMenu(AGENT_MENU, this._contextKeyService));
-				return getFlatActionBarActions(menu.getActions());
-			}
-		}, contextMenuService, {
-			...options,
-			// A submenu's glyph is its item's: its class says only that it is a submenu
-			classNames: action instanceof SubmenuItemAction && ThemeIcon.isThemeIcon(action.item.icon) ? ThemeIcon.asClassName(action.item.icon) : action.class,
-			// Or the tooltip is the only one in the row that does not say how to open it from the
-			// keyboard: a tool bar hands this to the dropdowns it builds itself, and not to ours.
-			keybindingProvider: item => this._keybindingService.lookupKeybinding(item.id)
-		});
+			actionProvider: { getActions: () => rows().agents },
+			// Show Active Agents and Configure, under a line and without icons, as the pickers
+			// upstream builds on this put their own "manage" rows
+			actionBarActionProvider: { getActions: () => rows().rest }
+		}, actionWidgetService, keybindingService, contextKeyService, telemetryService);
 
-		this._register(menus);
+		this._hoverDelegate = options.hoverDelegate;
 		this._register(this._launcherService.registerButton(this));
+	}
+
+	/**
+	 * The button's own glyph, the submenu's icon, and no hover of its own: the base puts one up with
+	 * only the label, and `updateTooltip` already puts up the full one - with the count and the key.
+	 */
+	protected override renderLabel(element: HTMLElement): IDisposable | null {
+		const icon = this.action instanceof SubmenuItemAction && ThemeIcon.isThemeIcon(this.action.item.icon) ? this.action.item.icon : Codicon.robot;
+		element.classList.add(...ThemeIcon.asClassNameArray(icon));
+		return null;
 	}
 
 	override render(container: HTMLElement): void {
@@ -109,7 +128,7 @@ class AgentMenuActionViewItem extends DropdownMenuActionViewItem implements IAge
 	 * menu and never the button that opens it.
 	 */
 	protected override getTooltip(): string {
-		const tooltip = this._keybindingService.appendKeybinding(this.action.tooltip || this.action.label, SHOW_AGENT_MENU, this._contextKeyService);
+		const tooltip = this.keybindingService.appendKeybinding(this.action.tooltip || this.action.label, SHOW_AGENT_MENU, this.contextKeyService);
 
 		const count = this._launcherService.agentTerminals.length;
 		if (count === 0) {
@@ -121,6 +140,26 @@ class AgentMenuActionViewItem extends DropdownMenuActionViewItem implements IAge
 			: localize('facade.agent.someActive', "{0} - {1} active agents", tooltip, count);
 	}
 
+	/**
+	 * The tooltip under the title bar's hover delegate, as the row's other buttons have theirs. The
+	 * base would put it up under the default one, and this would be the one button in the row whose
+	 * tooltip waits before it shows.
+	 */
+	protected override updateTooltip(): void {
+		if (!this.element) {
+			return;
+		}
+
+		this.updateAriaLabel();
+
+		const tooltip = this.getTooltip();
+		if (this._hover) {
+			this._hover.update(tooltip);
+		} else {
+			this._hover = this._register(getBaseLayerHoverDelegate().setupManagedHover(this._hoverDelegate ?? getDefaultHoverDelegate('element'), this.element, tooltip));
+		}
+	}
+
 	protected override setAriaLabelAttributes(element: HTMLElement): void {
 		super.setAriaLabelAttributes(element);
 		element.ariaLabel = this.getTooltip();
@@ -130,6 +169,41 @@ class AgentMenuActionViewItem extends DropdownMenuActionViewItem implements IAge
 	isIn(window: Window): boolean {
 		return !!this.element?.isConnected && getWindow(this.element) === window;
 	}
+}
+
+/** `AGENT_MENU` as the agent button's dropdown draws it: the agents, and the rows under the line. */
+export function agentMenuRows(groups: ReadonlyArray<[string, ReadonlyArray<MenuItemAction | SubmenuItemAction>]>, notificationService: INotificationService): { readonly agents: IActionWidgetDropdownAction[]; readonly rest: IActionWidgetDropdownAction[] } {
+	const rows = (agents: boolean) => groups
+		.filter(([group]) => (group === AGENT_MENU_GROUP) === agents)
+		.flatMap(([, items]) => items)
+		.filter(item => item instanceof MenuItemAction)
+		.map(item => toDropdownAction(item, notificationService));
+
+	return { agents: rows(true), rest: rows(false) };
+}
+
+/**
+ * A row of `AGENT_MENU` as a row of the dropdown, with the icon a context menu would leave out.
+ *
+ * ⚠️ A row that fails says so, as a context menu's does (`ContextMenuHandler`). The dropdown runs a
+ * row without waiting for it, so what fails would otherwise go nowhere a person sees - while the
+ * same row in the title bar's overflow, a context menu, shows it.
+ */
+function toDropdownAction(item: MenuItemAction, notificationService: INotificationService): IActionWidgetDropdownAction {
+	return {
+		id: item.id,
+		label: item.label,
+		tooltip: item.tooltip,
+		class: undefined,
+		enabled: item.enabled,
+		checked: undefined,
+		icon: ThemeIcon.isThemeIcon(item.item.icon) ? item.item.icon : undefined,
+		run: () => item.run().catch(error => {
+			if (!isCancellationError(error)) {
+				notificationService.error(error);
+			}
+		})
+	};
 }
 
 export function createAgentMenuActionViewItem(action: IAction, options: IActionViewItemOptions, instantiationService: IInstantiationService): AgentMenuActionViewItem {
