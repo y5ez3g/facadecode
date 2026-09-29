@@ -271,6 +271,12 @@
 	/* So the mark can be placed against this box's own leading edge. */
 	position: relative;
 	transition: background-color var(--facade-motion);
+	/*
+	 * The chip this row is painted with, set by each state below and read here: a wash over the bar's
+	 * surface, which the ring of its agent dot paints over the surface again to match the row.
+	 */
+	--facade-row-chip: transparent;
+	background-color: var(--facade-row-chip);
 }
 
 /*
@@ -357,7 +363,7 @@
 	 * lightening of the surface rather than a colour of its own - the ink that read on the surface
 	 * still reads on the chip.
 	 */
-	background-color: var(--vscode-modernActivityBarItem-activeBackground);
+	--facade-row-chip: var(--vscode-modernActivityBarItem-activeBackground);
 }
 
 /*
@@ -366,7 +372,7 @@
  * state, with the shape changed from a 24px box to this row.
  */
 .monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .workspacebar-row.active {
-	background-color: transparent;
+	--facade-row-chip: transparent;
 	outline: var(--vscode-strokeThickness) solid var(--vscode-contrastActiveBorder);
 	outline-offset: calc(-1 * var(--vscode-strokeThickness));
 }
@@ -418,7 +424,7 @@
  * is true after a click too.
  */
 .monaco-workbench .part.workspacebar .workspacebar-list.keyboard .monaco-list:focus .monaco-list-row.focused .workspacebar-row:not(.active) {
-	background-color: var(--vscode-modernActivityBarItem-hoverBackground);
+	--facade-row-chip: var(--vscode-modernActivityBarItem-hoverBackground);
 }
 
 /*
@@ -434,13 +440,13 @@
  * ⚠️ `:not(.active)` so the marked row keeps the heavier chip under the pointer.
  */
 .monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-row:not(.active) {
-	background-color: var(--vscode-modernActivityBarItem-hoverBackground);
+	--facade-row-chip: var(--vscode-modernActivityBarItem-hoverBackground);
 }
 
 /* High contrast has no chip: a dashed stroke instead, as `activityBar.css` does, for the keyboard's row too. */
 .monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .monaco-list-row:hover .workspacebar-row:not(.active),
 .monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .workspacebar-list.keyboard .monaco-list:focus .monaco-list-row.focused .workspacebar-row:not(.active) {
-	background-color: transparent;
+	--facade-row-chip: transparent;
 	outline: var(--vscode-strokeThickness) dashed var(--vscode-contrastActiveBorder);
 	outline-offset: calc(-1 * var(--vscode-strokeThickness));
 }
@@ -483,18 +489,12 @@
 }
 
 /*
- * A worktree's glyph (`worktreeIcon`): the level is said by the glyph, not an indent. In the quiet
- * glyph ink, or the colour the worktree was given (`--facade-folder-ink`, as a folder's icon).
- */
-.monaco-workbench .part.workspacebar .workspacebar-icon.workspacebar-worktree {
-	color: var(--facade-folder-ink, var(--vscode-facadeBar-inactiveForeground));
-}
-
-/*
- * Transitioned, for the running state it will show (WORKTREE.md section 13).
+ * A worktree's glyph (`worktreeIcon`): the level is said by the glyph, not an indent. In the ink a
+ * folder's icon takes (`.workspacebar-icon`), the row's or the colour the worktree was given;
+ * transitioned, for the running state it will show (WORKTREE.md section 13).
  *
- * ⚠️ A rule of its own, one class shallower than the colour's: a transition has to lose to
- * `.workspacebar-row.recycled *` above, and the colour has to beat `.workspacebar-icon`.
+ * ⚠️ Not the quiet ink it once had: a step darker than the folder icons and the triangle in the same
+ * column, the dot read as dimmed rather than as one level down.
  */
 .monaco-workbench .part.workspacebar .workspacebar-worktree {
 	transition: color var(--facade-motion);
@@ -548,7 +548,8 @@
  * ⚠️ `:not(.collapsed)`: collapsed to its icons, an icon is the whole row, and a repository opens and
  * closes from its menu (WT-1.10).
  */
-.monaco-workbench .part.workspacebar:not(.collapsed) .monaco-list-row:hover .workspacebar-row.collapsible .workspacebar-icon {
+.monaco-workbench .part.workspacebar:not(.collapsed) .monaco-list-row:hover .workspacebar-row.collapsible .workspacebar-icon,
+.monaco-workbench .part.workspacebar:not(.collapsed) .monaco-list-row:hover .workspacebar-row.collapsible .workspacebar-worktree-count {
 	opacity: 0;
 }
 
@@ -556,13 +557,113 @@
 	opacity: 1;
 }
 
-/* A folder's `New Worktree...`, in the last column of the row, under the header's `+` (WT-5.8). */
+/*
+ * The row's end: the agents its folder runs (WT-1.15), and a folder's `New Worktree...` under the
+ * header's `+` (WT-5.8), in one grid cell. Under the pointer the `+` takes the agents' place; the cell
+ * keeps the wider one's width, so the name's ellipsis stays where it was.
+ */
 .monaco-workbench .part.workspacebar .workspacebar-row-actions {
 	flex: 0 0 auto;
-	display: flex;
+	display: grid;
+	align-items: center;
+	justify-items: end;
 }
 
-.monaco-workbench .part.workspacebar .workspacebar-row:not(.offers-worktree) .workspacebar-row-actions {
+.monaco-workbench .part.workspacebar .workspacebar-row-actions > * {
+	grid-area: 1 / 1;
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-row:not(.offers-worktree) .workspacebar-row-toolbar {
+	display: none;
+}
+
+/*
+ * Each agent by its maker's logo, as its terminal tab draws it (`agentIcons.css` paints it over the
+ * glyph at the glyph's size), then `+N` in the workbench's count badge, in the agents' green, for the
+ * rest.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-agents,
+.monaco-workbench .part.workspacebar .workspacebar-agent-logos {
+	display: flex;
+	align-items: center;
+	gap: var(--vscode-spacing-size40);
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-agents {
+	transition: opacity var(--facade-motion);
+}
+
+/* ⚠️ Smaller than the row's glyphs: the logos are about the row, the name and the folder icon are it. */
+.monaco-workbench .part.workspacebar .workspacebar-agent {
+	font-size: 14px;
+}
+
+.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-row.offers-worktree .workspacebar-agents {
+	opacity: 0;
+}
+
+/*
+ * A closed repository's worktrees, counted on its icon (WT-1.15): the compact activity bar's badge,
+ * its size, colours and place against the glyph - right edge 4px past it, bottom 2px below - as this
+ * column is built to that bar's measure.
+ * ⚠️ No pointer events: the count is over the triangle's target, and a click on it opens the repository.
+ * ⚠️ It goes with the icon under the pointer (above), the whole slot the triangle's: over its point,
+ * the count covered the `>` that says the row opens.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-worktree-count {
+	position: absolute;
+	/* Against the glyph, centred in the slot's full height, rather than the row's 28px. */
+	right: -4px;
+	bottom: calc(50% - var(--vscode-codiconFontSize) / 2 - 2px);
+	min-width: 9px;
+	height: 13px;
+	padding: 0 2px;
+	border-radius: 13px;
+	font-size: 9px;
+	font-weight: 600;
+	line-height: 13px;
+	text-align: center;
+	color: var(--vscode-activityBarBadge-foreground);
+	background-color: var(--vscode-activityBarBadge-background);
+	pointer-events: none;
+	transition: opacity var(--facade-motion);
+}
+
+/*
+ * High contrast gives the badge the bar's own black, and a stroke is what outlines it: the count
+ * badges take `contrastBorder` the same way (`defaultCountBadgeStyles`).
+ */
+.monaco-workbench:is(.hc-black, .hc-light) .part.workspacebar .workspacebar-worktree-count {
+	border: 1px solid var(--vscode-contrastBorder);
+}
+
+/*
+ * A row that runs agents, while the bar is collapsed to its icons and the logos are gone (WT-1.15): a
+ * dot in the agents' colour on the icon's top corner, across from the worktree count on its bottom
+ * one. Ringed in the row's own colour so that it reads apart from the glyph under it - a worktree's
+ * is a dot too.
+ *
+ * ⚠️ The ring is a transparent border over the row's colour, not a shadow in the bar's: the row's
+ * chip is a wash over the bar's surface, and a ring in the surface alone showed as a darker halo on
+ * the marked row and the one under the pointer.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-agent-dot {
+	position: absolute;
+	/* Centred on the glyph's top edge and 4px past its side, the ring outside that. */
+	top: calc(50% - var(--vscode-codiconFontSize) / 2 - var(--vscode-spacing-size60) / 2 - var(--vscode-spacing-size20));
+	right: calc(-1 * (var(--vscode-spacing-size40) + var(--vscode-spacing-size20)));
+	width: var(--vscode-spacing-size60);
+	height: var(--vscode-spacing-size60);
+	border: var(--vscode-spacing-size20) solid transparent;
+	border-radius: var(--vscode-cornerRadius-circle);
+	background:
+		linear-gradient(var(--vscode-facadeAgentBadge-background), var(--vscode-facadeAgentBadge-background)) padding-box,
+		linear-gradient(var(--facade-row-chip), var(--facade-row-chip)) border-box,
+		var(--vscode-facadeBar-background) border-box;
+	pointer-events: none;
+}
+
+.monaco-workbench .part.workspacebar:not(.collapsed) .workspacebar-agent-dot {
 	display: none;
 }
 

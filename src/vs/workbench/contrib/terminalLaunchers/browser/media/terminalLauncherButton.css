@@ -7,8 +7,9 @@
  * How many agents are open, on the agent button's corner.
  *
  * The title bar's other icon buttons carry a count the same way - the compact badge in
- * `titlebarpart.css`, in the activity bar's badge colors - so this is that pill, drawn by the
- * button itself because a dropdown has no badge of its own.
+ * `titlebarpart.css` - so this is that pill, drawn by the button itself because a dropdown has no
+ * badge of its own. In the agents' colour rather than the activity bar's badge colours: the same
+ * green marks agents on the workspace bar's rows (WORKTREE.md WT-1.15).
  */
 
 .monaco-action-bar .action-item > .agent-count {
@@ -20,8 +21,8 @@
 	padding: 0 var(--vscode-spacing-size20);
 	box-sizing: border-box;
 	border-radius: var(--vscode-cornerRadius-circle);
-	background-color: var(--vscode-activityBarBadge-background);
-	color: var(--vscode-activityBarBadge-foreground);
+	background-color: var(--vscode-facadeAgentBadge-background);
+	color: var(--vscode-facadeAgentBadge-foreground);
 	font-size: var(--vscode-fontSize-label3);
 	font-weight: var(--vscode-fontWeight-semiBold);
 	line-height: 12px;

@@ -90,9 +90,10 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
 - **WT-1.9** A worktree git records whose folder is gone is listed, greyed, and can be deleted, which
   forgets git's record of it alone.
 - **WT-1.10** Collapsed to its icons, the bar is the same tree without its words: an open repository
-  shows its worktrees as dots, a closed one shows none. Collapsing the bar never opens or closes a
-  repository, and which repositories are closed is kept per workspace, across reloads. When the window
-  is on a worktree of a closed repository, the repository's row carries the active mark.
+  shows its worktrees as dots, a closed one only their count on its icon (WT-1.15). Collapsing the
+  bar never opens or closes a repository, and which repositories are closed is kept per workspace,
+  across reloads. When the window is on a worktree of a closed repository, the repository's row
+  carries the active mark.
 - **WT-1.11** The context menu follows the row, in three groups: making and seeing first, arranging,
   then what makes the row go.
 
@@ -125,6 +126,28 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
 - **WT-1.14** Everything in a row that changes takes one duration, `--facade-motion` (150ms, standard
   easing); `workbench.reduceMotion` sets it to 0. A row element the list hands to a different row
   shows that row at once.
+- **WT-1.15** A row says what is in it without being opened.
+  - A closed repository counts its worktrees in a badge on its icon: the compact activity bar's, in
+    its colours and where that bar puts it against the glyph, and still there collapsed to icons.
+    Under the pointer it goes with the icon, the slot the triangle's.
+  - Each row shows the agents its own folder runs, an open repository's row its main checkout's:
+    their logos side by side, oldest first, up to three, then `+N` in the workbench's count badge. A
+    closed repository speaks for its worktrees, as its count does: their agents after its own, in the
+    order of their rows. An agent in the panel is on no row.
+  - Under the pointer a folder's `+` takes the agents' place in the same cell, so the name does not
+    move. Collapsed to icons the logos go, and a row with agents carries a dot on its icon's top
+    corner, ringed in the bar's surface.
+  - The logos can cut a long name short, so every row's hover is its name, whole, and not its path: a
+    worktree's folder is named for where it lives, not for its branch.
+  - A screen reader hears the same after the row's name: `lab, 1 worktree, 3 agents`.
+  - The agent launchers tell the bar what runs where (`IWorkspaceBarAgentsService`): the bar sits
+    below the terminals and cannot ask them.
+
+  Blue counts worktrees, green marks agents. The worktree count keeps the activity bar's badge
+  colours; everything that marks agents - the `+N`, the collapsed dot and the count on the title
+  bar's agent button - takes `facadeAgentBadge.*`, a green of its own: the default themes give every
+  workbench count one blue, and the two would read as one. Green because the workbench's green is
+  "passed, started, running"; its orange is "warning, modified", and Claude's logo sits beside it.
 
 ---
 
