@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { getBaseLayerHoverDelegate, setBaseLayerHoverDelegate } from '../../../../../base/browser/ui/hover/hoverDelegate2.js';
 import { ObjectTree } from '../../../../../base/browser/ui/tree/objectTree.js';
 import { IObjectTreeElement } from '../../../../../base/browser/ui/tree/tree.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
@@ -489,6 +490,26 @@ suite('Workspace bar - the view', () => {
 				{ label: 'lab, 1 worktree, 1 agent', logos: ['agent-codex'], dot: true },
 			],
 		});
+	});
+
+	test('a row\'s hover is its name, whole - a worktree\'s the name it goes by, not its folder\'s path', () => {
+		// The label's hover goes through the base layer's delegate, which the test services leave alone
+		const hovers = new Map<HTMLElement, unknown>();
+		const before = getBaseLayerHoverDelegate();
+		setBaseLayerHoverDelegate({
+			...before,
+			setupManagedHover: (_delegate, target, content) => {
+				hovers.set(target, content);
+				return { dispose: () => undefined, show: () => undefined, hide: () => undefined, update: content => { hovers.set(target, content); } };
+			}
+		});
+		try {
+			const bar = view([lab, w2], [repository(w2)], lab.uri, new Map([['/wt/w2', 'Payments']]));
+
+			assert.deepStrictEqual([0, 1].map(index => hovers.get(bar.find('.monaco-icon-label', index))), ['lab', 'Payments']);
+		} finally {
+			setBaseLayerHoverDelegate(before);
+		}
 	});
 
 	test('a worktree git records under another spelling of its folder still shows the agents running in that folder', () => {

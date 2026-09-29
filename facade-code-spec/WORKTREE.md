@@ -137,6 +137,8 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   - Under the pointer a folder's `+` takes the agents' place in the same cell, so the name does not
     move. Collapsed to icons the logos go, and a row with agents carries a dot on its icon's top
     corner, ringed in the bar's surface.
+  - The logos can cut a long name short, so every row's hover is its name, whole, and not its path: a
+    worktree's folder is named for where it lives, not for its branch.
   - A screen reader hears the same after the row's name: `lab, 1 worktree, 3 agents`.
   - The agent launchers tell the bar what runs where (`IWorkspaceBarAgentsService`): the bar sits
     below the terminals and cannot ask them.

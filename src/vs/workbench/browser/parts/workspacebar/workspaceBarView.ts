@@ -27,7 +27,6 @@ import { IContextKey } from '../../../../platform/contextkey/common/contextkey.j
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IHoverService, WorkbenchHoverDelegate } from '../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
-import { ILabelService } from '../../../../platform/label/common/label.js';
 import { WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { defaultCountBadgeStyles } from '../../../../platform/theme/browser/defaultStyles.js';
@@ -319,7 +318,6 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 		private readonly hoverDelegate: IHoverDelegate,
 		/** The row's id, as the tree knows it (`WorkspaceBarIdentityProvider`). */
 		private readonly idOf: (row: WorkspaceBarRow) => string,
-		@ILabelService private readonly labelService: ILabelService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
 		@IWorkspaceBarAgentsService private readonly agentsService: IWorkspaceBarAgentsService,
 		@IHoverService private readonly hoverService: IHoverService,
@@ -444,24 +442,20 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 			const customization = this.customizationService.get(element.worktree.uri);
 			template.icon.className = `workspacebar-icon workspacebar-worktree ${ThemeIcon.asClassName(worktreeIcon)}`
 				+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
-			template.name = displayNameOf(element, this.customizationService);
-			template.label.setLabel(template.name, undefined, {
-				title: this.labelService.getUriLabel(element.worktree.uri)
-			});
-			return;
+		} else {
+			// ⚠️ The colour paints the icon and nothing else. Not the name, not the chevron: a row is
+			// read as a name, and a name in ten colours is ten kinds of emphasis nobody asked for.
+			const customization = this.customizationService.get(element.uri);
+			template.icon.className = `workspacebar-icon ${ThemeIcon.asClassName(folderGlyphFor(customization))}`
+				+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
 		}
 
-		// ⚠️ The colour paints the icon and nothing else. Not the name, not the chevron: a row is
-		// read as a name, and a name in ten colours is ten kinds of emphasis nobody asked for.
-		const customization = this.customizationService.get(element.uri);
-		template.icon.className = `workspacebar-icon ${ThemeIcon.asClassName(folderGlyphFor(customization))}`
-			+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
-
-		// The full path on hover is what tells two rows with the same name apart.
+		// ⚠️ The hover is the name, whole, and not the path: the agents at the row's end can cut the name
+		// short, and a worktree's folder is named for where it lives rather than for its branch - its
+		// path did not say which worktree it was. Two folders of one name are told apart by giving one
+		// another name in Customize.
 		template.name = displayNameOf(element, this.customizationService);
-		template.label.setLabel(template.name, undefined, {
-			title: this.labelService.getUriLabel(element.uri)
-		});
+		template.label.setLabel(template.name, undefined, { title: template.name });
 	}
 
 	disposeTemplate(template: IRowTemplate): void {
