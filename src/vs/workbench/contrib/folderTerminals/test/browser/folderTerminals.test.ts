@@ -15,7 +15,7 @@ import { EditorActivation } from '../../../../../platform/editor/common/editor.j
 import { FileSystemProviderCapabilities, IFileService } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { StorageScope, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
-import { TerminalExitReason, TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
+import { IShellLaunchConfig, TerminalExitReason, TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
@@ -23,9 +23,9 @@ import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/wor
 import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService, IActiveFolderWillChangeEvent } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../../services/editor/common/editorGroupsService.js';
-import { AUX_WINDOW_GROUP } from '../../../../services/editor/common/editorService.js';
+import { ACTIVE_GROUP, AUX_WINDOW_GROUP } from '../../../../services/editor/common/editorService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
-import { ITerminalInstance, ITerminalService, TerminalEditorLocation } from '../../../terminal/browser/terminal.js';
+import { ICreateTerminalOptions, ITerminalInstance, ITerminalService, TerminalEditorLocation } from '../../../terminal/browser/terminal.js';
 import { FolderTerminals, PARKED_STORAGE_KEY } from '../../browser/folderTerminals.js';
 
 /** Stands in for any tab, terminal or not: all these tests read off it is where it sits. */
@@ -186,8 +186,23 @@ class TestTerminalService extends mock<ITerminalService>() {
 
 	override whenConnected = Promise.resolve();
 
+	/** What `createTerminal` was asked for, in order. */
+	readonly created: ICreateTerminalOptions[] = [];
+
 	constructor(private readonly groups: TestEditorGroupsService) {
 		super();
+	}
+
+	/** A terminal named by its config: in the background when it is hidden from the person, as upstream's is. */
+	override async createTerminal(options?: ICreateTerminalOptions): Promise<ITerminalInstance> {
+		this.created.push(options ?? {});
+		const config = (options?.config ?? {}) as IShellLaunchConfig;
+		const instance = new TestInstance(config.name ?? `terminal ${this.created.length}`, options?.location === TerminalLocation.Panel ? TerminalLocation.Panel : TerminalLocation.Editor);
+		this.instances.push(instance.asInstance());
+		if (config.hideFromUser) {
+			this.inBackground.add(instance.name);
+		}
+		return instance.asInstance();
 	}
 
 	/** Terminals a reload brought back, in the background as upstream's `_reviveBackgroundTerminalInstances` puts them. */
@@ -398,6 +413,42 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		before.storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
 		return before.storage;
 	}
+
+	test('a terminal opened for a folder the window is not on is held for it, and comes up when the window goes there', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const column = new TestGroup(0, []);
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], []);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		const names = (of: IWorkspaceFolder) => folderTerminals.terminalsOf(of.uri).map(instance => (instance as unknown as TestInstance).name);
+
+		const agent = await folderTerminals.openFor(beta.uri, { name: 'agent' });
+		const whileAway = { hidden: !!(terminals.created[0].config as IShellLaunchConfig).hideFromUser, alpha: names(alpha), beta: names(beta), tabs: column.names() };
+		await switchTo(folders, bar, beta);
+
+		assert.deepStrictEqual({ whileAway, shown: terminals.shown, tabs: column.names(), folder: folderTerminals.folderOf(agent)?.name }, {
+			whileAway: { hidden: true, alpha: [], beta: ['agent'], tabs: [] },
+			shown: ['agent'],
+			tabs: ['agent'],
+			folder: 'beta',
+		});
+	});
+
+	test('a terminal opened for the folder on screen is one of its editor terminals; for a folder not in the workspace, the panel\'s', async () => {
+		const alpha = folder('alpha');
+		const { terminals, folders, context, folderTerminals } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+
+		await folderTerminals.openFor(alpha.uri, { name: 'here' });
+		await folderTerminals.openFor(URI.file('/elsewhere'), { name: 'there' });
+
+		assert.deepStrictEqual(terminals.created.map(options => ({ name: (options.config as IShellLaunchConfig).name, location: options.location, hidden: !!(options.config as IShellLaunchConfig).hideFromUser })), [
+			{ name: 'here', location: { viewColumn: ACTIVE_GROUP }, hidden: false },
+			{ name: 'there', location: TerminalLocation.Panel, hidden: false },
+		]);
+	});
 
 	test('switching away parks them alive, and switching back brings the same ones', async () => {
 		const alpha = folder('alpha');

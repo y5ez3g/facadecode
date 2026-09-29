@@ -14,7 +14,7 @@ import { EditorActivation } from '../../../../platform/editor/common/editor.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
-import { TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
+import { IShellLaunchConfig, TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { folderKey } from '../../../browser/parts/workspacebar/workspaceBar.js';
@@ -23,7 +23,7 @@ import { getWorkbenchContribution, IWorkbenchContribution } from '../../../commo
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { GroupsOrder, IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { EditorGroupColumn } from '../../../services/editor/common/editorGroupColumn.js';
-import { AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
+import { ACTIVE_GROUP, AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 
 /**
@@ -55,6 +55,14 @@ export interface IFolderTerminalsService {
 	 * moving the window onto that folder first, as a click on its row does.
 	 */
 	reveal(instance: ITerminalInstance): Promise<void>;
+
+	/**
+	 * A terminal opened for `folder` as if somebody on it had opened it, without moving the window: in
+	 * the editor area when the window is on it; kept for it in the background, to come up when the
+	 * window goes there, when it is another folder of the workspace; in the panel, the window's own,
+	 * when it is not a folder of the workspace or terminals do not follow folders.
+	 */
+	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance>;
 }
 
 /** `IFolderTerminalsService`, served by the `FolderTerminals` contribution that keeps the terminals. */
@@ -73,7 +81,17 @@ export class FolderTerminalsService implements IFolderTerminalsService {
 	reveal(instance: ITerminalInstance): Promise<void> {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).reveal(instance);
 	}
+
+	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance> {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).openFor(folder, config);
+	}
 }
+
+/**
+ * The group recorded for a terminal opened for another folder: none, so that coming back puts it at
+ * the end of whichever column is in front, behind that column's own tab.
+ */
+const NO_GROUP = -2;
 
 /**
  * The group recorded for a terminal whose tab was in an auxiliary window rather than the main
@@ -288,6 +306,26 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		this._terminalService.setActiveInstance(instance);
 		await this._terminalService.revealTerminal(instance);
 		await instance.focusWhenReady(true);
+	}
+
+	/** {@link IFolderTerminalsService.openFor}. */
+	async openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance> {
+		const key = this._key(folder);
+		const target = this._folderFor(key);
+		if (target && this._isActive(key)) {
+			return this._terminalService.createTerminal({ config, location: { viewColumn: ACTIVE_GROUP } });
+		}
+
+		if (!target || !this._isEnabled()) {
+			return this._terminalService.createTerminal({ config, location: TerminalLocation.Panel });
+		}
+
+		// Made in the background and held for its folder, as if it had been open there when the window
+		// left: never shown in the folder on screen, not even for a moment.
+		const instance = await this._terminalService.createTerminal({ config: { ...config, hideFromUser: true, forcePersist: true }, location: TerminalLocation.Editor });
+		this._hold(key, [{ instance, group: NO_GROUP, index: -1, persisted: config.forcePersist, active: false }]);
+		this._logService.trace(`[folderTerminals] opened a terminal for ${key}, held until the window goes there`);
+		return instance;
 	}
 
 	/**
