@@ -399,8 +399,9 @@ the price of one ink rather than a name that changes colour as it is marked.
 
 ### 7.3 Buttons
 
-The header's `+` and a row's `+` and triangle: a 24px box, 16px glyph, `facadeBar.inactiveForeground`,
-and on hover the ink only, no chip - the activity bar's gesture. The `+` is nudged half a pixel right
+The header's `+` and a row's `+`, one column: a 24px box, 16px glyph, `facadeBar.inactiveForeground`,
+and on hover the ink only, no chip - the activity bar's gesture. A repository's triangle is not a
+button: it takes its icon's slot (WORKTREE.md WT-1.13). The `+` is nudged half a pixel right
 and down: the codicon's cross is not centred in its square (measured at 125%: centre 17 in a column
 centred on 18). Everything in a row that changes takes `--facade-motion`, 150ms standard easing, 0 with
 reduced motion.

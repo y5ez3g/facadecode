@@ -291,6 +291,13 @@
 	 * beat them would be a specificity contest restarted on every future change to either.
 	 */
 	color: var(--facade-folder-ink, inherit);
+	/*
+	 * A repository's icon gives way to its triangle under the pointer (`.workspacebar-twistie`).
+	 *
+	 * ⚠️ Here, on every icon, rather than in a rule for a repository's: that rule would be six classes
+	 * deep and beat `.workspacebar-row.recycled *` above, and a row handed to another would fade.
+	 */
+	transition: opacity var(--facade-motion);
 }
 
 /*
@@ -458,12 +465,20 @@
 	display: none !important;
 }
 
-/* One slot for a folder's icon or a worktree's glyph, so every name starts on one line. */
+/*
+ * One slot for a folder's icon or a worktree's glyph, so every name starts on one line, and for a
+ * repository's triangle over its icon.
+ *
+ * ⚠️ The row's full height, not the glyph's 16. The triangle fills this box, so the target for
+ * opening a repository is a strip down the row rather than a 16px square in the middle of it.
+ */
 .monaco-workbench .part.workspacebar .workspacebar-glyph {
 	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	align-self: stretch;
+	position: relative;
 	width: var(--vscode-spacing-size160);
 }
 
@@ -486,10 +501,62 @@
 }
 
 /*
- * A folder's `New Worktree...` and the triangle, in the last two columns of the row, the triangle's
- * being the header `+`'s: one box without a gap, as the header's toolbar. Only on rows that offer a
- * worktree (WT-5.8).
+ * A repository's triangle, in its icon's slot (WT-1.13). At rest the row shows its folder; under the
+ * pointer the folder gives way to the triangle, in the row's ink as the folder's glyph takes it.
+ *
+ * ⚠️ Drawn over the icon and faded, rather than one taking the other's place: the two share one box,
+ * so the swap cannot shift the name by a pixel.
  */
+.monaco-workbench .part.workspacebar .workspacebar-twistie {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: var(--vscode-codiconFontSize);
+	color: inherit;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity var(--facade-motion);
+}
+
+/*
+ * Down while the repository is open, turned to point right while it is closed, as the tree's own
+ * (`tree.css`).
+ *
+ * ⚠️ The glyph turns, not the box. The box is the target, a strip down the row; turned with it, an
+ * open repository's target lay on its side - 28 wide and 16 tall - measured. The glyph is the box's
+ * flex item, so it can take a transform although a `::before` is inline.
+ */
+.monaco-workbench .part.workspacebar .workspacebar-twistie::before {
+	transition: transform var(--facade-motion);
+}
+
+.monaco-workbench .part.workspacebar .workspacebar-twistie.collapsed::before {
+	transform: rotate(-90deg);
+}
+
+/* The triangle only with worktrees to open (WT-1.8). */
+.monaco-workbench .part.workspacebar .workspacebar-row:not(.collapsible) .workspacebar-twistie {
+	display: none;
+}
+
+/*
+ * ⚠️ The pointer only, not the keyboard's row as well: a click leaves the list focused on the row it
+ * landed on, and `:focus-visible` is true then too, so the triangle stayed up after every click. The
+ * keyboard opens and closes with Left and Right.
+ * ⚠️ `:not(.collapsed)`: collapsed to its icons, an icon is the whole row, and a repository opens and
+ * closes from its menu (WT-1.10).
+ */
+.monaco-workbench .part.workspacebar:not(.collapsed) .monaco-list-row:hover .workspacebar-row.collapsible .workspacebar-icon {
+	opacity: 0;
+}
+
+.monaco-workbench .part.workspacebar:not(.collapsed) .monaco-list-row:hover .workspacebar-row.collapsible .workspacebar-twistie {
+	opacity: 1;
+}
+
+/* A folder's `New Worktree...`, in the last column of the row, under the header's `+` (WT-5.8). */
 .monaco-workbench .part.workspacebar .workspacebar-row-actions {
 	flex: 0 0 auto;
 	display: flex;
@@ -499,18 +566,12 @@
 	display: none;
 }
 
-/* The triangle only with worktrees to open (WT-1.8), hidden in place so the `+` keeps its column. */
-.monaco-workbench .part.workspacebar .workspacebar-row:not(.collapsible) .workspacebar-twistie {
-	visibility: hidden;
-}
-
 /*
  * Styled as the header's buttons (`.workspacebar-actions .action-label`), and shown only under the
  * pointer: faded rather than removed, so a long name's ellipsis does not jump. The keyboard has its own
- * ways to both - Left and Right, and the context menu.
+ * way to it, the context menu.
  */
-.monaco-workbench .part.workspacebar .workspacebar-row-toolbar .action-label,
-.monaco-workbench .part.workspacebar .workspacebar-twistie {
+.monaco-workbench .part.workspacebar .workspacebar-row-toolbar .action-label {
 	flex: 0 0 auto;
 	display: flex;
 	align-items: center;
@@ -526,14 +587,12 @@
 	transition: opacity var(--facade-motion), color var(--facade-motion);
 }
 
-.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-row-toolbar .action-label,
-.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-twistie {
+.monaco-workbench .part.workspacebar .monaco-list-row:hover .workspacebar-row-toolbar .action-label {
 	opacity: 1;
 }
 
 /* The ink, and no chip behind it: as the header's buttons, over the toolbar's own hover background. */
-.monaco-workbench .part.workspacebar .monaco-list-row .workspacebar-row-toolbar .action-label:not(.disabled):hover,
-.monaco-workbench .part.workspacebar .monaco-list-row .workspacebar-twistie:hover {
+.monaco-workbench .part.workspacebar .monaco-list-row .workspacebar-row-toolbar .action-label:not(.disabled):hover {
 	color: var(--vscode-facadeBar-foreground);
 	background-color: transparent;
 }
@@ -617,8 +676,14 @@
 	display: none;
 }
 
-/* Collapsed, a row is its icon; a repository opens and closes from its menu instead (WT-1.10). */
-.monaco-workbench .part.workspacebar.collapsed .workspacebar-row-actions {
+/*
+ * Collapsed, a row is its icon; a repository opens and closes from its menu instead (WT-1.10).
+ *
+ * ⚠️ The triangle taken out, not only left transparent: over the icon, it would take a click meant to
+ * go to the folder.
+ */
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-row-actions,
+.monaco-workbench .part.workspacebar.collapsed .workspacebar-twistie {
 	display: none;
 }
 

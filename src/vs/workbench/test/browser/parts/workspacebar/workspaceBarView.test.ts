@@ -395,6 +395,22 @@ suite('Workspace bar - the view', () => {
 		});
 	});
 
+	test('the triangle is in the row\'s icon slot, pointing down while the repository is open and turned while it is closed', () => {
+		const bar = view([lab], [repository(undefined)], lab.uri);
+		const drawn = () => {
+			const triangle = bar.find('.workspacebar-twistie');
+			return { slot: triangle.parentElement?.className, glyph: triangle.className };
+		};
+
+		const open = drawn();
+		click(bar.find('.workspacebar-twistie'));
+
+		assert.deepStrictEqual({ open, closed: drawn() }, {
+			open: { slot: 'workspacebar-glyph', glyph: 'workspacebar-twistie codicon codicon-tree-item-expanded' },
+			closed: { slot: 'workspacebar-glyph', glyph: 'workspacebar-twistie codicon codicon-tree-item-expanded collapsed' },
+		});
+	});
+
 	test('a folder\'s + is New Worktree... from its row\'s menu, run for that folder - and not there while the menu leaves it out', () => {
 		// As New Worktree adds itself: there only while Git can run (WT-5.1), not a button that does nothing.
 		store.add(MenuRegistry.appendMenuItem(WorkspaceBarRowToolbar, {
