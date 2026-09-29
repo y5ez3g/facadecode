@@ -24,7 +24,7 @@ import { ILifecycleService } from '../../../../services/lifecycle/common/lifecyc
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { AGENT_NAMES_STORAGE_KEY, TerminalLauncherService } from '../../browser/terminalLauncherService.js';
-import { AGENT_TERMINAL_ICON } from '../../common/terminalLaunchers.js';
+import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE } from '../../common/terminalLaunchers.js';
 
 /** An agent's terminal that a reload brought back, reconnecting to its process - and why it ended, once it has. */
 class TestAgent {
@@ -81,23 +81,29 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		instantiationService.stub(IKeybindingService, {});
 		instantiationService.stub(IHostService, {});
 		instantiationService.stub(IContextViewService, {});
-		disposables.add(instantiationService.createInstance(TerminalLauncherService));
+		const service = disposables.add(instantiationService.createInstance(TerminalLauncherService));
 
 		const first = new TestAgent('first');
 		const second = new TestAgent('second');
 		terminals.made.fire(first.asInstance());
 		terminals.made.fire(second.asInstance());
 
+		// One of Facade's agents starts, whose name is its title
+		const facade = new TestAgent('facade');
+		service.keepName(facade.asInstance(), '@main · Claude Code');
+
 		// The second one ends, and the terminal service has every other terminal back
 		second.exitReason = TerminalExitReason.User;
 		terminals.ended.fire(second.asInstance());
-		terminals.instances = [first.asInstance()];
+		terminals.instances = [first.asInstance(), facade.asInstance()];
 		terminals.connected.complete();
 		await timeout(0);
 
-		// The window closes, and takes the first one with it
+		// The window closes, and takes the first one and Facade's with it
 		first.exitReason = TerminalExitReason.Shutdown;
 		terminals.ended.fire(first.asInstance());
+		facade.exitReason = TerminalExitReason.Shutdown;
+		terminals.ended.fire(facade.asInstance());
 		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
 
 		assert.deepStrictEqual({
@@ -105,7 +111,7 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 			kept: JSON.parse(storage.get(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE) ?? '{}')
 		}, {
 			named: ['Claude Code', 'Codex'],
-			kept: { first: 'Claude Code' }
+			kept: { first: { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }, facade: { name: '@main · Claude Code' } }
 		});
 	});
 });

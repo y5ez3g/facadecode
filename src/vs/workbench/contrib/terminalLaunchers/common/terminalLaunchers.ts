@@ -40,16 +40,26 @@ export function isAgentGoneAtStartup(icon: TerminalIcon | undefined, startupKind
 	return startupKind !== StartupKind.ReloadedWindow && isAgentTerminalIcon(icon);
 }
 
-/** The title every agent terminal takes: the one the agent sets for itself, its name standing in until it has. */
+/** The title every agent terminal the agent button starts takes: the one the agent sets for itself, its name standing in until it has. */
 export const AGENT_TITLE_TEMPLATE = '${sequence}';
+
+/**
+ * An agent terminal's name as a reload gives it back. With the agent button's title template the
+ * agent's own title wins; without one the name is the title, as it is for Facade's agents, which
+ * are known by it.
+ */
+export interface IAgentName {
+	readonly name: string;
+	readonly titleTemplate?: string;
+}
 
 /**
  * The names of the agents a window had running, out of what was kept for them: by each terminal's
  * shell integration nonce, which its process carries across a reload. Storage that cannot be read
  * gives none rather than a wrong one.
  */
-export function readAgentNames(value: string | undefined): Map<string, string> {
-	const names = new Map<string, string>();
+export function readAgentNames(value: string | undefined): Map<string, IAgentName> {
+	const names = new Map<string, IAgentName>();
 
 	let stored: unknown;
 	try {
@@ -59,9 +69,15 @@ export function readAgentNames(value: string | undefined): Map<string, string> {
 	}
 
 	if (isObject(stored)) {
-		for (const [nonce, name] of Object.entries(stored)) {
-			if (isString(name) && name) {
-				names.set(nonce, name);
+		for (const [nonce, kept] of Object.entries(stored)) {
+			// A name on its own is how the agent button's agents were kept before any other agent was
+			if (isString(kept) && kept) {
+				names.set(nonce, { name: kept, titleTemplate: AGENT_TITLE_TEMPLATE });
+			} else if (isObject(kept)) {
+				const { name, titleTemplate } = kept as { name?: unknown; titleTemplate?: unknown };
+				if (isString(name) && name) {
+					names.set(nonce, { name, titleTemplate: isString(titleTemplate) ? titleTemplate : undefined });
+				}
 			}
 		}
 	}
@@ -70,21 +86,22 @@ export function readAgentNames(value: string | undefined): Map<string, string> {
 }
 
 /**
- * Gives an agent's terminal that a reload brought back the name and title template the agent button
- * started it with, found by its nonce, and answers whether it did. A terminal carries neither across
- * reconnecting, and without them its tab reads the name of the process rather than the agent's title.
+ * Gives an agent's terminal that a reload brought back the name and title template it was started
+ * with, found by its nonce, and answers whether it did. A terminal carries neither across
+ * reconnecting, and without them its tab reads the name of the process, or the title the agent set
+ * last, rather than what it was started with.
  *
  * ⚠️ Only one still drawn as an agent's: given another icon since, it is no longer one.
  */
-export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names: ReadonlyMap<string, string>): boolean {
+export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names: ReadonlyMap<string, IAgentName>): boolean {
 	const reconnecting = shellLaunchConfig.attachPersistentProcess;
-	const name = reconnecting && isAgentTerminalIcon(reconnecting.icon) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
-	if (!name) {
+	const kept = reconnecting && isAgentTerminalIcon(reconnecting.icon) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
+	if (!kept) {
 		return false;
 	}
 
-	shellLaunchConfig.name = name;
-	shellLaunchConfig.titleTemplate = AGENT_TITLE_TEMPLATE;
+	shellLaunchConfig.name = kept.name;
+	shellLaunchConfig.titleTemplate = kept.titleTemplate;
 	return true;
 }
 

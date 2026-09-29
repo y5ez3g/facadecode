@@ -23,7 +23,7 @@ import { IActiveFolderService } from '../../../services/activeFolder/common/acti
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
-import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, IAgentName, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
 import { showAgentsDialog } from './terminalLauncherDialog.js';
 
@@ -74,6 +74,12 @@ export interface ITerminalLauncherService {
 	/** Starts an agent in a terminal tab, in the folder the window is on. */
 	open(launcher: ITerminalLauncher): Promise<void>;
 
+	/**
+	 * Keeps the name of an agent's terminal started elsewhere - one of Facade's agents - so that a
+	 * reload gives it back as its title, as it was started.
+	 */
+	keepName(instance: ITerminalInstance, name: string): void;
+
 	/** Shows the dialog that decides which agents there are, and saves what it answers. */
 	configure(): Promise<void>;
 
@@ -106,7 +112,7 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	 * A terminal forgets the name it was started with when a reload reconnects it, and the nonce is
 	 * what it carries across: made once for each terminal, it goes with the process.
 	 */
-	private readonly _names: Map<string, string>;
+	private readonly _names: Map<string, IAgentName>;
 
 	constructor(
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
@@ -231,7 +237,7 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 				icon: AGENT_TERMINAL_ICON
 			}
 		});
-		this._names.set(instance.shellIntegrationNonce, launcher.label);
+		this._names.set(instance.shellIntegrationNonce, { name: launcher.label, titleTemplate: AGENT_TITLE_TEMPLATE });
 
 		await instance.focusWhenReady();
 
@@ -247,6 +253,10 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		} catch (error) {
 			this._logService.error(`[terminalLaunchers] could not start ${launcher.id}`, error);
 		}
+	}
+
+	keepName(instance: ITerminalInstance, name: string): void {
+		this._names.set(instance.shellIntegrationNonce, { name });
 	}
 
 	async configure(): Promise<void> {
