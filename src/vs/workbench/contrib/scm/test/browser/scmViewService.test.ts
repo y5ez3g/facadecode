@@ -11,7 +11,7 @@ import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
-import { IStorageService, StorageScope, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
+import { IStorageService, StorageScope, StorageTarget, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
 import { basename } from '../../../../../base/common/resources.js';
 import { IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { Workspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
@@ -241,18 +241,66 @@ suite('SCM view service - which repositories the window shows', () => {
 		assert.deepStrictEqual(second.onScreen(), ['api']);
 	});
 
-	test('a repository the person turned off stays off, and is not turned back on by a switch', async () => {
+	test('a repository the person turned off stays off while the window stays on the folder', async () => {
 		const window = openWindow();
 		await window.go(window.folders[0]);
 		window.view.toggleVisibility(window.repositoryIn(window.folders[0]), false);
 
 		assert.deepStrictEqual(window.onScreen(), []);
+		assert.deepStrictEqual(window.chosen(), ['web']);
+	});
+
+	test('but going back to a folder with nothing chosen in it shows its repositories', async () => {
+		// ⚠️ A folder with nothing chosen is a blank pane with no way back except the Repositories
+		// view, which is hidden by default. Going to a folder is asking to see it.
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		window.view.toggleVisibility(window.repositoryIn(window.folders[0]), false);
 
 		await window.go(window.folders[1]);
 		assert.deepStrictEqual(window.onScreen(), ['web']);
 
 		await window.go(window.folders[0]);
-		assert.deepStrictEqual(window.onScreen(), []);
+		assert.deepStrictEqual(window.onScreen(), ['api']);
+	});
+
+	test('⭐ a window restored with a choice that names none of the folder\'s repositories shows them anyway', async () => {
+		// ⭐ The choice is global and restored as it was written, so a record naming only repositories
+		// that no folder of the workspace holds leaves every folder blank - and stays that way, since
+		// it is what gets written back.
+		const other = URI.file('/elsewhere/other');
+		const storage = disposables.add(new TestStorageService());
+		const state: ISCMViewServiceState = {
+			all: ['git:api:' + apiFolder.toString(), 'git:web:' + webFolder.toString(), 'git:other:' + other.toString()],
+			visible: [2],
+			sortKey: ISCMRepositorySortKey.DiscoveryTime
+		};
+		storage.store('scm:view:visibleRepositories', JSON.stringify(state), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+
+		const window = openWindow({ repositories: [apiFolder, webFolder, other], storage });
+		assert.deepStrictEqual(window.chosen(), ['other']);
+
+		await window.go(window.folders[1]);
+		assert.deepStrictEqual(window.onScreen(), ['web']);
+
+		await window.go(window.folders[0]);
+		assert.deepStrictEqual(window.onScreen(), ['api']);
+		assert.deepStrictEqual(rememberedAsChosen(window.remember()), ['api', 'other', 'web']);
+	});
+
+	test('and that arrives as part of the switch, not as a second change', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		window.view.toggleVisibility(window.repositoryIn(window.folders[1]), false);
+
+		const events: ISCMViewVisibleRepositoryChangeEvent[] = [];
+		disposables.add(window.view.onDidChangeVisibleRepositories(e => events.push(e)));
+
+		await window.go(window.folders[1]);
+
+		assert.strictEqual(events.length, 1);
+		assert.deepStrictEqual([...events[0].added].map(r => r.provider.name), ['web']);
+		assert.deepStrictEqual([...events[0].removed].map(r => r.provider.name), ['api']);
 	});
 
 	test('and that is what is written down too', async () => {
@@ -312,9 +360,7 @@ suite('SCM view service - which repositories the window shows', () => {
 
 		await window.go(window.folders[1]);
 		assert.deepStrictEqual(window.onScreen(), ['web']);
-
-		await window.go(window.folders[0]);
-		assert.deepStrictEqual(window.onScreen(), []);
+		assert.deepStrictEqual(window.chosen(), ['web', 'zed']);
 	});
 
 	test(`⭐ the count the welcome views are gated on is the folder's, not the workspace's`, async () => {

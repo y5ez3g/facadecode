@@ -417,6 +417,9 @@ export class SCMViewService implements ISCMViewService {
 		this.disposables.add(this.activeFolderService.onDidChangeActiveFolder(() => {
 			const previous = this.repositoriesIn(folderOnScreen);
 			folderOnScreen = this.activeFolderService.activeFolder;
+
+			// Before the diff, so that what this selects is announced with the rest of the switch.
+			this.selectFolderRepositoriesIfNoneSelected(folderOnScreen);
 			const onScreen = this.visibleRepositories;
 
 			const added = onScreen.filter(r => !previous.includes(r));
@@ -803,6 +806,44 @@ export class SCMViewService implements ISCMViewService {
 		}
 
 		this.didFinishLoadingRepositories.set(true, undefined);
+
+		const added = this.selectFolderRepositoriesIfNoneSelected(this.activeFolderService.activeFolder);
+		if (added.length > 0) {
+			this._onDidSetVisibleRepositories.fire({ added, removed: Iterable.empty() });
+		}
+	}
+
+	/**
+	 * Selects the repositories of `folder` when none of them is selected, and returns the ones it
+	 * selected. Does not announce them: the caller knows whether it is already announcing a change.
+	 *
+	 * ⚠️ The selection outlives the window and is restored as it was saved, while the views show only
+	 * the folder the window is on. A saved selection that names no repository of that folder - the
+	 * folder's repositories were deselected, or opened after it was written - leaves both views
+	 * blank, and it is what gets written back, so it never corrects itself. Going to a folder, or
+	 * finishing the restore on it, is the moment to say that a folder with nothing chosen is shown
+	 * its own.
+	 *
+	 * ⚠️ Only when none is selected. A folder with some selected has been chosen from, and that
+	 * choice stands: this fills a gap, it does not undo a deselection.
+	 */
+	private selectFolderRepositoriesIfNoneSelected(folder: IWorkspaceFolder | undefined): ISCMRepository[] {
+		if (!folder) {
+			return [];
+		}
+
+		const views = this._repositories.filter(r => r.repository.provider.isHidden !== true && this.belongsTo(r.repository, folder));
+		if (views.length === 0 || views.some(r => r.selectionIndex !== -1)) {
+			return [];
+		}
+
+		const selected = this.selectionModeConfig.get() === ISCMRepositorySelectionMode.Single ? views.slice(0, 1) : views;
+		let selectionIndex = this.getMaxSelectionIndex();
+		for (const view of selected) {
+			view.selectionIndex = ++selectionIndex;
+		}
+
+		return selected.map(r => r.repository);
 	}
 
 	dispose(): void {
