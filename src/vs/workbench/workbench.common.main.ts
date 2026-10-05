@@ -351,6 +351,9 @@ import './contrib/worktrees/browser/worktrees.contribution.js';
 // Agents started in a terminal
 import './contrib/terminalLaunchers/browser/terminalLaunchers.contribution.js';
 
+// Facade's own parts of the window, as commands for the agents' extension
+import './contrib/facadeCommands/browser/facadeCommands.contribution.js';
+
 // External terminal
 import './contrib/externalTerminal/browser/externalTerminal.contribution.js';
 

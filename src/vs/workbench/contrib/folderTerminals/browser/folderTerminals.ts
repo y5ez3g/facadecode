@@ -54,10 +54,12 @@ export interface IFolderTerminalsService {
 	folderOf(instance: ITerminalInstance): URI | undefined;
 
 	/**
-	 * Puts a terminal in front and focuses it. One put away for another folder is brought back by
-	 * moving the window onto that folder first, as a click on its row does.
+	 * Puts a terminal in front and focuses it, and answers whether it is in front. One put away for
+	 * another folder is brought back by moving the window onto that folder first, as a click on its row
+	 * does. `false` when it does not come back - the move refused, the window moved on again first, or
+	 * it could not be shown - and for a terminal that has closed.
 	 */
-	reveal(instance: ITerminalInstance): Promise<void>;
+	reveal(instance: ITerminalInstance): Promise<boolean>;
 
 	/**
 	 * Opens a terminal for `folder` without disturbing the window: it does not move the window, come in
@@ -84,7 +86,7 @@ export class FolderTerminalsService implements IFolderTerminalsService {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).folderOf(instance);
 	}
 
-	reveal(instance: ITerminalInstance): Promise<void> {
+	reveal(instance: ITerminalInstance): Promise<boolean> {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).reveal(instance);
 	}
 
@@ -333,15 +335,22 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	}
 
 	/** {@link IFolderTerminalsService.reveal}. */
-	async reveal(instance: ITerminalInstance): Promise<void> {
+	async reveal(instance: ITerminalInstance): Promise<boolean> {
+		// One that has closed has nowhere to be put in front, and the terminal service no longer knows it
+		if (instance.isDisposed) {
+			return false;
+		}
+
 		const key = this._keyParkedFor(instance);
 		if (key !== undefined && !await this._bringBack(key, instance)) {
-			return;
+			return false;
 		}
 
 		this._terminalService.setActiveInstance(instance);
 		await this._terminalService.revealTerminal(instance);
 		await instance.focusWhenReady(true);
+		// Closed meanwhile, it is not in front after all
+		return !instance.isDisposed;
 	}
 
 	/** {@link IFolderTerminalsService.openFor}. */

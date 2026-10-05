@@ -53,6 +53,8 @@ class TestInstance {
 
 	target: TerminalLocation;
 
+	get isDisposed(): boolean { return this.disposed; }
+
 	constructor(readonly name: string, target = TerminalLocation.Editor) {
 		this.target = target;
 		this.resource = URI.from({ scheme: 'vscode-terminal', path: '/' + name });
@@ -697,10 +699,11 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		const revealing = folderTerminals.reveal(agent);
 		await timeout(0);
 		bar.restored();
-		await revealing;
+		const inFront = await revealing;
 
-		assert.deepStrictEqual({ held, moves: bar.moves, tabs: column.names(), revealed: terminals.revealed, folder: folderTerminals.folderOf(agent)?.path, joined: context.folders.map(each => each.name) }, {
+		assert.deepStrictEqual({ held, inFront, moves: bar.moves, tabs: column.names(), revealed: terminals.revealed, folder: folderTerminals.folderOf(agent)?.path, joined: context.folders.map(each => each.name) }, {
 			held: { hidden: true, underItsRow: true, folder: '/w/p1', terminalsOfRow: 1, tabs: [] },
+			inFront: true,
 			moves: ['/w/p1'],
 			tabs: ['agent'],
 			revealed: ['agent'],
@@ -908,10 +911,11 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		await timeout(0);
 		const whileSwitching = { tabs: column.names(), revealed: [...terminals.revealed] };
 		bar.restored();
-		await revealing;
+		const inFront = await revealing;
 
-		assert.deepStrictEqual({ whileSwitching, tabs: column.names(), revealed: terminals.revealed, focused: (agent as unknown as TestInstance).focused }, {
+		assert.deepStrictEqual({ whileSwitching, inFront, tabs: column.names(), revealed: terminals.revealed, focused: (agent as unknown as TestInstance).focused }, {
 			whileSwitching: { tabs: [], revealed: [] },
+			inFront: true,
 			tabs: ['agent'],
 			revealed: ['agent'],
 			focused: true,
@@ -1416,12 +1420,13 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		await timeout(0);
 		const beforeItIsBack = { revealed: [...terminals.revealed], focused: agent.focused };
 		bar.restored();
-		await revealing;
+		const inFront = await revealing;
 
-		assert.deepStrictEqual({ on: folders.activeFolder?.name, moves: bar.moves, beforeItIsBack, tabs: column.names(), active: terminals.active, revealed: terminals.revealed, focused: agent.focused }, {
+		assert.deepStrictEqual({ on: folders.activeFolder?.name, moves: bar.moves, beforeItIsBack, inFront, tabs: column.names(), active: terminals.active, revealed: terminals.revealed, focused: agent.focused }, {
 			on: 'alpha',
 			moves: ['/w/alpha'],
 			beforeItIsBack: { revealed: [], focused: false },
+			inFront: true,
 			tabs: ['agent'],
 			active: 'agent',
 			revealed: ['agent'],
@@ -1439,9 +1444,10 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		context.folders = [alpha];
 		folders.activeFolder = alpha;
 
-		await folderTerminals.reveal(agent.asInstance());
+		const inFront = await folderTerminals.reveal(agent.asInstance());
 
-		assert.deepStrictEqual({ moves: bar.moves, active: terminals.active, revealed: terminals.revealed, focused: agent.focused }, {
+		assert.deepStrictEqual({ inFront, moves: bar.moves, active: terminals.active, revealed: terminals.revealed, focused: agent.focused }, {
+			inFront: true,
 			moves: [],
 			active: 'agent',
 			revealed: ['agent'],
@@ -1465,9 +1471,10 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		const revealing = folderTerminals.reveal(agent.asInstance());
 		await timeout(0);
 		bar.restored();
-		await revealing;
+		const inFront = await revealing;
 
-		assert.deepStrictEqual({ active: terminals.active, revealed: terminals.revealed, focused: agent.focused, parkedFor: folderTerminals.folderOf(agent.asInstance())?.path }, {
+		assert.deepStrictEqual({ inFront, active: terminals.active, revealed: terminals.revealed, focused: agent.focused, parkedFor: folderTerminals.folderOf(agent.asInstance())?.path }, {
+			inFront: false,
 			active: undefined,
 			revealed: [],
 			focused: false,
@@ -1495,16 +1502,109 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		await timeout(0);
 		await folders.switchTo(beta);
 		terminals.blockOn.released.complete();
-		await revealing;
+		const inFront = await revealing;
 		await timeout(0);
 
-		assert.deepStrictEqual({ on: folders.activeFolder?.name, active: terminals.active, revealed: terminals.revealed, focused: agent.focused, parkedFor: folderTerminals.folderOf(agent.asInstance())?.path }, {
+		assert.deepStrictEqual({ on: folders.activeFolder?.name, inFront, active: terminals.active, revealed: terminals.revealed, focused: agent.focused, parkedFor: folderTerminals.folderOf(agent.asInstance())?.path }, {
 			on: 'beta',
+			inFront: false,
 			active: undefined,
 			revealed: [],
 			focused: false,
 			parkedFor: '/w/alpha',
 		});
+	});
+
+	test('a terminal parked for a folder the window does not go to is not revealed, and stays parked for it', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+
+		// The bar does not move, as for a folder that is gone from disk
+		const inFront = await folderTerminals.reveal(agent.asInstance());
+
+		assert.deepStrictEqual({ inFront, moves: bar.moves, on: folders.activeFolder?.name, active: terminals.active, revealed: terminals.revealed, parkedFor: folderTerminals.folderOf(agent.asInstance())?.path }, {
+			inFront: false,
+			moves: ['/w/alpha'],
+			on: 'beta',
+			active: undefined,
+			revealed: [],
+			parkedFor: '/w/alpha',
+		});
+	});
+
+	test('a terminal that has closed is not revealed, and the active terminal stays as it was', async () => {
+		const alpha = folder('alpha');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(agent), tabFor(shell)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent, shell]);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+		terminals.setActiveInstance(shell.asInstance());
+
+		agent.dispose(TerminalExitReason.Process);
+		const inFront = await folderTerminals.reveal(agent.asInstance());
+
+		assert.deepStrictEqual({ inFront, moves: bar.moves, active: terminals.active, revealed: terminals.revealed, focused: agent.focused }, {
+			inFront: false,
+			moves: [],
+			active: 'shell',
+			revealed: [],
+			focused: false,
+		});
+	});
+
+	test('a terminal that closes while it is brought back is not revealed', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+		moveThroughTheBar(bar, folders, context);
+
+		// On alpha, its editors still being put up when the terminal closes
+		const revealing = folderTerminals.reveal(agent.asInstance());
+		await timeout(0);
+		agent.dispose(TerminalExitReason.User);
+		const inFront = await revealing;
+		bar.restored();
+		await timeout(0);
+
+		assert.deepStrictEqual({ on: folders.activeFolder?.name, inFront, active: terminals.active, revealed: terminals.revealed, focused: agent.focused, tabs: column.names() }, {
+			on: 'alpha',
+			inFront: false,
+			active: undefined,
+			revealed: [],
+			focused: false,
+			tabs: [],
+		});
+	});
+
+	test('a terminal that closes as it is put in front is said not to be in front', async () => {
+		const alpha = folder('alpha');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+
+		const { terminals, folders, context, folderTerminals } = setup([column], [agent]);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+		agent.focusWhenReady = async () => agent.dispose(TerminalExitReason.User);
+
+		const inFront = await folderTerminals.reveal(agent.asInstance());
+
+		assert.deepStrictEqual({ inFront, revealed: terminals.revealed }, { inFront: false, revealed: ['agent'] });
 	});
 
 	test('the terminals parked for a folder are parked for it again when a reload brings them back, and come back to their tabs', async () => {
