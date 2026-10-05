@@ -8,7 +8,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IShellLaunchConfig, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
-import { AGENT_TERMINAL_ICON, agentIcon, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentTerminalIcon, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
+import { AGENT_TERMINAL_ICON, agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentTerminalIcon, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
 
 suite('Terminal launchers - what to look for', () => {
 
@@ -131,29 +131,54 @@ suite('Terminal launchers - an agent across a reload', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('the names kept for the agents are read back, and storage that cannot be read gives none', () => {
+	test('the names kept for the agents are read back, a name on its own as the agent button kept it, and storage that cannot be read gives none', () => {
 		assert.deepStrictEqual([
+			[...readAgentNames(JSON.stringify({ first: { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }, second: { name: '@main · Claude Code' } }))],
 			[...readAgentNames(JSON.stringify({ first: 'Claude Code', second: 'Codex' }))],
-			[...readAgentNames(JSON.stringify({ first: 'Claude Code', second: 7, third: '' }))],
+			[...readAgentNames(JSON.stringify({ first: 'Claude Code', second: 7, third: '', fourth: { name: 7 } }))],
 			[...readAgentNames('{ not json')],
 			[...readAgentNames(JSON.stringify(['Claude Code']))],
 			[...readAgentNames(undefined)],
 		], [
-			[['first', 'Claude Code'], ['second', 'Codex']],
-			[['first', 'Claude Code']],
+			[['first', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }], ['second', { name: '@main · Claude Code', titleTemplate: undefined }]],
+			[['first', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }], ['second', { name: 'Codex', titleTemplate: AGENT_TITLE_TEMPLATE }]],
+			[['first', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }]],
 			[],
 			[],
 			[],
 		]);
 	});
 
+	test('a terminal started now is kept with its name and title template when it is drawn as an agent\'s and named, whoever started it, and no other is', () => {
+		const configs: Record<string, IShellLaunchConfig> = {
+			button: { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE, icon: agentIcon('claude') },
+			facade: { name: '@main (2) · Claude Code', icon: AGENT_TERMINAL_ICON },	// one of Facade's agents, whose name is its title
+			shell: { name: 'pwsh', icon: Codicon.terminal },
+			unnamed: { icon: AGENT_TERMINAL_ICON },
+			// One a reload brought back, given its name again: kept already, not kept anew
+			reconnecting: {
+				name: 'Claude Code', icon: AGENT_TERMINAL_ICON,
+				attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: 'known' }
+			},
+		};
+
+		assert.deepStrictEqual(Object.entries(configs).map(([which, config]) => [which, agentLaunchOf(config)]), [
+			['button', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }],
+			['facade', { name: '@main (2) · Claude Code', titleTemplate: undefined }],
+			['shell', undefined],
+			['unnamed', undefined],
+			['reconnecting', undefined],
+		]);
+	});
+
 	test('a reconnecting agent terminal gets back its name and title template, found by its nonce, and nothing else does', () => {
-		const names = new Map([['known', 'Claude Code']]);
+		const names = new Map([['known', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }], ['facade', { name: '@main · Claude Code' }]]);
 		const reconnecting = (nonce: string, icon: TerminalIcon): IShellLaunchConfig => ({
 			attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon, shellIntegrationNonce: nonce }
 		});
 		const configs: Record<string, IShellLaunchConfig> = {
 			agent: reconnecting('known', AGENT_TERMINAL_ICON),
+			facade: reconnecting('facade', AGENT_TERMINAL_ICON),	// one of Facade's agents, whose name is its title
 			unknown: reconnecting('other', AGENT_TERMINAL_ICON),
 			repainted: reconnecting('known', Codicon.terminal),	// given another icon since, so no longer an agent's
 			started: {},										// a new terminal rather than a reconnecting one
@@ -163,6 +188,7 @@ suite('Terminal launchers - an agent across a reload', () => {
 
 		assert.deepStrictEqual(restored, [
 			['agent', true, 'Claude Code', AGENT_TITLE_TEMPLATE],
+			['facade', true, '@main · Claude Code', undefined],
 			['unknown', false, undefined, undefined],
 			['repainted', false, undefined, undefined],
 			['started', false, undefined, undefined],
