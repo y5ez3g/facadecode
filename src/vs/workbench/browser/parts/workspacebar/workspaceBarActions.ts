@@ -20,6 +20,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { asCodeSpan, folderKey, orderWorktrees } from './workspaceBar.js';
+import { IWorkspaceBarAgentsService } from './workspaceBarAgents.js';
 import { findWorktree, IWorkspaceBarRepository } from './workspaceBarGit.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
@@ -371,6 +372,7 @@ class RemoveFolderAction extends Action2 {
 		// ⚠️ All of them before the first `await`: a `ServicesAccessor` is only good for the
 		// synchronous part of a run, and this one has a dialog in the middle of it.
 		const workspaceBarService = accessor.get(IWorkspaceBarService);
+		const agentsService = accessor.get(IWorkspaceBarAgentsService);
 		const dialogService = accessor.get(IDialogService);
 		const labelService = accessor.get(ILabelService);
 		const configurationService = accessor.get(IConfigurationService);
@@ -381,7 +383,10 @@ class RemoveFolderAction extends Action2 {
 			return;
 		}
 
-		const leaving = foldersToRemove(folder, workspaceBarService.repositoryFor(folder), (a, b) => uriIdentityService.extUri.isEqual(a, b));
+		const isEqual = (a: URI, b: URI) => uriIdentityService.extUri.isEqual(a, b);
+		const repository = workspaceBarService.repositoryFor(folder);
+		const leaving = foldersToRemove(folder, repository, isEqual);
+		const agents = agentsStoppedBy(repository, leaving, agentsService, isEqual);
 
 		if (configurationService.getValue<boolean>(CONFIRM_REMOVE_FOLDER) === false) {
 			return workspaceBarService.remove(leaving);
@@ -402,12 +407,19 @@ class RemoveFolderAction extends Action2 {
 				? localize('workspaceBar.removeFolderWorktree', "The associated worktree will also be removed from the workspace, but remains on disk.")
 				: localize('workspaceBar.removeFolderWorktrees', "The {0} associated worktrees will also be removed from the workspace, but remain on disk.", leaving.length - 1)));
 		}
+		if (agents > 0) {
+			detail.appendMarkdown('\n\n');
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(agents === 1
+				? localize('workspaceBar.removeFolderAgent', "An agent is working in it, and will be stopped.")
+				: localize('workspaceBar.removeFolderAgents', "{0} agents are working in it, and will be stopped.", agents)));
+		}
 
 		const { confirmed } = await dialogService.confirm({
-			// ⚠️ No severity glyph. Nothing here is destroyed - the folder is left where it is - and a
-			// warning triangle over a reversible act is a claim the dialog cannot back up. `none` is
-			// the type for it, and it announces the same as `question` does, which is nothing.
-			type: 'none',
+			// ⚠️ No severity glyph while nothing here is destroyed - the folder is left where it is - as a
+			// warning triangle over a reversible act is a claim the dialog cannot back up. `none` is the
+			// type for it, and it announces the same as `question` does, which is nothing. The agents it
+			// stops are not given back: then it is a warning.
+			type: agents > 0 ? 'warning' : 'none',
 			message: localize('workspaceBar.removeFolderMessage', "Remove Folder?"),
 			detail,
 			// Just the verb: the question above it already named the thing, and a button that repeats
@@ -428,6 +440,19 @@ class RemoveFolderAction extends Action2 {
 			await workspaceBarService.remove(leaving);
 		}
 	}
+}
+
+/**
+ * How many agents `Remove Folder` stops: those working in the folders it takes out of the workspace
+ * (`foldersToRemove`) and, when they are the last of `repository`'s, those under the rows that go with
+ * it - its worktrees' that never joined the workspace, and its checkout's when that did not either.
+ */
+export function agentsStoppedBy(repository: IWorkspaceBarRepository | undefined, leaving: readonly URI[], agentsService: Pick<IWorkspaceBarAgentsService, 'agentsIn'>, isEqual: (a: URI, b: URI) => boolean): number {
+	const repositoryLeaves = !!repository && repository.members.every(member => leaving.some(uri => isEqual(uri, member.uri)));
+	const rows = repository && repositoryLeaves
+		? [...repository.worktrees.filter(worktree => !worktree.folder).map(worktree => worktree.uri), ...(repository.folder ? [] : [repository.main])]
+		: [];
+	return [...leaving, ...rows].reduce((count, uri) => count + agentsService.agentsIn(uri).length, 0);
 }
 
 /**

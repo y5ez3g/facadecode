@@ -108,7 +108,7 @@ export interface IWorkspaceBarCustomizationService {
  * What a worktree is called: while it is a folder of the workspace, what `nameFor` calls that folder, as
  * the window title does; else the name somebody gave it, or its branch (WT-1.12).
  */
-export function worktreeNameFor(customizationService: IWorkspaceBarCustomizationService, worktree: { readonly uri: URI; readonly label: string; readonly folder: IWorkspaceFolder | undefined }): string {
+export function worktreeNameFor(customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'>, worktree: { readonly uri: URI; readonly label: string; readonly folder: IWorkspaceFolder | undefined }): string {
 	return worktree.folder ? customizationService.nameFor(worktree.folder) : customizationService.get(worktree.uri)?.name || worktree.label;
 }
 

@@ -76,6 +76,6 @@ export class TerminalLauncherWorkspaceBar extends Disposable implements IWorkben
 	}
 
 	private tellBar(): void {
-		this.barAgentsService.set(agentsByFolder(this.launcherService.agentTerminals, agent => this.folderTerminalsService.folderOf(agent)?.uri));
+		this.barAgentsService.set(agentsByFolder(this.launcherService.agentTerminals, agent => this.folderTerminalsService.folderOf(agent)));
 	}
 }

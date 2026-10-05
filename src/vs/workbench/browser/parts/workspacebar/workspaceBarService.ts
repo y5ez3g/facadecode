@@ -34,6 +34,13 @@ export interface IWorkspaceBarService {
 	readonly onDidRestoreEditors: Event<void>;
 
 	/**
+	 * Fires when what {@link repositoryFor} answers may have changed: a read of git's files found other
+	 * repositories or worktrees than the last one did - a folder joined or left the workspace, git made
+	 * or deleted a worktree - or worktrees were switched on or off.
+	 */
+	readonly onDidChangeRepositories: Event<void>;
+
+	/**
 	 * Puts folders in the workspace, in the order given, skipping the ones already there.
 	 *
 	 * ⚠️ Adds and stops there. Where a folder was dropped is what says whether somebody also meant
