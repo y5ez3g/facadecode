@@ -29,7 +29,7 @@ row is a **folder**; the second level is a **worktree**.
 
 ```
 location              ~/.facade/worktrees/<repo>/<name>, on every OS
-creating              git worktree add -b <branch> <path> HEAD
+creating              git worktree add -b <branch> -- <path> <start point>, HEAD unless given
 Git LFS               the smudge skipped while creating, then git lfs checkout: local objects only
 trust                 a worktree of a trusted repository is trusted
 small ignored files   .worktreeinclude at the repository root, in gitignore syntax
@@ -133,7 +133,8 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   - Each row shows the agents its own folder runs, an open repository's row its main checkout's:
     their logos side by side, oldest first, up to three, then `+N` in the workbench's count badge. A
     closed repository speaks for its worktrees, as its count does: their agents after its own, in the
-    order of their rows. An agent in the panel is on no row.
+    order of their rows. An agent in the panel is on no row, nor one held for a worktree that has
+    not joined the workspace yet, until it does.
   - Under the pointer a folder's `+` takes the agents' place in the same cell, so the name does not
     move. Collapsed to icons the logos go, and a row with agents carries a dot on its icon's top
     corner, ringed in the bar's surface.
@@ -161,8 +162,9 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   `com1`-`com9`, `lpt1`-`lpt9`) is refused, with a sentence saying why.
 - **WT-2.3** A path that is taken gets `-1`, `-2`, and so on. That also separates two repositories whose
   folders have the same name.
-- **WT-2.4** Nothing is written into the repository: no `.gitignore` entry, no `.git/info/exclude`
-  entry, no `files.exclude` default.
+- **WT-2.4** Making a worktree writes nothing into the repository: no `.gitignore` entry, no
+  `.git/info/exclude` entry, no `files.exclude` default. While agents run in a worktree, the files
+  put there for them get `info/exclude` lines that go with them (AGENT-FRAMEWORK.md, 1.7).
 - **WT-2.5** No `core.longpaths` and no path-length check. A path too long for Windows fails with
   git's own "Filename too long", said on screen.
 
@@ -219,8 +221,11 @@ The renderer cannot run git, and upstream's `git.createWorktree` and `git.delete
 and modals of their own. So the git extension gets three internal, non-interactive commands:
 
 ```
-_git.createWorktreeAt(root, path, branch)
-    git worktree add -b <branch> <path> HEAD      with GIT_LFS_SKIP_SMUDGE=1
+_git.createWorktreeAt(root, path, branch, startPoint?)
+    git worktree add -b <branch> -- <path> <startPoint, or HEAD>
+                                                  with GIT_LFS_SKIP_SMUDGE=1; a startPoint is a
+                                                  full commit id, or the command answers
+                                                  InvalidArgument
     git lfs checkout                              in the worktree, best effort: the LFS objects
                                                   already on this machine, nothing downloaded
     then copies .worktreeinclude (§8)
@@ -303,6 +308,16 @@ From the `+` on a folder row (WT-1.13), the row's menu (WT-1.11), or the command
   dialog says how to set them and stays disabled - unless an `includeIf` may supply them once the
   repository exists.
 - **WT-5.9** Once made, the worktree's repository is opened in the bar before the window goes to it.
+- **WT-5.10** One repository makes one worktree at a time. A second New Worktree on a row still at
+  work is a second click, and does nothing. The worktrees agents ask for in one repository are made
+  one after another, none refused because another is being made; a New Worktree the person asks for
+  meanwhile goes once the agent's is made.
+- **WT-5.11** An agent's worktree (AGENT-FRAMEWORK.md, 1.3) is made through
+  `_facade.worktree.create` by the same service, without the dialog: from the parent worktree's HEAD;
+  refused, with the reason, in an untrusted workspace or repository and in a folder with no commit,
+  rather than trusted or prepared (WT-5.8); the window stays where it is unless asked to show the
+  worktree; setup runs at once, in a terminal of its own, revealed - not held under the worktree's
+  row as an agent's is.
 
 ---
 
@@ -426,7 +441,8 @@ removal      a terminal inside the worktree         -
 worktrees inside the repository        they would need an ignore entry, and nest folders of the
                                        workspace
 linking or copying dependencies        a repository can do it in its own setup script
-automatic cleanup, limits              these worktrees are made by a person and kept until deleted
+automatic cleanup, limits              these worktrees are made by a person or an agent, and
+                                       kept until deleted
 deleting the branch                    keeping it loses nothing
 choosing a base ref, cloning           later, each on its own
 a running state on a worktree's dot    later: the dot is drawn, but does not yet say whether
