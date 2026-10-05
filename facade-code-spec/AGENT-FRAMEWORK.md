@@ -28,7 +28,8 @@ the agent's CLI  --MCP over stdio-->  MCP server  --HTTP over a named pipe-->  e
   outlive a window reload: the CLI stays connected to the shim, and the shim waits for the window -
   60 seconds, tried every second. It keeps no state. At MCP `initialize` it says hello to the window
   (`POST /hello`) and hands the CLI the window's tools and instructions; each `tools/call` becomes a
-  `POST /call`. A call cut off halfway is not made again, and says it may have run.
+  `POST /call`. A call cut off halfway is not made again, and says it may have run. A window that is
+  away, or does not answer, is waited for once: after that the shim says at once that it is away.
 - **Who calls** is said by a bearer token on every request. A process's token is 32 random bytes in
   `runs/<pid>.token`, passed as `--pipe <pipe> --token-file <file>`; a CLI that reads one server
   configuration for all its agents in a folder starts `shim.js mcp --agent`, and the shim reads

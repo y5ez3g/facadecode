@@ -18,3 +18,13 @@ export function codeOf(err: unknown): string | undefined {
 	const code: unknown = err instanceof Error ? Reflect.get(err, 'code') : undefined;
 	return typeof code === 'string' ? code : undefined;
 }
+
+/** What a wait or a call that its caller cancelled ends with: its code is `CANCELLED`. */
+export class CancelledError extends Error {
+	readonly code = 'CANCELLED';
+
+	constructor() {
+		super('Cancelled');
+		this.name = 'CancelledError';
+	}
+}

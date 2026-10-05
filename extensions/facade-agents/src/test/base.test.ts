@@ -5,15 +5,16 @@
 
 import * as assert from 'assert';
 import { spawn } from 'child_process';
+import { getEventListeners } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import { DeferredPromise, sleepSync } from '../base/async';
+import { DeferredPromise, sleepSync, timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
 import { canonicalFolder, formatJson, isEqualPath, jsonLayoutOf, parseJson, readJsonFile, replaceFile, writeJsonFile } from '../base/files';
 import { isJsonObject, isStringArray } from '../base/json';
 import { removeLockIfUnchanged, withFileLock } from '../base/lock';
 import { isProcessRunning } from '../base/system';
-import { cutNextWriteShort, tempDir } from './util';
+import { cutNextWriteShort, outcomeOf, tempDir } from './util';
 
 const BOM = String.fromCharCode(0xfeff);
 
@@ -57,6 +58,22 @@ suite('Base: errors, JSON values, processes and promises', () => {
 		failed.complete('late');
 
 		assert.deepStrictEqual({ completed: await completed.p, failed: await failed.p.catch(messageOf) }, { completed: 'first', failed: 'broke' });
+	});
+
+	test('a wait ends as soon as it is cancelled, as cancelled, and one cancelled before it began does not begin; one that runs its course leaves no listener behind', async () => {
+		const cancelled = new AbortController();
+		const started = Date.now();
+		const long = outcomeOf(timeout(10_000, cancelled.signal));
+		cancelled.abort();
+		const ran = new AbortController();
+		await timeout(10, ran.signal);
+
+		assert.deepStrictEqual({
+			long: await long,
+			atOnce: Date.now() - started < 1000,
+			before: await outcomeOf(timeout(10, cancelled.signal)),
+			listeners: getEventListeners(ran.signal, 'abort').length
+		}, { long: 'CANCELLED: Cancelled', atOnce: true, before: 'CANCELLED: Cancelled', listeners: 0 });
 	});
 
 	test('a synchronous wait blocks for as long as it is asked', () => {

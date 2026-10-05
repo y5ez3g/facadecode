@@ -3,9 +3,25 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/** Resolves after `ms` milliseconds. */
-export function timeout(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms));
+import { CancelledError } from './errors';
+
+/** Resolves after `ms` milliseconds; rejects with a `CancelledError` as soon as `signal` aborts. */
+export function timeout(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(new CancelledError());
+			return;
+		}
+		const onAbort = () => {
+			clearTimeout(handle);
+			reject(new CancelledError());
+		};
+		const handle = setTimeout(() => {
+			signal?.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		signal?.addEventListener('abort', onAbort, { once: true });
+	});
 }
 
 /** A promise that whoever holds it settles, once: what comes after the first `complete` or `error` is ignored. */

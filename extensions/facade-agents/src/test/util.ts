@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { codeOf, messageOf } from '../base/errors';
 
 /** A temporary folder, real path, removed by the returned function. */
 export function tempDir(prefix: string): { dir: string; remove(): void } {
@@ -44,6 +45,17 @@ export function cutNextWriteShort(): () => void {
 		throw fsError('ENOSPC', 'write');
 	});
 	return restore;
+}
+
+/** What a promise came to: `fulfilled`, or its error's message, after its code when it has one. */
+export async function outcomeOf(promise: Promise<unknown>): Promise<string> {
+	try {
+		await promise;
+		return 'fulfilled';
+	} catch (err) {
+		const code = codeOf(err);
+		return code ? `${code}: ${messageOf(err)}` : messageOf(err);
+	}
 }
 
 /** Resolves after `ms`, or rejects as soon as `signal` aborts. */
