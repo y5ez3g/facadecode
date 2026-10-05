@@ -1,0 +1,4 @@
+{
+	"displayName": "Facade Agents",
+	"description": "Coding agents' CLIs in their own terminal UIs inside the window, with an MCP server through which agents start, list and end each other."
+}

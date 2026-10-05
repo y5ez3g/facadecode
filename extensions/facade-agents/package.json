@@ -1,0 +1,30 @@
+{
+  "name": "facade-agents",
+  "publisher": "vscode",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "10.0.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.5.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "scripts": {
+    "compile": "gulp compile-extension:facade-agents",
+    "watch": "gulp watch-extension:facade-agents",
+    "test": "node ../../node_modules/mocha/bin/mocha --ui tdd --timeout 30000 \"out/test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
+  }
+}

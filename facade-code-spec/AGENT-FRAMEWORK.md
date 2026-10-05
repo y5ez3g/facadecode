@@ -311,13 +311,17 @@ ledger.jsonl       the events, one JSON line each: { v: 2, seq, time, type, ... 
                    process.exited   pid kind reason
                    worktree.made    name folder repository parentWorktree madeBy
                    worktree.gone    folder
-ledger.lock        the window that has the agents: its process id, touched every 30 s; "closed"
+ledger.lock        the window that has the agents: its process id and a mark of its own, touched
+                   every 30 s; "closed"
 you.token          the person's token
+last-pid           the highest PID given, which a ledger begun anew counts on from
 runs/<pid>.*       a process's token, task and launch files: gone once it exits
 window.json        the pipe the window listens on
 window-state.json  the pipe's id, and the process ids of the agents' terminals
 ```
 
 The state is what replaying the ledger gives. A ledger another version wrote is moved aside and a new
-one begins; a last line a crash cut short is dropped; any other line that cannot be read stops the
-window from loading the agents, and says which.
+one begins, its PIDs counting on from `last-pid`; a last line a crash cut short is dropped, and an
+event the disk took only part of is cut back; any other line that cannot be read, or that does not fit
+those before it, stops the window from loading the agents, and says which. A lock untouched for 90 s
+is another window's to take, and the window that stood still that long writes nothing more.

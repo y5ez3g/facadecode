@@ -1,0 +1,661 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { codeOf, messageOf } from '../base/errors';
+import { LedgerEventBody, PERSON, YOU_PID } from '../record/events';
+import { isLedgerHeld, Ledger, LedgerLockedError } from '../record/ledger';
+import { injectedFile, recordDir, workspaceDir, workspacesRoot } from '../record/paths';
+import { agentName, nameOfWorktree, NewProcess, ProcessTable } from '../record/processes';
+import { cutNextWriteShort, fsError, replaceFsFunction, sleep, tempDir, waitFor } from './util';
+
+const LEDGER = 'ledger.jsonl';
+const LOCK = 'ledger.lock';
+const LAST_PID = 'last-pid';
+/** A lock as another window writes it: its process id, and a mark of its own. */
+const ANOTHERS_LOCK = '424242 0123456789ab';
+
+function newProcess(name: string, ppid = YOU_PID, worktree = 'main'): NewProcess {
+	return { name, ppid, cli: 'arg', model: 'small', worktree, folder: '/lab' };
+}
+
+/** A worktree the person had Facade make, called `name`. */
+function made(name: string): LedgerEventBody {
+	return { type: 'worktree.made', name, folder: `/lab-${name}`, repository: '/lab', parentWorktree: 'main', madeBy: YOU_PID };
+}
+
+/** What a call came to: `done`, or the code of what it threw, else its message. */
+function outcome(call: () => unknown): string {
+	try {
+		call();
+		return 'done';
+	} catch (err) {
+		return codeOf(err) ?? messageOf(err);
+	}
+}
+
+/** What a window is told once another window took the ledger in `dir`. */
+function takenFrom(dir: string): string {
+	return `Another Facade window took this workspace's agents: the ledger in ${dir} takes no event more from this one.`;
+}
+
+/** Makes reading `file` fail with `code` while `failing` says so; returns what puts reading back. */
+function failReading(file: string, code: string, failing: () => boolean = () => true): () => void {
+	return replaceFsFunction('readFileSync', original => ((...args: Parameters<typeof fs.readFileSync>) => {
+		if (args[0] === file && failing()) {
+			throw fsError(code, 'open');
+		}
+		return original(...args);
+	}) as typeof fs.readFileSync);
+}
+
+suite('Record: processes, their PIDs, names and tokens', () => {
+
+	let temp: { dir: string; remove(): void };
+	let table: ProcessTable;
+
+	setup(() => {
+		temp = tempDir('facade-processes-');
+		table = ProcessTable.open({ dir: temp.dir });
+	});
+
+	teardown(() => {
+		table.dispose();
+		temp.remove();
+	});
+
+	test('a process gets the next PID, never one given before: PIDs count up from 2, the person being 1, across a reopening too', () => {
+		const first = table.start(newProcess('main'));
+		table.setExited(first.process.pid, 'exited', 'its CLI ended with exit code 0');
+		const second = table.start(newProcess('main'));
+		table.dispose();
+		table = ProcessTable.open({ dir: temp.dir });
+		const third = table.start(newProcess('main'));
+
+		assert.deepStrictEqual([first.process.pid, second.process.pid, third.process.pid], [2, 3, 4]);
+	});
+
+	test('PIDs count on from the highest ever given, which last-pid keeps: past a ledger begun anew - the old one moved aside - and past a PID its ledger never recorded', () => {
+		table.start(newProcess('main'));
+		table.start(newProcess('clamp'));
+		table.dispose();
+		// As the person moves aside a ledger that does not open.
+		fs.renameSync(path.join(temp.dir, LEDGER), path.join(temp.dir, 'ledger.broken.jsonl'));
+		table = ProcessTable.open({ dir: temp.dir });
+		const anew = table.start(newProcess('main')).process.pid;
+		table.dispose();
+		// Given by a window that ended before its ledger recorded it.
+		fs.writeFileSync(path.join(temp.dir, LAST_PID), '9');
+		table = ProcessTable.open({ dir: temp.dir });
+		const pastAGap = table.start(newProcess('main')).process.pid;
+		table.dispose();
+		fs.writeFileSync(path.join(temp.dir, LAST_PID), 'nine');
+		table = ProcessTable.open({ dir: temp.dir });
+		const pastNonsense = table.start(newProcess('main')).process.pid;
+
+		assert.deepStrictEqual({ anew, pastAGap, pastNonsense, kept: fs.readFileSync(path.join(temp.dir, LAST_PID), 'utf8') }, { anew: 4, pastAGap: 10, pastNonsense: 11, kept: '11' });
+	});
+
+	test('each process\'s token is written to its run folder, and names it until it exits; the ledger keeps its hash alone; the person\'s token is the person\'s', () => {
+		const main = table.start(newProcess('main'));
+		const personsToken = fs.readFileSync(path.join(temp.dir, 'you.token'), 'utf8');
+		const heard = table.authenticate(fs.readFileSync(main.tokenFile, 'utf8'));
+		table.setExited(main.process.pid, 'killed', 'killed by the person');
+
+		assert.deepStrictEqual({
+			heard,
+			afterExit: table.authenticate(main.token),
+			person: table.authenticate(personsToken),
+			stranger: table.authenticate('not a token'),
+			inTheLedger: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').includes(main.token),
+			runFileGone: !fs.existsSync(main.tokenFile)
+		}, { heard: { pid: 2, name: 'main' }, afterExit: undefined, person: PERSON, stranger: undefined, inTheLedger: false, runFileGone: true });
+	});
+
+	test('a process is starting, then running once its MCP server said hello, and exits once: the first exit stands, with how, why and when', () => {
+		const main = table.start(newProcess('main'));
+		const starting = main.process.state;
+		table.setRunning(main.process.pid);
+		const running = main.process.state;
+		const first = table.setExited(main.process.pid, 'killed', 'killed by the person');
+		const second = table.setExited(main.process.pid, 'exited', 'its CLI ended with exit code 1');
+		table.setRunning(main.process.pid);
+
+		assert.deepStrictEqual({ starting, running, first: first && { kind: first.kind, reason: first.reason }, second, state: main.process.state, exit: main.process.exit === first }, {
+			starting: 'starting',
+			running: 'running',
+			first: { kind: 'killed', reason: 'killed by the person' },
+			second: undefined,
+			state: 'exited',
+			exit: true
+		});
+	});
+
+	test('a task is written whole to a file of its process\'s own, made knowing its PID; that the line telling of it was typed is recorded once, for a process that has one', () => {
+		const told = table.start({ ...newProcess('main'), task: pid => `You are PID ${pid}.\n\nAdd clamp.` });
+		const untold = table.start(newProcess('other'));
+		table.setTaskTyped(told.process.pid);
+		table.setTaskTyped(told.process.pid);
+		table.setTaskTyped(untold.process.pid);
+		const types = fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).type);
+
+		assert.deepStrictEqual({
+			taskFile: told.process.taskFile === path.join(table.runsDir, '2.task.md'),
+			task: fs.readFileSync(path.join(table.runsDir, '2.task.md'), 'utf8'),
+			typed: [told.process.taskTyped, untold.process.taskTyped, untold.process.taskFile],
+			types
+		}, {
+			taskFile: true,
+			task: 'You are PID 2.\n\nAdd clamp.',
+			typed: [true, undefined, undefined],
+			types: ['process.started', 'process.started', 'task.typed']
+		});
+	});
+
+	test('a process\'s parent is the one that started it while that one runs; once it exited, the person\'s, as init takes in the orphans', () => {
+		const main = table.start(newProcess('main')).process;
+		const child = table.start(newProcess('clamp', main.pid, 'clamp')).process;
+		const grandchild = table.start(newProcess('slug', child.pid, 'slug')).process;
+		const before = { child: table.parentOf(child), grandchild: table.parentOf(grandchild), ofMain: table.childrenOf(main.pid).map(each => each.pid) };
+		table.setExited(child.pid, 'killed', 'killed by @main (PID 2)');
+
+		assert.deepStrictEqual({
+			before,
+			grandchild: table.parentOf(grandchild),
+			ofMain: table.childrenOf(main.pid).map(each => each.pid),
+			ofThePerson: table.childrenOf(YOU_PID).map(each => each.pid)
+		}, {
+			before: { child: 2, grandchild: 3, ofMain: [3] },
+			grandchild: YOU_PID,
+			ofMain: [],
+			ofThePerson: [2, 4]
+		});
+	});
+
+	test('a name is a label: processes that have not exited may share it, and one that exited has it no more', () => {
+		const first = table.start(newProcess('main')).process;
+		const second = table.start(newProcess('main')).process;
+		const both = table.liveNamed('main').map(each => each.pid);
+		table.setExited(first.pid, 'exited', 'its CLI ended with exit code 0');
+
+		assert.deepStrictEqual({ both, one: table.liveNamed('main').map(each => each.pid), none: table.liveNamed('nobody'), second: second.name }, { both: [2, 3], one: [3], none: [], second: 'main' });
+	});
+
+	test('a name is lower case, without its @: a worktree\'s gives an agent\'s, its branch\'s slashes as dashes, never one Facade keeps', () => {
+		const refused = (text: string) => {
+			try {
+				return agentName(text);
+			} catch (err) {
+				return messageOf(err);
+			}
+		};
+
+		assert.deepStrictEqual({
+			named: [agentName('@Clamp'), agentName(' slug.2_x ')],
+			refused: [refused('you'), refused('-x'), refused('a b'), refused('x'.repeat(41))],
+			ofWorktrees: [nameOfWorktree('Feature/Clamp-It'), nameOfWorktree('main'), nameOfWorktree('you'), nameOfWorktree('init'), nameOfWorktree('---')]
+		}, {
+			named: ['clamp', 'slug.2_x'],
+			refused: [
+				'"you" is reserved: choose another name.',
+				'"-x" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.',
+				'"a b" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.',
+				`"${'x'.repeat(41)}" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.`
+			],
+			ofWorktrees: ['feature-clamp-it', 'main', 'agent', 'agent', 'agent']
+		});
+	});
+
+	test('the run files of a process go once it exits, and those of every process that is not running go as the table opens', () => {
+		const gone = table.start({ ...newProcess('gone'), task: () => 'Task.' });
+		const runs = table.start({ ...newProcess('runs'), task: () => 'Task.' });
+		table.setExited(gone.process.pid, 'exited', 'its terminal closed');
+		const afterExit = fs.readdirSync(table.runsDir).sort();
+		// A file a crash left, of a PID the ledger never recorded.
+		fs.writeFileSync(path.join(table.runsDir, '9.token'), 'x');
+		table.dispose();
+		table = ProcessTable.open({ dir: temp.dir });
+
+		assert.deepStrictEqual({ afterExit, afterOpening: fs.readdirSync(table.runsDir).sort(), runs: runs.process.pid }, {
+			afterExit: ['3.task.md', '3.token'],
+			afterOpening: ['3.task.md', '3.token'],
+			runs: 3
+		});
+	});
+
+	test('nothing is started once another window took the ledger: no PID is given, and no token or task written, which could be that window\'s', () => {
+		table.start(newProcess('main'));
+		fs.writeFileSync(path.join(temp.dir, LOCK), ANOTHERS_LOCK);
+		const refused = outcome(() => table.start({ ...newProcess('late'), task: () => 'Task.' }));
+
+		assert.deepStrictEqual({ refused, runs: fs.readdirSync(table.runsDir), lastPid: fs.readFileSync(path.join(temp.dir, LAST_PID), 'utf8') }, {
+			refused: takenFrom(temp.dir),
+			runs: ['2.token'],
+			lastPid: '2'
+		});
+	});
+});
+
+suite('Record: the ledger on disk', () => {
+
+	let temp: { dir: string; remove(): void };
+
+	setup(() => {
+		temp = tempDir('facade-ledger-');
+	});
+
+	teardown(() => {
+		temp.remove();
+	});
+
+	test('a reload loses nothing: processes, their states, how they exited, their tasks, their tokens and the person\'s, the worktrees made', () => {
+		let table = ProcessTable.open({ dir: temp.dir });
+		const main = table.start({ ...newProcess('main'), task: () => 'Lead.' });
+		table.setRunning(main.process.pid);
+		table.setTaskTyped(main.process.pid);
+		const gone = table.start(newProcess('clamp', main.process.pid, 'clamp'));
+		table.setExited(gone.process.pid, 'failed', 'it did not come up within 120 seconds');
+		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: main.process.pid });
+		const personsToken = fs.readFileSync(path.join(temp.dir, 'you.token'), 'utf8');
+		const before = structuredClone([...table.state.processes.values()]);
+		table.dispose();
+
+		table = ProcessTable.open({ dir: temp.dir });
+		const reloaded = {
+			processes: [...table.state.processes.values()],
+			token: table.authenticate(main.token),
+			personsToken: fs.readFileSync(path.join(temp.dir, 'you.token'), 'utf8') === personsToken,
+			worktrees: [...table.state.worktrees.values()],
+			next: table.start(newProcess('next')).process.pid
+		};
+		table.dispose();
+
+		assert.deepStrictEqual(reloaded, {
+			processes: before,
+			token: { pid: 2, name: 'main' },
+			personsToken: true,
+			worktrees: [{ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: 2 }],
+			next: 4
+		});
+	});
+
+	test('a worktree Facade made that is gone is its no more: its record goes, and stays gone at the next start; a folder it did not make records nothing', () => {
+		let table = ProcessTable.open({ dir: temp.dir });
+		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: YOU_PID });
+		table.recordWorktree({ name: 'slug', folder: '/lab-worktrees/slug', repository: '/lab', parentWorktree: 'main', madeBy: YOU_PID });
+		table.forgetWorktree('/lab-worktrees/clamp');
+		const seq = table.state.seq;
+		table.forgetWorktree('/lab-worktrees/never');
+		const now = { worktrees: [...table.state.worktrees.keys()], nothingMore: table.state.seq === seq, slug: table.madeWorktree('/lab-worktrees/slug')?.name, clamp: table.madeWorktree('/lab-worktrees/clamp') };
+		table.dispose();
+		table = ProcessTable.open({ dir: temp.dir });
+
+		assert.deepStrictEqual({ now, again: [...table.state.worktrees.keys()] }, {
+			now: { worktrees: ['/lab-worktrees/slug'], nothingMore: true, slug: 'slug', clamp: undefined },
+			again: ['/lab-worktrees/slug']
+		});
+		table.dispose();
+	});
+
+	test('a last line cut short by a crash is dropped, and the file is repaired', () => {
+		let table = ProcessTable.open({ dir: temp.dir });
+		const main = table.start(newProcess('main'));
+		const seq = table.state.seq;
+		table.dispose();
+		const file = path.join(temp.dir, LEDGER);
+		fs.appendFileSync(file, '{"v":2,"seq":2,"type":"process.ru');
+
+		table = ProcessTable.open({ dir: temp.dir });
+		const afterCrash = table.state.seq;
+		table.setExited(main.process.pid, 'exited', 'its terminal closed');
+		table.dispose();
+		table = ProcessTable.open({ dir: temp.dir });
+
+		assert.deepStrictEqual({ afterCrash, state: table.get(main.process.pid)?.state, lines: fs.readFileSync(file, 'utf8').split('\n').map(line => line && JSON.parse(line).type) }, {
+			afterCrash: seq,
+			state: 'exited',
+			lines: ['process.started', 'process.exited', '']
+		});
+		table.dispose();
+	});
+
+	test('an event the disk took only part of leaves nothing of it: the line is cut back, the state stays, and the next event follows the last whole one', () => {
+		const ledger = Ledger.open(temp.dir);
+		ledger.append(made('clamp'));
+		const file = path.join(temp.dir, LEDGER);
+		const whole = fs.readFileSync(file, 'utf8');
+		const restore = cutNextWriteShort();
+		const failed = outcome(() => ledger.append(made('slug')));
+		restore();
+		const afterFailure = { cutBack: fs.readFileSync(file, 'utf8') === whole, seq: ledger.state.seq };
+		ledger.append(made('next'));
+		ledger.close();
+		const reopened = Ledger.open(temp.dir);
+		reopened.close();
+
+		assert.deepStrictEqual({ failed, afterFailure, worktrees: [...reopened.state.worktrees.keys()] }, {
+			failed: 'ENOSPC',
+			afterFailure: { cutBack: true, seq: 1 },
+			worktrees: ['/lab-clamp', '/lab-next']
+		});
+	});
+
+	test('an event cut short that cannot be cut back closes the ledger, so that it stays the last line, which the next opening drops', () => {
+		const ledger = Ledger.open(temp.dir);
+		ledger.append(made('clamp'));
+		const restoreWrite = cutNextWriteShort();
+		const restoreTruncate = replaceFsFunction('truncateSync', () => () => {
+			throw fsError('EIO', 'ftruncate');
+		});
+		const failed = outcome(() => ledger.append(made('slug')));
+		restoreWrite();
+		restoreTruncate();
+		const refused = outcome(() => ledger.append(made('late')));
+		const reopened = Ledger.open(temp.dir);
+		reopened.close();
+
+		assert.deepStrictEqual({ failed, refused, seq: reopened.state.seq, lines: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').length }, {
+			failed: 'ENOSPC',
+			refused: `The ledger in ${temp.dir} is closed.`,
+			seq: 1,
+			lines: 2
+		});
+	});
+
+	test('a line that cannot be read before the last stops the workspace from opening, and says which: one that is no event, or one that does not fit those before it; the file is left as it was, and no lock', () => {
+		const table = ProcessTable.open({ dir: temp.dir });
+		table.start(newProcess('main'));
+		table.dispose();
+		const file = path.join(temp.dir, LEDGER);
+		const lines = fs.readFileSync(file, 'utf8');
+		const broken = (line: string) => {
+			fs.writeFileSync(file, `${lines}${line}\n{"v":2,"seq":3,"time":1,"type":"process.running","pid":2}\n`);
+			try {
+				ProcessTable.open({ dir: temp.dir }).dispose();
+				return 'opened';
+			} catch (err) {
+				return messageOf(err);
+			} finally {
+				assert.strictEqual(fs.readFileSync(file, 'utf8').startsWith(`${lines}${line}\n`), true);
+			}
+		};
+		// PID 3 started by PID 2, and a worktree made by PID 2, as Facade writes them but for `fields`.
+		const started = (fields: object) => JSON.stringify({ v: 2, seq: 2, time: 1, type: 'process.started', pid: 3, name: 'clamp', ppid: 2, cli: 'arg', model: 'small', worktree: 'clamp', folder: '/lab', tokenHash: 'ab'.repeat(32), ...fields });
+		const worktree = (fields: object) => JSON.stringify({ v: 2, seq: 2, time: 1, type: 'worktree.made', name: 'clamp', folder: '/lab-clamp', repository: '/lab', parentWorktree: 'main', madeBy: 2, ...fields });
+		const said = `Line 2 of ${file} is not an event Facade can read, so the workspace's agents are not loaded. Move the file away to start with no agents.`;
+
+		assert.deepStrictEqual({
+			asWritten: [broken(started({})), broken(worktree({}))],
+			notJson: broken('{"v":2,'),
+			unknownKind: broken('{"v":2,"seq":2,"time":1,"type":"process.later","pid":2}'),
+			wrongField: broken('{"v":2,"seq":2,"time":1,"type":"process.exited","pid":2,"kind":"vanished","reason":"?"}'),
+			outOfTurn: broken('{"v":2,"seq":5,"time":1,"type":"process.running","pid":2}'),
+			thePersonsPid: broken(started({ pid: 1, ppid: 1 })),
+			aPidGivenBefore: broken(started({ pid: 2, ppid: 1 })),
+			noParent: broken(started({ ppid: 0 })),
+			anUnknownParent: broken(started({ pid: 5, ppid: 4 })),
+			anEscapeInTheName: broken(started({ name: `${String.fromCharCode(27)}[2J` })),
+			aReservedName: broken(started({ name: 'you' })),
+			noFolder: broken(started({ folder: '' })),
+			noTokenHash: broken(started({ tokenHash: 'a token' })),
+			anUnknownProcess: broken('{"v":2,"seq":2,"time":1,"type":"process.exited","pid":9,"kind":"killed","reason":"?"}'),
+			anUnknownMaker: broken(worktree({ madeBy: 9 })),
+			aWorktreeWithoutFolder: broken(worktree({ folder: '' })),
+			lockLeft: fs.existsSync(path.join(temp.dir, LOCK))
+		}, {
+			asWritten: ['opened', 'opened'],
+			notJson: said,
+			unknownKind: said,
+			wrongField: said,
+			outOfTurn: said,
+			thePersonsPid: said,
+			aPidGivenBefore: said,
+			noParent: said,
+			anUnknownParent: said,
+			anEscapeInTheName: said,
+			aReservedName: said,
+			noFolder: said,
+			noTokenHash: said,
+			anUnknownProcess: said,
+			anUnknownMaker: said,
+			aWorktreeWithoutFolder: said,
+			lockLeft: false
+		});
+	});
+
+	test('a ledger that is there but cannot be read is not taken for an empty one: opening it fails, and leaves no lock', () => {
+		fs.mkdirSync(path.join(temp.dir, LEDGER));
+		const opened = outcome(() => Ledger.open(temp.dir).close());
+
+		assert.deepStrictEqual({ opened, lockLeft: fs.existsSync(path.join(temp.dir, LOCK)) }, { opened: 'EISDIR', lockLeft: false });
+	});
+
+	test('a token of the person\'s that cannot be read is not made anew, which would cut off the scripts that hold it: the workspace does not open, and says why', () => {
+		ProcessTable.open({ dir: temp.dir }).dispose();
+		const file = path.join(temp.dir, 'you.token');
+		const token = fs.readFileSync(file, 'utf8');
+		const restore = failReading(file, 'EACCES');
+		let opened: string;
+		try {
+			opened = outcome(() => ProcessTable.open({ dir: temp.dir }).dispose());
+		} finally {
+			restore();
+		}
+
+		assert.deepStrictEqual({ opened, kept: fs.readFileSync(file, 'utf8') === token, then: outcome(() => ProcessTable.open({ dir: temp.dir }).dispose()) }, { opened: 'EACCES', kept: true, then: 'done' });
+	});
+
+	test('a ledger another version wrote is kept beside, as it is, and a new one begins: its events are not this version\'s', () => {
+		const old = '{"v":1,"seq":1,"ts":1,"type":"agent.started","name":"main","incarnation":1}\n';
+		fs.writeFileSync(path.join(temp.dir, LEDGER), old);
+
+		const table = ProcessTable.open({ dir: temp.dir });
+		const fresh = { processes: table.state.processes.size, pid: table.start(newProcess('main')).process.pid };
+		table.dispose();
+		const kept = fs.readdirSync(temp.dir).filter(name => /^ledger\.v1\.\d+\.jsonl$/.test(name));
+
+		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === old }, { fresh: { processes: 0, pid: 2 }, kept: 1, same: true });
+	});
+
+	test('a ledger that was closed takes no event more: it says so, and writes nothing into the file another window may hold by then', () => {
+		const ledger = Ledger.open(temp.dir);
+		ledger.append(made('clamp'));
+		ledger.close();
+		const next = Ledger.open(temp.dir);
+		const written = fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8');
+		const refused = outcome(() => ledger.append(made('late')));
+		next.close();
+
+		assert.deepStrictEqual({ refused, unchanged: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8') === written, seq: ledger.state.seq }, {
+			refused: `The ledger in ${temp.dir} is closed.`,
+			unchanged: true,
+			seq: 1
+		});
+	});
+
+	test('a second window is refused while the first is alive, and takes over once it is gone; a window that closed holds the ledger a minute, for its reload', () => {
+		const lock = path.join(temp.dir, LOCK);
+		fs.writeFileSync(lock, ANOTHERS_LOCK);
+		let refused: string | undefined;
+		try {
+			Ledger.open(temp.dir, { isRunning: () => true });
+		} catch (err) {
+			refused = err instanceof LedgerLockedError ? err.message : `not refused: ${err}`;
+		}
+		Ledger.open(temp.dir, { isRunning: () => false }).close();
+		const heldAfterClosing = isLedgerHeld(temp.dir, () => true);
+		const longAgo = new Date(Date.now() - 2 * 60_000);
+		fs.utimesSync(lock, longAgo, longAgo);
+
+		assert.deepStrictEqual({ refused, lock: fs.readFileSync(lock, 'utf8'), heldAfterClosing, heldAMinuteOn: isLedgerHeld(temp.dir, () => true) }, {
+			refused: 'Another Facade window (process 424242) has this workspace\'s agents.',
+			lock: 'closed',
+			heldAfterClosing: true,
+			heldAMinuteOn: false
+		});
+	});
+
+	test('a lock whose process is alive, but that no window has touched for a while, is no window\'s - its process id may be another program\'s by now - and is taken over', () => {
+		const lock = path.join(temp.dir, LOCK);
+		fs.writeFileSync(lock, ANOTHERS_LOCK);
+		const longAgo = new Date(Date.now() - 5 * 60_000);
+		fs.utimesSync(lock, longAgo, longAgo);
+		const heldBefore = isLedgerHeld(temp.dir, () => true);
+
+		const ledger = Ledger.open(temp.dir, { isRunning: () => true });
+		const taken = fs.readFileSync(lock, 'utf8').startsWith(`${process.pid} `);
+		const heldNow = isLedgerHeld(temp.dir, () => true);
+		ledger.close();
+
+		assert.deepStrictEqual({ heldBefore, taken, heldNow }, { heldBefore: false, taken: true, heldNow: true });
+	});
+
+	test('a lock that names this window\'s own process - left by an opening of it that never closed - is no other window\'s, and is taken over', () => {
+		const lock = path.join(temp.dir, LOCK);
+		const left = `${process.pid} 0123456789ab`;
+		fs.writeFileSync(lock, left);
+		const ledger = Ledger.open(temp.dir, { isRunning: () => true });
+		const taken = fs.readFileSync(lock, 'utf8');
+		ledger.close();
+
+		assert.deepStrictEqual({ mine: taken.startsWith(`${process.pid} `), anew: taken !== left }, { mine: true, anew: true });
+	});
+
+	test('the window that has the ledger open touches its lock as often as it is told to, so that other windows see it is there', async () => {
+		const ledger = Ledger.open(temp.dir, { heartbeatMs: 10 });
+		const lock = path.join(temp.dir, LOCK);
+		const longAgo = new Date(Date.now() - 5 * 60_000);
+		fs.utimesSync(lock, longAgo, longAgo);
+		const before = isLedgerHeld(temp.dir, () => true);
+		const touched = await waitFor(() => isLedgerHeld(temp.dir, () => true), 1000).then(() => true, () => false);
+		ledger.close();
+
+		assert.deepStrictEqual({ before, touched }, { before: false, touched: true });
+	});
+
+	test('a window whose lock another window took - this one stood still past the lock\'s time - writes nothing more: its next event says why, and the other\'s lock stays', () => {
+		const ledger = Ledger.open(temp.dir);
+		ledger.append(made('clamp'));
+		const file = path.join(temp.dir, LEDGER);
+		const lock = path.join(temp.dir, LOCK);
+		const written = fs.readFileSync(file, 'utf8');
+		fs.writeFileSync(lock, ANOTHERS_LOCK);
+		const refused = outcome(() => ledger.append(made('late')));
+		ledger.close();
+
+		assert.deepStrictEqual({ refused, unchanged: fs.readFileSync(file, 'utf8') === written, lock: fs.readFileSync(lock, 'utf8'), seq: ledger.state.seq }, {
+			refused: takenFrom(temp.dir),
+			unchanged: true,
+			lock: ANOTHERS_LOCK,
+			seq: 1
+		});
+	});
+
+	test('nor does it touch that window\'s lock: the heartbeat that finds the lock another\'s stops', async () => {
+		const ledger = Ledger.open(temp.dir, { heartbeatMs: 10 });
+		const lock = path.join(temp.dir, LOCK);
+		fs.writeFileSync(lock, ANOTHERS_LOCK);
+		const longAgo = new Date(Date.now() - 5 * 60_000);
+		fs.utimesSync(lock, longAgo, longAgo);
+		await sleep(100);
+		const refused = outcome(() => ledger.append(made('late')));
+
+		assert.deepStrictEqual({ touched: fs.statSync(lock).mtimeMs > Date.now() - 60_000, refused, lock: fs.readFileSync(lock, 'utf8') }, {
+			touched: false,
+			refused: takenFrom(temp.dir),
+			lock: ANOTHERS_LOCK
+		});
+	});
+
+	test('a lock another program holds open for a moment - a scanner, on Windows - is read again; one it holds longer is not taken for another window\'s: the event fails, and the ledger stays open', async () => {
+		const ledger = Ledger.open(temp.dir, { heartbeatMs: 10 });
+		let reads = 3;
+		const restore = failReading(path.join(temp.dir, LOCK), 'EBUSY', () => reads-- > 0);
+		let held = 'not tried';
+		try {
+			ledger.append(made('clamp'));
+			reads = Infinity;
+			held = outcome(() => ledger.append(made('slug')));
+			// Nor can the heartbeats meanwhile read it.
+			await sleep(100);
+		} finally {
+			restore();
+		}
+		ledger.append(made('next'));
+		ledger.close();
+
+		assert.deepStrictEqual({ held, worktrees: [...ledger.state.worktrees.keys()] }, { held: 'EBUSY', worktrees: ['/lab-clamp', '/lab-next'] });
+	});
+
+	test('a lock another program holds open too long to be read counts as held, whose it is not being known: what the windows put in folders is not taken back over it', () => {
+		const lock = path.join(temp.dir, LOCK);
+		fs.writeFileSync(lock, ANOTHERS_LOCK);
+		const restore = failReading(lock, 'EBUSY');
+		let unreadable: boolean;
+		try {
+			unreadable = isLedgerHeld(temp.dir, () => false);
+		} finally {
+			restore();
+		}
+
+		assert.deepStrictEqual({ unreadable, read: isLedgerHeld(temp.dir, () => false) }, { unreadable: true, read: false });
+	});
+});
+
+suite('Record: where a workspace\'s record is', () => {
+
+	let temp: { dir: string; remove(): void };
+
+	setup(() => {
+		temp = tempDir('facade-paths-');
+	});
+
+	teardown(() => {
+		temp.remove();
+	});
+
+	test('what every window shares is under ~/.facade: the workspaces\' records, and what Facade put where', () => {
+		const home = path.join(os.homedir(), '.facade');
+
+		assert.deepStrictEqual([workspacesRoot(), injectedFile()], [path.join(home, 'workspaces'), path.join(home, 'injected.json')]);
+	});
+
+	test('a workspace is found by its first folder, whatever the case of its path on Windows', () => {
+		const folder = path.join(temp.dir, 'My Repo');
+		fs.mkdirSync(folder);
+		const dir = workspaceDir('/root', folder);
+
+		assert.deepStrictEqual({
+			named: /^My_Repo-[0-9a-f]{12}$/.test(path.basename(dir)),
+			again: workspaceDir('/root', folder) === dir,
+			otherCase: process.platform === 'win32' ? workspaceDir('/root', folder.toUpperCase()) === dir : true,
+			another: workspaceDir('/root', temp.dir) === dir
+		}, { named: true, again: true, otherCase: true, another: false });
+	});
+
+	test('a workspace keeps the record it found by its first folder, however its folders are moved after, and while an agent of it runs; a record kept whose folder left and whose agents are gone, one that is gone, or none, is its first folder\'s', () => {
+		const root = path.join(temp.dir, 'workspaces');
+		const lab = path.join(temp.dir, 'lab');
+		const notes = path.join(temp.dir, 'notes');
+		fs.mkdirSync(lab);
+		fs.mkdirSync(notes);
+		const labs = workspaceDir(root, lab);
+		fs.mkdirSync(labs, { recursive: true });
+		const noneRuns = () => false;
+
+		assert.deepStrictEqual({
+			none: recordDir(root, undefined, [lab], noneRuns) === labs,
+			keptAfterAMove: recordDir(root, labs, [notes, lab], noneRuns) === labs,
+			keptWhileItsAgentsRun: recordDir(root, labs, [notes], dir => dir === labs) === labs,
+			itsFolderGoneAndItsAgents: recordDir(root, labs, [notes], noneRuns) === workspaceDir(root, notes),
+			keptGone: recordDir(root, path.join(root, 'gone-0123456789ab'), [notes], () => true) === workspaceDir(root, notes),
+			keptElsewhere: recordDir(root, temp.dir, [notes], () => true) === workspaceDir(root, notes),
+			keptNoPath: recordDir(root, 42, [notes], () => true) === workspaceDir(root, notes)
+		}, { none: true, keptAfterAMove: true, keptWhileItsAgentsRun: true, itsFolderGoneAndItsAgents: true, keptGone: true, keptElsewhere: true, keptNoPath: true });
+	});
+});
