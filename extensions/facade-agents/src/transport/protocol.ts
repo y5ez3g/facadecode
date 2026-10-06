@@ -5,6 +5,15 @@
 
 import { isJsonObject } from '../base/json';
 
+/**
+ * How long an agent's MCP server waits for the window - as the agent starts, and through a reload - where
+ * its launch does not say: Facade's timeout where the person sets nothing else, two minutes.
+ */
+export const WINDOW_WAIT_MS = 120_000;
+
+/** The longest wait a timer takes: past it, Node fires at once. */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /** A tool as MCP lists it. */
 export interface McpTool {
 	readonly name: string;

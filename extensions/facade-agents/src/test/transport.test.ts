@@ -643,7 +643,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		tokens.set(token, name);
 		const tokenFile = path.join(temp.dir, `${name}.token`);
 		fs.writeFileSync(tokenFile, token);
-		const launch = endpoint.mcpServer(tokenFile);
+		const launch = endpoint.mcpServer(tokenFile, 60_000);
 		const client = StdioMcpClient.start(launch.args.slice(2));
 		clients.push(client);
 		return client;
@@ -674,12 +674,12 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		temp.remove();
 	});
 
-	test('an agent\'s MCP server offers the window\'s tools and instructions, and passes its calls through, with the window\'s progress', async () => {
+	test('an agent\'s MCP server offers the window\'s tools and instructions, and passes its calls through, with the window\'s progress; it is told how long to wait for the window, in its own environment or its agent\'s', async () => {
 		const main = agent('main');
 		const init = await main.initialize();
 		const said = await main.call('echo', { text: 'hello' });
 
-		assert.deepStrictEqual({ instructions: init.instructions, tools: await main.tools(), said: said.text, progress: main.progress, launch: endpoint.mcpServer('/runs/7.token'), shared: endpoint.sharedMcpServer() }, {
+		assert.deepStrictEqual({ instructions: init.instructions, tools: await main.tools(), said: said.text, progress: main.progress, launch: endpoint.mcpServer('/runs/7.token', 45_000), shared: endpoint.sharedMcpServer(), agent: endpoint.agentEnv('t0ken', 45_000) }, {
 			instructions: 'You are @main.',
 			tools: ['echo', 'hang'],
 			said: '@main said hello to echo',
@@ -687,9 +687,10 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 			launch: {
 				command: process.execPath,
 				args: [path.join(__dirname, '..', 'transport', 'shim.js'), 'mcp', '--pipe', pipe, '--token-file', '/runs/7.token'],
-				env: { ELECTRON_RUN_AS_NODE: '1' }
+				env: { ELECTRON_RUN_AS_NODE: '1', FACADE_AGENTS_WAIT_MS: '45000' }
 			},
-			shared: { command: process.execPath, args: [path.join(__dirname, '..', 'transport', 'shim.js'), 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }
+			shared: { command: process.execPath, args: [path.join(__dirname, '..', 'transport', 'shim.js'), 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } },
+			agent: { FACADE_AGENTS_PIPE: pipe, FACADE_AGENTS_TOKEN: 't0ken', FACADE_AGENTS_WAIT_MS: '45000' }
 		});
 	});
 
@@ -903,6 +904,19 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		await waiting.stop();
 
 		assert.deepStrictEqual({ byItself: waiting.child.signalCode === null, atOnce: Date.now() - quit < 1500 }, { byItself: true, atOnce: true });
+	});
+
+	test('an agent\'s MCP server waits for a window that is not there as long as its launch says - as the person set it - and then says it is away', async () => {
+		const tokenFile = path.join(temp.dir, 'main.token');
+		fs.writeFileSync(tokenFile, 'any');
+		const waiting = StdioMcpClient.start(['--pipe', pipePath(`nobody-${crypto.randomBytes(6).toString('hex')}`), '--token-file', tokenFile], { FACADE_AGENTS_WAIT_MS: '700' });
+		clients.push(waiting);
+		const start = Date.now();
+		await waiting.initialize();
+		const waited = Date.now() - start;
+		const status = await waiting.call('facade_status');
+
+		assert.deepStrictEqual({ waited: waited >= 600 && waited < 10_000, why: status.text.includes('Facade is not reachable (') }, { waited: true, why: true });
 	});
 
 	test('a window that does not answer its hello - stopped in a debugger, say - is waited for no longer than one that is not there', async () => {

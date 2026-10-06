@@ -60,23 +60,27 @@ export class PipeEndpoint<C> {
 		return this.server.path;
 	}
 
-	/** An agent's MCP server: the shim, run as Node, with the file that holds the agent's token. */
-	mcpServer(tokenFile: string): McpServerLaunch {
+	/** An agent's MCP server: the shim, run as Node, with the file that holds the agent's token; it waits `waitMs` for the window. */
+	mcpServer(tokenFile: string, waitMs: number): McpServerLaunch {
 		return {
 			command: this.runtime,
 			args: [this.shim, 'mcp', '--pipe', this.pipe, '--token-file', tokenFile],
-			env: { ELECTRON_RUN_AS_NODE: '1' }
+			env: { ELECTRON_RUN_AS_NODE: '1', FACADE_AGENTS_WAIT_MS: String(waitMs) }
 		};
 	}
 
 	/**
 	 * An MCP server the same for every agent, for a CLI that reads its servers from a file every agent
-	 * in a worktree shares: it finds the window and the agent from `FACADE_AGENTS_PIPE` and
-	 * `FACADE_AGENTS_TOKEN` in the agent's environment, and waits for the window through a reload as
-	 * an agent's own does.
+	 * in a worktree shares: it finds the window and the agent from the agent's environment, `agentEnv`,
+	 * and waits for the window through a reload as an agent's own does.
 	 */
 	sharedMcpServer(): McpServerLaunch {
 		return { command: this.runtime, args: [this.shim, 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } };
+	}
+
+	/** What an agent whose CLI starts `sharedMcpServer` has in its environment: this pipe, its token, and how long its server waits for the window. */
+	agentEnv(token: string, waitMs: number): { readonly [name: string]: string } {
+		return { FACADE_AGENTS_PIPE: this.pipe, FACADE_AGENTS_TOKEN: token, FACADE_AGENTS_WAIT_MS: String(waitMs) };
 	}
 
 	/** Stops listening, and removes the window record if it is still this window's. */

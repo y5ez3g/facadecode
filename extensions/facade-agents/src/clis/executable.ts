@@ -3,11 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { Environment, InstalledCli } from './cli';
+import { Environment } from './cli';
 
 /**
  * The script npm's shim for a package's command runs with Node, and nothing between the two: `"%_prog%"
@@ -23,8 +22,6 @@ const NODE_EXECUTABLE = /\.(?:exe|com)$/i;
  * through it can run commands or lose what follows.
  */
 const CMD_SPECIAL = /["%^&|<>!()\r\n]/;
-/** How long a CLI may take to list its models, which it may fetch from its service. */
-const LIST_TIMEOUT_MS = 30_000;
 
 /** The person's home folder as the operating system says it in `env`: where the CLIs keep their settings. */
 export function homeOf(env: Environment = process.env): string {
@@ -115,38 +112,4 @@ export function launchTarget(file: string, platform: NodeJS.Platform = process.p
 /** Whether `arg` could not go through cmd.exe as it is (`throughCmd`). */
 export function unsafeForCmd(arg: string): boolean {
 	return CMD_SPECIAL.test(arg);
-}
-
-/**
- * The ids of the models a CLI on this machine lists, for a CLI whose definition says how; undefined
- * when it cannot list them, lists none, or does not answer in time.
- */
-export async function cliModels(installed: InstalledCli): Promise<readonly string[] | undefined> {
-	const list = installed.cli.listModels;
-	if (!list) {
-		return undefined;
-	}
-	const output = await run(installed, list.args, LIST_TIMEOUT_MS);
-	const models = output === undefined ? undefined : list.parse(output);
-	return models?.length ? models : undefined;
-}
-
-/** What a CLI prints for `args`; undefined when it fails, or does not finish within `timeoutMs`. */
-function run(installed: InstalledCli, args: readonly string[], timeoutMs: number): Promise<string | undefined> {
-	const target = launchTarget(installed.executable);
-	// cmd.exe could read a % in the path as a variable.
-	if (target.throughCmd && target.executable.includes('%')) {
-		return Promise.resolve(undefined);
-	}
-	const command = target.throughCmd
-		// The path in quotes, as a path with spaces would not run otherwise, and the whole line in quotes again, which /s takes off.
-		? { file: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', `""${target.executable}" ${args.join(' ')}"`] }
-		: { file: target.executable, args: [...target.args, ...args] };
-	return new Promise(resolve => {
-		try {
-			execFile(command.file, command.args, { windowsHide: true, timeout: timeoutMs, windowsVerbatimArguments: target.throughCmd }, (err, stdout) => resolve(err ? undefined : stdout));
-		} catch {
-			resolve(undefined);
-		}
-	});
 }

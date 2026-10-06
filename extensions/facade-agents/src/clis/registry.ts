@@ -5,7 +5,7 @@
 
 import { antigravityCli } from './antigravity';
 import { claudeCli } from './claude';
-import { AgentCli, Environment, InstalledCli } from './cli';
+import { AgentCli, CliConfig, Environment, InstalledCli } from './cli';
 import { codexCli } from './codex';
 import { which } from './executable';
 import { museCli } from './muse';
@@ -17,13 +17,17 @@ export function knownClis(): readonly AgentCli[] {
 	return AGENT_CLIS;
 }
 
-/** The CLIs Facade knows that this machine has. */
-export function installedClis(env: Environment = process.env): InstalledCli[] {
+/**
+ * The CLIs Facade knows that this machine has, each as `configFor` says the person has Facade start it:
+ * the file its `path` names, else its command where PATH has it.
+ */
+export function installedClis(configFor: (cli: AgentCli) => CliConfig = cli => cli.defaults, env: Environment = process.env): InstalledCli[] {
 	const installed: InstalledCli[] = [];
 	for (const cli of AGENT_CLIS) {
-		const executable = which(cli.command, env);
+		const config = configFor(cli);
+		const executable = which(config.path || cli.command, env);
 		if (executable) {
-			installed.push({ cli, executable });
+			installed.push({ cli, config, executable });
 		}
 	}
 	return installed;

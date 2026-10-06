@@ -9,25 +9,24 @@ import * as l10n from '@vscode/l10n';
 import { messageOf } from '../base/errors';
 import { isEqualPath } from '../base/files';
 import { withFileLock } from '../base/lock';
-import { AgentCli, InstalledCli } from '../clis/cli';
+import { AgentCli, Environment, InstalledCli } from '../clis/cli';
+import { whyNotInstalled } from '../clis/config';
+import { writeTrust } from '../clis/trust';
 import { Caller, Exit, ExitKind, isLive, LiveProcess, MadeWorktree, Process, ProcessState, YOU_PID } from '../record/events';
 import { injectedFile } from '../record/paths';
 import { agentName, nameOfWorktree, ProcessTable } from '../record/processes';
-import { AnswerStore, Consent } from './consent';
-import { FacadeError, FullAccessRefusedError } from './errors';
+import { FacadeError } from './errors';
 import { Injections } from './injections';
 import { Launcher } from './launch';
-import { AgentSetup, CliCatalog, Disposable, Ports, Repository, TerminalEnd } from './ports';
+import { AgentSetup, CliCatalog, Disposable, Ports, Repository, TerminalEnd, Timing } from './ports';
 
 /**
  * How often, and how many times, the folders Facade made that a process of an exited agent still had
- * in use are tried again: two minutes, past the minute an MCP server of Facade's waits for its window.
- * The next window to start tries too.
+ * in use are tried again: three minutes, past the two an MCP server of Facade's waits for its window
+ * where the person sets nothing else. The next window to start tries too.
  */
-const TAKE_BACK_AGAIN_MS = 10_000;
+const TAKE_BACK_AGAIN_MS = 15_000;
 const TAKE_BACK_TRIES = 12;
-/** How long the models a CLI listed are taken as its models before it is asked again. */
-const MODELS_KEPT_MS = 10 * 60_000;
 /** A PID, as a tool is given one. */
 const PID = /^\d+$/;
 
@@ -37,22 +36,20 @@ export interface FacadeOptions {
 	readonly ports: Ports;
 	readonly clis: CliCatalog;
 	readonly setup: AgentSetup;
-	/** Where the person's answers about full access are kept for every window. */
-	readonly answers: AnswerStore;
 	readonly log: (message: string) => void;
 	/** The record of the files Facade put into folders, which every window shares: by default `~/.facade/injected.json`. */
 	readonly injected?: string;
-	/** How long a new process may take to come up, where not two minutes. */
-	readonly startTimeoutMs?: number;
-	/** How long after its MCP server's hello a CLI told of its task in its terminal is typed into, where not two seconds. */
-	readonly taskSettleMs?: number;
+	/** How long the core waits, as the person sets it; where left out, two minutes for a new process to come up. */
+	readonly timing?: () => Timing;
 }
 
-/** What a caller asks `spawn` for: the CLI and model, the task, where the child works, and its name. */
+/** What a caller asks `spawn` for: the CLI, its model and how hard it thinks, the task, where the child works, and its name. */
 export interface SpawnRequest {
 	/** The CLI, by its id. */
 	readonly cli: string;
+	/** The model and the effort as the CLI takes them: Facade passes them on as they are, and the CLI refuses one it does not have. */
 	readonly model: string;
+	readonly effort: string;
 	/** Its task, if it is given one. */
 	readonly prompt?: string;
 	/** Omitted: the caller's folder; `new`: a new worktree on the branch `name`; else a worktree of the caller's repository, by name. */
@@ -68,6 +65,7 @@ export interface Spawned {
 	readonly name: string;
 	readonly cli: string;
 	readonly model: string;
+	readonly effort: string;
 	readonly worktree: string;
 	readonly folder: string;
 	/** Whether its worktree was made for it, on the new branch `worktree`. */
@@ -83,6 +81,8 @@ export interface ProcessRow {
 	readonly state: ProcessState;
 	readonly cli: string;
 	readonly model: string;
+	/** None for a process a ledger of an older Facade recorded. */
+	readonly effort?: string;
 	readonly worktree: string;
 	readonly folder: string;
 	readonly startTime: number;
@@ -118,10 +118,7 @@ export class Facade implements Disposable {
 	private readonly disposables: Disposable[] = [];
 	/** What this window put into folders for its agents, beside what other windows did. */
 	private readonly injections: Injections;
-	private readonly consent: Consent;
 	private readonly launcher: Launcher;
-	/** The models each CLI that lists them listed last, and when. */
-	private readonly modelLists = new Map<string, { readonly time: number; readonly models: readonly string[] }>();
 	/** When the folders a process had in use are tried again, while some are. */
 	private takingBack: ReturnType<typeof setTimeout> | undefined;
 	private takeBackTriesLeft = 0;
@@ -131,15 +128,13 @@ export class Facade implements Disposable {
 		this.table = options.table;
 		this.ports = options.ports;
 		this.injections = new Injections(options.injected ?? injectedFile(), this.table.dir, message => this.log(message), text => this.ports.person.tell(text, undefined));
-		this.consent = new Consent(options.answers, this.ports.person);
 		this.launcher = new Launcher({
 			table: this.table,
 			ports: this.ports,
 			clis: options.clis,
 			setup: options.setup,
 			injections: this.injections,
-			...(options.startTimeoutMs !== undefined ? { startTimeoutMs: options.startTimeoutMs } : {}),
-			...(options.taskSettleMs !== undefined ? { taskSettleMs: options.taskSettleMs } : {}),
+			...(options.timing ? { timing: options.timing } : {}),
 			terminalOf: process => this.terminalOf(process),
 			fail: (process, reason) => this.fail(process, reason),
 			log: message => this.log(message)
@@ -194,13 +189,19 @@ export class Facade implements Disposable {
 	 * Starts a child of the caller in its own UI: beside it, in a worktree of its repository, or in a new
 	 * worktree on the branch `name`, at the caller's HEAD. Answers once the child is up, with its PID; a
 	 * child that exits before fails the call. Once begun, a spawn is carried through: a caller that exits
-	 * meanwhile leaves its child to the person.
+	 * meanwhile leaves its child to the person. Its model and effort go to its CLI as they are: the CLI is
+	 * the one that knows which it has.
 	 */
 	async spawn(caller: Caller, request: SpawnRequest, progress?: (message: string) => void): Promise<Spawned> {
 		const installed = this.installed(request.cli);
+		const { displayName } = installed.cli;
 		const model = request.model.trim();
 		if (!model) {
-			throw new FacadeError('INVALID', `model is required: one of ${installed.cli.displayName}'s models, as ${installed.cli.models[0]}.`);
+			throw new FacadeError('INVALID', `model is required: one of ${displayName}'s models, as ${displayName} takes it.`);
+		}
+		const effort = request.effort.trim();
+		if (!effort) {
+			throw new FacadeError('INVALID', `effort is required: how hard the child thinks, as ${displayName} takes it - low, medium, high and so on.`);
 		}
 		const name = request.name === undefined ? undefined : this.nameOf(request.name);
 		const home = this.processOf(caller)?.folder ?? request.folder;
@@ -210,12 +211,8 @@ export class Facade implements Disposable {
 		// Everything that can refuse the call is asked before anything is made for it.
 		const place = await this.placeOf(caller, home, request.worktree, name);
 		this.stillOpen();
-		await this.checkModel(installed, model);
-		this.stillOpen();
-		if (!await this.consent.allows(installed.cli, caller.pid === YOU_PID)) {
-			throw new FullAccessRefusedError(installed.cli.displayName);
-		}
-		this.stillOpen();
+		const env = this.environmentOf(installed);
+		this.launcher.check(installed, model, effort, home, request.prompt, env);
 
 		let folder: string;
 		let worktree: string;
@@ -233,13 +230,13 @@ export class Facade implements Disposable {
 			({ folder, worktree } = place);
 		}
 
-		// In a worktree Facade made, the CLI is given the person's trust in it, as they agreed.
+		// In a worktree Facade made, the CLI is given the person's trust in it, so that it does not stop to ask.
 		const made = this.table.madeWorktree(folder);
 		if (made) {
-			this.trust(installed.cli, made);
+			this.trust(installed, made, env);
 		}
-		const process = await this.launcher.launch(caller, installed, { name: name ?? nameOfWorktree(worktree), model, prompt: request.prompt, worktree, folder, trusted: !!made }, progress);
-		return { pid: process.pid, name: process.name, cli: process.cli, model: process.model, worktree: process.worktree, folder: process.folder, newWorktree: place.kind === 'new' };
+		const process = await this.launcher.launch(caller, installed, { name: name ?? nameOfWorktree(worktree), model, effort, prompt: request.prompt, worktree, folder, trusted: !!made }, progress);
+		return { pid: process.pid, name: process.name, cli: process.cli, model: process.model, effort, worktree: process.worktree, folder: process.folder, newWorktree: place.kind === 'new' };
 	}
 
 	/**
@@ -264,6 +261,7 @@ export class Facade implements Disposable {
 				state: process.state,
 				cli: process.cli,
 				model: process.model,
+				...(process.effort !== undefined ? { effort: process.effort } : {}),
 				worktree: process.worktree,
 				folder: process.folder,
 				startTime: process.startTime,
@@ -420,15 +418,17 @@ export class Facade implements Disposable {
 		}
 	}
 
-	/** Gives a CLI that keeps it in a file the person's trust in a worktree Facade made, as they agreed. */
-	private trust(cli: AgentCli, made: MadeWorktree): void {
-		if (!cli.trust) {
-			return;
-		}
+	/**
+	 * Gives a CLI that keeps it in a file the person's trust in a worktree Facade made, as its
+	 * `launch.trust` says: in the file the CLI reads in `env`, the environment it starts with.
+	 */
+	private trust({ cli, config }: InstalledCli, made: MadeWorktree, env: Environment): void {
 		try {
 			// Under a lock every window takes: two windows trusting worktrees at once each keep the other's.
-			// Where the CLI keeps it, as its terminal's environment says.
-			this.log(cli.trust.write({ folder: made.folder, repository: made.repository }, withFileLock, this.options.clis.environment?.()));
+			const done = writeTrust(cli, config, { folder: made.folder, repository: made.repository }, withFileLock, env);
+			if (done) {
+				this.log(done);
+			}
 		} catch (err) {
 			// It asks on its own screen instead, where the person answers.
 			this.log(`${cli.displayName}'s trust in ${made.folder} could not be written: ${messageOf(err)}`);
@@ -480,46 +480,23 @@ export class Facade implements Disposable {
 		tryAgain();
 	}
 
-	/**
-	 * Refuses a model a CLI that lists its models does not list: it would start with a model of its own
-	 * and not say so. The list is asked for once in a while; a CLI that lists none - offline, say - has
-	 * nothing checked, and the log says so.
-	 */
-	private async checkModel(installed: InstalledCli, model: string): Promise<void> {
-		const { cli } = installed;
-		if (!cli.listModels) {
-			return;
-		}
-		let listed = this.modelLists.get(cli.id);
-		if (!listed || Date.now() - listed.time > MODELS_KEPT_MS) {
-			let models: readonly string[] | undefined;
-			try {
-				models = await this.options.clis.modelsOf(installed);
-			} catch (err) {
-				this.log(`${cli.displayName} could not list its models: ${messageOf(err)}`);
-			}
-			if (!models?.length) {
-				this.log(`${cli.displayName} lists no models now: ${model} is not checked.`);
-				return;
-			}
-			listed = { time: Date.now(), models };
-			this.modelLists.set(cli.id, listed);
-		}
-		if (!listed.models.includes(model)) {
-			throw new FacadeError('INVALID', `${cli.displayName} has no model ${model}: it would start with a model of its own and not say so. Its models: ${listed.models.join(', ')}.`);
-		}
-	}
-
-	/** The CLI with the id `id` on this machine. */
+	/** The CLI with the id `id` on this machine; where it has none, why, and the CLIs it has. */
 	private installed(id: string): InstalledCli {
 		const installed = this.options.clis.installed();
 		const found = installed.find(each => each.cli.id === id);
 		if (!found) {
+			const known = this.cliOf(id);
+			const why = known ? `: ${whyNotInstalled(known, this.options.clis.configOf(known))}` : '';
 			throw new FacadeError('UNAVAILABLE', installed.length
-				? `Facade cannot start ${id} here. It starts: ${installed.map(each => each.cli.id).join(', ')}.`
-				: `Facade cannot start ${id} here: none of the CLIs it starts is on this machine's PATH.`);
+				? `Facade cannot start ${id} here${why}. It starts: ${installed.map(each => each.cli.id).join(', ')}.`
+				: `Facade cannot start ${id} here${why}. None of the CLIs it starts is on this machine.`);
 		}
 		return found;
+	}
+
+	/** The environment a CLI starts with: the terminals', with what its launch sets in it. */
+	private environmentOf(installed: InstalledCli): Environment {
+		return { ...this.options.clis.environment(), ...installed.config.launch.environment };
 	}
 
 	/** The process a tool names: by its PID, or by `@name` where one process that has not exited has that name. */

@@ -21,7 +21,7 @@ const LAST_PID = 'last-pid';
 const ANOTHERS_LOCK = '424242 0123456789ab';
 
 function newProcess(name: string, ppid = YOU_PID, worktree = 'main'): NewProcess {
-	return { name, ppid, cli: 'arg', model: 'small', worktree, folder: '/lab' };
+	return { name, ppid, cli: 'arg', model: 'small', effort: 'high', worktree, folder: '/lab' };
 }
 
 /** A worktree the person had Facade make, called `name`. */
@@ -390,7 +390,9 @@ suite('Record: the ledger on disk', () => {
 		const said = `Line 2 of ${file} is not an event Facade can read, so the workspace's agents are not loaded. Move the file away to start with no agents.`;
 
 		assert.deepStrictEqual({
-			asWritten: [broken(started({})), broken(worktree({}))],
+			asWritten: [broken(started({ effort: 'high' })), broken(worktree({}))],
+			asAnOlderFacadeWroteIt: broken(started({})),
+			anEmptyEffort: broken(started({ effort: '' })),
 			notJson: broken('{"v":2,'),
 			unknownKind: broken('{"v":2,"seq":2,"time":1,"type":"process.later","pid":2}'),
 			wrongField: broken('{"v":2,"seq":2,"time":1,"type":"process.exited","pid":2,"kind":"vanished","reason":"?"}'),
@@ -409,6 +411,8 @@ suite('Record: the ledger on disk', () => {
 			lockLeft: fs.existsSync(path.join(temp.dir, LOCK))
 		}, {
 			asWritten: ['opened', 'opened'],
+			asAnOlderFacadeWroteIt: 'opened',
+			anEmptyEffort: said,
 			notJson: said,
 			unknownKind: said,
 			wrongField: said,

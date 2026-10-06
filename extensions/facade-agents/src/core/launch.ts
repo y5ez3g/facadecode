@@ -8,27 +8,30 @@ import * as path from 'path';
 import * as l10n from '@vscode/l10n';
 import { DeferredPromise, timeout } from '../base/async';
 import { messageOf } from '../base/errors';
-import { AgentCli, Injected, InstalledCli } from '../clis/cli';
+import { AgentCli, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec } from '../clis/cli';
 import { launchTarget, unsafeForCmd } from '../clis/executable';
+import { trustTarget } from '../clis/trust';
 import { Caller, isLive, Process, YOU_PID } from '../record/events';
 import { ProcessTable } from '../record/processes';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
-import { AgentSetup, CliCatalog, Disposable, Ports } from './ports';
+import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
 
-/** How long a new process has to come up - its MCP server's hello - before it is ended as failed. */
-const START_TIMEOUT_MS = 120_000;
-/** How long after its MCP server's hello a CLI told of its task in its terminal is typed into: its UI takes keys a moment later. */
-const TASK_SETTLE_MS = 2_000;
+/**
+ * How long Facade waits where the person sets nothing else: two minutes, for a new process to come up,
+ * and for an agent's MCP server to find the window again.
+ */
+export const START_TIMEOUT_MS = 120_000;
 
 /** A child's start, as `spawn` decided it. */
 export interface Run {
 	readonly name: string;
 	readonly model: string;
+	readonly effort: string;
 	readonly prompt?: string;
 	readonly worktree: string;
 	readonly folder: string;
-	/** In a worktree Facade made, whose trust it gives the CLI as the person agreed. */
+	/** In a worktree Facade made, whose trust the CLI is given. */
 	readonly trusted: boolean;
 }
 
@@ -39,10 +42,8 @@ export interface LaunchContext {
 	readonly clis: CliCatalog;
 	readonly setup: AgentSetup;
 	readonly injections: Injections;
-	/** How long a new process may take to come up, where not two minutes. */
-	readonly startTimeoutMs?: number;
-	/** How long after its MCP server's hello a CLI told of its task in its terminal is typed into, where not two seconds. */
-	readonly taskSettleMs?: number;
+	/** How long the core waits, as the person sets it. */
+	readonly timing?: () => Timing;
 	/** The name of the terminal a process runs in. */
 	terminalOf(process: Process): string;
 	/** Ends a process that did not come up, or could not be told of its task: recorded as failed, its terminal closed. */
@@ -86,21 +87,48 @@ export class Launcher implements Disposable {
 	}
 
 	/**
+	 * Throws where `installed` could not be started on `model` at `effort` with `prompt` as the person has
+	 * it set up, in its environment `env` - a `${name}` its launch or its trust has no value for, or an
+	 * argument that would not reach a CLI Windows starts through cmd.exe as it is - so that a spawn refuses
+	 * before anything is made for it. The launch is computed, not run; the model and the effort are the
+	 * CLI's to take or refuse.
+	 */
+	check(installed: InstalledCli, model: string, effort: string, folder: string, prompt: string | undefined, env: Environment): void {
+		const inTerminal = installed.cli.task === 'terminal' || launchTarget(installed.executable).throughCmd;
+		try {
+			this.launchOf(installed, {
+				folder,
+				// The arguments for a worktree Facade made are checked too.
+				trusted: true,
+				...(!inTerminal && prompt !== undefined ? { prompt } : {}),
+				model,
+				effort,
+				mcp: { command: 'facade', args: [], env: {} },
+				skills: [],
+				runDir: this.context.table.runsDir,
+				slug: 'check'
+			});
+			trustTarget(installed.cli, installed.config, { folder, repository: folder }, env);
+		} catch (err) {
+			throw new FacadeError('UNAVAILABLE', `${installed.cli.displayName} cannot be started as its settings are: ${messageOf(err)}`);
+		}
+	}
+
+	/**
 	 * Records `run` as a new child of the caller, starts its CLI in its terminal, and waits until it is up.
 	 * Should anything fail on the way, the child is ended as failed, and the call fails with why.
 	 */
 	async launch(caller: Caller, installed: InstalledCli, run: Run, progress: ((message: string) => void) | undefined): Promise<Process> {
 		const { table, ports, setup } = this.context;
 		const { cli } = installed;
-		const target = launchTarget(installed.executable);
 		// No text of an agent's or the person's goes through cmd.exe, where it could run commands: a CLI
 		// Windows starts so is told of its task in its terminal, as a CLI whose first conversation has no
 		// MCP tools is.
-		const inTerminal = cli.task === 'terminal' || target.throughCmd;
+		const inTerminal = cli.task === 'terminal' || launchTarget(installed.executable).throughCmd;
 		const { prompt } = run;
 		const first = prompt === undefined ? undefined : (pid: number) => `${setup.opening({ pid, name: run.name, cliName: cli.displayName }, caller)}\n\n${prompt}`;
 		this.stillOpen();
-		const started = table.start({ name: run.name, ppid: caller.pid, cli: cli.id, model: run.model, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}) });
+		const started = table.start({ name: run.name, ppid: caller.pid, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}) });
 		const { process } = started;
 		const startup = this.watch(process, caller.pid);
 		const terminal = this.context.terminalOf(process);
@@ -108,22 +136,17 @@ export class Launcher implements Disposable {
 			ports.person.tell(l10n.t("@{0} (PID {1}) exited while it started @{2} (PID {3}), which is yours now.", caller.name, caller.pid, process.name, process.pid), terminal);
 		}
 		try {
-			const spec = cli.launch({
+			const { spec, args, throughCmd } = this.launchOf(installed, {
 				folder: run.folder,
 				trusted: run.trusted,
 				...(!inTerminal && first ? { prompt: first(process.pid) } : {}),
 				model: run.model,
+				effort: run.effort,
 				mcp: cli.sharedServer ? setup.sharedMcpServer() : setup.mcpServer(started.tokenFile),
 				skills: setup.skills(),
-				...(cli.efforts ? { effort: effortOf(cli.efforts, this.context.clis.effortFor(cli.id)) } : {}),
 				runDir: table.runsDir,
 				slug: String(process.pid)
-			}, target.executable);
-			const args = [...target.args, ...spec.args];
-			const unsafe = target.throughCmd ? args.find(unsafeForCmd) : undefined;
-			if (unsafe !== undefined) {
-				throw new Error(`${cli.displayName} is ${spec.executable} on this machine, which Windows starts through cmd.exe, and ${JSON.stringify(unsafe)} would not reach it as it is. Install it with its own installer, which puts an .exe on PATH.`);
-			}
+			});
 			for (const file of spec.files) {
 				fs.mkdirSync(path.dirname(file.path), { recursive: true });
 				fs.writeFileSync(file.path, file.content, { mode: 0o600 });
@@ -131,8 +154,8 @@ export class Launcher implements Disposable {
 			await this.inject(run.folder, spec.injected, cli.displayName);
 			this.stillOpen();
 			// A server the same for every launch finds the agent from its environment.
-			const env = cli.sharedServer ? { ...spec.env, FACADE_AGENTS_PIPE: setup.pipe(), FACADE_AGENTS_TOKEN: started.token } : spec.env;
-			this.context.log(`Starting ${terminal} in ${run.folder}, the worktree ${run.worktree}${target.throughCmd ? ', through cmd.exe' : ''}.`);
+			const env = cli.sharedServer ? { ...spec.env, ...setup.agentEnv(started.token) } : spec.env;
+			this.context.log(`Starting ${terminal} in ${run.folder}, the worktree ${run.worktree}${throughCmd ? ', through cmd.exe' : ''}.`);
 			progress?.(`Starting @${process.name}, PID ${process.pid}.`);
 			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.pid === YOU_PID });
 		} catch (err) {
@@ -184,6 +207,22 @@ export class Launcher implements Disposable {
 		return this.startups.get(pid)?.waiter;
 	}
 
+	/**
+	 * The launch of `installed` for `input`, as the person has it set up, with its arguments whole; throws
+	 * where one would not reach a CLI that Windows starts through cmd.exe as it is.
+	 */
+	private launchOf(installed: InstalledCli, input: Omit<LaunchInput, 'config'>): { readonly spec: LaunchSpec; readonly args: readonly string[]; readonly throughCmd: boolean } {
+		const { cli } = installed;
+		const target = launchTarget(installed.executable);
+		const spec = cli.launch({ ...input, config: installed.config }, target.executable);
+		const args = [...target.args, ...spec.args];
+		const unsafe = target.throughCmd ? args.find(unsafeForCmd) : undefined;
+		if (unsafe !== undefined) {
+			throw new Error(`${cli.displayName} is ${spec.executable} on this machine, which Windows starts through cmd.exe, and ${JSON.stringify(unsafe)} would not reach it as it is. Install it with its own installer, which puts an .exe on PATH.`);
+		}
+		return { spec, args, throughCmd: target.throughCmd };
+	}
+
 	/** A process exited: the spawn that waits for it fails with why. */
 	ended(pid: number, reason: string): void {
 		const startup = this.startups.get(pid);
@@ -196,7 +235,7 @@ export class Launcher implements Disposable {
 
 	/** Waits for a starting process to come up, for the time it has: then it is ended as failed. */
 	private watch(process: Process, waiter: number | undefined): Startup {
-		const ms = this.context.startTimeoutMs ?? START_TIMEOUT_MS;
+		const ms = this.timing().startTimeoutMs;
 		const startup: Startup = {
 			up: new DeferredPromise<void>(),
 			timer: setTimeout(() => {
@@ -235,14 +274,15 @@ export class Launcher implements Disposable {
 			if (!cli) {
 				throw new Error(`Facade does not know the CLI ${process.cli}`);
 			}
-			await timeout(this.context.taskSettleMs ?? TASK_SETTLE_MS);
+			const { taskDelay, enterDelay } = this.context.clis.configOf(cli).launch;
+			await timeout(taskDelay);
 			if (!this.isRunning(process)) {
 				return;
 			}
 			if (!await ports.terminals.type(terminal, `[facade] Your task is in ${taskFile}: read that file, then do what it says.`)) {
 				throw new Error('its terminal was not there');
 			}
-			await timeout(cli.enterDelayMs);
+			await timeout(enterDelay);
 			if (!this.isRunning(process)) {
 				return;
 			}
@@ -266,6 +306,11 @@ export class Launcher implements Disposable {
 			clearTimeout(startup.timer);
 			startup.up.complete();
 		}
+	}
+
+	/** How long the core waits, as the person sets it now. */
+	private timing(): Timing {
+		return this.context.timing?.() ?? { startTimeoutMs: START_TIMEOUT_MS };
 	}
 
 	/** Whether the window is open and `process` has not exited: what is done for it goes on. */
@@ -304,9 +349,4 @@ export class Launcher implements Disposable {
 
 function didNotStart(cli: AgentCli, process: Process, reason: string): FacadeError {
 	return new FacadeError('FAILED', `${cli.displayName} did not start as @${process.name} (PID ${process.pid}): ${reason}`);
-}
-
-/** The level a CLI thinks at: the person's, where it is one of its levels, else its own. */
-function effortOf(efforts: NonNullable<AgentCli['efforts']>, set: string | undefined): string {
-	return set !== undefined && efforts.levels.includes(set) ? set : efforts.byDefault;
 }

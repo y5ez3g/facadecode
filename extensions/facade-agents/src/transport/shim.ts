@@ -8,12 +8,10 @@ import { timeout } from '../base/async';
 import { messageOf, stackOf } from '../base/errors';
 import { McpStdioServer } from './mcpServer';
 import { PipeClient, PipeClientError } from './pipe';
-import { Hello, helloOf, McpTool, ToolResult, toolResultOf } from './protocol';
+import { Hello, helloOf, MAX_TIMER_MS, McpTool, ToolResult, toolResultOf, WINDOW_WAIT_MS } from './protocol';
 
 /** The version the MCP server gives of itself. */
 const VERSION = '0.2.0';
-/** How long an agent's MCP server waits for the window, as the agent starts and through a reload. */
-const AGENT_WAIT_MS = 60_000;
 /** How long a script waits for the window: it was started by hand, and should say at once that there is none. */
 const SCRIPT_WAIT_MS = 5_000;
 /** How often the window is tried again while it is away. */
@@ -56,15 +54,18 @@ function connectionOf(args: readonly string[]): Connection | string {
 	return 'it was started without a pipe and a token';
 }
 
-/** A wait in milliseconds, which the environment variable `name` can shorten for tests. */
+/**
+ * A wait in milliseconds, as the environment variable `name` sets it - an agent's launch, as the person
+ * set it, or a test - else `ms`; never longer than a timer takes.
+ */
 function waitFromEnv(name: string, ms: number): number {
 	const value = Number(process.env[name]);
-	return Number.isFinite(value) && value > 0 ? value : ms;
+	return Math.min(Number.isFinite(value) && value > 0 ? value : ms, MAX_TIMER_MS);
 }
 
 async function serveMcp(args: readonly string[]): Promise<void> {
 	const isAgent = args.includes('--token-file') || args.includes('--agent');
-	const waitMs = isAgent ? AGENT_WAIT_MS : waitFromEnv('FACADE_SCRIPT_WAIT_MS', SCRIPT_WAIT_MS);
+	const waitMs = isAgent ? waitFromEnv('FACADE_AGENTS_WAIT_MS', WINDOW_WAIT_MS) : waitFromEnv('FACADE_SCRIPT_WAIT_MS', SCRIPT_WAIT_MS);
 	const folder = process.cwd();
 	let hello: Hello | undefined;
 	let unavailable = '';
@@ -185,6 +186,9 @@ async function serveMcp(args: readonly string[]): Promise<void> {
  *   its environment.
  * - `shim.js mcp`, with FACADE_AGENTS_PIPE and FACADE_AGENTS_TOKEN set: a script, acting as whoever
  *   holds the token.
+ *
+ * An agent's waits for the window as long as FACADE_AGENTS_WAIT_MS says, which its launch sets as the
+ * person set it; a script, a few seconds.
  *
  * The MCP server forwards every tool call to the window over the pipe; the window decides what the
  * tools are and answers them. It keeps no state, so after a reload it simply connects again.

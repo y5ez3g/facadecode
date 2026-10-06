@@ -11,16 +11,16 @@ import { knownClis } from '../clis/registry';
 import { SpawnRequest } from '../core/facade';
 
 /**
- * Facade: Start Agent: the person picks the CLI, a model and a first message for the worktree on
- * screen, and the core starts it. A script gives any of them as the command's argument, `{ cli,
- * model, prompt, folder }`, and is asked only for the rest; `prompt: ''` starts the agent without a
- * first message.
+ * Facade: Start Agent: the person picks the CLI, and types a model, how hard it thinks and a first
+ * message, for the worktree on screen; the core starts it. A script gives any of them as the command's
+ * argument, `{ cli, model, effort, prompt, folder }`, and is asked only for the rest; `prompt: ''` starts
+ * the agent without a first message.
  */
 export async function askStartAgent(rawArgs: unknown, installed: readonly InstalledCli[]): Promise<SpawnRequest | undefined> {
 	const args = isJsonObject(rawArgs) ? rawArgs : {};
 	const title = vscode.l10n.t("Start Agent");
 	if (!installed.length) {
-		void vscode.window.showWarningMessage(vscode.l10n.t("Facade starts {0}, and none of them is on this machine's PATH.", new Intl.ListFormat(vscode.env.language, { type: 'conjunction' }).format(knownClis().map(cli => cli.displayName))));
+		void vscode.window.showWarningMessage(vscode.l10n.t("Facade starts {0}, and none of them is on this machine's PATH, or where its path setting says.", new Intl.ListFormat(vscode.env.language, { type: 'conjunction' }).format(knownClis().map(cli => cli.displayName))));
 		return undefined;
 	}
 
@@ -42,12 +42,14 @@ export async function askStartAgent(rawArgs: unknown, installed: readonly Instal
 		return undefined;
 	}
 
-	let model = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : undefined;
+	const { displayName } = chosen.cli;
+	const model = await given(args.model, () => vscode.window.showInputBox({ title, prompt: vscode.l10n.t("Which model for {0}? As its --model option takes it.", displayName), validateInput: required }));
 	if (!model) {
-		model = await vscode.window.showQuickPick(chosen.cli.models, { title, placeHolder: vscode.l10n.t("Which model for {0}?", chosen.cli.displayName) });
-		if (!model) {
-			return undefined;
-		}
+		return undefined;
+	}
+	const effort = await given(args.effort, () => vscode.window.showInputBox({ title, prompt: vscode.l10n.t("How hard should it think? As {0} takes it: low, medium, high and so on.", displayName), validateInput: required }));
+	if (!effort) {
+		return undefined;
 	}
 
 	let prompt = typeof args.prompt === 'string' ? args.prompt : undefined;
@@ -58,7 +60,20 @@ export async function askStartAgent(rawArgs: unknown, installed: readonly Instal
 		}
 	}
 
-	return { cli: chosen.cli.id, model, prompt: prompt.trim() || undefined, folder };
+	return { cli: chosen.cli.id, model, effort, prompt: prompt.trim() || undefined, folder };
+}
+
+/** What a script gave, trimmed, where it gave text; else what the person types, trimmed; undefined where they cancelled. */
+async function given(value: unknown, ask: () => Thenable<string | undefined>): Promise<string | undefined> {
+	if (typeof value === 'string' && value.trim()) {
+		return value.trim();
+	}
+	return (await ask())?.trim();
+}
+
+/** Refuses an empty answer: Facade passes no model or effort of its own. */
+function required(value: string): string | undefined {
+	return value.trim() ? undefined : vscode.l10n.t("Type one: Facade passes it to the CLI as it is.");
 }
 
 /**

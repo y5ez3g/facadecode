@@ -52,6 +52,7 @@ export interface NewProcess {
 	readonly ppid: number;
 	readonly cli: string;
 	readonly model: string;
+	readonly effort: string;
 	readonly worktree: string;
 	readonly folder: string;
 	/** The task of a CLI that is told of its task in its terminal, given its PID: written to a file of its own. */
@@ -171,6 +172,7 @@ export class ProcessTable {
 			ppid: process.ppid,
 			cli: process.cli,
 			model: process.model,
+			effort: process.effort,
 			worktree: process.worktree,
 			folder: process.folder,
 			...(taskFile !== undefined ? { taskFile } : {}),

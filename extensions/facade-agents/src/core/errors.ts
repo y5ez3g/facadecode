@@ -23,11 +23,3 @@ export class FacadeError extends Error {
 		this.name = 'FacadeError';
 	}
 }
-
-/** The person did not let Facade start a CLI at full access, the only way it starts agents. */
-export class FullAccessRefusedError extends FacadeError {
-	constructor(cli: string) {
-		super('REFUSED', `The person did not let Facade start ${cli} with full access, the only way it starts agents, so ${cli} is not started. Ask the person, or start another CLI: the person lets Facade start ${cli} by starting a ${cli} agent themselves, with Facade: Start Agent.`);
-		this.name = 'FullAccessRefusedError';
-	}
-}

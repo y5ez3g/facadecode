@@ -7,6 +7,7 @@ import * as l10n from '@vscode/l10n';
 import * as vscode from 'vscode';
 import { messageOf, stackOf } from './base/errors';
 import { AgentsService } from './host/service';
+import { registerShowLaunch } from './host/showLaunch';
 
 /**
  * Facade's agents: vendors' agent CLIs in their own UIs, in the worktrees of this window, run as
@@ -19,7 +20,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		l10n.config({ contents: vscode.l10n.bundle });
 	}
 	const log = vscode.window.createOutputChannel(vscode.l10n.t("Facade Agents"), { log: true });
-	context.subscriptions.push(log, vscode.commands.registerCommand('facade.agents.showLog', () => log.show()));
+	context.subscriptions.push(log, vscode.commands.registerCommand('facade.agents.showLog', () => log.show()), registerShowLaunch());
 
 	let service: AgentsService | undefined;
 	/** The service while it starts: the extension host can go meanwhile, as a folder window becomes a workspace. */
@@ -30,14 +31,14 @@ export function activate(context: vscode.ExtensionContext): void {
 	let starting: Promise<void> = Promise.resolve();
 	const sync = () => {
 		starting = starting.then(async () => {
-			const enabled = vscode.workspace.getConfiguration('facade.orchestration').get<boolean>('enabled', false);
+			const enabled = vscode.workspace.getConfiguration('facade.orchestration').get<boolean>('enabled', true);
 			if (enabled && !service) {
 				if (!context.storageUri) {
 					log.info('Facade agents need a folder or workspace open; nothing started.');
 					none = 'noFolder';
 					return;
 				}
-				const created = creating = new AgentsService(log, context.globalState, context.workspaceState);
+				const created = creating = new AgentsService(log, context.workspaceState);
 				try {
 					await created.start();
 					// Deactivated while it started: what it took since - the ledger's lock, the pipe - goes at once.

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { AgentCli, Environment, InstalledCli, McpLaunch, Skill } from '../clis/cli';
+import { AgentCli, CliConfig, Environment, InstalledCli, McpLaunch, Skill } from '../clis/cli';
 import { Caller } from '../record/events';
 
 /** What is let go of once the window closes. */
@@ -95,12 +95,10 @@ export interface Git {
 	untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>>;
 }
 
-/** What Facade tells, and asks, the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
+/** What Facade tells the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
 export interface Person {
 	/** A notice of Facade's for the person. Going to it shows `terminal`, the agent's it is about. */
 	tell(text: string, terminal: string | undefined): void;
-	/** A modal question, `detail` under `message`: true for `yes`, false for `no`, undefined when the person dismissed it. */
-	ask(message: string, detail: string, yes: string, no: string): Promise<boolean | undefined>;
 }
 
 /**
@@ -114,18 +112,22 @@ export interface Ports {
 	readonly person: Person;
 }
 
-/** The CLIs Facade knows, and those this machine has. */
+/** The CLIs Facade knows, those this machine has, and how the person has Facade start them: each read again at each use. */
 export interface CliCatalog {
-	/** Every CLI Facade knows, installed or not: what a process's CLI is called, and how it takes its keys. */
+	/** Every CLI Facade knows, installed or not: what a process's CLI is called. */
 	readonly known: readonly AgentCli[];
-	/** The CLIs this machine has, looked for again at each start. */
+	/** The CLIs this machine has. */
 	installed(): readonly InstalledCli[];
-	/** The models a CLI on this machine lists, for a CLI with `listModels`; undefined when it lists none. */
-	modelsOf(installed: InstalledCli): Promise<readonly string[] | undefined>;
-	/** The level the person set for a CLI to think at, by its id. */
-	effortFor(cli: string): string | undefined;
-	/** The environment the agents' terminals start with, which says where each CLI keeps its files; the extension host's own where left out. */
-	environment?(): Environment;
+	/** How the person has Facade start a CLI Facade knows. */
+	configOf(cli: AgentCli): CliConfig;
+	/** The environment the agents' terminals start with, before a launch's own: with it, where each CLI keeps its files. */
+	environment(): Environment;
+}
+
+/** How long the core waits, as the person sets it: read again at each use. */
+export interface Timing {
+	/** How long a new process has to come up - its MCP server's hello - before it is ended as failed: the person's timeout. */
+	readonly startTimeoutMs: number;
 }
 
 /** What every agent is given at its launch, and how it reaches the window. */
@@ -134,8 +136,8 @@ export interface AgentSetup {
 	mcpServer(tokenFile: string): McpLaunch;
 	/** How the MCP server of a CLI with `sharedServer` is started: the same for every agent, which it finds from its environment. */
 	sharedMcpServer(): McpLaunch;
-	/** The pipe this window listens on, for an agent that finds it from its environment. */
-	pipe(): string;
+	/** What an agent of a CLI with `sharedServer` has in its environment, given its token, for its MCP server to find the window and the agent by. */
+	agentEnv(token: string): { readonly [name: string]: string };
 	/** The skills every agent is handed, made for the CLIs this machine has then. */
 	skills(): readonly Skill[];
 	/** What a new process's first message says before its task: who it is, and who started it. */

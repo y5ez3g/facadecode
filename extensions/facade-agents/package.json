@@ -41,6 +41,11 @@
         "command": "facade.agents.showLog",
         "title": "%command.showLog%",
         "category": "%command.category%"
+      },
+      {
+        "command": "facade.agents.showLaunch",
+        "title": "%command.showLaunch%",
+        "category": "%command.category%"
       }
     ],
     "menus": {
@@ -51,24 +56,889 @@
         }
       ]
     },
-    "configuration": {
-      "title": "%config.title%",
-      "properties": {
-        "facade.orchestration.enabled": {
-          "type": "boolean",
-          "default": false,
-          "scope": "application",
-          "description": "%config.enabled%"
-        },
-        "facade.orchestration.muse.reasoningEffort": {
-          "type": "string",
-          "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
-          "default": "high",
-          "scope": "application",
-          "description": "%config.museReasoningEffort%"
+    "configuration": [
+      {
+        "id": "facade.orchestration",
+        "title": "%config.title%",
+        "order": 1,
+        "properties": {
+          "facade.orchestration.enabled": {
+            "type": "boolean",
+            "default": true,
+            "scope": "application",
+            "order": 1,
+            "markdownDescription": "%config.enabled%"
+          },
+          "facade.orchestration.timeout": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "default": 120,
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "%config.timeout%",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      },
+      {
+        "id": "facade.orchestration.claude",
+        "title": "%config.claude.title%",
+        "order": 2,
+        "properties": {
+          "facade.orchestration.claude.path": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "order": 1,
+            "markdownDescription": "%config.claude.path%"
+          },
+          "facade.orchestration.claude.launch": {
+            "type": "object",
+            "default": {},
+            "properties": {
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "warmUp": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "connect": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--mcp-config",
+                      "${mcpConfig}",
+                      "--strict-mcp-config",
+                      "--settings",
+                      "${settingsFile}",
+                      "--plugin-dir",
+                      "${pluginDir}"
+                    ]
+                  },
+                  "quiet": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "fullAccess": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--dangerously-skip-permissions"
+                    ]
+                  },
+                  "model": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--model",
+                      "${model}"
+                    ]
+                  },
+                  "effort": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--effort",
+                      "${effort}"
+                    ]
+                  },
+                  "extra": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "task": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--",
+                      "${task}"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "default": {
+                  "connect": [
+                    "--mcp-config",
+                    "${mcpConfig}",
+                    "--strict-mcp-config",
+                    "--settings",
+                    "${settingsFile}",
+                    "--plugin-dir",
+                    "${pluginDir}"
+                  ],
+                  "fullAccess": [
+                    "--dangerously-skip-permissions"
+                  ],
+                  "model": [
+                    "--model",
+                    "${model}"
+                  ],
+                  "effort": [
+                    "--effort",
+                    "${effort}"
+                  ],
+                  "task": [
+                    "--",
+                    "${task}"
+                  ]
+                },
+                "markdownDescription": "%config.launch.arguments%"
+              },
+              "environment": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default": {
+                  "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false",
+                  "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+                  "CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "0",
+                  "DISABLE_AUTOUPDATER": "1",
+                  "CLAUDE_CODE_AUTO_CONNECT_IDE": "false",
+                  "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL": "1"
+                },
+                "markdownDescription": "%config.launch.environment%"
+              },
+              "trust": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "arguments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "merge": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false,
+                "default": {
+                  "file": "${configFile}",
+                  "merge": {
+                    "projects": {
+                      "${repository}": {
+                        "hasTrustDialogAccepted": true
+                      }
+                    }
+                  }
+                },
+                "markdownDescription": "%config.launch.trust%"
+              },
+              "settings": {
+                "type": "object",
+                "default": {
+                  "skipDangerousModePermissionPrompt": true,
+                  "spinnerTipsEnabled": false,
+                  "emojiCompletionEnabled": false
+                },
+                "markdownDescription": "%config.claude.launch.settings%"
+              },
+              "enterDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 300,
+                "markdownDescription": "%config.launch.enterDelay%"
+              },
+              "taskDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 2000,
+                "markdownDescription": "%config.launch.taskDelay%"
+              }
+            },
+            "additionalProperties": false,
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "%config.claude.launch%",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      },
+      {
+        "id": "facade.orchestration.codex",
+        "title": "%config.codex.title%",
+        "order": 3,
+        "properties": {
+          "facade.orchestration.codex.path": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "order": 1,
+            "markdownDescription": "%config.codex.path%"
+          },
+          "facade.orchestration.codex.launch": {
+            "type": "object",
+            "default": {},
+            "properties": {
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "warmUp": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "connect": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "-c",
+                      "mcp_servers.facade.command=${mcpCommand}",
+                      "-c",
+                      "mcp_servers.facade.args=${mcpArgs}",
+                      "-c",
+                      "mcp_servers.facade.env=${mcpEnv}",
+                      "-c",
+                      "mcp_servers.facade.startup_timeout_sec=30",
+                      "-c",
+                      "mcp_servers.facade.tool_timeout_sec=3600",
+                      "-c",
+                      "mcp_servers.facade.required=true",
+                      "-c",
+                      "mcp_servers.facade.default_tools_approval_mode=\"approve\"",
+                      "--no-daemon"
+                    ]
+                  },
+                  "quiet": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "-c",
+                      "check_for_update_on_startup=false",
+                      "-c",
+                      "tui.show_tooltips=false",
+                      "-c",
+                      "notice.hide_rate_limit_model_nudge=true"
+                    ]
+                  },
+                  "fullAccess": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--dangerously-bypass-approvals-and-sandbox",
+                      "--dangerously-bypass-hook-trust"
+                    ]
+                  },
+                  "model": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--model",
+                      "${model}"
+                    ]
+                  },
+                  "effort": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "-c",
+                      "model_reasoning_effort=\"${effort}\""
+                    ]
+                  },
+                  "extra": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "task": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--",
+                      "${task}"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "default": {
+                  "connect": [
+                    "-c",
+                    "mcp_servers.facade.command=${mcpCommand}",
+                    "-c",
+                    "mcp_servers.facade.args=${mcpArgs}",
+                    "-c",
+                    "mcp_servers.facade.env=${mcpEnv}",
+                    "-c",
+                    "mcp_servers.facade.startup_timeout_sec=30",
+                    "-c",
+                    "mcp_servers.facade.tool_timeout_sec=3600",
+                    "-c",
+                    "mcp_servers.facade.required=true",
+                    "-c",
+                    "mcp_servers.facade.default_tools_approval_mode=\"approve\"",
+                    "--no-daemon"
+                  ],
+                  "quiet": [
+                    "-c",
+                    "check_for_update_on_startup=false",
+                    "-c",
+                    "tui.show_tooltips=false",
+                    "-c",
+                    "notice.hide_rate_limit_model_nudge=true"
+                  ],
+                  "fullAccess": [
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--dangerously-bypass-hook-trust"
+                  ],
+                  "model": [
+                    "--model",
+                    "${model}"
+                  ],
+                  "effort": [
+                    "-c",
+                    "model_reasoning_effort=\"${effort}\""
+                  ],
+                  "task": [
+                    "--",
+                    "${task}"
+                  ]
+                },
+                "markdownDescription": "%config.launch.arguments%"
+              },
+              "environment": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default": {},
+                "markdownDescription": "%config.launch.environment%"
+              },
+              "trust": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "arguments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "merge": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false,
+                "dependencies": {
+                  "file": [
+                    "merge"
+                  ],
+                  "merge": [
+                    "file"
+                  ]
+                },
+                "default": {
+                  "arguments": [
+                    "-c",
+                    "projects={ ${folder} = { trust_level = \"trusted\" } }"
+                  ]
+                },
+                "markdownDescription": "%config.launch.trust%"
+              },
+              "enterDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 300,
+                "markdownDescription": "%config.launch.enterDelay%"
+              },
+              "taskDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 2000,
+                "markdownDescription": "%config.launch.taskDelay%"
+              }
+            },
+            "additionalProperties": false,
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "%config.codex.launch%",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      },
+      {
+        "id": "facade.orchestration.antigravity",
+        "title": "%config.antigravity.title%",
+        "order": 4,
+        "properties": {
+          "facade.orchestration.antigravity.path": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "order": 1,
+            "markdownDescription": "%config.antigravity.path%"
+          },
+          "facade.orchestration.antigravity.launch": {
+            "type": "object",
+            "default": {},
+            "properties": {
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "warmUp": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "-i",
+                      "Reply with the single word ready, and nothing else."
+                    ]
+                  },
+                  "connect": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "quiet": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "fullAccess": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--mode",
+                      "accept-edits",
+                      "--dangerously-skip-permissions"
+                    ]
+                  },
+                  "model": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--model",
+                      "${model}"
+                    ]
+                  },
+                  "effort": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--effort",
+                      "${effort}"
+                    ]
+                  },
+                  "extra": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false,
+                "default": {
+                  "warmUp": [
+                    "-i",
+                    "Reply with the single word ready, and nothing else."
+                  ],
+                  "fullAccess": [
+                    "--mode",
+                    "accept-edits",
+                    "--dangerously-skip-permissions"
+                  ],
+                  "model": [
+                    "--model",
+                    "${model}"
+                  ],
+                  "effort": [
+                    "--effort",
+                    "${effort}"
+                  ]
+                },
+                "markdownDescription": "%config.launch.arguments%"
+              },
+              "environment": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default": {
+                  "AGY_CLI_DISABLE_AUTO_UPDATE": "true"
+                },
+                "markdownDescription": "%config.launch.environment%"
+              },
+              "trust": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "arguments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "merge": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false,
+                "default": {
+                  "file": "${home}/.gemini/antigravity-cli/settings.json",
+                  "merge": {
+                    "trustedWorkspaces": [
+                      "${folder}"
+                    ]
+                  }
+                },
+                "markdownDescription": "%config.launch.trust%"
+              },
+              "enterDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 400,
+                "markdownDescription": "%config.launch.enterDelay%"
+              },
+              "taskDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 2000,
+                "markdownDescription": "%config.launch.taskDelay%"
+              }
+            },
+            "additionalProperties": false,
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "%config.antigravity.launch%",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      },
+      {
+        "id": "facade.orchestration.muse",
+        "title": "%config.muse.title%",
+        "order": 5,
+        "properties": {
+          "facade.orchestration.muse.path": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "order": 1,
+            "markdownDescription": "%config.muse.path%"
+          },
+          "facade.orchestration.muse.launch": {
+            "type": "object",
+            "default": {},
+            "properties": {
+              "arguments": {
+                "type": "object",
+                "properties": {
+                  "warmUp": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "connect": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "quiet": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "fullAccess": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--disable-approval",
+                      "--disable-sandbox"
+                    ]
+                  },
+                  "model": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--model",
+                      "${model}"
+                    ]
+                  },
+                  "effort": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--reasoning-effort",
+                      "${effort}"
+                    ]
+                  },
+                  "extra": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false,
+                "default": {
+                  "fullAccess": [
+                    "--disable-approval",
+                    "--disable-sandbox"
+                  ],
+                  "model": [
+                    "--model",
+                    "${model}"
+                  ],
+                  "effort": [
+                    "--reasoning-effort",
+                    "${effort}"
+                  ]
+                },
+                "markdownDescription": "%config.launch.arguments%"
+              },
+              "environment": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default": {
+                  "MUSE_NO_AUTO_UPDATE": "1"
+                },
+                "markdownDescription": "%config.launch.environment%"
+              },
+              "trust": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "arguments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "merge": {
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false,
+                "dependencies": {
+                  "file": [
+                    "merge"
+                  ],
+                  "merge": [
+                    "file"
+                  ]
+                },
+                "default": {
+                  "arguments": [
+                    "--trust-workspace"
+                  ]
+                },
+                "markdownDescription": "%config.launch.trust%"
+              },
+              "enterDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 900,
+                "markdownDescription": "%config.launch.enterDelay%"
+              },
+              "taskDelay": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 60000,
+                "default": 2000,
+                "markdownDescription": "%config.launch.taskDelay%"
+              }
+            },
+            "additionalProperties": false,
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "%config.muse.launch%",
+            "tags": [
+              "advanced"
+            ]
+          }
         }
       }
-    }
+    ]
   },
   "dependencies": {
     "@vscode/l10n": "^0.0.18"

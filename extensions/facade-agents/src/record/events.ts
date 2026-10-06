@@ -54,6 +54,8 @@ export interface Process {
 	/** The CLI's id. */
 	readonly cli: string;
 	readonly model: string;
+	/** How hard it thinks, as its CLI takes it; none for one a ledger of an older Facade recorded. */
+	readonly effort?: string;
 	/** The name of its worktree: `main` for a repository's own checkout, else its branch. */
 	readonly worktree: string;
 	readonly folder: string;
@@ -91,6 +93,7 @@ export type LedgerEventBody =
 		readonly ppid: number;
 		readonly cli: string;
 		readonly model: string;
+		readonly effort?: string;
 		readonly worktree: string;
 		readonly folder: string;
 		readonly taskFile?: string;
@@ -164,12 +167,12 @@ export function eventOf(value: JsonObject): LedgerEvent | undefined {
 function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'process.started': {
-			const { pid, name, ppid, cli, model, worktree, folder, taskFile, tokenHash } = value;
-			if (!isPidFrom(pid, FIRST_PID) || typeof name !== 'string' || !isAgentName(name) || !isPidFrom(ppid, YOU_PID) || !isText(cli) || !isText(model)
+			const { pid, name, ppid, cli, model, effort, worktree, folder, taskFile, tokenHash } = value;
+			if (!isPidFrom(pid, FIRST_PID) || typeof name !== 'string' || !isAgentName(name) || !isPidFrom(ppid, YOU_PID) || !isText(cli) || !isText(model) || (effort !== undefined && !isText(effort))
 				|| !isText(worktree) || !isText(folder) || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))) {
 				return undefined;
 			}
-			return { type: 'process.started', pid, name, ppid, cli, model, worktree, folder, tokenHash, ...(taskFile !== undefined ? { taskFile } : {}) };
+			return { type: 'process.started', pid, name, ppid, cli, model, ...(effort !== undefined ? { effort } : {}), worktree, folder, tokenHash, ...(taskFile !== undefined ? { taskFile } : {}) };
 		}
 		case 'process.running':
 		case 'task.typed':
@@ -225,6 +228,7 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				ppid: event.ppid,
 				cli: event.cli,
 				model: event.model,
+				...(event.effort !== undefined ? { effort: event.effort } : {}),
 				worktree: event.worktree,
 				folder: event.folder,
 				...(event.taskFile !== undefined ? { taskFile: event.taskFile } : {}),

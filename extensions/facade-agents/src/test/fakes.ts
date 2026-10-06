@@ -5,7 +5,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { AgentCli, Environment, InstalledCli, skillMarkdown } from '../clis/cli';
+import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
+import { readCliConfig } from '../clis/config';
 import { Facade, SpawnRequest, Spawned } from '../core/facade';
 import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
 import { Caller, Process } from '../record/events';
@@ -74,6 +75,8 @@ export class FakeGit implements Git {
 	readonly trackedFiles = new Set<string>();
 	/** The files of the person's that git neither tracks nor ignores, by their full paths: none unless a test adds them. */
 	readonly untrackedFiles = new Set<string>();
+	/** While set, listing a repository's worktrees waits for it. */
+	hold: Promise<void> | undefined;
 	private readonly worktrees = new Map<string, ListedWorktree[]>();
 
 	/** `gitDir` holds each repository's `info/exclude`, by its main checkout's name; `unborn` are those with no commit yet. */
@@ -89,6 +92,7 @@ export class FakeGit implements Git {
 	}
 
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
+		await this.hold;
 		return this.worktrees.get(main) ?? [];
 	}
 
@@ -143,36 +147,13 @@ export class FakeGit implements Git {
 	}
 }
 
-/** The person: what Facade told them, and their answer to whether a CLI may start at full access. */
+/** The person: what Facade told them. */
 export class FakePerson implements Person {
 
 	readonly told: string[] = [];
-	/** The questions the person was asked, by their messages. */
-	readonly asked: string[] = [];
-	/** Their answer to the questions they are asked from now: yes unless set; a promise for one they take their time over. */
-	answer: boolean | undefined | Promise<boolean | undefined> = true;
 
 	tell(text: string, terminal: string | undefined): void {
 		this.told.push(`${text}${terminal ? ` (${terminal})` : ''}`);
-	}
-
-	async ask(message: string): Promise<boolean | undefined> {
-		this.asked.push(message);
-		return this.answer;
-	}
-}
-
-/** The window's global state, in memory. */
-export class MemoryStore {
-
-	private readonly values = new Map<string, unknown>();
-
-	get(key: string): unknown {
-		return this.values.get(key);
-	}
-
-	async update(key: string, value: unknown): Promise<void> {
-		this.values.set(key, value);
 	}
 }
 
@@ -186,66 +167,73 @@ export function callerOf(process: Process): Caller {
 	return { pid: process.pid, name: process.name };
 }
 
-/** What the fake CLIs did besides their launches: each trust they wrote. */
-export interface CliRecord {
-	readonly trusted: string[];
-}
-
 /**
- * A CLI that takes its task as an argument and keeps the person's trust in a file of its own, in the
- * folder `ARG_HOME` names where the environment has it: its launch computed, never run.
+ * A CLI that takes its task as an argument and keeps the person's trust in a file of its own,
+ * `trust.json`, in the folder `ARG_HOME` names where its environment has it, else in `home`: its launch
+ * computed, never run.
  */
-export function argCli(record: CliRecord): AgentCli {
-	return {
+export function argCli(home: string): AgentCli {
+	const cli: AgentCli = {
 		id: 'arg',
 		displayName: 'Arg Code',
+		section: 'arg',
 		command: 'arg',
-		models: ['small', 'large'],
-		trust: {
-			write: ({ folder, repository }, _lock, env) => {
-				record.trusted.push(`arg trusts ${repository}${env?.ARG_HOME ? `, in ${env.ARG_HOME}` : ''}`);
-				return `Arg Code trusts ${repository} now, for ${folder}.`;
+		defaults: {
+			path: '',
+			launch: {
+				arguments: { connect: ['--config', '${config}'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
+				environment: { ARG_QUIET: '1' },
+				trust: { file: '${argHome}/trust.json', merge: { trusted: ['${repository}'] } },
+				enterDelay: 300,
+				taskDelay: 0
 			}
 		},
-		fullAccess: () => 'Arg Code runs every command.',
+		trustValues: ({ repository }, env) => ({ argHome: env.ARG_HOME ?? home, repository }),
 		task: 'argument',
-		enterDelayMs: 300,
 		launch: (input, executable) => {
 			const config = path.join(input.runDir, `${input.slug}.config.json`);
 			return {
 				executable,
-				args: ['--config', config, '--model', input.model, ...(input.trusted ? ['--trusted'] : []), ...(input.prompt ? ['--', input.prompt] : [])],
-				env: { ARG_QUIET: '1' },
+				args: launchArgs(cli, input.config, { config, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
+				env: input.config.launch.environment,
 				cwd: input.folder,
 				files: [{ path: config, content: JSON.stringify(input.mcp) }],
 				injected: []
 			};
 		}
 	};
+	return cli;
 }
 
 /**
  * A CLI whose first conversation has no MCP tools - told of its task in its terminal - which reads one
- * server for all its agents, and its skills, from files in its folder, lists its models, and thinks at
- * levels.
+ * server for all its agents, and its skills, from files in its folder, and is given the person's trust
+ * in its arguments.
  */
 export function toldCli(): AgentCli {
 	const server = (input: { readonly mcp: { readonly command: string; readonly args: readonly string[] } }) => ({ command: input.mcp.command, args: input.mcp.args });
-	return {
+	const cli: AgentCli = {
 		id: 'told',
 		displayName: 'Told Code',
+		section: 'told',
 		command: 'told',
-		models: ['quick', 'deep'],
-		listModels: { args: ['models'], parse: output => output.split('\n').filter(Boolean) },
-		fullAccess: () => 'Told Code runs every command.',
+		defaults: {
+			path: '',
+			launch: {
+				arguments: { model: ['--model', '${model}'], effort: ['--effort', '${effort}'] },
+				environment: {},
+				trust: { arguments: ['--trust-folder'] },
+				// Typed at once, on a test's clock.
+				enterDelay: 400,
+				taskDelay: 0
+			}
+		},
 		sharedServer: true,
 		task: 'terminal',
-		enterDelayMs: 400,
-		efforts: { levels: ['low', 'high', 'max'], byDefault: 'high' },
 		launch: (input, executable) => ({
 			executable,
-			args: ['--model', input.model, '--effort', input.effort ?? 'none', ...(input.trusted ? ['--trust-folder'] : [])],
-			env: {},
+			args: launchArgs(cli, input.config, { model: input.model, effort: input.effort }, { trust: input.trusted }),
+			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],
 			injected: [
@@ -266,6 +254,7 @@ export function toldCli(): AgentCli {
 			]
 		})
 	};
+	return cli;
 }
 
 export interface WorldOptions {
@@ -281,53 +270,48 @@ export interface WorldOptions {
 	readonly injected?: string;
 	/** How long a new process may take to come up, where not two minutes. */
 	readonly startTimeoutMs?: number;
-	/** The models a CLI that lists them has: none listed by default. */
-	readonly modelsOf?: (installed: InstalledCli) => Promise<readonly string[] | undefined>;
-	/** The level the person set for a CLI to think at. */
-	readonly effortFor?: (cli: string) => string | undefined;
-	/** The environment the agents' terminals start with. */
+	/** The environment the agents' terminals start with: none of the person's home folders. */
 	readonly environment?: () => Environment;
 }
 
 /**
  * The core over a workspace in `dir`, with a window in memory: each port records what it was asked
- * and answers as a test set it up. Its CLIs' launches are only computed, never run.
+ * and answers as a test set it up. Its CLIs' launches are only computed, never run; a test changes the
+ * person's settings of them as it goes, in `settings` - by a CLI's section, then a setting's name, each
+ * as the window gives it, its default `{}` or `''` taking nothing away - and how long a new process has
+ * to come up, in `timing`. Arg Code keeps its trust in `<dir>/arg-home` where its environment does not
+ * say.
  */
 export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const table = ProcessTable.open({ dir });
 	const terminals = new FakeTerminals();
 	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
 	const person = new FakePerson();
-	const record: CliRecord = { trusted: [] };
-	const known: readonly InstalledCli[] = [
-		{ cli: argCli(record), executable: path.join(dir, 'bin', 'arg.exe') },
-		{ cli: toldCli(), executable: path.join(dir, 'bin', 'told.exe') }
-	];
-	const installed = known.filter(each => (options.clis ?? ['arg', 'told']).includes(each.cli.id));
+	const settings: { [section: string]: { [name: string]: unknown } } = {};
+	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000 };
+	const known: readonly AgentCli[] = [argCli(path.join(dir, 'arg-home')), toldCli()];
+	const configFor = (cli: AgentCli) => readCliConfig(cli, name => settings[cli.section]?.[name]);
 	/** What the core wrote to its log, in order. */
 	const logs: string[] = [];
 	const facade = new Facade({
 		table,
 		ports: { terminals, git, person },
 		clis: {
-			known: known.map(each => each.cli),
-			installed: () => installed,
-			modelsOf: options.modelsOf ?? (async () => undefined),
-			effortFor: options.effortFor ?? (() => undefined),
-			...(options.environment ? { environment: options.environment } : {})
+			known,
+			installed: () => known.filter(cli => (options.clis ?? ['arg', 'told']).includes(cli.id)).map(cli => ({ cli, config: configFor(cli), executable: path.join(dir, 'bin', `${cli.id}.exe`) })),
+			configOf: configFor,
+			environment: options.environment ?? (() => ({}))
 		},
 		setup: {
 			mcpServer: tokenFile => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', tokenFile], env: { ELECTRON_RUN_AS_NODE: '1' } }),
 			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
-			pipe: () => 'pipe',
+			agentEnv: token => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: token }),
 			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: '# Working in Facade Code' }],
 			opening: (process, parent) => `[facade] You are @${process.name}, PID ${process.pid}, ${process.cliName}, started by @${parent.name}.`
 		},
-		answers: new MemoryStore(),
+		timing: () => timing,
 		log: message => logs.push(message),
-		injected: options.injected ?? path.join(dir, 'injected.json'),
-		...(options.startTimeoutMs !== undefined ? { startTimeoutMs: options.startTimeoutMs } : {}),
-		taskSettleMs: 0
+		injected: options.injected ?? path.join(dir, 'injected.json')
 	});
 	return {
 		table,
@@ -335,8 +319,10 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		terminals,
 		git,
 		person,
-		record,
 		logs,
+		settings,
+		/** How long the core waits, as the person set it: a test changes it as it goes. */
+		timing,
 		/** The process with the PID `pid`. */
 		process(pid: number): Process {
 			const found = table.get(pid);

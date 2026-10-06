@@ -8,14 +8,20 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { messageOf } from '../base/errors';
 import { FileLock } from '../base/lock';
-import { antigravityCli, antigravitySettingsFile, trustAntigravityWorkspace } from '../clis/antigravity';
-import { claudeCli, claudeConfigFile, trustClaudeProject } from '../clis/claude';
-import { AgentCli, fullAccessQuestion, LaunchInput, skillMarkdown } from '../clis/cli';
+import { antigravityCli } from '../clis/antigravity';
+import { claudeCli, claudeConfigFile } from '../clis/claude';
+import { AgentCli, ARG_GROUPS, LaunchInput, skillMarkdown } from '../clis/cli';
 import { codexCli } from '../clis/codex';
-import { cliModels, launchTarget, unsafeForCmd, which } from '../clis/executable';
+import { MAX_DELAY_MS, MAX_TIME_S, readCliConfig, secondsSetting } from '../clis/config';
+import { launchDocument } from '../clis/describe';
+import { launchTarget, unsafeForCmd, which } from '../clis/executable';
 import { museCli } from '../clis/muse';
 import { installedClis, knownClis } from '../clis/registry';
+import { mergeIntoJsonFile, trustTarget, writeTrust } from '../clis/trust';
+import { START_TIMEOUT_MS } from '../core/launch';
+import { WINDOW_WAIT_MS } from '../transport/protocol';
 import { replaceFsFunction, tempDir } from './util';
 
 const BOM = String.fromCharCode(0xfeff);
@@ -23,18 +29,51 @@ const SKILL = { name: 'facade', description: 'How to work in Facade Code.', body
 const SKILL_MD = '---\nname: facade\ndescription: How to work in Facade Code.\n---\n\n# Working in Facade Code\n';
 const MCP = { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', '/runs/7.token'], env: { ELECTRON_RUN_AS_NODE: '1' } };
 
-/** What a launch of `cli` is given, as the core gives it for PID 7. */
+/** A setting as package.json declares it, and each part of one that is an object. */
+interface Declared {
+	readonly type?: unknown;
+	readonly default?: unknown;
+	readonly scope?: string;
+	readonly tags?: readonly string[];
+	readonly maximum?: number;
+	readonly markdownDescription?: string;
+	readonly dependencies?: unknown;
+	readonly properties?: { readonly [part: string]: Declared };
+}
+
+/** What a call came to: `done`, or the message of what it threw. */
+function outcome(call: () => unknown): string {
+	try {
+		call();
+		return 'done';
+	} catch (err) {
+		return messageOf(err);
+	}
+}
+
+/** What a launch of `cli` is given, as the core gives it for PID 7: its defaults, where a test sets nothing else. */
 function inputFor(cli: AgentCli, overrides: Partial<LaunchInput> = {}): LaunchInput {
-	return { folder: '/lab', trusted: false, model: cli.models[0], mcp: MCP, skills: [SKILL], runDir: '/runs', slug: '7', ...overrides };
+	return { folder: '/lab', trusted: false, model: 'model-x', effort: 'high', mcp: MCP, skills: [SKILL], config: cli.defaults, runDir: '/runs', slug: '7', ...overrides };
+}
+
+/** The extension's package.json - its settings and its commands - and its descriptions by key. */
+function manifest(): { readonly sections: readonly { readonly id: string; readonly properties: { readonly [key: string]: Declared } }[]; readonly commands: readonly { readonly command: string }[]; readonly texts: { readonly [key: string]: string } } {
+	const root = path.join(__dirname, '..', '..');
+	const { contributes } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+	return {
+		sections: contributes.configuration,
+		commands: contributes.commands,
+		texts: JSON.parse(fs.readFileSync(path.join(root, 'package.nls.json'), 'utf8'))
+	};
 }
 
 suite('CLIs: each launch, argument by argument', () => {
 
-	test('Claude Code runs in its own UI at full access, its warning about it taken by the person\'s leave, with Facade\'s server alone and the person\'s own settings, the switches that would stop it at a question with nobody there off, its skill from the run, on the model asked for, the task after the options', () => {
-		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', prompt: '--- Plan\nAdd clamp.' }), '/bin/claude');
+	test('Claude Code runs in its own UI at full access, its warning about it off, with Facade\'s server alone and the person\'s own settings, the switches that would stop it at a question with nobody there off - in its environment, where one is, else in its settings - its skill from the run, on the model and at the effort asked for, the task after the options; without a task it starts at its input box', () => {
+		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', effort: 'xhigh', prompt: '--- Plan\nAdd clamp.' }), '/bin/claude');
 		const file = (name: string) => JSON.parse(spec.files.find(each => path.basename(each.path) === name)?.content ?? 'null');
 
-		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files.map(each => each.path), config: file('7.mcp.json'), settings: file('7.settings.json'), plugin: file('plugin.json'), skill: spec.files[3]?.content, injected: spec.injected }, {
+		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files.map(each => each.path), config: file('7.mcp.json'), settings: file('7.settings.json'), plugin: file('plugin.json'), skill: spec.files[3]?.content, injected: spec.injected, noTask: claudeCli.launch(inputFor(claudeCli), '/bin/claude').args.includes('--') }, {
 			executable: '/bin/claude',
 			args: [
 				'--mcp-config', path.join('/runs', '7.mcp.json'),
@@ -62,27 +101,16 @@ suite('CLIs: each launch, argument by argument', () => {
 				path.join('/runs', '7.plugin', 'skills', 'facade', 'SKILL.md')
 			],
 			config: { mcpServers: { facade: { type: 'stdio', ...MCP } } },
-			settings: { skipDangerousModePermissionPrompt: true, promptSuggestionEnabled: false, spinnerTipsEnabled: false, feedbackSurveyRate: 0, awaySummaryEnabled: false, emojiCompletionEnabled: false },
+			settings: { skipDangerousModePermissionPrompt: true, spinnerTipsEnabled: false, emojiCompletionEnabled: false },
 			plugin: { name: 'facade', version: '1.0.0', description: 'How to work in Facade Code with your children and the person.', author: { name: 'Facade Code' } },
 			skill: SKILL_MD,
-			injected: []
-		});
-	});
-
-	test('Claude Code thinks as hard as Facade sets for each model: Sonnet at high, Opus at xhigh, by their full names too; any other model as Claude Code would; and without a task it starts at its input box', () => {
-		const effort = (model: string) => claudeCli.launch(inputFor(claudeCli, { model }), '/bin/claude').args.slice(-2);
-
-		assert.deepStrictEqual({
-			efforts: ['sonnet', 'claude-sonnet-5-5', 'opus', 'claude-opus-5-5', 'haiku'].map(effort),
-			noTask: claudeCli.launch(inputFor(claudeCli), '/bin/claude').args.includes('--')
-		}, {
-			efforts: [['--effort', 'high'], ['--effort', 'high'], ['--effort', 'xhigh'], ['--effort', 'xhigh'], ['--model', 'haiku']],
+			injected: [],
 			noTask: false
 		});
 	});
 
-	test('Codex runs in its own UI at full access, with Facade\'s server and the switches that would stop it at a question as -c overrides, the project\'s hooks unreviewed, in a process of its own; its skill goes into the folder', () => {
-		const spec = codexCli.launch(inputFor(codexCli, { model: 'gpt-6-luna', prompt: '--- Plan' }), '/bin/codex');
+	test('Codex runs in its own UI at full access, with Facade\'s server and the switches that would stop it at a question as -c overrides, the project\'s hooks unreviewed, in a process of its own, at the effort asked for; its skill goes into the folder', () => {
+		const spec = codexCli.launch(inputFor(codexCli, { model: 'gpt-6-luna', effort: 'max', prompt: '--- Plan' }), '/bin/codex');
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected: spec.injected, noTask: codexCli.launch(inputFor(codexCli), '/bin/codex').args.includes('--') }, {
 			executable: '/bin/codex',
@@ -94,13 +122,14 @@ suite('CLIs: each launch, argument by argument', () => {
 				'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
 				'-c', 'mcp_servers.facade.required=true',
 				'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
+				'--no-daemon',
 				'-c', 'check_for_update_on_startup=false',
 				'-c', 'tui.show_tooltips=false',
 				'-c', 'notice.hide_rate_limit_model_nudge=true',
 				'--dangerously-bypass-approvals-and-sandbox',
-				'--no-daemon',
 				'--dangerously-bypass-hook-trust',
 				'--model', 'gpt-6-luna',
+				'-c', 'model_reasoning_effort="max"',
 				'--', '--- Plan'
 			],
 			env: {},
@@ -111,15 +140,19 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('in a worktree Facade made, Codex is told for that launch alone to trust it, by its real path - only its ASCII letters in lower case on Windows, as Codex keys it - as a table whose key keeps the dots of the path; elsewhere it is not', () => {
+	test('in a worktree Facade made, Codex is told for that launch alone to trust it, after its server, by its real path - only its ASCII letters in lower case on Windows, as Codex keys it - as a table whose key keeps the dots of the path; elsewhere it is not', () => {
 		const temp = tempDir('facade-codex-');
 		try {
 			const worktree = path.join(temp.dir, 'Lab.V2-Ä');
 			fs.mkdirSync(worktree);
-			const trust = (trusted: boolean) => codexCli.launch(inputFor(codexCli, { folder: worktree, trusted }), '/bin/codex').args.filter(arg => arg.startsWith('projects='));
+			const args = (trusted: boolean) => codexCli.launch(inputFor(codexCli, { folder: worktree, trusted }), '/bin/codex').args;
 			const key = process.platform === 'win32' ? worktree.replace(/[A-Z]/g, letter => letter.toLowerCase()) : worktree;
+			const trusted = args(true);
 
-			assert.deepStrictEqual({ trusted: trust(true), untrusted: trust(false) }, { trusted: [`projects={ ${JSON.stringify(key)} = { trust_level = "trusted" } }`], untrusted: [] });
+			assert.deepStrictEqual({ trust: trusted.slice(trusted.indexOf('--no-daemon') + 1, trusted.indexOf('--no-daemon') + 3), untrusted: args(false).filter(arg => arg.startsWith('projects=')) }, {
+				trust: ['-c', `projects={ ${JSON.stringify(key)} = { trust_level = "trusted" } }`],
+				untrusted: []
+			});
 		} finally {
 			temp.remove();
 		}
@@ -131,21 +164,21 @@ suite('CLIs: each launch, argument by argument', () => {
 		assert.strictEqual(spec.args.find(arg => arg.startsWith('mcp_servers.facade.env=')), 'mcp_servers.facade.env={ ELECTRON_RUN_AS_NODE = "1", "NODE.OPTIONS" = "--no-warnings" }');
 	});
 
-	test('Muse Code runs in its own UI at full access - no approvals, no sandbox - trusting a worktree Facade made for the run alone, at the level of thought it is given; its server, which finds the agent from its environment, and its skill go into the folder', () => {
-		const spec = museCli.launch(inputFor(museCli, { trusted: true, effort: 'max' }), '/bin/muse.cmd');
+	test('Muse Code runs in its own UI at full access - no approvals, no sandbox - its launcher\'s update off, trusting a worktree Facade made for the run alone, at the effort asked for; its server, which finds the agent from its environment, and its skill go into the folder', () => {
+		const spec = museCli.launch(inputFor(museCli, { trusted: true, model: 'muse-spark-1.3', effort: 'max' }), '/bin/muse.cmd');
 		const injected = Object.fromEntries(spec.injected.map(file => [file.path, file.path.endsWith('.json') ? JSON.parse(file.content) : file.content]));
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, untrusted: museCli.launch(inputFor(museCli), '/bin/muse.cmd').args }, {
 			executable: '/bin/muse.cmd',
-			args: ['--model', 'muse-spark-1.3-contributor', '--reasoning-effort', 'max', '--disable-approval', '--disable-sandbox', '--trust-workspace'],
-			env: {},
+			args: ['--trust-workspace', '--disable-approval', '--disable-sandbox', '--model', 'muse-spark-1.3', '--reasoning-effort', 'max'],
+			env: { MUSE_NO_AUTO_UPDATE: '1' },
 			cwd: '/lab',
 			files: [],
 			injected: {
-				'.mcp.json': { mcpServers: { facade: { command: MCP.command, args: MCP.args, env: { ...MCP.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}' } } } },
+				'.mcp.json': { mcpServers: { facade: { command: MCP.command, args: MCP.args, env: { ...MCP.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS}' } } } },
 				'.agents/skills/facade/SKILL.md': SKILL_MD
 			},
-			untrusted: ['--model', 'muse-spark-1.3-contributor', '--reasoning-effort', 'high', '--disable-approval', '--disable-sandbox']
+			untrusted: ['--disable-approval', '--disable-sandbox', '--model', 'model-x', '--reasoning-effort', 'high']
 		});
 	});
 
@@ -167,13 +200,13 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own; its server and skill go into the folder as one plugin, which every agent there shares', () => {
-		const spec = antigravityCli.launch(inputFor(antigravityCli, { prompt: 'Not given here.' }), '/bin/agy.exe');
+	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
+		const spec = antigravityCli.launch(inputFor(antigravityCli, { model: 'gemini-3.8-flash', effort: 'medium', prompt: 'Not given here.' }), '/bin/agy.exe');
 		const injected = Object.fromEntries(spec.injected.map(file => [file.path, file.path.endsWith('.json') ? JSON.parse(file.content) : file.content]));
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task }, {
 			executable: '/bin/agy.exe',
-			args: ['-i', 'Reply with the single word ready, and nothing else.', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-high'],
+			args: ['-i', 'Reply with the single word ready, and nothing else.', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
 			env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
 			cwd: '/lab',
 			files: [],
@@ -185,13 +218,190 @@ suite('CLIs: each launch, argument by argument', () => {
 			task: 'terminal'
 		});
 	});
+});
 
-	test('Antigravity lists the models it has with `agy models`, an id and a name a line: Facade reads the ids, for it starts with its own model and says nothing when given one it has not', () => {
-		const listed = 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\nclaude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)\n\nModels: 2\n';
+suite('CLIs: how the person has Facade start each one', () => {
 
-		assert.deepStrictEqual({ args: antigravityCli.listModels?.args, ids: antigravityCli.listModels?.parse(listed) }, { args: ['models'], ids: ['gemini-3.8-flash-high', 'claude-opus-4-6-thinking'] });
+	test('every part of a launch is the person\'s to change, and only what they set changes: a group of arguments replaced, its `${name}`s given their values, one set to null left out; a variable of Facade\'s replaced or, set to null, taken out; Claude Code\'s settings key by key, down through objects - theirs too, so that no null reaches Claude Code', () => {
+		const set: { [name: string]: unknown } = {
+			launch: {
+				arguments: { fullAccess: ['--permission-mode', 'bypassPermissions'], extra: ['--add-dir', '/shared/${model}'], effort: null },
+				environment: { DISABLE_AUTOUPDATER: null, CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000' },
+				settings: { spinnerTipsEnabled: null, theme: 'dark', env: { FOO: null, BAR: '1' } }
+			}
+		};
+		const config = readCliConfig(claudeCli, name => set[name]);
+		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', prompt: 'Plan.', config }), '/bin/claude');
+		// Settings of Facade's with an object in them, which the person changes a part of.
+		const nested: AgentCli = { ...claudeCli, defaults: { path: '', launch: { ...claudeCli.defaults.launch, settings: { permissions: { allow: ['Read'], deny: ['Write'] } } } } };
+		const deeper = readCliConfig(nested, name => name === 'launch' ? { settings: { permissions: { deny: null, ask: ['Bash'] } } } : undefined);
+
+		assert.deepStrictEqual({ args: spec.args, env: spec.env, settings: JSON.parse(spec.files[1].content), deeper: deeper.launch.settings }, {
+			args: [
+				'--mcp-config', path.join('/runs', '7.mcp.json'),
+				'--strict-mcp-config',
+				'--settings', path.join('/runs', '7.settings.json'),
+				'--plugin-dir', path.join('/runs', '7.plugin'),
+				'--permission-mode', 'bypassPermissions',
+				'--model', 'opus',
+				'--add-dir', '/shared/opus',
+				'--', 'Plan.'
+			],
+			env: {
+				CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false',
+				CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+				CLAUDE_CODE_ENABLE_AWAY_SUMMARY: '0',
+				CLAUDE_CODE_AUTO_CONNECT_IDE: 'false',
+				CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '1',
+				CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000'
+			},
+			settings: { skipDangerousModePermissionPrompt: true, emojiCompletionEnabled: false, theme: 'dark', env: { BAR: '1' } },
+			deeper: { permissions: { allow: ['Read'], ask: ['Bash'] } }
+		});
 	});
 
+	test('on Windows, which takes a variable\'s name in any case, the person\'s variable is Facade\'s whatever its case - set to null it takes Facade\'s out, set to text it replaces it - and elsewhere one of another case is another variable', () => {
+		const { environment } = readCliConfig(claudeCli, name => name === 'launch' ? { environment: { disable_autoupdater: null, claude_code_auto_connect_ide: 'true' } } : undefined).launch;
+		const seen = { updater: [environment.DISABLE_AUTOUPDATER, environment.disable_autoupdater], ide: [environment.CLAUDE_CODE_AUTO_CONNECT_IDE, environment.claude_code_auto_connect_ide] };
+
+		assert.deepStrictEqual(seen, process.platform === 'win32'
+			? { updater: [undefined, undefined], ide: ['true', undefined] }
+			: { updater: ['1', undefined], ide: ['false', 'true'] });
+	});
+
+	test('a part of the launch that holds no value of its kind is the default\'s - arguments that are not a list of strings, a variable that is not text, a delay below zero, a trust of no kind - an empty list is the person\'s, those arguments left out, and a delay is a minute at most; a launch that is no object, or none, is the defaults', () => {
+		const set = { arguments: { connect: '--no-daemon', quiet: [], model: ['-m', 4] }, environment: { CODEX_HOME: 7 }, trust: { arguments: 'x' }, enterDelay: -5, taskDelay: 1e12 };
+		const { launch: defaults } = codexCli.defaults;
+
+		assert.deepStrictEqual({
+			config: readCliConfig(codexCli, name => name === 'launch' ? set : undefined),
+			path: readCliConfig(codexCli, name => name === 'path' ? '  /opt/codex/codex  ' : 7).path,
+			notAnObject: readCliConfig(codexCli, name => name === 'launch' ? ['--verbose'] : undefined),
+			unset: readCliConfig(codexCli, () => undefined)
+		}, {
+			config: { path: '', launch: { ...defaults, arguments: { ...defaults.arguments, quiet: [] }, taskDelay: MAX_DELAY_MS } },
+			path: '/opt/codex/codex',
+			notAnObject: codexCli.defaults,
+			unset: codexCli.defaults
+		});
+	});
+
+	test('the trust is the person\'s to change: set to null there is none, and the CLI asks; their arguments in place of a file; a file of their own, or an entry of their own, each beside the default\'s other half', () => {
+		const trust = (set: unknown) => readCliConfig(claudeCli, name => name === 'launch' ? { trust: set } : undefined).launch.trust;
+		const { trust: byDefault } = claudeCli.defaults.launch;
+
+		assert.deepStrictEqual([trust(null), trust({ arguments: ['--trust'] }), trust({ file: ' /elsewhere/claude.json ' }), trust({ merge: { trusted: true } }), trust({ file: 7 })], [
+			undefined,
+			{ arguments: ['--trust'] },
+			{ file: '/elsewhere/claude.json', merge: byDefault?.merge },
+			{ file: byDefault?.file, merge: { trusted: true } },
+			byDefault
+		]);
+	});
+
+	test('a `${name}` a launch has no value for - whatever is written between the braces - refuses the launch, naming the setting and the values there are', () => {
+		const refused = (launch: unknown) => outcome(() => claudeCli.launch(inputFor(claudeCli, { config: readCliConfig(claudeCli, name => name === 'launch' ? launch : undefined) }), '/bin/claude'));
+		const values = 'it has ${mcpConfig}, ${settingsFile}, ${pluginDir}, ${model}, ${effort}, ${task}.';
+
+		assert.deepStrictEqual([refused({ arguments: { extra: ['--add-dir', '${home}'] } }), refused({ arguments: { model: ['--model', '${model_name}'] } })], [
+			`facade.orchestration.claude.launch.arguments.extra has \${home}, for which Facade has no value: ${values}`,
+			`facade.orchestration.claude.launch.arguments.model has \${model_name}, for which Facade has no value: ${values}`
+		]);
+	});
+
+	test('a time the person sets in seconds is one of a second to a day; anything but a number is the default', () => {
+		assert.deepStrictEqual([secondsSetting(30, 5000), secondsSetting(0.2, 5000), secondsSetting(1e9, 5000), secondsSetting('30', 5000), secondsSetting(Number.NaN, 5000)], [30_000, 1000, MAX_TIME_S * 1000, 5000, 5000]);
+	});
+
+	test('package.json declares Facade\'s own settings - on by default, and one timeout, the code\'s, for whoever asks for advanced settings - and for each CLI where to find it, shown to everyone, and its launch, empty, for whoever asks for advanced settings, each on this machine alone; each part of a launch, and each group of its arguments, has Facade\'s own as the default completion fills in, and its description is short and names the command that shows it all', () => {
+		const { sections, commands, texts } = manifest();
+		const own = sections.find(each => each.id === 'facade.orchestration')?.properties ?? {};
+		const text = (description: string | undefined) => texts[description?.replace(/^%|%$/g, '') ?? ''] ?? '';
+		const seen = knownClis().map(cli => {
+			const section = sections.find(each => each.id === `facade.orchestration.${cli.section}`);
+			const declared = (name: string) => section?.properties[`facade.orchestration.${cli.section}.${name}`];
+			const launch = declared('launch');
+			const parts = launch?.properties ?? {};
+			return {
+				names: Object.keys(section?.properties ?? {}),
+				defaults: [declared('path')?.default, launch?.default],
+				advanced: [declared('path')?.tags, launch?.tags],
+				scopes: [declared('path')?.scope, launch?.scope],
+				parts: Object.fromEntries(Object.entries(parts).map(([part, schema]) => [part, schema.default])),
+				groups: Object.fromEntries(Object.entries(parts.arguments?.properties ?? {}).map(([group, schema]) => [group, schema.default])),
+				trustTakesBoth: parts.trust?.dependencies,
+				delays: [parts.enterDelay?.maximum, parts.taskDelay?.maximum],
+				described: [text(launch?.markdownDescription).includes('**Facade: Show Agent Launch**'), text(launch?.markdownDescription).includes('\n')]
+			};
+		});
+
+		assert.deepStrictEqual({
+			own: Object.keys(own),
+			enabled: own['facade.orchestration.enabled']?.default,
+			timeout: [own['facade.orchestration.timeout']?.default, own['facade.orchestration.timeout']?.maximum, own['facade.orchestration.timeout']?.tags],
+			waits: [START_TIMEOUT_MS, WINDOW_WAIT_MS],
+			shows: commands.some(each => each.command === 'facade.agents.showLaunch') && texts['command.showLaunch'],
+			seen
+		}, {
+			own: ['facade.orchestration.enabled', 'facade.orchestration.timeout'],
+			enabled: true,
+			timeout: [START_TIMEOUT_MS / 1000, MAX_TIME_S, ['advanced']],
+			waits: [START_TIMEOUT_MS, START_TIMEOUT_MS],
+			shows: 'Show Agent Launch',
+			seen: knownClis().map(({ section, task, defaults: { launch } }) => ({
+				names: [`facade.orchestration.${section}.path`, `facade.orchestration.${section}.launch`],
+				defaults: ['', {}],
+				advanced: [undefined, ['advanced']],
+				scopes: ['machine', 'machine'],
+				parts: { arguments: launch.arguments, environment: launch.environment, trust: launch.trust, ...(launch.settings ? { settings: launch.settings } : {}), enterDelay: launch.enterDelay, taskDelay: launch.taskDelay },
+				// A CLI told of its task in its terminal takes no task group.
+				groups: Object.fromEntries(ARG_GROUPS.filter(group => group !== 'task' || task === 'argument').map(group => [group, launch.arguments[group]])),
+				// One given its trust in its arguments has no file of Facade's to complete one of the person's.
+				trustTakesBoth: launch.trust?.file === undefined ? { file: ['merge'], merge: ['file'] } : undefined,
+				delays: [MAX_DELAY_MS, MAX_DELAY_MS],
+				described: [true, false]
+			}))
+		});
+	});
+
+	test('no setting of the extension sits under one of the workbench\'s, whose value would hide it: the agent button\'s list, facade.agents, has none under it', () => {
+		const workbench = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'src', 'vs', 'workbench', 'contrib', 'terminalLaunchers', 'common', 'terminalLaunchers.ts'), 'utf8');
+		const list = /AGENTS_SETTING = '(?<key>[^']+)'/.exec(workbench)?.groups?.key ?? '';
+		const keys = manifest().sections.flatMap(section => Object.keys(section.properties));
+
+		assert.deepStrictEqual({ list, under: keys.filter(key => key === list || key.startsWith(`${list}.`)) }, { list: 'facade.agents', under: [] });
+	});
+
+	test('Facade: Show Agent Launch shows, by each CLI\'s section, the program Facade runs - with the script it gives Node for an npm shim, and whether cmd.exe runs it - how its task reaches it, its launch as Facade starts it now - Facade\'s own with the person\'s changes over it - and those changes as the person wrote them', () => {
+		const yours = { environment: { DISABLE_AUTOUPDATER: null } };
+		const config = readCliConfig(claudeCli, name => name === 'launch' ? yours : undefined);
+		const document = launchDocument([
+			// One that cmd.exe runs is told of its task in its terminal, whatever the CLI.
+			{ cli: claudeCli, config, yours, program: { target: { executable: 'C:/tools/claude.cmd', args: [], throughCmd: true } } },
+			{ cli: codexCli, config: codexCli.defaults, yours: undefined, program: { target: { executable: 'C:/node/node.exe', args: ['C:/npm/codex.js'], throughCmd: false } } },
+			{ cli: museCli, config: museCli.defaults, yours: {}, program: { target: { executable: 'C:/muse/muse.exe', args: [], throughCmd: false } } },
+			{ cli: antigravityCli, config: antigravityCli.defaults, yours: undefined, program: { missing: 'agy is not on this machine\'s PATH' } }
+		]);
+		const [first, second, ...json] = document.split('\n');
+		const launch = (of: AgentCli) => JSON.parse(JSON.stringify(of.defaults.launch));
+
+		assert.deepStrictEqual({ comments: [first.startsWith('// '), second.startsWith('// ')], shown: JSON.parse(json.join('\n')), autoupdater: config.launch.environment.DISABLE_AUTOUPDATER }, {
+			comments: [true, true],
+			shown: {
+				claude: { program: 'C:/tools/claude.cmd', throughCmd: true, task: 'terminal', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours },
+				codex: { program: 'C:/node/node.exe', script: 'C:/npm/codex.js', task: 'argument', launch: launch(codexCli), yourChanges: {} },
+				muse: { program: 'C:/muse/muse.exe', task: 'terminal', launch: launch(museCli), yourChanges: {} },
+				antigravity: { program: 'not on this machine: agy is not on this machine\'s PATH', launch: launch(antigravityCli), yourChanges: {} }
+			},
+			autoupdater: undefined
+		});
+	});
+
+	test('a CLI told of its task in its terminal is given no task group, even one the person set', () => {
+		const set = (cli: AgentCli) => readCliConfig(cli, name => name === 'launch' ? { arguments: { task: ['--prompt', '${model}'] } } : undefined);
+
+		assert.deepStrictEqual([museCli, antigravityCli].map(cli => cli.launch(inputFor(cli, { config: set(cli) }), '/bin/cli').args.includes('--prompt')), [false, false]);
+	});
 });
 
 suite('CLIs: a skill as the CLIs read it', () => {
@@ -213,32 +423,6 @@ suite('CLIs: a skill as the CLIs read it', () => {
 			'description: "#1 rule"',
 			'description: "The person\'s own"',
 			'description: "two\\nlines"'
-		]);
-	});
-});
-
-suite('CLIs: what the person agrees to before Facade starts one, word for word', () => {
-
-	test('the person is asked, once, to let Facade start each CLI at full access: what that lets it do, the flags it takes, and what Facade does for them in the worktrees it makes, in the files the CLIs read on this machine', () => {
-		const once = (name: string) => `\n\nFacade asks this once: from then on every ${name} agent starts this way, in every window, including those your agents start.`;
-
-		assert.deepStrictEqual([claudeCli, codexCli, museCli, antigravityCli].map(fullAccessQuestion), [
-			{
-				message: 'Let Facade start Claude Code with full access?',
-				detail: `Claude Code will run every command and make every edit without asking you, outside any sandbox: it can do whatever you can on this computer. Facade starts it with --dangerously-skip-permissions and tells each launch that you agreed here, so Claude Code does not warn you again. In the worktrees Facade makes, Facade also tells Claude Code that you trust the repository they belong to: Claude Code keeps that trust for the whole repository, its main checkout included, in its own configuration (${claudeConfigFile()}).${once('Claude Code')}`
-			},
-			{
-				message: 'Let Facade start Codex with full access?',
-				detail: `Codex will run every command without asking you and outside its sandbox: it can edit any file on this computer and reach the network. Facade starts it with --dangerously-bypass-approvals-and-sandbox, and with --dangerously-bypass-hook-trust, which runs the project's hooks without Codex's review. In the worktrees Facade makes, Facade tells Codex to trust the folder for that run alone, and writes nothing into ~/.codex/config.toml.${once('Codex')}`
-			},
-			{
-				message: 'Let Facade start Muse Code with full access?',
-				detail: `Muse Code will run every command without asking you and outside its sandbox: it can do whatever you can on this computer. Facade starts it with --disable-approval --disable-sandbox. In the worktrees Facade makes, and nowhere else, Facade also tells Muse Code to trust the folder for that run alone, with --trust-workspace, which stores nothing: the project's own hooks, MCP servers and skills load there without Muse Code asking.${once('Muse Code')}`
-			},
-			{
-				message: 'Let Facade start Antigravity with full access?',
-				detail: `Antigravity will run every command and make every edit without asking you: it can do whatever you can on this computer. Facade starts it with --mode accept-edits --dangerously-skip-permissions. Before Antigravity starts in a worktree Facade made, Facade adds the worktree to trustedWorkspaces in ${antigravitySettingsFile()}, and nowhere else.${once('Antigravity')}`
-			}
 		]);
 	});
 });
@@ -268,42 +452,72 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 		return process.platform === 'win32' ? real.split(path.sep).join('/').replace(/^[a-z]:/, drive => drive.toUpperCase()) : real;
 	}
 
-	test('Claude Code\'s trust in a repository is written under its root, once, into a file that is not there yet or beside what the file holds, laid out as it is', () => {
+	/** A home folder of the test's own, as an environment gives it. */
+	function homeIn(name: string): { readonly home: string; readonly env: { readonly USERPROFILE: string; readonly HOME: string } } {
+		const home = path.join(temp.dir, name);
+		return { home, env: { USERPROFILE: home, HOME: home } };
+	}
+
+	test('Claude Code\'s trust in a repository is merged into its configuration under the repository\'s root, once, into a file that is not there yet or beside what the file holds, laid out as it is', () => {
 		const repository = path.join(temp.dir, 'Lab');
 		fs.mkdirSync(repository);
-		const config = path.join(temp.dir, '.claude.json');
-		const first = [trustClaudeProject(repository, lock, config), trustClaudeProject(repository, lock, config)];
+		const { home, env } = homeIn('home');
+		const config = path.join(home, '.claude.json');
+		const worktree = { folder: path.join(temp.dir, 'Lab-clamp'), repository };
+		const first = [writeTrust(claudeCli, claudeCli.defaults, worktree, lock, env), writeTrust(claudeCli, claudeCli.defaults, worktree, lock, env)];
 		const made = JSON.parse(fs.readFileSync(config, 'utf8'));
 		const theirs = `${BOM}{\r\n  "theme": "dark",\r\n  "projects": {\r\n    "C:/Other": {\r\n      "allowedTools": []\r\n    }\r\n  }\r\n}\r\n`;
 		fs.writeFileSync(config, theirs);
-		const merged = trustClaudeProject(repository, lock, config);
+		const merged = writeTrust(claudeCli, claudeCli.defaults, worktree, lock, env);
 		const after = fs.readFileSync(config, 'utf8');
 
+		const entry = JSON.stringify({ projects: { [claudeKey(repository)]: { hasTrustDialogAccepted: true } } });
+
 		assert.deepStrictEqual({ first, made, merged, after: JSON.parse(after.slice(1)), layout: [after.startsWith(`${BOM}{\r\n  "theme": "dark",\r\n`), after.endsWith('}\r\n')], locked }, {
-			first: ['written', 'there'],
+			first: [`Facade merged ${entry} into ${config}: Claude Code trusts ${worktree.folder} now.`, `${config} has ${entry} already: Claude Code trusted ${worktree.folder} before.`],
 			made: { projects: { [claudeKey(repository)]: { hasTrustDialogAccepted: true } } },
-			merged: 'written',
+			merged: `Facade merged ${entry} into ${config}: Claude Code trusts ${worktree.folder} now.`,
 			after: { theme: 'dark', projects: { 'C:/Other': { allowedTools: [] }, [claudeKey(repository)]: { hasTrustDialogAccepted: true } } },
 			layout: [true, true],
 			locked: [config, config, config]
 		});
 	});
 
-	test('Claude Code\'s configuration that is not a JSON object, whose projects are not one, or whose project is not one, is left alone', () => {
-		const repository = path.join(temp.dir, 'Lab');
-		fs.mkdirSync(repository);
-		const config = path.join(temp.dir, '.claude.json');
-		const left = (content: string) => {
-			fs.writeFileSync(config, content);
-			return [trustClaudeProject(repository, lock, config), fs.readFileSync(config, 'utf8') === content];
+	test('a file that is not a JSON object, or a value in it of another kind than what would be merged there - projects that are not an object, a project that is not one, a list that is not a list - is left alone', () => {
+		const file = path.join(temp.dir, 'settings.json');
+		const left = (content: string, entry: { readonly [key: string]: unknown }) => {
+			fs.writeFileSync(file, content);
+			return [mergeIntoJsonFile(file, entry, lock), fs.readFileSync(file, 'utf8') === content];
 		};
+		const project = { projects: { 'C:/Lab': { hasTrustDialogAccepted: true } } };
 
-		assert.deepStrictEqual([left('{ not json'), left('[]'), left('{"projects":[]}'), left(`{"projects":{${JSON.stringify(claudeKey(repository))}:true}}`)], [['unreadable', true], ['unreadable', true], ['unreadable', true], ['unreadable', true]]);
+		assert.deepStrictEqual([
+			left('{ not json', project),
+			left('[]', project),
+			left('{"projects":[]}', project),
+			left('{"projects":{"C:/Lab":true}}', project),
+			left('{"trustedWorkspaces": "everything"}', { trustedWorkspaces: ['C:\\Lab'] }),
+			left('{"trustedWorkspaces": {"C:\\\\Lab": true}}', { trustedWorkspaces: ['C:\\Lab'] })
+		], [['unreadable', true], ['unreadable', true], ['unreadable', true], ['unreadable', true], ['unreadable', true], ['unreadable', true]]);
 	});
 
-	test('Claude Code\'s own write that comes between Facade\'s read and its write is kept: the file is read again, and the trust added to what Claude Code wrote', () => {
-		const repository = path.join(temp.dir, 'Lab');
-		fs.mkdirSync(repository);
+	test('a null in the file where the entry goes holds nothing, as when its key is not there: the entry is written in its place', () => {
+		const file = path.join(temp.dir, 'settings.json');
+		const merged = (content: string, entry: { readonly [key: string]: unknown }) => {
+			fs.writeFileSync(file, content);
+			return [mergeIntoJsonFile(file, entry, lock), JSON.parse(fs.readFileSync(file, 'utf8'))];
+		};
+
+		assert.deepStrictEqual([
+			merged('{"projects": null}', { projects: { 'C:/Lab': { hasTrustDialogAccepted: true } } }),
+			merged('{"trustedWorkspaces": null, "theme": "dark"}', { trustedWorkspaces: ['C:\\Lab'] })
+		], [
+			['written', { projects: { 'C:/Lab': { hasTrustDialogAccepted: true } } }],
+			['written', { trustedWorkspaces: ['C:\\Lab'], theme: 'dark' }]
+		]);
+	});
+
+	test('the CLI\'s own write that comes between Facade\'s read and its write is kept: the file is read again, and the trust merged into what the CLI wrote', () => {
 		const config = path.join(temp.dir, '.claude.json');
 		fs.writeFileSync(config, '{\n  "numStartups": 1\n}\n');
 		let wrote = false;
@@ -317,86 +531,123 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 		});
 		let trust: string;
 		try {
-			trust = trustClaudeProject(repository, lock, config);
+			trust = mergeIntoJsonFile(config, { projects: { 'C:/Lab': { hasTrustDialogAccepted: true } } }, lock);
 		} finally {
 			restore();
 		}
 
 		assert.deepStrictEqual({ trust, after: JSON.parse(fs.readFileSync(config, 'utf8')), left: fs.readdirSync(temp.dir).sort() }, {
 			trust: 'written',
-			after: { numStartups: 22, projects: { [claudeKey(repository)]: { hasTrustDialogAccepted: true } } },
-			left: ['.claude.json', 'Lab']
+			after: { numStartups: 22, projects: { 'C:/Lab': { hasTrustDialogAccepted: true } } },
+			left: ['.claude.json']
 		});
 	});
 
-	test('Antigravity\'s trust in a folder is written once, by its real path, into a file that is not there yet or beside what the file holds, laid out as it is; a folder listed already, whatever its case, is left as it is', () => {
+	test('Antigravity\'s trust in a folder is merged into its settings once, by the folder\'s real path, into a file that is not there yet or beside what the file holds, laid out as it is; a folder listed already - in another case, with other slashes, or through a link - is left as it is', () => {
 		const worktree = path.join(temp.dir, 'Clamp');
 		fs.mkdirSync(worktree);
-		const settings = path.join(temp.dir, 'antigravity-cli', 'settings.json');
-		const outcomes = [trustAntigravityWorkspace(worktree, lock, settings), trustAntigravityWorkspace(worktree, lock, settings)];
+		const { home, env } = homeIn('home');
+		const settings = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
+		const trusted = { folder: worktree, repository: path.join(temp.dir, 'Lab') };
+		const entry = JSON.stringify({ trustedWorkspaces: [fs.realpathSync.native(worktree)] });
+		const outcomes = [writeTrust(antigravityCli, antigravityCli.defaults, trusted, lock, env), writeTrust(antigravityCli, antigravityCli.defaults, trusted, lock, env)];
 		const first = JSON.parse(fs.readFileSync(settings, 'utf8'));
 		const theirs = `{\n\t"model": "gemini-3.8-flash-high",\n\t"trustedWorkspaces": [\n\t\t"C:\\\\Users\\\\me"\n\t]\n}`;
 		fs.writeFileSync(settings, theirs);
-		const merged = trustAntigravityWorkspace(worktree, lock, settings);
+		writeTrust(antigravityCli, antigravityCli.defaults, trusted, lock, env);
 		const after = fs.readFileSync(settings, 'utf8');
-		fs.writeFileSync(settings, JSON.stringify({ trustedWorkspaces: [process.platform === 'win32' ? worktree.toUpperCase() : worktree] }));
-		const listed = trustAntigravityWorkspace(worktree, lock, settings);
+		const other = process.platform === 'win32' ? fs.realpathSync.native(worktree).toUpperCase().split('\\').join('/') : fs.realpathSync.native(worktree);
+		fs.writeFileSync(settings, JSON.stringify({ trustedWorkspaces: [other] }));
+		const listed = writeTrust(antigravityCli, antigravityCli.defaults, trusted, lock, env);
+		// The same folder through a link of its own, as the person may have opened it.
+		const link = path.join(temp.dir, 'clamp-link');
+		fs.symlinkSync(worktree, link, 'junction');
+		fs.writeFileSync(settings, JSON.stringify({ trustedWorkspaces: [link] }));
+		const linked = writeTrust(antigravityCli, antigravityCli.defaults, trusted, lock, env);
 
-		assert.deepStrictEqual({ outcomes, first, merged, after, listed, locked: locked.length }, {
-			outcomes: ['written', 'there'],
+		assert.deepStrictEqual({ outcomes, first, after, listed, linked, locked: locked.length }, {
+			outcomes: [`Facade merged ${entry} into ${settings}: Antigravity trusts ${worktree} now.`, `${settings} has ${entry} already: Antigravity trusted ${worktree} before.`],
 			first: { trustedWorkspaces: [fs.realpathSync.native(worktree)] },
-			merged: 'written',
 			after: `{\n\t"model": "gemini-3.8-flash-high",\n\t"trustedWorkspaces": [\n\t\t"C:\\\\Users\\\\me",\n\t\t${JSON.stringify(fs.realpathSync.native(worktree))}\n\t]\n}`,
-			listed: 'there',
-			locked: 4
+			listed: `${settings} has ${entry} already: Antigravity trusted ${worktree} before.`,
+			linked: `${settings} has ${entry} already: Antigravity trusted ${worktree} before.`,
+			locked: 5
 		});
 	});
 
-	test('Antigravity\'s settings that do not parse, or whose list is no list, are left alone', () => {
-		const worktree = path.join(temp.dir, 'Clamp');
-		fs.mkdirSync(worktree);
-		const settings = path.join(temp.dir, 'settings.json');
-		const left = (content: string) => {
-			fs.writeFileSync(settings, content);
-			return [trustAntigravityWorkspace(worktree, lock, settings), fs.readFileSync(settings, 'utf8') === content];
-		};
-
-		assert.deepStrictEqual([left('{ not json'), left('{"trustedWorkspaces": "everything"}')], [['unreadable', true], ['unreadable', true]]);
-	});
-
-	test('each CLI says what became of the trust, in the file it keeps it in now: Claude Code in CLAUDE_CONFIG_DIR where it is set, else in the home folder - in its folder\'s .config.json where an older version left one - as Antigravity', () => {
+	test('each CLI keeps its trust where it reads it now: Claude Code in CLAUDE_CONFIG_DIR where it is set, else in the home folder - in its folder\'s .config.json where an older version left one - Antigravity in the home folder; Codex and Muse Code are given theirs in their arguments, and nothing is written; a file that cannot be read is left, and the CLI asks', () => {
 		const repository = path.join(temp.dir, 'Lab');
 		fs.mkdirSync(repository);
-		const home = path.join(temp.dir, 'home');
-		const env = { USERPROFILE: home, HOME: home };
+		const { home, env } = homeIn('home');
 		const worktree = { folder: repository, repository };
+		const where = (cli: AgentCli, environment: { readonly [name: string]: string }) => trustTarget(cli, cli.defaults, worktree, environment)?.file;
 		const said = {
-			claudeHome: claudeConfigFile(env),
-			agyHome: antigravitySettingsFile(env),
-			claude: claudeCli.trust?.write(worktree, lock, env),
-			claudeAgain: claudeCli.trust?.write(worktree, lock, env),
-			agy: antigravityCli.trust?.write(worktree, lock, env)
+			claude: where(claudeCli, env),
+			agy: where(antigravityCli, env),
+			codex: writeTrust(codexCli, codexCli.defaults, worktree, lock, env),
+			muse: writeTrust(museCli, museCli.defaults, worktree, lock, env)
 		};
 		// What an older Claude Code left in its folder: it reads that file still.
 		const legacy = path.join(home, '.claude', '.config.json');
 		fs.mkdirSync(path.dirname(legacy), { recursive: true });
 		fs.writeFileSync(legacy, '{}');
-		const older = claudeConfigFile(env);
+		const older = where(claudeCli, env);
 		const moved = { ...env, CLAUDE_CONFIG_DIR: path.join(temp.dir, 'qclaude') };
 		const elsewhere = claudeConfigFile(moved);
 		// A folder where the file would be: it cannot be read.
 		fs.mkdirSync(elsewhere, { recursive: true });
 
-		assert.deepStrictEqual({ ...said, older, elsewhere, unreadable: claudeCli.trust?.write(worktree, lock, moved) }, {
-			claudeHome: path.join(home, '.claude.json'),
-			agyHome: path.join(home, '.gemini', 'antigravity-cli', 'settings.json'),
-			claude: `Claude Code trusts the repository ${repository} now, in ${path.join(home, '.claude.json')}.`,
-			claudeAgain: `Claude Code trusted the repository ${repository} already.`,
-			agy: `Antigravity trusts ${repository} now, in the trustedWorkspaces of ${path.join(home, '.gemini', 'antigravity-cli', 'settings.json')}.`,
+		assert.deepStrictEqual({ ...said, older, elsewhere, unreadable: writeTrust(claudeCli, claudeCli.defaults, worktree, lock, moved), nothingWritten: fs.readdirSync(home) }, {
+			claude: path.join(home, '.claude.json'),
+			agy: path.join(home, '.gemini', 'antigravity-cli', 'settings.json'),
+			codex: undefined,
+			muse: undefined,
 			older: legacy,
 			elsewhere: path.join(temp.dir, 'qclaude', '.claude.json'),
-			unreadable: `${path.join(temp.dir, 'qclaude', '.claude.json')} could not be read, or is not as Claude Code writes it, and was left alone: Claude Code will ask whether to trust ${repository}.`
+			unreadable: `${path.join(temp.dir, 'qclaude', '.claude.json')} could not be read, or is not as Claude Code writes it, and was left alone: Claude Code will ask whether to trust ${repository}.`,
+			nothingWritten: ['.claude']
 		});
+	});
+
+	test('a trust the person moved goes where they said, its `${name}`s given their values - `${home}` the home folder - and one with a `${name}` there is no value for is refused, naming the setting; one set to null writes nothing', () => {
+		const repository = path.join(temp.dir, 'Lab');
+		fs.mkdirSync(repository);
+		const { home, env } = homeIn('home');
+		const moved = readCliConfig(antigravityCli, name => name === 'launch' ? { trust: { file: '${home}/agy/trusted.json' } } : undefined);
+		const unknown = readCliConfig(antigravityCli, name => name === 'launch' ? { trust: { merge: { '${repo}': true } } } : undefined);
+		const none = readCliConfig(antigravityCli, name => name === 'launch' ? { trust: null } : undefined);
+		const worktree = { folder: repository, repository };
+
+		assert.deepStrictEqual({
+			moved: writeTrust(antigravityCli, moved, worktree, lock, env),
+			content: JSON.parse(fs.readFileSync(path.join(home, 'agy', 'trusted.json'), 'utf8')),
+			unknown: outcome(() => writeTrust(antigravityCli, unknown, worktree, lock, env)),
+			none: writeTrust(antigravityCli, none, worktree, lock, env)
+		}, {
+			moved: `Facade merged ${JSON.stringify({ trustedWorkspaces: [fs.realpathSync.native(repository)] })} into ${path.join(home, 'agy', 'trusted.json')}: Antigravity trusts ${repository} now.`,
+			content: { trustedWorkspaces: [fs.realpathSync.native(repository)] },
+			unknown: 'facade.orchestration.antigravity.launch.trust.merge has ${repo}, for which Facade has no value: it has ${home}, ${folder}.',
+			none: undefined
+		});
+	});
+
+	test('a trust file the person starts with ~ is in the home folder, as ${home} would be; one that is no absolute path otherwise, which would be written wherever the window runs from, is refused, saying how to write it', () => {
+		const repository = path.join(temp.dir, 'Lab');
+		fs.mkdirSync(repository);
+		const { home, env } = homeIn('home');
+		const file = (set: string) => outcome(() => {
+			const config = readCliConfig(antigravityCli, name => name === 'launch' ? { trust: { file: set } } : undefined);
+			const target = trustTarget(antigravityCli, config, { folder: repository, repository }, env);
+			if (target?.file !== path.join(home, 'agy', 'trusted.json')) {
+				throw new Error(`written to ${target?.file}`);
+			}
+		});
+
+		assert.deepStrictEqual([file('~/agy/trusted.json'), file('agy/trusted.json'), file('~agy/trusted.json')], [
+			'done',
+			'facade.orchestration.antigravity.launch.trust.file is "agy/trusted.json", which is no absolute path: start it with ${home}.',
+			'facade.orchestration.antigravity.launch.trust.file is "~agy/trusted.json", which is no absolute path: start it with ${home}.'
+		]);
 	});
 });
 
@@ -510,7 +761,7 @@ suite('CLIs: starting one without cmd.exe reading its arguments', () => {
 	});
 });
 
-suite('CLIs: which of them this machine has, and what models one lists', () => {
+suite('CLIs: which of them this machine has', () => {
 
 	let temp: { dir: string; remove(): void };
 
@@ -539,13 +790,23 @@ suite('CLIs: which of them this machine has, and what models one lists', () => {
 
 		assert.deepStrictEqual({
 			known: knownClis().map(cli => cli.id),
-			installed: installedClis(env).map(each => [each.cli.id, each.executable]),
-			none: installedClis({ PATH: '' })
+			installed: installedClis(cli => cli.defaults, env).map(each => [each.cli.id, each.executable]),
+			none: installedClis(cli => cli.defaults, { PATH: '' })
 		}, {
 			known: ['claude', 'codex', 'agy', 'muse'],
 			installed: [['claude', first], ['agy', agy]],
 			none: []
 		});
+	});
+
+	test('the CLI Facade starts is the file its path setting names, or the command named there that PATH has; one with none there is not offered', () => {
+		const own = executable('own', 'claude-nightly');
+		const other = executable('bin', 'codex2');
+		const env = { PATH: path.join(temp.dir, 'bin'), PATHEXT: '.EXE' };
+		const paths: { [cli: string]: string } = { claude: own, codex: 'codex2', agy: path.join(temp.dir, 'gone', 'agy') };
+		const installed = installedClis(cli => readCliConfig(cli, name => name === 'path' ? paths[cli.id] : undefined), env);
+
+		assert.deepStrictEqual(installed.map(each => [each.cli.id, each.executable, each.config.path]), [['claude', own, own], ['codex', other, 'codex2']]);
 	});
 
 	test('a command is found on PATH - a folder in quotes too - or by its own path; a folder of its name is not it', () => {
@@ -556,39 +817,10 @@ suite('CLIs: which of them this machine has, and what models one lists', () => {
 		assert.deepStrictEqual([which('tool', env), which(tool, {}), which('missing', env), which('tool', {}), which('tool', { Path: path.join(temp.dir, 'bin'), PATHEXT: '.EXE' })], [tool, tool, undefined, undefined, tool]);
 	});
 
-	test('on Windows, a CLI that is a .cmd of its own lists its models through cmd.exe, its path in quotes, spaces and all; one whose path cmd.exe would read a variable in is not asked', async function () {
-		if (process.platform !== 'win32') {
-			this.skip();
-		}
-		this.timeout(20_000);
-		/** A CLI that is a .cmd in `folder`, printing two models. */
-		const lister = (folder: string) => {
-			const file = path.join(temp.dir, folder, 'models.cmd');
-			fs.mkdirSync(path.dirname(file), { recursive: true });
-			fs.writeFileSync(file, '@echo quick\r\n@echo deep\r\n');
-			return { cli: { ...antigravityCli, listModels: { args: ['models'], parse: (output: string) => output.split(/\r?\n/).filter(Boolean) } }, executable: file };
-		};
+	test('the home folder a CLI keeps the person\'s settings in is the one the operating system says, where the environment names none', () => {
+		const folder = path.join(temp.dir, 'Lab');
+		fs.mkdirSync(folder);
 
-		assert.deepStrictEqual({ spaced: await cliModels(lister('with space')), variable: await cliModels(lister('100%')) }, { spaced: ['quick', 'deep'], variable: undefined });
-	});
-
-	test('a CLI\'s models are the ids it prints, read as its definition says; none where it lists none, fails, or has no way to list them', async function () {
-		this.timeout(20_000);
-		/** A CLI that is Node, printing what `script` prints. */
-		const lister = (script: string): { cli: AgentCli; executable: string } => ({
-			cli: { ...antigravityCli, listModels: { args: ['-e', script], parse: output => output.split(/\r?\n/).filter(Boolean) } },
-			executable: process.execPath
-		});
-
-		assert.deepStrictEqual({
-			listed: await cliModels(lister('console.log("quick"); console.log("deep")')),
-			none: await cliModels(lister('')),
-			failed: await cliModels(lister('console.log("quick"); process.exit(3)')),
-			noWay: await cliModels({ cli: claudeCli, executable: process.execPath })
-		}, { listed: ['quick', 'deep'], none: undefined, failed: undefined, noWay: undefined });
-	});
-
-	test('the home folder a CLI keeps the person\'s settings in is the one the operating system says now', () => {
-		assert.deepStrictEqual(antigravitySettingsFile(), path.join(os.homedir(), '.gemini', 'antigravity-cli', 'settings.json'));
+		assert.strictEqual(trustTarget(antigravityCli, antigravityCli.defaults, { folder, repository: folder }, {})?.file, path.join(os.homedir(), '.gemini', 'antigravity-cli', 'settings.json'));
 	});
 });

@@ -6,21 +6,12 @@
 import { Facade } from '../core/facade';
 import { Caller, YOU_PID } from '../record/events';
 
-/** How many of a CLI's models the skill and `spawn` name. */
-export const MODELS_NAMED = 3;
-
 const TOOLS = 'Your tools: spawn starts a child agent and answers with its PID once it is up; ps lists you, your parent and your children, each with its PID and state; kill ends one of your children.';
 
-/** A CLI an agent can start children with, as the skill names it: its likeliest models first. */
+/** A CLI an agent can start children with, as the skill names it. */
 export interface StartableCli {
 	readonly id: string;
 	readonly displayName: string;
-	readonly models: readonly string[];
-}
-
-/** A few choices as a sentence lists them: `a`, `a or b`, `a, b or c`. */
-export function orList(choices: readonly string[]): string {
-	return choices.length > 1 ? `${choices.slice(0, -1).join(', ')} or ${choices[choices.length - 1]}` : choices.join('');
 }
 
 /** An agent of a CLI, by the CLI's name, with its article: `a Coder agent`, `an Editor agent`. */
@@ -61,7 +52,7 @@ export function openingFor(process: { readonly pid: number; readonly name: strin
  */
 export function facadeSkill(clis: readonly StartableCli[]): { readonly name: string; readonly description: string; readonly body: string } {
 	const startable = clis.length
-		? clis.map(cli => `\`${cli.id}\` (${cli.displayName}) with ${orList(cli.models.slice(0, MODELS_NAMED).map(model => `\`${model}\``))}`).join('; ')
+		? clis.map(cli => `\`${cli.id}\` (${cli.displayName})`).join(', ')
 		: 'none, for no CLI Facade starts is installed';
 	return {
 		name: 'facade',
@@ -76,13 +67,15 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'',
 			'## The tools',
 			'',
-			`- \`spawn\` starts a child: \`cli\` and \`model\` are required - on this machine ${startable} - and \`prompt\` is its task.`,
+			`- \`spawn\` starts a child: \`cli\`, \`model\` and \`effort\` are required - on this machine ${startable} - and \`prompt\` is its task.`,
+			'  Facade gives the model and the effort to the CLI as they are, as its own options take them: one',
+			'  it does not have can make the child fail to start, or stop at its first step.',
 			'  It works beside you, in your folder; in a worktree of your repository, by name; or with',
 			'  `worktree: "new"` and a `name` in a worktree of its own, on a new branch of that name, starting',
 			'  at your worktree\'s HEAD: commit what the child needs before you start it there. It answers once',
 			'  the child is up, with its PID.',
 			'- `ps` lists you, your parent and your children: each one\'s PID, its parent\'s PID, its state -',
-			'  starting, running, or exited, how and why - its CLI and model, and its worktree. With `all`,',
+			'  starting, running, or exited, how and why - its CLI, model and effort, and its worktree. With `all`,',
 			'  every agent this workspace has had.',
 			'- `kill` ends one of your children, by its PID or its @name. Its worktree stays.',
 			'',

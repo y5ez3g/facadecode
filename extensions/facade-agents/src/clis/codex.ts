@@ -3,9 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as l10n from '@vscode/l10n';
 import { canonicalFolder } from '../base/files';
-import { AgentCli, skillMarkdown } from './cli';
+import { AgentCli, launchArgs, skillMarkdown } from './cli';
 
 /** A TOML value for Codex's `-c`: a JSON string is a TOML basic string. */
 function toml(value: string | readonly string[] | { readonly [name: string]: string }): string {
@@ -33,41 +32,53 @@ function projectKey(folder: string): string {
 export const codexCli: AgentCli = {
 	id: 'codex',
 	displayName: 'Codex',
+	section: 'codex',
 	command: 'codex',
-	// Only models its catalog offers no upgrade for: for one it does, Codex starts at a screen that offers
-	// the newer model, even with --model, and takes Enter or Esc there as a yes.
-	models: ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'],
-	fullAccess: () => l10n.t("Codex will run every command without asking you and outside its sandbox: it can edit any file on this computer and reach the network. Facade starts it with {0}, and with {1}, which runs the project's hooks without Codex's review. In the worktrees Facade makes, Facade tells Codex to trust the folder for that run alone, and writes nothing into {2}.", '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust', '~/.codex/config.toml'),
+	defaults: {
+		path: '',
+		launch: {
+			arguments: {
+				connect: [
+					'-c', 'mcp_servers.facade.command=${mcpCommand}',
+					'-c', 'mcp_servers.facade.args=${mcpArgs}',
+					'-c', 'mcp_servers.facade.env=${mcpEnv}',
+					'-c', 'mcp_servers.facade.startup_timeout_sec=30',
+					// spawn may wait minutes for a child to come up.
+					'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
+					'-c', 'mcp_servers.facade.required=true',
+					'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
+					// A process of its own: a session of the shared background server would run with the
+					// environment of whoever started that server.
+					'--no-daemon'
+				],
+				quiet: ['-c', 'check_for_update_on_startup=false', '-c', 'tui.show_tooltips=false', '-c', 'notice.hide_rate_limit_model_nudge=true'],
+				// The project's hooks would otherwise stop it at their review screen.
+				fullAccess: ['--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust'],
+				model: ['--model', '${model}'],
+				effort: ['-c', 'model_reasoning_effort="${effort}"'],
+				task: ['--', '${task}']
+			},
+			environment: {},
+			// The whole table: in `projects.<folder>` the folder would be split at its dots.
+			trust: { arguments: ['-c', 'projects={ ${folder} = { trust_level = "trusted" } }'] },
+			enterDelay: 300,
+			taskDelay: 2000
+		}
+	},
 	task: 'argument',
-	enterDelayMs: 300,
 	launch(input, executable) {
-		const server = (key: string, value: string) => ['-c', `mcp_servers.facade.${key}=${value}`];
 		return {
 			executable,
-			args: [
-				...server('command', toml(input.mcp.command)),
-				...server('args', toml(input.mcp.args)),
-				...server('env', toml(input.mcp.env)),
-				...server('startup_timeout_sec', '30'),
-				// spawn may wait minutes for a child to come up.
-				...server('tool_timeout_sec', '3600'),
-				...server('required', 'true'),
-				...server('default_tools_approval_mode', '"approve"'),
-				// The whole table: in `projects.<folder>` the folder would be split at its dots.
-				...(input.trusted ? ['-c', `projects={ ${toml(projectKey(input.folder))} = { trust_level = "trusted" } }`] : []),
-				'-c', 'check_for_update_on_startup=false',
-				'-c', 'tui.show_tooltips=false',
-				'-c', 'notice.hide_rate_limit_model_nudge=true',
-				'--dangerously-bypass-approvals-and-sandbox',
-				// A process of its own: a session of the shared background server would run with the
-				// environment of whoever started that server.
-				'--no-daemon',
-				// The project's hooks would otherwise stop it at their review screen.
-				'--dangerously-bypass-hook-trust',
-				'--model', input.model,
-				...(input.prompt ? ['--', input.prompt] : [])
-			],
-			env: {},
+			args: launchArgs(codexCli, input.config, {
+				mcpCommand: toml(input.mcp.command),
+				mcpArgs: toml(input.mcp.args),
+				mcpEnv: toml(input.mcp.env),
+				folder: toml(projectKey(input.folder)),
+				model: input.model,
+				effort: input.effort,
+				task: input.prompt ?? ''
+			}, { trust: input.trusted, task: !!input.prompt }),
+			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],
 			injected: input.skills.map(skill => ({ path: `.agents/skills/${skill.name}/SKILL.md`, content: skillMarkdown(skill) }))

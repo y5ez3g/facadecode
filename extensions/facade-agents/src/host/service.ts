@@ -8,11 +8,9 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
-import { cliModels } from '../clis/executable';
 import { installedClis, knownClis } from '../clis/registry';
 import { facadeSkill, openingFor } from '../contract/prompts';
 import { Contract } from '../contract/tools';
-import { FullAccessRefusedError } from '../core/errors';
 import { Facade } from '../core/facade';
 import { Caller, isLive, PERSON } from '../record/events';
 import { LedgerLockedError, lockWait } from '../record/ledger';
@@ -22,6 +20,7 @@ import { PipeEndpoint } from '../transport/endpoint';
 import { PipeHandlers, pipePath } from '../transport/pipe';
 import { HostGit } from './git';
 import { HostPerson } from './person';
+import { configFor, timeoutMs } from './settings';
 import { askStartAgent } from './startAgent';
 import { agentTerminalRuns, HostTerminals, terminalEnvironment } from './terminals';
 import { JsonFileState, StateStore } from './windowState';
@@ -39,8 +38,6 @@ const OWNER_KEY = 'facade.agents.owner';
 const HANDOVER_MS = 10_000;
 /** How often what another extension host holds is looked at, while it is waited for. */
 const HANDOVER_POLL_MS = 250;
-/** How long the pipe the agents still running call is waited for: as long as their MCP servers wait for the window. */
-const KEPT_PIPE_WAIT_MS = 60_000;
 
 /**
  * Facade's agents while `facade.orchestration.enabled` is on, and the one place the layers are put
@@ -58,11 +55,8 @@ export class AgentsService implements vscode.Disposable {
 	/** Set once the service stopped: as the window goes, as Facade agents are turned off, or as another window took its agents. */
 	private stopped = false;
 
-	/**
-	 * `globalState` keeps the person's answers across windows; `workspaceState` the record this
-	 * workspace's agents are in, whatever becomes of its first folder.
-	 */
-	constructor(private readonly log: vscode.LogOutputChannel, private readonly globalState: vscode.Memento, private readonly workspaceState: vscode.Memento) { }
+	/** `workspaceState` keeps the record this workspace's agents are in, whatever becomes of its first folder. */
+	constructor(private readonly log: vscode.LogOutputChannel, private readonly workspaceState: vscode.Memento) { }
 
 	/**
 	 * Opens the workspace's record, listens for its agents, and finds again those still running. Without
@@ -112,20 +106,19 @@ export class AgentsService implements vscode.Disposable {
 			ports: { terminals, git: new HostGit(), person: new HostPerson(terminals, message => this.say(message)) },
 			clis: {
 				known: knownClis(),
-				installed: () => installedClis(),
-				modelsOf: cliModels,
-				effortFor: id => vscode.workspace.getConfiguration('facade.orchestration').get<string>(`${id}.reasoningEffort`),
+				installed: () => installedClis(configFor),
+				configOf: configFor,
 				environment: terminalEnvironment
 			},
 			// No agent starts before the endpoint below listens: their MCP servers call it.
 			setup: {
-				mcpServer: tokenFile => this.listening().mcpServer(tokenFile),
+				mcpServer: tokenFile => this.listening().mcpServer(tokenFile, timeoutMs()),
 				sharedMcpServer: () => this.listening().sharedMcpServer(),
-				pipe: () => this.listening().pipe,
-				skills: () => [facadeSkill(installedClis().map(each => each.cli))],
+				agentEnv: token => this.listening().agentEnv(token, timeoutMs()),
+				skills: () => [facadeSkill(installedClis(configFor).map(({ cli }) => ({ id: cli.id, displayName: cli.displayName })))],
 				opening: openingFor
 			},
-			answers: this.globalState,
+			timing: () => ({ startTimeoutMs: timeoutMs() }),
 			log: message => this.say(message)
 		});
 		this.disposables.push(facade);
@@ -177,7 +170,15 @@ export class AgentsService implements vscode.Disposable {
 				: vscode.l10n.t("Facade agents need a folder on this machine in the workspace."));
 			return undefined;
 		}
-		const request = await askStartAgent(rawArgs, facade.clis());
+		const installed = facade.clis();
+		// A CLI whose path setting names nothing is not offered: the person is told why, each time they look.
+		for (const cli of knownClis()) {
+			const { path: setPath } = configFor(cli);
+			if (setPath && !installed.some(each => each.cli.id === cli.id)) {
+				void vscode.window.showWarningMessage(vscode.l10n.t("{0} is not offered: the setting facade.orchestration.{1}.path is {2}, which is no file, nor a command on PATH.", cli.displayName, cli.section, setPath));
+			}
+		}
+		const request = await askStartAgent(rawArgs, installed);
 		if (!request) {
 			return undefined;
 		}
@@ -185,11 +186,6 @@ export class AgentsService implements vscode.Disposable {
 			const { pid, name } = await facade.spawn(PERSON, request);
 			return { pid, name };
 		} catch (err) {
-			// The person said Don't Allow just now: nothing to tell them.
-			if (err instanceof FullAccessRefusedError) {
-				this.log.info(`The person did not let Facade start ${request.cli} with full access: nothing started.`);
-				return undefined;
-			}
 			this.log.error(`Starting an agent failed: ${stackOf(err)}`);
 			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
 			return undefined;
@@ -264,7 +260,8 @@ export class AgentsService implements vscode.Disposable {
 	private async listen(windowState: StateStore, dir: string, handlers: PipeHandlers<Caller>, agentsRun: boolean): Promise<PipeEndpoint<Caller> | undefined> {
 		const kept = windowState.get(PIPE_ID_KEY);
 		if (typeof kept === 'string' && /^[0-9a-f]{16}$/.test(kept)) {
-			const deadline = Date.now() + (agentsRun ? KEPT_PIPE_WAIT_MS : HANDOVER_MS);
+			// No shorter than the extension host before takes to let go of it, however short the person set it.
+			const deadline = Date.now() + (agentsRun ? Math.max(timeoutMs(), HANDOVER_MS) : HANDOVER_MS);
 			try {
 				return await this.retried(() => PipeEndpoint.start(pipePath(kept), dir, handlers), err => codeOf(err) === 'EADDRINUSE' && Date.now() < deadline);
 			} catch (err) {
