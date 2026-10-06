@@ -7,9 +7,9 @@
 export type ErrorCode =
 	/** An argument is missing or wrong. */
 	| 'INVALID'
-	/** What it names is not there: a process, a worktree. */
+	/** What it names is not there: an agent, a worktree. */
 	| 'NOT_FOUND'
-	/** Not the caller's to do: a process that is not its child, or the person. */
+	/** Not the caller's to do: an agent that is not its child, or the person. */
 	| 'REFUSED'
 	/** Facade cannot do it here and now: a CLI not installed, the window closing. */
 	| 'UNAVAILABLE'

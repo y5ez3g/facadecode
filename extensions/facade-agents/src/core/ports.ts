@@ -13,7 +13,7 @@ export interface Disposable {
 
 /** An agent's CLI, started in a terminal. */
 export interface TerminalLaunch {
-	/** The terminal's name, which finds it again: unique per process. */
+	/** The terminal's name, which finds it again: unique per agent. */
 	readonly name: string;
 	/** The command of its CLI, as `PATH` knows it: its terminal is drawn with that CLI's logo. */
 	readonly command: string;
@@ -23,7 +23,7 @@ export interface TerminalLaunch {
 	/** The folder it runs in, whose row in the workspace bar holds it. */
 	readonly cwd: string;
 	/**
-	 * Whether it is put in front once it is open: a process the person started, who is there to watch
+	 * Whether it is put in front once it is open: an agent the person started, who is there to watch
 	 * it. An agent's child opens without disturbing the window.
 	 */
 	readonly reveal: boolean;
@@ -114,7 +114,7 @@ export interface Ports {
 
 /** The CLIs Facade knows, those this machine has, and how the person has Facade start them: each read again at each use. */
 export interface CliCatalog {
-	/** Every CLI Facade knows, installed or not: what a process's CLI is called. */
+	/** Every CLI Facade knows, installed or not: what an agent's CLI is called. */
 	readonly known: readonly AgentCli[];
 	/** The CLIs this machine has. */
 	installed(): readonly InstalledCli[];
@@ -126,7 +126,7 @@ export interface CliCatalog {
 
 /** How long the core waits, as the person sets it: read again at each use. */
 export interface Timing {
-	/** How long a new process has to come up - its MCP server's hello - before it is ended as failed: the person's timeout. */
+	/** How long a new agent has to come up - its MCP server's hello - before it is ended as failed: the person's timeout. */
 	readonly startTimeoutMs: number;
 }
 
@@ -140,6 +140,6 @@ export interface AgentSetup {
 	agentEnv(token: string): { readonly [name: string]: string };
 	/** The skills every agent is handed, made for the CLIs this machine has then. */
 	skills(): readonly Skill[];
-	/** What a new process's first message says before its task: who it is, and who started it. */
-	opening(process: { readonly pid: number; readonly name: string; readonly cliName: string }, parent: Caller): string;
+	/** What a new agent's first message says before its task: who it is, and who started it. */
+	opening(agent: { readonly id: number; readonly name: string; readonly cliName: string }, parent: Caller): string;
 }

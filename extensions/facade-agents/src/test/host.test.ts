@@ -8,6 +8,8 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { excludeIn, repositoryIn, trackedIn, untrackedIn, worktreesIn } from '../host/gitCli';
+import { endOf } from '../host/terminalEnd';
+import { agentTerminalIndex } from '../host/terminalMatch';
 import { JsonFileState } from '../host/windowState';
 import { outcomeOf, tempDir } from './util';
 
@@ -21,6 +23,52 @@ suite('Host: Facade: Start Agent', () => {
 		const hidden = (manifest.contributes?.menus?.commandPalette ?? []).some((each: { command?: string; when?: string }) => each.command === 'facade.agents.startAgent' && each.when === 'false');
 
 		assert.deepStrictEqual({ title: names[String(command?.title).replace(/^%|%$/g, '')], category: names[String(command?.category).replace(/^%|%$/g, '')], hidden }, { title: 'Start Agent...', category: 'Facade', hidden: false });
+	});
+});
+
+suite('Host: an agent\'s terminal\'s end, as VS Code tells it', () => {
+
+	test('one the person closes ends with no exit code: by the person; one whose process exited has its code - in the editor area too, where VS Code closes it as if the person did; the window shutting down ends no agent', () => {
+		assert.deepStrictEqual({
+			closedByThePerson: endOf('user', undefined),
+			exitedInATab: endOf('user', 0),
+			failedInATab: endOf('user', 2),
+			exitedInThePanel: endOf('other', 1),
+			closedOtherwise: endOf('other', undefined),
+			shuttingDown: endOf('shutdown', undefined)
+		}, {
+			closedByThePerson: { byThePerson: true },
+			exitedInATab: { exitCode: 0, byThePerson: false },
+			failedInATab: { exitCode: 2, byThePerson: false },
+			exitedInThePanel: { exitCode: 1, byThePerson: false },
+			closedOtherwise: { byThePerson: false },
+			shuttingDown: undefined
+		});
+	});
+});
+
+suite('Host: an agent\'s terminal among the window\'s', () => {
+
+	test('the one running the process its launch recorded, whatever its name; else the one of its name - not when that one runs another process, nor once the recorded one has ended: the new shell VS Code starts under the old title in a tab it could not reconnect to, its process id not told yet', () => {
+		assert.deepStrictEqual({
+			byItsProcess: agentTerminalIndex(0, [11, 22, 33], 33, true),
+			renamed: agentTerminalIndex(-1, [11, 22], 22, true),
+			anotherProcessUnderItsName: agentTerminalIndex(1, [11, 99], 22, true),
+			itsNameNotYetTold: agentTerminalIndex(1, [11, undefined], 22, true),
+			aNewShellNotYetTold: agentTerminalIndex(1, [11, undefined], 22, false),
+			endedShowingItsExit: agentTerminalIndex(1, [11, 22], 22, false),
+			noProcessRecorded: agentTerminalIndex(1, [], undefined, false),
+			none: agentTerminalIndex(-1, [11], 22, true)
+		}, {
+			byItsProcess: 2,
+			renamed: 1,
+			anotherProcessUnderItsName: -1,
+			itsNameNotYetTold: 1,
+			aNewShellNotYetTold: -1,
+			endedShowingItsExit: 1,
+			noProcessRecorded: 1,
+			none: -1
+		});
 	});
 });
 
@@ -41,14 +89,14 @@ suite('Host: the window\'s state, beside the record', () => {
 		const first = new JsonFileState(file);
 		const before = first.get('pipe') ?? 'none';
 		await first.update('pipe', 'b71ef6fd');
-		await first.update('pids', { '@lead (2) · Arg Code': 4242 });
+		await first.update('pids', { '@lead #1 · Arg Code': 4242 });
 		await first.update('gone', 1);
 		await first.update('gone', undefined);
 
 		const second = new JsonFileState(file);
 		assert.deepStrictEqual(
 			{ before, pipe: second.get('pipe'), pids: second.get('pids'), gone: second.get('gone') ?? 'default', inherited: second.get('toString') ?? 'none' },
-			{ before: 'none', pipe: 'b71ef6fd', pids: { '@lead (2) · Arg Code': 4242 }, gone: 'default', inherited: 'none' });
+			{ before: 'none', pipe: 'b71ef6fd', pids: { '@lead #1 · Arg Code': 4242 }, gone: 'default', inherited: 'none' });
 	});
 
 	test('a file that does not hold an object of values starts it empty', () => {
@@ -192,5 +240,43 @@ suite('Host: git\'s records, read with git', function () {
 			inside: ['.mcp.json'],
 			plain: []
 		});
+	});
+
+	test('a worktree git still lists whose folder is left without its .git - as git removing it leaves one a process is in, on Windows - is a worktree no more: it is not among the repository\'s worktrees, nothing is looked for there, and git is not asked there', async () => {
+		const lab = path.join(temp.dir, 'lab');
+		const other = path.join(temp.dir, 'other');
+		const emptied = path.join(temp.dir, 'emptied');
+		fs.mkdirSync(lab);
+		git(lab, 'init', '-q', '-b', 'main');
+		git(lab, '-c', 'user.name=Test', '-c', 'user.email=test@test.invalid', 'commit', '-q', '--allow-empty', '-m', 'first');
+		git(lab, 'worktree', 'add', '-q', '-b', 'other', other);
+		git(lab, 'worktree', 'add', '-q', '-b', 'emptied', emptied);
+		for (const entry of fs.readdirSync(emptied)) {
+			fs.rmSync(path.join(emptied, entry), { recursive: true, force: true });
+		}
+		fs.writeFileSync(path.join(other, '.mcp.json'), '{}');
+
+		assert.deepStrictEqual({
+			listed: (await worktreesIn('git', lab)).map(each => path.relative(temp.dir, each.folder)).sort(),
+			untracked: [...await untrackedIn('git', lab, ['.mcp.json'])]
+		}, {
+			listed: ['lab', 'other'],
+			untracked: ['.mcp.json']
+		});
+	});
+
+	test('a worktree whose folder is gone is not among the repository\'s worktrees either: git lists it until it is pruned', async () => {
+		const lab = path.join(temp.dir, 'lab');
+		const gone = path.join(temp.dir, 'gone');
+		fs.mkdirSync(lab);
+		git(lab, 'init', '-q', '-b', 'main');
+		git(lab, '-c', 'user.name=Test', '-c', 'user.email=test@test.invalid', 'commit', '-q', '--allow-empty', '-m', 'first');
+		git(lab, 'worktree', 'add', '-q', '-b', 'gone', gone);
+		fs.rmSync(gone, { recursive: true, force: true });
+
+		assert.deepStrictEqual({
+			git: /prunable/.test(git(lab, 'worktree', 'list', '--porcelain').stdout),
+			listed: (await worktreesIn('git', lab)).map(each => path.relative(temp.dir, each.folder))
+		}, { git: true, listed: ['lab'] });
 	});
 });

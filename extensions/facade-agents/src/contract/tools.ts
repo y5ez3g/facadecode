@@ -47,7 +47,7 @@ export class Contract {
 
 	constructor(private readonly facade: Facade) { }
 
-	/** Answers a new MCP server's hello; for a process, its hello is also the news that it is running. */
+	/** Answers a new MCP server's hello; for an agent, its hello is also the news that it is running. */
 	hello(caller: Caller): Hello {
 		this.facade.connected(caller);
 		return { name: caller.name, tools: TOOLS.map(tool => tool.describe?.(this.facade) ?? tool.definition), instructions: instructionsFor(this.facade, caller) };

@@ -152,7 +152,7 @@ suite('Terminal launchers - an agent across a reload', () => {
 	test('a terminal started now is kept with its name and title template when it is drawn as an agent\'s and named, whoever started it, and no other is', () => {
 		const configs: Record<string, IShellLaunchConfig> = {
 			button: { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE, icon: agentIcon('claude') },
-			facade: { name: '@main (2) · Claude Code', icon: AGENT_TERMINAL_ICON },	// one of Facade's agents, whose name is its title
+			facade: { name: '@main #1 · Claude Code', icon: AGENT_TERMINAL_ICON },	// one of Facade's agents, whose name is its title
 			shell: { name: 'pwsh', icon: Codicon.terminal },
 			unnamed: { icon: AGENT_TERMINAL_ICON },
 			// One a reload brought back, given its name again: kept already, not kept anew
@@ -164,7 +164,7 @@ suite('Terminal launchers - an agent across a reload', () => {
 
 		assert.deepStrictEqual(Object.entries(configs).map(([which, config]) => [which, agentLaunchOf(config)]), [
 			['button', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }],
-			['facade', { name: '@main (2) · Claude Code', titleTemplate: undefined }],
+			['facade', { name: '@main #1 · Claude Code', titleTemplate: undefined }],
 			['shell', undefined],
 			['unnamed', undefined],
 			['reconnecting', undefined],

@@ -9,14 +9,14 @@ import type { ContractTool } from './tools';
 const PARAMS = ['cli', 'model', 'effort', 'prompt', 'worktree?', 'name?'];
 
 /**
- * `spawn`: starts a child of the caller in its own UI, beside it or in a worktree, as fork and exec
- * start a process. It answers with the child's PID once the child is up.
+ * `spawn`: starts a child of the caller in its own UI, beside it or in a worktree. It answers with the
+ * child's number once the child is up.
  */
 export const spawnTool: ContractTool = {
 	definition: {
 		name: 'spawn',
 		title: 'Start a child agent',
-		description: 'Starts a child agent in its own UI, as a new process: a CLI on one of its models, thinking as hard as you say, with its task. It works beside you, in your folder; in a worktree of your repository, by name; or, with worktree "new" and a name, in a new worktree on a new branch of that name, starting at your worktree\'s HEAD - commit what the child needs first. It answers once the child is up, with its PID. The child is yours: ps lists it, and kill ends it. Facade gives the model and the effort to the CLI as they are: one the CLI does not have can make it fail to start, or fail at its first step. A child can take a minute or two to come up: a slow spawn is waiting, so do not call it again.',
+		description: 'Starts a child agent in its own UI: a CLI on one of its models, thinking as hard as you say, with its task. It works beside you, in your folder; in a worktree of your repository, by name; or, with worktree "new" and a name, in a new worktree on a new branch of that name, starting at your worktree\'s HEAD - commit what the child needs first. It answers once the child is up, with its number, as #7. The child is yours: ps lists it, and kill ends it. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts: a child given a model its CLI does not have comes up all the same, then fails at its first step, on its screen, or works on the CLI\'s own default model. A child can take a minute or two to come up: a slow spawn is waiting, so do not call it again.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -57,7 +57,7 @@ export const spawnTool: ContractTool = {
 		}, progress);
 		const where = spawned.newWorktree ? `the new worktree ${spawned.worktree}, on the new branch ${spawned.worktree},` : `the worktree ${spawned.worktree}`;
 		return {
-			text: `Started @${spawned.name}, PID ${spawned.pid}: ${facade.cliName(spawned.cli)} on ${spawned.model} at ${spawned.effort}, in ${where} at ${spawned.folder}. It is up and has its task.`,
+			text: `Started @${spawned.name} #${spawned.id}: ${facade.cliName(spawned.cli)} on ${spawned.model} at ${spawned.effort}, in ${where} at ${spawned.folder}. It is up and has its task.`,
 			data: spawned
 		};
 	}

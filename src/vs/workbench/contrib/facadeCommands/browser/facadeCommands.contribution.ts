@@ -9,9 +9,11 @@ import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { assertType, isBoolean, isNumber, isObject, isString, isUndefined, isUndefinedOrNull } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
+import { generateUuid } from '../../../../base/common/uuid.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { ITerminalEnvironment } from '../../../../platform/terminal/common/terminal.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { ILifecycleService, LifecyclePhase, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalService } from '../../terminal/browser/terminal.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
@@ -59,6 +61,14 @@ interface IFacadeTerminal {
 	readonly exitCode: number | undefined;
 }
 
+/** What `_facade.window.loaded` answers with. */
+interface IFacadeWindowLoad {
+	/** This load of the window's own id: the same through the extension host's restarts, another after a reload. */
+	readonly id: string;
+	/** Whether a reload of the window before loaded this one. */
+	readonly reloaded: boolean;
+}
+
 /** Whether `candidate` is `IFacadeTerminalOptions`: an object whose every option is of its own kind. */
 function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTerminalOptions {
 	if (!isObject(candidate)) {
@@ -77,6 +87,25 @@ function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTermin
 
 // `()`: the folder the window is on, as the workspace bar shows it; none in an empty window
 CommandsRegistry.registerCommand('_facade.folder.active', accessor => accessor.get(IActiveFolderService).activeFolder?.uri);
+
+/** This load of the window: the same through the extension host's restarts, another after a reload. */
+const WINDOW_LOAD = generateUuid();
+
+// `()`: how the window was loaded (`IFacadeWindowLoad`): an id of this load's own, and whether a reload of
+// the window before loaded it, as VS Code tells itself (`ILifecycleService.startupKind`) - not after it was
+// closed, the app quit, or the window crashed.
+CommandsRegistry.registerCommand('_facade.window.loaded', (accessor): IFacadeWindowLoad => ({
+	id: WINDOW_LOAD,
+	reloaded: accessor.get(ILifecycleService).startupKind === StartupKind.ReloadedWindow
+}));
+
+// `()`: settles once the window has its terminals back - those reconnected to their processes, and
+// the editor area's restored - so that one the extension host does not find is gone.
+CommandsRegistry.registerCommand('_facade.terminal.whenRestored', async accessor => {
+	const terminalService = accessor.get(ITerminalService);
+	const lifecycleService = accessor.get(ILifecycleService);
+	await Promise.all([terminalService.whenConnected, lifecycleService.when(LifecyclePhase.Restored)]);
+});
 
 // `(main, branch, startPoint?, show?)`: a worktree of the repository whose main checkout is `main`, made
 // as New Worktree makes one, without its dialog, for an agent sending a child out

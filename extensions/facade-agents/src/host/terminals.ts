@@ -10,14 +10,20 @@ import { isJsonObject } from '../base/json';
 import { isProcessRunning } from '../base/system';
 import { Environment } from '../clis/cli';
 import { Disposable, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { endOf } from './terminalEnd';
+import { agentTerminalIndex } from './terminalMatch';
 import { StateStore } from './windowState';
 
 const PIDS_KEY = 'facade.agents.terminalPids';
 const LAUNCH_TIMEOUT_MS = 15_000;
 /** How long one terminal's process id is waited for. */
 const PID_WAIT_MS = 1_000;
-/** How long after the extension host started an agent's terminal is looked for before it counts as gone. */
+/** How long after the extension host started a window without Facade's workbench has its terminals back. */
 const SETTLE_MS = 5_000;
+/** How long Facade's workbench is waited for at most to have its terminals back: its pty host may not answer. */
+const RESTORE_TIMEOUT_MS = 60_000;
+/** How long, once the window has its terminals back, those not found are looked for still: the window tells the extension host of each on its own. */
+const FOUND_GRACE_MS = 2_000;
 /** How often the agents' processes are looked at, for one that ended while its terminal shows its exit code. */
 const EXITS_POLL_MS = 5_000;
 /** How often a terminal the window may still be telling of is looked for again. */
@@ -44,14 +50,34 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 	private readonly listeners = new Set<(name: string, end: TerminalEnd) => void>();
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly poll: ReturnType<typeof setInterval>;
-	private readonly startTime = Date.now();
+	/**
+	 * Settles once the window has the terminals it had back, after a reload, with the time until which one
+	 * not found yet is still looked for: the window tells the extension host of each on its own. Those not
+	 * found by then are gone - one deadline for them all.
+	 */
+	private readonly foundBy: Promise<number>;
+	private disposed = false;
 
 	constructor(private readonly state: StateStore, private readonly log: (message: string) => void) {
 		this.disposables.push(vscode.window.onDidCloseTerminal(terminal => this.background('Noting a terminal that closed', this.closed(terminal))));
 		// A process can end while its terminal stays open to show the exit code.
 		this.poll = setInterval(() => this.checkExits(), EXITS_POLL_MS);
-		const prune = setTimeout(() => this.background('Forgetting terminals that are gone', this.forgetGone()), SETTLE_MS);
-		this.disposables.push({ dispose: () => clearTimeout(prune) });
+		this.foundBy = terminalsRestored().then(() => Date.now() + FOUND_GRACE_MS);
+	}
+
+	/**
+	 * Facade has come back to its agents, telling their terminals apart by the process ids the window kept:
+	 * those of the agents whose terminals did not come back are forgotten now, once the window has its
+	 * terminals back. Not before - forgotten first, an agent's terminal is looked for by its name alone, and
+	 * the new shell VS Code starts under the old title, in a tab it could not reconnect to, is taken for it.
+	 */
+	recovered(): void {
+		this.background('Forgetting terminals that are gone', this.foundBy.then(async deadline => {
+			await timeout(Math.max(0, deadline - Date.now()));
+			if (!this.disposed) {
+				await this.forgetGone();
+			}
+		}));
 	}
 
 	async launch(request: TerminalLaunch): Promise<void> {
@@ -99,11 +125,15 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 
 	async isAlive(name: string): Promise<boolean> {
 		let terminal = await this.find(name);
-		// Just after the extension host started, the window can still be telling it of its terminals: of
-		// one whose process id it never told too.
-		while (!terminal && Date.now() < this.startTime + SETTLE_MS) {
-			await timeout(FIND_POLL_MS);
+		if (!terminal) {
+			// The window can still be giving its terminals back, and telling the extension host of each: of
+			// its process id too, by which one whose title changed is found.
+			const deadline = await this.foundBy;
 			terminal = await this.find(name);
+			while (!terminal && Date.now() < deadline) {
+				await timeout(FIND_POLL_MS);
+				terminal = await this.find(name);
+			}
 		}
 		return !!terminal && terminal.exitStatus === undefined;
 	}
@@ -141,6 +171,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		clearInterval(this.poll);
 		this.listeners.clear();
 		for (const disposable of this.disposables) {
@@ -258,18 +289,16 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		return pid === undefined ? undefined : Object.entries(this.pids()).find(([, known]) => known === pid)?.[0];
 	}
 
-	/**
-	 * A terminal closed: an agent's has ended, unless the window is shutting down, which leaves the
-	 * agents to the next window to find, running or gone.
-	 */
+	/** A terminal closed: an agent's has ended, as `endOf` reads its exit status. */
 	private async closed(terminal: vscode.Terminal): Promise<void> {
 		const exit = terminal.exitStatus;
-		if (exit?.reason === vscode.TerminalExitReason.Shutdown) {
+		const end = endOf(exit?.reason === vscode.TerminalExitReason.Shutdown ? 'shutdown' : exit?.reason === vscode.TerminalExitReason.User ? 'user' : 'other', exit?.code);
+		if (!end) {
 			return;
 		}
 		const name = await this.nameOf(terminal);
 		if (name) {
-			this.report(name, { ...(exit?.code !== undefined ? { exitCode: exit.code } : {}), byThePerson: exit?.reason === vscode.TerminalExitReason.User });
+			this.report(name, end);
 			this.byName.delete(name);
 			const pids = this.pids();
 			delete pids[name];
@@ -314,17 +343,15 @@ function pidsIn(state: StateStore): { [name: string]: number } {
 }
 
 /**
- * The terminal an agent's process called `name` runs in: by that name, which it was given, else by
- * its process id. The ids are asked of all the terminals at once, each for a moment at most.
+ * The terminal an agent's launch called `name`, as `agentTerminalIndex` picks it: by the process id the
+ * launch recorded, where it is known, else by that name. The ids are asked of all the terminals at once,
+ * each for a moment at most.
  */
 async function terminalOf(name: string, pid: number | undefined): Promise<vscode.Terminal | undefined> {
 	const terminals = vscode.window.terminals;
-	const named = terminals.find(terminal => isNamed(terminal, name));
-	if (named || pid === undefined) {
-		return named;
-	}
-	const pids = await Promise.all(terminals.map(terminal => processIdOf(terminal)));
-	const index = pids.indexOf(pid);
+	const named = terminals.findIndex(terminal => isNamed(terminal, name));
+	const pids = pid === undefined ? [] : await Promise.all(terminals.map(terminal => processIdOf(terminal)));
+	const index = agentTerminalIndex(named, pids, pid, pid !== undefined && isProcessRunning(pid));
 	return index >= 0 ? terminals[index] : undefined;
 }
 
@@ -370,6 +397,19 @@ function exitedAsItStarted(executable: string, exitCode: number | undefined): st
 /** Whether the window has the command `id`: Facade's own are there only in Facade's workbench. */
 async function hasCommand(id: string): Promise<boolean> {
 	return (await vscode.commands.getCommands()).includes(id);
+}
+
+/**
+ * Settles once the window has the terminals it had back - reconnected to their processes, the editor
+ * area's restored - as Facade's workbench says, for a minute at most; without it, a few seconds after
+ * the extension host started. The window tells the extension host of each one as it has it.
+ */
+async function terminalsRestored(): Promise<void> {
+	if (!await hasCommand('_facade.terminal.whenRestored')) {
+		await timeout(SETTLE_MS);
+		return;
+	}
+	await Promise.race([Promise.resolve(vscode.commands.executeCommand('_facade.terminal.whenRestored')).catch(() => undefined), timeout(RESTORE_TIMEOUT_MS)]);
 }
 
 /** A terminal's process id, or undefined when the window has not told it within `waitMs`. */

@@ -579,13 +579,13 @@ suite('Transport: what an agent\'s end of the pipe reads from the window', () =>
 
 	test('a tool\'s result is read as text, with its data and whether it failed: anything else is none', () => {
 		assert.deepStrictEqual([
-			toolResultOf({ text: 'Started.', data: { pid: 7 } }),
+			toolResultOf({ text: 'Started.', data: { id: 7 } }),
 			toolResultOf({ text: 'No.', isError: true }),
 			toolResultOf({ text: 3 }),
 			toolResultOf({ text: 'Started.', data: 'main' }),
 			toolResultOf({ text: 'Started.', isError: 'no' }),
 			toolResultOf(null)
-		], [{ text: 'Started.', data: { pid: 7 } }, { text: 'No.', isError: true }, undefined, undefined, undefined, undefined]);
+		], [{ text: 'Started.', data: { id: 7 } }, { text: 'No.', isError: true }, undefined, undefined, undefined, undefined]);
 	});
 });
 
@@ -596,7 +596,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 	let temp: { dir: string; remove(): void };
 	let pipe: string;
 	let endpoint: PipeEndpoint<string>;
-	/** Who the window knows, by token: what the process table would answer. */
+	/** Who the window knows, by token: what the agent table would answer. */
 	let tokens: Map<string, string>;
 	const clients: StdioMcpClient[] = [];
 	/** The calls of `hang` that reached the window's end, which it never answers. */

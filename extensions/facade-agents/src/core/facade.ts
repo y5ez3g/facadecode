@@ -12,9 +12,9 @@ import { withFileLock } from '../base/lock';
 import { AgentCli, Environment, InstalledCli } from '../clis/cli';
 import { whyNotInstalled } from '../clis/config';
 import { writeTrust } from '../clis/trust';
-import { Caller, Exit, ExitKind, isLive, LiveProcess, MadeWorktree, Process, ProcessState, YOU_PID } from '../record/events';
+import { agentName, AgentTable, nameOfWorktree } from '../record/agents';
+import { Agent, AgentState, Caller, Exit, ExitKind, isLive, LiveAgent, MadeWorktree, PERSON } from '../record/events';
 import { injectedFile } from '../record/paths';
-import { agentName, nameOfWorktree, ProcessTable } from '../record/processes';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
 import { Launcher } from './launch';
@@ -27,19 +27,21 @@ import { AgentSetup, CliCatalog, Disposable, Ports, Repository, TerminalEnd, Tim
  */
 const TAKE_BACK_AGAIN_MS = 15_000;
 const TAKE_BACK_TRIES = 12;
-/** A PID, as a tool is given one. */
-const PID = /^\d+$/;
+/** An agent's number, as a tool is given it: `#7`, or `7`. */
+const NUMBER = /^#?(?<id>\d+)$/;
+/** An agent as Facade's words name it: `@name #7`. */
+const NAMED_NUMBER = /^@(?<name>\S+)\s+#(?<id>\d+)$/;
 
 /** What the core is made with: the record, the window's ports, the CLIs, and what agents are given. */
 export interface FacadeOptions {
-	readonly table: ProcessTable;
+	readonly table: AgentTable;
 	readonly ports: Ports;
 	readonly clis: CliCatalog;
 	readonly setup: AgentSetup;
 	readonly log: (message: string) => void;
 	/** The record of the files Facade put into folders, which every window shares: by default `~/.facade/injected.json`. */
 	readonly injected?: string;
-	/** How long the core waits, as the person sets it; where left out, two minutes for a new process to come up. */
+	/** How long the core waits, as the person sets it; where left out, two minutes for a new agent to come up. */
 	readonly timing?: () => Timing;
 }
 
@@ -47,7 +49,7 @@ export interface FacadeOptions {
 export interface SpawnRequest {
 	/** The CLI, by its id. */
 	readonly cli: string;
-	/** The model and the effort as the CLI takes them: Facade passes them on as they are, and the CLI refuses one it does not have. */
+	/** The model and the effort as the CLI takes them: Facade passes them on as they are, and no CLI checks them as it starts. */
 	readonly model: string;
 	readonly effort: string;
 	/** Its task, if it is given one. */
@@ -59,9 +61,9 @@ export interface SpawnRequest {
 	readonly folder?: string;
 }
 
-/** What `spawn` answers with: the process started, and where it works. */
+/** What `spawn` answers with: the agent started, and where it works. */
 export interface Spawned {
-	readonly pid: number;
+	readonly id: number;
 	readonly name: string;
 	readonly cli: string;
 	readonly model: string;
@@ -72,26 +74,25 @@ export interface Spawned {
 	readonly newWorktree: boolean;
 }
 
-/** One line of `ps`: a process as it is now. */
-export interface ProcessRow {
-	readonly pid: number;
-	/** Its parent now: the process that spawned it while that one runs, else the person. */
-	readonly ppid: number;
+/** One line of `ps`: an agent as it is now. */
+export interface AgentRow {
+	readonly id: number;
+	/** Its parent now: the agent that started it while that one runs; none, the person, else. */
+	readonly parent?: number;
 	readonly name: string;
-	readonly state: ProcessState;
+	readonly state: AgentState;
 	readonly cli: string;
 	readonly model: string;
-	/** None for a process a ledger of an older Facade recorded. */
-	readonly effort?: string;
+	readonly effort: string;
 	readonly worktree: string;
 	readonly folder: string;
 	readonly startTime: number;
 	readonly exit?: Exit;
 }
 
-/** What `kill` answers with: the process, and how it exited. */
+/** What `kill` answers with: the agent, and how it exited. */
 export interface Killed {
-	readonly pid: number;
+	readonly id: number;
 	readonly name: string;
 	/** Whether it had exited before the call: then its exit says how. */
 	readonly alreadyExited: boolean;
@@ -104,16 +105,17 @@ type Place =
 	| { readonly kind: 'new'; readonly repository: Repository; readonly head: string; readonly branch: string };
 
 /**
- * Facade, the kernel of AGENT-FRAMEWORK.md: it starts agents as processes, keeps their table, and ends
- * them, as Linux does. A process has a PID no other gets, a parent, and children; the person is PID 1,
- * who takes in the orphans. Facade knows what it did and what is certain - a process started, its MCP
- * server said hello, its terminal ended - and never what a process is doing: whether it works or waits
- * is its parent's to find out. Every caller comes through here - the contract for an agent's tool
- * calls, Start Agent for the person - and it reaches the window only through its ports.
+ * Facade, the kernel of AGENT-FRAMEWORK.md: it starts agents, keeps their table, and ends them, as an
+ * operating system does its processes. An agent has a number no other gets, a parent, and children; the
+ * person, who has no number, takes in the orphans. Facade knows what it did and what is certain - an
+ * agent started, its MCP server said hello, its terminal ended - and never what an agent is doing:
+ * whether it works or waits is its parent's to find out. Every caller comes through here - the contract
+ * for an agent's tool calls, Start Agent for the person - and it reaches the window only through its
+ * ports.
  */
 export class Facade implements Disposable {
 
-	private readonly table: ProcessTable;
+	private readonly table: AgentTable;
 	private readonly ports: Ports;
 	private readonly disposables: Disposable[] = [];
 	/** What this window put into folders for its agents, beside what other windows did. */
@@ -135,8 +137,8 @@ export class Facade implements Disposable {
 			setup: options.setup,
 			injections: this.injections,
 			...(options.timing ? { timing: options.timing } : {}),
-			terminalOf: process => this.terminalOf(process),
-			fail: (process, reason) => this.fail(process, reason),
+			terminalOf: agent => this.terminalOf(agent),
+			fail: (agent, reason) => this.fail(agent, reason),
 			log: message => this.log(message)
 		});
 		this.disposables.push(this.launcher, this.ports.terminals.onDidEnd((terminal, end) => this.terminalEnded(terminal, end)));
@@ -154,14 +156,14 @@ export class Facade implements Disposable {
 		this.takingBack = undefined;
 	}
 
-	/** The process with the PID `pid`, exited or not. */
-	process(pid: number): Process | undefined {
-		return this.table.get(pid);
+	/** The agent numbered `id`, exited or not. */
+	agent(id: number): Agent | undefined {
+		return this.table.get(id);
 	}
 
-	/** The process a caller is; undefined for the person. */
-	processOf(caller: Caller): Process | undefined {
-		return caller.pid === YOU_PID ? undefined : this.table.get(caller.pid);
+	/** The agent a caller is; undefined for the person. */
+	agentOf(caller: Caller): Agent | undefined {
+		return caller.id === undefined ? undefined : this.table.get(caller.id);
 	}
 
 	/** A CLI's name for people, by its id. */
@@ -175,20 +177,20 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * A process's MCP server said hello to Facade: it is running. One told of its task in its terminal is
+	 * An agent's MCP server said hello to Facade: it is running. One told of its task in its terminal is
 	 * told now; then it is up.
 	 */
 	connected(caller: Caller): void {
-		const process = this.processOf(caller);
-		if (!this.disposed && process?.state === 'starting') {
-			this.launcher.hello(process);
+		const agent = this.agentOf(caller);
+		if (!this.disposed && agent?.state === 'starting') {
+			this.launcher.hello(agent);
 		}
 	}
 
 	/**
 	 * Starts a child of the caller in its own UI: beside it, in a worktree of its repository, or in a new
-	 * worktree on the branch `name`, at the caller's HEAD. Answers once the child is up, with its PID; a
-	 * child that exits before fails the call. Once begun, a spawn is carried through: a caller that exits
+	 * worktree on the branch `name`, at the caller's HEAD. Answers once the child is up, with its number;
+	 * a child that exits before fails the call. Once begun, a spawn is carried through: a caller that exits
 	 * meanwhile leaves its child to the person. Its model and effort go to its CLI as they are: the CLI is
 	 * the one that knows which it has.
 	 */
@@ -204,7 +206,7 @@ export class Facade implements Disposable {
 			throw new FacadeError('INVALID', `effort is required: how hard the child thinks, as ${displayName} takes it - low, medium, high and so on.`);
 		}
 		const name = request.name === undefined ? undefined : this.nameOf(request.name);
-		const home = this.processOf(caller)?.folder ?? request.folder;
+		const home = this.agentOf(caller)?.folder ?? request.folder;
 		if (home === undefined) {
 			throw new FacadeError('INVALID', 'The person has no folder of their own: start an agent with Facade: Start Agent, in the folder on screen.');
 		}
@@ -225,7 +227,7 @@ export class Facade implements Disposable {
 			}
 			this.stillOpen();
 			worktree = place.branch;
-			this.table.recordWorktree({ name: worktree, folder, repository: place.repository.main, parentWorktree: place.repository.worktree, madeBy: caller.pid });
+			this.table.recordWorktree({ name: worktree, folder, repository: place.repository.main, parentWorktree: place.repository.worktree, ...(caller.id !== undefined ? { madeBy: caller.id } : {}) });
 		} else {
 			({ folder, worktree } = place);
 		}
@@ -235,74 +237,81 @@ export class Facade implements Disposable {
 		if (made) {
 			this.trust(installed, made, env);
 		}
-		const process = await this.launcher.launch(caller, installed, { name: name ?? nameOfWorktree(worktree), model, effort, prompt: request.prompt, worktree, folder, trusted: !!made }, progress);
-		return { pid: process.pid, name: process.name, cli: process.cli, model: process.model, effort, worktree: process.worktree, folder: process.folder, newWorktree: place.kind === 'new' };
+		const agent = await this.launcher.launch(caller, installed, { name: name ?? nameOfWorktree(worktree), model, effort, prompt: request.prompt, worktree, folder, trusted: !!made }, progress);
+		return { id: agent.id, name: agent.name, cli: agent.cli, model: agent.model, effort, worktree: agent.worktree, folder: agent.folder, newWorktree: place.kind === 'new' };
 	}
 
 	/**
-	 * The process table as the caller sees it: itself, its parent, and its children - those it spawned,
-	 * exited ones too, and those that are its own now; with `all`, every process the workspace has had.
-	 * By PID.
+	 * The agents as the caller sees them: itself, its parent, and its children - those it started, exited
+	 * ones too, and those that are its own now; with `all`, every agent the workspace has had. By number.
 	 */
-	ps(caller: Caller, all = false): ProcessRow[] {
-		const self = this.processOf(caller);
-		const parent = self && this.table.parentOf(self);
-		return [...this.table.state.processes.values()]
-			.filter(process => all
-				|| process.pid === caller.pid
-				|| process.pid === parent
-				|| process.ppid === caller.pid
-				|| (isLive(process) && this.table.parentOf(process) === caller.pid))
-			.sort((a, b) => a.pid - b.pid)
-			.map(process => ({
-				pid: process.pid,
-				ppid: this.table.parentOf(process),
-				name: process.name,
-				state: process.state,
-				cli: process.cli,
-				model: process.model,
-				...(process.effort !== undefined ? { effort: process.effort } : {}),
-				worktree: process.worktree,
-				folder: process.folder,
-				startTime: process.startTime,
-				...(process.exit ? { exit: process.exit } : {})
-			}));
+	ps(caller: Caller, all = false): AgentRow[] {
+		const self = this.agentOf(caller);
+		const ownParent = self && this.table.parentOf(self);
+		return [...this.table.state.agents.values()]
+			.filter(agent => all
+				|| agent.id === caller.id
+				|| agent.id === ownParent
+				|| agent.parent === caller.id
+				|| (isLive(agent) && this.table.parentOf(agent) === caller.id))
+			.sort((a, b) => a.id - b.id)
+			.map(agent => {
+				const parent = this.table.parentOf(agent);
+				return {
+					id: agent.id,
+					...(parent !== undefined ? { parent } : {}),
+					name: agent.name,
+					state: agent.state,
+					cli: agent.cli,
+					model: agent.model,
+					effort: agent.effort,
+					worktree: agent.worktree,
+					folder: agent.folder,
+					startTime: agent.startTime,
+					...(agent.exit ? { exit: agent.exit } : {})
+				};
+			});
 	}
 
 	/**
-	 * Ends one of the caller's children, as `kill` ends a process: its CLI ends and its terminal closes;
-	 * its folder stays as it is. Its own children run on, and are the person's now. The person ends any
-	 * process.
+	 * Ends one of the caller's children: its CLI ends and its terminal closes; its folder stays as it is.
+	 * Its own children run on, and are the person's now. The person ends any agent.
 	 */
 	async kill(caller: Caller, target: string): Promise<Killed> {
 		this.stillOpen();
-		const process = this.processNamed(target);
-		if (caller.pid !== YOU_PID && this.table.parentOf(process) !== caller.pid) {
-			throw new FacadeError('REFUSED', `${describe(process)} is not your child: an agent kills only its own children, and the person any. ${this.childrenOfText(caller)}`);
+		const agent = this.agentNamed(target);
+		if (caller.id !== undefined && this.table.parentOf(agent) !== caller.id) {
+			throw new FacadeError('REFUSED', `${describe(agent)} is not your child: an agent kills only its own children, and the person any. ${this.childrenOfText(caller)}`);
 		}
-		if (process.exit) {
-			return { pid: process.pid, name: process.name, alreadyExited: true, exit: process.exit };
+		if (agent.exit) {
+			return { id: agent.id, name: agent.name, alreadyExited: true, exit: agent.exit };
 		}
-		const exit = this.exited(process, 'killed', `killed by ${describe(caller)}`, caller.pid === YOU_PID);
-		// Only a window that closed records nothing for a process that has not exited.
+		const exit = this.exited(agent, 'killed', `killed by ${describe(caller)}`, caller.id === undefined);
+		// Only a window that closed records nothing for an agent that has not exited.
 		if (!exit) {
 			throw new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
 		}
 		// Recorded as killed already: a terminal that would not close is the log's to say, not the call's.
 		try {
-			await this.ports.terminals.stop(this.terminalOf(process));
+			await this.ports.terminals.stop(this.terminalOf(agent));
 		} catch (err) {
-			this.log(`${this.terminalOf(process)} could not be closed: ${messageOf(err)}`);
+			this.log(`${this.terminalOf(agent)} could not be closed: ${messageOf(err)}`);
 		}
-		return { pid: process.pid, name: process.name, alreadyExited: false, exit };
+		return { id: agent.id, name: agent.name, alreadyExited: false, exit };
 	}
 
 	/**
-	 * After a reload or a restart: a process whose terminal is gone has exited. One that was starting is
+	 * As Facade comes back - after a reload, a restart, or turned on again - an agent whose terminal is
+	 * gone has exited. When the window before was closed - the person quit Facade, closed the window, or
+	 * opened another workspace in it - and none of its agents came back, they went with it: killed by the
+	 * person, as a terminal they close is, without a word to them. After a reload, while Facade was off,
+	 * after a crash, or beside others that came back, one gone ended by itself. One that was starting is
 	 * waited for again, its MCP server's hello coming to this window; one not yet told of its task is told
 	 * now. What windows that closed left in folders is taken back.
+	 *
+	 * @param reloaded Whether a reload of the window before loaded this one.
 	 */
-	async recover(): Promise<void> {
+	async recover(reloaded = false): Promise<void> {
 		if (this.sweep()) {
 			this.takeBackLater();
 		}
@@ -312,19 +321,35 @@ export class Facade implements Disposable {
 				this.table.forgetWorktree(made.folder);
 			}
 		}
-		for (const process of this.liveProcesses()) {
+		const gone: LiveAgent[] = [];
+		let cameBack = false;
+		for (const agent of this.liveAgents()) {
 			// One whose terminal the window does not answer for keeps neither the others nor Facade from coming back.
 			try {
-				if (await this.ports.terminals.isAlive(this.terminalOf(process))) {
-					this.launcher.resume(process);
+				if (await this.ports.terminals.isAlive(this.terminalOf(agent))) {
+					cameBack = true;
+					this.launcher.resume(agent);
 				} else {
-					this.exited(process, process.state === 'starting' ? 'failed' : 'exited', 'its terminal was gone when the window came back');
+					gone.push(agent);
 				}
 			} catch (err) {
-				this.log(`Coming back to ${this.terminalOf(process)} failed: ${messageOf(err)}`);
+				this.log(`Coming back to ${this.terminalOf(agent)} failed: ${messageOf(err)}`);
 			}
 			if (this.disposed) {
 				return;
+			}
+		}
+		// The window before was closed: another workspace's, or this workspace's and not reloaded - not this
+		// very window, whose extension host started again, and not Facade letting go of its agents
+		const last = this.table.lastClose;
+		const windowClosed = last?.by === 'window' && !last.thisWindow && (!last.ownWindow || !reloaded);
+		const closedByThePerson = windowClosed && !cameBack;
+		// Children before their parents: a parent's exit then leaves no child that went with it to tell of as the person's
+		for (const agent of gone.sort((a, b) => b.id - a.id)) {
+			if (closedByThePerson) {
+				this.exited(agent, 'killed', 'the person closed its window', true);
+			} else {
+				this.exited(agent, agent.state === 'starting' ? 'failed' : 'exited', 'its terminal was gone when Facade came back');
 			}
 		}
 		// What was put into a folder whose agents exited while no window was there to see it.
@@ -336,7 +361,7 @@ export class Facade implements Disposable {
 	/** Where a child of the caller starts: in `home`, a worktree of its repository, or a new worktree to make. */
 	private async placeOf(caller: Caller, home: string, worktree: string | undefined, name: string | undefined): Promise<Place> {
 		if (worktree === undefined) {
-			return { kind: 'folder', folder: home, worktree: this.processOf(caller)?.worktree ?? await this.worktreeOf(home) };
+			return { kind: 'folder', folder: home, worktree: this.agentOf(caller)?.worktree ?? await this.worktreeOf(home) };
 		}
 		if (worktree === 'new' && name === undefined) {
 			throw new FacadeError('INVALID', 'name is required with worktree "new": the new worktree\'s branch is named after the child.');
@@ -359,17 +384,18 @@ export class Facade implements Disposable {
 		return { kind: 'folder', folder: found.folder, worktree: found.name };
 	}
 
-	/** An agent's terminal ended: its process exited, unless it had already. */
+	/** An agent's terminal ended: the agent exited, unless it had already. Its CLI's exit code is said where it is not 0. */
 	private terminalEnded(terminal: string, end: TerminalEnd): void {
-		const process = this.liveProcesses().find(each => this.terminalOf(each) === terminal);
-		if (!process) {
+		const agent = this.liveAgents().find(each => this.terminalOf(each) === terminal);
+		if (!agent) {
 			return;
 		}
 		try {
 			if (end.byThePerson) {
-				this.exited(process, 'killed', 'the person closed its terminal', true);
+				this.exited(agent, 'killed', 'the person closed its terminal', true);
 			} else {
-				this.exited(process, process.state === 'starting' ? 'failed' : 'exited', end.exitCode !== undefined ? `its CLI ended with exit code ${end.exitCode}` : 'its terminal closed');
+				const reason = end.exitCode === undefined ? 'its terminal closed' : end.exitCode === 0 ? 'its CLI ended' : `its CLI ended with exit code ${end.exitCode}`;
+				this.exited(agent, agent.state === 'starting' ? 'failed' : 'exited', reason);
 			}
 		} catch (err) {
 			this.log(`Recording that ${terminal} ended failed: ${messageOf(err)}`);
@@ -377,44 +403,45 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * Records how a process exited - once - and takes back what was put into its folder once no process
-	 * runs there. The person hears of a child of theirs that exited without their doing, and of the
-	 * children that are theirs now; an agent parent sees it in `ps`. Answers with its exit; undefined for
-	 * a process that had exited already, or once the window closed.
+	 * Records how an agent exited - once - and takes back what was put into its folder once no agent runs
+	 * there. The person hears of a child of theirs that exited without their doing, and of the children
+	 * that are theirs now; an agent parent sees it in `ps`. Answers with its exit; undefined for an agent
+	 * that had exited already, or once the window closed.
 	 */
-	private exited(process: Process, kind: ExitKind, reason: string, byThePerson = false): Exit | undefined {
+	private exited(agent: Agent, kind: ExitKind, reason: string, byThePerson = false): Exit | undefined {
 		if (this.disposed) {
 			return undefined;
 		}
-		const parent = this.table.parentOf(process);
-		const orphans = this.table.childrenOf(process.pid);
-		const waiter = this.launcher.waiterOf(process.pid);
-		const exit = this.table.setExited(process.pid, kind, reason);
+		const parent = this.table.parentOf(agent);
+		const orphans = this.table.childrenOf(agent.id);
+		const waiter = this.launcher.waiterOf(agent.id);
+		const exit = this.table.setExited(agent.id, kind, reason);
 		if (!exit) {
 			return undefined;
 		}
-		this.log(`${this.terminalOf(process)} exited (${kind}): ${reason}`);
-		this.launcher.ended(process.pid, reason);
-		this.withdraw(process.folder);
+		this.log(`${this.terminalOf(agent)} exited (${kind}): ${reason}`);
+		this.launcher.ended(agent.id, reason);
+		this.withdraw(agent.folder);
 		// A spawn of the person's tells them itself.
-		if (parent === YOU_PID && !byThePerson && waiter !== YOU_PID) {
-			this.ports.person.tell(l10n.t("@{0} (PID {1}) exited: {2}.", process.name, process.pid, reason), undefined);
+		const spawnOfThePerson = waiter !== undefined && waiter.id === undefined;
+		if (parent === undefined && !byThePerson && !spawnOfThePerson) {
+			this.ports.person.tell(l10n.t("@{0} #{1} exited: {2}.", agent.name, agent.id, reason), undefined);
 		}
 		if (orphans.length) {
-			this.ports.person.tell(l10n.t("@{0} (PID {1}) exited, and its children are yours now: {2}.", process.name, process.pid, orphans.map(describe).join(', ')), this.terminalOf(orphans[0]));
+			this.ports.person.tell(l10n.t("@{0} #{1} exited, and its children are yours now: {2}.", agent.name, agent.id, orphans.map(describe).join(', ')), this.terminalOf(orphans[0]));
 		}
 		return exit;
 	}
 
-	/** Ends a process that did not come up, or could not be told of its task: recorded as failed, and its terminal closed. */
-	private async fail(process: Process, reason: string): Promise<void> {
-		if (!this.exited(process, 'failed', reason)) {
+	/** Ends an agent that did not come up, or could not be told of its task: recorded as failed, and its terminal closed. */
+	private async fail(agent: Agent, reason: string): Promise<void> {
+		if (!this.exited(agent, 'failed', reason)) {
 			return;
 		}
 		try {
-			await this.ports.terminals.stop(this.terminalOf(process));
+			await this.ports.terminals.stop(this.terminalOf(agent));
 		} catch (err) {
-			this.log(`${this.terminalOf(process)} could not be closed: ${messageOf(err)}`);
+			this.log(`${this.terminalOf(agent)} could not be closed: ${messageOf(err)}`);
 		}
 	}
 
@@ -437,7 +464,7 @@ export class Facade implements Disposable {
 
 	/** Takes back what Facade put into a folder for this window's agents, once none of them runs there. */
 	private withdraw(folder: string): void {
-		if (this.liveProcesses().some(process => isEqualPath(process.folder, folder))) {
+		if (this.liveAgents().some(agent => isEqualPath(agent.folder, folder))) {
 			return;
 		}
 		try {
@@ -499,34 +526,41 @@ export class Facade implements Disposable {
 		return { ...this.options.clis.environment(), ...installed.config.launch.environment };
 	}
 
-	/** The process a tool names: by its PID, or by `@name` where one process that has not exited has that name. */
-	private processNamed(target: string): Process {
+	/**
+	 * The agent a tool names: by its number, `#7`; by `@name`, where one agent that has not exited has
+	 * that name; or as Facade's words name it, `@name #7`, the number that agent's.
+	 */
+	private agentNamed(target: string): Agent {
 		const text = target.trim();
-		if (PID.test(text)) {
-			const pid = Number(text);
-			if (pid === YOU_PID) {
-				throw new FacadeError('REFUSED', 'PID 1 is the person, whom no agent ends.');
+		const numbered = NAMED_NUMBER.exec(text)?.groups ?? NUMBER.exec(text)?.groups;
+		if (numbered) {
+			const id = Number(numbered.id);
+			const agent = this.table.get(id);
+			if (!agent) {
+				throw new FacadeError('NOT_FOUND', `No agent is #${id}: ps with all lists every agent this workspace has had.`);
 			}
-			const process = this.table.get(pid);
-			if (!process) {
-				throw new FacadeError('NOT_FOUND', `No process has PID ${pid}: ps with all lists every process this workspace has had.`);
+			if (numbered.name !== undefined && numbered.name.toLowerCase() !== agent.name) {
+				throw new FacadeError('INVALID', `#${id} is @${agent.name}, not @${numbered.name}: name it by its number alone, or by its name.`);
 			}
-			return process;
+			return agent;
 		}
 		const name = text.replace(/^@/, '').toLowerCase();
+		if (name === PERSON.name) {
+			throw new FacadeError('REFUSED', `@${name} is the person, whom no agent ends.`);
+		}
 		const named = this.table.liveNamed(name);
 		if (named.length > 1) {
-			throw new FacadeError('INVALID', `${named.length} running processes are called @${name}: ${named.map(describe).join(', ')}. Name one by its PID.`);
+			throw new FacadeError('INVALID', `${named.length} running agents are called @${name}: ${named.map(describe).join(', ')}. Name one by its number.`);
 		}
 		if (!named.length) {
-			throw new FacadeError('NOT_FOUND', `No running process is called @${name}: name an exited one by its PID, which ps with all lists.`);
+			throw new FacadeError('NOT_FOUND', `No running agent is called @${name}: name an exited one by its number, which ps with all lists.`);
 		}
 		return named[0];
 	}
 
 	/** Whom the caller can kill, for a refusal to name. */
 	private childrenOfText(caller: Caller): string {
-		const children = this.table.childrenOf(caller.pid).map(describe);
+		const children = this.table.childrenOf(caller.id).map(describe);
 		return children.length ? `Your running children: ${children.join(', ')}.` : 'You have no running children.';
 	}
 
@@ -548,13 +582,13 @@ export class Facade implements Disposable {
 		return this.options.clis.known.find(cli => cli.id === id);
 	}
 
-	/** The name of the terminal a process runs in: unique per process, and the same after a reload. */
-	private terminalOf(process: Process): string {
-		return `@${process.name} (${process.pid}) · ${this.cliName(process.cli)}`;
+	/** The name of the terminal an agent runs in: unique per agent, and the same after a reload. */
+	private terminalOf(agent: Agent): string {
+		return `@${agent.name} #${agent.id} · ${this.cliName(agent.cli)}`;
 	}
 
-	private liveProcesses(): LiveProcess[] {
-		return [...this.table.state.processes.values()].filter(isLive);
+	private liveAgents(): LiveAgent[] {
+		return [...this.table.state.agents.values()].filter(isLive);
 	}
 
 	private log(message: string): void {
@@ -569,7 +603,7 @@ export class Facade implements Disposable {
 	}
 }
 
-/** A process or the person, as Facade's words name them: `@name (PID 7)`, or `the person`. */
-function describe(who: { readonly pid: number; readonly name: string }): string {
-	return who.pid === YOU_PID ? 'the person' : `@${who.name} (PID ${who.pid})`;
+/** An agent or the person, as Facade's words name them: `@name #7`, or `the person`. */
+function describe(who: Caller): string {
+	return who.id === undefined ? 'the person' : `@${who.name} #${who.id}`;
 }

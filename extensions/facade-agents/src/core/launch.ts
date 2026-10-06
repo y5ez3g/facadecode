@@ -11,14 +11,14 @@ import { messageOf } from '../base/errors';
 import { AgentCli, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec } from '../clis/cli';
 import { launchTarget, unsafeForCmd } from '../clis/executable';
 import { trustTarget } from '../clis/trust';
-import { Caller, isLive, Process, YOU_PID } from '../record/events';
-import { ProcessTable } from '../record/processes';
+import { AgentTable } from '../record/agents';
+import { Agent, Caller, isLive } from '../record/events';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
 import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
 
 /**
- * How long Facade waits where the person sets nothing else: two minutes, for a new process to come up,
+ * How long Facade waits where the person sets nothing else: two minutes, for a new agent to come up,
  * and for an agent's MCP server to find the window again.
  */
 export const START_TIMEOUT_MS = 120_000;
@@ -37,41 +37,41 @@ export interface Run {
 
 /** What a launch needs of the core around it. */
 export interface LaunchContext {
-	readonly table: ProcessTable;
+	readonly table: AgentTable;
 	readonly ports: Ports;
 	readonly clis: CliCatalog;
 	readonly setup: AgentSetup;
 	readonly injections: Injections;
 	/** How long the core waits, as the person sets it. */
 	readonly timing?: () => Timing;
-	/** The name of the terminal a process runs in. */
-	terminalOf(process: Process): string;
-	/** Ends a process that did not come up, or could not be told of its task: recorded as failed, its terminal closed. */
-	fail(process: Process, reason: string): Promise<void>;
+	/** The name of the terminal an agent runs in. */
+	terminalOf(agent: Agent): string;
+	/** Ends an agent that did not come up, or could not be told of its task: recorded as failed, its terminal closed. */
+	fail(agent: Agent, reason: string): Promise<void>;
 	log(message: string): void;
 }
 
-/** A process on its way up. */
+/** An agent on its way up. */
 interface Startup {
-	/** Settles once the process is up - its MCP server said hello, and it was told of its task where it is told in its terminal - or once it exited. */
+	/** Settles once the agent is up - its MCP server said hello, and it was told of its task where it is told in its terminal - or once it exited. */
 	readonly up: DeferredPromise<void>;
 	/** Ends it as failed once its time to come up is over; cleared by its MCP server's hello. */
 	timer: ReturnType<typeof setTimeout> | undefined;
-	/** The PID of the caller whose spawn waits for it; none for one found starting after a reload. */
-	readonly waiter?: number;
+	/** The caller whose spawn waits for it; none for one found starting after a reload. */
+	readonly waiter?: Caller;
 }
 
 /**
  * Launches children: each recorded, its CLI started in its terminal, and waited for until it is up -
  * its MCP server said hello and, for a CLI told of its task in its terminal, the line telling it was
- * typed. After a reload, a process found starting is waited for again, and one not yet told of its task
+ * typed. After a reload, an agent found starting is waited for again, and one not yet told of its task
  * is told.
  */
 export class Launcher implements Disposable {
 
-	/** The processes on their way up, by PID. */
+	/** The agents on their way up, by number. */
 	private readonly startups = new Map<number, Startup>();
-	/** The processes whose task is being typed into their terminals, by PID: once each. */
+	/** The agents whose task is being typed into their terminals, by number: once each. */
 	private readonly typing = new Set<number>();
 	private disposed = false;
 
@@ -118,7 +118,7 @@ export class Launcher implements Disposable {
 	 * Records `run` as a new child of the caller, starts its CLI in its terminal, and waits until it is up.
 	 * Should anything fail on the way, the child is ended as failed, and the call fails with why.
 	 */
-	async launch(caller: Caller, installed: InstalledCli, run: Run, progress: ((message: string) => void) | undefined): Promise<Process> {
+	async launch(caller: Caller, installed: InstalledCli, run: Run, progress: ((message: string) => void) | undefined): Promise<Agent> {
 		const { table, ports, setup } = this.context;
 		const { cli } = installed;
 		// No text of an agent's or the person's goes through cmd.exe, where it could run commands: a CLI
@@ -126,26 +126,26 @@ export class Launcher implements Disposable {
 		// MCP tools is.
 		const inTerminal = cli.task === 'terminal' || launchTarget(installed.executable).throughCmd;
 		const { prompt } = run;
-		const first = prompt === undefined ? undefined : (pid: number) => `${setup.opening({ pid, name: run.name, cliName: cli.displayName }, caller)}\n\n${prompt}`;
+		const first = prompt === undefined ? undefined : (id: number) => `${setup.opening({ id, name: run.name, cliName: cli.displayName }, caller)}\n\n${prompt}`;
 		this.stillOpen();
-		const started = table.start({ name: run.name, ppid: caller.pid, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}) });
-		const { process } = started;
-		const startup = this.watch(process, caller.pid);
-		const terminal = this.context.terminalOf(process);
-		if (caller.pid !== YOU_PID && !isLive(table.get(caller.pid))) {
-			ports.person.tell(l10n.t("@{0} (PID {1}) exited while it started @{2} (PID {3}), which is yours now.", caller.name, caller.pid, process.name, process.pid), terminal);
+		const started = table.start({ name: run.name, parent: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}) });
+		const { agent } = started;
+		const startup = this.watch(agent, caller);
+		const terminal = this.context.terminalOf(agent);
+		if (caller.id !== undefined && !isLive(table.get(caller.id))) {
+			ports.person.tell(l10n.t("@{0} #{1} exited while it started @{2} #{3}, which is yours now.", caller.name, caller.id, agent.name, agent.id), terminal);
 		}
 		try {
 			const { spec, args, throughCmd } = this.launchOf(installed, {
 				folder: run.folder,
 				trusted: run.trusted,
-				...(!inTerminal && first ? { prompt: first(process.pid) } : {}),
+				...(!inTerminal && first ? { prompt: first(agent.id) } : {}),
 				model: run.model,
 				effort: run.effort,
 				mcp: cli.sharedServer ? setup.sharedMcpServer() : setup.mcpServer(started.tokenFile),
 				skills: setup.skills(),
 				runDir: table.runsDir,
-				slug: String(process.pid)
+				slug: String(agent.id)
 			});
 			for (const file of spec.files) {
 				fs.mkdirSync(path.dirname(file.path), { recursive: true });
@@ -156,55 +156,55 @@ export class Launcher implements Disposable {
 			// A server the same for every launch finds the agent from its environment.
 			const env = cli.sharedServer ? { ...spec.env, ...setup.agentEnv(started.token) } : spec.env;
 			this.context.log(`Starting ${terminal} in ${run.folder}, the worktree ${run.worktree}${throughCmd ? ', through cmd.exe' : ''}.`);
-			progress?.(`Starting @${process.name}, PID ${process.pid}.`);
-			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.pid === YOU_PID });
+			progress?.(`Starting @${agent.name} #${agent.id}.`);
+			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined });
 		} catch (err) {
 			// A window that closed leaves it to the next one: starting, or gone with its terminal.
 			if (err instanceof FacadeError && err.code === 'UNAVAILABLE') {
 				throw err;
 			}
-			await this.context.fail(process, messageOf(err));
-			throw didNotStart(cli, process, messageOf(err));
+			await this.context.fail(agent, messageOf(err));
+			throw didNotStart(cli, agent, messageOf(err));
 		}
-		progress?.(`Waiting for @${process.name} to come up.`);
+		progress?.(`Waiting for @${agent.name} to come up.`);
 		try {
 			await startup.up.p;
 		} catch (err) {
-			throw err instanceof FacadeError ? err : didNotStart(cli, process, messageOf(err));
+			throw err instanceof FacadeError ? err : didNotStart(cli, agent, messageOf(err));
 		}
-		return process;
+		return agent;
 	}
 
-	/** A starting process's MCP server said hello: it is running, and is told of its task where it is told in its terminal. */
-	hello(process: Process): void {
-		if (this.disposed || process.state !== 'starting') {
+	/** A starting agent's MCP server said hello: it is running, and is told of its task where it is told in its terminal. */
+	hello(agent: Agent): void {
+		if (this.disposed || agent.state !== 'starting') {
 			return;
 		}
-		this.context.table.setRunning(process.pid);
-		this.context.log(`${this.context.terminalOf(process)} is running: its MCP server said hello.`);
-		const startup = this.startups.get(process.pid);
+		this.context.table.setRunning(agent.id);
+		this.context.log(`${this.context.terminalOf(agent)} is running: its MCP server said hello.`);
+		const startup = this.startups.get(agent.id);
 		if (startup) {
 			clearTimeout(startup.timer);
 			startup.timer = undefined;
 		}
-		this.bringUp(process);
+		this.bringUp(agent);
 	}
 
-	/** After a reload: a process that was starting is waited for again; one running but not yet told of its task is told. */
-	resume(process: Process): void {
-		if (!this.isRunning(process)) {
+	/** After a reload: an agent that was starting is waited for again; one running but not yet told of its task is told. */
+	resume(agent: Agent): void {
+		if (!this.isRunning(agent)) {
 			return;
 		}
-		if (process.state !== 'starting') {
-			this.bringUp(process);
-		} else if (!this.startups.has(process.pid)) {
-			this.watch(process, undefined);
+		if (agent.state !== 'starting') {
+			this.bringUp(agent);
+		} else if (!this.startups.has(agent.id)) {
+			this.watch(agent, undefined);
 		}
 	}
 
-	/** The PID of the caller whose spawn waits for `pid` to come up, if one does. */
-	waiterOf(pid: number): number | undefined {
-		return this.startups.get(pid)?.waiter;
+	/** The caller whose spawn waits for the agent `id` to come up, if one does. */
+	waiterOf(id: number): Caller | undefined {
+		return this.startups.get(id)?.waiter;
 	}
 
 	/**
@@ -223,86 +223,86 @@ export class Launcher implements Disposable {
 		return { spec, args, throughCmd: target.throughCmd };
 	}
 
-	/** A process exited: the spawn that waits for it fails with why. */
-	ended(pid: number, reason: string): void {
-		const startup = this.startups.get(pid);
+	/** An agent exited: the spawn that waits for it fails with why. */
+	ended(id: number, reason: string): void {
+		const startup = this.startups.get(id);
 		if (startup) {
-			this.startups.delete(pid);
+			this.startups.delete(id);
 			clearTimeout(startup.timer);
 			startup.up.error(new Error(reason));
 		}
 	}
 
-	/** Waits for a starting process to come up, for the time it has: then it is ended as failed. */
-	private watch(process: Process, waiter: number | undefined): Startup {
+	/** Waits for a starting agent to come up, for the time it has: then it is ended as failed. */
+	private watch(agent: Agent, waiter: Caller | undefined): Startup {
 		const ms = this.timing().startTimeoutMs;
 		const startup: Startup = {
 			up: new DeferredPromise<void>(),
 			timer: setTimeout(() => {
 				startup.timer = undefined;
-				if (this.context.table.get(process.pid)?.state === 'starting') {
-					this.background(`Ending ${this.context.terminalOf(process)}`, this.context.fail(process, `it did not come up within ${Math.round(ms / 1000)} seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal`));
+				if (this.context.table.get(agent.id)?.state === 'starting') {
+					this.background(`Ending ${this.context.terminalOf(agent)}`, this.context.fail(agent, `it did not come up within ${Math.round(ms / 1000)} seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal`));
 				}
 			}, ms),
 			...(waiter !== undefined ? { waiter } : {})
 		};
 		// Seen by the spawn that waits for it, if one does: never a rejection nobody handles.
 		startup.up.p.catch(() => undefined);
-		this.startups.set(process.pid, startup);
+		this.startups.set(agent.id, startup);
 		return startup;
 	}
 
-	/** Tells a running process of its task where it is told in its terminal, once; then it is up. */
-	private bringUp(process: Process): void {
-		if (process.taskFile === undefined || process.taskTyped) {
-			this.isUp(process);
-		} else if (!this.typing.has(process.pid)) {
-			this.typing.add(process.pid);
-			this.background(`Telling ${this.context.terminalOf(process)} of its task`, this.typeTask(process, process.taskFile).finally(() => this.typing.delete(process.pid)));
+	/** Tells a running agent of its task where it is told in its terminal, once; then it is up. */
+	private bringUp(agent: Agent): void {
+		if (agent.taskFile === undefined || agent.taskTyped) {
+			this.isUp(agent);
+		} else if (!this.typing.has(agent.id)) {
+			this.typing.add(agent.id);
+			this.background(`Telling ${this.context.terminalOf(agent)} of its task`, this.typeTask(agent, agent.taskFile).finally(() => this.typing.delete(agent.id)));
 		}
 	}
 
 	/**
-	 * Types the line that tells a process of its task file into its terminal, a moment after its MCP
+	 * Types the line that tells an agent of its task file into its terminal, a moment after its MCP
 	 * server's hello, and presses Enter after the pause its CLI needs. One that cannot be told is failed.
 	 */
-	private async typeTask(process: Process, taskFile: string): Promise<void> {
+	private async typeTask(agent: Agent, taskFile: string): Promise<void> {
 		const { table, ports } = this.context;
-		const terminal = this.context.terminalOf(process);
+		const terminal = this.context.terminalOf(agent);
 		try {
-			const cli = this.context.clis.known.find(each => each.id === process.cli);
+			const cli = this.context.clis.known.find(each => each.id === agent.cli);
 			if (!cli) {
-				throw new Error(`Facade does not know the CLI ${process.cli}`);
+				throw new Error(`Facade does not know the CLI ${agent.cli}`);
 			}
 			const { taskDelay, enterDelay } = this.context.clis.configOf(cli).launch;
 			await timeout(taskDelay);
-			if (!this.isRunning(process)) {
+			if (!this.isRunning(agent)) {
 				return;
 			}
 			if (!await ports.terminals.type(terminal, `[facade] Your task is in ${taskFile}: read that file, then do what it says.`)) {
 				throw new Error('its terminal was not there');
 			}
 			await timeout(enterDelay);
-			if (!this.isRunning(process)) {
+			if (!this.isRunning(agent)) {
 				return;
 			}
 			await ports.terminals.type(terminal, '\r');
-			if (!this.isRunning(process)) {
+			if (!this.isRunning(agent)) {
 				return;
 			}
-			table.setTaskTyped(process.pid);
+			table.setTaskTyped(agent.id);
 			this.context.log(`${terminal} was told of its task, in ${taskFile}.`);
-			this.isUp(process);
+			this.isUp(agent);
 		} catch (err) {
-			await this.context.fail(process, `its task could not be typed into its terminal: ${messageOf(err)}`);
+			await this.context.fail(agent, `its task could not be typed into its terminal: ${messageOf(err)}`);
 		}
 	}
 
-	/** A process is up: the spawn that waits for it answers. */
-	private isUp(process: Process): void {
-		const startup = this.startups.get(process.pid);
+	/** An agent is up: the spawn that waits for it answers. */
+	private isUp(agent: Agent): void {
+		const startup = this.startups.get(agent.id);
 		if (startup) {
-			this.startups.delete(process.pid);
+			this.startups.delete(agent.id);
 			clearTimeout(startup.timer);
 			startup.up.complete();
 		}
@@ -313,9 +313,9 @@ export class Launcher implements Disposable {
 		return this.context.timing?.() ?? { startTimeoutMs: START_TIMEOUT_MS };
 	}
 
-	/** Whether the window is open and `process` has not exited: what is done for it goes on. */
-	private isRunning(process: Process): boolean {
-		return !this.disposed && isLive(this.context.table.get(process.pid));
+	/** Whether the window is open and `agent` has not exited: what is done for it goes on. */
+	private isRunning(agent: Agent): boolean {
+		return !this.disposed && isLive(this.context.table.get(agent.id));
 	}
 
 	/**
@@ -347,6 +347,6 @@ export class Launcher implements Disposable {
 	}
 }
 
-function didNotStart(cli: AgentCli, process: Process, reason: string): FacadeError {
-	return new FacadeError('FAILED', `${cli.displayName} did not start as @${process.name} (PID ${process.pid}): ${reason}`);
+function didNotStart(cli: AgentCli, agent: Agent, reason: string): FacadeError {
+	return new FacadeError('FAILED', `${cli.displayName} did not start as @${agent.name} #${agent.id}: ${reason}`);
 }

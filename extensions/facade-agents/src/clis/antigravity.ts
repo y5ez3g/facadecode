@@ -30,7 +30,8 @@ export const antigravityCli: AgentCli = {
 				// waits behind this one and is that next conversation.
 				warmUp: ['-i', 'Reply with the single word ready, and nothing else.'],
 				fullAccess: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
-				// A model's base name, as `gemini-3.8-flash`, which `--effort` picks a variant of.
+				// A model's base name, as `gemini-3.8-flash`, which `--effort` picks a variant of. One it does not
+				// have it puts aside for its own default, and its effort with it, without a word.
 				model: ['--model', '${model}'],
 				effort: ['--effort', '${effort}']
 			},

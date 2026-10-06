@@ -19,7 +19,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		[FOLLOW_FOLDER]: {
 			type: 'boolean',
-			description: localize('terminal.followFolder', "Controls whether a terminal in the editor area belongs to the folder it was opened in. When enabled, leaving that folder hides the terminal and returning shows the same shell again. When disabled, a terminal in the editor area is closed by the switch."),
+			description: localize('terminal.followFolder', "Controls whether a terminal in the editor area belongs to the folder it was opened in. When enabled, leaving that folder hides the terminal and returning shows the same shell again. When disabled, it belongs to the window, as a terminal in the panel does, and stays on screen as the window moves between folders."),
 			default: true,
 			scope: ConfigurationScope.APPLICATION
 		}

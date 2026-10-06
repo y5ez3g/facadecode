@@ -6,7 +6,8 @@
 import { DeferredPromise } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter } from '../../../../base/common/event.js';
-import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { joinPath } from '../../../../base/common/resources.js';
 import { isBoolean, isNumber, isObject, isString } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -22,13 +23,14 @@ import { folderKey } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { getWorkbenchContribution, IWorkbenchContribution } from '../../../common/contributions.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
-import { GroupsOrder, IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
+import { GroupsOrder, IEditorGroup, IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { EditorGroupColumn } from '../../../services/editor/common/editorGroupColumn.js';
 import { AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 
 /**
- * Controls whether a terminal in the editor area belongs to the folder it was opened in.
+ * Controls whether a terminal in the editor area belongs to the folder it was opened in. Off, it belongs
+ * to the window, as one in the panel does.
  */
 export const FOLLOW_FOLDER = 'facade.terminal.followFolder';
 
@@ -39,17 +41,19 @@ export interface IFolderTerminalsService {
 	readonly _serviceBrand: undefined;
 
 	/**
-	 * The terminals `folder` has in the editor area: put away while the window is elsewhere, or there
-	 * now while it is on it - the ones leaving it puts away, or without {@link FOLLOW_FOLDER} closes,
-	 * and taking it out of the workspace stops. For a row of the bar that has not joined the workspace,
-	 * those held under it ({@link openFor}).
+	 * The terminals `folder` has, which taking it out of the workspace stops: those opened for it
+	 * ({@link openFor}) wherever they are, the panel's too, and in the editor area those put away while
+	 * the window is elsewhere or there now - the ones leaving it puts away for it. Without
+	 * {@link FOLLOW_FOLDER} the editor area's there now are the window's, unless opened for it. For a row
+	 * of the bar that has not joined the workspace, those opened for it.
 	 */
 	terminalsOf(folder: URI): readonly ITerminalInstance[];
 
 	/**
-	 * The folder a terminal belongs to, by its row on the bar: the one it is put away for - a folder of
-	 * the workspace, or a row that has not joined it - or while it has a tab, the one the window is on.
-	 * `undefined` for a terminal that belongs to the window, in the panel.
+	 * The folder a terminal belongs to, by its row on the bar: the one it was opened for, wherever it is;
+	 * else the one it is put away for, or while it has a tab the one it was opened in. `undefined` for a
+	 * terminal that belongs to the window: one opened in the panel for none, or without
+	 * {@link FOLLOW_FOLDER} one in the editor area.
 	 */
 	folderOf(instance: ITerminalInstance): URI | undefined;
 
@@ -66,9 +70,11 @@ export interface IFolderTerminalsService {
 	 * front of what is on screen or take the focus. A folder of the workspace keeps it, and so does a
 	 * row of the bar that has not joined the workspace yet - a worktree's, or a repository's whose
 	 * checkout is not one of the workspace's folders: it comes up behind the tabs of the column in front
-	 * while the window is on that folder, and is held for it until the window goes there otherwise. Any
-	 * other folder's, and every one while terminals do not follow folders, is the panel's, the window's
-	 * own. {@link reveal} puts it in front.
+	 * while the window is on that folder, and is held for it until the window goes there otherwise. While
+	 * terminals do not follow folders it comes up in the panel, its folder's all the same. Wherever it is,
+	 * it ends with its folder: when the folder leaves the workspace - a row's, with its repository - and
+	 * once git has no worktree there any more. Any other folder's is the panel's, the window's own.
+	 * {@link reveal} puts it in front.
 	 */
 	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance>;
 }
@@ -106,6 +112,12 @@ const NO_GROUP = -2;
  * editor grid.
  */
 const AUXILIARY_WINDOW = -1;
+
+/**
+ * What the editor area's terminals are held under on their way from one folder to the next while they
+ * do not follow folders: the window, not a folder - whose keys are never empty.
+ */
+const WINDOW = '';
 
 /**
  * A terminal that has been taken out of the editor area, and the tab it should be given back.
@@ -164,6 +176,44 @@ interface IHeldRow {
 	readonly members: ReadonlySet</*folder*/string> | undefined;
 }
 
+/** A terminal opened for a folder (`openFor`), and that folder (`FolderTerminals._openedFor`). */
+interface IOpenedFor {
+	readonly key: string;
+	readonly uri: URI;
+
+	/** Whether it was a folder of the workspace when the workspace's folders last changed, not a row that had not joined it. */
+	joined: boolean;
+
+	/**
+	 * The folders of the workspace its repository has, as the bar last read them: a row goes with the last
+	 * of them. Undefined for a folder in no repository, which git's records say nothing of.
+	 */
+	members: ReadonlySet</*folder*/string> | undefined;
+
+	readonly listener: IDisposable;
+}
+
+/** Where the folders terminals were opened for are kept while the window is closed, by each terminal's nonce. */
+export const OPENED_FOR_STORAGE_KEY = 'facade.folderTerminals.openedFor';
+
+/** What was kept of the folders terminals were opened for, by nonce. Storage that cannot be read keeps nothing. */
+function readOpenedFor(value: string | undefined): Map</*nonce*/string, URI> {
+	const kept = new Map<string, URI>();
+	try {
+		const stored: unknown = value ? JSON.parse(value) : undefined;
+		if (isObject(stored)) {
+			for (const [nonce, uri] of Object.entries(stored)) {
+				if (isString(uri)) {
+					kept.set(nonce, URI.parse(uri));
+				}
+			}
+		}
+	} catch {
+		// Nothing kept
+	}
+	return kept;
+}
+
 function isStoredParkedTerminal(candidate: unknown): candidate is IStoredParkedTerminal {
 	if (!isObject(candidate)) {
 		return false;
@@ -203,7 +253,9 @@ function readParkedTerminals(value: string | undefined): Map</*folder*/string, I
  * Switching folders applies an editor working set, which closes every editor that is not part of
  * it. A `TerminalEditorInput` disposes its instance when it is closed, so without this the shells
  * of the folder being left are killed. Terminals are instead moved to the background before the
- * working set is captured, and shown again once the incoming folder's editors are up.
+ * working set is captured, and shown again once the incoming folder's editors are up: each folder's
+ * when the window comes back to it, and without {@link FOLLOW_FOLDER} all of them, the window's, with
+ * whichever folder it goes to.
  */
 export class FolderTerminals extends Disposable implements IWorkbenchContribution {
 
@@ -221,6 +273,24 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 * folder, gone from disk (`_pruneGoneRows`).
 	 */
 	private readonly _rows = new Map</*folder*/string, IHeldRow>();
+
+	/**
+	 * The folder a terminal was opened in, for one that has left it with the window while terminals did
+	 * not follow folders. One with no record is the folder's it is on screen in: opened there, or shown
+	 * again there, the folder it is put away for.
+	 */
+	private readonly _origins = new WeakMap<ITerminalInstance, /*folder*/string>();
+
+	/**
+	 * The terminals opened for a folder of the workspace or a row of the bar (`openFor`) - agents' - each with
+	 * that folder. Wherever one is - held for its folder, in the editor area, in the panel - it is that
+	 * folder's, and ends with it: when the folder leaves the workspace, or for a row its repository does
+	 * (`_pruneRemovedFolders`), and once git has no worktree there any more (`_pruneGoneRows`).
+	 */
+	private readonly _openedFor = new Map<ITerminalInstance, IOpenedFor>();
+
+	/** What was kept of `_openedFor`, until `_restore` has it again: kept again meanwhile, as `_unrestored` is. */
+	private _unrestoredOpenedFor: ReadonlyMap</*nonce*/string, URI> | undefined;
 
 	/**
 	 * Incremented by every folder switch. A restore in flight compares against it and stops when it
@@ -247,7 +317,8 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 * The folder whose editors are up: the one the window opened on, whose editors the workbench
 	 * restored, then each one the bar has put up since. None from the moment a switch is announced until
 	 * the bar is done putting the incoming folder's up, which it says even when that failed: a terminal
-	 * shown meanwhile is closed, the shell in it with it, by the editors the switch puts there.
+	 * shown meanwhile is closed, the shell in it with it, by the editors the switch puts there. None too
+	 * once the folder on screen has left the workspace, until the bar has put its neighbour's up.
 	 */
 	private _editorsUpFor: string | undefined;
 
@@ -275,7 +346,11 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			this._generation++;
 			this._editorsUpFor = undefined;
 
-			if (e.from && this._isEnabled()) {
+			// ⚠️ Whether or not terminals follow folders. Kept with the editors the bar keeps for the folder,
+			// a terminal is closed when the next folder's are put up - the shell in it with it - unless it
+			// would ask first, when they take it along, and one a reload brought back is opened a second time,
+			// beside itself, when they come back (`TerminalInputSerializer`).
+			if (e.from) {
 				this._park(this._key(e.from.uri));
 			}
 		}));
@@ -286,16 +361,24 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			const folder = this._activeFolderService.activeFolder;
 			this._editorsUpFor = folder && this._key(folder.uri);
 			if (this._editorsUpFor !== undefined) {
-				this._unpark(this._editorsUpFor).then(undefined, onUnexpectedError);
+				this._unparkUp(this._editorsUpFor).then(undefined, onUnexpectedError);
 			}
 		}));
 
-		// A folder can leave the workspace without the active folder service announcing it first, in
-		// which case nothing parks and the terminals would be held for a folder that is gone
+		// A folder can leave the workspace without the active folder service announcing a move first -
+		// the one on screen does, the service moving on to its neighbour - in which case nothing parks,
+		// and the terminals shown or held for a folder that is gone would outlive it
 		this._register(this._contextService.onDidChangeWorkspaceFolders(() => this._pruneRemovedFolders()));
 
 		// And the bar's rows follow git's files
 		this._register(this._workspaceBarService.onDidChangeRepositories(() => this._pruneGoneRows()));
+
+		// Following folders again: what came along with the window goes back to the folder it was opened in
+		this._register(this._configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration(FOLLOW_FOLDER) && this._isEnabled()) {
+				this._putBack();
+			}
+		}));
 
 		// Kept while the window is closed: a reload, or a restart of the app, brings the terminals back
 		// in the background with nothing to say which folder they were put away for
@@ -310,28 +393,66 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		const key = this._key(folder);
 		const held = (this._parked.get(key) ?? []).map(parked => parked.instance);
 
-		// On the folder now, the editor area's terminals are the ones leaving it will put away. Not
-		// `instances`: those put away for other folders are in it too, and still say `Editor`.
-		const active = this._activeFolderService.activeFolder;
-		const shown = active && this._key(active.uri) === key ? this._terminalService.foregroundInstances.filter(instance => instance.target === TerminalLocation.Editor) : [];
+		// The editor area's terminals that are its own: the ones leaving the folder on screen will put away
+		// for it. Not `instances`: those put away for other folders are in it too, and still say `Editor`.
+		const shown = this._terminalService.foregroundInstances.filter(instance => instance.target === TerminalLocation.Editor && this._shownFor(instance) === key);
 
-		return [...held, ...shown];
+		// And those opened for it, wherever they are: in the panel, or on screen with the window
+		const opened = [...this._openedFor].filter(([, entry]) => entry.key === key).map(([instance]) => instance);
+
+		return [...new Set([...held, ...shown, ...opened])];
 	}
 
 	/** {@link IFolderTerminalsService.folderOf}. */
 	folderOf(instance: ITerminalInstance): URI | undefined {
+		// One opened for a folder is that folder's, wherever it is
+		const opened = this._openedFor.get(instance);
+		if (opened) {
+			return this._folderFor(opened.key)?.uri ?? opened.uri;
+		}
+
 		const key = this._keyParkedFor(instance);
 		if (key !== undefined) {
-			return this._folderFor(key)?.uri ?? this._rows.get(key)?.uri;
+			// On its way with the window to the next folder, the window's
+			return key === WINDOW ? undefined : this._folderFor(key)?.uri ?? this._rows.get(key)?.uri;
 		}
 
-		// With a tab, it is the folder on screen's: leaving that folder is what would put it away - or
-		// without `FOLLOW_FOLDER`, close it
-		if (instance.target === TerminalLocation.Editor && this._terminalService.foregroundInstances.includes(instance)) {
-			return this._activeFolderService.activeFolder?.uri;
+		// With a tab, the folder's it was opened in, which leaving the folder on screen puts it away for
+		const shownFor = instance.target === TerminalLocation.Editor && this._terminalService.foregroundInstances.includes(instance) ? this._shownFor(instance) : undefined;
+		return shownFor === undefined ? undefined : this._folderFor(shownFor)?.uri;
+	}
+
+	/**
+	 * The folder a terminal with a tab belongs to: its own ({@link _homeOf}), else the one on screen. None
+	 * without {@link FOLLOW_FOLDER}: the editor area's are then the window's, as the panel's are.
+	 */
+	private _shownFor(instance: ITerminalInstance): string | undefined {
+		if (!this._isEnabled()) {
+			return undefined;
 		}
 
-		return undefined;
+		const home = this._homeOf(instance);
+		if (home !== undefined) {
+			return home;
+		}
+
+		const active = this._activeFolderService.activeFolder;
+		return active && this._key(active.uri);
+	}
+
+	/**
+	 * The folder or row a terminal belongs to wherever it is shown: the one it was opened for (`openFor`),
+	 * else the one it was opened in while that is a folder of the workspace - a terminal that left it with
+	 * the window while terminals did not follow folders. None for one that belongs to the folder on screen.
+	 */
+	private _homeOf(instance: ITerminalInstance): string | undefined {
+		const opened = this._openedFor.get(instance);
+		if (opened && (this._folderFor(opened.key) || this._rows.has(opened.key))) {
+			return opened.key;
+		}
+
+		const origin = this._origins.get(instance);
+		return origin !== undefined && this._folderFor(origin) ? origin : undefined;
 	}
 
 	/** {@link IFolderTerminalsService.reveal}. */
@@ -357,7 +478,13 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	async openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance> {
 		const key = this._key(folder);
 		if (!this._isEnabled() || !this._keepsTerminals(folder, key)) {
-			return this._terminalService.createTerminal({ config, location: TerminalLocation.Panel });
+			const instance = await this._terminalService.createTerminal({ config, location: TerminalLocation.Panel });
+			// The panel's to show, and its folder's all the same, ending with it - looked at again, as the
+			// workspace's folders can have changed while it was made
+			if (!this._store.isDisposed && this._keepsTerminals(folder, key)) {
+				this._recordOpenedFor(instance, folder, key);
+			}
+			return instance;
 		}
 
 		// Made in the background and held for its folder, as one put away there is: it never comes in
@@ -379,9 +506,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			await this._terminalService.showBackgroundTerminal(instance, true);
 			return instance;
 		}
-		if (!this._folderFor(key)) {
-			this._rows.set(key, { uri: folder, members: this._membersOf(folder) });
-		}
+		this._recordOpenedFor(instance, folder, key);
 		this._hold(key, [{ instance, group: NO_GROUP, index: -1, persisted: config.forcePersist, active: false }]);
 		this._logService.trace(`[folderTerminals] opened a terminal for ${key}`);
 
@@ -400,9 +525,10 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 * terminal could not be shown or went away.
 	 */
 	private async _bringBack(key: string, instance: ITerminalInstance): Promise<boolean> {
-		// A folder of the workspace, or a row that is not one yet, which going to puts in it
-		const target = this._folderFor(key)?.uri ?? this._rows.get(key)?.uri;
-		if (!target) {
+		// A folder of the workspace, or a row that is not one yet, which going to puts in it - and none for one
+		// on its way with the window, which comes back with whichever folder that is going to
+		const target = key === WINDOW ? undefined : this._folderFor(key)?.uri ?? this._rows.get(key)?.uri;
+		if (!target && key !== WINDOW) {
 			return false;
 		}
 
@@ -422,7 +548,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		store.add(instance.onDisposed(() => back.complete(false)));
 
 		try {
-			if (!this._isActive(key)) {
+			if (target && !this._isActive(key)) {
 				await this._workspaceBarService.show(target);
 
 				// Refused, as a folder that is gone from disk is
@@ -430,8 +556,9 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 					return false;
 				}
 			} else {
-				// On it already: brought back now when nothing is - one that could not be shown before, say -
-				// unless a switch is still putting the folder's editors up, which brings it once they are
+				// On it already, or on its way with the window: brought back now when nothing is - one that
+				// could not be shown before, say - unless a switch is still putting the folder's editors up,
+				// which brings it once they are
 				this._unparkIfUp(key);
 			}
 
@@ -487,15 +614,66 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	}
 
 	/**
-	 * Moves the folder's terminal editors to the background, recording where each one was.
+	 * Moves the terminal editors to the background as the window leaves the folder `from`: each for the
+	 * folder it belongs to - its own ({@link _homeOf}), else `from` - or without {@link FOLLOW_FOLDER} for the
+	 * window, with whichever folder it goes to next.
+	 */
+	private _park(from: string): void {
+		const following = this._isEnabled();
+		this._putAway(instance => {
+			const opened = this._homeOf(instance) ?? from;
+			if (following) {
+				return opened;
+			}
+			this._origins.set(instance, opened);
+			return WINDOW;
+		}, true);
+	}
+
+	/**
+	 * Following folders again: each terminal that came along with the window goes back to its own folder
+	 * ({@link _homeOf}) - one on screen in another folder's editor area put away for it now, one on its way
+	 * with the window held for it - so that none is left as the folder's on screen when it is another's.
+	 */
+	private _putBack(): void {
+		const active = this._activeFolderService.activeFolder;
+		const here = active && this._key(active.uri);
+		const homeOf = (instance: ITerminalInstance) => {
+			const home = this._homeOf(instance);
+			return home !== here ? home : undefined;
+		};
+		this._putAway(homeOf, false);
+
+		// Those on their way, unless being shown right now: the next move puts those away
+		const carried = this._parked.get(WINDOW);
+		if (!carried || this._unparking.has(WINDOW)) {
+			return;
+		}
+		for (const entry of [...carried]) {
+			const home = homeOf(entry.instance);
+			if (home !== undefined) {
+				carried.splice(carried.indexOf(entry), 1);
+				this._hold(home, [entry]);
+			}
+		}
+		if (!carried.length) {
+			this._drop(WINDOW);
+		}
+	}
+
+	/**
+	 * Moves to the background the terminal editors `away` names a folder for - or the window - each recorded
+	 * for it with where it was; one it names none for stays. One caught on its way back, its tab up already,
+	 * stays in the record it is in, and leaves the editor area with the others when `caught` says so.
 	 *
 	 * Only terminals that currently have a tab are taken; a panel terminal belongs to the window
 	 * and one that is already in the background has no position to read. Positions are read and the
 	 * record written before anything is moved, since backgrounding closes tabs and renumbers the
 	 * ones after them.
 	 */
-	private _park(key: string): void {
-		const parking: IParkedTerminal[] = [];
+	private _putAway(away: (instance: ITerminalInstance) => string | undefined, caught: boolean): void {
+		const parking = new Map</*folder, or WINDOW*/string, IParkedTerminal[]>();
+		const leaving: ITerminalInstance[] = [];
 
 		for (const instance of this._terminalService.instances) {
 			if (instance.target !== TerminalLocation.Editor) {
@@ -503,25 +681,40 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			}
 
 			const place = this._placeOf(instance);
-			if (place) {
-				parking.push({ instance, ...place, persisted: instance.shellLaunchConfig.forcePersist });
+			if (!place) {
+				continue;
 			}
+
+			// Caught on its way back, its tab up already: the record it is in has it still
+			if (this._keyParkedFor(instance) !== undefined) {
+				if (caught) {
+					leaving.push(instance);
+				}
+				continue;
+			}
+
+			const key = away(instance);
+			if (key === undefined) {
+				continue;
+			}
+
+			leaving.push(instance);
+			const entries = parking.get(key) ?? [];
+			entries.push({ instance, ...place, persisted: instance.shellLaunchConfig.forcePersist });
+			parking.set(key, entries);
 		}
 
-		if (parking.length === 0) {
-			return;
+		for (const [key, entries] of parking) {
+			this._hold(key, entries);
+			this._logService.trace(`[folderTerminals] parked ${entries.length} terminal(s) for ${key === WINDOW ? 'the window' : key}`);
 		}
 
-		this._hold(key, parking);
-
-		for (const { instance } of parking) {
+		for (const instance of leaving) {
 			// `setTerminalLayoutInfo` only persists backgrounded terminals that carry this, so without
 			// it a window reload would discard the shells this contribution exists to keep
 			instance.shellLaunchConfig.forcePersist = true;
 			this._terminalService.moveToBackground(instance);
 		}
-
-		this._logService.trace(`[folderTerminals] parked ${parking.length} terminal(s) for ${key}`);
 	}
 
 	/**
@@ -567,29 +760,53 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		} else {
 			this._storageService.remove(PARKED_STORAGE_KEY, StorageScope.WORKSPACE);
 		}
+
+		// And the folder each terminal opened for one was opened for, wherever it is
+		const opened: Record</*nonce*/string, string> = {};
+		for (const [nonce, uri] of this._unrestoredOpenedFor ?? []) {
+			opened[nonce] = uri.toString();
+		}
+		for (const [instance, { uri }] of this._openedFor) {
+			opened[instance.shellIntegrationNonce] = uri.toString();
+		}
+		if (Object.keys(opened).length) {
+			this._storageService.store(OPENED_FOR_STORAGE_KEY, JSON.stringify(opened), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this._storageService.remove(OPENED_FOR_STORAGE_KEY, StorageScope.WORKSPACE);
+		}
 	}
 
 	/**
 	 * Parks again the terminals kept as parked when the window closed, once the terminal service has
 	 * brought them back, and shows those of the folder the window is on once its editors are up. One
 	 * that did not come back is dropped - an agent's after a restart of the app, which the agent does
-	 * not outlive.
+	 * not outlive. Each terminal opened for a folder is that folder's again, wherever it came back.
 	 */
 	private async _restore(): Promise<void> {
 		const kept = readParkedTerminals(this._storageService.get(PARKED_STORAGE_KEY, StorageScope.WORKSPACE));
-		if (!kept.size) {
+		const openedFor = readOpenedFor(this._storageService.get(OPENED_FOR_STORAGE_KEY, StorageScope.WORKSPACE));
+		if (!kept.size && !openedFor.size) {
 			return;
 		}
 
 		this._unrestored = kept;
+		this._unrestoredOpenedFor = openedFor;
 		try {
 			await this._terminalService.whenConnected;
 		} finally {
 			this._unrestored = undefined;
+			this._unrestoredOpenedFor = undefined;
 		}
 
 		if (this._store.isDisposed) {
 			return;
+		}
+
+		for (const instance of this._terminalService.instances) {
+			const uri = openedFor.get(instance.shellIntegrationNonce);
+			if (uri && !this._openedFor.has(instance)) {
+				this._recordOpenedFor(instance, uri, this._key(uri));
+			}
 		}
 
 		// Brought back in the background, with nothing parking them since
@@ -638,17 +855,20 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		const active = this._activeFolderService.activeFolder;
 		const key = active && this._key(active.uri);
 		if (key !== undefined && key === this._editorsUpFor) {
-			await this._unpark(key);
+			await this._unparkUp(key);
 		}
 	}
 
 	/**
 	 * The position of a terminal's tab, and whether it is the one in front of its group, or
-	 * `undefined` when it does not have one.
+	 * `undefined` when it does not have one. A tab whose editor is disposed is not the terminal's: it is
+	 * what is left of one the terminal had, until its group closes it (`_closeLeftTabs`).
 	 */
 	private _placeOf(instance: ITerminalInstance): { group: number; index: number; active: boolean } | undefined {
+		const tabIn = (group: IEditorGroup) => group.findEditors(instance.resource).find(editor => !editor.isDisposed());
+
 		for (const group of this._editorGroupsService.mainPart.getGroups(GroupsOrder.GRID_APPEARANCE)) {
-			const [editor] = group.findEditors(instance.resource);
+			const editor = tabIn(group);
 			if (editor) {
 				return { group: group.id, index: group.getIndexOfEditor(editor), active: group.activeEditor === editor };
 			}
@@ -660,7 +880,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			}
 
 			for (const group of part.groups) {
-				const [editor] = group.findEditors(instance.resource);
+				const editor = tabIn(group);
 				if (editor) {
 					return { group: AUXILIARY_WINDOW, index: -1, active: group.activeEditor === editor };
 				}
@@ -671,14 +891,49 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	}
 
 	/**
-	 * Shows the terminals held for the folder on screen now, when its editors are up and nothing is
-	 * showing them already: while a switch is still putting the folder's editors up they bring them, and
-	 * a terminal shown before then would be closed with the shell in it.
+	 * Closes what is left of a parked terminal's tab, before the terminal is shown again. Put away, it leaves
+	 * the tab to its editor group, which closes it only on the next turn of the event loop - and a folder switch
+	 * parks terminals, puts the next folder's editors up and shows terminals again within one turn, the editors
+	 * put up keeping the tab of a terminal running a child process, which says closing it would ask first. Shown
+	 * while that tab is there, the terminal is given it - a terminal has one tab (`singlePerResource`) - and it
+	 * opens nothing: the terminal would be in the editor area with no tab. Reverted first, so that it does not
+	 * ask: the terminal is not ending.
+	 */
+	private async _closeLeftTabs(instance: ITerminalInstance): Promise<void> {
+		for (const group of this._editorGroupsService.groups) {
+			for (const editor of group.findEditors(instance.resource)) {
+				if (editor.isDisposed()) {
+					await editor.revert(group.id);
+					await group.closeEditor(editor, { preserveFocus: true });
+				}
+			}
+		}
+	}
+
+	/**
+	 * Shows the terminals held for the folder on screen now - or those on their way with the window, for
+	 * whichever folder that is - when its editors are up and nothing is showing them already: while a
+	 * switch is still putting the folder's editors up they bring them, and a terminal shown before then
+	 * would be closed with the shell in it.
 	 */
 	private _unparkIfUp(key: string): void {
-		if (this._isActive(key) && this._editorsUpFor === key && !this._unparking.has(key)) {
+		const up = key === WINDOW ? this._editorsUpFor !== undefined : this._isActive(key) && this._editorsUpFor === key;
+		if (up && !this._unparking.has(key)) {
 			this._unpark(key).then(undefined, onUnexpectedError);
 		}
+	}
+
+	/**
+	 * Shows the terminals of the folder whose editors are up, then those that came along with the window -
+	 * unless it has moved on meanwhile, when the next folder's editors bring them.
+	 */
+	private async _unparkUp(key: string): Promise<void> {
+		// Not a second time over the same record: one still coming back from a move onto the folder before
+		// goes on, or, stopped by the moves since, starts again (`_unpark`)
+		if (!this._unparking.has(key)) {
+			await this._unpark(key);
+		}
+		this._unparkIfUp(WINDOW);
 	}
 
 	/**
@@ -704,11 +959,15 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		this._unparking.add(key);
 
 		let reopened = 0;
+		let movedOn = false;
 		try {
 			while (queue.length) {
 				const entry = queue[0];
 
+				let failed = false;
 				try {
+					await this._closeLeftTabs(entry.instance);
+
 					// Straight into its own column and at its own tab: moving it between groups closes its
 					// editor, and the terminal editor service then stops tracking it. In another column, at
 					// its end, in the order they come back - an editor opened without an index goes after
@@ -725,7 +984,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 					});
 				} catch (error) {
 					this._logService.error(`[folderTerminals] could not reopen a terminal for ${key}`, error);
-					return;
+					failed = true;
 				}
 
 				// Ended while it was being shown, it has been taken off already (`_forget`) - and is not to be
@@ -739,6 +998,18 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 						this._terminalService.moveToBackground(entry.instance);
 					}
 					this._logService.trace(`[folderTerminals] switch during restore, ${queue.length} terminal(s) still parked for ${key}`);
+					movedOn = true;
+					return;
+				}
+
+				// Shown nowhere - the open failed, or opened nothing - it goes back to the background, parked
+				// still, rather than staying in the editor area without a tab: there nobody sees it, and the
+				// next reload loses it, the shell in it with it
+				if (!ended && !this._placeOf(entry.instance)) {
+					if (!failed) {
+						this._logService.error(`[folderTerminals] a terminal for ${key} did not come back`);
+					}
+					this._terminalService.moveToBackground(entry.instance);
 					return;
 				}
 
@@ -758,6 +1029,13 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			}
 			this._unparking.delete(key);
 			this._onDidStopUnparking.fire(key);
+
+			// Stopped by a move: started again at once when what it was for is up again - the window back on
+			// the folder, or for those on its way with it any folder - as the editors put up meanwhile did
+			// not start it a second time (`_unparkUp`); else the editors still to be put up start it
+			if (movedOn) {
+				this._unparkIfUp(key);
+			}
 		}
 	}
 
@@ -810,12 +1088,31 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	}
 
 	/**
-	 * Follows the workspace's folders: a folder that left takes the terminals parked for it with it. A
-	 * row that joined them is a folder like the others from then on; one whose repository left them - the
-	 * last of its folders gone - goes with it, its terminals with it.
+	 * Follows the workspace's folders: a folder that left takes the terminals parked for it with it, and
+	 * those opened for it wherever they are. A row that joined them is a folder like the others from then
+	 * on; one whose repository left them - the last of its folders gone - goes with it, its terminals with
+	 * it.
 	 */
 	private _pruneRemovedFolders(): void {
 		const present = new Set(this._contextService.getWorkspace().folders.map(folder => this._key(folder.uri)));
+
+		// The folder on screen gone: the active folder service moved on without announcing it, which is a
+		// move all the same - a restore in flight stops - and its terminals are put away as on any: those
+		// that are its for it, to end below with those held for it, those that came along with the window
+		// for their own folders, and while terminals do not follow folders all of them for the window, back
+		// with the next folder's editors - unless no folder is left, whose editors would put them back. Out
+		// of the editor area first: ended in its tab, a terminal's tab is closed only once its group gets to
+		// it, by when the editors the bar puts up for the next folder may have taken its place - nothing
+		// closes it then, and the terminal editor service keeps the ended terminal for good.
+		const gone = this._editorsUpFor;
+		if (gone !== undefined && !present.has(gone)) {
+			this._generation++;
+			this._editorsUpFor = undefined;
+			if (this._isEnabled() || present.size) {
+				this._park(gone);
+			}
+		}
+
 		for (const [key, row] of [...this._rows]) {
 			if (present.has(key)) {
 				this._rows.delete(key);
@@ -825,13 +1122,26 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			}
 		}
 
+		// Those on their way with the window are none of the folders'
 		for (const [key, parked] of [...this._parked]) {
-			if (present.has(key) || this._rows.has(key)) {
+			if (key === WINDOW || present.has(key) || this._rows.has(key)) {
 				continue;
 			}
 
 			this._logService.trace(`[folderTerminals] folder removed, disposing ${parked.length} parked terminal(s)`);
 			this._endHeld(key);
+		}
+
+		// Those opened for a folder, wherever they are, as those held for one: a folder that left takes them,
+		// and a row that never joined goes with its repository's last folder - not before the bar has read
+		// which those are, as after a reload
+		for (const [instance, opened] of [...this._openedFor]) {
+			if (present.has(opened.key)) {
+				opened.joined = true;
+			} else if (opened.joined || (opened.members && ![...opened.members].some(member => present.has(member)))) {
+				this._logService.trace(`[folderTerminals] folder removed, disposing a terminal opened for ${opened.key}`);
+				this._endOpenedFor(instance);
+			}
 		}
 	}
 
@@ -839,7 +1149,13 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 * Follows the bar's reading of git's files. A row it reads keeps its repository's folders up to date
 	 * (`_pruneRemovedFolders`). One it does not is not gone for that alone - a read misses a file git is
 	 * rewriting, and while the bar lists no worktrees it reads none - but once its folder is gone from
-	 * disk it is, and its terminals end as a folder's do when it leaves the workspace.
+	 * disk it is, and its terminals end as a folder's do when it leaves the workspace. Gone, or left
+	 * without its `.git`: git removing a worktree on Windows cannot delete the folder a process is in, and
+	 * leaves it empty.
+	 *
+	 * And the terminals opened for a folder in a repository - a row, or a folder of the workspace - end once
+	 * git has no worktree there any more, wherever they are. The person's own shells in a folder of the
+	 * workspace stay, as the folder does.
 	 */
 	private _pruneGoneRows(): void {
 		for (const [key, row] of [...this._rows]) {
@@ -850,12 +1166,77 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 				this._endIfGoneFromDisk(key, row.uri).then(undefined, onUnexpectedError);
 			}
 		}
+
+		for (const [instance, opened] of [...this._openedFor]) {
+			opened.members = this._membersOf(opened.uri) ?? opened.members;
+			if (opened.members) {
+				this._endOpenedIfGone(instance, opened).then(undefined, onUnexpectedError);
+			}
+		}
 	}
 
-	/** Ends the terminals held under the row at `uri` once its folder is not found on disk - not when it cannot be looked at. */
+	/** Ends a terminal opened for a folder once the folder's `.git` is not found on disk - not when it cannot be looked at. */
+	private async _endOpenedIfGone(instance: ITerminalInstance, opened: IOpenedFor): Promise<void> {
+		try {
+			await this._fileService.stat(joinPath(opened.uri, '.git'));
+			return;
+		} catch (error) {
+			if (toFileOperationResult(error) !== FileOperationResult.FILE_NOT_FOUND) {
+				return;
+			}
+		}
+
+		// Unless it has ended meanwhile
+		if (this._openedFor.get(instance) === opened) {
+			this._logService.trace(`[folderTerminals] worktree gone from disk, disposing a terminal opened for ${opened.key}`);
+			this._endOpenedFor(instance);
+		}
+	}
+
+	/**
+	 * Notes that a terminal was opened for the folder at `uri`, until it ends: one the window closing takes
+	 * away comes back with the next window (`_saveParked`). One opened for a row of the bar is held for that
+	 * row wherever it is put away, in the panel too.
+	 */
+	private _recordOpenedFor(instance: ITerminalInstance, uri: URI, key: string): void {
+		const listener = instance.onDisposed(() => {
+			if (instance.exitReason !== TerminalExitReason.Shutdown) {
+				this._forgetOpenedFor(instance);
+			}
+		});
+		this._openedFor.set(instance, { key, uri, joined: !!this._folderFor(key), members: this._membersOf(uri), listener });
+		if (!this._folderFor(key) && !this._rows.has(key)) {
+			this._rows.set(key, { uri, members: this._membersOf(uri) });
+		}
+	}
+
+	private _forgetOpenedFor(instance: ITerminalInstance): void {
+		const opened = this._openedFor.get(instance);
+		if (opened) {
+			opened.listener.dispose();
+			this._openedFor.delete(instance);
+		}
+	}
+
+	/**
+	 * Ends a terminal opened for a folder that has gone, wherever it is: out of the editor area first, as
+	 * the folder on screen's are (`_pruneRemovedFolders`).
+	 */
+	private _endOpenedFor(instance: ITerminalInstance): void {
+		this._forgetOpenedFor(instance);
+		if (this._placeOf(instance)) {
+			this._terminalService.moveToBackground(instance);
+		}
+		instance.dispose(TerminalExitReason.User);
+	}
+
+	/**
+	 * Ends the terminals held under the row at `uri` once its folder's `.git` is not found on disk - with
+	 * the folder, or without it - and not when it cannot be looked at.
+	 */
 	private async _endIfGoneFromDisk(key: string, uri: URI): Promise<void> {
 		try {
-			await this._fileService.stat(uri);
+			await this._fileService.stat(joinPath(uri, '.git'));
 			return;
 		} catch (error) {
 			if (toFileOperationResult(error) !== FileOperationResult.FILE_NOT_FOUND) {
@@ -888,6 +1269,11 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		this._watching.clear();
 		this._parked.clear();
 		this._rows.clear();
+
+		for (const opened of this._openedFor.values()) {
+			opened.listener.dispose();
+		}
+		this._openedFor.clear();
 	}
 
 	private _key(uri: URI): string {

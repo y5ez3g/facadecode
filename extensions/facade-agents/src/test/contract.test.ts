@@ -13,7 +13,7 @@ import { settled, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
-const TOOLS = 'Your tools: spawn starts a child agent and answers with its PID once it is up; ps lists you, your parent and your children, each with its PID and state; kill ends one of your children.';
+const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once it is up; ps lists you, your parent and your children, each with its number and state; kill ends one of your children.';
 
 suite('Contract: what the model sees, and what it gets back', () => {
 
@@ -45,7 +45,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		void calling.then(() => over = true);
 		await until(() => over || world.terminals.launched.length > launched);
 		if (!over) {
-			contract.hello(callerOf(world.process(world.table.state.lastPid)));
+			contract.hello(callerOf(world.agent(world.table.state.lastId)));
 		}
 		return settled(calling);
 	}
@@ -55,12 +55,12 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		return new Date(time ?? 0).toTimeString().slice(0, 8);
 	}
 
-	test('a process\'s MCP server says hello: the process is running, and its model is given the tools - spawn offering the CLIs this machine has, and taking a model and an effort as those CLIs do - and who it is, who started it, and where it runs; the person acts as the person', async () => {
+	test('an agent\'s MCP server says hello: the agent is running, and its model is given the tools - spawn offering the CLIs this machine has, and taking a model and an effort as those CLIs do - and who it is, who started it, and where it runs; the person acts as the person', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
-		const starting = world.facade.spawn(callerOf(world.process(2)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan.', name: 'planner' });
+		const starting = world.facade.spawn(callerOf(world.agent(1)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan.', name: 'planner' });
 		await until(() => world.terminals.launched.length === 2);
-		const hello = contract.hello(callerOf(world.process(3)));
-		const state = world.process(3).state;
+		const hello = contract.hello(callerOf(world.agent(2)));
+		const state = world.agent(2).state;
 		await settled(starting);
 		const tools = JSON.parse(JSON.stringify(hello.tools));
 		const person = contract.hello(PERSON);
@@ -82,11 +82,11 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it.' },
 			effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. The levels differ from CLI to CLI, and from model to model.' },
 			instructions: [
-				'You are @planner, PID 3, a Told Code agent in Facade Code, started by @lead (PID 2).',
+				'You are @planner #2, a Told Code agent in Facade Code, started by @lead #1.',
 				`You run in ${lab}: the worktree main. You are in that folder already: run commands there without cd.`,
 				TOOLS
 			],
-			person: { name: 'you', instructions: ['You act as the person, @you, PID 1, in Facade Code.', TOOLS] }
+			person: { name: 'you', instructions: ['You act as the person, @you, in Facade Code.', TOOLS] }
 		});
 	});
 
@@ -99,33 +99,33 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		});
 	});
 
-	test('spawn answers once the child is up, in words and as data; kill ends a child, and says of one that exited how it did; ps gives the caller\'s view of the table, a line each, and the same as data', async () => {
+	test('spawn answers once the child is up, in words and as data; kill ends a child, and says of one that exited how it did; ps gives the caller\'s view of the agents, a line each, and the same as data, where an agent the person started has no parent\'s number', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
-		const lead = callerOf(world.process(2));
+		const lead = callerOf(world.agent(1));
 		const beside = await call(lead, 'spawn', { cli: 'arg', model: 'small', effort: 'high', prompt: 'Write the tests.', name: 'tests' });
 		const inNew = await call(lead, 'spawn', { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp the widths.', worktree: 'new', name: 'clamp' });
 		const killed = await call(lead, 'kill', { agent: '@tests' });
-		const again = await call(lead, 'kill', { agent: '3' });
+		const again = await call(lead, 'kill', { agent: '#2' });
 		const ps = await call(lead, 'ps', {});
 		const clamp = worktreeFolder(lab, 'clamp');
 
-		assert.deepStrictEqual({ beside, inNew: inNew.text, killed: killed.text, again: again.text, ps: ps.text.split('\n'), rows: JSON.parse(JSON.stringify(ps.data)).processes.map((row: { pid: number }) => row.pid) }, {
-			beside: { text: `Started @tests, PID 3: Arg Code on small at high, in the worktree main at ${lab}. It is up and has its task.`, data: { pid: 3, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false } },
-			inNew: `Started @clamp, PID 4: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. It is up and has its task.`,
-			killed: 'Killed @tests, PID 3: its terminal closed. Its worktree stays as it is.',
-			again: '@tests, PID 3, had exited already (killed: killed by @lead (PID 2)).',
+		assert.deepStrictEqual({ beside, inNew: inNew.text, killed: killed.text, again: again.text, ps: ps.text.split('\n'), rows: JSON.parse(JSON.stringify(ps.data)).agents.map((row: { id: number; parent?: number }) => `${row.id}<${Object.keys(row).includes('parent') ? row.parent : 'none'}`) }, {
+			beside: { text: `Started @tests #2: Arg Code on small at high, in the worktree main at ${lab}. It is up and has its task.`, data: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false } },
+			inNew: `Started @clamp #3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. It is up and has its task.`,
+			killed: 'Killed @tests #2: its terminal closed. Its worktree stays as it is.',
+			again: '@tests #2 had exited already (killed: killed by @lead #1).',
 			ps: [
-				`PID 2 (you)  @lead  parent 1 (the person)  running  arg on large at high  worktree main at ${lab}  started ${timeOfDay(world.process(2).startTime)}`,
-				`PID 3  @tests  parent 2  exited at ${timeOfDay(world.process(3).exit?.time)} (killed: killed by @lead (PID 2))  arg on small at high  worktree main at ${lab}  started ${timeOfDay(world.process(3).startTime)}`,
-				`PID 4  @clamp  parent 2  running  arg on small at high  worktree clamp at ${clamp}  started ${timeOfDay(world.process(4).startTime)}`
+				`@lead #1 (you)  parent the person  running  arg on large at high  worktree main at ${lab}  started ${timeOfDay(world.agent(1).startTime)}`,
+				`@tests #2  parent #1  exited at ${timeOfDay(world.agent(2).exit?.time)} (killed: killed by @lead #1)  arg on small at high  worktree main at ${lab}  started ${timeOfDay(world.agent(2).startTime)}`,
+				`@clamp #3  parent #1  running  arg on small at high  worktree clamp at ${clamp}  started ${timeOfDay(world.agent(3).startTime)}`
 			],
-			rows: [2, 3, 4]
+			rows: ['1<none', '2<1', '3<1']
 		});
 	});
 
 	test('a failure is a result the model reads, marked as an error, its data one of five codes: an unknown tool, an argument a tool does not take, one missing or of the wrong kind, and what the core refuses; anything else is FAILED', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
-		const lead = callerOf(world.process(2));
+		const lead = callerOf(world.agent(1));
 		const results = [
 			await call(lead, 'send', { to: '@you' }),
 			await call(lead, 'spawn', { cli: 'arg', model: 'small', effort: 'high', prompt: 'Go.', color: 'red' }),
@@ -136,8 +136,8 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			await call(lead, 'spawn', { cli: 'arg', model: 'small', prompt: 'Go.' }),
 			await call(lead, 'ps', { all: 'yes' }),
 			await call(lead, 'kill', {}),
-			await call(lead, 'kill', { agent: '1' }),
-			await call(lead, 'kill', { agent: '99' }),
+			await call(lead, 'kill', { agent: '@you' }),
+			await call(lead, 'kill', { agent: '#99' }),
 			await call(lead, 'spawn', { cli: 'nope', model: 'small', effort: 'high', prompt: 'Go.' })
 		];
 		world.facade.ps = () => {
@@ -156,8 +156,8 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			error('INVALID', 'effort is required.'),
 			error('INVALID', 'all must be true or false.'),
 			error('INVALID', 'agent is required.'),
-			error('REFUSED', 'PID 1 is the person, whom no agent ends.'),
-			error('NOT_FOUND', 'No process has PID 99: ps with all lists every process this workspace has had.'),
+			error('REFUSED', '@you is the person, whom no agent ends.'),
+			error('NOT_FOUND', 'No agent is #99: ps with all lists every agent this workspace has had.'),
 			error('UNAVAILABLE', 'Facade cannot start nope here. It starts: arg, told.'),
 			error('FAILED', 'the ledger could not be read')
 		]);

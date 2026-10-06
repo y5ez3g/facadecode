@@ -133,8 +133,10 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   - Each row shows the agents its own folder runs, an open repository's row its main checkout's:
     their logos side by side, oldest first, up to three, then `+N` in the workbench's count badge. A
     closed repository speaks for its worktrees, as its count does: their agents after its own, in the
-    order of their rows. An agent in the panel is on no row, nor one held for a worktree that has
-    not joined the workspace yet, until it does.
+    order of their rows. An agent's worktree is a row like any other, whether or not it has joined
+    the workspace. An agent Facade started for a folder is on that folder's row wherever its
+    terminal is - a tab, held for the folder, or the panel; one that is the window's, in the panel or
+    on screen while terminals do not follow folders, is on no row.
   - Under the pointer a folder's `+` takes the agents' place in the same cell, so the name does not
     move. Collapsed to icons the logos go, and a row with agents carries a dot on its icon's top
     corner, ringed in the bar's surface.

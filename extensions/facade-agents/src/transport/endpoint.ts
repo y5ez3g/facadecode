@@ -26,7 +26,7 @@ export interface McpServerLaunch {
 
 /**
  * The window's end of the pipe every agent's MCP server calls. It hands each request to what the host
- * gave it - the process table to know a caller by its token, the contract to answer `/hello` and
+ * gave it - the agent table to know a caller by its token, the contract to answer `/hello` and
  * `/call` - and knows no tool itself. `window.json`, next to the ledger, says which pipe the window
  * listens on, so that a script holding the person's token can reach it.
  *

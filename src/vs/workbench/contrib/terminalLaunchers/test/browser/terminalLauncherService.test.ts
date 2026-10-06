@@ -115,8 +115,8 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		// Started now: one from the agent button, two of Facade's agents - named, with the robot - and a shell
 		await service.open({ id: 'gemini', label: 'Gemini CLI', command: '' });
 		const [button] = terminals.created;
-		const facade = new TestTerminal('facade', { name: '@main (2) · Claude Code', icon: AGENT_TERMINAL_ICON });
-		const closed = new TestTerminal('closed', { name: '@clamp (3) · Codex', icon: AGENT_TERMINAL_ICON });
+		const facade = new TestTerminal('facade', { name: '@main #1 · Claude Code', icon: AGENT_TERMINAL_ICON });
+		const closed = new TestTerminal('closed', { name: '@clamp #2 · Codex', icon: AGENT_TERMINAL_ICON });
 		const shell = new TestTerminal('shell', { name: 'pwsh' });
 		for (const terminal of [facade, closed, shell]) {
 			terminals.made.fire(terminal.asInstance());
@@ -146,7 +146,7 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 			kept: {
 				first: { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE },
 				'Gemini CLI': { name: 'Gemini CLI', titleTemplate: AGENT_TITLE_TEMPLATE },
-				facade: { name: '@main (2) · Claude Code' }
+				facade: { name: '@main #1 · Claude Code' }
 			}
 		});
 	});

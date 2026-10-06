@@ -14,12 +14,12 @@ import { outcomeOf, tempDir } from './util';
 
 type World = ReturnType<typeof fakeWorld>;
 
-/** What a process that did not say hello in time fails with. */
+/** What an agent that did not say hello in time fails with. */
 const NO_HELLO = 'it did not come up within 120 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal';
 
-/** Every process the workspace has had, a line each: its PID, name, parent now, and state - how it exited, once it has. */
-function processes(world: World): string[] {
-	return world.facade.ps(PERSON, true).map(row => `${row.pid} @${row.name} ppid ${row.ppid} ${row.exit ? `${row.exit.kind}: ${row.exit.reason}` : row.state}`);
+/** Every agent the workspace has had, a line each: its number, name, parent now, and state - how it exited, once it has. */
+function agents(world: World): string[] {
+	return world.facade.ps(PERSON, true).map(row => `#${row.id} @${row.name} parent ${row.parent === undefined ? 'the person' : `#${row.parent}`} ${row.exit ? `${row.exit.kind}: ${row.exit.reason}` : row.state}`);
 }
 
 /** What a folder holds, folders and files, by their paths in it with forward slashes. */
@@ -53,48 +53,48 @@ suite('Core: spawn, step by step', () => {
 		temp.remove();
 	});
 
-	test('the person starts an agent in the folder on screen: PID 2, named after its worktree, its CLI in a terminal of its own put in front, its first message the opening and then the task, and its token in its run folder; it is up once its MCP server says hello', async () => {
+	test('the person starts an agent in the folder on screen: #1, named after its worktree, its CLI in a terminal of its own put in front, its first message the opening and then the task, and its token in its run folder; it is up once its MCP server says hello', async () => {
 		const spawned = await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Tidy the docs.', folder: lab });
 		const runs = world.table.runsDir;
-		const config = path.join(runs, '2.config.json');
+		const config = path.join(runs, '1.config.json');
 
 		assert.deepStrictEqual({
 			spawned,
 			launched: world.terminals.launched,
 			config: JSON.parse(fs.readFileSync(config, 'utf8')),
-			token: world.table.authenticate(fs.readFileSync(path.join(runs, '2.token'), 'utf8')),
-			processes: processes(world),
+			token: world.table.authenticate(fs.readFileSync(path.join(runs, '1.token'), 'utf8')),
+			agents: agents(world),
 			told: world.person.told
 		}, {
-			spawned: { pid: 2, name: 'main', cli: 'arg', model: 'large', effort: 'high', worktree: 'main', folder: lab, newWorktree: false },
+			spawned: { id: 1, name: 'main', cli: 'arg', model: 'large', effort: 'high', worktree: 'main', folder: lab, newWorktree: false },
 			launched: [{
-				name: '@main (2) · Arg Code',
+				name: '@main #1 · Arg Code',
 				command: 'arg',
 				executable: path.join(temp.dir, 'workspace', 'bin', 'arg.exe'),
-				args: ['--config', config, '--model', 'large', '--effort', 'high', '--', '[facade] You are @main, PID 2, Arg Code, started by @you.\n\nTidy the docs.'],
+				args: ['--config', config, '--model', 'large', '--effort', 'high', '--', '[facade] You are @main #1, Arg Code, started by @you.\n\nTidy the docs.'],
 				env: { ARG_QUIET: '1' },
 				cwd: lab,
 				reveal: true
 			}],
-			config: { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', path.join(runs, '2.token')], env: { ELECTRON_RUN_AS_NODE: '1' } },
-			token: { pid: 2, name: 'main' },
-			processes: ['2 @main ppid 1 running'],
+			config: { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', path.join(runs, '1.token')], env: { ELECTRON_RUN_AS_NODE: '1' } },
+			token: { id: 1, name: 'main' },
+			agents: ['#1 @main parent the person running'],
 			told: []
 		});
 	});
 
 	test('an agent\'s child starts beside it, in its folder, without coming in front; its first message names its parent, and it is that agent\'s', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
-		const spawned = await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Write the tests.', name: '@Tests' });
+		const spawned = await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Write the tests.', name: '@Tests' });
 		const launch = world.terminals.launched[1];
 
-		assert.deepStrictEqual({ spawned, name: launch.name, task: launch.args[launch.args.length - 1], cwd: launch.cwd, reveal: launch.reveal, processes: processes(world), told: world.person.told }, {
-			spawned: { pid: 3, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false },
-			name: '@tests (3) · Arg Code',
-			task: '[facade] You are @tests, PID 3, Arg Code, started by @main.\n\nWrite the tests.',
+		assert.deepStrictEqual({ spawned, name: launch.name, task: launch.args[launch.args.length - 1], cwd: launch.cwd, reveal: launch.reveal, agents: agents(world), told: world.person.told }, {
+			spawned: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false },
+			name: '@tests #2 · Arg Code',
+			task: '[facade] You are @tests #2, Arg Code, started by @main.\n\nWrite the tests.',
 			cwd: lab,
 			reveal: false,
-			processes: ['2 @main ppid 1 running', '3 @tests ppid 2 running'],
+			agents: ['#1 @main parent the person running', '#2 @tests parent #1 running'],
 			told: []
 		});
 	});
@@ -106,9 +106,9 @@ suite('Core: spawn, step by step', () => {
 		fs.mkdirSync(home);
 		fs.writeFileSync(path.join(home, 'trust.json'), '{\n  "theme": "dark"\n}\n');
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
-		const spawned = await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp the widths.', worktree: 'new', name: 'clamp' });
+		const spawned = await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp the widths.', worktree: 'new', name: 'clamp' });
 		const folder = worktreeFolder(lab, 'clamp');
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp again.', worktree: 'clamp', name: 'again' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp again.', worktree: 'clamp', name: 'again' });
 		const file = path.join(home, 'trust.json');
 
 		assert.deepStrictEqual({
@@ -118,15 +118,24 @@ suite('Core: spawn, step by step', () => {
 			trust: fs.readFileSync(file, 'utf8'),
 			logged: world.logs.filter(line => line.includes(': Arg Code trust'))
 		}, {
-			spawned: { pid: 3, name: 'clamp', cli: 'arg', model: 'small', effort: 'high', worktree: 'clamp', folder, newWorktree: true },
+			spawned: { id: 2, name: 'clamp', cli: 'arg', model: 'small', effort: 'high', worktree: 'clamp', folder, newWorktree: true },
 			steps: [`make clamp from aaaaaaa in ${lab}`],
-			made: { name: 'clamp', folder, repository: lab, parentWorktree: 'main', madeBy: 2 },
+			made: { name: 'clamp', folder, repository: lab, parentWorktree: 'main', madeBy: 1 },
 			// The rest of the file as it was, and its layout.
 			trust: `{\n  "theme": "dark",\n  "trusted": [\n    ${JSON.stringify(lab)}\n  ]\n}\n`,
 			logged: [
 				`Facade merged ${JSON.stringify({ trusted: [lab] })} into ${file}: Arg Code trusts ${folder} now.`,
 				`${file} has ${JSON.stringify({ trusted: [lab] })} already: Arg Code trusted ${folder} before.`
 			]
+		});
+	});
+
+	test('a new worktree the person starts an agent in is recorded as theirs: made by no agent', async () => {
+		const spawned = await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp', folder: lab });
+
+		assert.deepStrictEqual({ spawned: spawned.id, made: world.table.madeWorktree(worktreeFolder(lab, 'clamp')) }, {
+			spawned: 1,
+			made: { name: 'clamp', folder: worktreeFolder(lab, 'clamp'), repository: lab, parentWorktree: 'main' }
 		});
 	});
 
@@ -137,7 +146,7 @@ suite('Core: spawn, step by step', () => {
 		const own = path.join(temp.dir, 'own-home');
 		world.settings.arg = { launch: { environment: { ARG_HOME: own } } };
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
 		const unset = await outcomeOf(world.facade.spawn(PERSON, { cli: 'told', model: 'quick', effort: 'high', prompt: 'Plan.', folder: lab }));
 		world.settings.told = { path: '/nowhere/told' };
 		const misnamed = await outcomeOf(world.facade.spawn(PERSON, { cli: 'told', model: 'quick', effort: 'high', prompt: 'Plan.', folder: lab }));
@@ -152,11 +161,11 @@ suite('Core: spawn, step by step', () => {
 
 	test('a CLI given its trust in its arguments is given them in a worktree Facade made, after its own way to connect, and nowhere else; a trust the person set to null is no trust: nothing is written, and the CLI asks', async () => {
 		await world.spawnUp(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'Lead.', folder: lab });
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
 		world.settings.told = { launch: { trust: null } };
 		world.settings.arg = { launch: { trust: null } };
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Again.', worktree: 'clamp', name: 'again' });
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Arg.', worktree: 'clamp', name: 'arg' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Again.', worktree: 'clamp', name: 'again' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Arg.', worktree: 'clamp', name: 'arg' });
 
 		assert.deepStrictEqual({ args: world.terminals.launched.slice(0, 3).map(launch => launch.args), argTrust: trustIn(path.join(temp.dir, 'workspace', 'arg-home')) }, {
 			args: [['--model', 'deep', '--effort', 'high'], ['--trust-folder', '--model', 'deep', '--effort', 'high'], ['--model', 'deep', '--effort', 'high']],
@@ -166,11 +175,11 @@ suite('Core: spawn, step by step', () => {
 
 	test('a child in a worktree of its parent\'s repository, by its name: named after it, and given no trust in a worktree Facade did not make', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
-		const spawned = await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Fix the docs.', worktree: 'docs' });
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan the docs.', worktree: 'docs' });
+		const spawned = await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Fix the docs.', worktree: 'docs' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan the docs.', worktree: 'docs' });
 
 		assert.deepStrictEqual({ spawned, argTrust: trustIn(path.join(temp.dir, 'workspace', 'arg-home')), toldArgs: world.terminals.launched[2].args }, {
-			spawned: { pid: 3, name: 'docs', cli: 'arg', model: 'small', effort: 'high', worktree: 'docs', folder: worktreeFolder(lab, 'docs'), newWorktree: false },
+			spawned: { id: 2, name: 'docs', cli: 'arg', model: 'small', effort: 'high', worktree: 'docs', folder: worktreeFolder(lab, 'docs'), newWorktree: false },
 			argTrust: undefined,
 			toldArgs: ['--model', 'deep', '--effort', 'high']
 		});
@@ -197,7 +206,7 @@ suite('Core: spawn, step by step', () => {
 			unborn.dispose();
 		}
 
-		assert.deepStrictEqual({ refusals, processes: processes(world), launched: world.terminals.launched.length, steps: world.git.steps }, {
+		assert.deepStrictEqual({ refusals, agents: agents(world), launched: world.terminals.launched.length, steps: world.git.steps }, {
 			refusals: [
 				'UNAVAILABLE: Facade cannot start nope here. It starts: arg, told.',
 				'INVALID: model is required: one of Arg Code\'s models, as Arg Code takes it.',
@@ -210,7 +219,7 @@ suite('Core: spawn, step by step', () => {
 				`REFUSED: ${plain} is in no git repository, so it has no worktrees: start the child there, without worktree.`,
 				`REFUSED: ${lab} is on a branch with no commit yet, or one git cannot read: a new worktree starts at a commit.`
 			],
-			processes: [],
+			agents: [],
 			launched: 0,
 			steps: []
 		});
@@ -219,7 +228,7 @@ suite('Core: spawn, step by step', () => {
 	test('the model and the effort go to the CLI as they are, a model or level it may not have included: the CLI is the one that knows which it has; ps and the record show them', async () => {
 		const spawned = await world.spawnUp(PERSON, { cli: 'told', model: ' gemini-9-flash ', effort: ' ultra ', prompt: 'Plan.', folder: lab });
 
-		assert.deepStrictEqual({ spawned: [spawned.model, spawned.effort], args: world.terminals.launched[0].args, row: world.facade.ps(PERSON).map(row => [row.model, row.effort]), recorded: world.process(2).effort }, {
+		assert.deepStrictEqual({ spawned: [spawned.model, spawned.effort], args: world.terminals.launched[0].args, row: world.facade.ps(PERSON).map(row => [row.model, row.effort]), recorded: world.agent(1).effort }, {
 			spawned: ['gemini-9-flash', 'ultra'],
 			args: ['--model', 'gemini-9-flash', '--effort', 'ultra'],
 			row: [['gemini-9-flash', 'ultra']],
@@ -229,11 +238,11 @@ suite('Core: spawn, step by step', () => {
 
 	test('nothing asks the person before a CLI\'s first agent: an agent\'s spawn of a CLI nobody started before starts it at once, at full access', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
-		const first = await outcomeOf(world.spawnUp(callerOf(world.process(2)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan.' }));
+		const first = await outcomeOf(world.spawnUp(callerOf(world.agent(1)), { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan.' }));
 
-		assert.deepStrictEqual({ first, processes: processes(world), told: world.person.told }, {
+		assert.deepStrictEqual({ first, agents: agents(world), told: world.person.told }, {
 			first: 'fulfilled',
-			processes: ['2 @main ppid 1 running', '3 @main ppid 2 running'],
+			agents: ['#1 @main parent the person running', '#2 @main parent #1 running'],
 			told: []
 		});
 	});
@@ -243,23 +252,23 @@ suite('Core: spawn, step by step', () => {
 		const launchFailed = await outcomeOf(world.facade.spawn(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'One.', folder: lab }));
 		const ending = world.facade.spawn(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Two.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
-		world.terminals.end('@main (3) · Arg Code', { exitCode: 2, byThePerson: false });
+		world.terminals.end('@main #2 · Arg Code', { exitCode: 2, byThePerson: false });
 		const ended = await outcomeOf(settled(ending));
 		const silent = outcomeOf(world.facade.spawn(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Three.', folder: lab }));
 		await until(() => world.terminals.launched.length === 2);
 		await sleep(120_000);
 		const timedOut = await silent;
 
-		assert.deepStrictEqual({ launchFailed, ended, timedOut, processes: processes(world), typed: world.terminals.typed, told: world.person.told }, {
-			launchFailed: 'FAILED: Arg Code did not start as @main (PID 2): the window has no terminal for it',
-			ended: 'FAILED: Arg Code did not start as @main (PID 3): its CLI ended with exit code 2',
-			timedOut: `FAILED: Arg Code did not start as @main (PID 4): ${NO_HELLO}`,
-			processes: [
-				'2 @main ppid 1 failed: the window has no terminal for it',
-				'3 @main ppid 1 failed: its CLI ended with exit code 2',
-				`4 @main ppid 1 failed: ${NO_HELLO}`
+		assert.deepStrictEqual({ launchFailed, ended, timedOut, agents: agents(world), typed: world.terminals.typed, told: world.person.told }, {
+			launchFailed: 'FAILED: Arg Code did not start as @main #1: the window has no terminal for it',
+			ended: 'FAILED: Arg Code did not start as @main #2: its CLI ended with exit code 2',
+			timedOut: `FAILED: Arg Code did not start as @main #3: ${NO_HELLO}`,
+			agents: [
+				'#1 @main parent the person failed: the window has no terminal for it',
+				'#2 @main parent the person failed: its CLI ended with exit code 2',
+				`#3 @main parent the person failed: ${NO_HELLO}`
 			],
-			typed: ['@main (2) · Arg Code: [closed]', '@main (4) · Arg Code: [closed]'],
+			typed: ['@main #1 · Arg Code: [closed]', '@main #3 · Arg Code: [closed]'],
 			told: []
 		});
 	});
@@ -268,12 +277,12 @@ suite('Core: spawn, step by step', () => {
 		const spawning = world.facade.spawn(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan the release.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
 		const beforeHello = [...world.terminals.typed];
-		world.hello(2);
+		world.hello(1);
 		await until(() => world.terminals.typed.length > 0);
 		const beforeEnter = [...world.terminals.typed];
 		const spawned = await settled(spawning);
-		const taskFile = path.join(world.table.runsDir, '2.task.md');
-		const line = `@main (2) · Told Code: ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}`;
+		const taskFile = path.join(world.table.runsDir, '1.task.md');
+		const line = `@main #1 · Told Code: ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}`;
 		const launch = world.terminals.launched[0];
 
 		assert.deepStrictEqual({
@@ -283,17 +292,17 @@ suite('Core: spawn, step by step', () => {
 			task: fs.readFileSync(taskFile, 'utf8'),
 			args: launch.args,
 			agent: { pipe: launch.env.FACADE_AGENTS_PIPE, token: world.table.authenticate(launch.env.FACADE_AGENTS_TOKEN) },
-			taskTyped: world.process(2).taskTyped,
-			pid: spawned.pid
+			taskTyped: world.agent(1).taskTyped,
+			id: spawned.id
 		}, {
 			beforeHello: [],
 			beforeEnter: [line],
-			typed: [line, `@main (2) · Told Code: ${JSON.stringify('\r')}`],
-			task: '[facade] You are @main, PID 2, Told Code, started by @you.\n\nPlan the release.',
+			typed: [line, `@main #1 · Told Code: ${JSON.stringify('\r')}`],
+			task: '[facade] You are @main #1, Told Code, started by @you.\n\nPlan the release.',
 			args: ['--model', 'deep', '--effort', 'high'],
-			agent: { pipe: 'pipe', token: { pid: 2, name: 'main' } },
+			agent: { pipe: 'pipe', token: { id: 1, name: 'main' } },
 			taskTyped: true,
-			pid: 2
+			id: 1
 		});
 	});
 
@@ -318,7 +327,7 @@ suite('Core: spawn, step by step', () => {
 			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}.',
 			inTrust: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.trust.file has ${nowhere}, for which Facade has no value: it has ${home}, ${argHome}, ${repository}.',
 			made: [],
-			slow: 'FAILED: Arg Code did not start as @main (PID 4): it did not come up within 5 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal'
+			slow: 'FAILED: Arg Code did not start as @main #3: it did not come up within 5 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal'
 		});
 	});
 });
@@ -343,77 +352,79 @@ suite('Core: ps and kill', () => {
 		temp.remove();
 	});
 
-	test('ps shows the caller, its parent and its children - those it spawned, exited ones too, and those that are its own now - and every process with all; once the process that spawned a child exited, its parent is the person', async () => {
+	test('ps shows the caller, its parent and its children - those it spawned, exited ones too, and those that are its own now - and every agent with all; once the agent that spawned a child exited, its parent is the person', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
-		const lead = callerOf(world.process(2));
+		const lead = callerOf(world.agent(1));
 		await world.spawnUp(lead, { cli: 'arg', model: 'small', effort: 'high', prompt: 'A.', name: 'a' });
 		await world.spawnUp(lead, { cli: 'arg', model: 'small', effort: 'high', prompt: 'B.', name: 'b' });
-		await world.spawnUp(callerOf(world.process(3)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'C.', name: 'c' });
-		const killed = await world.facade.kill(lead, '3');
-		const seenBy = (pid: number, all = false) => world.facade.ps(pid === 1 ? PERSON : callerOf(world.process(pid)), all).map(row => `${row.pid}<${row.ppid}`);
+		await world.spawnUp(callerOf(world.agent(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'C.', name: 'c' });
+		const killed = await world.facade.kill(lead, '#2');
+		const seenBy = (id: number | undefined, all = false) => world.facade.ps(id === undefined ? PERSON : callerOf(world.agent(id)), all).map(row => `${row.id}<${row.parent ?? 'you'}`);
 
 		assert.deepStrictEqual({
 			killed: { ...killed, exit: { ...killed.exit, time: 0 } },
-			lead: seenBy(2),
-			b: seenBy(4),
-			c: seenBy(5),
-			person: seenBy(1),
-			all: seenBy(4, true),
+			lead: seenBy(1),
+			b: seenBy(3),
+			c: seenBy(4),
+			person: seenBy(undefined),
+			all: seenBy(3, true),
 			told: world.person.told
 		}, {
-			killed: { pid: 3, name: 'a', alreadyExited: false, exit: { kind: 'killed', reason: 'killed by @lead (PID 2)', time: 0 } },
-			lead: ['2<1', '3<2', '4<2'],
-			b: ['2<1', '4<2'],
-			c: ['5<1'],
-			person: ['2<1', '5<1'],
-			all: ['2<1', '3<2', '4<2', '5<1'],
-			told: ['@a (PID 3) exited, and its children are yours now: @c (PID 5). (@c (5) · Arg Code)']
+			killed: { id: 2, name: 'a', alreadyExited: false, exit: { kind: 'killed', reason: 'killed by @lead #1', time: 0 } },
+			lead: ['1<you', '2<1', '3<1'],
+			b: ['1<you', '3<1'],
+			c: ['4<you'],
+			person: ['1<you', '4<you'],
+			all: ['1<you', '2<1', '3<1', '4<you'],
+			told: ['@a #2 exited, and its children are yours now: @c #4. (@c #4 · Arg Code)']
 		});
 	});
 
-	test('an agent kills only its own children, and the person any; PID 1 is nobody\'s to kill; a name more than one running process has is refused, naming them; one that exited already says how', async () => {
+	test('an agent kills only its own children, and the person any; the person is nobody\'s to kill; an agent is named by its number, with or without #, by a name one running agent has, or as Facade\'s words name it, its name that number\'s; a name more than one running agent has is refused, naming them; one that exited already says how', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
-		const lead = callerOf(world.process(2));
+		const lead = callerOf(world.agent(1));
 		await world.spawnUp(lead, { cli: 'arg', model: 'small', effort: 'high', prompt: 'One.', name: 'twin' });
 		await world.spawnUp(lead, { cli: 'arg', model: 'small', effort: 'high', prompt: 'Two.', name: 'twin' });
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Alone.', name: 'solo', folder: lab });
-		const solo = callerOf(world.process(5));
-		const done = (killing: Promise<{ readonly pid: number; readonly alreadyExited: boolean }>) => outcomeOf(killing.then(killed => {
+		const solo = callerOf(world.agent(4));
+		const done = (killing: Promise<{ readonly id: number; readonly alreadyExited: boolean }>) => outcomeOf(killing.then(killed => {
 			if (killed.alreadyExited) {
-				throw new Error(`PID ${killed.pid} had exited already`);
+				throw new Error(`#${killed.id} had exited already`);
 			}
 		}));
 		const outcomes = [
-			await done(world.facade.kill(solo, '3')),
-			await done(world.facade.kill(lead, '1')),
-			await done(world.facade.kill(lead, '99')),
+			await done(world.facade.kill(solo, '#2')),
+			await done(world.facade.kill(lead, '@you')),
+			await done(world.facade.kill(lead, '#99')),
 			await done(world.facade.kill(lead, '@nobody')),
 			await done(world.facade.kill(lead, '@twin')),
-			await done(world.facade.kill(lead, ' 3 ')),
-			await done(world.facade.kill(lead, '3')),
-			await done(world.facade.kill(lead, '@Twin')),
+			await done(world.facade.kill(lead, '@solo #2')),
+			await done(world.facade.kill(lead, ' #2 ')),
+			await done(world.facade.kill(lead, '2')),
+			await done(world.facade.kill(lead, '@Twin #3')),
 			await done(world.facade.kill(PERSON, '@solo'))
 		];
 
-		assert.deepStrictEqual({ outcomes, processes: processes(world), typed: world.terminals.typed, told: world.person.told }, {
+		assert.deepStrictEqual({ outcomes, agents: agents(world), typed: world.terminals.typed, told: world.person.told }, {
 			outcomes: [
-				'REFUSED: @twin (PID 3) is not your child: an agent kills only its own children, and the person any. You have no running children.',
-				'REFUSED: PID 1 is the person, whom no agent ends.',
-				'NOT_FOUND: No process has PID 99: ps with all lists every process this workspace has had.',
-				'NOT_FOUND: No running process is called @nobody: name an exited one by its PID, which ps with all lists.',
-				'INVALID: 2 running processes are called @twin: @twin (PID 3), @twin (PID 4). Name one by its PID.',
+				'REFUSED: @twin #2 is not your child: an agent kills only its own children, and the person any. You have no running children.',
+				'REFUSED: @you is the person, whom no agent ends.',
+				'NOT_FOUND: No agent is #99: ps with all lists every agent this workspace has had.',
+				'NOT_FOUND: No running agent is called @nobody: name an exited one by its number, which ps with all lists.',
+				'INVALID: 2 running agents are called @twin: @twin #2, @twin #3. Name one by its number.',
+				'INVALID: #2 is @twin, not @solo: name it by its number alone, or by its name.',
 				'fulfilled',
-				'PID 3 had exited already',
+				'#2 had exited already',
 				'fulfilled',
 				'fulfilled'
 			],
-			processes: [
-				'2 @lead ppid 1 running',
-				'3 @twin ppid 2 killed: killed by @lead (PID 2)',
-				'4 @twin ppid 2 killed: killed by @lead (PID 2)',
-				'5 @solo ppid 1 killed: killed by the person'
+			agents: [
+				'#1 @lead parent the person running',
+				'#2 @twin parent #1 killed: killed by @lead #1',
+				'#3 @twin parent #1 killed: killed by @lead #1',
+				'#4 @solo parent the person killed: killed by the person'
 			],
-			typed: ['@twin (3) · Arg Code: [closed]', '@twin (4) · Arg Code: [closed]', '@solo (5) · Arg Code: [closed]'],
+			typed: ['@twin #2 · Arg Code: [closed]', '@twin #3 · Arg Code: [closed]', '@solo #4 · Arg Code: [closed]'],
 			told: []
 		});
 	});
@@ -423,11 +434,11 @@ suite('Core: ps and kill', () => {
 		world.terminals.stop = async () => {
 			throw new Error('the window did not answer');
 		};
-		const killed = await world.facade.kill(PERSON, '2');
+		const killed = await world.facade.kill(PERSON, '#1');
 
-		assert.deepStrictEqual({ alreadyExited: killed.alreadyExited, processes: processes(world), logged: world.logs.includes('@main (2) · Arg Code could not be closed: the window did not answer') }, {
+		assert.deepStrictEqual({ alreadyExited: killed.alreadyExited, agents: agents(world), logged: world.logs.includes('@main #1 · Arg Code could not be closed: the window did not answer') }, {
 			alreadyExited: false,
-			processes: ['2 @main ppid 1 killed: killed by the person'],
+			agents: ['#1 @main parent the person killed: killed by the person'],
 			logged: true
 		});
 	});
@@ -453,44 +464,44 @@ suite('Core: exits', () => {
 		temp.remove();
 	});
 
-	test('a terminal the person closes is a kill by the person, of which they are not told; one that ends by itself is an exit with its code, and the person hears of their own child\'s; an agent\'s child\'s exit its parent sees in ps', async () => {
+	test('a terminal the person closes is a kill by the person, of which they are not told; one that ends by itself is an exit, with its CLI\'s exit code where that is not 0, and the person hears of their own child\'s; an agent\'s child\'s exit its parent sees in ps', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'A.', name: 'a', folder: lab });
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'B.', name: 'b', folder: lab });
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'C.', name: 'c' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'C.', name: 'c' });
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'D.', name: 'd', folder: lab });
-		world.terminals.end('@c (4) · Arg Code', { exitCode: 0, byThePerson: false });
-		world.terminals.end('@b (3) · Arg Code', { exitCode: 1, byThePerson: false });
-		world.terminals.end('@d (5) · Arg Code', { byThePerson: false });
-		world.terminals.end('@a (2) · Arg Code', { byThePerson: true });
+		world.terminals.end('@c #3 · Arg Code', { exitCode: 0, byThePerson: false });
+		world.terminals.end('@b #2 · Arg Code', { exitCode: 1, byThePerson: false });
+		world.terminals.end('@d #4 · Arg Code', { byThePerson: false });
+		world.terminals.end('@a #1 · Arg Code', { byThePerson: true });
 
-		assert.deepStrictEqual({ processes: processes(world), told: world.person.told }, {
-			processes: [
-				'2 @a ppid 1 killed: the person closed its terminal',
-				'3 @b ppid 1 exited: its CLI ended with exit code 1',
-				'4 @c ppid 1 exited: its CLI ended with exit code 0',
-				'5 @d ppid 1 exited: its terminal closed'
+		assert.deepStrictEqual({ agents: agents(world), told: world.person.told }, {
+			agents: [
+				'#1 @a parent the person killed: the person closed its terminal',
+				'#2 @b parent the person exited: its CLI ended with exit code 1',
+				'#3 @c parent the person exited: its CLI ended',
+				'#4 @d parent the person exited: its terminal closed'
 			],
-			told: ['@b (PID 3) exited: its CLI ended with exit code 1.', '@d (PID 5) exited: its terminal closed.']
+			told: ['@b #2 exited: its CLI ended with exit code 1.', '@d #4 exited: its terminal closed.']
 		});
 	});
 
 	test('an agent that exits leaves its running children to the person, who is told once, with the way to the first of them; so does one that exits while its child comes up, which the child does all the same', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
-		const lead = callerOf(world.process(2));
+		const lead = callerOf(world.agent(1));
 		await world.spawnUp(lead, { cli: 'arg', model: 'small', effort: 'high', prompt: 'A.', name: 'a' });
 		const coming = world.facade.spawn(lead, { cli: 'arg', model: 'small', effort: 'high', prompt: 'B.', name: 'b' });
 		await until(() => world.terminals.launched.length === 3);
-		world.terminals.end('@lead (2) · Arg Code', { exitCode: 0, byThePerson: false });
-		world.hello(4);
+		world.terminals.end('@lead #1 · Arg Code', { exitCode: 0, byThePerson: false });
+		world.hello(3);
 		const spawned = await settled(coming);
 
-		assert.deepStrictEqual({ spawned: spawned.pid, processes: processes(world), seenByThePerson: world.facade.ps(PERSON).map(row => row.pid), told: world.person.told }, {
-			spawned: 4,
-			processes: ['2 @lead ppid 1 exited: its CLI ended with exit code 0', '3 @a ppid 1 running', '4 @b ppid 1 running'],
-			seenByThePerson: [2, 3, 4],
+		assert.deepStrictEqual({ spawned: spawned.id, agents: agents(world), seenByThePerson: world.facade.ps(PERSON).map(row => row.id), told: world.person.told }, {
+			spawned: 3,
+			agents: ['#1 @lead parent the person exited: its CLI ended', '#2 @a parent the person running', '#3 @b parent the person running'],
+			seenByThePerson: [1, 2, 3],
 			told: [
-				'@lead (PID 2) exited: its CLI ended with exit code 0.',
-				'@lead (PID 2) exited, and its children are yours now: @a (PID 3), @b (PID 4). (@a (3) · Arg Code)'
+				'@lead #1 exited: its CLI ended.',
+				'@lead #1 exited, and its children are yours now: @a #2, @b #3. (@a #2 · Arg Code)'
 			]
 		});
 	});
@@ -528,71 +539,156 @@ suite('Core: after a reload', () => {
 		return world;
 	}
 
-	test('the window that comes back finds its processes again: one whose terminal is gone has exited, one starting is waited for again - its hello makes it running - and one running stays so; a spawn that waited as the window went cannot say whether its child came up', async () => {
+	/** The window crashes: the one after finds the lock the one before held, its process gone, and none of its terminals. */
+	function crash(): World {
+		world.dispose();
+		fs.writeFileSync(path.join(dir, 'ledger.lock'), '424242 0123456789ab');
+		world = fakeWorld(dir, { repositories: { [lab]: [] }, isRunning: () => false });
+		return world;
+	}
+
+	test('the window that comes back finds its agents again: one whose terminal is gone has exited, one starting is waited for again - its hello makes it running - and one running stays so; a spawn that waited as the window went cannot say whether its child came up', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Up.', name: 'up', folder: lab });
 		const slow = world.facade.spawn(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Slow.', name: 'slow', folder: lab });
 		await until(() => world.terminals.launched.length === 2);
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Gone.', name: 'gone', folder: lab });
-		const after = reload('@up (2) · Arg Code', '@slow (3) · Arg Code');
+		const after = reload('@up #1 · Arg Code', '@slow #2 · Arg Code');
 		const unknown = await outcomeOf(slow);
 		await after.facade.recover();
-		const recovered = processes(after);
-		after.hello(3);
+		const recovered = agents(after);
+		after.hello(2);
 
-		assert.deepStrictEqual({ unknown, recovered, processes: processes(after), told: after.person.told }, {
+		assert.deepStrictEqual({ unknown, recovered, agents: agents(after), told: after.person.told }, {
 			unknown: 'UNAVAILABLE: The window closed meanwhile: whether the agent came up is not known. ps says, once the window is back.',
-			recovered: ['2 @up ppid 1 running', '3 @slow ppid 1 starting', '4 @gone ppid 1 exited: its terminal was gone when the window came back'],
-			processes: ['2 @up ppid 1 running', '3 @slow ppid 1 running', '4 @gone ppid 1 exited: its terminal was gone when the window came back'],
-			told: ['@gone (PID 4) exited: its terminal was gone when the window came back.']
+			recovered: ['#1 @up parent the person running', '#2 @slow parent the person starting', '#3 @gone parent the person exited: its terminal was gone when Facade came back'],
+			agents: ['#1 @up parent the person running', '#2 @slow parent the person running', '#3 @gone parent the person exited: its terminal was gone when Facade came back'],
+			told: ['@gone #3 exited: its terminal was gone when Facade came back.']
 		});
 	});
 
 	test('one found starting that does not say hello within two minutes fails, and its terminal closes; the person hears of it, no spawn being there to tell them', async () => {
 		const starting = world.facade.spawn(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Slow.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
-		const after = reload('@main (2) · Arg Code');
+		const after = reload('@main #1 · Arg Code');
 		await outcomeOf(starting);
 		await after.facade.recover();
 		await sleep(120_000);
 
-		assert.deepStrictEqual({ processes: processes(after), typed: after.terminals.typed, told: after.person.told }, {
-			processes: [`2 @main ppid 1 failed: ${NO_HELLO}`],
-			typed: ['@main (2) · Arg Code: [closed]'],
-			told: [`@main (PID 2) exited: ${NO_HELLO}.`]
+		assert.deepStrictEqual({ agents: agents(after), typed: after.terminals.typed, told: after.person.told }, {
+			agents: [`#1 @main parent the person failed: ${NO_HELLO}`],
+			typed: ['@main #1 · Arg Code: [closed]'],
+			told: [`@main #1 exited: ${NO_HELLO}.`]
 		});
 	});
 
 	test('one running but not yet told of its task - the window went between its hello and the line - is told once the window is back', async () => {
 		const spawning = world.facade.spawn(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'Plan.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
-		world.hello(2);
-		const after = reload('@main (2) · Told Code');
+		world.hello(1);
+		const after = reload('@main #1 · Told Code');
 		await outcomeOf(spawning);
 		await after.facade.recover();
 		await sleep(1_000);
-		const taskFile = path.join(after.table.runsDir, '2.task.md');
+		const taskFile = path.join(after.table.runsDir, '1.task.md');
 
-		assert.deepStrictEqual({ typed: after.terminals.typed, taskTyped: after.process(2).taskTyped, processes: processes(after) }, {
+		assert.deepStrictEqual({ typed: after.terminals.typed, taskTyped: after.agent(1).taskTyped, agents: agents(after) }, {
 			typed: [
-				`@main (2) · Told Code: ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}`,
-				`@main (2) · Told Code: ${JSON.stringify('\r')}`
+				`@main #1 · Told Code: ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}`,
+				`@main #1 · Told Code: ${JSON.stringify('\r')}`
 			],
 			taskTyped: true,
-			processes: ['2 @main ppid 1 running']
+			agents: ['#1 @main parent the person running']
 		});
 	});
 
 	test('a worktree Facade made that is gone - deleted by the person, or by git - is its no more', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
-		await world.spawnUp(callerOf(world.process(2)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
 		const folder = worktreeFolder(lab, 'clamp');
-		const after = reload('@main (2) · Arg Code');
+		const after = reload('@main #1 · Arg Code');
 		fs.rmSync(folder, { recursive: true, force: true });
 		await after.facade.recover();
 
-		assert.deepStrictEqual({ made: after.table.madeWorktree(folder), processes: processes(after) }, {
+		assert.deepStrictEqual({ made: after.table.madeWorktree(folder), agents: agents(after) }, {
 			made: undefined,
-			processes: ['2 @main ppid 1 running', '3 @clamp ppid 2 exited: its terminal was gone when the window came back']
+			agents: ['#1 @main parent the person running', '#2 @clamp parent #1 exited: its terminal was gone when Facade came back']
+		});
+	});
+
+	test('a window the person closed - quitting Facade, or closing the window - takes its agents with it: none comes back, each is killed by the person, as a terminal they close is, and they hear nothing', async () => {
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
+		const after = reload();
+		await after.facade.recover();
+
+		assert.deepStrictEqual({ agents: agents(after), told: after.person.told }, {
+			agents: ['#1 @main parent the person killed: the person closed its window', '#2 @clamp parent the person killed: the person closed its window'],
+			told: []
+		});
+	});
+
+	test('a reload that brings none of the agents\' terminals back: each ended by itself, as after a crash, and the person hears of their own', async () => {
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
+		const after = reload();
+		await after.facade.recover(true);
+
+		assert.deepStrictEqual({ agents: agents(after), told: after.person.told }, {
+			agents: ['#1 @main parent the person exited: its terminal was gone when Facade came back', '#2 @clamp parent the person exited: its terminal was gone when Facade came back'],
+			told: ['@main #1 exited: its terminal was gone when Facade came back.']
+		});
+	});
+
+	test('another workspace\'s window that takes the agents once the window that had them was closed: those gone went with that window, killed by the person, who hears nothing - though this window was reloaded', async () => {
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
+		world.dispose();
+		// A minute on, which another owner waits for
+		const longAgo = new Date(Date.now() - 2 * 60_000);
+		fs.utimesSync(path.join(dir, 'ledger.lock'), longAgo, longAgo);
+		world = fakeWorld(dir, { repositories: { [lab]: [] }, owner: 'notes' });
+		await world.facade.recover(true);
+
+		assert.deepStrictEqual({ agents: agents(world), told: world.person.told }, {
+			agents: ['#1 @main parent the person killed: the person closed its window'],
+			told: []
+		});
+	});
+
+	test('the extension host started again in the same load of the window - none of the agents\' terminals back - is no window closed: each ended by itself, and the person hears of it', async () => {
+		world.dispose();
+		world = fakeWorld(dir, { repositories: { [lab]: [] }, session: 'this-load' });
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
+		world.dispose();
+		world = fakeWorld(dir, { repositories: { [lab]: [] }, session: 'this-load' });
+		await world.facade.recover();
+
+		assert.deepStrictEqual({ agents: agents(world), told: world.person.told }, {
+			agents: ['#1 @main parent the person exited: its terminal was gone when Facade came back'],
+			told: ['@main #1 exited: its terminal was gone when Facade came back.']
+		});
+	});
+
+	test('Facade turned off and on again, the window staying: an agent whose terminal ended meanwhile ended by itself, though none is left, and the person hears of it', async () => {
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
+		world.dispose('facade');
+		world = fakeWorld(dir, { repositories: { [lab]: [] } });
+		await world.facade.recover();
+
+		assert.deepStrictEqual({ agents: agents(world), told: world.person.told }, {
+			agents: ['#1 @main parent the person exited: its terminal was gone when Facade came back'],
+			told: ['@main #1 exited: its terminal was gone when Facade came back.']
+		});
+	});
+
+	test('after a crash, one whose terminal is gone ended by itself, though none comes back: the person hears of a child of theirs, and not of its own child as theirs, that child gone with it', async () => {
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', folder: lab });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Clamp.', worktree: 'new', name: 'clamp' });
+		const after = crash();
+		await after.facade.recover();
+
+		assert.deepStrictEqual({ agents: agents(after), told: after.person.told }, {
+			agents: ['#1 @main parent the person exited: its terminal was gone when Facade came back', '#2 @clamp parent the person exited: its terminal was gone when Facade came back'],
+			told: ['@main #1 exited: its terminal was gone when Facade came back.']
 		});
 	});
 });
@@ -622,8 +718,8 @@ suite('Core: what Facade puts into a folder', () => {
 	});
 
 	/** As the agent's terminal ends by itself. */
-	function exits(name: string, pid: number, of = world): void {
-		of.terminals.end(`@${name} (${pid}) · Told Code`, { exitCode: 0, byThePerson: false });
+	function exits(name: string, id: number, of = world): void {
+		of.terminals.end(`@${name} #${id} · Told Code`, { exitCode: 0, byThePerson: false });
 	}
 
 	test('the files a CLI reads from its folder are put there for its agents - kept out of git by lines in info/exclude, and a folder Facade made by a .gitignore of its own - and go once the last agent there exits', async () => {
@@ -632,9 +728,9 @@ suite('Core: what Facade puts into a folder', () => {
 		const whileTheyRun = listed(lab);
 		const excluded = fs.readFileSync(exclude, 'utf8');
 		const server = JSON.parse(fs.readFileSync(mcp, 'utf8'));
-		exits('one', 2);
+		exits('one', 1);
 		const whileOneRuns = listed(lab);
-		exits('two', 3);
+		exits('two', 2);
 
 		assert.deepStrictEqual({ whileTheyRun, excluded, server, whileOneRuns, after: listed(lab), excludedAfter: fs.readFileSync(exclude, 'utf8'), record: fs.existsSync(path.join(temp.dir, 'workspace', 'injected.json')) }, {
 			whileTheyRun: ['.mcp.json', '.told', '.told/.gitignore', '.told/skills', '.told/skills/facade', '.told/skills/facade/SKILL.md'],
@@ -654,7 +750,7 @@ suite('Core: what Facade puts into a folder', () => {
 		await world.spawnUp(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'One.', folder: lab });
 		const merged = JSON.parse(fs.readFileSync(mcp, 'utf8'));
 		const excluded = fs.readFileSync(exclude, 'utf8');
-		exits('main', 2);
+		exits('main', 1);
 
 		assert.deepStrictEqual({ servers: Object.keys(merged.mcpServers), excluded, after: fs.readFileSync(mcp, 'utf8') === theirs, logged: world.logs.includes(`${mcp} is the person's: Facade's part is added to it while agents run there.`) }, {
 			servers: ['docs', 'facade'],
@@ -673,8 +769,8 @@ suite('Core: what Facade puts into a folder', () => {
 		const notJson = await outcomeOf(world.facade.spawn(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'Two.', folder: lab }));
 
 		assert.deepStrictEqual({ tracked, notJson, left: listed(lab), theirs: fs.readFileSync(mcp, 'utf8'), launched: world.terminals.launched.length }, {
-			tracked: `FAILED: Told Code did not start as @main (PID 2): Told Code is not started: ${mcp} is in the repository, and Facade would have to change it, so that a commit could take Facade's settings with it.`,
-			notJson: `FAILED: Told Code did not start as @main (PID 3): Told Code is not started: ${mcp} is there already, and Facade does not write over it.`,
+			tracked: `FAILED: Told Code did not start as @main #1: Told Code is not started: ${mcp} is in the repository, and Facade would have to change it, so that a commit could take Facade's settings with it.`,
+			notJson: `FAILED: Told Code did not start as @main #2: Told Code is not started: ${mcp} is there already, and Facade does not write over it.`,
 			left: ['.mcp.json'],
 			theirs: 'not JSON',
 			launched: 0
@@ -690,8 +786,8 @@ suite('Core: what Facade puts into a folder', () => {
 		fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { ...merged.mcpServers, lint: { command: 'lint-server' } } }, undefined, 2));
 		const second = await outcomeOf(world.spawnUp(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'Two.', name: 'two', folder: lab }));
 		const whileTwoRuns = Object.keys(JSON.parse(fs.readFileSync(mcp, 'utf8')).mcpServers);
-		exits('one', 2);
-		exits('two', 3);
+		exits('one', 1);
+		exits('two', 2);
 
 		assert.deepStrictEqual({ second, whileTwoRuns, after: JSON.parse(fs.readFileSync(mcp, 'utf8')) }, {
 			second: 'fulfilled',
@@ -706,7 +802,7 @@ suite('Core: what Facade puts into a folder', () => {
 		world.git.untrackedFiles.add(mcp);
 		await world.spawnUp(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'One.', folder: lab });
 		fs.rmSync(mcp);
-		world.terminals.end('@main (2) · Told Code', { byThePerson: true });
+		world.terminals.end('@main #1 · Told Code', { byThePerson: true });
 		const keptDir = path.join(temp.dir, 'workspace', 'kept');
 		const kept = fs.readdirSync(keptDir).map(name => path.join(keptDir, name));
 
@@ -725,9 +821,9 @@ suite('Core: what Facade puts into a folder', () => {
 			await world.spawnUp(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'One.', folder: lab });
 			await other.spawnUp(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'Two.', folder: lab });
 			const whileBothRun = listed(lab);
-			exits('main', 2);
+			exits('main', 1);
 			const whileTheOtherRuns = listed(lab);
-			exits('main', 2, other);
+			exits('main', 1, other);
 
 			assert.deepStrictEqual({ whileTheOtherRuns: whileTheOtherRuns.length === whileBothRun.length && whileBothRun.includes('.mcp.json'), after: listed(lab), record: fs.existsSync(injected) }, {
 				whileTheOtherRuns: true,
@@ -769,10 +865,10 @@ suite('Core: when the window closes', () => {
 		world.facade.dispose();
 		git.complete();
 
-		assert.deepStrictEqual({ spawn: await outcomeOf(spawning), kill: await outcomeOf(world.facade.kill(PERSON, '2')), processes: processes(world), launched: world.terminals.launched.length }, {
+		assert.deepStrictEqual({ spawn: await outcomeOf(spawning), kill: await outcomeOf(world.facade.kill(PERSON, '#1')), agents: agents(world), launched: world.terminals.launched.length }, {
 			spawn: 'UNAVAILABLE: The window closed meanwhile, and does nothing more: try again once it is open.',
 			kill: 'UNAVAILABLE: The window closed meanwhile, and does nothing more: try again once it is open.',
-			processes: ['2 @main ppid 1 running'],
+			agents: ['#1 @main parent the person running'],
 			launched: 1
 		});
 	});

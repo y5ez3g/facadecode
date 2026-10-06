@@ -17,6 +17,7 @@ import { TestInstantiationService } from '../../../../../platform/instantiation/
 import { IShellLaunchConfig } from '../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { ILifecycleService, LifecyclePhase, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { IWorktreeService } from '../../../worktrees/browser/worktrees.js';
@@ -170,25 +171,25 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 
 	test('a terminal is opened for its folder as it is described - an agent\'s drawn as its CLI - and answered once its process is ready', async () => {
 		const claude = await run('_facade.terminal.create', URI.file('/lab'), {
-			name: '@main (2) · Claude Code',
+			name: '@main #1 · Claude Code',
 			// npm's Claude Code, run as the Node script it runs
 			executable: 'node.exe',
 			args: ['/npm/claude-code/cli.js', '--model', 'haiku'],
-			env: { FACADE_PID: '2', NO_COLOR: null },
+			env: { FACADE_AGENTS_WAIT_MS: '120000', NO_COLOR: null },
 			cwd: '/lab/src',
 			agent: 'claude'
 		});
-		const antigravity = await run('_facade.terminal.create', URI.file('/lab'), { name: '@docs (3) · Antigravity', executable: 'agy', cwd: URI.file('/lab/docs'), agent: 'agy' });
-		const noLogo = await run('_facade.terminal.create', URI.file('/lab'), { name: '@tidy (4) · Gemini', executable: 'gemini', agent: 'gemini' });
+		const antigravity = await run('_facade.terminal.create', URI.file('/lab'), { name: '@docs #2 · Antigravity', executable: 'agy', cwd: URI.file('/lab/docs'), agent: 'agy' });
+		const noLogo = await run('_facade.terminal.create', URI.file('/lab'), { name: '@tidy #3 · Gemini', executable: 'gemini', agent: 'gemini' });
 		// As the extension host gives what it leaves out
 		const plain = await run('_facade.terminal.create', URI.file('/lab'), null);
 
 		assert.deepStrictEqual({ answers: [claude, antigravity, noLogo, plain], launched: launched.map(launchOf) }, {
 			answers: Array(4).fill({ processId: 4242, closed: false, exitCode: undefined }),
 			launched: [
-				{ name: '@main (2) · Claude Code', executable: 'node.exe', args: ['/npm/claude-code/cli.js', '--model', 'haiku'], env: { FACADE_PID: '2', NO_COLOR: null }, cwd: '/lab/src', icon: 'agent-claude' },
-				{ name: '@docs (3) · Antigravity', executable: 'agy', args: undefined, env: undefined, cwd: 'uri /lab/docs', icon: 'agent-antigravity' },
-				{ name: '@tidy (4) · Gemini', executable: 'gemini', args: undefined, env: undefined, cwd: 'uri /lab', icon: 'robot' },
+				{ name: '@main #1 · Claude Code', executable: 'node.exe', args: ['/npm/claude-code/cli.js', '--model', 'haiku'], env: { FACADE_AGENTS_WAIT_MS: '120000', NO_COLOR: null }, cwd: '/lab/src', icon: 'agent-claude' },
+				{ name: '@docs #2 · Antigravity', executable: 'agy', args: undefined, env: undefined, cwd: 'uri /lab/docs', icon: 'agent-antigravity' },
+				{ name: '@tidy #3 · Gemini', executable: 'gemini', args: undefined, env: undefined, cwd: 'uri /lab', icon: 'robot' },
 				{ name: undefined, executable: undefined, args: undefined, env: undefined, cwd: 'uri /lab', icon: undefined },
 			],
 		});
@@ -309,5 +310,42 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			notAnId: 'Unexpected type, expected \'number\'',
 			steps: ['reveal @clamp · Claude Code', 'reveal @clamp · Claude Code'],
 		});
+	});
+
+	test('the window says how it was loaded: an id of this load\'s own, the same each time it is asked, and whether a reload of the window before loaded it, as VS Code tells itself', async () => {
+		const answers: { id: string; reloaded: boolean }[] = [];
+		for (const startupKind of [StartupKind.NewWindow, StartupKind.ReloadedWindow, StartupKind.ReopenedWindow]) {
+			instantiationService.stub(ILifecycleService, { startupKind });
+			answers.push(await run('_facade.window.loaded') as { id: string; reloaded: boolean });
+		}
+
+		assert.deepStrictEqual({
+			reloaded: answers.map(answer => answer.reloaded),
+			oneId: new Set(answers.map(answer => answer.id)).size === 1 && /^[0-9a-f-]{36}$/.test(answers[0].id)
+		}, { reloaded: [false, true, false], oneId: true });
+	});
+
+	test('the window says once it has its terminals back: those reconnected to their processes, and the editor area\'s restored', async () => {
+		const connected = new DeferredPromise<void>();
+		const restored = new DeferredPromise<void>();
+		const phases: LifecyclePhase[] = [];
+		instantiationService.stub(ITerminalService, { whenConnected: connected.p });
+		instantiationService.stub(ILifecycleService, {
+			when: (phase: LifecyclePhase) => {
+				phases.push(phase);
+				return restored.p;
+			}
+		});
+		let back = false;
+		const waiting = run('_facade.terminal.whenRestored').then(() => back = true);
+		await timeout(0);
+		const atFirst = back;
+		connected.complete();
+		await timeout(0);
+		const connectedOnly = back;
+		restored.complete();
+		await waiting;
+
+		assert.deepStrictEqual({ atFirst, connectedOnly, back, phases }, { atFirst: false, connectedOnly: false, back: true, phases: [LifecyclePhase.Restored] });
 	});
 });

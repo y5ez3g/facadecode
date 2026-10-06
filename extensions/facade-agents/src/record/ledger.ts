@@ -17,14 +17,39 @@ import { applyEvent, createState, eventOf, fitsState, LedgerEvent, LedgerEventBo
 /** The ledger's file, in the workspace's folder. */
 const LEDGER_FILE = 'ledger.jsonl';
 const LOCK_FILE = 'ledger.lock';
-/** The version of the ledger's events: 2 since processes have PIDs. */
-const VERSION = 2;
+/** The version of the ledger's events: 3 since agents have numbers, and the person none. */
+const VERSION = 3;
 /** How often the window that has the ledger open touches its lock. */
 const HEARTBEAT_MS = 30_000;
 /** A lock untouched for this long belongs to no window, even if the process it names runs: its id may be reused. */
 const HELD_MS = 3 * HEARTBEAT_MS;
-/** What a lock holds once its window closed the ledger. */
+/** What a lock holds once its window closed the ledger as the window went: closed, quit, or reloaded. */
 const CLOSED = 'closed';
+/** What a lock holds once Facade let go of its agents while its window stayed: turned off, or a start that failed. */
+const RELEASED = 'released';
+/** A word of a closed lock that is not known: its owner, where a window load follows. */
+const UNKNOWN = '-';
+
+/** Who let go of a ledger: its window, as it went, or Facade, the window staying. */
+export type ClosedBy = 'window' | 'facade';
+
+/** How the window that had a ledger before let go of it, as its lock says. */
+export interface LastClose {
+	readonly by: ClosedBy;
+	/** Whether it was this workspace's window: the one whose owner opens it now. */
+	readonly ownWindow: boolean;
+	/** Whether it was this very window, as its extension host started again: the window load that opens it now. */
+	readonly thisWindow: boolean;
+}
+
+/** How the window that had a ledger before let go of it, as its lock says. */
+export interface LastClose {
+	readonly by: ClosedBy;
+	/** Whether it was this workspace's window: the one whose owner opens it now. */
+	readonly ownWindow: boolean;
+	/** Whether it was this very window, as its extension host started again: the window load that opens it now. */
+	readonly thisWindow: boolean;
+}
 /** How long a ledger closed by its window counts as held: the window may be reloading. */
 const RELOAD_MS = 60_000;
 /** How many times the lock is tried - taken, or read - while another window or program has it busy. */
@@ -33,15 +58,19 @@ const LOCK_RETRY_MS = 20;
 /** How long past the time a lock nobody touches may be taken over a window waiting for it waits: a moment more. */
 const WAIT_MARGIN_MS = 5_000;
 
-/** The ledger is another window's: open there, or closed by it a moment ago as it reloads. */
+/** The ledger is another window's: open there, or closed by it a moment ago, as it reloads or as Facade there let go of its agents. */
 export class LedgerLockedError extends Error {
 	/**
-	 * `pid` is the process of the window that has it open - undefined for one that closed it as it
-	 * reloads - and `touchedAt` when its lock was last touched, which a window that runs does every
+	 * `pid` is the process of the window that has it open - undefined for one that closed it, `closedBy`
+	 * saying how - and `touchedAt` when its lock was last touched, which a window that runs does every
 	 * 30 seconds.
 	 */
-	constructor(readonly pid: number | undefined, readonly touchedAt: number) {
-		super(pid !== undefined ? `Another Facade window (process ${pid}) has this workspace's agents.` : 'Another Facade window has this workspace\'s agents: it closed them a moment ago, as it reloads.');
+	constructor(readonly pid: number | undefined, readonly touchedAt: number, closedBy: ClosedBy = 'window') {
+		super(pid !== undefined
+			? `Another Facade window (process ${pid}) has this workspace's agents.`
+			: closedBy === 'window'
+				? 'Another Facade window has this workspace\'s agents: it closed them a moment ago, as it reloads.'
+				: 'Another Facade window has this workspace\'s agents: Facade there let go of them a moment ago.');
 		this.name = 'LedgerLockedError';
 	}
 }
@@ -105,6 +134,11 @@ export interface LedgerOptions {
 	 * ledger closes: that one takes it back at once, any other once it is a minute old.
 	 */
 	readonly owner?: string;
+	/**
+	 * The window load it opens in: the same through its extension host's restarts, another after a reload.
+	 * Written into the lock as the ledger closes, for the next opening to tell whether this very window closed it.
+	 */
+	readonly session?: string;
 	/** Called once, should another window take the ledger: it has closed itself by then. */
 	readonly onTaken?: () => void;
 }
@@ -123,19 +157,29 @@ export class Ledger {
 	private taken = false;
 	private heartbeat: ReturnType<typeof setTimeout> | undefined;
 
-	private constructor(readonly dir: string, readonly state: WorkspaceState, private readonly mark: string, private readonly options: LedgerOptions) { }
+	/**
+	 * @param lastClose How the window that had the ledger before let go of it: as it went - quit, closed or
+	 * reloaded - or as Facade let go of its agents while the window stayed, and which window that was.
+	 * Undefined where it crashed, its lock left behind, or for the first window there, which finds none.
+	 */
+	private constructor(readonly dir: string, readonly state: WorkspaceState, private readonly mark: string, private readonly options: LedgerOptions, readonly lastClose: LastClose | undefined) { }
 
 	/** Opens the ledger in `dir`, taking its lock; throws `LedgerLockedError` while another window has it. */
 	static open(dir: string, options: LedgerOptions = {}): Ledger {
 		fs.mkdirSync(dir, { recursive: true });
 		const mark = `${process.pid} ${crypto.randomBytes(6).toString('hex')}`;
-		acquireLock(dir, mark, options.isRunning ?? isProcessRunning, options.owner);
+		const found = acquireLock(dir, mark, options.isRunning ?? isProcessRunning, options.owner);
+		const lastClose = found && {
+			by: found.by,
+			ownWindow: found.owner === options.owner,
+			thisWindow: found.session !== undefined && found.session === options.session
+		};
 		try {
-			const ledger = new Ledger(dir, load(dir), mark, options);
+			const ledger = new Ledger(dir, load(dir), mark, options, lastClose);
 			ledger.scheduleHeartbeat();
 			return ledger;
 		} catch (err) {
-			releaseLock(dir, mark, false);
+			releaseLock(dir, mark, undefined);
 			throw err;
 		}
 	}
@@ -176,7 +220,8 @@ export class Ledger {
 				// By its path: Windows cuts no file through a handle opened to append to it
 				fs.truncateSync(path.join(this.dir, LEDGER_FILE), size);
 			} catch {
-				this.close();
+				// The window stays: it is Facade that lets go
+				this.close('facade');
 			}
 			throw err;
 		}
@@ -184,8 +229,11 @@ export class Ledger {
 		return event;
 	}
 
-	/** Closes the ledger: its lock says `closed`, and by whom, if it is still this window's, for a reload to take it back. */
-	close(): void {
+	/**
+	 * Closes the ledger: its lock says it was closed - by its window as it goes, or by Facade, the window
+	 * staying - and by whom, if it is still this window's, for a reload to take it back.
+	 */
+	close(by: ClosedBy = 'window'): void {
 		if (this.closed) {
 			return;
 		}
@@ -195,7 +243,7 @@ export class Ledger {
 			fs.closeSync(this.fd);
 			this.fd = undefined;
 		}
-		releaseLock(this.dir, this.mark, true, this.options.owner);
+		releaseLock(this.dir, this.mark, by, this.options.owner, this.options.session);
 	}
 
 	/** Another window took the lock: nothing more is written, and whoever opened the ledger is told, once. */
@@ -293,14 +341,24 @@ function holderOf(content: string): number | undefined {
 	return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
-/** Whether a lock says its ledger was closed. */
-function isClosed(content: string): boolean {
-	return content.split(' ')[0].trim() === CLOSED;
+/** A lock that says its ledger was closed: how, by which owner, and in which window load. */
+interface ClosedLock {
+	readonly by: ClosedBy;
+	readonly owner: string | undefined;
+	readonly session: string | undefined;
 }
 
-/** Who closed the ledger, as its lock says; undefined for one that says only `closed`. */
-function closerOf(content: string): string | undefined {
-	return content.slice(CLOSED.length).trim() || undefined;
+/** What a lock says of its ledger's closing - `<how> <owner> <window load>`, a word not known `-` - undefined for one a window holds. */
+function closedLockOf(content: string): ClosedLock | undefined {
+	const [word, owner, session] = content.trim().split(' ');
+	const by: ClosedBy | undefined = word === CLOSED ? 'window' : word === RELEASED ? 'facade' : undefined;
+	const known = (value: string | undefined) => value && value !== UNKNOWN ? value : undefined;
+	return by && { by, owner: known(owner), session: known(session) };
+}
+
+/** Whether a lock says its ledger was closed. */
+function isClosed(content: string): boolean {
+	return closedLockOf(content) !== undefined;
 }
 
 /** When the lock `file` was last touched; 0 where that cannot be told. */
@@ -316,17 +374,19 @@ function touchedAt(file: string): number {
  * Takes the lock in `dir` for this opening, `mark` its content. One whose process runs and touched it
  * lately is another window's, and so is one another owner closed a moment ago, as its window reloads;
  * any other was left by a window that ended, closed, or stood still too long, and is taken over - moved
- * aside first, so that of two windows finding it so at once only one takes it.
+ * aside first, so that of two windows finding it so at once only one takes it. Answers what the lock
+ * taken over said of the ledger's closing, where it did.
  */
-function acquireLock(dir: string, mark: string, isRunning: (pid: number) => boolean, owner: string | undefined): void {
+function acquireLock(dir: string, mark: string, isRunning: (pid: number) => boolean, owner: string | undefined): ClosedLock | undefined {
 	const file = path.join(dir, LOCK_FILE);
+	let found: string | undefined;
 	for (let attempt = 1; attempt <= LOCK_ATTEMPTS; attempt++) {
 		if (attempt > 1) {
 			sleepSync(LOCK_RETRY_MS);
 		}
 		try {
 			fs.writeFileSync(file, mark, { flag: 'wx', mode: 0o600 });
-			return;
+			return found === undefined ? undefined : closedLockOf(found);
 		} catch (err) {
 			// Windows fails with EPERM while another window is deleting the lock: tried again.
 			if (codeOf(err) !== 'EEXIST' && codeOf(err) !== 'EPERM') {
@@ -338,13 +398,14 @@ function acquireLock(dir: string, mark: string, isRunning: (pid: number) => bool
 		if (content === undefined) {
 			continue;
 		}
+		found = content;
 		const holder = holderOf(content);
 		if (holder !== undefined && holder !== process.pid && isRunning(holder) && isTouchedWithin(file, HELD_MS)) {
 			throw new LedgerLockedError(holder, touchedAt(file));
 		}
-		const closer = isClosed(content) ? closerOf(content) : undefined;
-		if (closer !== undefined && closer !== owner && isTouchedWithin(file, RELOAD_MS)) {
-			throw new LedgerLockedError(undefined, touchedAt(file));
+		const closed = closedLockOf(content);
+		if (closed?.owner !== undefined && closed.owner !== owner && isTouchedWithin(file, RELOAD_MS)) {
+			throw new LedgerLockedError(undefined, touchedAt(file), closed.by);
 		}
 		removeLockIfUnchanged(file, content);
 	}
@@ -377,15 +438,19 @@ function ownsLock(dir: string, mark: string): boolean {
 	return readLock(dir) === mark;
 }
 
-/** Lets go of this opening's lock; a ledger that was `closed` leaves a lock that says so, by whom, with the time. */
-function releaseLock(dir: string, mark: string, closed: boolean, owner?: string): void {
+/**
+ * Lets go of this opening's lock; a ledger that was closed - by its window, or by Facade - leaves a lock
+ * that says so, by which owner, in which window load, with the time.
+ */
+function releaseLock(dir: string, mark: string, closedBy: ClosedBy | undefined, owner?: string, session?: string): void {
 	const file = path.join(dir, LOCK_FILE);
 	try {
 		if (!ownsLock(dir, mark)) {
 			return;
 		}
-		if (closed) {
-			fs.writeFileSync(file, owner ? `${CLOSED} ${owner}` : CLOSED);
+		if (closedBy) {
+			const word = closedBy === 'window' ? CLOSED : RELEASED;
+			fs.writeFileSync(file, session !== undefined ? `${word} ${owner ?? UNKNOWN} ${session}` : owner !== undefined ? `${word} ${owner}` : word);
 		} else {
 			fs.rmSync(file, { force: true });
 		}

@@ -136,7 +136,7 @@ export interface LaunchInput {
 	readonly config: CliConfig;
 	/** Where the launch writes its own files. */
 	readonly runDir: string;
-	/** Unique per process, for the names of those files: its PID. */
+	/** Unique per agent, for the names of those files: its number. */
 	readonly slug: string;
 }
 

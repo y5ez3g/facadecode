@@ -8,14 +8,15 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
+import { isJsonObject } from '../base/json';
 import { installedClis, knownClis } from '../clis/registry';
 import { facadeSkill, openingFor } from '../contract/prompts';
 import { Contract } from '../contract/tools';
 import { Facade } from '../core/facade';
+import { AgentTable } from '../record/agents';
 import { Caller, isLive, PERSON } from '../record/events';
-import { LedgerLockedError, lockWait } from '../record/ledger';
+import { ClosedBy, LedgerLockedError, lockWait } from '../record/ledger';
 import { recordDir, workspaceDir, workspacesRoot } from '../record/paths';
-import { ProcessTable } from '../record/processes';
 import { PipeEndpoint } from '../transport/endpoint';
 import { PipeHandlers, pipePath } from '../transport/pipe';
 import { HostGit } from './git';
@@ -52,8 +53,12 @@ export class AgentsService implements vscode.Disposable {
 	/** Why there is no core once the service started: another window has the workspace's agents, or no folder is on this machine. */
 	private noCore: 'otherWindow' | 'noFolder' | undefined;
 	private endpoint: PipeEndpoint<Caller> | undefined;
+	/** The workspace's record, open in this window. */
+	private table: AgentTable | undefined;
 	/** Set once the service stopped: as the window goes, as Facade agents are turned off, or as another window took its agents. */
 	private stopped = false;
+	/** How it stopped first: as the window went, or as Facade let go of its agents. */
+	private stoppedBy: ClosedBy | undefined;
 
 	/** `workspaceState` keeps the record this workspace's agents are in, whatever becomes of its first folder. */
 	constructor(private readonly log: vscode.LogOutputChannel, private readonly workspaceState: vscode.Memento) { }
@@ -78,9 +83,10 @@ export class AgentsService implements vscode.Disposable {
 			this.log.info(`The workspace's first folder is now ${folders[0].uri.fsPath}; its agents stay in the record they started in, ${dir}.`);
 		}
 		await this.workspaceState.update(RECORD_KEY, dir);
-		let table: ProcessTable | undefined;
+		const load = await windowLoad();
+		let table: AgentTable | undefined;
 		try {
-			table = await this.openTable(dir, await this.owner());
+			table = await this.openTable(dir, await this.owner(), load.id);
 		} catch (err) {
 			if (err instanceof LedgerLockedError) {
 				this.log.warn(err.message);
@@ -93,7 +99,12 @@ export class AgentsService implements vscode.Disposable {
 		if (!table) {
 			return;
 		}
-		this.disposables.push(table);
+		// Closed last, saying how Facade stopped
+		this.table = table;
+		if (this.stopped) {
+			this.dispose();
+			return;
+		}
 
 		// Next to the ledger rather than in the workspace storage, which a folder window becoming a
 		// workspace replaces while agents keep running.
@@ -129,7 +140,7 @@ export class AgentsService implements vscode.Disposable {
 			hello: caller => contract.hello(caller),
 			call: (caller, tool, args, progress) => contract.call(caller, tool, args, progress),
 			log: message => this.log.error(message)
-		}, [...table.state.processes.values()].some(isLive));
+		}, [...table.state.agents.values()].some(isLive));
 		if (!endpoint) {
 			return;
 		}
@@ -139,16 +150,22 @@ export class AgentsService implements vscode.Disposable {
 			return;
 		}
 
-		await facade.recover();
+		await facade.recover(load.reloaded);
 		if (this.stopped) {
 			return;
 		}
+		terminals.recovered();
 		this.facade = facade;
 		this.log.info(`Facade agents are on for ${folders[0].uri.fsPath}. Record ${dir}; pipe ${endpoint.pipe}; CLIs: ${facade.clis().map(each => each.cli.id).join(', ') || 'none'}.`);
 	}
 
-	dispose(): void {
+	/**
+	 * Stops: as the window goes, or as Facade lets go of its agents while the window stays - turned off, or
+	 * a start that failed - which the workspace's ledger records for the next window to know.
+	 */
+	dispose(by: ClosedBy = 'window'): void {
 		this.stopped = true;
+		this.stoppedBy ??= by;
 		this.facade = undefined;
 		this.endpoint = undefined;
 		for (const disposable of this.disposables.reverse()) {
@@ -159,10 +176,16 @@ export class AgentsService implements vscode.Disposable {
 			}
 		}
 		this.disposables.length = 0;
+		try {
+			this.table?.dispose(this.stoppedBy);
+		} catch (err) {
+			this.log.error(`Stopping Facade agents: ${messageOf(err)}`);
+		}
+		this.table = undefined;
 	}
 
-	/** Facade: Start Agent. Answers with the new agent's PID and name, for a script that started it. */
-	async startAgentCommand(rawArgs: unknown): Promise<{ readonly pid: number; readonly name: string } | undefined> {
+	/** Facade: Start Agent. Answers with the new agent's number and name, for a script that started it. */
+	async startAgentCommand(rawArgs: unknown): Promise<{ readonly id: number; readonly name: string } | undefined> {
 		const facade = this.facade;
 		if (!facade) {
 			void vscode.window.showInformationMessage(this.noCore === 'otherWindow'
@@ -183,8 +206,8 @@ export class AgentsService implements vscode.Disposable {
 			return undefined;
 		}
 		try {
-			const { pid, name } = await facade.spawn(PERSON, request);
-			return { pid, name };
+			const { id, name } = await facade.spawn(PERSON, request);
+			return { id, name };
 		} catch (err) {
 			this.log.error(`Starting an agent failed: ${stackOf(err)}`);
 			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
@@ -208,10 +231,10 @@ export class AgentsService implements vscode.Disposable {
 	 * is waited for as `lockWait` says: one a window that runs keeps touching is that window's,
 	 * `LedgerLockedError`.
 	 */
-	private async openTable(dir: string, owner: string): Promise<ProcessTable | undefined> {
+	private async openTable(dir: string, owner: string, session: string | undefined): Promise<AgentTable | undefined> {
 		const locked = lockWait(HANDOVER_MS);
 		let told = false;
-		return this.retried(() => ProcessTable.open({ dir, owner, onTaken: () => setImmediate(() => this.taken()) }), err => {
+		return this.retried(() => AgentTable.open({ dir, owner, session, onTaken: () => setImmediate(() => this.taken()) }), err => {
 			if (err instanceof LedgerLockedError && !told) {
 				told = true;
 				this.log.info(`${err.message} Its lock is waited for while the window before lets go of it, or while nobody touches it.`);
@@ -293,4 +316,18 @@ export class AgentsService implements vscode.Disposable {
 		}
 		return undefined;
 	}
+}
+
+/**
+ * How the window was loaded, as Facade's workbench says: an id of this load's own - the same through the
+ * extension host's restarts, another after a reload - and whether a reload of the window before loaded it.
+ * Without Facade's workbench neither is known: no id, and taken for no reload.
+ */
+async function windowLoad(): Promise<{ readonly id: string | undefined; readonly reloaded: boolean }> {
+	if (!(await vscode.commands.getCommands()).includes('_facade.window.loaded')) {
+		return { id: undefined, reloaded: false };
+	}
+	const load = await vscode.commands.executeCommand<unknown>('_facade.window.loaded');
+	const { id, reloaded } = isJsonObject(load) ? load : {};
+	return { id: typeof id === 'string' && /^[0-9a-f-]+$/i.test(id) ? id : undefined, reloaded: reloaded === true };
 }

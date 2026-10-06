@@ -79,7 +79,12 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 	return { main, worktree: branch || path.basename(folder), head };
 }
 
-/** The worktrees of the repository whose main checkout is `main`, main first, as git lists them. */
+/**
+ * The worktrees of the repository whose main checkout is `main`, main first, as git lists them. One git
+ * lists until it is pruned - its folder gone, or left without its `.git`, as git removing a worktree a
+ * process is in leaves it on Windows - is a worktree no more: git 2.31 and later say it is prunable, and
+ * its folder without a `.git` says so on any git.
+ */
 export async function worktreesIn(git: string, main: string): Promise<readonly ListedWorktree[]> {
 	const listed = await runGit(git, ['-C', main, 'worktree', 'list', '--porcelain']);
 	const worktrees: ListedWorktree[] = [];
@@ -87,7 +92,7 @@ export async function worktreesIn(git: string, main: string): Promise<readonly L
 		const lines = record.split(/\r?\n/);
 		const folder = lines.find(line => line.startsWith('worktree '))?.slice('worktree '.length);
 		// A bare repository has no checkout of its own: its worktrees are those checked out of it.
-		if (!folder || lines.includes('bare')) {
+		if (!folder || lines.includes('bare') || !fs.existsSync(path.join(folder, '.git'))) {
 			return;
 		}
 		const branch = lines.find(line => line.startsWith('branch '))?.slice('branch '.length).replace(/^refs\/heads\//, '');
@@ -140,9 +145,9 @@ export async function trackedIn(git: string, folder: string, files: readonly str
 
 /**
  * Which of `files`, paths relative to `folder`, some worktree of its repository has - at the same place
- * from that worktree's root - as a file git neither tracks nor ignores. A worktree whose folder is gone
- * has none. git failing otherwise rejects with why: taken for none, a line in the repository's
- * `info/exclude` would leave a file of the person's for git to write over.
+ * from that worktree's root - as a file git neither tracks nor ignores. A worktree whose folder is gone,
+ * or left without its `.git`, has none. git failing otherwise rejects with why: taken for none, a line in
+ * the repository's `info/exclude` would leave a file of the person's for git to write over.
  */
 export async function untrackedIn(git: string, folder: string, files: readonly string[]): Promise<ReadonlySet<string>> {
 	let root: string;
@@ -166,10 +171,9 @@ export async function untrackedIn(git: string, folder: string, files: readonly s
 	if (!fromRoot.size) {
 		return found;
 	}
+	// Only worktrees there are: asked in a folder left without its `.git`, git would answer for whichever
+	// repository holds the folder, if any
 	for (const worktree of await worktreesIn(git, folder)) {
-		if (!fs.existsSync(worktree.folder)) {
-			continue;
-		}
 		const listed = await runGit(git, ['-C', worktree.folder, 'ls-files', '--others', '--exclude-standard', '-z', '--', ...[...fromRoot.keys()].map(file => `:(literal)${file}`)]);
 		for (const each of listed.split('\0')) {
 			const file = fromRoot.get(each);

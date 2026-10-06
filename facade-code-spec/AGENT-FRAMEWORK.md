@@ -2,12 +2,15 @@
 
 Facade runs vendors' coding-agent CLIs - Claude Code, Codex, Muse Code and Antigravity - in their own
 terminal UIs inside the window, and gives each one an MCP server through which agents start, list and
-end each other. The model is borrowed from operating-system processes: an agent is a process with a
-PID, a parent and children; the person is PID 1, and the children of an agent that exits become
-theirs. Facade records what it did and what it knows for certain - a launch, an MCP server's hello, a
-terminal that ended - and never reads a screen to decide anything, nor guesses whether an agent works.
+end each other. The model is borrowed from operating-system processes, not their words: an agent has
+a name and a number, as `@main #1`, a parent and children; the person, `@you`, has no number, starts
+the first agents, and takes in the children of an agent that exits. A number is Facade's own, never
+an operating system's process id. Facade records what it did and what it knows for certain - a
+launch, an MCP server's hello, a terminal that ended - and never reads a screen to decide anything,
+nor guesses whether an agent works.
 
-Chapter 1 is processes. Messages between agents and looking into an agent's terminal come next.
+Chapter 1 is starting, listing and ending agents. Messages between agents and looking into an agent's
+terminal come next.
 
 ## Architecture
 
@@ -18,7 +21,7 @@ the agent's CLI  --MCP over stdio-->  MCP server  --HTTP over a named pipe-->  e
                                                                                PipeEndpoint
                                                                                Contract   the tools
                                                                                Facade     the core
-                                                                               ProcessTable, Injections
+                                                                               AgentTable, Injections
                                                                                ports --> VS Code API, git,
                                                                                          _facade.* commands
 ```
@@ -31,8 +34,8 @@ the agent's CLI  --MCP over stdio-->  MCP server  --HTTP over a named pipe-->  e
   (`POST /hello`) and hands the CLI the window's tools and instructions; each `tools/call` becomes a
   `POST /call`. A call cut off halfway is not made again, and says it may have run. A window that is
   away, or does not answer, is waited for once: after that the shim says at once that it is away.
-- **Who calls** is said by a bearer token on every request. A process's token is 32 random bytes in
-  `runs/<pid>.token`, passed as `--pipe <pipe> --token-file <file>`; a CLI that reads one server
+- **Who calls** is said by a bearer token on every request. An agent's token is 32 random bytes in
+  `runs/<number>.token`, passed as `--pipe <pipe> --token-file <file>`; a CLI that reads one server
   configuration for all its agents in a folder starts `shim.js mcp --agent`, and the shim reads
   `FACADE_AGENTS_PIPE` and `FACADE_AGENTS_TOKEN` from the agent's environment. A script holding the
   person's token in `you.token` acts as the person.
@@ -46,7 +49,10 @@ the agent's CLI  --MCP over stdio-->  MCP server  --HTTP over a named pipe-->  e
   one taken, the person told that the agents still running lost Facade's tools.
 - **The workbench** gives the extension what its API cannot, as commands with no dialog:
   `_facade.folder.active`, `_facade.worktree.create` (WORKTREE.md, WT-5.11), `_facade.terminal.create`
-  (a terminal held under a folder's row, its name kept across a reload) and `_facade.terminal.reveal`.
+  (a terminal held under a folder's row, its name kept across a reload), `_facade.terminal.reveal`,
+  `_facade.terminal.whenRestored` (once the window has its terminals back after a reload: reconnected
+  to their processes, the editor area restored) and `_facade.window.loaded` (an id of this load of the
+  window's own, and whether a reload of the window before loaded it, as VS Code tells itself).
 
 ## Code
 
@@ -69,10 +75,14 @@ base         -                                          what any layer may use
 extension.ts       the switch facade.orchestration.enabled; Start Agent; Show Agents Log; Show Agent Launch
 host/
   service.ts       puts it together at start - record, ports, core, tools, pipe - and finds the running
-                   agents again
+                   agents again; stops as the window goes, or as Facade lets go of its agents
   settings.ts      the person's settings as the window has them now: each CLI's, and the timeout
   terminals.ts     Terminals: launches through _facade.terminal.create, finds a terminal again by name or
-                   process id, reports its end and whether the person closed it
+                   process id once the window has its terminals back, reports its end
+  terminalEnd.ts   what a terminal's end is to Facade: the person closed one that ended for the user
+                   with no exit code
+  terminalMatch.ts which of the window's terminals is an agent's: the one running its process, else the
+                   one of its name - while its process runs, and unless that one runs another
   git.ts           Git: reads git's records with gitCli.ts; makes worktrees through
                    _facade.worktree.create
   gitCli.ts        git's records, read by running git
@@ -113,9 +123,9 @@ transport/
   mcpServer.ts     an MCP server over stdio
   shim.ts          the shim: the MCP server that forwards to the pipe
 record/
-  events.ts        Process, the ledger's events, and the state they replay to
+  events.ts        Agent, the ledger's events, and the state they replay to
   ledger.ts        ledger.jsonl and ledger.lock
-  processes.ts     ProcessTable: PIDs, names, tokens, run files; what the core asks and records
+  agents.ts        AgentTable: numbers, names, tokens, run files; what the core asks and records
   paths.ts         where records are, under ~/.facade
 base/              async, errors, files (one-step replace, JSON written back in its layout), json,
                    lock (a lock every window takes), system
@@ -124,8 +134,8 @@ base/              async, errors, files (one-step replace, JSON written back in 
 What the core is built on, in outline:
 
 ```
-interface Process {
-    pid: number; name: string; ppid: number; cli: string; model: string; effort?: string;
+interface Agent {
+    id: number; name: string; parent?: number; cli: string; model: string; effort: string;
     worktree: string; folder: string; taskFile?: string; taskTyped?: boolean;
     state: 'starting' | 'running' | 'exited';
     exit?: { kind: 'exited' | 'killed' | 'failed'; reason: string; time: number };
@@ -145,7 +155,7 @@ interface CliConfig {                          // 1.9
               settings?; enterDelay; taskDelay };
 }
 interface FacadeOptions {
-    table: ProcessTable;
+    table: AgentTable;
     ports: {
         terminals: { launch; isAlive; onDidEnd(name, { exitCode?, byThePerson }); stop; type };
         git: { repositoryOf; worktreesOf; makeWorktree(main, branch, startPoint); excludeOf; tracks;
@@ -153,7 +163,7 @@ interface FacadeOptions {
         person: { tell(text, terminal?) };
     };
     clis: { known; installed(); configOf(cli); environment() };  // CliCatalog
-    setup: { mcpServer(tokenFile); sharedMcpServer(); agentEnv(token); skills(); opening(process, parent) };
+    setup: { mcpServer(tokenFile); sharedMcpServer(); agentEnv(token); skills(); opening(agent, parent) };
     timing?(): { startTimeoutMs };             // the person's timeout, read at each use
     log(message): void;
 }
@@ -161,22 +171,21 @@ interface FacadeOptions {
 
 Each layer has its own tests, with fakes for the ports and a clock the tests move.
 
-## 1 Processes
+## 1 Agents
 
 ### 1.1 The model
 
 ```
-PID          per workspace, from 2 up, never given twice; the person is 1
-parent       the process that spawned it while that one runs; then the person
+number       per workspace, from 1 up, never given twice, written #1; Facade's own, not a process id
+parent       the agent that spawned it while that one runs; then the person, @you, who has no number
 name         a label: lower case, [a-z0-9][a-z0-9._-], at most 40; not you, facade, all, everyone,
-             me, init, kernel. Processes may share it: @name names one where one running process
-             has it
+             me, init, kernel. Agents may share it: @name names one where one running agent has it
 state        starting from its launch; running once its MCP server said hello; exited once its
              terminal ended, it was killed, or it did not come up - with how and why, kept for good
-terminal     @<name> (<pid>) · <CLI>, under the row of its folder, a worktree that has not joined the
+terminal     @<name> #<number> · <CLI>, under the row of its folder, a worktree that has not joined the
              workspace included. It opens without moving the window or taking the focus: behind the
              tab in front on the folder on screen, else held for its folder until the window goes
-             there. A process the person starts comes up in front.
+             there. An agent the person starts comes up in front.
 ```
 
 ### 1.2 The tools
@@ -192,25 +201,28 @@ spawn(cli, model, effort, prompt, worktree?, name?)
     worktree   omitted: the caller's folder; "new": a new worktree on the branch name, at the
                caller's worktree's HEAD; a name: that worktree of the caller's repository
     name       omitted: the worktree's name; required with "new"
-    answers    once the child is up: pid, name, cli, model, effort, worktree, folder, newWorktree
+    answers    once the child is up: id, name, cli, model, effort, worktree, folder, newWorktree
 ps(all?)       the caller, its parent and its children - those it spawned, exited ones too, and
-               those that are its own now - or every process; per row pid, ppid (its parent now),
-               name, state, cli, model, effort, worktree, folder, startTime, exit
-kill(agent)    one of the caller's children, by PID or @name; the person kills any. Its terminal
-               closes, its folder stays, its children are the person's
+               those that are its own now - or every agent; per row id, parent (its parent now; none
+               for the person), name, state, cli, model, effort, worktree, folder, startTime, exit
+kill(agent)    one of the caller's children, by its number - #7, or 7 - by @name, or as Facade writes
+               it, @name #7; the person kills any. Its terminal closes, its folder stays, its children
+               are the person's
 ```
 
 The hello's instructions tell the model who it is, who started it, where it runs and what the tools
-do. A process's first message starts the same way - `[facade] You are @<name>, PID <pid>, a <CLI>
-agent in Facade Code, started by <@parent (PID n) | the person, @you (PID 1)>. Your task:` - for a
-CLI whose model never sees the instructions. Every agent is handed the `facade` skill: the tools, and
+do. An agent's first message starts the same way - `[facade] You are @<name> #<number>, a <CLI> agent
+in Facade Code, started by <@parent #n | the person, @you>. Your task:` - for a CLI whose model never
+sees the instructions. Every agent is handed the `facade` skill: the tools, and
 the CLIs this machine has.
 
 The model and the effort are the CLI's to take: Facade passes them on as they are and checks neither.
 A CLI is the one that knows what it has - Claude Code and Codex send a model missing from their own
 catalogs to their service all the same - and a list of Facade's would go stale with each release, and
-refuse what a CLI takes. A CLI given one it does not have refuses it as it starts, or at its first
-step, or takes a level of its own; what it says is the parent's to read.
+refuse what a CLI takes. No CLI checks the model as it starts: given one it does not have, Claude
+Code, Codex and Muse Code come up and fail at the first step, on their screens, and Antigravity works
+on its own default model without a word; an effort a CLI does not have it may ignore, or take a level
+of its own. A spawn's answer does not tell: the child's screen does.
 
 ### 1.3 Spawn, step by step
 
@@ -221,12 +233,12 @@ step, or takes a level of its own; what it says is the parent's to read.
    trust is `UNAVAILABLE`, naming the setting.
 2. A new worktree is made from the caller's HEAD and recorded (`worktree.made`).
 3. In a worktree Facade made, the CLI gets the person's trust (1.6).
-4. `process.started`: the next PID and a token. The first message - the opening, then the task - is
-   the CLI's argument, or for a CLI told of its task in its terminal, `runs/<pid>.task.md`.
+4. `agent.started`: the next number and a token. The first message - the opening, then the task - is
+   the CLI's argument, or for a CLI told of its task in its terminal, `runs/<number>.task.md`.
 5. The launch: the CLI's `LaunchSpec`, as the person sets it (1.9); its run files written, readable
    by the user only; its files put into the folder (1.7); its terminal launched, with
    `FACADE_AGENTS_PIPE`, `FACADE_AGENTS_TOKEN` and `FACADE_AGENTS_WAIT_MS` for a shared server.
-6. Its MCP server's hello makes it running (`process.running`). A CLI told of its task in its
+6. Its MCP server's hello makes it running (`agent.running`). A CLI told of its task in its
    terminal gets, after its task delay, `[facade] Your task is in <file>: read that file, then do
    what it says.` and Enter after its enter delay; then `task.typed`. Then spawn answers.
 
@@ -234,32 +246,49 @@ Nothing asks the person first: an agent works with nobody at the keyboard, and a
 an answer would stall its parent. A spawn once begun is carried through: no cancellation, and a caller
 that exits meanwhile leaves its child to the person, who is told. Anything that fails from step 4 on
 ends the child as failed and closes its terminal; spawn fails with `<CLI> did not start as @<name>
-(PID <pid>): <why>`. With no hello within the timeout - two minutes unless the person sets otherwise
+#<number>: <why>`. With no hello within the timeout - two minutes unless the person sets otherwise
 (1.9) - the child is failed so: its CLI may be waiting for an answer on its screen. A window that
 closes meanwhile does nothing more, and the call is `UNAVAILABLE`.
 
 ### 1.4 Exits, kill, reload
 
 ```
-its terminal ended by itself    exited - its CLI's exit code - or failed, while starting
-the person closed its terminal  killed, by the person
-its folder or its repository    killed, by the person: its terminal goes with them, whether or not
-taken out of the workspace      the person ever went to its worktree
+its terminal ended by itself    exited - with its CLI's exit code where not 0 - or failed, while starting
+the person closed its terminal  killed, by the person: VS Code says the user ended it, and its CLI left
+                                no exit code - VS Code closes a tab whose process exited as if the
+                                user had, its exit code kept
+the person closed its window,   killed, by the person: the window before was closed, not reloaded, and
+quit Facade, or opened another  none of its agents came back with the next
+workspace in it
+its folder or its repository    killed, by the person, wherever its terminal is - a tab, held for its
+taken out of the workspace; its folder, or the panel - and whether or not the person ever went there. A
+worktree deleted, with Delete   folder of the workspace git emptied stays in the workspace, as VS Code
+Worktree or by git              leaves a folder that is gone
 kill                            killed, by its parent or the person: recorded, then its terminal closed
 no hello within the timeout,    failed, and its terminal closed
 a launch or a task line that
 failed
 ```
 
-On every exit its run files go, and the files Facade put into its folder are let go once no process
-of the window runs there. The person is told of a child of theirs that exited without their doing -
+On every exit its run files go, and the files Facade put into its folder are let go once no agent of
+the window runs there. The person is told of a child of theirs that exited without their doing -
 not of a Start Agent of theirs that failed, which tells them itself - and of the children that are
 theirs because their parent exited. An agent learns of its children's exits from `ps`.
 
-A window that comes back - a reload, a restart - finds each process that has not exited: one whose
-terminal is gone has exited, or failed if it was starting; one starting is given the timeout again
-for its hello; one running but not yet told of its task is told. A worktree Facade made that is gone
-is forgotten, and what windows that closed left in folders is taken back.
+Facade that comes back - with a reload, a restart, or turned on again - finds each agent that has not
+exited, once the window has its terminals back: reconnected to their processes, the editor area
+restored, the window given a minute at most. An agent's terminal is the one running its process: a tab
+whose process VS Code could not reconnect to comes back as a new shell under the old title, and is not
+the agent's. One starting is given the timeout again for its hello;
+one running but not yet told of its task is told. One whose terminal is gone went with the window when
+the window before was closed - another workspace's, or this workspace's and not reloaded - and none of
+its agents came back: killed, by the person, who is not told. After a reload, while Facade was off,
+when only the extension host started again, after a crash, or beside others that came back, it ended
+by itself - exited, or failed if it was starting - and the person is told of theirs. That the window
+was reloaded, VS Code records for itself; the ledger's lock says whether the window went or Facade let
+go of its agents, the window staying, and which window: its owner and its load. Those gone are recorded
+children first, so that no parent's exit leaves one of them to tell of as the person's. A worktree
+Facade made that is gone is forgotten, and what windows that closed left in folders is taken back.
 
 ### 1.5 Starting each CLI
 
@@ -353,28 +382,32 @@ A CLI that reads its MCP server or skills from its folder gets them there before
 whose folders move while its agents run:
 
 ```
-ledger.jsonl       the events, one JSON line each: { v: 2, seq, time, type, ... }
-                   process.started  pid name ppid cli model effort? worktree folder taskFile? tokenHash
-                   process.running  pid          task.typed  pid
-                   process.exited   pid kind reason
-                   worktree.made    name folder repository parentWorktree madeBy
-                   worktree.gone    folder
+ledger.jsonl       the events, one JSON line each: { v: 3, seq, time, type, ... }; a parent or a
+                   maker left out is the person
+                   agent.started   id name parent? cli model effort worktree folder taskFile? tokenHash
+                   agent.running   id          task.typed  id
+                   agent.exited    id kind reason
+                   worktree.made   name folder repository parentWorktree madeBy?
+                   worktree.gone   folder
 ledger.lock        the window that has the agents: its process id and a mark of its own, touched
-                   every 30 s; once it closed them, "closed" and the id its workspace keeps
+                   every 30 s; once it closed them as it went, "closed", the id its workspace keeps and
+                   the id of the window's load; once Facade let go of them, the window staying - turned
+                   off, a start that failed, a write the disk refused - "released" and those ids
 you.token          the person's token
-last-pid           the highest PID given, which a ledger begun anew counts on from
-runs/<pid>.*       a process's token, task and launch files: gone once it exits
+last-id            the highest number given, which a ledger begun anew counts on from; an older
+                   Facade's last-pid where there is none
+runs/<number>.*    an agent's token, task and launch files: gone once it exits
 window.json        the pipe the window listens on
 window-state.json  the pipe's id, and the process ids of the agents' terminals
 ```
 
 The state is what replaying the ledger gives. A ledger another version wrote is moved aside and a new
-one begins, its PIDs counting on from `last-pid`; a last line a crash cut short is dropped, and an
+one begins, its numbers counting on from `last-id`; a last line a crash cut short is dropped, and an
 event the disk took only part of is cut back; any other line that cannot be read, or that does not fit
 those before it, stops the window from loading the agents, and says which. A lock untouched for 90 s
 is another window's to take: the window that stood still that long writes nothing more, lets go of the
-agents and tells the person. A closed lock is its workspace's window's to take back at once, as it
-reloads, and another window's once it is a minute old. A window that finds the lock held waits while
+agents and tells the person. A closed or released lock is its workspace's window's to take back at
+once, as it reloads or turns Facade on again, and another window's once it is a minute old. A window that finds the lock held waits while
 the window before lets go of it, then while nobody touches it - its window ended, and its process id
 is another program's now - until it may take it over; a lock touched again is a running window's, and
 the window says so and starts nothing.
@@ -426,3 +459,125 @@ with no value refuses the spawn before anything is made, naming the setting; a v
 kind counts as unset. Each setting is read at each use, so a change applies to the next launch, and
 belongs to the machine, never to a workspace. Where Facade's files go, and how an agent's token
 reaches its MCP server, are not settings.
+
+### 1.10 Acceptance
+
+This chapter is done when each case below holds in a development window built from its branch, on
+a test workspace - a repository `lab` and a folder `notes` - run as the person runs it: driven from
+inside the window and through the pipe, as @you or as an agent, with the four CLIs on real models.
+A case is seen where the person and the agents would see it - the screen, the terminals' text, ps,
+the processes and the disk - and holds when those agree. What is Facade's own - the ledger's
+replay, the merging of files, the reading of settings - is the unit tests', with mutants; the cases
+are where Facade meets what it does not control: VS Code, the CLIs, git and the operating system. A
+case marked *seen* is the person's to judge as well, on its screenshots or live.
+
+**Starting agents**
+
+1. The person's Start Agent of Claude Code in `lab`: its terminal comes up in front, focused, and
+   takes what the person types; Facade asks nothing, and Claude Code's own question, whether to
+   trust the person's folder, is the person's to answer; ps has it as the person's child, on the
+   model and the effort given. *Seen.*
+2. The lead spawns a child in a new worktree: the window does not move and the focus stays; the
+   worktree's row, not joined to the workspace, shows the child, and the agent list has it under
+   that row; the child asks nothing and opens with `[facade] You are @...`; the ledger has
+   `worktree.made`, `agent.started` and `agent.running`, in that order.
+3. The lead spawns a child in its own folder, the one on screen: the child's tab opens behind the
+   one in front, and what the person types meanwhile goes on where it went. *Seen.*
+4. The lead spawns a child into a worktree of its repository, by name.
+5. A child, asked to, spawns a child of its own, lists them and kills it: three generations in ps.
+6. Claude Code spawned into a new worktree: it trusts the worktree without asking; its task reaches
+   it as its argument; its status line shows the model and the effort given; ps lists it; kill
+   ends it.
+7. Codex, as Claude Code in 6, with Facade's files in its folder and their `info/exclude` lines,
+   which kill takes back.
+8. Muse Code, as Codex in 7, its task typed.
+9. Antigravity, as Muse Code in 8, its task typed after its warm-up turn.
+
+**ps and kill**
+
+10. ps in the caller's view - itself, its parent, its children, exited and adopted ones too - and
+    with `all`: each row as the ledger, the screen and the CLIs' processes have it, each agent by
+    the number its tab's title has.
+11. kill by number, #7 or 7; by @name; as Facade writes it, @name #7, and with a name not that
+    number's (`INVALID`); by a name two running agents share (`INVALID`); of an agent not the
+    caller's child (`REFUSED`); of @you (`REFUSED`); of none (`NOT_FOUND`); of one that exited,
+    saying how; and the person's kill of any: its terminal, its row's logo, its run files and the
+    files put into its folder go.
+12. An agent with running children killed: they are the person's, with no parent's number in ps,
+    and the person is told, a Show Terminal taking them to one. *Seen.*
+
+**Wrong calls**
+
+13. A spawn of each kind refused before anything is made: a CLI not on PATH, no model or no effort,
+    a bad or a reserved name, "new" without a name, an argument spawn does not take, a worktree
+    that is not there, a folder with no repository, a repository with no commit, a `${name}` the
+    launch cannot fill.
+
+**Ends and failures**
+
+14. An agent of the person's exits by itself in a tab on screen: exited, its exit code said where it
+    is not 0; the person is told; its tab goes.
+15. The person closes an agent's tab: killed, by the person, and nothing told.
+16. A CLI that ends as it starts, given an option it does not take: spawn fails at once, with the
+    exit code.
+17. A CLI that never connects, the timeout set short: spawn fails once it is over, and the parent
+    waits until then.
+18. The person's Start Agent of a CLI that cannot start: its own error alone tells them.
+19. A spawn into a worktree git still lists whose folder is gone, or left empty: refused before
+    anything is made (`NOT_FOUND`), as one that is not there. A terminal that cannot start, opened for
+    the folder on screen: its tab goes without a word, as VS Code's own does in the editor area.
+
+**Folders and worktrees**
+
+20. The folder on screen removed with an agent in it: the question says the agent will stop; it
+    does, killed by the person, and no tab of it is left. *Seen.*
+21. Another folder removed, its worktrees holding agents, joined to the workspace and not: each
+    stops.
+22. A folder with no agent removed: asked as always. One with agents removed once the question is
+    turned off: nothing asked, and they stop.
+23. A worktree an agent works in, deleted with Delete Worktree: the question says something runs in
+    it and will be stopped; the agent stops, killed by the person, and the worktree and its row go.
+    One removed with git in a terminal: its row goes, and the agent stops - on Windows too, where git
+    cannot delete the folder the agent is in: it deletes what is in it, asks whether to try again,
+    and told no leaves the folder empty. One joined to the workspace, removed so: its agent stops,
+    and the folder stays in the workspace, as VS Code leaves a folder that is gone.
+24. Going to another folder and back: the agents' terminals are where they were, their processes
+    the same. *Seen.*
+25. Two spawns into new worktrees of one repository at once, a New Worktree of the person's between
+    them: each is made, one after another. A spawn into a new worktree while the person is on
+    another folder: the window stays there.
+
+**The window**
+
+26. A reload, with agents in the folder on screen, in another folder and in a worktree not joined:
+    all running, where they were, under their titles - a title Claude Code sets itself put back -
+    however long, up to a minute, the window takes to give their terminals back. One whose CLI ended
+    while the window reloaded: exited, by itself, and the person is told.
+27. A reload just after a spawn, before its child said hello: the child comes up.
+28. Facade quit and started again: the agents were killed by the person, and nothing is told; the
+    rows stay; the files put into folders are taken back.
+29. A crash, the app's process ended: the agents exited, and the person is told once of each child
+    of theirs.
+30. A second window on the workspace: it says another window has its agents, and starts none; once
+    the first has closed, a reload takes them.
+
+**Settings**
+
+31. `facade.orchestration.enabled` turned off: Start Agent is not offered, and an agent's tools say
+    Facade is not there; turned on, all is back, and an agent whose CLI ended meanwhile exited by
+    itself, the person told. *Seen.*
+32. A launch changed - a group of arguments replaced, one set to null, a variable added, trust set
+    to null: the next agent starts so, given no trust by Facade - none on its command line, none
+    written for it - so that its CLI asks wherever it does not trust the folder already, as
+    Antigravity does in a new worktree; Show Agent Launch follows; the settings read as they mean.
+    *Seen.*
+33. `facade.terminal.followFolder` turned off: a child's terminal opens in the panel, without taking
+    the focus, and the child is on its folder's row; a terminal in the editor area - an agent's come
+    back with a reload, an idle shell - stays on screen as the window moves between folders and onto a
+    worktree's row and back, one tab of it, its process running. The child's folder taken out of the
+    workspace, it stops. Turned on again, each goes back to the folder it was opened in.
+
+Left to the unit tests: what a live window cannot time - a terminal opened while the folder
+switches, one coming back halfway through a restore, a lock handed over - and what touches nothing
+outside Facade: a ledger's broken or cut lines, a CLI writing its file between Facade's read and its
+write, npm's shims and cmd.exe's quoting, macOS and Linux paths, the workbench commands' arguments.

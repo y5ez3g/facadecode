@@ -9,8 +9,9 @@ import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
 import { Facade, SpawnRequest, Spawned } from '../core/facade';
 import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
-import { Caller, Process } from '../record/events';
-import { ProcessTable } from '../record/processes';
+import { AgentTable } from '../record/agents';
+import { Agent, Caller } from '../record/events';
+import { ClosedBy } from '../record/ledger';
 import { settled, until } from './clock';
 
 /** The window's terminals, in memory: what was launched, typed and closed, and which run. */
@@ -162,9 +163,9 @@ export function worktreeFolder(main: string, name: string): string {
 	return path.join(`${main}-worktrees`, name);
 }
 
-/** The caller a process is, as its token says. */
-export function callerOf(process: Process): Caller {
-	return { pid: process.pid, name: process.name };
+/** The caller an agent is, as its token says. */
+export function callerOf(agent: Agent): Caller {
+	return { id: agent.id, name: agent.name };
 }
 
 /**
@@ -268,22 +269,31 @@ export interface WorldOptions {
 	readonly gitDir?: string;
 	/** The record of what Facade put into folders: the world's own unless set, for windows that share one. */
 	readonly injected?: string;
-	/** How long a new process may take to come up, where not two minutes. */
+	/** How long a new agent may take to come up, where not two minutes. */
 	readonly startTimeoutMs?: number;
 	/** The environment the agents' terminals start with: none of the person's home folders. */
 	readonly environment?: () => Environment;
+	/** Whether a process the ledger's lock names runs, as the operating system says unless set. */
+	readonly isRunning?: (pid: number) => boolean;
+	/** Who opens the ledger: the workspace `lab`'s window unless set. */
+	readonly owner?: string;
+	/** The load of the window it opens in: a new one for each world unless set. */
+	readonly session?: string;
 }
+
+/** How many worlds were made: each one a new load of the window. */
+let loads = 0;
 
 /**
  * The core over a workspace in `dir`, with a window in memory: each port records what it was asked
  * and answers as a test set it up. Its CLIs' launches are only computed, never run; a test changes the
  * person's settings of them as it goes, in `settings` - by a CLI's section, then a setting's name, each
- * as the window gives it, its default `{}` or `''` taking nothing away - and how long a new process has
+ * as the window gives it, its default `{}` or `''` taking nothing away - and how long a new agent has
  * to come up, in `timing`. Arg Code keeps its trust in `<dir>/arg-home` where its environment does not
  * say.
  */
 export function fakeWorld(dir: string, options: WorldOptions = {}) {
-	const table = ProcessTable.open({ dir });
+	const table = AgentTable.open({ dir, isRunning: options.isRunning, owner: options.owner ?? 'lab', session: options.session ?? `load-${++loads}` });
 	const terminals = new FakeTerminals();
 	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
 	const person = new FakePerson();
@@ -307,7 +317,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
 			agentEnv: token => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: token }),
 			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: '# Working in Facade Code' }],
-			opening: (process, parent) => `[facade] You are @${process.name}, PID ${process.pid}, ${process.cliName}, started by @${parent.name}.`
+			opening: (agent, parent) => `[facade] You are @${agent.name} #${agent.id}, ${agent.cliName}, started by @${parent.name}.`
 		},
 		timing: () => timing,
 		log: message => logs.push(message),
@@ -323,36 +333,37 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		settings,
 		/** How long the core waits, as the person set it: a test changes it as it goes. */
 		timing,
-		/** The process with the PID `pid`. */
-		process(pid: number): Process {
-			const found = table.get(pid);
+		/** The agent numbered `id`. */
+		agent(id: number): Agent {
+			const found = table.get(id);
 			if (!found) {
-				throw new Error(`no process has PID ${pid}`);
+				throw new Error(`no agent is #${id}`);
 			}
 			return found;
 		},
-		/** As the MCP server of process `pid` says hello: it is running. */
-		hello(pid: number): void {
-			facade.connected(callerOf(this.process(pid)));
+		/** As the MCP server of agent `id` says hello: it is running. */
+		hello(id: number): void {
+			facade.connected(callerOf(this.agent(id)));
 		},
 		/**
 		 * A spawn whose child's MCP server says hello once its terminal is launched, as a CLI's does: what
 		 * the spawn answered, or its error. On a test's clock.
 		 */
 		async spawnUp(caller: Caller, request: SpawnRequest): Promise<Spawned> {
-			const pid = table.state.lastPid + 1;
+			const id = table.state.lastId + 1;
 			let over = false;
 			const spawning = facade.spawn(caller, request);
 			spawning.then(() => over = true, () => over = true);
-			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.includes(`(${pid})`)));
+			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.includes(` #${id} · `)));
 			if (!over) {
-				facade.connected(callerOf(this.process(pid)));
+				facade.connected(callerOf(this.agent(id)));
 			}
 			return settled(spawning);
 		},
-		dispose(): void {
+		/** As the window goes, or as Facade lets go of its agents while the window stays. */
+		dispose(by?: ClosedBy): void {
 			facade.dispose();
-			table.dispose();
+			table.dispose(by);
 		}
 	};
 }

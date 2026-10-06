@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Facade } from '../core/facade';
-import { Caller, YOU_PID } from '../record/events';
+import { Caller } from '../record/events';
 
-const TOOLS = 'Your tools: spawn starts a child agent and answers with its PID once it is up; ps lists you, your parent and your children, each with its PID and state; kill ends one of your children.';
+const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once it is up; ps lists you, your parent and your children, each with its number and state; kill ends one of your children.';
 
 /** A CLI an agent can start children with, as the skill names it. */
 export interface StartableCli {
@@ -24,31 +24,31 @@ function anAgentOf(cliName: string): string {
  * what the tools do. Nothing about how to work: that is the skill's.
  */
 export function instructionsFor(facade: Facade, caller: Caller): string {
-	const process = facade.processOf(caller);
-	if (!process) {
-		return ['You act as the person, @you, PID 1, in Facade Code.', TOOLS].join('\n');
+	const agent = facade.agentOf(caller);
+	if (!agent) {
+		return ['You act as the person, @you, in Facade Code.', TOOLS].join('\n');
 	}
-	const spawner = process.ppid === YOU_PID ? undefined : facade.process(process.ppid);
+	const spawner = agent.parent === undefined ? undefined : facade.agent(agent.parent);
 	return [
-		`You are @${process.name}, PID ${process.pid}, ${anAgentOf(facade.cliName(process.cli))} in Facade Code, started by ${spawner ? `@${spawner.name} (PID ${spawner.pid})` : 'the person, @you (PID 1)'}.`,
-		`You run in ${process.folder}: the worktree ${process.worktree}. You are in that folder already: run commands there without cd.`,
+		`You are @${agent.name} #${agent.id}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, started by ${spawner ? `@${spawner.name} #${spawner.id}` : 'the person, @you'}.`,
+		`You run in ${agent.folder}: the worktree ${agent.worktree}. You are in that folder already: run commands there without cd.`,
 		TOOLS
 	].join('\n');
 }
 
 /**
- * What a new process's first message says before its task: who it is and who started it, for a CLI
+ * What a new agent's first message says before its task: who it is and who started it, for a CLI
  * whose model may not see its MCP server's instructions.
  */
-export function openingFor(process: { readonly pid: number; readonly name: string; readonly cliName: string }, parent: Caller): string {
-	const by = parent.pid === YOU_PID ? 'the person, @you (PID 1)' : `@${parent.name} (PID ${parent.pid})`;
-	return `[facade] You are @${process.name}, PID ${process.pid}, ${anAgentOf(process.cliName)} in Facade Code, started by ${by}. Your task:`;
+export function openingFor(agent: { readonly id: number; readonly name: string; readonly cliName: string }, parent: Caller): string {
+	const by = parent.id === undefined ? 'the person, @you' : `@${parent.name} #${parent.id}`;
+	return `[facade] You are @${agent.name} #${agent.id}, ${anAgentOf(agent.cliName)} in Facade Code, started by ${by}. Your task:`;
 }
 
 /**
- * The `facade` skill every agent is handed at its launch: how Facade behaves - agents as processes, the
- * tools, the folder an agent runs in - and the CLIs this machine has to start children with. Nothing
- * about how to work: that is the person's to choose.
+ * The `facade` skill every agent is handed at its launch: how Facade behaves - agents, their parents and
+ * children, the tools, the folder an agent runs in - and the CLIs this machine has to start children
+ * with. Nothing about how to work: that is the person's to choose.
  */
 export function facadeSkill(clis: readonly StartableCli[]): { readonly name: string; readonly description: string; readonly body: string } {
 	const startable = clis.length
@@ -61,26 +61,28 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'# Working in Facade Code',
 			'',
 			'You are an agent in Facade Code: a coding agent CLI in its own terminal, in a folder of a git',
-			'repository. Facade runs agents as processes: each has a PID, a parent and children. The person is',
-			'PID 1: they start the first agents, and the children of an agent that exits are theirs from then',
-			'on. The person can see your terminal and type into it at any time: answer them there.',
+			'repository. Each agent has a name and a number, as @name #7, a parent and children. The person,',
+			'@you, starts the first agents, and the children of an agent that exits are theirs from then on.',
+			'A number is Facade\'s own, not a process id: only the tools below take it. The person can see your',
+			'terminal and type into it at any time: answer them there.',
 			'',
 			'## The tools',
 			'',
 			`- \`spawn\` starts a child: \`cli\`, \`model\` and \`effort\` are required - on this machine ${startable} - and \`prompt\` is its task.`,
-			'  Facade gives the model and the effort to the CLI as they are, as its own options take them: one',
-			'  it does not have can make the child fail to start, or stop at its first step.',
+			'  Facade gives the model and the effort to the CLI as they are, as its own options take them, and no',
+			'  CLI checks them as it starts: a child given a model its CLI does not have comes up all the same,',
+			'  then fails at its first step, on its screen, or works on the CLI\'s own default model.',
 			'  It works beside you, in your folder; in a worktree of your repository, by name; or with',
 			'  `worktree: "new"` and a `name` in a worktree of its own, on a new branch of that name, starting',
 			'  at your worktree\'s HEAD: commit what the child needs before you start it there. It answers once',
-			'  the child is up, with its PID.',
-			'- `ps` lists you, your parent and your children: each one\'s PID, its parent\'s PID, its state -',
-			'  starting, running, or exited, how and why - its CLI, model and effort, and its worktree. With `all`,',
-			'  every agent this workspace has had.',
-			'- `kill` ends one of your children, by its PID or its @name. Its worktree stays.',
+			'  the child is up, with its number.',
+			'- `ps` lists you, your parent and your children: each one\'s name and number, its parent\'s number',
+			'  or the person, its state - starting, running, or exited, how and why - its CLI, model and effort,',
+			'  and its worktree. With `all`, every agent this workspace has had.',
+			'- `kill` ends one of your children, by its number, as #7, or its @name. Its worktree stays.',
 			'',
 			'A name is a label, which several agents can have: where more than one running agent has it, name',
-			'the one you mean by its PID.',
+			'the one you mean by its number.',
 			'',
 			'## Your children',
 			'',

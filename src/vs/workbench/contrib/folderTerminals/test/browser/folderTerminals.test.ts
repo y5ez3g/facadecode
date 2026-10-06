@@ -10,6 +10,7 @@ import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { EditorActivation } from '../../../../../platform/editor/common/editor.js';
 import { FileOperationError, FileOperationResult, FileSystemProviderCapabilities, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
@@ -27,12 +28,21 @@ import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../../ser
 import { AUX_WINDOW_GROUP } from '../../../../services/editor/common/editorService.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { ICreateTerminalOptions, ITerminalInstance, ITerminalService, TerminalEditorLocation } from '../../../terminal/browser/terminal.js';
-import { FOLLOW_FOLDER, FolderTerminals, PARKED_STORAGE_KEY } from '../../browser/folderTerminals.js';
+import { FOLLOW_FOLDER, FolderTerminals, OPENED_FOR_STORAGE_KEY, PARKED_STORAGE_KEY } from '../../browser/folderTerminals.js';
 
-/** Stands in for any tab, terminal or not: all these tests read off it is where it sits. */
+/**
+ * Stands in for any tab, terminal or not: all these tests read off it is where it sits - and, for what is
+ * left of a terminal's tab after it went to the background, that its editor is disposed, and that closing it
+ * would ask first unless reverted, as a terminal running a child process says.
+ */
 class TestEditor {
+	disposed = false;
+	asks = false;
+	reverted = false;
 	constructor(readonly name: string, readonly resource: URI) { }
 	asInput(): EditorInput { return this as unknown as EditorInput; }
+	isDisposed(): boolean { return this.disposed; }
+	async revert(): Promise<void> { this.reverted = true; }
 }
 
 /** A terminal that knows its resource, whether it persists, and whether it is still alive - and why not. */
@@ -121,6 +131,26 @@ class TestGroup extends mock<IEditorGroup>() {
 		return true;
 	}
 
+	/** Tabs whose closing would have asked first, and those that refuse to close. */
+	readonly asked: string[] = [];
+	readonly refusing = new Set<string>();
+
+	override async closeEditor(editor?: EditorInput): Promise<boolean> {
+		const tab = editor as unknown as TestEditor | undefined;
+		if (!tab || !this.tabs.includes(tab) || this.refusing.has(tab.name)) {
+			return false;
+		}
+		if (tab.asks && !tab.reverted) {
+			this.asked.push(tab.name);
+			return false;
+		}
+		this.tabs.splice(this.tabs.indexOf(tab), 1);
+		if (this.active === tab) {
+			this.active = undefined;
+		}
+		return true;
+	}
+
 	remove(name: string): void {
 		const at = this.tabs.findIndex(tab => tab.name === name);
 		if (at >= 0) {
@@ -158,6 +188,7 @@ class TestEditorGroupsService extends mock<IEditorGroupsService>() {
 
 	override get mainPart(): IEditorPart { return this.main as unknown as IEditorPart; }
 	override get parts(): readonly IEditorPart[] { return [this.main, this.floated] as unknown as IEditorPart[]; }
+	override get groups(): readonly IEditorGroup[] { return [...this.main.groups, ...this.floated.groups]; }
 }
 
 /**
@@ -173,9 +204,20 @@ class TestTerminalService extends mock<ITerminalService>() {
 	readonly shown: string[] = [];
 	readonly askedFor: TerminalEditorLocation[] = [];
 
-	/** Names that should fail to come back, and one that should block until released. */
+	/** Names that should fail to come back, one that should block until released, and one that should once its tab is up. */
 	readonly failing = new Set<string>();
+
+	/** Names whose showing should open nothing, as upstream's does when the editor it opens is refused. */
+	readonly openingNothing = new Set<string>();
+
+	/**
+	 * Names whose tab should be left behind when they go to the background - its editor disposed, and saying
+	 * closing it would ask first, as a terminal running a child process says - as upstream's group leaves it
+	 * until the next turn of the event loop, and a working set put up meanwhile keeps it.
+	 */
+	readonly leavingTabs = new Set<string>();
 	blockOn: { name: string; released: DeferredPromise<void> } | undefined;
+	blockOnceUp: { name: string; released: DeferredPromise<void> } | undefined;
 
 	/** The terminal made the active one, and those put in front, in order. */
 	active: string | undefined;
@@ -246,7 +288,14 @@ class TestTerminalService extends mock<ITerminalService>() {
 
 		for (const part of [this.groups.main, this.groups.floated]) {
 			for (const group of part.groups) {
-				group.remove(named.name);
+				if (!this.leavingTabs.has(named.name)) {
+					group.remove(named.name);
+					continue;
+				}
+				for (const tab of group.tabs.filter(candidate => candidate.name === named.name)) {
+					tab.disposed = true;
+					tab.asks = true;
+				}
 			}
 		}
 	}
@@ -280,6 +329,13 @@ class TestTerminalService extends mock<ITerminalService>() {
 			this.askedFor.push({ ...editorOptions });
 		}
 
+		// Out of the background, and on the terminal editor service's list, but in no tab: refused - or given
+		// what is left of its tab, as a terminal has one tab (`singlePerResource`), which opens nothing
+		const left = [...this.groups.main.groups, ...this.groups.floated.groups].some(group => group.tabs.some(tab => tab.disposed && tab.resource.toString() === named.resource.toString()));
+		if (this.openingNothing.has(named.name) || left) {
+			return;
+		}
+
 		// As an editor opens: in the column asked for - a column number is a column, as upstream's
 		// `columnToEditorGroup` reads it - or else the first, at the tab asked for or else after the one
 		// in front (`workbench.editor.openPositioning`), and in front unless asked not to be.
@@ -290,6 +346,10 @@ class TestTerminalService extends mock<ITerminalService>() {
 		group.tabs.splice(editorOptions?.index ?? (group.active ? group.tabs.indexOf(group.active) + 1 : group.tabs.length), 0, tab);
 		if (!editorOptions?.inactive) {
 			group.active = tab;
+		}
+
+		if (this.blockOnceUp?.name === named.name) {
+			await this.blockOnceUp.released.p;
 		}
 	}
 }
@@ -362,10 +422,12 @@ class TestFileService extends mock<IFileService>() {
 	readonly unreadable = new Set<string>();
 
 	override async stat(resource: URI): Promise<IFileStatWithPartialMetadata> {
-		if (this.gone.has(resource.path)) {
+		// What is in a folder goes with it
+		const within = (paths: Set<string>) => [...paths].some(path => resource.path === path || resource.path.startsWith(path + '/'));
+		if (within(this.gone)) {
 			throw new FileOperationError(`${resource.path} is not there`, FileOperationResult.FILE_NOT_FOUND);
 		}
-		if (this.unreadable.has(resource.path)) {
+		if (within(this.unreadable)) {
 			throw new Error(`${resource.path} could not be read`);
 		}
 		return upcastPartial<IFileStatWithPartialMetadata>({ resource, isDirectory: true });
@@ -468,6 +530,12 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		bar.moving = uri => folders.switchTo(context.folders.find(candidate => candidate.uri.path === uri.path)!);
 	}
 
+	/** The setting changed, as the configuration service says when someone changes it. */
+	async function setFollowFolder(configuration: TestConfigurationService, value: boolean) {
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, value);
+		configuration.onDidChangeConfigurationEmitter.fire(upcastPartial<IConfigurationChangeEvent>({ affectsConfiguration: (key: string) => key === FOLLOW_FOLDER }));
+	}
+
 	/** Parks `parked` for alpha by moving onto beta, then closes the window: the terminals go, and the state is kept. */
 	async function closeWithParked(parked: TestInstance[], alpha: IWorkspaceFolder, beta: IWorkspaceFolder) {
 		const before = setup([new TestGroup(0, parked.map(tabFor))], parked);
@@ -535,7 +603,7 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		});
 	});
 
-	test('while terminals do not follow folders, a terminal opened for any folder is the panel\'s', async () => {
+	test('while terminals do not follow folders, a terminal opened for any folder is the panel\'s, and that folder\'s all the same', async () => {
 		const alpha = folder('alpha');
 		const beta = folder('beta');
 		const row = URI.file('/w/p1');
@@ -563,7 +631,7 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 				{ location: TerminalLocation.Panel, hidden: false },
 			],
 			tabs: [],
-			held: [0, 0, 0],
+			held: [1, 1, 1],
 		});
 	});
 
@@ -815,6 +883,503 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		});
 	});
 
+	test('the folder on screen taken out of the workspace ends the terminals shown for it, as it ends those held for a folder that leaves - out of the editor area first; the panel\'s stay', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+		const panel = new TestInstance('panel', TerminalLocation.Panel);
+		const { terminals, folders, context, bar, folderTerminals } = setup([new TestGroup(0, [tabFor(agent), tabFor(shell)])], [agent, shell, panel]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		const held = await folderTerminals.openFor(beta.uri, { name: 'held' });
+		// Ended in its tab, a terminal's tab could outlast it, and the terminal editor service keep it
+		const outFirst: boolean[] = [];
+		for (const each of [agent, shell]) {
+			disposables.add(each.onDisposed(() => outFirst.push(terminals.backgrounded.includes(each.name))));
+		}
+
+		// As the active folder service does when the folder it is on leaves: on to its neighbour, unannounced
+		folders.activeFolder = beta;
+		context.removeFolder(alpha);
+
+		assert.deepStrictEqual({ ended: [agent, shell].map(each => [each.disposed, each.exitReason]), outFirst, panel: panel.disposed, held: (held as unknown as TestInstance).disposed }, {
+			ended: [[true, TerminalExitReason.User], [true, TerminalExitReason.User]],
+			outFirst: [true, true],
+			panel: false,
+			held: false,
+		});
+	});
+
+	test('another folder leaving ends none of the terminals shown for the folder on screen, nor does the folder on screen leaving while terminals do not follow folders', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const { folders, context, bar, configuration } = setup([new TestGroup(0, [tabFor(agent)])], [agent]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+
+		context.removeFolder(beta);
+		const anotherLeft = agent.disposed;
+		// The editor area's terminals are then the window's
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		folders.activeFolder = undefined;
+		context.removeFolder(alpha);
+
+		assert.deepStrictEqual({ anotherLeft, notFollowing: agent.disposed }, { anotherLeft: false, notFollowing: false });
+	});
+
+	test('while terminals do not follow folders, those of the editor area are the window\'s: out of it before the folder left keeps its editors, so that none is kept with them, and back at their tabs once the next folder\'s are up', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+		const agentTab = tabFor(agent);
+		const column = new TestGroup(0, [file('readme'), agentTab, tabFor(shell)]);
+		column.active = agentTab;
+		const { terminals, folders, context, bar, folderTerminals, configuration } = setup([column], [agent, shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		// The bar keeps the editors of the folder left once the switch has announced itself, behind what it
+		// joined. A terminal still there then would be kept with them: closed when the next folder's are put
+		// up, the shell in it with it - or one that asks before it closes taken along, and one a reload
+		// brought back opened a second time beside itself.
+		const kept: string[][] = [];
+		disposables.add(folders.onWillChangeActiveFolder(e => e.join(Promise.resolve().then(() => { kept.push(column.names()); }))));
+		await folders.switchTo(beta);
+		const whileArriving = column.names();
+		bar.restored();
+		await timeout(0);
+		const onBeta = { tabs: column.names(), inFront: column.active?.name, folder: folderTerminals.folderOf(agent.asInstance())?.path, beta: folderTerminals.terminalsOf(beta.uri).length };
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ kept, whileArriving, onBeta, backOnAlpha: column.names(), ended: [agent.disposed, shell.disposed], backgrounded: terminals.backgrounded }, {
+			kept: [['readme'], ['readme']],
+			whileArriving: ['readme'],
+			onBeta: { tabs: ['readme', 'agent', 'shell'], inFront: 'agent', folder: undefined, beta: 0 },
+			backOnAlpha: ['readme', 'agent', 'shell'],
+			ended: [false, false],
+			backgrounded: ['agent', 'shell', 'agent', 'shell'],
+		});
+	});
+
+	test('while terminals do not follow folders, those on their way with the window are not ended by a folder leaving meanwhile, and a reload then brings them back with it', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const gamma = folder('gamma');
+		const agent = new TestInstance('agent');
+		const before = setup([new TestGroup(0, [tabFor(agent)])], [agent]);
+		before.context.folders = [alpha, beta, gamma];
+		onScreen(before.folders, before.bar, alpha);
+		await before.configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		// On beta, its editors still being put up, when another folder leaves
+		await before.folders.switchTo(beta);
+		before.context.removeFolder(gamma);
+		const afterRemoval = agent.disposed;
+
+		// The window closes then, and opens again on beta
+		agent.dispose(TerminalExitReason.Shutdown);
+		before.storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+		const revived = new TestInstance('agent', TerminalLocation.Panel);
+		const column = new TestGroup(0, []);
+		const after = setup([column], [], [], { storage: before.storage, revived: [revived], opensOn: beta });
+		after.context.folders = [alpha, beta];
+		await after.configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		await timeout(0);
+
+		assert.deepStrictEqual({ afterRemoval, ended: revived.disposed, tabs: column.names(), folder: after.folderTerminals.folderOf(revived.asInstance())?.path }, {
+			afterRemoval: false,
+			ended: false,
+			tabs: ['agent'],
+			folder: undefined,
+		});
+	});
+
+	test('while terminals do not follow folders, the folder on screen leaving takes those of the editor area along with the window, out of it until the next folder\'s editors are up', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+		const { terminals, folders, context, bar, configuration } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		// The active folder service moves on to beta without announcing a switch, and the bar puts beta's
+		// editors up: a tab still there would be closed by them, or opened again beside itself
+		context.removeFolder(alpha);
+		folders.activeFolder = beta;
+		const whileMoving = column.names();
+		bar.restored();
+		await timeout(0);
+
+		assert.deepStrictEqual({ whileMoving, onBeta: column.names(), backgrounded: terminals.backgrounded, ended: agent.disposed }, {
+			whileMoving: [],
+			onBeta: ['agent'],
+			backgrounded: ['agent'],
+			ended: false,
+		});
+	});
+
+	test('a terminal that came along with the window while terminals did not follow folders is put away for the folder it was opened in once they do again', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const gamma = folder('gamma');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+		const { folders, context, bar, folderTerminals, configuration } = setup([column], [agent]);
+		context.folders = [alpha, beta, gamma];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		await switchTo(folders, bar, beta);
+		const onBeta = column.names();
+
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, true);
+		const shownFor = folderTerminals.folderOf(agent.asInstance())?.path;
+		await switchTo(folders, bar, gamma);
+		const onGamma = { tabs: column.names(), heldFor: folderTerminals.folderOf(agent.asInstance())?.path, beta: folderTerminals.terminalsOf(beta.uri).length };
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ onBeta, shownFor, onGamma, backOnAlpha: column.names() }, {
+			onBeta: ['agent'],
+			shownFor: '/w/alpha',
+			onGamma: { tabs: [], heldFor: '/w/alpha', beta: 0 },
+			backOnAlpha: ['agent'],
+		});
+	});
+
+	test('revealing a terminal on its way with the window to the next folder puts it in front once that folder\'s editors are up, without moving the window', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+		const { terminals, folders, context, bar, folderTerminals, configuration } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		await folders.switchTo(beta);
+		const revealing = folderTerminals.reveal(agent.asInstance());
+		await timeout(0);
+		const whileSwitching = { tabs: column.names(), revealed: [...terminals.revealed] };
+		bar.restored();
+		const inFront = await revealing;
+
+		assert.deepStrictEqual({ whileSwitching, inFront, moves: bar.moves, on: folders.activeFolder?.name, revealed: terminals.revealed, focused: agent.focused }, {
+			whileSwitching: { tabs: [], revealed: [] },
+			inFront: true,
+			moves: [],
+			on: 'beta',
+			revealed: ['agent'],
+			focused: true,
+		});
+	});
+
+	test('a terminal caught by the window moving on again with its tab up but not yet back leaves the editor area with the others, and is kept once, for its folder', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar, storage } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+
+		// Back on alpha, the shell's tab up, and the window leaves before the shell is said to be back
+		terminals.blockOnceUp = { name: 'shell', released: new DeferredPromise<void>() };
+		await switchTo(folders, bar, alpha);
+		await folders.switchTo(beta);
+		// Before beta's editors are put up, which would close a tab left there, the shell with it
+		const whileLeaving = column.names();
+		terminals.blockOnceUp.released.complete();
+		await timeout(0);
+		bar.restored();
+		await timeout(0);
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+		const kept: Record<string, { nonce: string }[]> = JSON.parse(storage.get(PARKED_STORAGE_KEY, StorageScope.WORKSPACE) ?? '{}');
+		const keptOnBeta = Object.values(kept).flat().map(entry => entry.nonce);
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ whileLeaving, keptOnBeta, backOnAlpha: column.names() }, {
+			whileLeaving: [],
+			keptOnBeta: ['nonce-shell'],
+			backOnAlpha: ['shell'],
+		});
+	});
+
+	test('those on their way with the window whose showing a switch stops come with the next folder, even when its editors are up before that stop', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const gamma = folder('gamma');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+		const { terminals, folders, context, bar, configuration } = setup([column], [agent]);
+		context.folders = [alpha, beta, gamma];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		// On beta, the agent held half way back, the window goes on to gamma and its editors are up
+		terminals.blockOn = { name: 'agent', released: new DeferredPromise<void>() };
+		await switchTo(folders, bar, beta);
+		await switchTo(folders, bar, gamma);
+		terminals.blockOn.released.complete();
+		await timeout(0);
+
+		assert.deepStrictEqual({ onGamma: column.names(), ended: agent.disposed }, { onGamma: ['agent'], ended: false });
+	});
+
+	test('a terminal opened for a folder belongs to it wherever it is - in the panel too, while terminals do not follow folders - and ends when the folder leaves the workspace, or for a row its repository does', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const p1 = URI.file('/w/p1');
+		const { folders, context, bar, folderTerminals, configuration } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		bar.members = [beta];
+		bar.rows.push(p1);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		const here = await folderTerminals.openFor(alpha.uri, { name: 'here' });
+		const row = await folderTerminals.openFor(p1, { name: 'row' });
+		const ended = () => [here, row].map(each => (each as unknown as TestInstance).disposed);
+		const belong = { here: folderTerminals.folderOf(here)?.path, row: folderTerminals.folderOf(row)?.path, beta: folderTerminals.terminalsOf(p1).length };
+
+		context.removeFolder(alpha);
+		const alphaLeft = ended();
+		context.removeFolder(beta);
+
+		assert.deepStrictEqual({ belong, alphaLeft, betaLeft: ended() }, {
+			belong: { here: '/w/alpha', row: '/w/p1', beta: 1 },
+			alphaLeft: [true, false],
+			betaLeft: [true, true],
+		});
+	});
+
+	test('a terminal opened for a folder is still that folder\'s after a reload - the panel\'s too - and ends when it leaves', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const before = setup([new TestGroup(0, [])], []);
+		before.context.folders = [alpha, beta];
+		onScreen(before.folders, before.bar, alpha);
+		await before.configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		const agent = await before.folderTerminals.openFor(alpha.uri, { name: 'agent' });
+
+		// The window closes, and opening again brings the agent back in the panel
+		(agent as unknown as TestInstance).dispose(TerminalExitReason.Shutdown);
+		before.storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+		const revived = new TestInstance('agent', TerminalLocation.Panel);
+		const after = setup([new TestGroup(0, [])], [], [], { storage: before.storage, revived: [revived], opensOn: beta });
+		after.context.folders = [alpha, beta];
+		await after.configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		await timeout(0);
+		const belongs = after.folderTerminals.folderOf(revived.asInstance())?.path;
+		after.context.removeFolder(alpha);
+
+		assert.deepStrictEqual({ belongs, ended: revived.disposed }, { belongs: '/w/alpha', ended: true });
+	});
+
+	test('a folder of the workspace that git has no worktree at any more - its .git gone - ends the terminals opened for it, and not the person\'s own shells there, nor the folder', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { folders, context, bar, folderTerminals, files } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		bar.members = [alpha, beta];
+		bar.rows.push(alpha.uri);
+		const agent = await folderTerminals.openFor(alpha.uri, { name: 'agent' });
+		await timeout(0);
+
+		// Removed with git: its files gone, the folder left in the workspace
+		files.gone.add('/w/alpha/.git');
+		bar.read([]);
+		await timeout(0);
+
+		assert.deepStrictEqual({ agent: (agent as unknown as TestInstance).disposed, shell: shell.disposed, workspace: context.folders.map(each => each.name) }, {
+			agent: true,
+			shell: false,
+			workspace: ['alpha', 'beta'],
+		});
+	});
+
+	test('while terminals do not follow folders, a terminal opened for a row ends once git has removed the row\'s worktree - its .git gone', async () => {
+		const alpha = folder('alpha');
+		const p1 = URI.file('/w/p1');
+		const { folders, context, bar, folderTerminals, files, configuration } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha];
+		onScreen(folders, bar, alpha);
+		bar.members = [alpha];
+		bar.rows.push(p1);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		const agent = await folderTerminals.openFor(p1, { name: 'agent' });
+
+		files.gone.add('/w/p1/.git');
+		bar.read([]);
+		await timeout(0);
+
+		assert.strictEqual((agent as unknown as TestInstance).disposed, true);
+	});
+
+	test('a terminal opened for a folder in no repository is not ended by a read of git\'s files, which finds no .git there', async () => {
+		const notes = folder('notes');
+		const { folders, context, bar, folderTerminals, files } = setup([new TestGroup(0, [])], []);
+		context.folders = [notes];
+		onScreen(folders, bar, notes);
+		const agent = await folderTerminals.openFor(notes.uri, { name: 'agent' });
+
+		files.gone.add('/w/notes/.git');
+		bar.read([]);
+		await timeout(0);
+
+		assert.strictEqual((agent as unknown as TestInstance).disposed, false);
+	});
+
+	test('turned on again, a terminal that came along with the window goes back at once to the folder it was opened in, out of the editor area of another', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { folders, context, bar, folderTerminals, configuration } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		await switchTo(folders, bar, beta);
+		const onBeta = column.names();
+
+		await setFollowFolder(configuration, true);
+
+		assert.deepStrictEqual({ onBeta, now: column.names(), heldFor: folderTerminals.folderOf(shell.asInstance())?.path, beta: folderTerminals.terminalsOf(beta.uri).length }, {
+			onBeta: ['shell'],
+			now: [],
+			heldFor: '/w/alpha',
+			beta: 0,
+		});
+	});
+
+	test('turned on again while terminals are on their way with the window, each is held for the folder it was opened in rather than shown with the next one', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { folders, context, bar, folderTerminals, configuration } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		await folders.switchTo(beta);
+		await setFollowFolder(configuration, true);
+		bar.restored();
+		await timeout(0);
+		const onBeta = { tabs: column.names(), heldFor: folderTerminals.folderOf(shell.asInstance())?.path };
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ onBeta, backOnAlpha: column.names() }, {
+			onBeta: { tabs: [], heldFor: '/w/alpha' },
+			backOnAlpha: ['shell'],
+		});
+	});
+
+	test('while terminals do not follow folders, the folder on screen leaving as they come back loses none: they come with the next folder\'s editors', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const gamma = folder('gamma');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar, configuration } = setup([column], [shell]);
+		context.folders = [alpha, beta, gamma];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		// On beta, the shell's tab up again but not yet said to be back, beta leaves the workspace
+		const released = new DeferredPromise<void>();
+		terminals.blockOnceUp = { name: 'shell', released };
+		await switchTo(folders, bar, beta);
+		context.removeFolder(beta);
+		folders.activeFolder = gamma;
+		terminals.blockOnceUp = undefined;
+		released.complete();
+		await timeout(0);
+		bar.restored();
+		await timeout(0);
+
+		assert.deepStrictEqual({ onGamma: column.names(), shown: terminals.foregroundInstances.includes(shell.asInstance()), ended: shell.disposed }, { onGamma: ['shell'], shown: true, ended: false });
+	});
+
+	test('the folder on screen leaving while a terminal is on its way back - its tab not up yet - puts it straight back once it lands: the editors the next folder puts up would close it', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const gamma = folder('gamma');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar, configuration } = setup([column], [shell]);
+		context.folders = [alpha, beta, gamma];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		// On beta, the shell on its way back, beta leaves the workspace before its tab is up
+		const released = new DeferredPromise<void>();
+		terminals.blockOn = { name: 'shell', released };
+		await switchTo(folders, bar, beta);
+		context.removeFolder(beta);
+		folders.activeFolder = gamma;
+		released.complete();
+		await timeout(0);
+		const landed = { tabs: column.names(), shown: terminals.foregroundInstances.includes(shell.asInstance()) };
+		bar.restored();
+		await timeout(0);
+
+		assert.deepStrictEqual({ landed, onGamma: column.names(), ended: shell.disposed }, {
+			landed: { tabs: [], shown: false },
+			onGamma: ['shell'],
+			ended: false
+		});
+	});
+
+	test('while terminals do not follow folders, the last folder leaving the workspace leaves the editor area\'s terminals on screen: no folder\'s editors are put up to bring them back', async () => {
+		const alpha = folder('alpha');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar, configuration } = setup([column], [shell]);
+		context.folders = [alpha];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		folders.activeFolder = undefined;
+		context.removeFolder(alpha);
+		await timeout(0);
+
+		assert.deepStrictEqual({ tabs: column.names(), backgrounded: terminals.backgrounded, ended: shell.disposed }, { tabs: ['shell'], backgrounded: [], ended: false });
+	});
+
+	test('back on a folder whose terminals were still coming back from a move before, they all come back: the move that was stopped hides none of them', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await switchTo(folders, bar, beta);
+
+		// Back on alpha, the shell's tab up but not yet said to be back; away and back again, the second
+		// showing held as well
+		const released = new DeferredPromise<void>();
+		terminals.blockOnceUp = { name: 'shell', released };
+		await switchTo(folders, bar, alpha);
+		await switchTo(folders, bar, beta);
+		await switchTo(folders, bar, alpha);
+		terminals.blockOnceUp = undefined;
+		released.complete();
+		await timeout(0);
+		await timeout(0);
+
+		assert.deepStrictEqual({ tabs: column.names(), shown: terminals.foregroundInstances.includes(shell.asInstance()) }, { tabs: ['shell'], shown: true });
+	});
+
 	test('a read of git\'s files that misses a row ends nothing held under it - its folder gone from disk does, not one that cannot be looked at', async () => {
 		const alpha = folder('alpha');
 		const p1 = URI.file('/w/p1');
@@ -850,6 +1415,24 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			gone: [true, false],
 			held: [0, 1],
 		});
+	});
+
+	test('a row git no longer reads whose folder is left without its .git - as git leaves one on Windows, where a folder a process is in cannot be deleted - ends what is held under it', async () => {
+		const alpha = folder('alpha');
+		const p1 = URI.file('/w/p1');
+		const { folders, context, bar, folderTerminals, files } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha];
+		onScreen(folders, bar, alpha);
+		bar.members = [alpha];
+		bar.rows.push(p1);
+		const agent = await folderTerminals.openFor(p1, { name: 'agent' });
+
+		// Removed with git: its files gone, its folder left empty, held by the agent's process
+		files.gone.add('/w/p1/.git');
+		bar.read([]);
+		await timeout(0);
+
+		assert.deepStrictEqual({ ended: (agent as unknown as TestInstance).disposed, held: folderTerminals.terminalsOf(p1).length }, { ended: true, held: 0 });
 	});
 
 	test('a row that joined the workspace while the window was closed is that folder after a reload: taking it out then ends its terminals', async () => {
@@ -967,6 +1550,203 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			agentHeldFor: '/w/alpha',
 			held: ['agent'],
 		});
+	});
+
+	test('a folder whose last terminal coming back ended, taken out of the workspace and put back with a terminal opened for it, shows that one once its editors are up', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		await switchTo(folders, bar, beta);
+
+		// Back on alpha with its shell held half way back: the shell ends, alpha leaves and comes back, and an
+		// agent opens a terminal for it, all before the shell's showing gives up
+		terminals.blockOn = { name: 'shell', released: new DeferredPromise<void>() };
+		await switchTo(folders, bar, alpha);
+		shell.dispose(TerminalExitReason.User);
+		context.removeFolder(alpha);
+		context.addFolder(alpha);
+		const agent = await folderTerminals.openFor(alpha.uri, { name: 'agent' });
+		terminals.blockOn.released.complete();
+		await timeout(0);
+		bar.restored();
+		await timeout(0);
+
+		assert.deepStrictEqual({ tabs: column.names(), shown: terminals.foregroundInstances.includes(agent) }, { tabs: ['agent'], shown: true });
+	});
+
+	test('back on a folder before its terminals stopped coming back from the visit before, each comes back once, to one tab', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await switchTo(folders, bar, beta);
+
+		// Back on alpha, the shell held before its tab is up; away and back again while it is
+		terminals.blockOn = { name: 'shell', released: new DeferredPromise<void>() };
+		await switchTo(folders, bar, alpha);
+		await switchTo(folders, bar, beta);
+		await switchTo(folders, bar, alpha);
+		terminals.blockOn.released.complete();
+		for (let i = 0; i < 4; i++) {
+			await timeout(0);
+		}
+
+		assert.deepStrictEqual({ tabs: column.names(), shown: terminals.foregroundInstances.includes(shell.asInstance()) }, { tabs: ['shell'], shown: true });
+	});
+
+	test('turned on again after a reload, a terminal opened for a folder that came along with the window goes back to that folder: what it was opened for is kept, though not where it came from', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const before = setup([new TestGroup(0, [])], []);
+		before.context.folders = [alpha, beta];
+		onScreen(before.folders, before.bar, alpha);
+		const opened = await before.folderTerminals.openFor(alpha.uri, { name: 'agent' });
+		await timeout(0);
+		(opened as unknown as TestInstance).dispose(TerminalExitReason.Shutdown);
+		before.storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		// Opened again on beta, the agent's tab among beta's: it came along with the window while terminals did not follow folders
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+		const after = setup([column], [agent], [], { storage: before.storage, revived: [], opensOn: beta });
+		after.context.folders = [alpha, beta];
+		await after.configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		after.bar.restored();
+		await timeout(0);
+
+		await setFollowFolder(after.configuration, true);
+		const turnedOn = { tabs: column.names(), heldFor: after.folderTerminals.folderOf(agent.asInstance())?.path };
+		await switchTo(after.folders, after.bar, alpha);
+
+		assert.deepStrictEqual({ turnedOn, backOnAlpha: column.names() }, {
+			turnedOn: { tabs: [], heldFor: '/w/alpha' },
+			backOnAlpha: ['agent'],
+		});
+	});
+
+	test('a terminal opened for a folder that the person moves into another folder\'s editor area is still its own folder\'s: leaving that folder puts it away for its own, and taking that folder out of the workspace does not end it', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const gamma = folder('gamma');
+		const column = new TestGroup(0, []);
+		const { folders, context, bar, folderTerminals, configuration } = setup([column], []);
+		context.folders = [alpha, beta, gamma];
+		onScreen(folders, bar, beta);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		const agent = await folderTerminals.openFor(alpha.uri, { name: 'agent' }) as unknown as TestInstance;
+		await setFollowFolder(configuration, true);
+
+		// Moved by the person from the panel into beta's editor area
+		agent.target = TerminalLocation.Editor;
+		column.tabs.push(tabFor(agent));
+		await switchTo(folders, bar, gamma);
+		const onGamma = { tabs: column.names(), heldFor: folderTerminals.folderOf(agent.asInstance())?.path, beta: folderTerminals.terminalsOf(beta.uri).length };
+		context.removeFolder(beta);
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ onGamma, ended: agent.disposed, backOnAlpha: column.names() }, {
+			onGamma: { tabs: [], heldFor: '/w/alpha', beta: 0 },
+			ended: false,
+			backOnAlpha: ['agent'],
+		});
+	});
+
+	test('turned on again on the folder a terminal was opened in, it stays on screen there', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar, folderTerminals, configuration } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+		await switchTo(folders, bar, beta);
+		await switchTo(folders, bar, alpha);
+		const backgrounded = terminals.backgrounded.length;
+
+		await setFollowFolder(configuration, true);
+
+		assert.deepStrictEqual({ tabs: column.names(), putAway: terminals.backgrounded.length - backgrounded, shownFor: folderTerminals.folderOf(shell.asInstance())?.path }, {
+			tabs: ['shell'],
+			putAway: 0,
+			shownFor: '/w/alpha',
+		});
+	});
+
+	test('turned on again while those on their way with the window are being shown, they come up with the folder on screen, and revealing one does not move the window', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(shell)]);
+		const { terminals, folders, context, bar, folderTerminals, configuration } = setup([column], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		// On beta, the shell on its way with the window held half way back as following folders is turned on
+		terminals.blockOn = { name: 'shell', released: new DeferredPromise<void>() };
+		await switchTo(folders, bar, beta);
+		await setFollowFolder(configuration, true);
+		terminals.blockOn.released.complete();
+		await timeout(0);
+		const inFront = await folderTerminals.reveal(shell.asInstance());
+
+		assert.deepStrictEqual({ tabs: column.names(), inFront, moves: bar.moves, on: folders.activeFolder?.name }, {
+			tabs: ['shell'],
+			inFront: true,
+			moves: [],
+			on: 'beta',
+		});
+	});
+
+	test('while terminals do not follow folders, a terminal opened in the panel for a row that joined the workspace since ends when that folder leaves it, its repository staying', async () => {
+		const alpha = folder('alpha');
+		const p1 = folder('p1');
+		const { folders, context, bar, folderTerminals, configuration } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha];
+		onScreen(folders, bar, alpha);
+		bar.members = [alpha];
+		bar.rows.push(p1.uri);
+		await configuration.setUserConfiguration(FOLLOW_FOLDER, false);
+
+		const agent = await folderTerminals.openFor(p1.uri, { name: 'agent' });
+		context.addFolder(p1);
+		const joined = folderTerminals.folderOf(agent)?.path;
+		context.removeFolder(p1);
+
+		assert.deepStrictEqual({ panel: agent.target === TerminalLocation.Panel, joined, ended: (agent as unknown as TestInstance).disposed }, { panel: true, joined: '/w/p1', ended: true });
+	});
+
+	test('a terminal held under a row that a reload brought back with nothing kept of the folder it was opened for - as an older window kept it - ends once git removed the row\'s worktree, its .git gone', async () => {
+		const alpha = folder('alpha');
+		const p1 = URI.file('/w/p1');
+		const before = setup([new TestGroup(0, [])], []);
+		before.context.folders = [alpha];
+		before.folders.activeFolder = alpha;
+		before.bar.members = [alpha];
+		before.bar.rows.push(p1);
+		const agent = await before.folderTerminals.openFor(p1, { name: 'agent' });
+		(agent as unknown as TestInstance).dispose(TerminalExitReason.Shutdown);
+		before.storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+		before.storage.remove(OPENED_FOR_STORAGE_KEY, StorageScope.WORKSPACE);
+
+		const revived = new TestInstance('agent', TerminalLocation.Panel);
+		const after = setup([new TestGroup(0, [])], [], [], { storage: before.storage, revived: [revived], opensOn: alpha });
+		after.context.folders = [alpha];
+		await timeout(0);
+		const heldFor = after.folderTerminals.folderOf(revived.asInstance())?.path;
+		after.files.gone.add('/w/p1/.git');
+		after.bar.read([]);
+		await timeout(0);
+
+		assert.deepStrictEqual({ heldFor, ended: revived.disposed, held: after.folderTerminals.terminalsOf(p1).length }, { heldFor: '/w/p1', ended: true, held: 0 });
 	});
 
 	test('a terminal that ends while it is being shown, as the window moves on again, is not put back in the background', async () => {
@@ -1204,6 +1984,82 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		await switchTo(folders, bar, alpha);
 
 		assert.deepStrictEqual(terminals.shown, ['one', 'two']);
+	});
+
+	test('one whose tab is still there when it comes back - a working set keeps the tab of a terminal running a child process until its group closes it - gets a tab of its own, and nobody is asked', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const shell = new TestInstance('shell');
+		const column = new TestGroup(0, [tabFor(agent), tabFor(shell)]);
+
+		const { terminals, folders, context, bar } = setup([column], [agent, shell]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		terminals.leavingTabs.add('agent');
+		const tabs = () => column.tabs.map(tab => tab.disposed ? `${tab.name}, left` : tab.name);
+
+		await switchTo(folders, bar, beta);
+		const away = tabs();
+		await switchTo(folders, bar, alpha);
+
+		// Given what was left of its tab, it would have opened nothing: in no tab, and lost to the next reload
+		assert.deepStrictEqual({ away, back: tabs(), asked: column.asked, hidden: !terminals.foregroundInstances.includes(agent.asInstance()) }, {
+			away: ['agent, left'],
+			back: ['agent', 'shell'],
+			asked: [],
+			hidden: false
+		});
+	});
+
+	test('one that comes back to no tab - showing it opened nothing - goes back to the background, held for its folder still, and comes back the next time', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const one = new TestInstance('one');
+		const two = new TestInstance('two');
+		const column = new TestGroup(0, [tabFor(one), tabFor(two)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [one, two]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		terminals.openingNothing.add('one');
+		const hidden = () => [one, two].filter(instance => !terminals.foregroundInstances.includes(instance.asInstance())).map(instance => instance.name);
+		const heldFor = (target: IWorkspaceFolder) => folderTerminals.terminalsOf(target.uri).map(instance => (instance as unknown as TestInstance).name);
+
+		await switchTo(folders, bar, beta);
+		await switchTo(folders, bar, alpha);
+		const first = { tabs: column.names(), hidden: hidden(), alpha: heldFor(alpha), ended: one.disposed || two.disposed };
+
+		terminals.openingNothing.clear();
+		await switchTo(folders, bar, beta);
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({ first, then: { tabs: column.names(), hidden: hidden() } }, {
+			first: { tabs: [], hidden: ['one', 'two'], alpha: ['one', 'two'], ended: false },
+			then: { tabs: ['one', 'two'], hidden: [] }
+		});
+	});
+
+	test('what is left of a terminal\'s tab is not a tab of its own: shown again while it cannot be closed, the terminal goes back to the background rather than staying in the editor area with no tab', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const agent = new TestInstance('agent');
+		const column = new TestGroup(0, [tabFor(agent)]);
+
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], [agent]);
+		context.folders = [alpha, beta];
+		folders.activeFolder = alpha;
+		terminals.leavingTabs.add('agent');
+		column.refusing.add('agent');
+
+		await switchTo(folders, bar, beta);
+		await switchTo(folders, bar, alpha);
+
+		assert.deepStrictEqual({
+			hidden: !terminals.foregroundInstances.includes(agent.asInstance()),
+			alpha: folderTerminals.terminalsOf(alpha.uri).map(instance => (instance as unknown as TestInstance).name),
+			ended: agent.disposed
+		}, { hidden: true, alpha: ['agent'], ended: false });
 	});
 
 	test('a switch arriving mid-restore leaves the rest parked instead of opening them elsewhere', async () => {

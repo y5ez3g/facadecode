@@ -51,7 +51,7 @@ function outcome(call: () => unknown): string {
 	}
 }
 
-/** What a launch of `cli` is given, as the core gives it for PID 7: its defaults, where a test sets nothing else. */
+/** What a launch of `cli` is given, as the core gives it for #7: its defaults, where a test sets nothing else. */
 function inputFor(cli: AgentCli, overrides: Partial<LaunchInput> = {}): LaunchInput {
 	return { folder: '/lab', trusted: false, model: 'model-x', effort: 'high', mcp: MCP, skills: [SKILL], config: cli.defaults, runDir: '/runs', slug: '7', ...overrides };
 }

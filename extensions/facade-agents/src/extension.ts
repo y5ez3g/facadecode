@@ -10,9 +10,9 @@ import { AgentsService } from './host/service';
 import { registerShowLaunch } from './host/showLaunch';
 
 /**
- * Facade's agents: vendors' agent CLIs in their own UIs, in the worktrees of this window, run as
- * processes with Facade's MCP server. The switch is `facade.orchestration.enabled`: off, this extension
- * starts nothing, writes nothing and launches nothing.
+ * Facade's agents: vendors' agent CLIs in their own UIs, in the worktrees of this window, starting,
+ * listing and ending each other through Facade's MCP server. The switch is `facade.orchestration.enabled`:
+ * off, this extension starts nothing, writes nothing and launches nothing.
  */
 export function activate(context: vscode.ExtensionContext): void {
 	// What the layers under the host tell the person goes through @vscode/l10n: in the window's language.
@@ -48,7 +48,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					}
 					service = created;
 				} catch (err) {
-					created.dispose();
+					created.dispose('facade');
 					none = 'failed';
 					log.error(`Facade agents could not start: ${stackOf(err)}`);
 					void vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start: {0}", messageOf(err)));
@@ -56,7 +56,8 @@ export function activate(context: vscode.ExtensionContext): void {
 					creating = undefined;
 				}
 			} else if (!enabled && service) {
-				service.dispose();
+				// Its agents run on, without Facade's tools, while the window stays
+				service.dispose('facade');
 				service = undefined;
 				log.info('Facade agents are off.');
 			}

@@ -153,8 +153,11 @@ editors           a working set per folder, stored on the way out and restored o
                   (`WorkspaceBarEditors`), dropped when the folder leaves the workspace
 terminals         one in the editor area belongs to the folder it was opened in: leaving the folder
                   puts it away, coming back shows the same shell, and it survives a reload
-                  (`IFolderTerminalsService`, `facade.terminal.followFolder`, on by default; off, the
-                  switch closes it). A terminal in the panel belongs to the window
+                  (`IFolderTerminalsService`, `facade.terminal.followFolder`, on by default). Off,
+                  it is the window's and stays on screen, out of the editor area only while a
+                  switch keeps one folder's editors and puts up the next's, which would close it
+                  or open it twice. A terminal in the panel belongs to the window, but one Facade
+                  opened for a folder - an agent's - is that folder's wherever it is, and ends with it
 new terminal,     ask `IActiveFolderService` (§3.2). Create New Terminal no longer asks which folder;
 dialogs, debug    Create New Terminal in Another Folder... is where that question went
 source control    the Changes pane lists the active folder's repositories (`visibleRepositories`);

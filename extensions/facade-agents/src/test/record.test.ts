@@ -8,25 +8,26 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
-import { LedgerEventBody, PERSON, YOU_PID } from '../record/events';
+import { agentName, AgentTable, nameOfWorktree, NewAgent } from '../record/agents';
+import { LedgerEventBody, PERSON } from '../record/events';
 import { isLedgerHeld, Ledger, LedgerLockedError, lockWait } from '../record/ledger';
 import { injectedFile, recordDir, workspaceDir, workspacesRoot } from '../record/paths';
-import { agentName, nameOfWorktree, NewProcess, ProcessTable } from '../record/processes';
 import { cutNextWriteShort, fsError, replaceFsFunction, sleep, tempDir, waitFor } from './util';
 
 const LEDGER = 'ledger.jsonl';
 const LOCK = 'ledger.lock';
-const LAST_PID = 'last-pid';
+const LAST_ID = 'last-id';
 /** A lock as another window writes it: its process id, and a mark of its own. */
 const ANOTHERS_LOCK = '424242 0123456789ab';
 
-function newProcess(name: string, ppid = YOU_PID, worktree = 'main'): NewProcess {
-	return { name, ppid, cli: 'arg', model: 'small', effort: 'high', worktree, folder: '/lab' };
+/** An agent the person starts, or the agent `parent` does. */
+function newAgent(name: string, parent?: number, worktree = 'main'): NewAgent {
+	return { name, parent, cli: 'arg', model: 'small', effort: 'high', worktree, folder: '/lab' };
 }
 
 /** A worktree the person had Facade make, called `name`. */
 function made(name: string): LedgerEventBody {
-	return { type: 'worktree.made', name, folder: `/lab-${name}`, repository: '/lab', parentWorktree: 'main', madeBy: YOU_PID };
+	return { type: 'worktree.made', name, folder: `/lab-${name}`, repository: '/lab', parentWorktree: 'main' };
 }
 
 /** What a call came to: `done`, or the code of what it threw, else its message. */
@@ -54,14 +55,14 @@ function failReading(file: string, code: string, failing: () => boolean = () => 
 	}) as typeof fs.readFileSync);
 }
 
-suite('Record: processes, their PIDs, names and tokens', () => {
+suite('Record: agents, their numbers, names and tokens', () => {
 
 	let temp: { dir: string; remove(): void };
-	let table: ProcessTable;
+	let table: AgentTable;
 
 	setup(() => {
-		temp = tempDir('facade-processes-');
-		table = ProcessTable.open({ dir: temp.dir });
+		temp = tempDir('facade-agents-');
+		table = AgentTable.open({ dir: temp.dir });
 	});
 
 	teardown(() => {
@@ -69,43 +70,55 @@ suite('Record: processes, their PIDs, names and tokens', () => {
 		temp.remove();
 	});
 
-	test('a process gets the next PID, never one given before: PIDs count up from 2, the person being 1, across a reopening too', () => {
-		const first = table.start(newProcess('main'));
-		table.setExited(first.process.pid, 'exited', 'its CLI ended with exit code 0');
-		const second = table.start(newProcess('main'));
+	test('an agent gets the next number, never one given before: numbers count up from 1, across a reopening too', () => {
+		const first = table.start(newAgent('main'));
+		table.setExited(first.agent.id, 'exited', 'its CLI ended');
+		const second = table.start(newAgent('main'));
 		table.dispose();
-		table = ProcessTable.open({ dir: temp.dir });
-		const third = table.start(newProcess('main'));
+		table = AgentTable.open({ dir: temp.dir });
+		const third = table.start(newAgent('main'));
 
-		assert.deepStrictEqual([first.process.pid, second.process.pid, third.process.pid], [2, 3, 4]);
+		assert.deepStrictEqual([first.agent.id, second.agent.id, third.agent.id], [1, 2, 3]);
 	});
 
-	test('PIDs count on from the highest ever given, which last-pid keeps: past a ledger begun anew - the old one moved aside - and past a PID its ledger never recorded', () => {
-		table.start(newProcess('main'));
-		table.start(newProcess('clamp'));
+	test('numbers count on from the highest ever given, which last-id keeps: past a ledger begun anew - the old one moved aside - and past a number its ledger never recorded', () => {
+		table.start(newAgent('main'));
+		table.start(newAgent('clamp'));
 		table.dispose();
 		// As the person moves aside a ledger that does not open.
 		fs.renameSync(path.join(temp.dir, LEDGER), path.join(temp.dir, 'ledger.broken.jsonl'));
-		table = ProcessTable.open({ dir: temp.dir });
-		const anew = table.start(newProcess('main')).process.pid;
+		table = AgentTable.open({ dir: temp.dir });
+		const anew = table.start(newAgent('main')).agent.id;
 		table.dispose();
 		// Given by a window that ended before its ledger recorded it.
-		fs.writeFileSync(path.join(temp.dir, LAST_PID), '9');
-		table = ProcessTable.open({ dir: temp.dir });
-		const pastAGap = table.start(newProcess('main')).process.pid;
+		fs.writeFileSync(path.join(temp.dir, LAST_ID), '9');
+		table = AgentTable.open({ dir: temp.dir });
+		const pastAGap = table.start(newAgent('main')).agent.id;
 		table.dispose();
-		fs.writeFileSync(path.join(temp.dir, LAST_PID), 'nine');
-		table = ProcessTable.open({ dir: temp.dir });
-		const pastNonsense = table.start(newProcess('main')).process.pid;
+		fs.writeFileSync(path.join(temp.dir, LAST_ID), 'nine');
+		table = AgentTable.open({ dir: temp.dir });
+		const pastNonsense = table.start(newAgent('main')).agent.id;
 
-		assert.deepStrictEqual({ anew, pastAGap, pastNonsense, kept: fs.readFileSync(path.join(temp.dir, LAST_PID), 'utf8') }, { anew: 4, pastAGap: 10, pastNonsense: 11, kept: '11' });
+		assert.deepStrictEqual({ anew, pastAGap, pastNonsense, kept: fs.readFileSync(path.join(temp.dir, LAST_ID), 'utf8') }, { anew: 3, pastAGap: 10, pastNonsense: 11, kept: '11' });
 	});
 
-	test('each process\'s token is written to its run folder, and names it until it exits; the ledger keeps its hash alone; the person\'s token is the person\'s', () => {
-		const main = table.start(newProcess('main'));
+	test('a workspace whose ledger an older Facade wrote counts on from its last-pid, where there is no last-id: no number is given twice', () => {
+		table.dispose();
+		fs.writeFileSync(path.join(temp.dir, 'last-pid'), '7');
+		table = AgentTable.open({ dir: temp.dir });
+		const fromLastPid = table.start(newAgent('main')).agent.id;
+		table.dispose();
+		fs.writeFileSync(path.join(temp.dir, 'last-pid'), '99');
+		table = AgentTable.open({ dir: temp.dir });
+
+		assert.deepStrictEqual({ fromLastPid, lastIdFirst: table.start(newAgent('main')).agent.id }, { fromLastPid: 8, lastIdFirst: 9 });
+	});
+
+	test('each agent\'s token is written to its run folder, and names it until it exits; the ledger keeps its hash alone; the person\'s token is the person\'s', () => {
+		const main = table.start(newAgent('main'));
 		const personsToken = fs.readFileSync(path.join(temp.dir, 'you.token'), 'utf8');
 		const heard = table.authenticate(fs.readFileSync(main.tokenFile, 'utf8'));
-		table.setExited(main.process.pid, 'killed', 'killed by the person');
+		table.setExited(main.agent.id, 'killed', 'killed by the person');
 
 		assert.deepStrictEqual({
 			heard,
@@ -114,19 +127,19 @@ suite('Record: processes, their PIDs, names and tokens', () => {
 			stranger: table.authenticate('not a token'),
 			inTheLedger: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').includes(main.token),
 			runFileGone: !fs.existsSync(main.tokenFile)
-		}, { heard: { pid: 2, name: 'main' }, afterExit: undefined, person: PERSON, stranger: undefined, inTheLedger: false, runFileGone: true });
+		}, { heard: { id: 1, name: 'main' }, afterExit: undefined, person: PERSON, stranger: undefined, inTheLedger: false, runFileGone: true });
 	});
 
-	test('a process is starting, then running once its MCP server said hello, and exits once: the first exit stands, with how, why and when', () => {
-		const main = table.start(newProcess('main'));
-		const starting = main.process.state;
-		table.setRunning(main.process.pid);
-		const running = main.process.state;
-		const first = table.setExited(main.process.pid, 'killed', 'killed by the person');
-		const second = table.setExited(main.process.pid, 'exited', 'its CLI ended with exit code 1');
-		table.setRunning(main.process.pid);
+	test('an agent is starting, then running once its MCP server said hello, and exits once: the first exit stands, with how, why and when', () => {
+		const main = table.start(newAgent('main'));
+		const starting = main.agent.state;
+		table.setRunning(main.agent.id);
+		const running = main.agent.state;
+		const first = table.setExited(main.agent.id, 'killed', 'killed by the person');
+		const second = table.setExited(main.agent.id, 'exited', 'its CLI ended with exit code 1');
+		table.setRunning(main.agent.id);
 
-		assert.deepStrictEqual({ starting, running, first: first && { kind: first.kind, reason: first.reason }, second, state: main.process.state, exit: main.process.exit === first }, {
+		assert.deepStrictEqual({ starting, running, first: first && { kind: first.kind, reason: first.reason }, second, state: main.agent.state, exit: main.agent.exit === first }, {
 			starting: 'starting',
 			running: 'running',
 			first: { kind: 'killed', reason: 'killed by the person' },
@@ -136,54 +149,54 @@ suite('Record: processes, their PIDs, names and tokens', () => {
 		});
 	});
 
-	test('a task is written whole to a file of its process\'s own, made knowing its PID; that the line telling of it was typed is recorded once, for a process that has one', () => {
-		const told = table.start({ ...newProcess('main'), task: pid => `You are PID ${pid}.\n\nAdd clamp.` });
-		const untold = table.start(newProcess('other'));
-		table.setTaskTyped(told.process.pid);
-		table.setTaskTyped(told.process.pid);
-		table.setTaskTyped(untold.process.pid);
+	test('a task is written whole to a file of its agent\'s own, made knowing its number; that the line telling of it was typed is recorded once, for an agent that has one', () => {
+		const told = table.start({ ...newAgent('main'), task: id => `You are #${id}.\n\nAdd clamp.` });
+		const untold = table.start(newAgent('other'));
+		table.setTaskTyped(told.agent.id);
+		table.setTaskTyped(told.agent.id);
+		table.setTaskTyped(untold.agent.id);
 		const types = fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).type);
 
 		assert.deepStrictEqual({
-			taskFile: told.process.taskFile === path.join(table.runsDir, '2.task.md'),
-			task: fs.readFileSync(path.join(table.runsDir, '2.task.md'), 'utf8'),
-			typed: [told.process.taskTyped, untold.process.taskTyped, untold.process.taskFile],
+			taskFile: told.agent.taskFile === path.join(table.runsDir, '1.task.md'),
+			task: fs.readFileSync(path.join(table.runsDir, '1.task.md'), 'utf8'),
+			typed: [told.agent.taskTyped, untold.agent.taskTyped, untold.agent.taskFile],
 			types
 		}, {
 			taskFile: true,
-			task: 'You are PID 2.\n\nAdd clamp.',
+			task: 'You are #1.\n\nAdd clamp.',
 			typed: [true, undefined, undefined],
-			types: ['process.started', 'process.started', 'task.typed']
+			types: ['agent.started', 'agent.started', 'task.typed']
 		});
 	});
 
-	test('a process\'s parent is the one that started it while that one runs; once it exited, the person\'s, as init takes in the orphans', () => {
-		const main = table.start(newProcess('main')).process;
-		const child = table.start(newProcess('clamp', main.pid, 'clamp')).process;
-		const grandchild = table.start(newProcess('slug', child.pid, 'slug')).process;
-		const before = { child: table.parentOf(child), grandchild: table.parentOf(grandchild), ofMain: table.childrenOf(main.pid).map(each => each.pid) };
-		table.setExited(child.pid, 'killed', 'killed by @main (PID 2)');
+	test('an agent\'s parent is the one that started it while that one runs; once it exited, the person, who has no number, takes in the orphans', () => {
+		const main = table.start(newAgent('main')).agent;
+		const child = table.start(newAgent('clamp', main.id, 'clamp')).agent;
+		const grandchild = table.start(newAgent('slug', child.id, 'slug')).agent;
+		const before = { main: table.parentOf(main), child: table.parentOf(child), grandchild: table.parentOf(grandchild), ofMain: table.childrenOf(main.id).map(each => each.id) };
+		table.setExited(child.id, 'killed', 'killed by @main #1');
 
 		assert.deepStrictEqual({
 			before,
 			grandchild: table.parentOf(grandchild),
-			ofMain: table.childrenOf(main.pid).map(each => each.pid),
-			ofThePerson: table.childrenOf(YOU_PID).map(each => each.pid)
+			ofMain: table.childrenOf(main.id).map(each => each.id),
+			ofThePerson: table.childrenOf(undefined).map(each => each.id)
 		}, {
-			before: { child: 2, grandchild: 3, ofMain: [3] },
-			grandchild: YOU_PID,
+			before: { main: undefined, child: 1, grandchild: 2, ofMain: [2] },
+			grandchild: undefined,
 			ofMain: [],
-			ofThePerson: [2, 4]
+			ofThePerson: [1, 3]
 		});
 	});
 
-	test('a name is a label: processes that have not exited may share it, and one that exited has it no more', () => {
-		const first = table.start(newProcess('main')).process;
-		const second = table.start(newProcess('main')).process;
-		const both = table.liveNamed('main').map(each => each.pid);
-		table.setExited(first.pid, 'exited', 'its CLI ended with exit code 0');
+	test('a name is a label: agents that have not exited may share it, and one that exited has it no more', () => {
+		const first = table.start(newAgent('main')).agent;
+		const second = table.start(newAgent('main')).agent;
+		const both = table.liveNamed('main').map(each => each.id);
+		table.setExited(first.id, 'exited', 'its CLI ended');
 
-		assert.deepStrictEqual({ both, one: table.liveNamed('main').map(each => each.pid), none: table.liveNamed('nobody'), second: second.name }, { both: [2, 3], one: [3], none: [], second: 'main' });
+		assert.deepStrictEqual({ both, one: table.liveNamed('main').map(each => each.id), none: table.liveNamed('nobody'), second: second.name }, { both: [1, 2], one: [2], none: [], second: 'main' });
 	});
 
 	test('a name is lower case, without its @: a worktree\'s gives an agent\'s, its branch\'s slashes as dashes, never one Facade keeps', () => {
@@ -211,32 +224,32 @@ suite('Record: processes, their PIDs, names and tokens', () => {
 		});
 	});
 
-	test('the run files of a process go once it exits, and those of every process that is not running go as the table opens', () => {
-		const gone = table.start({ ...newProcess('gone'), task: () => 'Task.' });
-		const runs = table.start({ ...newProcess('runs'), task: () => 'Task.' });
-		table.setExited(gone.process.pid, 'exited', 'its terminal closed');
+	test('the run files of an agent go once it exits, and those of every agent that is not running go as the table opens', () => {
+		const gone = table.start({ ...newAgent('gone'), task: () => 'Task.' });
+		const runs = table.start({ ...newAgent('runs'), task: () => 'Task.' });
+		table.setExited(gone.agent.id, 'exited', 'its terminal closed');
 		const afterExit = fs.readdirSync(table.runsDir).sort();
-		// A file a crash left, of a PID the ledger never recorded.
+		// A file a crash left, of a number the ledger never recorded.
 		fs.writeFileSync(path.join(table.runsDir, '9.token'), 'x');
 		table.dispose();
-		table = ProcessTable.open({ dir: temp.dir });
+		table = AgentTable.open({ dir: temp.dir });
 
-		assert.deepStrictEqual({ afterExit, afterOpening: fs.readdirSync(table.runsDir).sort(), runs: runs.process.pid }, {
-			afterExit: ['3.task.md', '3.token'],
-			afterOpening: ['3.task.md', '3.token'],
-			runs: 3
+		assert.deepStrictEqual({ afterExit, afterOpening: fs.readdirSync(table.runsDir).sort(), runs: runs.agent.id }, {
+			afterExit: ['2.task.md', '2.token'],
+			afterOpening: ['2.task.md', '2.token'],
+			runs: 2
 		});
 	});
 
-	test('nothing is started once another window took the ledger: no PID is given, and no token or task written, which could be that window\'s', () => {
-		table.start(newProcess('main'));
+	test('nothing is started once another window took the ledger: no number is given, and no token or task written, which could be that window\'s', () => {
+		table.start(newAgent('main'));
 		fs.writeFileSync(path.join(temp.dir, LOCK), ANOTHERS_LOCK);
-		const refused = outcome(() => table.start({ ...newProcess('late'), task: () => 'Task.' }));
+		const refused = outcome(() => table.start({ ...newAgent('late'), task: () => 'Task.' }));
 
-		assert.deepStrictEqual({ refused, runs: fs.readdirSync(table.runsDir), lastPid: fs.readFileSync(path.join(temp.dir, LAST_PID), 'utf8') }, {
+		assert.deepStrictEqual({ refused, runs: fs.readdirSync(table.runsDir), lastId: fs.readFileSync(path.join(temp.dir, LAST_ID), 'utf8') }, {
 			refused: takenFrom(temp.dir),
-			runs: ['2.token'],
-			lastPid: '2'
+			runs: ['1.token'],
+			lastId: '1'
 		});
 	});
 });
@@ -253,47 +266,47 @@ suite('Record: the ledger on disk', () => {
 		temp.remove();
 	});
 
-	test('a reload loses nothing: processes, their states, how they exited, their tasks, their tokens and the person\'s, the worktrees made', () => {
-		let table = ProcessTable.open({ dir: temp.dir });
-		const main = table.start({ ...newProcess('main'), task: () => 'Lead.' });
-		table.setRunning(main.process.pid);
-		table.setTaskTyped(main.process.pid);
-		const gone = table.start(newProcess('clamp', main.process.pid, 'clamp'));
-		table.setExited(gone.process.pid, 'failed', 'it did not come up within 120 seconds');
-		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: main.process.pid });
+	test('a reload loses nothing: agents, their states, how they exited, their tasks, their tokens and the person\'s, the worktrees made', () => {
+		let table = AgentTable.open({ dir: temp.dir });
+		const main = table.start({ ...newAgent('main'), task: () => 'Lead.' });
+		table.setRunning(main.agent.id);
+		table.setTaskTyped(main.agent.id);
+		const gone = table.start(newAgent('clamp', main.agent.id, 'clamp'));
+		table.setExited(gone.agent.id, 'failed', 'it did not come up within 120 seconds');
+		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: main.agent.id });
 		const personsToken = fs.readFileSync(path.join(temp.dir, 'you.token'), 'utf8');
-		const before = structuredClone([...table.state.processes.values()]);
+		const before = structuredClone([...table.state.agents.values()]);
 		table.dispose();
 
-		table = ProcessTable.open({ dir: temp.dir });
+		table = AgentTable.open({ dir: temp.dir });
 		const reloaded = {
-			processes: [...table.state.processes.values()],
+			agents: [...table.state.agents.values()],
 			token: table.authenticate(main.token),
 			personsToken: fs.readFileSync(path.join(temp.dir, 'you.token'), 'utf8') === personsToken,
 			worktrees: [...table.state.worktrees.values()],
-			next: table.start(newProcess('next')).process.pid
+			next: table.start(newAgent('next')).agent.id
 		};
 		table.dispose();
 
 		assert.deepStrictEqual(reloaded, {
-			processes: before,
-			token: { pid: 2, name: 'main' },
+			agents: before,
+			token: { id: 1, name: 'main' },
 			personsToken: true,
-			worktrees: [{ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: 2 }],
-			next: 4
+			worktrees: [{ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: 1 }],
+			next: 3
 		});
 	});
 
 	test('a worktree Facade made that is gone is its no more: its record goes, and stays gone at the next start; a folder it did not make records nothing', () => {
-		let table = ProcessTable.open({ dir: temp.dir });
-		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: YOU_PID });
-		table.recordWorktree({ name: 'slug', folder: '/lab-worktrees/slug', repository: '/lab', parentWorktree: 'main', madeBy: YOU_PID });
+		let table = AgentTable.open({ dir: temp.dir });
+		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main' });
+		table.recordWorktree({ name: 'slug', folder: '/lab-worktrees/slug', repository: '/lab', parentWorktree: 'main' });
 		table.forgetWorktree('/lab-worktrees/clamp');
 		const seq = table.state.seq;
 		table.forgetWorktree('/lab-worktrees/never');
 		const now = { worktrees: [...table.state.worktrees.keys()], nothingMore: table.state.seq === seq, slug: table.madeWorktree('/lab-worktrees/slug')?.name, clamp: table.madeWorktree('/lab-worktrees/clamp') };
 		table.dispose();
-		table = ProcessTable.open({ dir: temp.dir });
+		table = AgentTable.open({ dir: temp.dir });
 
 		assert.deepStrictEqual({ now, again: [...table.state.worktrees.keys()] }, {
 			now: { worktrees: ['/lab-worktrees/slug'], nothingMore: true, slug: 'slug', clamp: undefined },
@@ -303,23 +316,23 @@ suite('Record: the ledger on disk', () => {
 	});
 
 	test('a last line cut short by a crash is dropped, and the file is repaired', () => {
-		let table = ProcessTable.open({ dir: temp.dir });
-		const main = table.start(newProcess('main'));
+		let table = AgentTable.open({ dir: temp.dir });
+		const main = table.start(newAgent('main'));
 		const seq = table.state.seq;
 		table.dispose();
 		const file = path.join(temp.dir, LEDGER);
-		fs.appendFileSync(file, '{"v":2,"seq":2,"type":"process.ru');
+		fs.appendFileSync(file, '{"v":3,"seq":2,"type":"agent.ru');
 
-		table = ProcessTable.open({ dir: temp.dir });
+		table = AgentTable.open({ dir: temp.dir });
 		const afterCrash = table.state.seq;
-		table.setExited(main.process.pid, 'exited', 'its terminal closed');
+		table.setExited(main.agent.id, 'exited', 'its terminal closed');
 		table.dispose();
-		table = ProcessTable.open({ dir: temp.dir });
+		table = AgentTable.open({ dir: temp.dir });
 
-		assert.deepStrictEqual({ afterCrash, state: table.get(main.process.pid)?.state, lines: fs.readFileSync(file, 'utf8').split('\n').map(line => line && JSON.parse(line).type) }, {
+		assert.deepStrictEqual({ afterCrash, state: table.get(main.agent.id)?.state, lines: fs.readFileSync(file, 'utf8').split('\n').map(line => line && JSON.parse(line).type) }, {
 			afterCrash: seq,
 			state: 'exited',
-			lines: ['process.started', 'process.exited', '']
+			lines: ['agent.started', 'agent.exited', '']
 		});
 		table.dispose();
 	});
@@ -345,7 +358,7 @@ suite('Record: the ledger on disk', () => {
 		});
 	});
 
-	test('an event cut short that cannot be cut back closes the ledger, so that it stays the last line, which the next opening drops', () => {
+	test('an event cut short that cannot be cut back closes the ledger, so that it stays the last line, which the next opening drops; Facade let go of it, the window staying', () => {
 		const ledger = Ledger.open(temp.dir);
 		ledger.append(made('clamp'));
 		const restoreWrite = cutNextWriteShort();
@@ -356,27 +369,29 @@ suite('Record: the ledger on disk', () => {
 		restoreWrite();
 		restoreTruncate();
 		const refused = outcome(() => ledger.append(made('late')));
+		const lock = fs.readFileSync(path.join(temp.dir, LOCK), 'utf8');
 		const reopened = Ledger.open(temp.dir);
 		reopened.close();
 
-		assert.deepStrictEqual({ failed, refused, seq: reopened.state.seq, lines: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').length }, {
+		assert.deepStrictEqual({ failed, refused, lock, seq: reopened.state.seq, lines: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').length }, {
 			failed: 'ENOSPC',
 			refused: `The ledger in ${temp.dir} is closed.`,
+			lock: 'released',
 			seq: 1,
 			lines: 2
 		});
 	});
 
 	test('a line that cannot be read before the last stops the workspace from opening, and says which: one that is no event, or one that does not fit those before it; the file is left as it was, and no lock', () => {
-		const table = ProcessTable.open({ dir: temp.dir });
-		table.start(newProcess('main'));
+		const table = AgentTable.open({ dir: temp.dir });
+		table.start(newAgent('main'));
 		table.dispose();
 		const file = path.join(temp.dir, LEDGER);
 		const lines = fs.readFileSync(file, 'utf8');
 		const broken = (line: string) => {
-			fs.writeFileSync(file, `${lines}${line}\n{"v":2,"seq":3,"time":1,"type":"process.running","pid":2}\n`);
+			fs.writeFileSync(file, `${lines}${line}\n{"v":3,"seq":3,"time":1,"type":"agent.running","id":1}\n`);
 			try {
-				ProcessTable.open({ dir: temp.dir }).dispose();
+				AgentTable.open({ dir: temp.dir }).dispose();
 				return 'opened';
 			} catch (err) {
 				return messageOf(err);
@@ -384,48 +399,54 @@ suite('Record: the ledger on disk', () => {
 				assert.strictEqual(fs.readFileSync(file, 'utf8').startsWith(`${lines}${line}\n`), true);
 			}
 		};
-		// PID 3 started by PID 2, and a worktree made by PID 2, as Facade writes them but for `fields`.
-		const started = (fields: object) => JSON.stringify({ v: 2, seq: 2, time: 1, type: 'process.started', pid: 3, name: 'clamp', ppid: 2, cli: 'arg', model: 'small', worktree: 'clamp', folder: '/lab', tokenHash: 'ab'.repeat(32), ...fields });
-		const worktree = (fields: object) => JSON.stringify({ v: 2, seq: 2, time: 1, type: 'worktree.made', name: 'clamp', folder: '/lab-clamp', repository: '/lab', parentWorktree: 'main', madeBy: 2, ...fields });
+		// #2 started by #1, and a worktree made by #1, as Facade writes them but for `fields`.
+		const started = (fields: object) => JSON.stringify({ v: 3, seq: 2, time: 1, type: 'agent.started', id: 2, name: 'clamp', parent: 1, cli: 'arg', model: 'small', effort: 'high', worktree: 'clamp', folder: '/lab', tokenHash: 'ab'.repeat(32), ...fields });
+		const worktree = (fields: object) => JSON.stringify({ v: 3, seq: 2, time: 1, type: 'worktree.made', name: 'clamp', folder: '/lab-clamp', repository: '/lab', parentWorktree: 'main', madeBy: 1, ...fields });
 		const said = `Line 2 of ${file} is not an event Facade can read, so the workspace's agents are not loaded. Move the file away to start with no agents.`;
 
 		assert.deepStrictEqual({
-			asWritten: [broken(started({ effort: 'high' })), broken(worktree({}))],
-			asAnOlderFacadeWroteIt: broken(started({})),
+			asWritten: [broken(started({})), broken(worktree({}))],
+			thePersons: [broken(started({ parent: undefined })), broken(worktree({ madeBy: undefined }))],
+			noEffort: broken(started({ effort: undefined })),
 			anEmptyEffort: broken(started({ effort: '' })),
-			notJson: broken('{"v":2,'),
-			unknownKind: broken('{"v":2,"seq":2,"time":1,"type":"process.later","pid":2}'),
-			wrongField: broken('{"v":2,"seq":2,"time":1,"type":"process.exited","pid":2,"kind":"vanished","reason":"?"}'),
-			outOfTurn: broken('{"v":2,"seq":5,"time":1,"type":"process.running","pid":2}'),
-			thePersonsPid: broken(started({ pid: 1, ppid: 1 })),
-			aPidGivenBefore: broken(started({ pid: 2, ppid: 1 })),
-			noParent: broken(started({ ppid: 0 })),
-			anUnknownParent: broken(started({ pid: 5, ppid: 4 })),
+			notJson: broken('{"v":3,'),
+			unknownKind: broken('{"v":3,"seq":2,"time":1,"type":"agent.later","id":1}'),
+			wrongField: broken('{"v":3,"seq":2,"time":1,"type":"agent.exited","id":1,"kind":"vanished","reason":"?"}'),
+			outOfTurn: broken('{"v":3,"seq":5,"time":1,"type":"agent.running","id":1}'),
+			anOlderVersions: broken('{"v":2,"seq":2,"time":1,"type":"process.running","pid":1}'),
+			noNumber: broken(started({ id: 0 })),
+			aNumberGivenBefore: broken(started({ id: 1, parent: undefined })),
+			aParentOfNoNumber: broken(started({ parent: 0 })),
+			aNullParent: broken(started({ parent: null })),
+			anUnknownParent: broken(started({ id: 5, parent: 4 })),
 			anEscapeInTheName: broken(started({ name: `${String.fromCharCode(27)}[2J` })),
 			aReservedName: broken(started({ name: 'you' })),
 			noFolder: broken(started({ folder: '' })),
 			noTokenHash: broken(started({ tokenHash: 'a token' })),
-			anUnknownProcess: broken('{"v":2,"seq":2,"time":1,"type":"process.exited","pid":9,"kind":"killed","reason":"?"}'),
+			anUnknownAgent: broken('{"v":3,"seq":2,"time":1,"type":"agent.exited","id":9,"kind":"killed","reason":"?"}'),
 			anUnknownMaker: broken(worktree({ madeBy: 9 })),
 			aWorktreeWithoutFolder: broken(worktree({ folder: '' })),
 			lockLeft: fs.existsSync(path.join(temp.dir, LOCK))
 		}, {
 			asWritten: ['opened', 'opened'],
-			asAnOlderFacadeWroteIt: 'opened',
+			thePersons: ['opened', 'opened'],
+			noEffort: said,
 			anEmptyEffort: said,
 			notJson: said,
 			unknownKind: said,
 			wrongField: said,
 			outOfTurn: said,
-			thePersonsPid: said,
-			aPidGivenBefore: said,
-			noParent: said,
+			anOlderVersions: said,
+			noNumber: said,
+			aNumberGivenBefore: said,
+			aParentOfNoNumber: said,
+			aNullParent: said,
 			anUnknownParent: said,
 			anEscapeInTheName: said,
 			aReservedName: said,
 			noFolder: said,
 			noTokenHash: said,
-			anUnknownProcess: said,
+			anUnknownAgent: said,
 			anUnknownMaker: said,
 			aWorktreeWithoutFolder: said,
 			lockLeft: false
@@ -440,30 +461,30 @@ suite('Record: the ledger on disk', () => {
 	});
 
 	test('a token of the person\'s that cannot be read is not made anew, which would cut off the scripts that hold it: the workspace does not open, and says why', () => {
-		ProcessTable.open({ dir: temp.dir }).dispose();
+		AgentTable.open({ dir: temp.dir }).dispose();
 		const file = path.join(temp.dir, 'you.token');
 		const token = fs.readFileSync(file, 'utf8');
 		const restore = failReading(file, 'EACCES');
 		let opened: string;
 		try {
-			opened = outcome(() => ProcessTable.open({ dir: temp.dir }).dispose());
+			opened = outcome(() => AgentTable.open({ dir: temp.dir }).dispose());
 		} finally {
 			restore();
 		}
 
-		assert.deepStrictEqual({ opened, kept: fs.readFileSync(file, 'utf8') === token, then: outcome(() => ProcessTable.open({ dir: temp.dir }).dispose()) }, { opened: 'EACCES', kept: true, then: 'done' });
+		assert.deepStrictEqual({ opened, kept: fs.readFileSync(file, 'utf8') === token, then: outcome(() => AgentTable.open({ dir: temp.dir }).dispose()) }, { opened: 'EACCES', kept: true, then: 'done' });
 	});
 
 	test('a ledger another version wrote is kept beside, as it is, and a new one begins: its events are not this version\'s', () => {
-		const old = '{"v":1,"seq":1,"ts":1,"type":"agent.started","name":"main","incarnation":1}\n';
+		const old = `{"v":2,"seq":1,"time":1,"type":"process.started","pid":2,"name":"main","ppid":1,"cli":"arg","model":"small","effort":"high","worktree":"main","folder":"/lab","tokenHash":"${'ab'.repeat(32)}"}\n`;
 		fs.writeFileSync(path.join(temp.dir, LEDGER), old);
 
-		const table = ProcessTable.open({ dir: temp.dir });
-		const fresh = { processes: table.state.processes.size, pid: table.start(newProcess('main')).process.pid };
+		const table = AgentTable.open({ dir: temp.dir });
+		const fresh = { agents: table.state.agents.size, id: table.start(newAgent('main')).agent.id };
 		table.dispose();
-		const kept = fs.readdirSync(temp.dir).filter(name => /^ledger\.v1\.\d+\.jsonl$/.test(name));
+		const kept = fs.readdirSync(temp.dir).filter(name => /^ledger\.v2\.\d+\.jsonl$/.test(name));
 
-		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === old }, { fresh: { processes: 0, pid: 2 }, kept: 1, same: true });
+		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === old }, { fresh: { agents: 0, id: 1 }, kept: 1, same: true });
 	});
 
 	test('a ledger that was closed takes no event more: it says so, and writes nothing into the file another window may hold by then', () => {
@@ -522,7 +543,44 @@ suite('Record: the ledger on disk', () => {
 		assert.deepStrictEqual({ heldBefore, taken, heldNow }, { heldBefore: false, taken: true, heldNow: true });
 	});
 
-	test('a ledger closed as its window reloads is that workspace\'s to take back at once; another workspace\'s window waits for a minute, then takes it', () => {
+	test('a ledger says how the window that had it before let go of it - as the window went: it quit, closed or reloaded; or as Facade let go of its agents, the window staying - and which window that was: this workspace\'s or another\'s, this very window or another load of it; nothing the first time, nor after a crash, its lock left behind', () => {
+		const lock = path.join(temp.dir, LOCK);
+		const first = Ledger.open(temp.dir, { owner: 'lab', session: 'load-1' });
+		const firstTime = first.lastClose;
+		first.close();
+		const closedLock = fs.readFileSync(lock, 'utf8');
+		// Its extension host starting again, in the same load of the window
+		const sameLoad = Ledger.open(temp.dir, { owner: 'lab', session: 'load-1' });
+		const thisWindow = sameLoad.lastClose;
+		sameLoad.close('facade');
+		const releasedLock = fs.readFileSync(lock, 'utf8');
+		// After a reload, or the window closed and opened again
+		const nextLoad = Ledger.open(temp.dir, { owner: 'lab', session: 'load-2' });
+		const ownWindow = nextLoad.lastClose;
+		nextLoad.close();
+		// Another workspace's window, a minute on
+		const longAgo = new Date(Date.now() - 2 * 60_000);
+		fs.utimesSync(lock, longAgo, longAgo);
+		const another = Ledger.open(temp.dir, { owner: 'notes', session: 'load-3' });
+		const anotherWindow = another.lastClose;
+		another.close();
+		fs.writeFileSync(lock, ANOTHERS_LOCK);
+		const afterCrash = Ledger.open(temp.dir, { isRunning: () => false });
+		const crashed = afterCrash.lastClose;
+		afterCrash.close();
+
+		assert.deepStrictEqual({ firstTime, closedLock, thisWindow, releasedLock, ownWindow, anotherWindow, crashed }, {
+			firstTime: undefined,
+			closedLock: 'closed lab load-1',
+			thisWindow: { by: 'window', ownWindow: true, thisWindow: true },
+			releasedLock: 'released lab load-1',
+			ownWindow: { by: 'facade', ownWindow: true, thisWindow: false },
+			anotherWindow: { by: 'window', ownWindow: false, thisWindow: false },
+			crashed: undefined
+		});
+	});
+
+	test('a ledger closed as its window reloads, or let go of by Facade, is that workspace\'s to take back at once; another workspace\'s window waits for a minute, then takes it', () => {
 		const lock = path.join(temp.dir, LOCK);
 		Ledger.open(temp.dir, { owner: 'lab' }).close();
 		const closedBy = fs.readFileSync(lock, 'utf8');
@@ -534,15 +592,21 @@ suite('Record: the ledger on disk', () => {
 			refused = err instanceof LedgerLockedError ? `${err.pid}: ${err.message}` : messageOf(err);
 			touchedAt = err instanceof LedgerLockedError && err.touchedAt === fs.statSync(lock).mtimeMs;
 		}
-		const reloaded = outcome(() => Ledger.open(temp.dir, { owner: 'lab' }).close());
+		const reloaded = outcome(() => Ledger.open(temp.dir, { owner: 'lab' }).close('facade'));
+		const releasedBy = fs.readFileSync(lock, 'utf8');
+		const releasedRefused = outcome(() => Ledger.open(temp.dir, { owner: 'notes' }).close());
+		const turnedOnAgain = outcome(() => Ledger.open(temp.dir, { owner: 'lab' }).close());
 		const longAgo = new Date(Date.now() - 2 * 60_000);
 		fs.utimesSync(lock, longAgo, longAgo);
 
-		assert.deepStrictEqual({ closedBy, refused, touchedAt, reloaded, aMinuteOn: outcome(() => Ledger.open(temp.dir, { owner: 'notes' }).close()), lock: fs.readFileSync(lock, 'utf8') }, {
+		assert.deepStrictEqual({ closedBy, refused, touchedAt, reloaded, releasedBy, releasedRefused, turnedOnAgain, aMinuteOn: outcome(() => Ledger.open(temp.dir, { owner: 'notes' }).close()), lock: fs.readFileSync(lock, 'utf8') }, {
 			closedBy: 'closed lab',
 			refused: 'undefined: Another Facade window has this workspace\'s agents: it closed them a moment ago, as it reloads.',
 			touchedAt: true,
 			reloaded: 'done',
+			releasedBy: 'released lab',
+			releasedRefused: 'Another Facade window has this workspace\'s agents: Facade there let go of them a moment ago.',
+			turnedOnAgain: 'done',
 			aMinuteOn: 'done',
 			lock: 'closed notes'
 		});
