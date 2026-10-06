@@ -14,6 +14,12 @@ import { isProcessRunning } from './system';
 const STALE_AFTER_MS = 2_000;
 /** A lock older than this is taken over even if the process it names still runs: its id may have been reused. */
 const ABANDONED_AFTER_MS = 30_000;
+/**
+ * A lock another program takes in proper-lockfile's way - a folder at the same path, as Claude Code
+ * locks its configuration - whose holder touches it while it holds it: older than this, it was left
+ * behind, as proper-lockfile itself takes it to be.
+ */
+const FOLDER_LOCK_STALE_MS = 10_000;
 /** How long `withFileLock` waits for another holder. */
 const WAIT_MS = 5_000;
 const RETRY_MS = 20;
@@ -24,7 +30,8 @@ export type FileLock = <T>(file: string, fn: () => T) => T;
 /**
  * Runs `fn` while holding `<file>.lock`, which one process at a time can hold. It waits without
  * returning to the event loop, since callers hold it for a synchronous read and write only. Each holder
- * writes its own mark into the lock and removes only a lock that still has that mark.
+ * writes its own mark into the lock and removes only a lock that still has that mark. A folder at that
+ * path is another program's lock, taken as proper-lockfile takes one, and is waited for as well.
  */
 export function withFileLock<T>(file: string, fn: () => T): T {
 	const lock = `${file}.lock`;
@@ -68,11 +75,22 @@ function release(lock: string, mark: string): void {
 	}
 }
 
-/** Removes a lock its holder left behind: older than any holder keeps one, or its holder gone. */
+/**
+ * Removes a lock its holder left behind: older than any holder keeps one, or its holder gone. Another
+ * program's folder is waited for while its holder touches it, and removed once it no longer does.
+ */
 function breakIfStale(lock: string): void {
 	let mark: string;
 	try {
-		const age = Date.now() - fs.statSync(lock).mtimeMs;
+		const stat = fs.statSync(lock);
+		const age = Date.now() - stat.mtimeMs;
+		if (stat.isDirectory()) {
+			if (age > FOLDER_LOCK_STALE_MS) {
+				// Only while it is empty, as proper-lockfile leaves it.
+				fs.rmdirSync(lock);
+			}
+			return;
+		}
 		if (age <= STALE_AFTER_MS) {
 			return;
 		}

@@ -264,9 +264,10 @@ Models: Codex is offered only the models its catalog offers no upgrade for - `gp
 the newer one. Antigravity, which starts with a model of its own when given one it does not have, is
 checked against `agy models`.
 
-A CLI that is an npm shim (`.cmd`) is run as the Node script it runs. Any other `.cmd` goes through
-cmd.exe, so it is told of its task in its terminal, and an argument that cmd.exe would read as its
-own - `" % ^ & | < > ! ( )` or a line break - refuses the launch.
+A CLI that is npm's shim (`.cmd`) for a script Node runs as it is, with no options of its own, is run
+as that script, by a Node that is a program of its own: the one beside the shim, else the one on PATH.
+Any other `.cmd` goes through cmd.exe, so it is told of its task in its terminal, and an argument that
+cmd.exe would read as its own - `" % ^ & | < > ! ( )` or a line break - refuses the launch.
 
 ### 1.6 Trust and consent
 
@@ -281,7 +282,10 @@ repository, keyed by its root's real path with forward slashes and an upper-case
 for the worktree, by its real path; Codex for the launch, keyed by the real path with its ASCII letters
 lower-cased on Windows, as Codex keys it; Muse Code for the launch. A trust file is written under a
 lock every window takes, its other entries and its layout kept; a file that is not a JSON object is
-left alone, and the CLI asks the person itself.
+left alone, and the CLI asks the person itself. The lock is the one Claude Code takes on its own file,
+`<file>.lock`, so the two take turns, and what a CLI writes between Facade's read and its write is
+read again and kept. Claude Code's file is the one it reads: an older version's `.config.json` in its
+folder where there is one.
 
 ### 1.7 Files Facade puts into a folder
 

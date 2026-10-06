@@ -10,11 +10,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DeferredPromise, sleepSync, timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
-import { canonicalFolder, formatJson, isEqualPath, jsonLayoutOf, parseJson, readJsonFile, replaceFile, writeJsonFile } from '../base/files';
+import { canonicalFolder, FileChangedError, formatJson, isEqualPath, JsonFile, jsonLayoutOf, parseJson, readJsonFile, replaceFile, updateJsonFile, writeJsonFile } from '../base/files';
 import { isJsonObject, isStringArray } from '../base/json';
 import { removeLockIfUnchanged, withFileLock } from '../base/lock';
 import { isProcessRunning } from '../base/system';
-import { cutNextWriteShort, outcomeOf, tempDir } from './util';
+import { cutNextWriteShort, outcomeOf, replaceFsFunction, tempDir } from './util';
 
 const BOM = String.fromCharCode(0xfeff);
 
@@ -212,6 +212,71 @@ suite('Base: files', () => {
 		});
 	});
 
+	/** Makes another program write `file` as Facade writes its new one, `times` times, each time to a size it did not have. */
+	function writtenMeanwhile(file: string, times: number): () => void {
+		let count = 0;
+		return replaceFsFunction('writeFileSync', original => (target, data, options) => {
+			original(target, data, options);
+			if (typeof target === 'number' && count < times) {
+				count++;
+				original(file, `{"theirs": ${'9'.repeat(count + 1)}}\n`);
+			}
+		});
+	}
+
+	test('a JSON file another program writes too is read again when it wrote the file meanwhile, so that what it wrote is kept; one that goes on changing throws, and Facade writes nothing', () => {
+		const file = path.join(temp.dir, 'settings.json');
+		fs.writeFileSync(file, '{"theirs": 1}\n');
+		const ours = (read: JsonFile) => read.kind === 'object' ? { outcome: 'written', write: { ...read.value, ours: true } } : { outcome: read.kind };
+		let restore = writtenMeanwhile(file, 1);
+		let once: string;
+		try {
+			once = updateJsonFile(file, ours);
+		} finally {
+			restore();
+		}
+		const kept = JSON.parse(fs.readFileSync(file, 'utf8'));
+		restore = writtenMeanwhile(file, 10);
+		let always = 'written';
+		try {
+			updateJsonFile(file, ours);
+		} catch (err) {
+			always = err instanceof FileChangedError ? 'changed' : messageOf(err);
+		} finally {
+			restore();
+		}
+
+		assert.deepStrictEqual({ once, kept, always, theirs: JSON.parse(fs.readFileSync(file, 'utf8')), left: fs.readdirSync(temp.dir) }, {
+			once: 'written',
+			kept: { theirs: 99, ours: true },
+			always: 'changed',
+			theirs: { theirs: 9999 },
+			left: ['settings.json']
+		});
+	});
+
+	test('a JSON file written while it is read is read again', () => {
+		const file = path.join(temp.dir, 'settings.json');
+		fs.writeFileSync(file, '{"theirs": 1}\n');
+		let once = true;
+		const restore = replaceFsFunction('readFileSync', original => ((...args: Parameters<typeof fs.readFileSync>) => {
+			const text = original(...args);
+			if (once && args[0] === file) {
+				once = false;
+				fs.writeFileSync(file, '{"theirs": 22}\n');
+			}
+			return text;
+		}) as typeof fs.readFileSync);
+		let read: JsonFile;
+		try {
+			read = readJsonFile(file);
+		} finally {
+			restore();
+		}
+
+		assert.deepStrictEqual(read.kind === 'object' ? read.value : read.kind, { theirs: 22 });
+	});
+
 	test('a JSON file that is missing, not JSON, not an object or not readable is told apart', () => {
 		const at = (name: string, content?: string) => {
 			const file = path.join(temp.dir, name);
@@ -256,6 +321,30 @@ suite('Base: a lock windows take turns at', () => {
 		const letGo = Number(/let go (\d+)/.exec(said)?.[1]);
 
 		assert.deepStrictEqual({ afterItLetGo: held.at >= letGo, mine: held.mark.startsWith(`${process.pid} `), gone: fs.existsSync(lock) }, { afterItLetGo: true, mine: true, gone: false });
+	});
+
+	test('a lock in the form another program takes it - a folder, as Claude Code locks its configuration - is waited for while its holder has it, and broken once it is older than such a holder keeps one', async function () {
+		this.timeout(10_000);
+		const file = path.join(temp.dir, '.claude.json');
+		const lock = `${file}.lock`;
+		// Claude Code holds it for half a second, as proper-lockfile does: a folder of its own.
+		const claude = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.mkdirSync(${JSON.stringify(lock)}); console.log('took', Date.now()); setTimeout(() => { fs.rmdirSync(${JSON.stringify(lock)}); console.log('let go', Date.now()); }, 500);`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+		let said = '';
+		claude.stdout.on('data', (chunk: Buffer) => said += chunk.toString('utf8'));
+		const exited = new Promise(resolve => claude.on('exit', resolve));
+		while (!said.includes('took')) {
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+		const heldAt = withFileLock(file, () => Date.now());
+		await exited;
+		const letGo = Number(/let go (\d+)/.exec(said)?.[1]);
+		// One a Claude Code killed as it saved left behind, untouched since.
+		fs.mkdirSync(lock);
+		const longAgo = new Date(Date.now() - 20_000);
+		fs.utimesSync(lock, longAgo, longAgo);
+		const leftBehind = withFileLock(file, () => 'took');
+
+		assert.deepStrictEqual({ afterItLetGo: heldAt >= letGo, leftBehind, left: fs.existsSync(lock) }, { afterItLetGo: true, leftBehind: 'took', left: false });
 	});
 
 	test('a lock goes only by its holder: one that is another\'s by the time it lets go - its own broken as stale, and taken since - stays', () => {

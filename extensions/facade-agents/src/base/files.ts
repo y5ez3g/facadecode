@@ -15,6 +15,8 @@ const BYTE_ORDER_MARK = 0xfeff;
 const RENAME_RETRY_DELAYS_MS = [20, 40, 80, 160, 320];
 /** The codes Windows fails a call on a file with while another program holds it open, or is deleting it. */
 export const HELD_OPEN_CODES: ReadonlySet<string> = new Set(['EPERM', 'EACCES', 'EBUSY']);
+/** How many times a file another program writes too is read, or written, again when it changed meanwhile. */
+const CHANGED_ATTEMPTS = 3;
 
 /** Whether the file system names one file or folder by both paths: case is ignored on Windows and macOS. */
 export function isEqualPath(a: string, b: string): boolean {
@@ -35,13 +37,53 @@ export function canonicalFolder(folder: string): string {
 	}
 }
 
+/** What a file was as it was read: its size, when it was last written, and which file it is. */
+export interface FileStamp {
+	readonly size: number;
+	readonly mtimeMs: number;
+	readonly ino: number;
+}
+
+/** A file another program wrote between its read and the write that was to replace it: nothing was written. */
+export class FileChangedError extends Error {
+	constructor(file: string) {
+		super(`${file} was written by another program while Facade wrote it, so Facade wrote nothing.`);
+		this.name = 'FileChangedError';
+	}
+}
+
+/** The stamp of `file`, or undefined when there is none. */
+function stampOf(file: string): FileStamp | undefined {
+	try {
+		const { size, mtimeMs, ino } = fs.statSync(file);
+		return { size, mtimeMs, ino };
+	} catch (err) {
+		if (codeOf(err) === 'ENOENT') {
+			return undefined;
+		}
+		throw err;
+	}
+}
+
+function sameStamp(a: FileStamp | undefined, b: FileStamp): boolean {
+	return a !== undefined && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ino === b.ino;
+}
+
+/** Whether `file` is still as `stamp` says it was read, or, for `missing`, still not there. */
+function isUnchanged(file: string, stamp: FileStamp | 'missing'): boolean {
+	const now = stampOf(file);
+	return stamp === 'missing' ? now === undefined : sameStamp(now, stamp);
+}
+
 /**
  * Replaces the content of `file` in one step: the content is written whole and flushed to a sibling
  * file, which is then renamed over it, so a reader sees either the old content or the new one. A link is
  * followed - what it points to is replaced, and it stays a link. The file keeps its permissions; a new one
- * is readable by the user only. Nothing is left beside it when replacing fails.
+ * is readable by the user only. Nothing is left beside it when replacing fails. With `unchangedSince`, a
+ * file another program writes too is replaced only while it is still as it was read - or still not
+ * there - and else `FileChangedError` is thrown.
  */
-export function replaceFile(file: string, content: string): void {
+export function replaceFile(file: string, content: string, unchangedSince?: FileStamp | 'missing'): void {
 	let target = file;
 	try {
 		target = fs.realpathSync.native(file);
@@ -71,10 +113,14 @@ export function replaceFile(file: string, content: string): void {
 	}
 	for (let retry = 0; ; retry++) {
 		try {
+			// Looked at again before each try: a wait for another program to let go is a moment it may write
+			if (unchangedSince !== undefined && !isUnchanged(target, unchangedSince)) {
+				throw new FileChangedError(file);
+			}
 			fs.renameSync(next, target);
 			return;
 		} catch (err) {
-			if (retry >= RENAME_RETRY_DELAYS_MS.length || !HELD_OPEN_CODES.has(codeOf(err) ?? '')) {
+			if (err instanceof FileChangedError || retry >= RENAME_RETRY_DELAYS_MS.length || !HELD_OPEN_CODES.has(codeOf(err) ?? '')) {
 				fs.rmSync(next, { force: true });
 				throw err;
 			}
@@ -113,27 +159,39 @@ export function jsonLayoutOf(text: string): JsonLayout {
 	};
 }
 
-/** A JSON file as read: missing, an object with its layout, or anything else, which is left alone. */
+/** A JSON file as read: missing, an object with its layout and stamp, or anything else, which is left alone. */
 export type JsonFile =
 	| { readonly kind: 'missing' }
-	| { readonly kind: 'object'; readonly value: JsonObject; readonly layout: JsonLayout }
+	| { readonly kind: 'object'; readonly value: JsonObject; readonly layout: JsonLayout; readonly stamp: FileStamp }
 	| { readonly kind: 'other' };
 
-/** Reads a JSON file that should hold an object, such as a settings file. */
+/** Reads a JSON file that should hold an object, such as a settings file; one written while it is read is read again. */
 export function readJsonFile(file: string): JsonFile {
-	let text: string;
-	try {
-		text = fs.readFileSync(file, 'utf8');
-	} catch (err) {
-		return codeOf(err) === 'ENOENT' ? { kind: 'missing' } : { kind: 'other' };
+	for (let attempt = 1; ; attempt++) {
+		let text: string;
+		let before: FileStamp | undefined;
+		let after: FileStamp | undefined;
+		try {
+			before = stampOf(file);
+			text = fs.readFileSync(file, 'utf8');
+			after = stampOf(file);
+		} catch (err) {
+			return codeOf(err) === 'ENOENT' ? { kind: 'missing' } : { kind: 'other' };
+		}
+		if (before === undefined || !sameStamp(after, before)) {
+			if (attempt < CHANGED_ATTEMPTS) {
+				continue;
+			}
+			return { kind: 'other' };
+		}
+		let value: unknown;
+		try {
+			value = parseJson(text);
+		} catch {
+			return { kind: 'other' };
+		}
+		return isJsonObject(value) ? { kind: 'object', value, layout: jsonLayoutOf(text), stamp: before } : { kind: 'other' };
 	}
-	let value: unknown;
-	try {
-		value = parseJson(text);
-	} catch {
-		return { kind: 'other' };
-	}
-	return isJsonObject(value) ? { kind: 'object', value, layout: jsonLayoutOf(text) } : { kind: 'other' };
 }
 
 /** Parses a JSON text that may start with a byte order mark. */
@@ -148,6 +206,30 @@ export function formatJson(value: unknown, layout: JsonLayout = NEW_FILE_LAYOUT)
 }
 
 /** Writes `value` to a JSON file in one step, laid out as `layout` says: a file that was read keeps its layout. */
-export function writeJsonFile(file: string, value: JsonObject, layout: JsonLayout = NEW_FILE_LAYOUT): void {
-	replaceFile(file, formatJson(value, layout));
+export function writeJsonFile(file: string, value: JsonObject, layout: JsonLayout = NEW_FILE_LAYOUT, unchangedSince?: FileStamp | 'missing'): void {
+	replaceFile(file, formatJson(value, layout), unchangedSince);
+}
+
+/**
+ * Reads a JSON file another program writes too - a CLI's own settings - and writes back what `update`
+ * makes of it, if anything, laid out as it was. Should that program write the file meanwhile, it is read
+ * again and `update` asked again, so that what the program wrote is kept; a file that goes on changing
+ * throws `FileChangedError`. `update` answers what to say, and the value to write, if any.
+ */
+export function updateJsonFile<T>(file: string, update: (read: JsonFile) => { readonly outcome: T; readonly write?: JsonObject }): T {
+	for (let attempt = 1; ; attempt++) {
+		const read = readJsonFile(file);
+		const { outcome, write } = update(read);
+		if (write === undefined) {
+			return outcome;
+		}
+		try {
+			writeJsonFile(file, write, read.kind === 'object' ? read.layout : undefined, read.kind === 'object' ? read.stamp : 'missing');
+			return outcome;
+		} catch (err) {
+			if (!(err instanceof FileChangedError) || attempt >= CHANGED_ATTEMPTS) {
+				throw err;
+			}
+		}
+	}
 }

@@ -19,6 +19,9 @@
     "watch": "gulp watch-extension:facade-agents",
     "test": "node ../../node_modules/mocha/bin/mocha --ui tdd --timeout 30000 \"out/test/**/*.test.js\""
   },
+  "dependencies": {
+    "@vscode/l10n": "^0.0.18"
+  },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x"
