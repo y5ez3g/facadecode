@@ -30,13 +30,44 @@ const RELOAD_MS = 60_000;
 /** How many times the lock is tried - taken, or read - while another window or program has it busy. */
 const LOCK_ATTEMPTS = 10;
 const LOCK_RETRY_MS = 20;
+/** How long past the time a lock nobody touches may be taken over a window waiting for it waits: a moment more. */
+const WAIT_MARGIN_MS = 5_000;
 
-/** The ledger is open in another window. */
+/** The ledger is another window's: open there, or closed by it a moment ago as it reloads. */
 export class LedgerLockedError extends Error {
-	constructor(readonly pid: number) {
-		super(`Another Facade window (process ${pid}) has this workspace's agents.`);
+	/**
+	 * `pid` is the process of the window that has it open - undefined for one that closed it as it
+	 * reloads - and `touchedAt` when its lock was last touched, which a window that runs does every
+	 * 30 seconds.
+	 */
+	constructor(readonly pid: number | undefined, readonly touchedAt: number) {
+		super(pid !== undefined ? `Another Facade window (process ${pid}) has this workspace's agents.` : 'Another Facade window has this workspace\'s agents: it closed them a moment ago, as it reloads.');
 		this.name = 'LedgerLockedError';
 	}
+}
+
+/**
+ * Whether a window that finds the ledger locked tries again, as each failure to open it comes. A lock
+ * is waited for within `handoverMs` of the first, as the extension host before lets go of it; after
+ * that while nobody touches it - its window ended, and its process id is another program's now, or
+ * another workspace's window closed it as it reloaded and did not come back - until any window may
+ * take it over. One touched again after the handover is a running window's.
+ */
+export function lockWait(handoverMs: number): (err: unknown) => boolean {
+	const start = Date.now();
+	/** When the lock was last touched, as first seen after the handover. */
+	let seen: number | undefined;
+	return err => {
+		if (!(err instanceof LedgerLockedError)) {
+			return false;
+		}
+		const now = Date.now();
+		if (now - start < handoverMs) {
+			return true;
+		}
+		seen ??= err.touchedAt;
+		return err.touchedAt === seen && now < Math.max(seen, start) + HELD_MS + WAIT_MARGIN_MS;
+	};
 }
 
 /** The ledger was taken by another window - its lock untouched for too long, as while this one stood still - and takes no event more from this one. */
@@ -69,6 +100,13 @@ export interface LedgerOptions {
 	/** Whether an operating system process runs. */
 	readonly isRunning?: (pid: number) => boolean;
 	readonly heartbeatMs?: number;
+	/**
+	 * Who opens it, the same each time - the workspace, through its reloads - written into the lock as the
+	 * ledger closes: that one takes it back at once, any other once it is a minute old.
+	 */
+	readonly owner?: string;
+	/** Called once, should another window take the ledger: it has closed itself by then. */
+	readonly onTaken?: () => void;
 }
 
 /**
@@ -85,15 +123,15 @@ export class Ledger {
 	private taken = false;
 	private heartbeat: ReturnType<typeof setTimeout> | undefined;
 
-	private constructor(readonly dir: string, readonly state: WorkspaceState, private readonly mark: string, private readonly now: () => number, private readonly heartbeatMs: number) { }
+	private constructor(readonly dir: string, readonly state: WorkspaceState, private readonly mark: string, private readonly options: LedgerOptions) { }
 
 	/** Opens the ledger in `dir`, taking its lock; throws `LedgerLockedError` while another window has it. */
 	static open(dir: string, options: LedgerOptions = {}): Ledger {
 		fs.mkdirSync(dir, { recursive: true });
 		const mark = `${process.pid} ${crypto.randomBytes(6).toString('hex')}`;
-		acquireLock(dir, mark, options.isRunning ?? isProcessRunning);
+		acquireLock(dir, mark, options.isRunning ?? isProcessRunning, options.owner);
 		try {
-			const ledger = new Ledger(dir, load(dir), mark, options.now ?? Date.now, options.heartbeatMs ?? HEARTBEAT_MS);
+			const ledger = new Ledger(dir, load(dir), mark, options);
 			ledger.scheduleHeartbeat();
 			return ledger;
 		} catch (err) {
@@ -108,8 +146,7 @@ export class Ledger {
 	 */
 	assertOpen(): void {
 		if (!this.closed && !ownsLock(this.dir, this.mark)) {
-			this.taken = true;
-			this.close();
+			this.lose();
 		}
 		if (this.taken) {
 			throw new LedgerTakenError(this.dir);
@@ -126,7 +163,7 @@ export class Ledger {
 	 */
 	append(body: LedgerEventBody): LedgerEvent {
 		this.assertOpen();
-		const event: LedgerEvent = { ...body, seq: this.state.seq + 1, time: this.now() };
+		const event: LedgerEvent = { ...body, seq: this.state.seq + 1, time: (this.options.now ?? Date.now)() };
 		if (this.fd === undefined) {
 			this.fd = fs.openSync(path.join(this.dir, LEDGER_FILE), 'a', 0o600);
 		}
@@ -147,7 +184,7 @@ export class Ledger {
 		return event;
 	}
 
-	/** Closes the ledger: its lock says `closed`, if it is still this window's, for a reload to take it back. */
+	/** Closes the ledger: its lock says `closed`, and by whom, if it is still this window's, for a reload to take it back. */
 	close(): void {
 		if (this.closed) {
 			return;
@@ -158,7 +195,14 @@ export class Ledger {
 			fs.closeSync(this.fd);
 			this.fd = undefined;
 		}
-		releaseLock(this.dir, this.mark, true);
+		releaseLock(this.dir, this.mark, true, this.options.owner);
+	}
+
+	/** Another window took the lock: nothing more is written, and whoever opened the ledger is told, once. */
+	private lose(): void {
+		this.taken = true;
+		this.close();
+		this.options.onTaken?.();
 	}
 
 	private scheduleHeartbeat(): void {
@@ -174,15 +218,14 @@ export class Ledger {
 			}
 			// Another window's by now: not touched for it, and not written to
 			if (owned === false) {
-				this.taken = true;
-				this.close();
+				this.lose();
 				return;
 			}
 			if (owned) {
 				touchLock(this.dir);
 			}
 			this.scheduleHeartbeat();
-		}, this.heartbeatMs);
+		}, this.options.heartbeatMs ?? HEARTBEAT_MS);
 		this.heartbeat.unref?.();
 	}
 }
@@ -250,12 +293,32 @@ function holderOf(content: string): number | undefined {
 	return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
+/** Whether a lock says its ledger was closed. */
+function isClosed(content: string): boolean {
+	return content.split(' ')[0].trim() === CLOSED;
+}
+
+/** Who closed the ledger, as its lock says; undefined for one that says only `closed`. */
+function closerOf(content: string): string | undefined {
+	return content.slice(CLOSED.length).trim() || undefined;
+}
+
+/** When the lock `file` was last touched; 0 where that cannot be told. */
+function touchedAt(file: string): number {
+	try {
+		return fs.statSync(file).mtimeMs;
+	} catch {
+		return 0;
+	}
+}
+
 /**
  * Takes the lock in `dir` for this opening, `mark` its content. One whose process runs and touched it
- * lately is another window's; any other was left by a window that ended, closed, or stood still too long,
- * and is taken over - moved aside first, so that of two windows finding it so at once only one takes it.
+ * lately is another window's, and so is one another owner closed a moment ago, as its window reloads;
+ * any other was left by a window that ended, closed, or stood still too long, and is taken over - moved
+ * aside first, so that of two windows finding it so at once only one takes it.
  */
-function acquireLock(dir: string, mark: string, isRunning: (pid: number) => boolean): void {
+function acquireLock(dir: string, mark: string, isRunning: (pid: number) => boolean, owner: string | undefined): void {
 	const file = path.join(dir, LOCK_FILE);
 	for (let attempt = 1; attempt <= LOCK_ATTEMPTS; attempt++) {
 		if (attempt > 1) {
@@ -277,7 +340,11 @@ function acquireLock(dir: string, mark: string, isRunning: (pid: number) => bool
 		}
 		const holder = holderOf(content);
 		if (holder !== undefined && holder !== process.pid && isRunning(holder) && isTouchedWithin(file, HELD_MS)) {
-			throw new LedgerLockedError(holder);
+			throw new LedgerLockedError(holder, touchedAt(file));
+		}
+		const closer = isClosed(content) ? closerOf(content) : undefined;
+		if (closer !== undefined && closer !== owner && isTouchedWithin(file, RELOAD_MS)) {
+			throw new LedgerLockedError(undefined, touchedAt(file));
 		}
 		removeLockIfUnchanged(file, content);
 	}
@@ -310,15 +377,15 @@ function ownsLock(dir: string, mark: string): boolean {
 	return readLock(dir) === mark;
 }
 
-/** Lets go of this opening's lock; a ledger that was `closed` leaves a lock that says so, with the time. */
-function releaseLock(dir: string, mark: string, closed: boolean): void {
+/** Lets go of this opening's lock; a ledger that was `closed` leaves a lock that says so, by whom, with the time. */
+function releaseLock(dir: string, mark: string, closed: boolean, owner?: string): void {
 	const file = path.join(dir, LOCK_FILE);
 	try {
 		if (!ownsLock(dir, mark)) {
 			return;
 		}
 		if (closed) {
-			fs.writeFileSync(file, CLOSED);
+			fs.writeFileSync(file, owner ? `${CLOSED} ${owner}` : CLOSED);
 		} else {
 			fs.rmSync(file, { force: true });
 		}
@@ -364,5 +431,5 @@ export function isLedgerHeld(dir: string, isRunning: (pid: number) => boolean = 
 	const holder = holderOf(content);
 	return holder !== undefined
 		? isRunning(holder) && isTouchedWithin(file, HELD_MS)
-		: content.trim() === CLOSED && isTouchedWithin(file, RELOAD_MS);
+		: isClosed(content) && isTouchedWithin(file, RELOAD_MS);
 }

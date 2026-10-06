@@ -38,9 +38,11 @@ the agent's CLI  --MCP over stdio-->  MCP server  --HTTP over a named pipe-->  e
 - **The pipe** is HTTP on `\\.\pipe\facade-agents-<id>` (a Unix socket elsewhere), so that nothing
   listens on TCP. `/call` answers in newline-delimited JSON: progress lines, then one result or error
   line. A body is at most 1 MB. A call runs to its end even when its caller has gone.
-- **One window** has a workspace's agents at a time. The pipe's id is kept, so a reloaded window
-  listens where the running agents' shims call, and the ledger is only appended to, so a reload
-  replays it and a crash loses at most the line being written.
+- **One window** has a workspace's agents at a time. The ledger is only appended to, so a reload
+  replays it and a crash loses at most the line being written. The pipe's id is kept, so a reloaded
+  window listens where the running agents' shims call: while the window before still holds it, it is
+  waited for - a minute, while agents run - and only then is a new one taken, the person told that the
+  agents still running lost Facade's tools.
 - **The workbench** gives the extension what its API cannot, as commands with no dialog:
   `_facade.folder.active`, `_facade.worktree.create` (WORKTREE.md, WT-5.11), `_facade.terminal.create`
   (a terminal held under a folder's row, its name kept across a reload) and `_facade.terminal.reveal`.
@@ -124,7 +126,7 @@ interface Process {
 interface AgentCli {
     id; displayName; command; models;          // models: what Start Agent offers
     listModels?: { args; parse(output) };      // a CLI that starts with its own model unasked
-    trust?: { write(worktree, lock) };         // a CLI that keeps trust in a file
+    trust?: { write(worktree, lock, env?) };   // a CLI that keeps trust in a file
     fullAccess(): string;                      // what the person agrees to
     sharedServer?: boolean;                    // one server file for all its agents in a folder
     task: 'argument' | 'terminal'; enterDelayMs; efforts?;
@@ -138,7 +140,7 @@ interface FacadeOptions {
                untrackedAnywhere };
         person: { tell(text, terminal?); ask(message, detail, yes, no) };  // yes, no, or dismissed
     };
-    clis: { known; installed(); modelsOf(installed); effortFor(cli) };     // CliCatalog
+    clis: { known; installed(); modelsOf(installed); effortFor(cli); environment?() };  // CliCatalog
     setup: { mcpServer(tokenFile); sharedMcpServer(); pipe(); skills(); opening(process, parent) };
     answers: { get; update };                  // the person's answers, kept for every window
     log(message): void;
@@ -284,8 +286,9 @@ lower-cased on Windows, as Codex keys it; Muse Code for the launch. A trust file
 lock every window takes, its other entries and its layout kept; a file that is not a JSON object is
 left alone, and the CLI asks the person itself. The lock is the one Claude Code takes on its own file,
 `<file>.lock`, so the two take turns, and what a CLI writes between Facade's read and its write is
-read again and kept. Claude Code's file is the one it reads: an older version's `.config.json` in its
-folder where there is one.
+read again and kept. A CLI's file is the one it reads in the environment its terminals start with -
+the window's, as `terminal.integrated.env.<platform>` changes it, `CLAUDE_CONFIG_DIR` say - and Claude
+Code's is an older version's `.config.json` in its folder where there is one.
 
 ### 1.7 Files Facade puts into a folder
 
@@ -301,8 +304,9 @@ A CLI that reads its MCP server or skills from its folder gets them there before
   windows holding it - a window holds while open and for a minute after it closed, for a reload.
 - Once no window holds a folder, each file is taken back: as it was before, byte for byte, where
   nothing changed; a JSON file the person changed meanwhile keeps their change and loses Facade's
-  part; one with nothing of Facade's left is left, the person's old content kept in `~/.facade/kept/`
-  and the person told. A folder a process still has in use is removed later.
+  part, an agent started there after the change taking it for theirs without that part; one with
+  nothing of Facade's left is left, the person's old content kept in `~/.facade/kept/` and the person
+  told. A folder a process still has in use is removed later.
 
 ### 1.8 The record
 
@@ -317,7 +321,7 @@ ledger.jsonl       the events, one JSON line each: { v: 2, seq, time, type, ... 
                    worktree.made    name folder repository parentWorktree madeBy
                    worktree.gone    folder
 ledger.lock        the window that has the agents: its process id and a mark of its own, touched
-                   every 30 s; "closed"
+                   every 30 s; once it closed them, "closed" and the id its workspace keeps
 you.token          the person's token
 last-pid           the highest PID given, which a ledger begun anew counts on from
 runs/<pid>.*       a process's token, task and launch files: gone once it exits
@@ -329,4 +333,9 @@ The state is what replaying the ledger gives. A ledger another version wrote is 
 one begins, its PIDs counting on from `last-pid`; a last line a crash cut short is dropped, and an
 event the disk took only part of is cut back; any other line that cannot be read, or that does not fit
 those before it, stops the window from loading the agents, and says which. A lock untouched for 90 s
-is another window's to take, and the window that stood still that long writes nothing more.
+is another window's to take: the window that stood still that long writes nothing more, lets go of the
+agents and tells the person. A closed lock is its workspace's window's to take back at once, as it
+reloads, and another window's once it is a minute old. A window that finds the lock held waits while
+the window before lets go of it, then while nobody touches it - its window ended, and its process id
+is another program's now - until it may take it over; a lock touched again is a running window's, and
+the window says so and starts nothing.

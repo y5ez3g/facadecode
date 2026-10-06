@@ -1,4 +1,10 @@
 {
 	"displayName": "Facade Agents",
-	"description": "Coding agents' CLIs in their own terminal UIs inside the window, with an MCP server through which agents start, list and end each other."
+	"description": "Coding agents' CLIs in their own terminal UIs inside the window, with an MCP server through which agents start, list and end each other.",
+	"command.category": "Facade",
+	"command.startAgent": "Start Agent...",
+	"command.showLog": "Show Agents Log",
+	"config.title": "Facade Agents",
+	"config.museReasoningEffort": "How hard Muse Code agents think: Facade starts Muse Code with this --reasoning-effort. Higher levels think longer at each step.",
+	"config.enabled": "Lets Facade start coding agents in their own terminal UIs, with its MCP server. Off means Facade starts no server, writes nothing under ~/.facade/workspaces and launches no agents."
 }

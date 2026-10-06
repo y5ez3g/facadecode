@@ -9,7 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
 import { LedgerEventBody, PERSON, YOU_PID } from '../record/events';
-import { isLedgerHeld, Ledger, LedgerLockedError } from '../record/ledger';
+import { isLedgerHeld, Ledger, LedgerLockedError, lockWait } from '../record/ledger';
 import { injectedFile, recordDir, workspaceDir, workspacesRoot } from '../record/paths';
 import { agentName, nameOfWorktree, NewProcess, ProcessTable } from '../record/processes';
 import { cutNextWriteShort, fsError, replaceFsFunction, sleep, tempDir, waitFor } from './util';
@@ -482,18 +482,21 @@ suite('Record: the ledger on disk', () => {
 		const lock = path.join(temp.dir, LOCK);
 		fs.writeFileSync(lock, ANOTHERS_LOCK);
 		let refused: string | undefined;
+		let touchedAt: boolean | undefined;
 		try {
 			Ledger.open(temp.dir, { isRunning: () => true });
 		} catch (err) {
 			refused = err instanceof LedgerLockedError ? err.message : `not refused: ${err}`;
+			touchedAt = err instanceof LedgerLockedError && err.pid === 424242 && err.touchedAt === fs.statSync(lock).mtimeMs;
 		}
 		Ledger.open(temp.dir, { isRunning: () => false }).close();
 		const heldAfterClosing = isLedgerHeld(temp.dir, () => true);
 		const longAgo = new Date(Date.now() - 2 * 60_000);
 		fs.utimesSync(lock, longAgo, longAgo);
 
-		assert.deepStrictEqual({ refused, lock: fs.readFileSync(lock, 'utf8'), heldAfterClosing, heldAMinuteOn: isLedgerHeld(temp.dir, () => true) }, {
+		assert.deepStrictEqual({ refused, touchedAt, lock: fs.readFileSync(lock, 'utf8'), heldAfterClosing, heldAMinuteOn: isLedgerHeld(temp.dir, () => true) }, {
 			refused: 'Another Facade window (process 424242) has this workspace\'s agents.',
+			touchedAt: true,
 			lock: 'closed',
 			heldAfterClosing: true,
 			heldAMinuteOn: false
@@ -513,6 +516,97 @@ suite('Record: the ledger on disk', () => {
 		ledger.close();
 
 		assert.deepStrictEqual({ heldBefore, taken, heldNow }, { heldBefore: false, taken: true, heldNow: true });
+	});
+
+	test('a ledger closed as its window reloads is that workspace\'s to take back at once; another workspace\'s window waits for a minute, then takes it', () => {
+		const lock = path.join(temp.dir, LOCK);
+		Ledger.open(temp.dir, { owner: 'lab' }).close();
+		const closedBy = fs.readFileSync(lock, 'utf8');
+		let refused: string | undefined;
+		let touchedAt: boolean | undefined;
+		try {
+			Ledger.open(temp.dir, { owner: 'notes' }).close();
+		} catch (err) {
+			refused = err instanceof LedgerLockedError ? `${err.pid}: ${err.message}` : messageOf(err);
+			touchedAt = err instanceof LedgerLockedError && err.touchedAt === fs.statSync(lock).mtimeMs;
+		}
+		const reloaded = outcome(() => Ledger.open(temp.dir, { owner: 'lab' }).close());
+		const longAgo = new Date(Date.now() - 2 * 60_000);
+		fs.utimesSync(lock, longAgo, longAgo);
+
+		assert.deepStrictEqual({ closedBy, refused, touchedAt, reloaded, aMinuteOn: outcome(() => Ledger.open(temp.dir, { owner: 'notes' }).close()), lock: fs.readFileSync(lock, 'utf8') }, {
+			closedBy: 'closed lab',
+			refused: 'undefined: Another Facade window has this workspace\'s agents: it closed them a moment ago, as it reloads.',
+			touchedAt: true,
+			reloaded: 'done',
+			aMinuteOn: 'done',
+			lock: 'closed notes'
+		});
+	});
+
+	test('a window that finds the ledger locked waits while the window before lets go of it, then while nobody touches the lock, until it may take it over; a lock touched again after the handover is a running window\'s', () => {
+		const realNow = Date.now;
+		const start = 1_000_000;
+		let now = start;
+		Date.now = () => now;
+		const at = (time: number, wait: (err: unknown) => boolean, err: unknown) => {
+			now = time;
+			return wait(err);
+		};
+		const locked = (touchedAt: number) => new LedgerLockedError(424242, touchedAt);
+		/** A wait that begins at `start`. */
+		const waitFromStart = () => {
+			now = start;
+			return lockWait(10_000);
+		};
+		try {
+			// The window before touches it as it lets go; then a window that runs touches it again.
+			const running = waitFromStart();
+			const handedOver = [
+				at(start, running, locked(start - 1_000)),
+				at(start + 5_000, running, locked(start + 5_000)),
+				at(start + 10_000, running, locked(start + 5_000)),
+				at(start + 30_000, running, locked(start + 5_000)),
+				at(start + 35_000, running, locked(start + 35_000))
+			];
+			// Nobody touches it: its window ended, and its process id is another program's now.
+			const ended = waitFromStart();
+			const untouched = [
+				at(start, ended, locked(start - 20_000)),
+				at(start + 10_000, ended, locked(start - 20_000)),
+				at(start + 94_999, ended, locked(start - 20_000)),
+				at(start + 95_000, ended, locked(start - 20_000))
+			];
+			const other = waitFromStart();
+
+			assert.deepStrictEqual({ handedOver, untouched, otherFailure: at(start, other, new Error('EACCES')) }, {
+				handedOver: [true, true, true, true, false],
+				untouched: [true, true, true, false],
+				otherFailure: false
+			});
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
+	test('a window whose ledger another window took is told, once: as its heartbeat finds it, or as an event does', async () => {
+		const told = { beat: 0, event: 0 };
+		const beat = path.join(temp.dir, 'beat');
+		const event = path.join(temp.dir, 'event');
+		const beating = Ledger.open(beat, { heartbeatMs: 10, onTaken: () => told.beat++ });
+		const writing = Ledger.open(event, { onTaken: () => told.event++ });
+		fs.writeFileSync(path.join(beat, LOCK), ANOTHERS_LOCK);
+		fs.writeFileSync(path.join(event, LOCK), ANOTHERS_LOCK);
+		const refused = [outcome(() => writing.append(made('late'))), outcome(() => writing.append(made('later')))];
+		await waitFor(() => told.beat > 0, 1000);
+		// Long enough for another beat, which should tell nobody again.
+		await sleep(50);
+
+		assert.deepStrictEqual({ told, refused, afterwards: outcome(() => beating.append(made('late'))) }, {
+			told: { beat: 1, event: 1 },
+			refused: [takenFrom(event), takenFrom(event)],
+			afterwards: takenFrom(beat)
+		});
 	});
 
 	test('a lock that names this window\'s own process - left by an opening of it that never closed - is no other window\'s, and is taken over', () => {

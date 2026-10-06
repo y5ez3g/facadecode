@@ -1,0 +1,372 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as fs from 'fs';
+import * as path from 'path';
+import { AgentCli, Environment, InstalledCli, skillMarkdown } from '../clis/cli';
+import { Facade, SpawnRequest, Spawned } from '../core/facade';
+import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Caller, Process } from '../record/events';
+import { ProcessTable } from '../record/processes';
+import { settled, until } from './clock';
+
+/** The window's terminals, in memory: what was launched, typed and closed, and which run. */
+export class FakeTerminals implements Terminals {
+
+	readonly launched: TerminalLaunch[] = [];
+	readonly running = new Set<string>();
+	/** What was typed into each terminal, piece by piece, and which were closed. */
+	readonly typed: string[] = [];
+	/** The next launch fails with this. */
+	failNext: string | undefined;
+	private readonly listeners = new Set<(name: string, end: TerminalEnd) => void>();
+
+	async launch(launch: TerminalLaunch): Promise<void> {
+		const failure = this.failNext;
+		this.failNext = undefined;
+		if (failure) {
+			throw new Error(failure);
+		}
+		this.launched.push(launch);
+		this.running.add(launch.name);
+	}
+
+	async isAlive(name: string): Promise<boolean> {
+		return this.running.has(name);
+	}
+
+	onDidEnd(listener: (name: string, end: TerminalEnd) => void): Disposable {
+		this.listeners.add(listener);
+		return { dispose: () => this.listeners.delete(listener) };
+	}
+
+	/** As the window closes a terminal for the extension: it tells of the end as of any other. */
+	async stop(name: string): Promise<void> {
+		this.typed.push(`${name}: [closed]`);
+		this.end(name);
+	}
+
+	async type(name: string, text: string): Promise<boolean> {
+		if (!this.running.has(name)) {
+			return false;
+		}
+		this.typed.push(`${name}: ${JSON.stringify(text)}`);
+		return true;
+	}
+
+	/** As when a terminal closes, or its process exits. */
+	end(name: string, end: TerminalEnd = { byThePerson: false }): void {
+		if (this.running.delete(name)) {
+			for (const listener of [...this.listeners]) {
+				listener(name, end);
+			}
+		}
+	}
+}
+
+/** Repositories by their main checkout: git's record of their worktrees, all at one HEAD. */
+export class FakeGit implements Git {
+
+	readonly steps: string[] = [];
+	/** The files git tracks, by their full paths: none unless a test adds them. */
+	readonly trackedFiles = new Set<string>();
+	/** The files of the person's that git neither tracks nor ignores, by their full paths: none unless a test adds them. */
+	readonly untrackedFiles = new Set<string>();
+	private readonly worktrees = new Map<string, ListedWorktree[]>();
+
+	/** `gitDir` holds each repository's `info/exclude`, by its main checkout's name; `unborn` are those with no commit yet. */
+	constructor(repositories: { readonly [main: string]: readonly string[] }, private readonly gitDir: string, private readonly unborn: readonly string[] = [], readonly head = 'a'.repeat(40)) {
+		for (const [main, names] of Object.entries(repositories)) {
+			this.worktrees.set(main, [{ name: 'main', folder: main }, ...names.map(name => ({ name, folder: worktreeFolder(main, name) }))]);
+		}
+	}
+
+	async repositoryOf(folder: string): Promise<Repository | undefined> {
+		const found = this.worktreeAt(folder);
+		return found && { main: found.main, worktree: found.worktree.name, head: this.unborn.includes(found.main) ? undefined : this.head };
+	}
+
+	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
+		return this.worktrees.get(main) ?? [];
+	}
+
+	async makeWorktree(main: string, branch: string, startPoint: string): Promise<string> {
+		const worktrees = this.worktrees.get(main) ?? [];
+		if (worktrees.some(each => each.name === branch)) {
+			throw new Error(`A branch named ${branch} already exists. Choose another name.`);
+		}
+		this.steps.push(`make ${branch} from ${startPoint.slice(0, 7)} in ${main}`);
+		const folder = worktreeFolder(main, branch);
+		fs.mkdirSync(folder, { recursive: true });
+		worktrees.push({ name: branch, folder });
+		this.worktrees.set(main, worktrees);
+		return folder;
+	}
+
+	async excludeOf(folder: string): Promise<{ readonly file: string; readonly root: string } | undefined> {
+		const found = this.worktreeAt(folder);
+		return found && { file: path.join(this.gitDir, path.basename(found.main), 'info', 'exclude'), root: found.worktree.folder };
+	}
+
+	async tracks(folder: string, files: readonly string[]): Promise<ReadonlySet<string>> {
+		return new Set(files.filter(file => this.trackedFiles.has(path.join(folder, file))));
+	}
+
+	/** The files every worktree of `folder`'s repository has untracked at that place from its root. */
+	async untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>> {
+		const found = this.worktreeAt(folder);
+		if (!found) {
+			return new Set();
+		}
+		const worktrees = this.worktrees.get(found.main) ?? [];
+		return new Set(files.filter(file => {
+			const fromRoot = path.relative(found.worktree.folder, path.join(folder, file));
+			return worktrees.some(worktree => this.untrackedFiles.has(path.join(worktree.folder, fromRoot)));
+		}));
+	}
+
+	/** The worktree `folder` is in - its root, or a folder inside it - and its repository's main checkout. */
+	private worktreeAt(folder: string): { readonly main: string; readonly worktree: ListedWorktree } | undefined {
+		let found: { readonly main: string; readonly worktree: ListedWorktree } | undefined;
+		for (const [main, worktrees] of this.worktrees) {
+			for (const worktree of worktrees) {
+				const inside = path.relative(worktree.folder, folder);
+				const within = folder === worktree.folder || (inside !== '' && !inside.startsWith('..') && !path.isAbsolute(inside));
+				if (within && (!found || worktree.folder.length > found.worktree.folder.length)) {
+					found = { main, worktree };
+				}
+			}
+		}
+		return found;
+	}
+}
+
+/** The person: what Facade told them, and their answer to whether a CLI may start at full access. */
+export class FakePerson implements Person {
+
+	readonly told: string[] = [];
+	/** The questions the person was asked, by their messages. */
+	readonly asked: string[] = [];
+	/** Their answer to the questions they are asked from now: yes unless set; a promise for one they take their time over. */
+	answer: boolean | undefined | Promise<boolean | undefined> = true;
+
+	tell(text: string, terminal: string | undefined): void {
+		this.told.push(`${text}${terminal ? ` (${terminal})` : ''}`);
+	}
+
+	async ask(message: string): Promise<boolean | undefined> {
+		this.asked.push(message);
+		return this.answer;
+	}
+}
+
+/** The window's global state, in memory. */
+export class MemoryStore {
+
+	private readonly values = new Map<string, unknown>();
+
+	get(key: string): unknown {
+		return this.values.get(key);
+	}
+
+	async update(key: string, value: unknown): Promise<void> {
+		this.values.set(key, value);
+	}
+}
+
+/** Where a fake repository's worktree lives. */
+export function worktreeFolder(main: string, name: string): string {
+	return path.join(`${main}-worktrees`, name);
+}
+
+/** The caller a process is, as its token says. */
+export function callerOf(process: Process): Caller {
+	return { pid: process.pid, name: process.name };
+}
+
+/** What the fake CLIs did besides their launches: each trust they wrote. */
+export interface CliRecord {
+	readonly trusted: string[];
+}
+
+/**
+ * A CLI that takes its task as an argument and keeps the person's trust in a file of its own, in the
+ * folder `ARG_HOME` names where the environment has it: its launch computed, never run.
+ */
+export function argCli(record: CliRecord): AgentCli {
+	return {
+		id: 'arg',
+		displayName: 'Arg Code',
+		command: 'arg',
+		models: ['small', 'large'],
+		trust: {
+			write: ({ folder, repository }, _lock, env) => {
+				record.trusted.push(`arg trusts ${repository}${env?.ARG_HOME ? `, in ${env.ARG_HOME}` : ''}`);
+				return `Arg Code trusts ${repository} now, for ${folder}.`;
+			}
+		},
+		fullAccess: () => 'Arg Code runs every command.',
+		task: 'argument',
+		enterDelayMs: 300,
+		launch: (input, executable) => {
+			const config = path.join(input.runDir, `${input.slug}.config.json`);
+			return {
+				executable,
+				args: ['--config', config, '--model', input.model, ...(input.trusted ? ['--trusted'] : []), ...(input.prompt ? ['--', input.prompt] : [])],
+				env: { ARG_QUIET: '1' },
+				cwd: input.folder,
+				files: [{ path: config, content: JSON.stringify(input.mcp) }],
+				injected: []
+			};
+		}
+	};
+}
+
+/**
+ * A CLI whose first conversation has no MCP tools - told of its task in its terminal - which reads one
+ * server for all its agents, and its skills, from files in its folder, lists its models, and thinks at
+ * levels.
+ */
+export function toldCli(): AgentCli {
+	const server = (input: { readonly mcp: { readonly command: string; readonly args: readonly string[] } }) => ({ command: input.mcp.command, args: input.mcp.args });
+	return {
+		id: 'told',
+		displayName: 'Told Code',
+		command: 'told',
+		models: ['quick', 'deep'],
+		listModels: { args: ['models'], parse: output => output.split('\n').filter(Boolean) },
+		fullAccess: () => 'Told Code runs every command.',
+		sharedServer: true,
+		task: 'terminal',
+		enterDelayMs: 400,
+		efforts: { levels: ['low', 'high', 'max'], byDefault: 'high' },
+		launch: (input, executable) => ({
+			executable,
+			args: ['--model', input.model, '--effort', input.effort ?? 'none', ...(input.trusted ? ['--trust-folder'] : [])],
+			env: {},
+			cwd: input.folder,
+			files: [],
+			injected: [
+				{
+					path: '.mcp.json',
+					content: JSON.stringify({ mcpServers: { facade: server(input) } }, undefined, '\t'),
+					merge: theirs => {
+						let file: { mcpServers?: { [name: string]: unknown } };
+						try {
+							file = JSON.parse(theirs);
+						} catch {
+							return undefined;
+						}
+						return file.mcpServers?.facade ? undefined : JSON.stringify({ ...file, mcpServers: { ...file.mcpServers, facade: server(input) } }, undefined, 2);
+					}
+				},
+				...input.skills.map(skill => ({ path: `.told/skills/${skill.name}/SKILL.md`, content: skillMarkdown(skill) }))
+			]
+		})
+	};
+}
+
+export interface WorldOptions {
+	/** Repositories by their main checkout, with the names of their worktrees. */
+	readonly repositories?: { readonly [main: string]: readonly string[] };
+	/** The main checkouts of those repositories that have no commit yet. */
+	readonly unborn?: readonly string[];
+	/** The CLIs this machine has, by id: `arg` and `told` unless set. */
+	readonly clis?: readonly string[];
+	/** Where the repositories' `info/exclude` files are: in the world's own folder unless set. */
+	readonly gitDir?: string;
+	/** The record of what Facade put into folders: the world's own unless set, for windows that share one. */
+	readonly injected?: string;
+	/** How long a new process may take to come up, where not two minutes. */
+	readonly startTimeoutMs?: number;
+	/** The models a CLI that lists them has: none listed by default. */
+	readonly modelsOf?: (installed: InstalledCli) => Promise<readonly string[] | undefined>;
+	/** The level the person set for a CLI to think at. */
+	readonly effortFor?: (cli: string) => string | undefined;
+	/** The environment the agents' terminals start with. */
+	readonly environment?: () => Environment;
+}
+
+/**
+ * The core over a workspace in `dir`, with a window in memory: each port records what it was asked
+ * and answers as a test set it up. Its CLIs' launches are only computed, never run.
+ */
+export function fakeWorld(dir: string, options: WorldOptions = {}) {
+	const table = ProcessTable.open({ dir });
+	const terminals = new FakeTerminals();
+	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
+	const person = new FakePerson();
+	const record: CliRecord = { trusted: [] };
+	const known: readonly InstalledCli[] = [
+		{ cli: argCli(record), executable: path.join(dir, 'bin', 'arg.exe') },
+		{ cli: toldCli(), executable: path.join(dir, 'bin', 'told.exe') }
+	];
+	const installed = known.filter(each => (options.clis ?? ['arg', 'told']).includes(each.cli.id));
+	/** What the core wrote to its log, in order. */
+	const logs: string[] = [];
+	const facade = new Facade({
+		table,
+		ports: { terminals, git, person },
+		clis: {
+			known: known.map(each => each.cli),
+			installed: () => installed,
+			modelsOf: options.modelsOf ?? (async () => undefined),
+			effortFor: options.effortFor ?? (() => undefined),
+			...(options.environment ? { environment: options.environment } : {})
+		},
+		setup: {
+			mcpServer: tokenFile => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', tokenFile], env: { ELECTRON_RUN_AS_NODE: '1' } }),
+			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
+			pipe: () => 'pipe',
+			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: '# Working in Facade Code' }],
+			opening: (process, parent) => `[facade] You are @${process.name}, PID ${process.pid}, ${process.cliName}, started by @${parent.name}.`
+		},
+		answers: new MemoryStore(),
+		log: message => logs.push(message),
+		injected: options.injected ?? path.join(dir, 'injected.json'),
+		...(options.startTimeoutMs !== undefined ? { startTimeoutMs: options.startTimeoutMs } : {}),
+		taskSettleMs: 0
+	});
+	return {
+		table,
+		facade,
+		terminals,
+		git,
+		person,
+		record,
+		logs,
+		/** The process with the PID `pid`. */
+		process(pid: number): Process {
+			const found = table.get(pid);
+			if (!found) {
+				throw new Error(`no process has PID ${pid}`);
+			}
+			return found;
+		},
+		/** As the MCP server of process `pid` says hello: it is running. */
+		hello(pid: number): void {
+			facade.connected(callerOf(this.process(pid)));
+		},
+		/**
+		 * A spawn whose child's MCP server says hello once its terminal is launched, as a CLI's does: what
+		 * the spawn answered, or its error. On a test's clock.
+		 */
+		async spawnUp(caller: Caller, request: SpawnRequest): Promise<Spawned> {
+			const pid = table.state.lastPid + 1;
+			let over = false;
+			const spawning = facade.spawn(caller, request);
+			spawning.then(() => over = true, () => over = true);
+			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.includes(`(${pid})`)));
+			if (!over) {
+				facade.connected(callerOf(this.process(pid)));
+			}
+			return settled(spawning);
+		},
+		dispose(): void {
+			facade.dispose();
+			table.dispose();
+		}
+	};
+}
