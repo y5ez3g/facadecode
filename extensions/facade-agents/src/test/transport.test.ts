@@ -858,6 +858,8 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		const main = agent('main');
 		await main.initialize();
 		const running = await main.callAndCancel('hang', {}, waitFor(() => hanging === 1));
+		// The shim reads its input in order: once it answers a ping, it has the cancel, and only then does the window go
+		await main.request('ping', {});
 		endpoint.dispose();
 		const waiting = await main.callAndCancel('echo', { text: 'too late' }, sleep(300));
 		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
