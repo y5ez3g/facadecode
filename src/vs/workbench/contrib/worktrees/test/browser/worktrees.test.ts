@@ -17,6 +17,7 @@ import { OS } from '../../../../../base/common/platform.js';
 import { extUri } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
+import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { isIMenuItem, MenuRegistry, registerAction2 } from '../../../../../platform/actions/common/actions.js';
 import { CommandsRegistry, ICommandService } from '../../../../../platform/commands/common/commands.js';
@@ -139,7 +140,8 @@ suite('Worktrees - making and deleting one', () => {
 	let terminals: ITerminalInstance[];
 	/** The terminals of the worktree's editor area, whatever they started in (`IFolderTerminalsService`). */
 	let editorAreaTerminals: ITerminalInstance[];
-	let trust: { enabled: boolean; trusted: boolean; granted: boolean };
+	/** Whether trust is on, the workspace trusted, trust given when asked, and the repository trusted where that differs. */
+	let trust: { enabled: boolean; trusted: boolean; granted: boolean; repositoryTrusted?: boolean };
 	let instantiationService: TestInstantiationService;
 
 	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean }): ITerminalInstance {
@@ -212,6 +214,18 @@ suite('Worktrees - making and deleting one', () => {
 	/** Every argument the git extension is sent, a URI as its path. */
 	function describeCommand(id: string, args: unknown[]): string {
 		return [id, ...args.map(arg => URI.isUri(arg) ? arg.path : String(arg))].join(' ');
+	}
+
+	/** Resolves once the service took a step that starts with `prefix`. */
+	async function stepTaken(prefix: string): Promise<void> {
+		for (let turn = 0; turn < 1000 && !steps.some(step => step.startsWith(prefix)); turn++) {
+			await timeout(0);
+		}
+	}
+
+	/** The git extension's commands registered, as once it has started: a worktree made for an agent waits for them. */
+	function gitIsRunning(): void {
+		store.add(CommandsRegistry.registerCommand('_git.prepareWorktreeBaseAt', () => { }));
 	}
 
 	setup(() => {
@@ -322,7 +336,7 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(IWorkspaceTrustEnablementService, { isWorkspaceTrustEnabled: () => trust.enabled });
 		instantiationService.stub(IWorkspaceTrustManagementService, {
 			isWorkspaceTrusted: () => trust.trusted,
-			getUriTrustInfo: async uri => upcastPartial<IWorkspaceTrustUriInfo>({ uri, trusted: trust.trusted }),
+			getUriTrustInfo: async uri => upcastPartial<IWorkspaceTrustUriInfo>({ uri, trusted: trust.repositoryTrusted ?? trust.trusted }),
 			setUrisTrust: async (uris, trusted) => { steps.push(`${trusted ? 'trust' : 'untrust'} ${uris.map(uri => uri.path).join(', ')}`); }
 		});
 		instantiationService.stub(IWorkspaceTrustRequestService, {
@@ -355,6 +369,157 @@ suite('Worktrees - making and deleting one', () => {
 			'open /lab',
 			'show /home/me/.facade/worktrees/lab/w3',
 		]);
+	});
+
+	test('made without asking, for an agent: no dialog, from the commit it is given, its row there, and the window left where it is', async () => {
+		gitIsRunning();
+		trust.enabled = true;
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		const commit = 'a'.repeat(40);
+
+		const made = await instantiationService.createInstance(WorktreeService).makeWorktree(main, ' w3 ', { startPoint: commit });
+
+		assert.deepStrictEqual({ made: made.path, steps }, {
+			made: '/home/me/.facade/worktrees/lab/w3',
+			steps: [
+				'_git.prepareWorktreeBaseAt /lab inspect',
+				'customize /home/me/.facade/worktrees/lab/w3 {}',
+				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
+				'trust /home/me/.facade/worktrees/lab/w3',
+				'listed /home/me/.facade/worktrees/lab/w3',
+				'open /lab',
+			],
+		});
+	});
+
+	test('made without asking, what would have been asked is refused instead: no branch, a name that is no folder, trust, no repository or no commit yet, a branch or a folder that is there', async () => {
+		gitIsRunning();
+		const service = instantiationService.createInstance(WorktreeService);
+		const attempt = (branch: string) => service.makeWorktree(main, branch).then(() => 'made', (err: Error) => err.message);
+		const noBranch = await attempt('  ');
+		const notAFolder = await attempt('con');
+		trust.enabled = true;
+		trust.trusted = false;
+		const restricted = await attempt('w3');
+		trust.trusted = true;
+		trust.repositoryTrusted = false;
+		const untrusted = await attempt('w3');
+		trust.repositoryTrusted = true;
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'uninitialized', files: 2, identity: true, enclosing: undefined });
+		const notARepository = await attempt('w3');
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'unborn', files: 2, identity: true });
+		const unborn = await attempt('w3');
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w2', { kind: 'error', code: 'BranchAlreadyExists', message: 'fatal: a branch named w2 already exists' });
+		const branchTaken = await attempt('w2');
+		answers.set('_git.createWorktreeAt w5', { kind: 'error', code: 'WorktreeAlreadyExists', message: 'fatal: already exists' });
+		const folderTaken = await attempt('w5');
+
+		assert.deepStrictEqual({ noBranch, notAFolder, restricted, untrusted, notARepository, unborn, branchTaken, folderTaken, asked: steps.filter(step => step === 'ask' || step === 'ask for trust' || step.startsWith('prompt')) }, {
+			noBranch: 'A worktree needs the name of its branch.',
+			notAFolder: '"con" cannot be the name of a folder on Windows.',
+			restricted: 'The workspace is in Restricted Mode, where Git does not run. Trust the workspace first.',
+			untrusted: '/lab is not trusted, and a worktree of it would be. Trust /lab first.',
+			notARepository: '"lab" is not a Git repository. Make it one first.',
+			unborn: '"lab" has no commit for a worktree to branch off from. Make its first commit first.',
+			branchTaken: 'A branch named w2 already exists. Choose another name.',
+			folderTaken: 'Something is already at /home/me/.facade/worktrees/lab/w5.',
+			asked: [],
+		});
+	});
+
+	test('made without asking while Git is still starting, it waits for Git, as New Worktree does once trust is given; Git that does not start is said not to run', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		const service = instantiationService.createInstance(WorktreeService);
+
+		const starting = service.makeWorktree(main, 'w3');
+		await timeout(10);
+		steps.push('git registers its commands');
+		const registered = CommandsRegistry.registerCommand('_git.prepareWorktreeBaseAt', () => { });
+		const made = await starting;
+		registered.dispose();
+		const whileStarting = steps.splice(0, 2);
+		missingCommands.add('_git.prepareWorktreeBaseAt');
+		const notRunning = await service.makeWorktree(main, 'w4').then(() => 'made', (err: Error) => err.message);
+
+		assert.deepStrictEqual({ made: made.path, whileStarting, notRunning }, {
+			made: '/home/me/.facade/worktrees/lab/w3',
+			whileStarting: ['git registers its commands', '_git.prepareWorktreeBaseAt /lab inspect'],
+			notRunning: 'Worktrees are made and deleted with the Git extension, which is not running in this window.',
+		});
+	}));
+
+	test('made without asking, two at once in one repository: the second waits for the first, and neither is refused', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		const makingW3 = new DeferredPromise<unknown>();
+		answers.set('_git.createWorktreeAt w3', makingW3.p);
+		answers.set('_git.createWorktreeAt w4', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		const service = instantiationService.createInstance(WorktreeService);
+		const made = () => steps.filter(step => step.startsWith('_git.createWorktreeAt'));
+
+		const first = service.makeWorktree(main, 'w3');
+		const second = service.makeWorktree(main, 'w4').then(worktree => worktree.path, (err: Error) => err.message);
+		await stepTaken('_git.createWorktreeAt');
+		await timeout(0);
+		const whileW3IsMade = made();
+		makingW3.complete({ kind: 'created', copyFailures: [], hookFailure: undefined });
+
+		assert.deepStrictEqual({ first: (await first).path, second: await second, whileW3IsMade, made: made() }, {
+			first: '/home/me/.facade/worktrees/lab/w3',
+			second: '/home/me/.facade/worktrees/lab/w4',
+			whileW3IsMade: ['_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3'],
+			made: [
+				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
+				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w4 w4',
+			],
+		});
+	});
+
+	test('New Worktree while a worktree is made for an agent in its repository goes once that one is made, rather than doing nothing', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		const makingW3 = new DeferredPromise<unknown>();
+		answers.set('_git.createWorktreeAt w3', makingW3.p);
+		answers.set('_git.createWorktreeAt w4', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		answer = { branch: 'w4', customization: {} };
+		const service = instantiationService.createInstance(WorktreeService);
+
+		const agents = service.makeWorktree(main, 'w3');
+		await stepTaken('_git.createWorktreeAt');
+		const persons = service.createWorktree(main);
+		await timeout(0);
+		const askedWhileW3IsMade = steps.includes('ask');
+		makingW3.complete({ kind: 'created', copyFailures: [], hookFailure: undefined });
+		await agents;
+		await persons;
+
+		assert.deepStrictEqual({ askedWhileW3IsMade, asked: steps.filter(step => step === 'ask').length, made: steps.filter(step => step.startsWith('_git.createWorktreeAt')) }, {
+			askedWhileW3IsMade: false,
+			asked: 1,
+			made: [
+				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
+				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w4 w4',
+			],
+		});
+	});
+
+	test('a second New Worktree while the person\'s first is going does nothing, as a second click on a row that is being worked on', async () => {
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		const makingW3 = new DeferredPromise<unknown>();
+		answers.set('_git.createWorktreeAt w3', makingW3.p);
+		answer = { branch: 'w3', customization: {} };
+		const service = instantiationService.createInstance(WorktreeService);
+
+		const first = service.createWorktree(main);
+		await stepTaken('_git.createWorktreeAt');
+		await service.createWorktree(main);
+		makingW3.complete({ kind: 'created', copyFailures: [], hookFailure: undefined });
+		await first;
+
+		assert.deepStrictEqual({ asked: steps.filter(step => step === 'ask').length, made: steps.filter(step => step.startsWith('_git.createWorktreeAt')).length }, { asked: 1, made: 1 });
 	});
 
 	test('setup lines run one at a time: each once the shell says that line\'s own command finished', async () => {

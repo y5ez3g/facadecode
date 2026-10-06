@@ -89,20 +89,25 @@ suite('Agent picker - every agent open, in one list', () => {
 		]);
 	});
 
-	test('a folder is drawn as the bar draws it, and a worktree after its repository', () => {
+	test('a folder is drawn as the bar draws it, and a worktree after its repository, whether or not it has joined the workspace', () => {
 		const folder = (path: string, name: string): IWorkspaceFolder => new WorkspaceFolder({ uri: URI.file(path), name, index: 0 });
 		const facadeFolder = folder('/code/FacadeCode', 'FacadeCode');
 		const featureFolder = folder('/code/FacadeCode-feature-16', 'FacadeCode-feature-16');
 		const shop = folder('/code/shop-app', 'shop-app');
 		const orphan = folder('/code/api-fix', 'api-fix');
 
+		// Two worktrees made for agents, not in the workspace until somebody goes there
+		const clamp = URI.file('/code/FacadeCode-clamp');
+		const cart = URI.file('/code/FacadeCode-cart');
+
 		// What the bar draws: shop-app was named, given a glyph and coloured in Customize, a worktree goes by
-		// its branch and api-fix's was coloured, and the main checkout of its repository was customised
-		// without being a folder of the workspace
+		// its branch and api-fix's was coloured, the main checkout of its repository was customised
+		// without being a folder of the workspace, and so was one of the agents' worktrees
 		const customizations = new Map<string, IFolderCustomization>([
 			['/code/shop-app', { name: 'My shop', icon: 'rocket', color: 'green' }],
 			['/code/api', { name: 'API', icon: 'server' }],
-			['/code/api-fix', { color: 'pink' }]
+			['/code/api-fix', { color: 'pink' }],
+			['/code/FacadeCode-cart', { name: 'Cart fix', color: 'blue' }]
 		]);
 		const branches = new Map<string, string>([['/code/FacadeCode-feature-16', 'feature-16'], ['/code/api-fix', 'fix-login']]);
 		const customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'> = {
@@ -117,18 +122,30 @@ suite('Agent picker - every agent open, in one list', () => {
 			members: mainFolder ? [mainFolder, worktree] : [worktree],
 			worktrees: [{ uri: worktree.uri, branch: worktree.name, label: worktree.name, exists: true, folder: worktree }]
 		});
-		const facadeRepository = repository(facadeFolder.uri, facadeFolder, featureFolder);
-		const placeOf = (candidate: IWorkspaceFolder, of: IWorkspaceBarRepository | undefined) =>
-			placeOfFolder(candidate, of, customizationService, extUriBiasedIgnorePathCase).map(step => `${glyphInFolderColor(step.glyph, step.color).id} ${step.name}`);
+		const withFeature = repository(facadeFolder.uri, facadeFolder, featureFolder);
+		const facadeRepository: IWorkspaceBarRepository = {
+			...withFeature,
+			worktrees: [
+				...withFeature.worktrees,
+				{ uri: clamp, branch: 'clamp', label: 'clamp', exists: true, folder: undefined },
+				{ uri: cart, branch: 'cart', label: 'cart', exists: true, folder: undefined }
+			]
+		};
+		const placeOf = (uri: URI, candidate: IWorkspaceFolder | undefined, of: IWorkspaceBarRepository | undefined) =>
+			placeOfFolder(uri, candidate, of, customizationService, extUriBiasedIgnorePathCase).map(step => `${glyphInFolderColor(step.glyph, step.color).id} ${step.name}`);
 
 		assert.deepStrictEqual([
-			placeOf(facadeFolder, facadeRepository),
-			placeOf(featureFolder, facadeRepository),
-			placeOf(shop, undefined),
-			placeOf(orphan, repository(URI.file('/code/api'), undefined, orphan)),
+			placeOf(facadeFolder.uri, facadeFolder, facadeRepository),
+			placeOf(featureFolder.uri, featureFolder, facadeRepository),
+			placeOf(clamp, undefined, facadeRepository),
+			placeOf(cart, undefined, facadeRepository),
+			placeOf(shop.uri, shop, undefined),
+			placeOf(orphan.uri, orphan, repository(URI.file('/code/api'), undefined, orphan)),
 		], [
 			['folder FacadeCode'],
 			['folder FacadeCode', 'workspace-bar-worktree feature-16'],
+			['folder FacadeCode', 'workspace-bar-worktree clamp'],
+			['folder FacadeCode', 'workspace-bar-worktree~folderblue Cart fix'],
 			['rocket~foldergreen My shop'],
 			['server API', 'workspace-bar-worktree~folderpink fix-login'],
 		]);

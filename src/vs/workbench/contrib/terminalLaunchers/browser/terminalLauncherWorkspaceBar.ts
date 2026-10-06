@@ -7,19 +7,20 @@ import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IFolderAgents, IWorkspaceBarAgentsService } from '../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
-import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
+import { FOLLOW_FOLDER, IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance } from '../../terminal/browser/terminal.js';
 import { AGENT_TERMINAL_ICON } from '../common/terminalLaunchers.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
 /**
- * The agents each folder runs, in the order they were started: an agent in the panel belongs to no
- * folder and is left out.
+ * The agents each folder runs, in the order they were started: one that belongs to no folder - the
+ * window's - is left out.
  */
 export function agentsByFolder(agents: readonly ITerminalInstance[], folderOf: (agent: ITerminalInstance) => URI | undefined): IFolderAgents[] {
 	const byFolder = new Map<string, { folder: URI; icons: ThemeIcon[] }>();
@@ -61,10 +62,17 @@ export class TerminalLauncherWorkspaceBar extends Disposable implements IWorkben
 		@IWorkspaceBarService workspaceBarService: IWorkspaceBarService,
 		@IActiveFolderService activeFolderService: IActiveFolderService,
 		@IWorkspaceContextService contextService: IWorkspaceContextService,
+		@IConfigurationService configurationService: IConfigurationService,
 	) {
 		super();
 
 		const schedule = () => this.report.schedule();
+		// Following folders or not moves the editor area's terminals between their folder and the window
+		this._register(configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration(FOLLOW_FOLDER)) {
+				schedule();
+			}
+		}));
 		// A terminal is made, closed or starts an agent
 		this._register(launcherService.onDidChangeAgentTerminals(schedule));
 		// A terminal with a tab belongs to the folder the window is on: a switch moves every one of them
@@ -76,6 +84,6 @@ export class TerminalLauncherWorkspaceBar extends Disposable implements IWorkben
 	}
 
 	private tellBar(): void {
-		this.barAgentsService.set(agentsByFolder(this.launcherService.agentTerminals, agent => this.folderTerminalsService.folderOf(agent)?.uri));
+		this.barAgentsService.set(agentsByFolder(this.launcherService.agentTerminals, agent => this.folderTerminalsService.folderOf(agent)));
 	}
 }

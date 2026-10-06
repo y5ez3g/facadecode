@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { raceTimeout } from '../../../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
@@ -12,7 +12,7 @@ import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { parse, ParseError } from '../../../../base/common/json.js';
 import { Schemas } from '../../../../base/common/network.js';
-import { ResourceSet } from '../../../../base/common/map.js';
+import { ResourceMap } from '../../../../base/common/map.js';
 import { basename, joinPath, toLocalResource } from '../../../../base/common/resources.js';
 import Severity from '../../../../base/common/severity.js';
 import { isObject } from '../../../../base/common/types.js';
@@ -36,7 +36,7 @@ import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uri
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { asCodeSpan } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
-import { IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
@@ -244,14 +244,41 @@ export interface IWorktreeService {
 
 	/** Delete Worktree for `target`, or for the row the bar's commands act on. */
 	deleteWorktree(target: URI | undefined): Promise<void>;
+
+	/**
+	 * A worktree of `main` on the new branch `branch`, made without asking anything, for a caller that
+	 * has decided already - an agent sending a child out to a worktree of its own. Setup runs as for
+	 * New Worktree. Throws, in the product's words, when it cannot be made.
+	 *
+	 * Nothing is asked, so nothing that would have been asked is done: a workspace or repository that
+	 * is not trusted, or a folder with no commit yet, is refused rather than trusted or given one.
+	 */
+	makeWorktree(main: URI, branch: string, options?: IMakeWorktreeOptions): Promise<URI>;
 }
+
+/** How `makeWorktree` makes a worktree. */
+export interface IMakeWorktreeOptions {
+	/** The commit it starts at, a full commit id; HEAD when there is none. */
+	readonly startPoint?: string;
+	/** Whether the window goes to it, as after New Worktree; it stays where it is otherwise. */
+	readonly show?: boolean;
+}
+
+/** What `createDecided` came to: the worktree made, or why not. */
+type CreateOutcome =
+	| { readonly kind: 'created'; readonly worktree: URI; readonly result: Extract<CreateWorktreeAtResult, { kind: 'created' }> }
+	| { readonly kind: 'failed'; readonly worktree: URI; readonly result: CreateWorktreeAtResult | undefined; readonly unreachable?: string };
 
 export class WorktreeService implements IWorktreeService {
 
 	declare readonly _serviceBrand: undefined;
 
-	/** The repositories being given a worktree and the worktrees being deleted: one run for each at a time. */
-	private readonly running: ResourceSet;
+	/**
+	 * The repositories being given a worktree and the worktrees being deleted: one run for each at a
+	 * time. A worktree being made for an agent is `waitedFor`: what comes for its repository meanwhile
+	 * goes once it is made, rather than being dropped as a second click (WT-5.10).
+	 */
+	private readonly running: ResourceMap<{ readonly done: Promise<void>; readonly waitedFor: boolean }>;
 
 	constructor(
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
@@ -274,7 +301,7 @@ export class WorktreeService implements IWorktreeService {
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@ILogService private readonly logService: ILogService,
 	) {
-		this.running = new ResourceSet(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
+		this.running = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 	}
 
 	async createWorktree(target: URI | undefined): Promise<void> {
@@ -310,20 +337,49 @@ export class WorktreeService implements IWorktreeService {
 		await this.runOnce(worktree.uri, () => this.doDeleteWorktree(repository.main, worktree.uri, worktree.branch, worktreeNameFor(this.customizationService, worktree)));
 	}
 
+	async makeWorktree(main: URI, branch: string, options: IMakeWorktreeOptions = {}): Promise<URI> {
+		const root = this.workspaceBarService.repositoryFor(main)?.main ?? main;
+		const worktree = await this.runInTurn(root, () => this.doMakeWorktree(root, branch.trim(), options));
+
+		// As after New Worktree: setup goes on in its own terminal, and holds nothing up.
+		this.runSetup(root, worktree).catch(onUnexpectedError);
+		return worktree;
+	}
+
 	/**
 	 * Runs `task` for `uri` unless a run for it is still going - a second click on a row that is being
-	 * worked on - and returns what it returned.
+	 * worked on - and returns what it returned. A worktree being made for an agent is waited for
+	 * instead: New Worktree goes once it is made (WT-5.10).
 	 */
 	private async runOnce<T>(uri: URI, task: () => Promise<T>): Promise<T | undefined> {
-		if (this.running.has(uri)) {
-			return undefined;
+		for (let going = this.running.get(uri); going; going = this.running.get(uri)) {
+			if (!going.waitedFor) {
+				return undefined;
+			}
+			await going.done;
 		}
+		return this.run(uri, task, false);
+	}
 
-		this.running.add(uri);
+	/**
+	 * Runs `task` for `uri` once what runs for it is done: the worktrees agents ask for in one repository
+	 * are made one after another, none refused for another being made (WT-5.10).
+	 */
+	private async runInTurn<T>(uri: URI, task: () => Promise<T>): Promise<T> {
+		for (let going = this.running.get(uri); going; going = this.running.get(uri)) {
+			await going.done;
+		}
+		return this.run(uri, task, true);
+	}
+
+	private async run<T>(uri: URI, task: () => Promise<T>, waitedFor: boolean): Promise<T> {
+		const done = new DeferredPromise<void>();
+		this.running.set(uri, { done: done.p, waitedFor });
 		try {
 			return await task();
 		} finally {
 			this.running.delete(uri);
+			done.complete();
 		}
 	}
 
@@ -470,29 +526,103 @@ export class WorktreeService implements IWorktreeService {
 			}
 		}
 
+		const created = await this.createDecided(main, branch, name, parent, answer.customization, undefined);
+		if (created.kind === 'failed') {
+			if (created.unreachable) {
+				this.notificationService.error(created.unreachable);
+			} else {
+				this.reportCreateFailure(main, repository, branch, created.worktree, created.result);
+			}
+			return undefined;
+		}
+
+		await this.afterCreate(main, created.worktree, trustEnabled, true);
+		return created.worktree;
+	}
+
+	/**
+	 * `makeWorktree`: WT-5.6 with every question answered by the caller or refused - no dialog, no
+	 * trust asked for, no repository or initial commit made - and the window left where it is unless
+	 * asked. Git that is still starting, as a window just opened, is waited for as after trust is given.
+	 */
+	private async doMakeWorktree(main: URI, branch: string, options: IMakeWorktreeOptions): Promise<URI> {
+		if (!branch) {
+			throw new Error(localize('worktrees.noBranch', "A worktree needs the name of its branch."));
+		}
+
+		const name = worktreeFolderName(branch);
+		if (!name) {
+			throw new Error(localize('worktrees.badName', "\"{0}\" cannot be the name of a folder on Windows.", branch));
+		}
+
+		const trustEnabled = this.workspaceTrustEnablementService.isWorkspaceTrustEnabled();
+		if (trustEnabled && !this.workspaceTrustManagementService.isWorkspaceTrusted()) {
+			throw new Error(localize('worktrees.restrictedUnasked', "The workspace is in Restricted Mode, where Git does not run. Trust the workspace first."));
+		}
+
+		if (trustEnabled && !(await this.workspaceTrustManagementService.getUriTrustInfo(main)).trusted) {
+			throw new Error(localize('worktrees.untrustedUnasked', "{0} is not trusted, and a worktree of it would be. Trust {0} first.", this.labelService.getUriLabel(main)));
+		}
+
+		await whenRegistered('_git.prepareWorktreeBaseAt', GIT_START_TIMEOUT);
+		let base: WorktreeBaseAtResult | undefined;
+		try {
+			base = await this.commandService.executeCommand<WorktreeBaseAtResult>('_git.prepareWorktreeBaseAt', main, 'inspect');
+		} catch (err) {
+			throw new Error(gitUnreachable('_git.prepareWorktreeBaseAt', err));
+		}
+
+		if (!base || base.kind === 'error') {
+			throw new Error(explainFailure(base, main)
+				?? localize('worktrees.inspectFailed', "Git could not read {0}: {1}", this.labelService.getUriLabel(main), gitMessage(base)));
+		}
+
+		if (base.kind === 'uninitialized') {
+			throw new Error(localize('worktrees.notRepositoryUnasked', "\"{0}\" is not a Git repository. Make it one first.", basename(main)));
+		}
+
+		if (base.kind === 'unborn') {
+			throw new Error(localize('worktrees.noBaseUnasked', "\"{0}\" has no commit for a worktree to branch off from. Make its first commit first.", basename(main)));
+		}
+
+		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES, basename(main));
+		const created = await this.createDecided(main, branch, name, parent, {}, options.startPoint);
+		if (created.kind === 'failed') {
+			throw new Error(created.unreachable ?? this.createFailureMessage(main, branch, created.worktree, created.result));
+		}
+
+		await this.afterCreate(main, created.worktree, trustEnabled, options.show === true);
+		return created.worktree;
+	}
+
+	/**
+	 * WT-5.4 once the branch is decided: the folder, its customization, and git's worktree. Failures
+	 * are returned, for New Worktree to say on screen and `makeWorktree` to throw.
+	 */
+	private async createDecided(main: URI, branch: string, name: string, parent: URI, customization: IFolderCustomization, startPoint: string | undefined): Promise<CreateOutcome> {
 		const worktree = await freeWorktreeUri(parent, name, candidate => this.fileService.exists(candidate));
 
 		// Before git writes its record, which the bar reads a row from while the files are still being
 		// checked out. Written even when nothing was chosen: customizations are kept by path, and one left
 		// by a worktree deleted outside the bar would otherwise be worn by this one. Taken back if none is made.
-		this.customizationService.set(worktree, answer.customization);
+		this.customizationService.set(worktree, customization);
 
-		// WT-5.4: not cancellable - a half-made worktree is worse than waiting.
+		// WT-5.4: not cancellable - a half-made worktree is worse than waiting. The start point only when
+		// there is one: the git extension's command takes HEAD without it.
 		let result: CreateWorktreeAtResult | undefined;
 		try {
 			result = await this.progressService.withProgress(
-				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree {0}...", answer.customization.name || branch) },
-				() => this.commandService.executeCommand<CreateWorktreeAtResult>('_git.createWorktreeAt', main, worktree, branch));
+				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree {0}...", customization.name || branch) },
+				() => this.commandService.executeCommand<CreateWorktreeAtResult>('_git.createWorktreeAt', main, worktree, branch, ...(startPoint ? [startPoint] : [])));
 		} catch (err) {
 			this.customizationService.set(worktree, {});
-			this.notificationService.error(gitUnreachable('_git.createWorktreeAt', err));
-			return undefined;
+			return { kind: 'failed', worktree, result: undefined, unreachable: gitUnreachable('_git.createWorktreeAt', err) };
 		}
 
 		if (!result || result.kind === 'error') {
 			this.customizationService.set(worktree, {});
-			this.reportCreateFailure(main, repository, branch, worktree, result);
-			return undefined;
+			this.logService.warn(`[worktrees] creating ${worktree.toString(true)} failed: ${result?.message ?? 'no answer'}`);
+			return { kind: 'failed', worktree, result };
 		}
 
 		// WT-6.4: a file that did not copy is said once, and stops nothing.
@@ -505,6 +635,11 @@ export class WorktreeService implements IWorktreeService {
 			this.notificationService.warn(localize('worktrees.hookFailed', "The worktree was created, but a Git hook failed: {0}", result.hookFailure));
 		}
 
+		return { kind: 'created', worktree, result };
+	}
+
+	/** WT-5.6 after git made it: trusted, listed, its repository open - and the window on it, if `show`. */
+	private async afterCreate(main: URI, worktree: URI, trustEnabled: boolean, show: boolean): Promise<void> {
 		if (trustEnabled) {
 			await this.workspaceTrustManagementService.setUrisTrust([worktree], true);
 		}
@@ -513,8 +648,12 @@ export class WorktreeService implements IWorktreeService {
 		// from the start, not at the end of the list for a moment (WT-3.6), and the repository can open.
 		await this.workspaceBarService.whenListed(worktree);
 
-		// So the row the window is about to go to can be seen.
+		// So the row the window is about to go to - or that just appeared - can be seen.
 		this.workspaceBarService.setExpanded(main, true);
+
+		if (!show) {
+			return;
+		}
 
 		// WT-5.7: setup waits for the switch to restore the worktree's editors, which closes whatever
 		// else is in the editor area. Subscribed before the switch; cancelled however it ends.
@@ -525,38 +664,38 @@ export class WorktreeService implements IWorktreeService {
 		} finally {
 			restored.cancel();
 		}
-
-		return worktree;
 	}
 
-	/** WT-5.3 and WT-5.5: git's errors are the checks, and each is said on screen in words. */
-	private reportCreateFailure(main: URI, repository: IWorkspaceBarRepository | undefined, branch: string, worktree: URI, result: CreateWorktreeAtResult | undefined): void {
+	/** WT-5.3 and WT-5.5: git's errors are the checks, each said in the product's words. */
+	private createFailureMessage(main: URI, branch: string, worktree: URI, result: CreateWorktreeAtResult | undefined): string {
 		const error = result?.kind === 'error' ? result : undefined;
-		this.logService.warn(`[worktrees] creating ${worktree.toString(true)} failed: ${error?.message ?? 'no answer'}`);
-
 		if (error?.code === 'BranchAlreadyExists') {
-			// Always `-b`, so this is any branch that exists. When a checkout has it, offer to go there.
-			const holder = repository?.branch === branch
-				? repository.main
-				: repository?.worktrees.find(candidate => candidate.branch === branch)?.uri;
-			if (holder) {
-				this.notificationService.prompt(Severity.Info,
-					localize('worktrees.branchCheckedOut', "Branch {0} is already checked out in {1}.", branch, this.labelService.getUriLabel(holder)),
-					[{ label: localize('worktrees.goThere', "Go There"), run: () => this.workspaceBarService.show(holder) }]);
-				return;
-			}
-
-			this.notificationService.error(localize('worktrees.branchExists', "A branch named {0} already exists. Choose another name.", branch));
-			return;
+			return localize('worktrees.branchExists', "A branch named {0} already exists. Choose another name.", branch);
 		}
 
 		if (error?.code === 'WorktreeAlreadyExists') {
-			this.notificationService.error(localize('worktrees.pathExists', "Something is already at {0}.", this.labelService.getUriLabel(worktree)));
+			return localize('worktrees.pathExists', "Something is already at {0}.", this.labelService.getUriLabel(worktree));
+		}
+
+		return explainFailure(error, main, branch) ?? localize('worktrees.createFailed', "The worktree could not be made: {0}", gitMessage(error));
+	}
+
+	/** Says on screen why New Worktree could not make its worktree; a branch a checkout has is offered to go to. */
+	private reportCreateFailure(main: URI, repository: IWorkspaceBarRepository | undefined, branch: string, worktree: URI, result: CreateWorktreeAtResult | undefined): void {
+		// Always `-b`, so this is any branch that exists. When a checkout has it, offer to go there.
+		const holder = result?.kind !== 'error' || result.code !== 'BranchAlreadyExists'
+			? undefined
+			: repository?.branch === branch
+				? repository.main
+				: repository?.worktrees.find(candidate => candidate.branch === branch)?.uri;
+		if (holder) {
+			this.notificationService.prompt(Severity.Info,
+				localize('worktrees.branchCheckedOut', "Branch {0} is already checked out in {1}.", branch, this.labelService.getUriLabel(holder)),
+				[{ label: localize('worktrees.goThere', "Go There"), run: () => this.workspaceBarService.show(holder) }]);
 			return;
 		}
 
-		this.notificationService.error(explainFailure(error, main, branch)
-			?? localize('worktrees.createFailed', "The worktree could not be made: {0}", gitMessage(error)));
+		this.notificationService.error(this.createFailureMessage(main, branch, worktree, result));
 	}
 
 	/**

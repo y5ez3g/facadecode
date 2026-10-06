@@ -15,36 +15,49 @@ import { TestInstantiationService } from '../../../../../platform/instantiation/
 import { IKeybindingService } from '../../../../../platform/keybinding/common/keybinding.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
-import { IShellLaunchConfig, TerminalExitReason, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
+import { IShellLaunchConfig, TerminalExitReason, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IConfigurationResolverService } from '../../../../services/configurationResolver/common/configurationResolver.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
 import { IWorkbenchLayoutService } from '../../../../services/layout/browser/layoutService.js';
 import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
-import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
+import { ICreateTerminalOptions, ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { AGENT_NAMES_STORAGE_KEY, TerminalLauncherService } from '../../browser/terminalLauncherService.js';
-import { AGENT_TERMINAL_ICON } from '../../common/terminalLaunchers.js';
+import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE } from '../../common/terminalLaunchers.js';
 
-/** An agent's terminal that a reload brought back, reconnecting to its process - and why it ended, once it has. */
-class TestAgent {
+/**
+ * A terminal as far as the agents' names go: what it was started with - or, one a reload brought back,
+ * the process it reconnects to - and why it ended, once it has.
+ */
+class TestTerminal {
 
-	readonly icon = AGENT_TERMINAL_ICON;
-	readonly shellLaunchConfig: IShellLaunchConfig;
 	exitReason: TerminalExitReason | undefined;
 
-	constructor(readonly shellIntegrationNonce: string) {
-		this.shellLaunchConfig = {
-			attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce }
-		};
+	constructor(readonly shellIntegrationNonce: string, readonly shellLaunchConfig: IShellLaunchConfig) { }
+
+	get icon(): TerminalIcon | undefined {
+		return this.shellLaunchConfig.icon ?? this.shellLaunchConfig.attachPersistentProcess?.icon;
 	}
+
+	async focusWhenReady(): Promise<void> { }
 
 	asInstance(): ITerminalInstance {
 		return upcastPartial<ITerminalInstance>(this);
 	}
 }
 
-/** The terminal service as far as the agents' names go: terminals made and ended, and every one of them back. */
+/** An agent's terminal that a reload brought back, reconnecting to its process. */
+function reconnecting(nonce: string): TestTerminal {
+	return new TestTerminal(nonce, {
+		attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: nonce }
+	});
+}
+
+/**
+ * The terminal service as far as the agents' names go: terminals made - each announced as it is made,
+ * as upstream's are - and ended, and every one of them back.
+ */
 class TestTerminalService extends mock<ITerminalService>() {
 
 	readonly made = new Emitter<ITerminalInstance>();
@@ -57,14 +70,25 @@ class TestTerminalService extends mock<ITerminalService>() {
 	override readonly onAnyInstanceIconChange = Event.None;
 	override readonly whenConnected = this.connected.p;
 	override instances: ITerminalInstance[] = [];
+
+	/** The terminals `createTerminal` made, in order: each one's nonce is the name it was given. */
+	readonly created: TestTerminal[] = [];
+
+	override async createTerminal(options?: ICreateTerminalOptions): Promise<ITerminalInstance> {
+		const config = (options?.config ?? {}) as IShellLaunchConfig;
+		const terminal = new TestTerminal(config.name ?? '', config);
+		this.created.push(terminal);
+		this.made.fire(terminal.asInstance());
+		return terminal.asInstance();
+	}
 }
 
 suite('Terminal launchers - what a window keeps of its agents', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('an agent keeps its name through the window closing, and loses it once it ends or does not come back', async () => {
-		// Kept by the window before: three agents, one of which does not come back, as after a restart of the app
+	test('an agent\'s terminal keeps the name it was started with through the window closing, whoever started it, and loses it once it ends or does not come back', async () => {
+		// Kept by the window before, as the agent button kept them: three agents, one of which does not come back, as after a restart of the app
 		const storage = disposables.add(new TestStorageService());
 		storage.store(AGENT_NAMES_STORAGE_KEY, JSON.stringify({ first: 'Claude Code', second: 'Codex', gone: 'Grok Build' }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
 
@@ -81,23 +105,37 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		instantiationService.stub(IKeybindingService, {});
 		instantiationService.stub(IHostService, {});
 		instantiationService.stub(IContextViewService, {});
-		disposables.add(instantiationService.createInstance(TerminalLauncherService));
+		const service = disposables.add(instantiationService.createInstance(TerminalLauncherService));
 
-		const first = new TestAgent('first');
-		const second = new TestAgent('second');
+		const first = reconnecting('first');
+		const second = reconnecting('second');
 		terminals.made.fire(first.asInstance());
 		terminals.made.fire(second.asInstance());
 
-		// The second one ends, and the terminal service has every other terminal back
+		// Started now: one from the agent button, two of Facade's agents - named, with the robot - and a shell
+		await service.open({ id: 'gemini', label: 'Gemini CLI', command: '' });
+		const [button] = terminals.created;
+		const facade = new TestTerminal('facade', { name: '@main #1 · Claude Code', icon: AGENT_TERMINAL_ICON });
+		const closed = new TestTerminal('closed', { name: '@clamp #2 · Codex', icon: AGENT_TERMINAL_ICON });
+		const shell = new TestTerminal('shell', { name: 'pwsh' });
+		for (const terminal of [facade, closed, shell]) {
+			terminals.made.fire(terminal.asInstance());
+		}
+
+		// The second one ends, the person closes one of Facade's, and the terminal service has every other terminal back
 		second.exitReason = TerminalExitReason.User;
 		terminals.ended.fire(second.asInstance());
-		terminals.instances = [first.asInstance()];
+		closed.exitReason = TerminalExitReason.User;
+		terminals.ended.fire(closed.asInstance());
+		terminals.instances = [first, button, facade, shell].map(terminal => terminal.asInstance());
 		terminals.connected.complete();
 		await timeout(0);
 
-		// The window closes, and takes the first one with it
-		first.exitReason = TerminalExitReason.Shutdown;
-		terminals.ended.fire(first.asInstance());
+		// The window closes, and takes the agents with it
+		for (const terminal of [first, button, facade]) {
+			terminal.exitReason = TerminalExitReason.Shutdown;
+			terminals.ended.fire(terminal.asInstance());
+		}
 		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
 
 		assert.deepStrictEqual({
@@ -105,7 +143,11 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 			kept: JSON.parse(storage.get(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE) ?? '{}')
 		}, {
 			named: ['Claude Code', 'Codex'],
-			kept: { first: 'Claude Code' }
+			kept: {
+				first: { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE },
+				'Gemini CLI': { name: 'Gemini CLI', titleTemplate: AGENT_TITLE_TEMPLATE },
+				facade: { name: '@main #1 · Claude Code' }
+			}
 		});
 	});
 });

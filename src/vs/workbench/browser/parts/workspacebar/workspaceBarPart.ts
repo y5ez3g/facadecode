@@ -120,6 +120,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private readonly _onDidRestoreEditors = this._register(new Relay<void>());
 	readonly onDidRestoreEditors = this._onDidRestoreEditors.event;
 
+	readonly onDidChangeRepositories: Event<void>;
+
 	constructor(
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
@@ -163,6 +165,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			onDidChange: Event.any(model.onDidChange, Event.signal(Event.filter(this.configurationService.onDidChangeConfiguration, e => e.affectsConfiguration(SHOW_WORKTREES)))),
 			key: model.key
 		}));
+		// Switching worktrees off is a read too: one of no folders
+		this.onDidChangeRepositories = this.git.onDidChange;
 
 		// WT-1.12: a worktree in folders[] that nobody has named is called by its branch - in the window's
 		// title as in the bar, both through `nameFor`. Named at once from the groups kept from the last

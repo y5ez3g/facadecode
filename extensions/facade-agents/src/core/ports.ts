@@ -1,0 +1,145 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { AgentCli, CliConfig, Environment, InstalledCli, McpLaunch, Skill } from '../clis/cli';
+import { Caller } from '../record/events';
+
+/** What is let go of once the window closes. */
+export interface Disposable {
+	dispose(): void;
+}
+
+/** An agent's CLI, started in a terminal. */
+export interface TerminalLaunch {
+	/** The terminal's name, which finds it again: unique per agent. */
+	readonly name: string;
+	/** The command of its CLI, as `PATH` knows it: its terminal is drawn with that CLI's logo. */
+	readonly command: string;
+	readonly executable: string;
+	readonly args: readonly string[];
+	readonly env: { readonly [name: string]: string };
+	/** The folder it runs in, whose row in the workspace bar holds it. */
+	readonly cwd: string;
+	/**
+	 * Whether it is put in front once it is open: an agent the person started, who is there to watch
+	 * it. An agent's child opens without disturbing the window.
+	 */
+	readonly reveal: boolean;
+}
+
+/** How an agent's terminal ended. */
+export interface TerminalEnd {
+	/** The code its process exited with, where the window knows it. */
+	readonly exitCode?: number;
+	/** Whether the person closed the terminal. */
+	readonly byThePerson: boolean;
+}
+
+/** The agents' terminals, each known by the name its launch gave it. */
+export interface Terminals {
+	/** Starts the CLI in a terminal held under its folder's row; rejects when it did not start. */
+	launch(launch: TerminalLaunch): Promise<void>;
+	/** Whether the terminal of that name still runs, found again after a reload. */
+	isAlive(name: string): Promise<boolean>;
+	/** Called once for each agent's terminal that ends: closed, or its process gone. */
+	onDidEnd(listener: (name: string, end: TerminalEnd) => void): Disposable;
+	/** Closes the terminal, which ends the CLI in it. */
+	stop(name: string): Promise<void>;
+	/** Types `text` into the terminal as it is, keys and all; false when there is no such terminal. */
+	type(name: string, text: string): Promise<boolean>;
+}
+
+/** The repository a folder is in, as git reads it. */
+export interface Repository {
+	/** Its main checkout's folder. */
+	readonly main: string;
+	/** The worktree the folder is: `main` for the main checkout, else its branch. */
+	readonly worktree: string;
+	/** That worktree's HEAD, a full commit id; undefined on a branch with no commit yet, or one git cannot read. */
+	readonly head: string | undefined;
+}
+
+/** A worktree of a repository, as git lists it. */
+export interface ListedWorktree {
+	/** `main`, or its branch. */
+	readonly name: string;
+	readonly folder: string;
+}
+
+/** The repositories of the workspace's folders. */
+export interface Git {
+	/** The repository `folder` is in; undefined for a folder with none. */
+	repositoryOf(folder: string): Promise<Repository | undefined>;
+	/** The worktrees of the repository whose main checkout is `main`, main included. */
+	worktreesOf(main: string): Promise<readonly ListedWorktree[]>;
+	/**
+	 * A worktree on the new branch `branch`, starting at `startPoint`, made through the window's New
+	 * Worktree without its dialog; answers with its folder. Rejects with why it could not be made.
+	 */
+	makeWorktree(main: string, branch: string, startPoint: string): Promise<string>;
+	/**
+	 * The `info/exclude` of the repository `folder` is in, which git reads as a `.gitignore` of its
+	 * own for every worktree, and the root of `folder`'s worktree, where its lines start from;
+	 * undefined for a folder with no repository.
+	 */
+	excludeOf(folder: string): Promise<{ readonly file: string; readonly root: string } | undefined>;
+	/** Which of `files`, paths relative to `folder`, git tracks there. */
+	tracks(folder: string, files: readonly string[]): Promise<ReadonlySet<string>>;
+	/**
+	 * Which of `files`, paths relative to `folder`, some worktree of its repository has - at the same
+	 * place from that worktree's root - as a file git neither tracks nor ignores: a file of the person's,
+	 * which a line in the repository's `info/exclude` would leave for git to write over.
+	 */
+	untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>>;
+}
+
+/** What Facade tells the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
+export interface Person {
+	/** A notice of Facade's for the person. Going to it shows `terminal`, the agent's it is about. */
+	tell(text: string, terminal: string | undefined): void;
+}
+
+/**
+ * What Facade needs the window to do, and nothing of how: the host implements these with VS Code's
+ * API and the workbench's `_facade.*` commands, and tests with fakes. Each reports what it found; what
+ * that means - a terminal not there, a launch that failed - is the core's to say.
+ */
+export interface Ports {
+	readonly terminals: Terminals;
+	readonly git: Git;
+	readonly person: Person;
+}
+
+/** The CLIs Facade knows, those this machine has, and how the person has Facade start them: each read again at each use. */
+export interface CliCatalog {
+	/** Every CLI Facade knows, installed or not: what an agent's CLI is called. */
+	readonly known: readonly AgentCli[];
+	/** The CLIs this machine has. */
+	installed(): readonly InstalledCli[];
+	/** How the person has Facade start a CLI Facade knows. */
+	configOf(cli: AgentCli): CliConfig;
+	/** The environment the agents' terminals start with, before a launch's own: with it, where each CLI keeps its files. */
+	environment(): Environment;
+}
+
+/** How long the core waits, as the person sets it: read again at each use. */
+export interface Timing {
+	/** How long a new agent has to come up - its MCP server's hello - before it is ended as failed: the person's timeout. */
+	readonly startTimeoutMs: number;
+}
+
+/** What every agent is given at its launch, and how it reaches the window. */
+export interface AgentSetup {
+	/** How an agent's MCP server is started, given its token file: the shim, on this window's pipe. */
+	mcpServer(tokenFile: string): McpLaunch;
+	/** How the MCP server of a CLI with `sharedServer` is started: the same for every agent, which it finds from its environment. */
+	sharedMcpServer(): McpLaunch;
+	/** What an agent of a CLI with `sharedServer` has in its environment, given its token, for its MCP server to find the window and the agent by. */
+	agentEnv(token: string): { readonly [name: string]: string };
+	/** The skills every agent is handed, made for the CLIs this machine has then. */
+	skills(): readonly Skill[];
+	/** What a new agent's first message says before its task: who it is, and who started it. */
+	opening(agent: { readonly id: number; readonly name: string; readonly cliName: string }, parent: Caller): string;
+}

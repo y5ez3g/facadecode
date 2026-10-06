@@ -523,6 +523,19 @@ suite('Workspace bar - the view', () => {
 		});
 	});
 
+	test('an agent working in a worktree that has not joined the workspace - one made for it - shows on that worktree\'s row, as on any other', () => {
+		const bar = view([lab], [repository(undefined)], lab.uri, undefined, undefined, undefined, new Map([['/wt/w2', [ThemeIcon.fromId('agent-codex')]]]));
+		const logos = (index: number) => [...bar.find('.workspacebar-agent-logos', index).children].map(logo => logo.className.replace('workspacebar-agent codicon codicon-', ''));
+
+		const open = { rows: bar.rows(), worktree: logos(1) };
+		click(bar.find('.workspacebar-twistie'));
+
+		assert.deepStrictEqual({ open, closed: { rows: bar.rows(), repository: logos(0) } }, {
+			open: { rows: ['lab', 'w2, worktree, 1 agent'], worktree: ['agent-codex'] },
+			closed: { rows: ['lab, 1 worktree, 1 agent'], repository: ['agent-codex'] },
+		});
+	});
+
 	test('an agent started in a folder after the bar is drawn shows on its row', () => {
 		const bar = view([lab], [repository(undefined)], lab.uri);
 		const logos = () => [...bar.find('.workspacebar-agent-logos').children].map(logo => logo.className);

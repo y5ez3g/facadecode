@@ -5,17 +5,19 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
-import { Emitter } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
+import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { TerminalIcon } from '../../../../../platform/terminal/common/terminal.js';
-import { IWorkspaceContextService, IWorkspaceFolder, IWorkspaceFoldersChangeEvent } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFoldersChangeEvent } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
-import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
+import { FOLLOW_FOLDER, IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance } from '../../../terminal/browser/terminal.js';
 import { ITerminalLauncherService } from '../../browser/terminalLauncherService.js';
 import { agentsByFolder, TerminalLauncherWorkspaceBar } from '../../browser/terminalLauncherWorkspaceBar.js';
@@ -41,11 +43,12 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 		const told: string[][] = [];
 		store.add(new TerminalLauncherWorkspaceBar(
 			upcastPartial<ITerminalLauncherService>({ onDidChangeAgentTerminals: agentsChanged.event, get agentTerminals() { return agents; } }),
-			upcastPartial<IFolderTerminalsService>({ folderOf: agent => { const path = folders.get(agent); return path ? upcastPartial<IWorkspaceFolder>({ uri: URI.file(path) }) : undefined; } }),
+			upcastPartial<IFolderTerminalsService>({ folderOf: agent => { const path = folders.get(agent); return path ? URI.file(path) : undefined; } }),
 			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder, icons }) => `${folder.path}: ${icons.map(icon => icon.id).join(' ')}`)); } }),
 			upcastPartial<IWorkspaceBarService>({ onDidRestoreEditors: editorsRestored.event }),
 			upcastPartial<IActiveFolderService>({ onDidChangeActiveFolder: activeFolderChanged.event }),
-			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: foldersChanged.event })
+			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: foldersChanged.event }),
+			new TestConfigurationService()
 		));
 
 		// An agent starts in /lab
@@ -75,6 +78,29 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 			['/lab: agent-claude', '/wt/w2: agent-codex'],
 			['/wt/w2: agent-codex'],
 		]);
+	});
+
+	test('the bar is told again when terminals start or stop following folders, which moves an agent of the editor area between its folder and the window', async () => {
+		const configuration = new TestConfigurationService();
+		const agent = new TestAgent(1, ThemeIcon.fromId('agent-claude'));
+		let folder: URI | undefined = URI.file('/lab');
+		const told: string[][] = [];
+		store.add(new TerminalLauncherWorkspaceBar(
+			upcastPartial<ITerminalLauncherService>({ onDidChangeAgentTerminals: Event.None, agentTerminals: [agent] }),
+			upcastPartial<IFolderTerminalsService>({ folderOf: () => folder }),
+			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder }) => folder.path)); } }),
+			upcastPartial<IWorkspaceBarService>({ onDidRestoreEditors: Event.None }),
+			upcastPartial<IActiveFolderService>({ onDidChangeActiveFolder: Event.None }),
+			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: Event.None }),
+			configuration
+		));
+
+		// Not following folders: the editor area's agent is the window's, on no row
+		folder = undefined;
+		configuration.onDidChangeConfigurationEmitter.fire(upcastPartial<IConfigurationChangeEvent>({ affectsConfiguration: (key: string) => key === FOLLOW_FOLDER }));
+		await timeout(1);
+
+		assert.deepStrictEqual(told, [['/lab'], []]);
 	});
 
 	test('each folder\'s agents in the order they were started, a custom icon as the robot, and one in the panel on no row', () => {

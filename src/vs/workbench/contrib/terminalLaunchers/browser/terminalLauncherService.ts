@@ -23,7 +23,7 @@ import { IActiveFolderService } from '../../../services/activeFolder/common/acti
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
-import { agentIcon, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, IAgentName, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
 import { showAgentsDialog } from './terminalLauncherDialog.js';
 
@@ -48,7 +48,8 @@ export interface IAgentMenuButton {
 
 /**
  * What the agent menu is built on: starting an agent, editing the list, and saying afterwards which
- * terminals came from here.
+ * terminals are agents' - the ones it started, and any other drawn with an agent's icon, as Facade's
+ * agents are.
  */
 export interface ITerminalLauncherService {
 
@@ -62,12 +63,12 @@ export interface ITerminalLauncherService {
 	 */
 	readonly onDidChangeAgentTerminals: Event<void>;
 
-	/** Whether this terminal is one the agent menu started. */
+	/** Whether this terminal is an agent's: drawn with an agent's icon, as those the agent menu starts are. */
 	isAgentTerminal(resource: URI | undefined): boolean;
 
 	/**
-	 * The terminals the agent menu started that are open now, in every folder: showing, and put away
-	 * by a folder switch. Changes with `onDidChangeAgentTerminals`.
+	 * The agents' terminals open now (`isAgentTerminal`), in every folder: showing, and put away by a
+	 * folder switch. Changes with `onDidChangeAgentTerminals`.
 	 */
 	readonly agentTerminals: readonly ITerminalInstance[];
 
@@ -101,12 +102,13 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	private readonly _buttons = new Set<IAgentMenuButton>();
 
 	/**
-	 * Which agent each agent's terminal is, by the terminal's shell integration nonce.
+	 * The name and title template each agent's terminal was started with, by the terminal's shell
+	 * integration nonce, to give back after a reload (`restoreAgentLaunch`).
 	 *
-	 * A terminal forgets the name it was started with when a reload reconnects it, and the nonce is
-	 * what it carries across: made once for each terminal, it goes with the process.
+	 * A terminal forgets both when a reload reconnects it, and the nonce is what it carries across:
+	 * made once for each terminal, it goes with the process.
 	 */
-	private readonly _names: Map<string, string>;
+	private readonly _names: Map<string, IAgentName>;
 
 	constructor(
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
@@ -136,9 +138,19 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 
 		// ⚠️ Given back as each terminal is made, which is before it works out its title - on the
 		// terminal's own, from a reload's `attachPersistentProcess`. Afterwards is too late: its tab
-		// would read the process's name until the agent next set a title.
+		// would read the process's name until the agent next set a title. And kept as each agent's
+		// terminal is started, whoever starts it - here, or anything that gives a terminal an agent's icon.
 		this._names = readAgentNames(this._storageService.get(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE));
-		this._register(this._terminalService.onDidCreateInstance(instance => restoreAgentLaunch(instance.shellLaunchConfig, this._names)));
+		this._register(this._terminalService.onDidCreateInstance(instance => {
+			if (restoreAgentLaunch(instance.shellLaunchConfig, this._names)) {
+				return;
+			}
+
+			const launch = agentLaunchOf(instance.shellLaunchConfig);
+			if (launch) {
+				this._names.set(instance.shellIntegrationNonce, launch);
+			}
+		}));
 
 		// An agent ended is forgotten; one the window closing takes away comes back with a reload
 		this._register(this._terminalService.onDidDisposeInstance(instance => {
@@ -231,7 +243,6 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 				icon: agentIcon(launcher.command)
 			}
 		});
-		this._names.set(instance.shellIntegrationNonce, launcher.label);
 
 		await instance.focusWhenReady();
 

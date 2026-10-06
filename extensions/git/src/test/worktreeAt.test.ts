@@ -120,6 +120,29 @@ suite('worktreeAt', () => {
 		});
 	});
 
+	test('creates the worktree at a given commit, and refuses a start point that is not a full commit id', async () => {
+		const first = run(main, 'rev-parse', 'HEAD');
+		write(path.join(main, 'later.txt'), 'later\n');
+		run(main, 'add', 'later.txt');
+		run(main, '-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '-m', 'later');
+		const worktree = path.join(dir, 'worktrees', 'main', 'at-first');
+
+		const result = await createWorktreeAt(git, main, worktree, 'at/first', first);
+		const refused = await createWorktreeAt(git, main, path.join(dir, 'worktrees', 'main', 'refused'), 'refused', '--orphan');
+
+		assert.deepStrictEqual({
+			result,
+			head: run(worktree, 'rev-parse', 'HEAD'),
+			later: existsSync(path.join(worktree, 'later.txt')),
+			refused: refused.kind === 'error' && refused.code
+		}, {
+			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
+			head: first,
+			later: false,
+			refused: 'InvalidArgument'
+		});
+	});
+
 	test('.worktreeinclude never copies through a link: not one it names, nor one inside a folder it names', async () => {
 		// Junctions on Windows, which need no privilege to make; links elsewhere.
 		const outside = path.join(dir, 'outside');

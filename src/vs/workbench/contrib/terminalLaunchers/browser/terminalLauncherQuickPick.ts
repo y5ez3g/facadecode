@@ -19,7 +19,7 @@ import { IQuickInputButton, IQuickInputService, IQuickPick, IQuickPickItem, Item
 import { TerminalExitReason, TerminalLocation, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
-import { FolderColor, folderGlyphFor, folderRowNameFor, glyphInFolderColor, IWorkspaceBarCustomizationService, worktreeIcon } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { FolderColor, folderGlyphFor, folderRowNameFor, glyphInFolderColor, IWorkspaceBarCustomizationService, worktreeIcon, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -67,25 +67,26 @@ export function agentPicks(agents: readonly ITerminalInstance[], placeOf: (agent
 }
 
 /**
- * Where a folder is, drawn as the workspace bar draws it: the glyph, colour and name of its row - the
- * name somebody gave it in Customize, else its default one - and a worktree after its repository, the
- * row the bar draws it under.
+ * Where the folder at `uri` is, drawn as the workspace bar draws it: the glyph, colour and name of its
+ * row - the name somebody gave it in Customize, else its default one - and a worktree after its
+ * repository, the row the bar draws it under, whether or not it has joined the workspace.
+ * `workspaceFolder` is the workspace's folder there, when there is one.
  */
-export function placeOfFolder(folder: IWorkspaceFolder, repository: IWorkspaceBarRepository | undefined, customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'>, extUri: IExtUri): IPlaceStep[] {
-	const folderRow = (uri: URI, name: string): IPlaceStep => {
-		const customization = customizationService.get(uri);
+export function placeOfFolder(uri: URI, workspaceFolder: IWorkspaceFolder | undefined, repository: IWorkspaceBarRepository | undefined, customizationService: Pick<IWorkspaceBarCustomizationService, 'nameFor' | 'get'>, extUri: IExtUri): IPlaceStep[] {
+	const folderRow = (at: URI, name: string): IPlaceStep => {
+		const customization = customizationService.get(at);
 		return { glyph: folderGlyphFor(customization), color: customization?.color, name };
 	};
 
-	const worktree = findWorktree(repository, folder.uri, extUri);
+	const worktree = findWorktree(repository, uri, extUri);
 	if (!repository || !worktree) {
-		return [folderRow(folder.uri, customizationService.nameFor(folder))];
+		return [folderRow(uri, folderRowNameFor(customizationService, uri, workspaceFolder))];
 	}
 
 	// A worktree's row is its glyph in the colour the worktree was given, as in the bar (`workspaceBarView.ts`)
 	return [
 		folderRow(repository.main, folderRowNameFor(customizationService, repository.main, repository.folder)),
-		{ glyph: worktreeIcon, color: customizationService.get(worktree.uri)?.color, name: customizationService.nameFor(folder) }
+		{ glyph: worktreeIcon, color: customizationService.get(worktree.uri)?.color, name: worktreeNameFor(customizationService, worktree) }
 	];
 }
 
@@ -145,7 +146,7 @@ export class TerminalLauncherQuickPick extends Disposable {
 		@IWorkspaceBarCustomizationService private readonly _customizationService: IWorkspaceBarCustomizationService,
 		@IUriIdentityService private readonly _uriIdentityService: IUriIdentityService,
 		@IEditorService private readonly _editorService: IEditorService,
-		@IWorkspaceContextService contextService: IWorkspaceContextService,
+		@IWorkspaceContextService private readonly _contextService: IWorkspaceContextService,
 		@IActiveFolderService activeFolderService: IActiveFolderService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IDialogService private readonly _dialogService: IDialogService,
@@ -184,7 +185,7 @@ export class TerminalLauncherQuickPick extends Disposable {
 		this._register(this._launcherService.onDidChangeAgentTerminals(update));
 		this._register(this._terminalService.onAnyInstanceTitleChange(update));
 		this._register(activeFolderService.onDidChangeActiveFolder(update));
-		this._register(contextService.onDidChangeWorkspaceFolders(update));
+		this._register(this._contextService.onDidChangeWorkspaceFolders(update));
 		this._register(this._customizationService.onDidChange(update));
 
 		this._register(this._quickPick.onDidHide(() => this.dispose()));
@@ -241,9 +242,11 @@ export class TerminalLauncherQuickPick extends Disposable {
 	private _placeOf(agent: ITerminalInstance, rowOf: (folder: URI | undefined) => number): IAgentPlace {
 		const folder = this._folderTerminalsService.folderOf(agent);
 		if (folder) {
+			const extUri = this._uriIdentityService.extUri;
+			const workspaceFolder = this._contextService.getWorkspace().folders.find(candidate => extUri.isEqual(candidate.uri, folder));
 			return {
-				steps: placeOfFolder(folder, this._workspaceBarService.repositoryFor(folder.uri), this._customizationService, this._uriIdentityService.extUri),
-				row: rowOf(folder.uri)
+				steps: placeOfFolder(folder, workspaceFolder, this._workspaceBarService.repositoryFor(folder), this._customizationService, extUri),
+				row: rowOf(folder)
 			};
 		}
 
