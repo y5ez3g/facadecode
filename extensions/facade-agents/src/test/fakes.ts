@@ -103,17 +103,46 @@ export class FakeGit implements Git {
 	/** While set, listing a repository's worktrees waits for it. */
 	hold: Promise<void> | undefined;
 	private readonly worktrees = new Map<string, ListedWorktree[]>();
+	/** The branches of each repository that no worktree has checked out, by its main checkout. */
+	private readonly otherBranches = new Map<string, Set<string>>();
+	/** The HEAD of each worktree, by its folder, where it is not the world's `head`. */
+	private readonly heads = new Map<string, string>();
 
-	/** `gitDir` holds each repository's `info/exclude`, by its main checkout's name; `unborn` are those with no commit yet. */
+	/**
+	 * `repositories`: by their main checkouts, on the branch `main`, the branches of their other worktrees,
+	 * each in a folder of its name. `gitDir` holds each repository's `info/exclude`, by its main checkout's
+	 * name; `unborn` are those with no commit yet.
+	 */
 	constructor(repositories: { readonly [main: string]: readonly string[] }, private readonly gitDir: string, private readonly unborn: readonly string[] = [], readonly head = 'a'.repeat(40)) {
-		for (const [main, names] of Object.entries(repositories)) {
-			this.worktrees.set(main, [{ name: 'main', folder: main }, ...names.map(name => ({ name, folder: worktreeFolder(main, name) }))]);
+		for (const [main, branches] of Object.entries(repositories)) {
+			this.worktrees.set(main, [{ name: 'main', branch: 'main', folder: main }, ...branches.map(branch => ({ name: branch, branch, folder: worktreeFolder(main, branch) }))]);
 		}
+	}
+
+	/** The worktree of `main` on `branch` is on a detached HEAD from now on: no branch, its label its folder's name. */
+	detach(main: string, branch: string): void {
+		this.worktrees.set(main, (this.worktrees.get(main) ?? []).map(each => each.branch === branch ? { name: path.basename(each.folder), folder: each.folder } : each));
+	}
+
+	/** `main` has a branch no worktree has checked out. */
+	addBranch(main: string, branch: string): void {
+		this.otherBranches.set(main, new Set([...this.otherBranches.get(main) ?? [], branch]));
+	}
+
+	/** The HEAD of the worktree at `folder` - a main checkout's too - is `head`, not the world's. */
+	setHead(folder: string, head: string): void {
+		this.heads.set(folder, head);
+	}
+
+	/** A worktree of `main` on `branch`, at `folder`, which git was forced to check out there too. */
+	addWorktree(main: string, branch: string, folder: string): void {
+		fs.mkdirSync(folder, { recursive: true });
+		this.worktrees.set(main, [...this.worktrees.get(main) ?? [], { name: branch, branch, folder }]);
 	}
 
 	async repositoryOf(folder: string): Promise<Repository | undefined> {
 		const found = this.worktreeAt(folder);
-		return found && { main: found.main, worktree: found.worktree.name, head: this.unborn.includes(found.main) ? undefined : this.head };
+		return found && { main: found.main, worktree: found.worktree.name, head: this.unborn.includes(found.main) ? undefined : this.heads.get(found.worktree.folder) ?? this.head };
 	}
 
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
@@ -121,15 +150,19 @@ export class FakeGit implements Git {
 		return this.worktrees.get(main) ?? [];
 	}
 
+	async hasBranch(main: string, branch: string): Promise<boolean> {
+		return (this.worktrees.get(main) ?? []).some(each => each.branch === branch) || !!this.otherBranches.get(main)?.has(branch);
+	}
+
 	async makeWorktree(main: string, branch: string, startPoint: string): Promise<string> {
 		const worktrees = this.worktrees.get(main) ?? [];
-		if (worktrees.some(each => each.name === branch)) {
+		if (await this.hasBranch(main, branch)) {
 			throw new Error(`A branch named ${branch} already exists. Choose another name.`);
 		}
 		this.steps.push(`make ${branch} from ${startPoint.slice(0, 7)} in ${main}`);
 		const folder = worktreeFolder(main, branch);
 		fs.mkdirSync(folder, { recursive: true });
-		worktrees.push({ name: branch, folder });
+		worktrees.push({ name: branch, branch, folder });
 		this.worktrees.set(main, worktrees);
 		return folder;
 	}
@@ -283,8 +316,10 @@ export function toldCli(): AgentCli {
 }
 
 export interface WorldOptions {
-	/** Repositories by their main checkout, with the names of their worktrees. */
+	/** Repositories by their main checkout, with the branches of their worktrees: each main checkout a folder of the workspace. */
 	readonly repositories?: { readonly [main: string]: readonly string[] };
+	/** The workspace's folders besides the repositories' main checkouts. */
+	readonly folders?: readonly string[];
 	/** The main checkouts of those repositories that have no commit yet. */
 	readonly unborn?: readonly string[];
 	/** The CLIs this machine has, by id: `arg` and `told` unless set. */
@@ -329,7 +364,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const logs: string[] = [];
 	const facade = new Facade({
 		table,
-		ports: { terminals, git, person },
+		ports: { terminals, git, workspace: { folders: () => [...Object.keys(options.repositories ?? {}), ...options.folders ?? []] }, person },
 		clis: {
 			known,
 			installed: () => known.filter(cli => (options.clis ?? ['arg', 'told']).includes(cli.id)).map(cli => ({ cli, config: configFor(cli), executable: path.join(dir, 'bin', `${cli.id}.exe`) })),

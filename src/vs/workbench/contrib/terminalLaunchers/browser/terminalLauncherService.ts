@@ -7,6 +7,7 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextViewService } from '../../../../platform/contextview/browser/contextView.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -23,7 +24,7 @@ import { IActiveFolderService } from '../../../services/activeFolder/common/acti
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
-import { agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, IAgentName, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, facadeCliOf, IAgentName, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
 import { showAgentsDialog } from './terminalLauncherDialog.js';
 
@@ -31,6 +32,12 @@ export const ITerminalLauncherService = createDecorator<ITerminalLauncherService
 
 /** Where the names of the agents a window has running are kept across a reload (`readAgentNames`). */
 export const AGENT_NAMES_STORAGE_KEY = 'facade.agent.names';
+
+/** Facade's switch, which its agents' extension contributes: whether Facade starts the agents. */
+const FACADE_ENABLED_SETTING = 'facade.orchestration.enabled';
+
+/** Facade: Start Agent, which takes the CLI to start as `{ cli }`. */
+const START_AGENT_COMMAND = 'facade.agents.startAgent';
 
 /**
  * The agent button, as much of it as anything outside the tool bar needs.
@@ -72,7 +79,10 @@ export interface ITerminalLauncherService {
 	 */
 	readonly agentTerminals: readonly ITerminalInstance[];
 
-	/** Starts an agent in a terminal tab, in the folder the window is on. */
+	/**
+	 * Starts an agent in a terminal tab, in the folder the window is on - or, while Facade is on, one of the
+	 * CLIs Facade starts with Facade: Start Agent, that CLI chosen.
+	 */
 	open(launcher: ITerminalLauncher): Promise<void>;
 
 	/** Shows the dialog that decides which agents there are, and saves what it answers. */
@@ -122,6 +132,7 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		@IContextViewService private readonly _contextViewService: IContextViewService,
 		@IStorageService private readonly _storageService: IStorageService,
 		@ILifecycleService private readonly _lifecycleService: ILifecycleService,
+		@ICommandService private readonly _commandService: ICommandService,
 		@ILogService private readonly _logService: ILogService
 	) {
 		super();
@@ -219,6 +230,14 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	}
 
 	async open(launcher: ITerminalLauncher): Promise<void> {
+		// Facade starts its CLIs itself, as agents it knows: Start Agent asks for the rest, the CLI's launch
+		// settings say how it starts, and the launcher's command line goes unused (AGENT-FRAMEWORK.md, 2.9.8)
+		const cli = facadeCliOf(launcher.command);
+		if (cli && this._configurationService.getValue<boolean>(FACADE_ENABLED_SETTING) === true) {
+			await this._commandService.executeCommand(START_AGENT_COMMAND, { cli });
+			return;
+		}
+
 		const cwd = (await resolveActiveFolderTerminalCwd(this._activeFolderService, this._configurationService, this._configurationResolverService))?.cwd;
 
 		const instance = await this._terminalService.createTerminal({

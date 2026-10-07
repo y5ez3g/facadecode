@@ -72,11 +72,36 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 		}
 	}
 	const main = path.dirname(path.normalize(commonDir));
-	if (isEqualPath(gitDir, commonDir)) {
-		return { main, worktree: 'main', head };
+	// The main checkout's worktree is its branch too; on a detached HEAD, it is its folder's name
+	return { main, worktree: await branchIn(git, folder) ?? path.basename(isEqualPath(gitDir, commonDir) ? main : folder), head };
+}
+
+/**
+ * The branch checked out in `folder`, as its HEAD names it - whether or not that branch has a commit, or
+ * one git can read; undefined on a detached HEAD. git failing otherwise rejects with why.
+ */
+async function branchIn(git: string, folder: string): Promise<string | undefined> {
+	try {
+		return await symbolicHead(git, folder, ['--no-recurse']);
+	} catch (err) {
+		// A git before 2.41 does not know --no-recurse, and names the branch only where it can read it
+		if (err instanceof GitError && err.exitCode === 129) {
+			return symbolicHead(git, folder, []);
+		}
+		throw err;
 	}
-	const branch = await runGit(git, ['-C', folder, 'branch', '--show-current']);
-	return { main, worktree: branch || path.basename(folder), head };
+}
+
+/** The branch HEAD names, `git symbolic-ref` given `options`; undefined on a detached HEAD, which git says by its exit code alone. */
+async function symbolicHead(git: string, folder: string, options: readonly string[]): Promise<string | undefined> {
+	try {
+		return await runGit(git, ['-C', folder, 'symbolic-ref', ...options, '--short', '-q', 'HEAD']) || undefined;
+	} catch (err) {
+		if (err instanceof GitError && err.exitCode === 1) {
+			return undefined;
+		}
+		throw err;
+	}
 }
 
 /**
@@ -88,7 +113,7 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 export async function worktreesIn(git: string, main: string): Promise<readonly ListedWorktree[]> {
 	const listed = await runGit(git, ['-C', main, 'worktree', 'list', '--porcelain']);
 	const worktrees: ListedWorktree[] = [];
-	listed.split(/\r?\n\r?\n/).forEach((record, index) => {
+	listed.split(/\r?\n\r?\n/).forEach(record => {
 		const lines = record.split(/\r?\n/);
 		const folder = lines.find(line => line.startsWith('worktree '))?.slice('worktree '.length);
 		// A bare repository has no checkout of its own: its worktrees are those checked out of it.
@@ -96,10 +121,23 @@ export async function worktreesIn(git: string, main: string): Promise<readonly L
 			return;
 		}
 		const branch = lines.find(line => line.startsWith('branch '))?.slice('branch '.length).replace(/^refs\/heads\//, '');
-		// git lists the main worktree first; a bare repository, itself.
-		worktrees.push({ name: index === 0 ? 'main' : branch ?? path.basename(folder), folder: path.normalize(folder) });
+		worktrees.push({ name: branch ?? path.basename(folder), ...(branch ? { branch } : {}), folder: path.normalize(folder) });
 	});
 	return worktrees;
+}
+
+/** Whether the repository whose main checkout is `main` has a branch called `branch`; git failing otherwise rejects with why. */
+export async function hasBranchIn(git: string, main: string, branch: string): Promise<boolean> {
+	try {
+		await runGit(git, ['-C', main, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+		return true;
+	} catch (err) {
+		// That there is none, git says by its exit code alone
+		if (err instanceof GitError && err.exitCode === 1) {
+			return false;
+		}
+		throw err;
+	}
 }
 
 /**

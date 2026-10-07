@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import { Git, ListedWorktree, Repository } from '../core/ports';
-import { excludeIn, repositoryIn, trackedIn, untrackedIn, worktreesIn } from './gitCli';
+import { excludeIn, hasBranchIn, repositoryIn, trackedIn, untrackedIn, worktreesIn } from './gitCli';
 
 /**
  * The core's Git port: git's own records, read with the git the git extension uses - the one the
@@ -20,6 +20,10 @@ export class HostGit implements Git {
 
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
 		return worktreesIn(await gitPath(), main);
+	}
+
+	async hasBranch(main: string, branch: string): Promise<boolean> {
+		return hasBranchIn(await gitPath(), main, branch);
 	}
 
 	async makeWorktree(main: string, branch: string, startPoint: string): Promise<string> {

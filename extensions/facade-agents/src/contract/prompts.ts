@@ -6,7 +6,7 @@
 import { Facade } from '../core/facade';
 import { Caller, describe, PERSON } from '../record/events';
 
-const TOOLS = 'Your tools: start_agent starts a child agent and answers with its number once it is up; list_agents lists you, the agent that started you and the agents you started, each with its number and state; stop_agent stops one of your children.';
+const TOOLS = 'Your tools: start_agent starts a child agent, in any folder of this window or a new worktree, and answers with its number once it has started; list_agents lists you, the agent that started you and the agents you started, each with its number and state; stop_agent stops one of your children.';
 
 /** A CLI an agent can start children with, as the skill names it. */
 export interface StartableCli {
@@ -68,14 +68,17 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'',
 			'## The tools',
 			'',
-			`- \`start_agent\` starts a child: \`cli\`, \`model\` and \`effort\` are required - on this machine ${startable} - and \`task\` is its task.`,
-			'  Facade gives the model and the effort to the CLI as they are, as its own options take them, and no',
-			'  CLI checks them as it starts: a child given a model its CLI does not have comes up all the same,',
-			'  then fails at its first step, on its screen, or works on the CLI\'s own default model.',
-			'  It works beside you, in your folder; in a worktree of your repository, by name; or with',
-			'  `worktree: "new"` and a `name` in a worktree of its own, on a new branch of that name, starting',
-			'  at your worktree\'s HEAD: commit what the child needs before you start it there. It answers once',
-			'  the child is up, with its number.',
+			`- \`start_agent\` starts a child: \`name\`, \`cli\`, \`model\` and \`effort\` are required - the CLIs on this machine are ${startable} -`,
+			'  and `task` is its task, if you give it one. Facade gives the model and the effort to the CLI as they',
+			'  are, as its own options take them, and no CLI checks them as it starts: a child given a model its CLI',
+			'  does not have starts all the same, then fails at its first step, on its screen, or works on the',
+			'  CLI\'s own default model.',
+			'  It works in your folder; in another folder of this window, by its absolute path; in a worktree of',
+			'  your repository, by the branch checked out in it; or, with `new_worktree`, in a worktree of its own,',
+			'  on a new branch named after it - starting at your commit in your repository, so commit what the',
+			'  child needs before you start it there. It answers once the child has started, with its number;',
+			'  if it has not within the timeout, that its start is not confirmed, and why: the child stays',
+			'  starting, and may start yet.',
 			'- `list_agents` lists you, the agent that started you and the agents you started: each one\'s',
 			'  name and number, who started it, its state - starting, running, stopping, or ended, how and why -',
 			'  its CLI, model and effort, and its worktree. With `all`, every agent of this window\'s list.',

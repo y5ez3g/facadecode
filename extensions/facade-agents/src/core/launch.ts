@@ -34,6 +34,13 @@ export interface Run {
 	readonly trusted: boolean;
 }
 
+/** How a launch came out: the child started, or its start is not confirmed - the timeout over - and why. */
+export interface Launched {
+	readonly agent: Agent;
+	readonly status: 'started' | 'unconfirmed';
+	readonly why?: string;
+}
+
 /** What a launch needs of the core around it. */
 export interface LaunchContext {
 	readonly table: AgentTable;
@@ -45,30 +52,33 @@ export interface LaunchContext {
 	readonly timing?: () => Timing;
 	/** The name of the terminal an agent runs in. */
 	terminalOf(agent: Agent): string;
-	/** Ends an agent that did not come up, or could not be told of its task: recorded as failed, its terminal closed. */
+	/** Ends an agent whose launch failed before it had a process: recorded as failed, its terminal closed. */
 	fail(agent: Agent, reason: string): Promise<void>;
 	log(message: string): void;
 }
 
-/** An agent on its way up. */
+/** An agent on its way up, a start waiting for it. */
 interface Startup {
-	/** Settles once the agent is up - its MCP server said hello, and it was told of its task where it is told in its terminal - or once it exited. */
-	readonly up: DeferredPromise<void>;
-	/** Ends it as failed once its time to come up is over; cleared by its MCP server's hello. */
+	/**
+	 * Settles once the agent has started - its MCP server said hello, and it was told of its task where it is
+	 * told in its terminal - or, with why, once its start is not confirmed; rejects once it ended.
+	 */
+	readonly up: DeferredPromise<{ readonly why?: string }>;
+	/** Answers the start as not confirmed once its time is over; cleared by its MCP server's hello. */
 	timer: ReturnType<typeof setTimeout> | undefined;
-	/** The caller whose start waits for it; none for one found starting after a reload. */
-	readonly waiter?: Caller;
+	/** The caller whose start waits for it. */
+	readonly waiter: Caller;
 }
 
 /**
- * Launches children: each recorded, its CLI started in its terminal, and waited for until it is up -
- * its MCP server said hello and, for a CLI told of its task in its terminal, the line telling it was
- * typed. After a reload, an agent found starting is waited for again, and one not yet told of its task
- * is told.
+ * Launches children: each recorded, its CLI started in its terminal, and waited for until it has started -
+ * its MCP server said hello and, for a CLI told of its task in its terminal, the line telling it was typed -
+ * for the time the person gives it; a start not confirmed by then answers so, the child left starting. After
+ * a reload, an agent found starting is let start, and one not yet told of its task is told.
  */
 export class Launcher implements Disposable {
 
-	/** The agents on their way up, by number. */
+	/** The agents on their way up whose starts wait for them, by number. */
 	private readonly startups = new Map<number, Startup>();
 	/** The agents whose task is being typed into their terminals, by number: once each. */
 	private readonly typing = new Set<number>();
@@ -114,10 +124,11 @@ export class Launcher implements Disposable {
 	}
 
 	/**
-	 * Records `run` as a new child of the caller, starts its CLI in its terminal, and waits until it is up.
-	 * Should anything fail on the way, the child is ended as failed, and the call fails with why.
+	 * Records `run` as a new child of the caller, starts its CLI in its terminal, and waits until it has
+	 * started, or its time is over. Should its launch fail on the way, or its process end before it started,
+	 * the child is ended as failed, and the call fails with why.
 	 */
-	async launch(caller: Caller, installed: InstalledCli, run: Run, progress: ((message: string) => void) | undefined): Promise<Agent> {
+	async launch(caller: Caller, installed: InstalledCli, run: Run, progress: ((message: string) => void) | undefined): Promise<Launched> {
 		const { table, ports, setup } = this.context;
 		const { cli } = installed;
 		// No text of an agent's or the person's goes through cmd.exe, where it could run commands: a CLI
@@ -162,13 +173,14 @@ export class Launcher implements Disposable {
 			await this.context.fail(agent, messageOf(err));
 			throw didNotStart(cli, agent, messageOf(err));
 		}
-		progress?.(`Waiting for @${agent.name} to come up.`);
+		progress?.(`Waiting for @${agent.name} to start.`);
+		let up: { readonly why?: string };
 		try {
-			await startup.up.p;
+			up = await startup.up.p;
 		} catch (err) {
 			throw err instanceof FacadeError ? err : didNotStart(cli, agent, messageOf(err));
 		}
-		return agent;
+		return { agent: this.context.table.get(agent.id) ?? agent, status: up.why === undefined ? 'started' : 'unconfirmed', ...(up.why !== undefined ? { why: up.why } : {}) };
 	}
 
 	/** A starting agent's MCP server said hello: it is running, and is told of its task where it is told in its terminal. */
@@ -188,16 +200,11 @@ export class Launcher implements Disposable {
 
 	/**
 	 * After a reload: an agent whose MCP server said hello is brought up - told its task, where that was
-	 * not typed yet - and one whose server had not said hello is waited for again.
+	 * not typed yet. One whose server has not said hello starts once it does.
 	 */
 	resume(agent: Agent): void {
-		if (!this.isRunning(agent)) {
-			return;
-		}
-		if (agent.connected) {
+		if (this.isRunning(agent) && agent.connected) {
 			this.bringUp(agent);
-		} else if (!this.startups.has(agent.id)) {
-			this.watch(agent, undefined);
 		}
 	}
 
@@ -232,23 +239,35 @@ export class Launcher implements Disposable {
 		}
 	}
 
-	/** Waits for a starting agent to come up, for the time it has: then it is ended as failed. */
-	private watch(agent: Agent, waiter: Caller | undefined): Startup {
+	/**
+	 * Waits for a starting agent to start, for the time it has: then its start answers that it is not
+	 * confirmed, and the agent is left starting - it may be slow, or waiting for an answer on its screen.
+	 */
+	private watch(agent: Agent, waiter: Caller): Startup {
 		const ms = this.timing().startTimeoutMs;
 		const startup: Startup = {
-			up: new DeferredPromise<void>(),
+			up: new DeferredPromise<{ readonly why?: string }>(),
 			timer: setTimeout(() => {
 				startup.timer = undefined;
-				if (this.context.table.get(agent.id)?.state === 'starting') {
-					this.background(`Ending ${this.context.terminalOf(agent)}`, this.context.fail(agent, `it did not come up within ${Math.round(ms / 1000)} seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal`));
-				}
+				this.unconfirmed(agent, `it has not started within ${Math.round(ms / 1000)} seconds: its CLI has not connected to Facade, and may be slow, or waiting for an answer on its screen`);
 			}, ms),
-			...(waiter !== undefined ? { waiter } : {})
+			waiter
 		};
-		// Seen by the start that waits for it, if one does: never a rejection nobody handles.
+		// Seen by the start that waits for it: never a rejection nobody handles.
 		startup.up.p.catch(() => undefined);
 		this.startups.set(agent.id, startup);
 		return startup;
+	}
+
+	/** The start waiting for `agent` answers that it is not confirmed, saying why; the agent stays starting. */
+	private unconfirmed(agent: Agent, why: string): void {
+		const startup = this.startups.get(agent.id);
+		if (startup) {
+			this.startups.delete(agent.id);
+			clearTimeout(startup.timer);
+			this.context.log(`${this.context.terminalOf(agent)} is not confirmed to have started: ${why}.`);
+			startup.up.complete({ why });
+		}
 	}
 
 	/**
@@ -266,7 +285,8 @@ export class Launcher implements Disposable {
 
 	/**
 	 * Types the line that tells an agent of its task file into its terminal, a moment after its MCP
-	 * server's hello, and presses Enter after the pause its CLI needs. One that cannot be told is failed.
+	 * server's hello, and presses Enter after the pause its CLI needs. One that cannot be told stays
+	 * starting, and its start answers why.
 	 */
 	private async typeTask(agent: Agent, taskFile: string): Promise<void> {
 		const { table, ports } = this.context;
@@ -297,18 +317,18 @@ export class Launcher implements Disposable {
 			this.context.log(`${terminal} was told of its task, in ${taskFile}.`);
 			this.isUp(agent);
 		} catch (err) {
-			await this.context.fail(agent, `its task could not be typed into its terminal: ${messageOf(err)}`);
+			this.unconfirmed(agent, `its task could not be typed into its terminal: ${messageOf(err)}`);
 		}
 	}
 
-	/** An agent is up: the start that waits for it answers. */
+	/** An agent has started: the start that waits for it answers. */
 	private isUp(agent: Agent): void {
 		this.context.table.running(agent.id);
 		const startup = this.startups.get(agent.id);
 		if (startup) {
 			this.startups.delete(agent.id);
 			clearTimeout(startup.timer);
-			startup.up.complete();
+			startup.up.complete({});
 		}
 	}
 

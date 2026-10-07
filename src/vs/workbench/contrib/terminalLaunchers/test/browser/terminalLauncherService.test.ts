@@ -8,6 +8,7 @@ import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { IContextViewService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -34,7 +35,14 @@ class TestTerminal {
 
 	exitReason: TerminalExitReason | undefined;
 
+	/** What was typed into it, each line run. */
+	readonly typed: string[] = [];
+
 	constructor(readonly shellIntegrationNonce: string, readonly shellLaunchConfig: IShellLaunchConfig) { }
+
+	async sendText(text: string): Promise<void> {
+		this.typed.push(text);
+	}
 
 	get icon(): TerminalIcon | undefined {
 		return this.shellLaunchConfig.icon ?? this.shellLaunchConfig.attachPersistentProcess?.icon;
@@ -87,17 +95,13 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('an agent\'s terminal keeps the name it was started with through the window closing, whoever started it, and loses it once it ends or does not come back', async () => {
-		// Kept by the window before, as the agent button kept them: three agents, one of which does not come back, as after a restart of the app
-		const storage = disposables.add(new TestStorageService());
-		storage.store(AGENT_NAMES_STORAGE_KEY, JSON.stringify({ first: 'Claude Code', second: 'Codex', gone: 'Grok Build' }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
-
-		const terminals = new TestTerminalService();
+	/** The launcher service over `terminals`, its settings `configuration`, the commands it runs kept in `ran`. */
+	function launcherService(terminals: TestTerminalService, storage: TestStorageService, configuration: TestConfigurationService, ran: string[] = []): TerminalLauncherService {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ITerminalService, terminals);
 		instantiationService.stub(IStorageService, storage);
 		instantiationService.stub(ILifecycleService, { when: async () => { } });
-		instantiationService.stub(IConfigurationService, new TestConfigurationService());
+		instantiationService.stub(IConfigurationService, configuration);
 		instantiationService.stub(ILogService, new NullLogService());
 		instantiationService.stub(IActiveFolderService, {});
 		instantiationService.stub(IConfigurationResolverService, {});
@@ -105,7 +109,38 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		instantiationService.stub(IKeybindingService, {});
 		instantiationService.stub(IHostService, {});
 		instantiationService.stub(IContextViewService, {});
-		const service = disposables.add(instantiationService.createInstance(TerminalLauncherService));
+		instantiationService.stub(ICommandService, {
+			executeCommand: async (id: string, ...args: unknown[]) => {
+				ran.push(`${id} ${JSON.stringify(args)}`);
+				return undefined;
+			}
+		});
+		return disposables.add(instantiationService.createInstance(TerminalLauncherService));
+	}
+
+	test('while Facade is on, a launcher of a CLI Facade starts is Start Agent with that CLI chosen, its command line not used; any other launcher, and every one while Facade is off, opens a shell and types its command', async () => {
+		const terminals = new TestTerminalService();
+		const ran: string[] = [];
+		const on = launcherService(terminals, disposables.add(new TestStorageService()), new TestConfigurationService({ facade: { orchestration: { enabled: true } } }), ran);
+		await on.open({ id: 'codex', label: 'Codex', command: 'codex --dangerously-bypass-approvals-and-sandbox' });
+		await on.open({ id: 'claude', label: 'Claude Code', command: '"C:\\tools\\claude.cmd" --model opus' });
+		await on.open({ id: 'grok', label: 'Grok Build', command: 'grok' });
+		const off = launcherService(terminals, disposables.add(new TestStorageService()), new TestConfigurationService({ facade: { orchestration: { enabled: false } } }), ran);
+		await off.open({ id: 'codex', label: 'Codex', command: 'codex' });
+
+		assert.deepStrictEqual({ ran, shells: terminals.created.map(terminal => `${terminal.shellLaunchConfig.name}: ${terminal.typed.join(', ')}`) }, {
+			ran: ['facade.agents.startAgent [{"cli":"codex"}]', 'facade.agents.startAgent [{"cli":"claude"}]'],
+			shells: ['Grok Build: grok', 'Codex: codex']
+		});
+	});
+
+	test('an agent\'s terminal keeps the name it was started with through the window closing, whoever started it, and loses it once it ends or does not come back', async () => {
+		// Kept by the window before, as the agent button kept them: three agents, one of which does not come back, as after a restart of the app
+		const storage = disposables.add(new TestStorageService());
+		storage.store(AGENT_NAMES_STORAGE_KEY, JSON.stringify({ first: 'Claude Code', second: 'Codex', gone: 'Grok Build' }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+
+		const terminals = new TestTerminalService();
+		const service = launcherService(terminals, storage, new TestConfigurationService());
 
 		const first = reconnecting('first');
 		const second = reconnecting('second');

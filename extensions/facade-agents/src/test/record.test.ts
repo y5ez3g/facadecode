@@ -215,7 +215,7 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		assert.deepStrictEqual({ both, one: table.liveNamed('main').map(each => each.id), none: table.liveNamed('nobody'), second: second.name }, { both: [1, 2], one: [2], none: [], second: 'main' });
 	});
 
-	test('a name is lower case, without its @: a worktree\'s gives an agent\'s, its branch\'s slashes as dashes, never one Facade keeps', () => {
+	test('a name is taken as it is given, trimmed: one that is no name - with an @, in upper case, reserved - is refused, saying why; a worktree\'s gives a name, its branch\'s slashes as dashes, never one Facade keeps', () => {
 		const refused = (text: string) => {
 			try {
 				return agentName(text);
@@ -225,17 +225,19 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		};
 
 		assert.deepStrictEqual({
-			named: [agentName('@Clamp'), agentName(' slug.2_x ')],
-			refused: [refused('human'), refused('you'), refused('-x'), refused('a b'), refused('x'.repeat(41))],
+			named: [agentName('clamp'), agentName(' slug.2_x ')],
+			refused: [refused('@clamp'), refused('Clamp'), refused('human'), refused('you'), refused('-x'), refused('a b'), refused('x'.repeat(41))],
 			ofWorktrees: [nameOfWorktree('Feature/Clamp-It'), nameOfWorktree('main'), nameOfWorktree('human'), nameOfWorktree('init'), nameOfWorktree('---')]
 		}, {
 			named: ['clamp', 'slug.2_x'],
 			refused: [
+				'"@clamp" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
+				'"Clamp" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
 				'"human" is reserved: choose another name.',
 				'"you" is reserved: choose another name.',
-				'"-x" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.',
-				'"a b" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.',
-				`"${'x'.repeat(41)}" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.`
+				'"-x" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
+				'"a b" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
+				`"${'x'.repeat(41)}" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.`
 			],
 			ofWorktrees: ['feature-clamp-it', 'main', 'agent', 'agent', 'agent']
 		});

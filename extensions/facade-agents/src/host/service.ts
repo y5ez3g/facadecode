@@ -12,9 +12,9 @@ import { isJsonObject } from '../base/json';
 import { installedClis, knownClis } from '../clis/registry';
 import { facadeSkill, openingFor } from '../contract/prompts';
 import { Contract } from '../contract/tools';
-import { Facade } from '../core/facade';
+import { Facade, StartRequest } from '../core/facade';
 import { AgentTable } from '../record/agents';
-import { Caller, isLive, PERSON } from '../record/events';
+import { Caller, describe, isLive, PERSON } from '../record/events';
 import { identityOf, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { ClosedBy, LedgerLockedError, LedgerUnreadableError, lockStateOf, lockWait } from '../record/ledger';
 import { AGENTS_LOG } from '../record/log';
@@ -135,7 +135,12 @@ export class AgentsService implements vscode.Disposable {
 
 		const facade = new Facade({
 			table,
-			ports: { terminals, git: new HostGit(), person: new HostPerson(terminals, message => this.say(message)) },
+			ports: {
+				terminals,
+				git: new HostGit(),
+				workspace: { folders: () => (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath) },
+				person: new HostPerson(terminals, message => this.say(message))
+			},
 			clis: {
 				known: knownClis(),
 				installed: () => installedClis(configFor),
@@ -204,8 +209,11 @@ export class AgentsService implements vscode.Disposable {
 		this.table = undefined;
 	}
 
-	/** Facade: Start Agent. Answers with the new agent's number and name, for a script that started it. */
-	async startAgentCommand(rawArgs: unknown): Promise<{ readonly id: number; readonly name: string } | undefined> {
+	/**
+	 * Facade: Start Agent. Answers with the new agent's number and name, and whether it has started, for a
+	 * script that started it; the person is told where its start is not confirmed.
+	 */
+	async startAgentCommand(rawArgs: unknown): Promise<{ readonly id: number; readonly name: string; readonly status: 'started' | 'unconfirmed' } | undefined> {
 		const facade = this.facade;
 		if (!facade) {
 			void vscode.window.showInformationMessage(this.noCore === 'otherWindow'
@@ -223,13 +231,22 @@ export class AgentsService implements vscode.Disposable {
 				void vscode.window.showWarningMessage(vscode.l10n.t("{0} is not offered: the setting facade.orchestration.{1}.path is {2}, which is no file, nor a command on PATH.", cli.displayName, cli.section, setPath));
 			}
 		}
-		const request = await askStartAgent(rawArgs, installed);
+		let request: StartRequest | undefined;
+		try {
+			request = await askStartAgent(rawArgs, installed, await facade.windowFolders());
+		} catch (err) {
+			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
+			return undefined;
+		}
 		if (!request) {
 			return undefined;
 		}
 		try {
-			const { id, name } = await facade.startAgent(PERSON, request);
-			return { id, name };
+			const started = await facade.startAgent(PERSON, request);
+			if (started.status === 'unconfirmed') {
+				void vscode.window.showWarningMessage(vscode.l10n.t("{0} is not confirmed to have started: {1}. It stays starting; its tab shows what it waits for.", describe(started), started.why ?? ''));
+			}
+			return { id: started.id, name: started.name, status: started.status };
 		} catch (err) {
 			this.log.error(`Starting an agent failed: ${stackOf(err)}`);
 			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));

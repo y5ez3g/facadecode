@@ -7,28 +7,29 @@ import { describe } from '../record/events';
 import { Args } from './args';
 import type { ContractTool } from './tools';
 
-const PARAMS = ['cli', 'model', 'effort', 'task', 'worktree?', 'name?'];
+const PARAMS = ['name', 'cli', 'model', 'effort', 'task?', 'folder?', 'new_worktree?'];
 
 /**
- * `start_agent`: starts a child of the caller in its own UI, beside it or in a worktree. It answers with
- * the child's number once the child is up.
+ * `start_agent`: starts a child of the caller in its own UI, in any folder of the window or a new worktree.
+ * It answers with the child's number once the child has started, or that its start is not confirmed.
  */
 export const startAgentTool: ContractTool = {
 	definition: {
 		name: 'start_agent',
 		title: 'Start a child agent',
-		description: 'Starts a child agent in its own UI: a CLI on one of its models, thinking as hard as you say, with its task. It works beside you, in your folder; in a worktree of your repository, by name; or, with worktree "new" and a name, in a new worktree on a new branch of that name, starting at your worktree\'s HEAD - commit what the child needs first. It answers once the child is up, with its number, as #a7. The child is yours: list_agents lists it, and stop_agent stops it. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts: a child given a model its CLI does not have comes up all the same, then fails at its first step, on its screen, or works on the CLI\'s own default model. A child can take a minute or two to come up: a slow start_agent is waiting, so do not call it again.',
+		description: 'Starts a child agent called name in its own UI: a CLI on one of its models, thinking as hard as you say, with a task if you give it one. It works in your folder; in another folder of this window, by its absolute path; in a worktree of your repository, by the branch checked out in it; or, with new_worktree, in a new worktree of that folder\'s repository, on a new branch called name - starting at your commit in your own repository, so commit what the child needs first, and at the main checkout\'s in another. It answers once the child has started, with its number, as #a7; if it has not within the timeout, it answers that its start is not confirmed, and why - it stays starting, and list_agents and stop_agent take it. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts: a child given a model its CLI does not have starts all the same, then fails at its first step, on its screen, or works on the CLI\'s own default model. A child can take a minute to start: a slow start_agent is waiting, so do not call it again.',
 		inputSchema: {
 			type: 'object',
 			properties: {
+				name: { type: 'string', description: 'Its name, without the @: a label of lower-case letters, digits, dots, dashes and underscores, which other agents may have too. With new_worktree, its branch.' },
 				cli: { type: 'string', description: 'The CLI, by its id.' },
 				model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it.' },
 				effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. The levels differ from CLI to CLI, and from model to model.' },
-				task: { type: 'string', description: 'Its task.' },
-				worktree: { type: 'string', description: 'Omitted: your folder. "new": a new worktree on the branch name. A name: that worktree of your repository.' },
-				name: { type: 'string', description: 'Its name, without the @: a label, which other agents may have too. Required with worktree "new"; else your worktree\'s name.' }
+				task: { type: 'string', description: 'Its task. Omitted: none, and it waits at its CLI\'s own prompt.' },
+				folder: { type: 'string', description: 'Where it works: a folder of this window, by its absolute path, or a worktree of your repository, by the branch checked out in it. Omitted: your folder.' },
+				new_worktree: { type: 'boolean', description: 'true: a new worktree of that folder\'s repository, on a new branch called name.' }
 			},
-			required: ['cli', 'model', 'effort', 'task'],
+			required: ['name', 'cli', 'model', 'effort'],
 			additionalProperties: false
 		}
 	},
@@ -49,16 +50,20 @@ export const startAgentTool: ContractTool = {
 	async call(facade, caller, input, progress) {
 		const args = new Args('start_agent', PARAMS, input);
 		const started = await facade.startAgent(caller, {
+			name: args.text('name'),
 			cli: args.text('cli'),
 			model: args.text('model'),
 			effort: args.text('effort'),
-			task: args.text('task'),
-			worktree: args.optionalText('worktree'),
-			name: args.optionalText('name')
+			task: args.optionalText('task'),
+			folder: args.optionalText('folder'),
+			newWorktree: args.boolean('new_worktree')
 		}, progress);
 		const where = started.newWorktree ? `the new worktree ${started.worktree}, on the new branch ${started.worktree},` : `the worktree ${started.worktree}`;
+		const what = `${facade.cliName(started.cli)} on ${started.model} at ${started.effort}, in ${where} at ${started.folder}`;
 		return {
-			text: `Started ${describe(started)}: ${facade.cliName(started.cli)} on ${started.model} at ${started.effort}, in ${where} at ${started.folder}. It is up and has its task.`,
+			text: started.status === 'started'
+				? `Started ${describe(started)}: ${what}. ${started.task === 'none' ? 'It has no task, and waits at its own prompt.' : 'It has started, and has its task.'}`
+				: `${describe(started)} is not confirmed to have started: ${started.why}. It stays starting - ${what} - and list_agents shows it, and stop_agent stops it.`,
 			data: started
 		};
 	}

@@ -25,14 +25,15 @@ const RUNS_DIR = 'runs';
 /** A file of an agent's run: `<number>.<anything>`. */
 const RUN_FILE = /^(?<id>\d+)\./;
 
-/** An agent's name as given - `@clamp` or `Clamp` - in its form: lower case, without the `@`. Throws with why one is no name. */
+/** An agent's name, as it is given, trimmed: `clamp`. Throws with why one is no name - `@clamp` and `Clamp` among them. */
 export function agentName(text: string): string {
-	const name = text.trim().replace(/^@/, '').toLowerCase();
+	// Taken as it is given: one that is no name is refused, rather than made one
+	const name = text.trim();
 	if (RESERVED_NAMES.has(name)) {
 		throw new Error(`"${name}" is reserved: choose another name.`);
 	}
 	if (!isAgentName(name)) {
-		throw new Error(`"${text}" is not a name: use up to ${MAX_NAME_LENGTH} letters, digits, dots, dashes or underscores, starting with a letter or digit.`);
+		throw new Error(`"${text}" is not a name: use up to ${MAX_NAME_LENGTH} lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.`);
 	}
 	return name;
 }

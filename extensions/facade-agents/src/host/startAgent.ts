@@ -5,18 +5,24 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { messageOf } from '../base/errors';
+import { isEqualPath } from '../base/files';
 import { isJsonObject } from '../base/json';
 import { InstalledCli } from '../clis/cli';
 import { knownClis } from '../clis/registry';
-import { StartRequest } from '../core/facade';
+import { StartRequest, WindowFolder } from '../core/facade';
+import { agentName, nameOfWorktree } from '../record/agents';
 
 /**
- * Facade: Start Agent: the person picks the CLI, and types a model, how hard it thinks and a first
- * message, for the worktree on screen; the core starts it. A script gives any of them as the command's
- * argument, `{ cli, model, effort, task, folder }`, and is asked only for the rest; `task: ''` starts
- * the agent without a first message.
+ * Facade: Start Agent: the person picks the CLI and the folder - the one on screen offered first - and
+ * types the name, the model, how hard it thinks and, if they like, its task; the core starts it. The
+ * agent button runs it with its CLI chosen. A script gives any of them as the command's argument,
+ * `{ cli, name, model, effort, task, folder }`, and is asked only for the rest; `task: ''` starts the
+ * agent without one.
+ *
+ * @param folders The window's folders an agent can start in.
  */
-export async function askStartAgent(rawArgs: unknown, installed: readonly InstalledCli[]): Promise<StartRequest | undefined> {
+export async function askStartAgent(rawArgs: unknown, installed: readonly InstalledCli[], folders: readonly WindowFolder[]): Promise<StartRequest | undefined> {
 	const args = isJsonObject(rawArgs) ? rawArgs : {};
 	const title = vscode.l10n.t("Start Agent");
 	if (!installed.length) {
@@ -36,13 +42,22 @@ export async function askStartAgent(rawArgs: unknown, installed: readonly Instal
 		}
 		chosen = pick.installed;
 	}
+	const { displayName } = chosen.cli;
 
-	const folder = typeof args.folder === 'string' && args.folder.trim() ? path.resolve(args.folder) : await worktreeOnScreen(title);
-	if (!folder) {
+	const place = typeof args.folder === 'string' && args.folder.trim() ? { folder: path.resolve(args.folder), worktree: path.basename(args.folder) } : await pickPlace(title, folders);
+	if (!place) {
 		return undefined;
 	}
 
-	const { displayName } = chosen.cli;
+	const name = await given(args.name, () => vscode.window.showInputBox({
+		title,
+		prompt: vscode.l10n.t("Its name: a label, which other agents may have too."),
+		value: nameOfWorktree(place.worktree),
+		validateInput: whyNotAName
+	}));
+	if (!name) {
+		return undefined;
+	}
 	const model = await given(args.model, () => vscode.window.showInputBox({ title, prompt: vscode.l10n.t("Which model for {0}? As its --model option takes it.", displayName), validateInput: required }));
 	if (!model) {
 		return undefined;
@@ -54,13 +69,13 @@ export async function askStartAgent(rawArgs: unknown, installed: readonly Instal
 
 	let task = typeof args.task === 'string' ? args.task : undefined;
 	if (task === undefined) {
-		task = await vscode.window.showInputBox({ title, prompt: vscode.l10n.t("Its first message. Leave it empty to start it without one."), placeHolder: vscode.l10n.t("What it should do") });
+		task = await vscode.window.showInputBox({ title, prompt: vscode.l10n.t("Its task. Leave it empty to start it without one, at its own prompt."), placeHolder: vscode.l10n.t("What it should do") });
 		if (task === undefined) {
 			return undefined;
 		}
 	}
 
-	return { cli: chosen.cli.id, model, effort, task: task.trim() || undefined, folder };
+	return { cli: chosen.cli.id, name, model, effort, task: task.trim() || undefined, folder: place.folder };
 }
 
 /** What a script gave, trimmed, where it gave text; else what the person types, trimmed; undefined where they cancelled. */
@@ -76,20 +91,32 @@ function required(value: string): string | undefined {
 	return value.trim() ? undefined : vscode.l10n.t("Type one: Facade passes it to the CLI as it is.");
 }
 
+/** Why `value` is not an agent's name, as Facade says it; nothing where it is one. */
+function whyNotAName(value: string): string | undefined {
+	try {
+		agentName(value);
+		return undefined;
+	} catch (err) {
+		return messageOf(err);
+	}
+}
+
 /**
- * The folder the window is on, as the workspace bar shows it. Picked from the workspace's folders
- * when the window cannot tell, as without Facade's workbench.
+ * The folder the agent works in, picked among the window's: the one on screen first, as the workspace
+ * bar shows it. Not asked where the window has one.
  */
-async function worktreeOnScreen(title: string): Promise<string | undefined> {
+async function pickPlace(title: string, folders: readonly WindowFolder[]): Promise<WindowFolder | undefined> {
 	// Only Facade's workbench has the command; its answer crosses to the extension host as a URI.
 	const onScreen = (await vscode.commands.getCommands()).includes('_facade.folder.active') ? await vscode.commands.executeCommand<unknown>('_facade.folder.active') : undefined;
-	if (onScreen instanceof vscode.Uri && onScreen.scheme === 'file') {
-		return onScreen.fsPath;
+	const first = onScreen instanceof vscode.Uri && onScreen.scheme === 'file' ? folders.find(each => isEqualPath(each.folder, onScreen.fsPath)) : undefined;
+	const ordered = first ? [first, ...folders.filter(each => each !== first)] : folders;
+	if (ordered.length <= 1) {
+		return ordered[0];
 	}
-	const folders = (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file');
-	if (folders.length <= 1) {
-		return folders[0]?.uri.fsPath;
-	}
-	const pick = await vscode.window.showQuickPick(folders.map(folder => ({ label: folder.name, description: folder.uri.fsPath, folder })), { title, placeHolder: vscode.l10n.t("Which folder does it work in?") });
-	return pick?.folder.uri.fsPath;
+	const pick = await vscode.window.showQuickPick(ordered.map(each => ({
+		label: each.worktree,
+		description: each === first ? vscode.l10n.t("{0} - on screen", each.folder) : each.folder,
+		place: each
+	})), { title, placeHolder: vscode.l10n.t("Which folder does it work in?") });
+	return pick?.place;
 }

@@ -61,7 +61,10 @@ export interface Terminals {
 export interface Repository {
 	/** Its main checkout's folder. */
 	readonly main: string;
-	/** The worktree the folder is: `main` for the main checkout, else its branch. */
+	/**
+	 * The worktree the folder is, by its label: the branch checked out in it - the main checkout's too - or
+	 * its folder's own name on a detached HEAD. The folder is what names a worktree.
+	 */
 	readonly worktree: string;
 	/** That worktree's HEAD, a full commit id; undefined on a branch with no commit yet, or one git cannot read. */
 	readonly head: string | undefined;
@@ -69,8 +72,10 @@ export interface Repository {
 
 /** A worktree of a repository, as git lists it. */
 export interface ListedWorktree {
-	/** `main`, or its branch. */
+	/** Its label: the branch checked out in it, or its folder's own name on a detached HEAD. */
 	readonly name: string;
+	/** The branch checked out in it; none on a detached HEAD. */
+	readonly branch?: string;
 	readonly folder: string;
 }
 
@@ -80,6 +85,8 @@ export interface Git {
 	repositoryOf(folder: string): Promise<Repository | undefined>;
 	/** The worktrees of the repository whose main checkout is `main`, main included. */
 	worktreesOf(main: string): Promise<readonly ListedWorktree[]>;
+	/** Whether the repository whose main checkout is `main` has a branch called `branch`. */
+	hasBranch(main: string, branch: string): Promise<boolean>;
 	/**
 	 * A worktree on the new branch `branch`, starting at `startPoint`, made through the window's New
 	 * Worktree without its dialog; answers with its folder. Rejects with why it could not be made.
@@ -101,6 +108,12 @@ export interface Git {
 	untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>>;
 }
 
+/** The window's workspace. */
+export interface Workspace {
+	/** Its folders on this machine, by their paths. */
+	folders(): readonly string[];
+}
+
 /** What Facade tells the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
 export interface Person {
 	/** A notice of Facade's for the person. Going to it shows the terminal of `agent`, the agent it is about. */
@@ -115,6 +128,7 @@ export interface Person {
 export interface Ports {
 	readonly terminals: Terminals;
 	readonly git: Git;
+	readonly workspace: Workspace;
 	readonly person: Person;
 }
 

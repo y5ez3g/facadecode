@@ -40,9 +40,26 @@ const AGENT_ICONS: ReadonlyMap<string, ThemeIcon> = new Map([
  * last segment of a path, without an extension: `C:\tools\claude.cmd` is `claude`.
  */
 export function agentIcon(command: string): ThemeIcon {
-	const executable = commandExecutable(command);
-	const name = executable?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, '').toLowerCase();
+	const name = programOf(command);
 	return (name && AGENT_ICONS.get(name)) || AGENT_TERMINAL_ICON;
+}
+
+/** The program a command starts, by its name: the last segment of its path, without an extension, in lower case. */
+function programOf(command: string): string | undefined {
+	return commandExecutable(command)?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, '').toLowerCase();
+}
+
+/** The CLIs Facade starts, by the programs that start them, as its agents' extension knows them by id. */
+const FACADE_CLIS: ReadonlySet<string> = new Set(['claude', 'codex', 'muse', 'agy']);
+
+/**
+ * The CLI of Facade's that a launcher's command starts - `claude`, `codex`, `muse` or `agy` - by its program,
+ * as `agentIcon` reads it; undefined for any other. While Facade is on, such a launcher is Start Agent with
+ * that CLI chosen: the CLI's launch settings say how it starts, and the rest of the command line is not used.
+ */
+export function facadeCliOf(command: string): string | undefined {
+	const program = programOf(command);
+	return program && FACADE_CLIS.has(program) ? program : undefined;
 }
 
 /**

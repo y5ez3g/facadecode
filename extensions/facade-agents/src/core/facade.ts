@@ -12,7 +12,7 @@ import { withFileLock } from '../base/lock';
 import { AgentCli, Environment, InstalledCli } from '../clis/cli';
 import { whyNotInstalled } from '../clis/config';
 import { writeTrust } from '../clis/trust';
-import { agentName, AgentTable, nameOfWorktree } from '../record/agents';
+import { agentName, AgentTable } from '../record/agents';
 import { Agent, agentRef, AgentState, Caller, describe, End, EndKind, isLive, LiveAgent, MadeWorktree, parseAgentReference, PERSON, StoppedBy, TaskDelivery } from '../record/events';
 import { injectedFile } from '../record/paths';
 import { FacadeError } from './errors';
@@ -41,8 +41,10 @@ export interface FacadeOptions {
 	readonly timing?: () => Timing;
 }
 
-/** What a caller asks `start_agent` for: the CLI, its model and how hard it thinks, the task, where the child works, and its name. */
+/** What a caller asks `start_agent` for: the child's name, the CLI, its model and how hard it thinks, its task, and where it works. */
 export interface StartRequest {
+	/** Its name: a label, and with `newWorktree` its branch too. */
+	readonly name: string;
 	/** The CLI, by its id. */
 	readonly cli: string;
 	/** The model and the effort as the CLI takes them: Facade passes them on as they are, and no CLI checks them as it starts. */
@@ -50,15 +52,21 @@ export interface StartRequest {
 	readonly effort: string;
 	/** Its task, if it is given one. */
 	readonly task?: string;
-	/** Omitted: the caller's folder; `new`: a new worktree on the branch `name`; else a worktree of the caller's repository, by name. */
-	readonly worktree?: string;
-	readonly name?: string;
-	/** The folder the person starts an agent in, the one on screen: the person has none of their own. */
+	/**
+	 * Where it works: a folder of the window, by its absolute path, or a worktree of the caller's own
+	 * repository, by the branch checked out in it. Omitted: the caller's own folder, which the person has none of.
+	 */
 	readonly folder?: string;
+	/** Whether it works in a new worktree of that folder's repository, on a new branch called `name`. */
+	readonly newWorktree?: boolean;
 }
 
-/** What `start_agent` answers with: the agent started, and where it works. */
+/** What `start_agent` answers with: whether the child has started, who it is, and where it works. */
 export interface Started {
+	/** `started` (2.1.8); `unconfirmed` while it has not, the timeout over - it stays starting, and may start yet. */
+	readonly status: 'started' | 'unconfirmed';
+	/** Why its start is not confirmed, where it is not. */
+	readonly why?: string;
 	readonly id: number;
 	readonly name: string;
 	readonly cli: string;
@@ -68,6 +76,14 @@ export interface Started {
 	readonly folder: string;
 	/** Whether its worktree was made for it, on the new branch `worktree`. */
 	readonly newWorktree: boolean;
+	/** How its task reached it. */
+	readonly task: TaskDelivery;
+}
+
+/** A folder of the window an agent can start in, and the worktree it is. */
+export interface WindowFolder {
+	readonly folder: string;
+	readonly worktree: string;
 }
 
 /** One line of `list_agents`: an agent as it is now. */
@@ -190,15 +206,39 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * Starts a child of the caller in its own UI: beside it, in a worktree of its repository, or in a new
-	 * worktree on the branch `name`, at the caller's HEAD. Answers once the child is up, with its number;
-	 * a child that exits before fails the call. Once begun, a start is carried through: a caller that exits
-	 * meanwhile leaves its child to the person. Its model and effort go to its CLI as they are: the CLI is
-	 * the one that knows which it has.
+	 * The folders of the window an agent can start in: its workspace's, and every worktree of their
+	 * repositories - those the workspace bar lists - each once, with the worktree it is.
+	 */
+	async windowFolders(): Promise<readonly WindowFolder[]> {
+		const found: WindowFolder[] = [];
+		const add = (folder: string, worktree: string) => {
+			if (!found.some(each => isEqualPath(each.folder, folder))) {
+				found.push({ folder, worktree });
+			}
+		};
+		for (const folder of this.ports.workspace.folders()) {
+			const repository = await this.ports.git.repositoryOf(folder);
+			add(folder, repository?.worktree ?? path.basename(folder));
+			for (const listed of repository ? await this.ports.git.worktreesOf(repository.main) : []) {
+				add(listed.folder, listed.name);
+			}
+		}
+		return found;
+	}
+
+	/**
+	 * Starts a child of the caller called `name`, in its own UI: in a folder of the window - the caller's own
+	 * where none is named - or in a new worktree of that folder's repository, on a new branch named after the
+	 * child, at the caller's commit in its own repository and at the main checkout's in another. A start
+	 * refused leaves nothing behind. Answers once the child has started, or once the timeout runs out with it
+	 * starting still - left as it is, for the caller to decide; a child whose process ends before it started
+	 * fails the call. Once begun, a start is carried through: a caller that ends meanwhile leaves its child as
+	 * it is. Its model and effort go to its CLI as they are: the CLI is the one that knows which it has.
 	 */
 	async startAgent(caller: Caller, request: StartRequest, progress?: (message: string) => void): Promise<Started> {
 		const installed = this.installed(request.cli);
 		const { displayName } = installed.cli;
+		const name = this.nameOf(request.name);
 		const model = request.model.trim();
 		if (!model) {
 			throw new FacadeError('INVALID', `model is required: one of ${displayName}'s models, as ${displayName} takes it.`);
@@ -207,13 +247,9 @@ export class Facade implements Disposable {
 		if (!effort) {
 			throw new FacadeError('INVALID', `effort is required: how hard the child thinks, as ${displayName} takes it - low, medium, high and so on.`);
 		}
-		const name = request.name === undefined ? undefined : this.nameOf(request.name);
-		const home = this.agentOf(caller)?.folder ?? request.folder;
-		if (home === undefined) {
-			throw new FacadeError('INVALID', 'The person has no folder of their own: start an agent with Facade: Start Agent, in the folder on screen.');
-		}
 		// Everything that can refuse the call is asked before anything is made for it.
-		const place = await this.placeOf(caller, home, request.worktree, name);
+		const place = await this.placeOf(caller, request.folder, request.newWorktree === true, name);
+		const home = place.kind === 'new' ? place.repository.main : place.folder;
 		const env = await this.environmentOf(installed, home);
 		this.stillOpen();
 		this.launcher.check(installed, model, effort, home, request.task, env);
@@ -239,8 +275,8 @@ export class Facade implements Disposable {
 		if (made) {
 			this.trust(installed, made, env);
 		}
-		const agent = await this.launcher.launch(caller, installed, { name: name ?? nameOfWorktree(worktree), model, effort, task: request.task, worktree, folder, trusted: !!made }, progress);
-		return { id: agent.id, name: agent.name, cli: agent.cli, model: agent.model, effort, worktree: agent.worktree, folder: agent.folder, newWorktree: place.kind === 'new' };
+		const { agent, status, why } = await this.launcher.launch(caller, installed, { name, model, effort, task: request.task, worktree, folder, trusted: !!made }, progress);
+		return { status, ...(why !== undefined ? { why } : {}), id: agent.id, name: agent.name, cli: agent.cli, model: agent.model, effort, worktree: agent.worktree, folder: agent.folder, newWorktree: place.kind === 'new', task: agent.task };
 	}
 
 	/**
@@ -361,30 +397,67 @@ export class Facade implements Disposable {
 		}
 	}
 
-	/** Where a child of the caller starts: in `home`, a worktree of its repository, or a new worktree to make. */
-	private async placeOf(caller: Caller, home: string, worktree: string | undefined, name: string | undefined): Promise<Place> {
-		if (worktree === undefined) {
-			return { kind: 'folder', folder: home, worktree: this.agentOf(caller)?.worktree ?? await this.worktreeOf(home) };
+	/**
+	 * Where a child of the caller starts: a folder of the window - by its absolute path, or in the caller's own
+	 * repository by the branch checked out there - the caller's own folder where none is named, or a new
+	 * worktree of that folder's repository on the branch `name`. Refused before anything is made: what names
+	 * no folder of the window, a branch checked out in two worktrees, and a new worktree outside any repository,
+	 * on a branch that is there, or with no commit to start at.
+	 */
+	private async placeOf(caller: Caller, named: string | undefined, newWorktree: boolean, name: string): Promise<Place> {
+		const own = this.agentOf(caller)?.folder;
+		const wanted = named?.trim();
+		const folder = !wanted ? own : path.isAbsolute(wanted) ? await this.windowFolderAt(wanted) : await this.worktreeOnBranch(own, wanted);
+		if (folder === undefined) {
+			throw new FacadeError('INVALID', 'folder is required: the person has no folder of their own. Name a folder of the window by its absolute path.');
 		}
-		if (worktree === 'new' && name === undefined) {
-			throw new FacadeError('INVALID', 'name is required with worktree "new": the new worktree\'s branch is named after the child.');
+		if (!newWorktree) {
+			return { kind: 'folder', folder, worktree: await this.worktreeOf(folder) };
 		}
-		const repository = await this.ports.git.repositoryOf(home);
+		const repository = await this.ports.git.repositoryOf(folder);
 		if (!repository) {
-			throw new FacadeError('REFUSED', `${home} is in no git repository, so it has no worktrees: start the child there, without worktree.`);
+			throw new FacadeError('REFUSED', `${folder} is in no git repository, so no worktree of it can be made: start the child in the folder itself, without new_worktree.`);
 		}
-		if (worktree === 'new' && name !== undefined) {
-			if (repository.head === undefined) {
-				throw new FacadeError('REFUSED', `${home} is on a branch with no commit yet, or one git cannot read: a new worktree starts at a commit.`);
-			}
-			return { kind: 'new', repository, head: repository.head, branch: name };
+		// At the caller's commit in its own repository; in another - and for the person - at its main checkout's.
+		const ownRepository = own === undefined ? undefined : await this.ports.git.repositoryOf(own);
+		const from = ownRepository && isEqualPath(ownRepository.main, repository.main) ? { folder: own, head: ownRepository.head } : { folder: repository.main, head: (await this.ports.git.repositoryOf(repository.main))?.head };
+		if (from.head === undefined) {
+			throw new FacadeError('REFUSED', `${from.folder} has no commit for a new worktree to start at: it is on a branch with no commit yet, or one git cannot read.`);
+		}
+		if (await this.ports.git.hasBranch(repository.main, name)) {
+			throw new FacadeError('REFUSED', `${path.basename(repository.main)} has a branch called ${name} already, and a new worktree is on a new branch, named after the child: give the child another name, or start it in the worktree of ${name} by its folder.`);
+		}
+		return { kind: 'new', repository, head: from.head, branch: name };
+	}
+
+	/** The folder of the window that is `folder`; refused, naming the window's folders, where none is. */
+	private async windowFolderAt(folder: string): Promise<string> {
+		const folders = await this.windowFolders();
+		const found = folders.find(each => isEqualPath(each.folder, folder));
+		if (!found) {
+			throw new FacadeError('NOT_FOUND', `${folder} is no folder of this window. Its folders: ${folders.map(each => each.folder).join(', ')}.`);
+		}
+		return found.folder;
+	}
+
+	/**
+	 * The worktree of the repository of the caller's folder `own` that has `branch` checked out; refused where
+	 * the caller has no repository, no worktree has the branch, or git was forced to check it out in two.
+	 */
+	private async worktreeOnBranch(own: string | undefined, branch: string): Promise<string> {
+		const repository = own === undefined ? undefined : await this.ports.git.repositoryOf(own);
+		if (!repository) {
+			throw new FacadeError('INVALID', `${branch} is no absolute path, and ${own === undefined ? 'the person has no repository of their own' : `${own} is in no repository`} for it to be a branch of. Name a folder of the window by its absolute path.`);
 		}
 		const listed = await this.ports.git.worktreesOf(repository.main);
-		const found = listed.find(each => each.name === worktree);
-		if (!found) {
-			throw new FacadeError('NOT_FOUND', `No worktree of ${path.basename(repository.main)} is called ${worktree}. Its worktrees: ${listed.map(each => each.name).join(', ')}.`);
+		const on = listed.filter(each => each.branch === branch);
+		if (on.length > 1) {
+			throw new FacadeError('INVALID', `${branch} is checked out in ${on.length} worktrees of ${path.basename(repository.main)}: ${on.map(each => each.folder).join(', ')}. Name the one you mean by its folder.`);
 		}
-		return { kind: 'folder', folder: found.folder, worktree: found.name };
+		if (!on.length) {
+			throw new FacadeError('NOT_FOUND', `No worktree of ${path.basename(repository.main)} has ${branch} checked out. Its worktrees: ${listed.map(each => `${each.name} at ${each.folder}`).join(', ')}.`);
+		}
+		return on[0].folder;
 	}
 
 	/**
@@ -434,7 +507,7 @@ export class Facade implements Disposable {
 		return end;
 	}
 
-	/** Ends an agent that did not come up, or could not be told of its task: recorded as failed, and its terminal closed. */
+	/** Ends an agent whose launch failed before it had a process: recorded as failed, and its terminal closed. */
 	private async fail(agent: Agent, reason: string): Promise<void> {
 		if (!this.ended(agent, 'failed', reason)) {
 			return;

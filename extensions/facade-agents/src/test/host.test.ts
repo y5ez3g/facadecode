@@ -84,7 +84,7 @@ suite('Host: git\'s records, read with git', function () {
 		const gone = path.join(temp.dir, 'gone');
 		fs.mkdirSync(plain);
 		fs.mkdirSync(empty);
-		git(empty, 'init', '-q');
+		git(empty, 'init', '-q', '-b', 'trunk');
 		// A repository with a commit, on a branch with none.
 		fs.mkdirSync(orphan);
 		git(orphan, 'init', '-q');
@@ -108,8 +108,8 @@ suite('Host: git\'s records, read with git', function () {
 			trackedGone: /cannot change to/.test(await outcomeOf(trackedIn('git', gone, ['.mcp.json'])))
 		}, {
 			plain: undefined,
-			empty: { main: empty, worktree: 'main', head: undefined },
-			orphan: { main: orphan, worktree: 'main', head: undefined },
+			empty: { main: empty, worktree: 'trunk', head: undefined },
+			orphan: { main: orphan, worktree: 'new', head: undefined },
 			broken: { main: broken, worktree: 'main', head: undefined },
 			gone: true,
 			excludePlain: undefined,

@@ -9,11 +9,11 @@ import * as path from 'path';
 import { Contract } from '../contract/tools';
 import { Caller, PERSON } from '../record/events';
 import { ToolResult } from '../transport/protocol';
-import { settled, until, useFakeClock } from './clock';
+import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
-const TOOLS = 'Your tools: start_agent starts a child agent and answers with its number once it is up; list_agents lists you, the agent that started you and the agents you started, each with its number and state; stop_agent stops one of your children.';
+const TOOLS = 'Your tools: start_agent starts a child agent, in any folder of this window or a new worktree, and answers with its number once it has started; list_agents lists you, the agent that started you and the agents you started, each with its number and state; stop_agent stops one of your children.';
 
 suite('Contract: what the model sees, and what it gets back', () => {
 
@@ -90,28 +90,38 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		});
 	});
 
-	test('the start_agent tool requires a model and an effort beside the CLI and the task, and names no model or level of its own: the CLI is the one that knows them', () => {
+	test('the start_agent tool requires a name, the CLI, a model and an effort, the task, the folder and a new worktree left to the caller, and names no model or level of its own: the CLI is the one that knows them', () => {
 		const schema = JSON.parse(JSON.stringify(contract.hello(PERSON).tools[0])).inputSchema;
 
-		assert.deepStrictEqual({ required: schema.required, enums: [schema.properties.model.enum, schema.properties.effort.enum] }, {
-			required: ['cli', 'model', 'effort', 'task'],
+		assert.deepStrictEqual({ required: schema.required, optional: Object.keys(schema.properties).filter(name => !schema.required.includes(name)), enums: [schema.properties.model.enum, schema.properties.effort.enum] }, {
+			required: ['name', 'cli', 'model', 'effort'],
+			optional: ['task', 'folder', 'new_worktree'],
 			enums: [undefined, undefined]
 		});
 	});
 
-	test('start_agent answers once the child is up, in words and as data; stop_agent stops a child, and says of one that exited how it did; list_agents gives the caller\'s view of the agents - how many in each state, then a line each - and the same as data, where an agent the person started has no parent\'s number', async () => {
+	test('start_agent answers once the child has started, in words and as data - and, where its start is not confirmed in time, why, the child left starting; stop_agent stops a child, and says of one that exited how it did; list_agents gives the caller\'s view of the agents - how many in each state, then a line each - and the same as data, where an agent the person started has no parent\'s number', async () => {
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
-		const beside = await call(lead, 'start_agent', { cli: 'arg', model: 'small', effort: 'high', task: 'Write the tests.', name: 'tests' });
-		const inNew = await call(lead, 'start_agent', { cli: 'arg', model: 'small', effort: 'high', task: 'Clamp the widths.', worktree: 'new', name: 'clamp' });
+		const beside = await call(lead, 'start_agent', { name: 'tests', cli: 'arg', model: 'small', effort: 'high', task: 'Write the tests.' });
+		const inNew = await call(lead, 'start_agent', { name: 'clamp', cli: 'arg', model: 'small', effort: 'high', task: 'Clamp the widths.', new_worktree: true });
 		const stopped = await call(lead, 'stop_agent', { agent: '@tests' });
 		const again = await call(lead, 'stop_agent', { agent: '#a2' });
 		const listed = await call(lead, 'list_agents', {});
 		const clamp = worktreeFolder(lab, 'clamp');
+		world.timing.startTimeoutMs = 5_000;
+		const starting = contract.call(lead, 'start_agent', { name: 'waits', cli: 'told', model: 'deep', effort: 'high', folder: lab }, () => undefined);
+		await until(() => world.terminals.launched.length === 4);
+		await sleep(5_000);
+		const unconfirmed = await settled(starting);
 
-		assert.deepStrictEqual({ beside, inNew: inNew.text, stopped: stopped.text, again: again.text, listed: listed.text.split('\n'), rows: JSON.parse(JSON.stringify(listed.data)).agents.map((row: { id: number; creator?: number }) => `${row.id}<${Object.keys(row).includes('creator') ? row.creator : 'none'}`) }, {
-			beside: { text: `Started @tests #a2: Arg Code on small at high, in the worktree main at ${lab}. It is up and has its task.`, data: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false } },
-			inNew: `Started @clamp #a3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. It is up and has its task.`,
+		assert.deepStrictEqual({ beside, inNew: inNew.text, unconfirmed, stopped: stopped.text, again: again.text, listed: listed.text.split('\n'), rows: JSON.parse(JSON.stringify(listed.data)).agents.map((row: { id: number; creator?: number }) => `${row.id}<${Object.keys(row).includes('creator') ? row.creator : 'none'}`) }, {
+			beside: { text: `Started @tests #a2: Arg Code on small at high, in the worktree main at ${lab}. It has started, and has its task.`, data: { status: 'started', id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false, task: 'argument' } },
+			inNew: `Started @clamp #a3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. It has started, and has its task.`,
+			unconfirmed: {
+				text: `@waits #a4 is not confirmed to have started: it has not started within 5 seconds: its CLI has not connected to Facade, and may be slow, or waiting for an answer on its screen. It stays starting - Told Code on deep at high, in the worktree main at ${lab} - and list_agents shows it, and stop_agent stops it.`,
+				data: { status: 'unconfirmed', why: 'it has not started within 5 seconds: its CLI has not connected to Facade, and may be slow, or waiting for an answer on its screen', id: 4, name: 'waits', cli: 'told', model: 'deep', effort: 'high', worktree: 'main', folder: lab, newWorktree: false, task: 'none' }
+			},
 			stopped: 'Stopped @tests #a2: its terminal closed. Its worktree stays as it is.',
 			again: '@tests #a2 had ended already (stopped by @lead #a1: with stop_agent).',
 			listed: [
@@ -129,17 +139,18 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const lead = callerOf(world.agent(1));
 		const results = [
 			await call(lead, 'send', { to: '@human' }),
-			await call(lead, 'start_agent', { cli: 'arg', model: 'small', effort: 'high', task: 'Go.', color: 'red' }),
+			await call(lead, 'start_agent', { name: 'go', cli: 'arg', model: 'small', effort: 'high', task: 'Go.', color: 'red' }),
 			await call(lead, 'start_agent', 'arg'),
-			await call(lead, 'start_agent', { cli: 'arg', model: 'small', effort: 'high' }),
-			await call(lead, 'start_agent', { cli: 'arg', model: 'small', effort: 'high', task: ' ' }),
-			await call(lead, 'start_agent', { cli: 'arg', model: 7, task: 'Go.' }),
-			await call(lead, 'start_agent', { cli: 'arg', model: 'small', task: 'Go.' }),
+			await call(lead, 'start_agent', { cli: 'arg', model: 'small', effort: 'high', task: 'Go.' }),
+			await call(lead, 'start_agent', { name: 'go', cli: 'arg', model: 'small', effort: 'high', task: ' ' }),
+			await call(lead, 'start_agent', { name: 'go', cli: 'arg', model: 7, task: 'Go.' }),
+			await call(lead, 'start_agent', { name: 'go', cli: 'arg', model: 'small', task: 'Go.' }),
+			await call(lead, 'start_agent', { name: 'go', cli: 'arg', model: 'small', effort: 'high', new_worktree: 'yes' }),
 			await call(lead, 'list_agents', { all: 'yes' }),
 			await call(lead, 'stop_agent', {}),
 			await call(lead, 'stop_agent', { agent: '@human' }),
 			await call(lead, 'stop_agent', { agent: '#a99' }),
-			await call(lead, 'start_agent', { cli: 'nope', model: 'small', effort: 'high', task: 'Go.' })
+			await call(lead, 'start_agent', { name: 'go', cli: 'nope', model: 'small', effort: 'high', task: 'Go.' })
 		];
 		world.facade.listAgents = () => {
 			throw new Error('the ledger could not be read');
@@ -149,12 +160,13 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 		assert.deepStrictEqual(results, [
 			error('INVALID', 'Unknown tool send. The tools: start_agent, list_agents, stop_agent.'),
-			error('INVALID', 'start_agent takes cli, model, effort, task, worktree?, name?; not color.'),
-			error('INVALID', 'start_agent takes an object of arguments: cli, model, effort, task, worktree?, name?.'),
-			error('INVALID', 'task is required.'),
+			error('INVALID', 'start_agent takes name, cli, model, effort, task?, folder?, new_worktree?; not color.'),
+			error('INVALID', 'start_agent takes an object of arguments: name, cli, model, effort, task?, folder?, new_worktree?.'),
+			error('INVALID', 'name is required.'),
 			error('INVALID', 'task must not be empty.'),
 			error('INVALID', 'model must be a string.'),
 			error('INVALID', 'effort is required.'),
+			error('INVALID', 'new_worktree must be true or false.'),
 			error('INVALID', 'all must be true or false.'),
 			error('INVALID', 'agent is required.'),
 			error('INVALID', '@human is the person, not an agent.'),
