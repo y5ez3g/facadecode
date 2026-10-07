@@ -5,7 +5,6 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as l10n from '@vscode/l10n';
 import { DeferredPromise, timeout } from '../base/async';
 import { messageOf } from '../base/errors';
 import { AgentCli, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec } from '../clis/cli';
@@ -128,13 +127,10 @@ export class Launcher implements Disposable {
 		const { task } = run;
 		const first = task === undefined ? undefined : (id: number) => `${setup.opening({ id, name: run.name, cliName: cli.displayName }, caller)}\n\n${task}`;
 		this.stillOpen();
-		const started = table.start({ name: run.name, parent: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}) });
+		const started = table.start({ name: run.name, creator: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(first ? { task: inTerminal ? first : 'argument' } : {}) });
 		const { agent } = started;
 		const startup = this.watch(agent, caller);
 		const terminal = this.context.terminalOf(agent);
-		if (caller.id !== undefined && !isLive(table.get(caller.id))) {
-			ports.person.tell(l10n.t("{0} exited while it started {1}, which is yours now.", describe(caller), describe(agent)), terminal);
-		}
 		try {
 			const { spec, args, throughCmd } = this.launchOf(installed, {
 				folder: run.folder,
@@ -180,8 +176,8 @@ export class Launcher implements Disposable {
 		if (this.disposed || agent.state !== 'starting') {
 			return;
 		}
-		this.context.table.setRunning(agent.id);
-		this.context.log(`${this.context.terminalOf(agent)} is running: its MCP server said hello.`);
+		this.context.table.connected(agent.id);
+		this.context.log(`${this.context.terminalOf(agent)} is connected: its MCP server said hello.`);
 		const startup = this.startups.get(agent.id);
 		if (startup) {
 			clearTimeout(startup.timer);
@@ -190,12 +186,15 @@ export class Launcher implements Disposable {
 		this.bringUp(agent);
 	}
 
-	/** After a reload: an agent that was starting is waited for again; one running but not yet told of its task is told. */
+	/**
+	 * After a reload: an agent whose MCP server said hello is brought up - told its task, where that was
+	 * not typed yet - and one whose server had not said hello is waited for again.
+	 */
 	resume(agent: Agent): void {
 		if (!this.isRunning(agent)) {
 			return;
 		}
-		if (agent.state !== 'starting') {
+		if (agent.connected) {
 			this.bringUp(agent);
 		} else if (!this.startups.has(agent.id)) {
 			this.watch(agent, undefined);
@@ -252,13 +251,16 @@ export class Launcher implements Disposable {
 		return startup;
 	}
 
-	/** Tells a running agent of its task where it is told in its terminal, once; then it is up. */
+	/**
+	 * Tells a connected agent of its task where it is told in its terminal, once; then it is up. A task
+	 * whose typing was cut short is not typed again: it may have reached the CLI, whole or in part.
+	 */
 	private bringUp(agent: Agent): void {
-		if (agent.taskFile === undefined || agent.taskTyped) {
+		if (agent.task !== 'pending') {
 			this.isUp(agent);
 		} else if (!this.typing.has(agent.id)) {
 			this.typing.add(agent.id);
-			this.background(`Telling ${this.context.terminalOf(agent)} of its task`, this.typeTask(agent, agent.taskFile).finally(() => this.typing.delete(agent.id)));
+			this.background(`Telling ${this.context.terminalOf(agent)} of its task`, this.typeTask(agent, this.context.table.taskFileOf(agent.id)).finally(() => this.typing.delete(agent.id)));
 		}
 	}
 
@@ -279,6 +281,7 @@ export class Launcher implements Disposable {
 			if (!this.isRunning(agent)) {
 				return;
 			}
+			table.taskTyping(agent.id);
 			if (!await ports.terminals.type(terminal, `[facade] Your task is in ${taskFile}: read that file, then do what it says.`)) {
 				throw new Error('its terminal was not there');
 			}
@@ -290,7 +293,7 @@ export class Launcher implements Disposable {
 			if (!this.isRunning(agent)) {
 				return;
 			}
-			table.setTaskTyped(agent.id);
+			table.taskTyped(agent.id);
 			this.context.log(`${terminal} was told of its task, in ${taskFile}.`);
 			this.isUp(agent);
 		} catch (err) {
@@ -300,6 +303,7 @@ export class Launcher implements Disposable {
 
 	/** An agent is up: the start that waits for it answers. */
 	private isUp(agent: Agent): void {
+		this.context.table.running(agent.id);
 		const startup = this.startups.get(agent.id);
 		if (startup) {
 			this.startups.delete(agent.id);

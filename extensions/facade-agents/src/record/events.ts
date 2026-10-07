@@ -6,7 +6,7 @@
 import { isEqualPath } from '../base/files';
 import { JsonObject } from '../base/json';
 
-/** The person's name, `@human`: the root of the agents' tree, and the parent of every orphan. The person has no number. */
+/** The person's name, `@human`: the creator of the first agents. The person has no number. */
 const HUMAN = 'human';
 /** Facade's own name, which no agent takes: its MCP server is called so, and what it says to an agent starts `[facade]`. */
 const FACADE = 'facade';
@@ -35,19 +35,32 @@ export function isAgentName(name: string): boolean {
 }
 
 /**
- * `starting` from its launch, `running` once its MCP server said hello to Facade, `exited` once its
- * terminal ended, it was killed, or it did not come up.
+ * `starting` from its launch until it has started - with a task, once it called `accept_task`; without,
+ * once its MCP server said hello - `running` from then on, `stopping` once Facade set out to stop it,
+ * until its process ended, and `ended` once its process ended.
  */
-export type AgentState = 'starting' | 'running' | 'exited';
+export type AgentState = 'starting' | 'running' | 'stopping' | 'ended';
 
-/** How an agent exited: its CLI ended, it was killed, or it never came up. */
-export type ExitKind = 'exited' | 'killed' | 'failed';
+/** How an agent ended: its CLI ended by itself, it was stopped, it did not start, or nothing saw it end. */
+export type EndKind = 'exited' | 'stopped' | 'failed' | 'lost';
 
-/** How and why an agent exited, and when. */
-export interface Exit {
-	readonly kind: ExitKind;
+/**
+ * How an agent's task reached it: it was given none; as an argument; it is still to be typed into its
+ * terminal; it was typed there; or Facade began to type it and cannot know how far it got.
+ */
+export type TaskDelivery = 'none' | 'argument' | 'pending' | 'typed' | 'unknown';
+
+/** Who stopped an agent: another agent, by its number, or the person. */
+export type StoppedBy = number | 'human';
+
+/** How an agent ended, by whom where someone stopped it, why, and when. */
+export interface End {
+	readonly kind: EndKind;
+	readonly by?: StoppedBy;
 	readonly reason: string;
 	readonly time: number;
+	/** Its CLI's exit code, where it is known. */
+	readonly exitCode?: number;
 }
 
 /** An agent: one CLI running in its own terminal, in one folder. */
@@ -56,38 +69,43 @@ export interface Agent {
 	readonly id: number;
 	/** A label, which other agents may share. */
 	readonly name: string;
-	/** The number of the agent that started it; none for one the person started. */
-	readonly parent?: number;
+	/** The number of the agent that started it; none for one the person started. It never changes. */
+	readonly creator?: number;
 	/** The CLI's id. */
 	readonly cli: string;
 	readonly model: string;
 	/** How hard it thinks, as its CLI takes it. */
 	readonly effort: string;
-	/** The name of its worktree: `main` for a repository's own checkout, else its branch. */
+	/** The name of its worktree: its branch, or the folder's own name outside a repository. */
 	readonly worktree: string;
 	readonly folder: string;
-	/** The file its task is in, for a CLI that is told of its task in its terminal. */
-	readonly taskFile?: string;
-	/** Set once the line that tells it of its task file was typed into its terminal. */
-	taskTyped?: boolean;
+	task: TaskDelivery;
+	/** Whether its MCP server said hello to Facade. */
+	connected: boolean;
+	/** Whether it called `accept_task`. */
+	accepted: boolean;
+	/** Its CLI's process, once its terminal runs it. */
+	processId?: number;
 	state: AgentState;
-	exit?: Exit;
+	/** Who set out to stop it, and why, while it is stopping. */
+	stopping?: { readonly by?: StoppedBy; readonly reason: string };
+	end?: End;
 	readonly startTime: number;
 }
 
-/** An agent that has not exited. */
-export type LiveAgent = Agent & { readonly state: 'starting' | 'running' };
+/** An agent that has not ended. */
+export type LiveAgent = Agent & { readonly state: 'starting' | 'running' | 'stopping' };
 
-/** A worktree Facade made for a child. */
+/** A worktree Facade made for an agent. */
 export interface MadeWorktree {
 	/** Its branch, which is also its name. */
 	readonly name: string;
 	readonly folder: string;
 	/** The folder of the repository's main checkout. */
 	readonly repository: string;
-	/** The name of the worktree it was branched from. */
-	readonly parentWorktree: string;
-	/** The number of the agent that started the child; none for the person. */
+	/** The commit it was made at. */
+	readonly commit: string;
+	/** The number of the agent that started the agent it was made for; none for the person. */
 	readonly madeBy?: number;
 }
 
@@ -98,20 +116,23 @@ export type LedgerEventBody =
 		readonly id: number;
 		readonly name: string;
 		/** None for an agent the person started. */
-		readonly parent?: number;
+		readonly creator?: number;
 		readonly cli: string;
 		readonly model: string;
 		readonly effort: string;
 		readonly worktree: string;
 		readonly folder: string;
-		readonly taskFile?: string;
+		/** How its task reaches it: none, as an argument, or to be typed into its terminal. */
+		readonly task: 'none' | 'argument' | 'pending';
 		readonly tokenHash: string;
 	}
-	| { readonly type: 'agent.running'; readonly id: number }
-	| { readonly type: 'task.typed'; readonly id: number }
-	| { readonly type: 'agent.exited'; readonly id: number; readonly kind: ExitKind; readonly reason: string }
+	| { readonly type: 'agent.launched'; readonly id: number; readonly processId: number }
+	| { readonly type: 'agent.connected' | 'task.typing' | 'task.typed' | 'task.accepted' | 'agent.running'; readonly id: number }
+	| { readonly type: 'agent.stopping'; readonly id: number; readonly by?: StoppedBy; readonly reason: string }
+	| { readonly type: 'agent.ended'; readonly id: number; readonly kind: EndKind; readonly by?: StoppedBy; readonly reason: string; readonly exitCode?: number }
 	| { readonly type: 'worktree.made' } & MadeWorktree
-	| { readonly type: 'worktree.gone'; readonly folder: string };
+	| { readonly type: 'worktree.gone'; readonly folder: string }
+	| { readonly type: 'list.cleared' };
 
 /** An event as the ledger keeps it: numbered, with the time it happened. */
 export type LedgerEvent = LedgerEventBody & { readonly seq: number; readonly time: number };
@@ -183,15 +204,21 @@ export function createState(): WorkspaceState {
 	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), tokens: new Map(), worktrees: new Map() };
 }
 
-const EXIT_KINDS: ReadonlySet<string> = new Set<ExitKind>(['exited', 'killed', 'failed']);
+const END_KINDS: ReadonlySet<string> = new Set<EndKind>(['exited', 'stopped', 'failed', 'lost']);
+const STARTING_TASKS: ReadonlySet<string> = new Set(['none', 'argument', 'pending']);
 
-function isExitKind(value: unknown): value is ExitKind {
-	return typeof value === 'string' && EXIT_KINDS.has(value);
+function isEndKind(value: unknown): value is EndKind {
+	return typeof value === 'string' && END_KINDS.has(value);
 }
 
 /** Whether `value` is a number an agent can have. */
 function isId(value: unknown): value is number {
 	return typeof value === 'number' && Number.isInteger(value) && value >= FIRST_ID;
+}
+
+/** Whether `value` names who stopped an agent: an agent's number, or the person. */
+function isStoppedBy(value: unknown): value is StoppedBy {
+	return value === HUMAN || isId(value);
 }
 
 /** Whether `value` is a string with something in it. */
@@ -215,52 +242,76 @@ export function eventOf(value: JsonObject): LedgerEvent | undefined {
 function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'agent.started': {
-			const { id, name, parent, cli, model, effort, worktree, folder, taskFile, tokenHash } = value;
-			if (!isId(id) || typeof name !== 'string' || !isAgentName(name) || (parent !== undefined && !isId(parent)) || !isText(cli) || !isText(model) || !isText(effort)
-				|| !isText(worktree) || !isText(folder) || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))) {
+			const { id, name, creator, cli, model, effort, worktree, folder, task, tokenHash } = value;
+			if (!isId(id) || typeof name !== 'string' || !isAgentName(name) || (creator !== undefined && !isId(creator)) || !isText(cli) || !isText(model) || !isText(effort)
+				|| !isText(worktree) || !isText(folder) || typeof task !== 'string' || !STARTING_TASKS.has(task) || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash)) {
 				return undefined;
 			}
-			return { type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder, tokenHash, ...(taskFile !== undefined ? { taskFile } : {}) };
+			return { type: 'agent.started', id, name, ...(creator !== undefined ? { creator } : {}), cli, model, effort, worktree, folder, task: task as 'none' | 'argument' | 'pending', tokenHash };
 		}
-		case 'agent.running':
+		case 'agent.launched': {
+			const { id, processId } = value;
+			return isId(id) && typeof processId === 'number' && Number.isInteger(processId) && processId > 0 ? { type: 'agent.launched', id, processId } : undefined;
+		}
+		case 'agent.connected':
+		case 'task.typing':
 		case 'task.typed':
+		case 'task.accepted':
+		case 'agent.running':
 			return isId(value.id) ? { type: value.type, id: value.id } : undefined;
-		case 'agent.exited': {
-			const { id, kind, reason } = value;
-			return isId(id) && isExitKind(kind) && typeof reason === 'string'
-				? { type: 'agent.exited', id, kind, reason }
+		case 'agent.stopping': {
+			const { id, by, reason } = value;
+			return isId(id) && (by === undefined || isStoppedBy(by)) && typeof reason === 'string'
+				? { type: 'agent.stopping', id, ...(by !== undefined ? { by } : {}), reason }
+				: undefined;
+		}
+		case 'agent.ended': {
+			const { id, kind, by, reason, exitCode } = value;
+			return isId(id) && isEndKind(kind) && (by === undefined || isStoppedBy(by)) && typeof reason === 'string' && (exitCode === undefined || (typeof exitCode === 'number' && Number.isInteger(exitCode)))
+				? { type: 'agent.ended', id, kind, ...(by !== undefined ? { by } : {}), reason, ...(exitCode !== undefined ? { exitCode } : {}) }
 				: undefined;
 		}
 		case 'worktree.made': {
-			const { name, folder, repository, parentWorktree, madeBy } = value;
-			return isText(name) && isText(folder) && isText(repository) && isText(parentWorktree) && (madeBy === undefined || isId(madeBy))
-				? { type: 'worktree.made', name, folder, repository, parentWorktree, ...(madeBy !== undefined ? { madeBy } : {}) }
+			const { name, folder, repository, commit, madeBy } = value;
+			return isText(name) && isText(folder) && isText(repository) && isText(commit) && (madeBy === undefined || isId(madeBy))
+				? { type: 'worktree.made', name, folder, repository, commit, ...(madeBy !== undefined ? { madeBy } : {}) }
 				: undefined;
 		}
 		case 'worktree.gone': {
 			const { folder } = value;
 			return isText(folder) ? { type: 'worktree.gone', folder } : undefined;
 		}
+		case 'list.cleared':
+			return { type: 'list.cleared' };
 	}
 	return undefined;
 }
 
 /**
  * Whether an event can follow the state the ledger gave so far: an agent starts under a number above
- * every one given, as the person's or as the child of an agent started before it; any other event of an
- * agent is of one the ledger started; a worktree is made by the person or by such an agent.
+ * every one given, as the person's or as an agent's the list has; any other event of an agent is of one
+ * the list has, and an agent that stops another is one it has; a worktree is made by the person or by
+ * such an agent.
  */
 export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
+	const known = (id: number | undefined) => id === undefined || state.agents.has(id);
 	switch (event.type) {
 		case 'agent.started':
-			return event.id > state.lastId && (event.parent === undefined || state.agents.has(event.parent));
-		case 'agent.running':
+			return event.id > state.lastId && known(event.creator);
+		case 'agent.launched':
+		case 'agent.connected':
+		case 'task.typing':
 		case 'task.typed':
-		case 'agent.exited':
+		case 'task.accepted':
+		case 'agent.running':
 			return state.agents.has(event.id);
+		case 'agent.stopping':
+		case 'agent.ended':
+			return state.agents.has(event.id) && known(event.by === HUMAN ? undefined : event.by);
 		case 'worktree.made':
-			return event.madeBy === undefined || state.agents.has(event.madeBy);
+			return known(event.madeBy);
 		case 'worktree.gone':
+		case 'list.cleared':
 			return true;
 	}
 }
@@ -273,18 +324,55 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			state.agents.set(event.id, {
 				id: event.id,
 				name: event.name,
-				...(event.parent !== undefined ? { parent: event.parent } : {}),
+				...(event.creator !== undefined ? { creator: event.creator } : {}),
 				cli: event.cli,
 				model: event.model,
 				effort: event.effort,
 				worktree: event.worktree,
 				folder: event.folder,
-				...(event.taskFile !== undefined ? { taskFile: event.taskFile } : {}),
+				task: event.task,
+				connected: false,
+				accepted: false,
 				state: 'starting',
 				startTime: event.time
 			});
 			state.lastId = Math.max(state.lastId, event.id);
 			state.tokens.set(event.tokenHash, event.id);
+			break;
+		}
+		case 'agent.launched': {
+			const agent = state.agents.get(event.id);
+			if (isLive(agent)) {
+				agent.processId = event.processId;
+			}
+			break;
+		}
+		case 'agent.connected': {
+			const agent = state.agents.get(event.id);
+			if (isLive(agent)) {
+				agent.connected = true;
+			}
+			break;
+		}
+		case 'task.typing': {
+			const agent = state.agents.get(event.id);
+			if (agent?.task === 'pending') {
+				agent.task = 'unknown';
+			}
+			break;
+		}
+		case 'task.typed': {
+			const agent = state.agents.get(event.id);
+			if (agent?.task === 'pending' || agent?.task === 'unknown') {
+				agent.task = 'typed';
+			}
+			break;
+		}
+		case 'task.accepted': {
+			const agent = state.agents.get(event.id);
+			if (agent) {
+				agent.accepted = true;
+			}
 			break;
 		}
 		case 'agent.running': {
@@ -294,18 +382,20 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			}
 			break;
 		}
-		case 'task.typed': {
+		case 'agent.stopping': {
 			const agent = state.agents.get(event.id);
-			if (agent && agent.taskFile !== undefined) {
-				agent.taskTyped = true;
+			if (agent?.state === 'starting' || agent?.state === 'running') {
+				agent.state = 'stopping';
+				agent.stopping = { ...(event.by !== undefined ? { by: event.by } : {}), reason: event.reason };
 			}
 			break;
 		}
-		case 'agent.exited': {
+		case 'agent.ended': {
 			const agent = state.agents.get(event.id);
-			if (agent && agent.state !== 'exited') {
-				agent.state = 'exited';
-				agent.exit = { kind: event.kind, reason: event.reason, time: event.time };
+			if (agent && agent.state !== 'ended') {
+				agent.state = 'ended';
+				agent.stopping = undefined;
+				agent.end = { kind: event.kind, ...(event.by !== undefined ? { by: event.by } : {}), reason: event.reason, time: event.time, ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}) };
 			}
 			for (const [hash, id] of state.tokens) {
 				if (id === event.id) {
@@ -315,8 +405,8 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			break;
 		}
 		case 'worktree.made': {
-			const { name, folder, repository, parentWorktree, madeBy } = event;
-			state.worktrees.set(folder, { name, folder, repository, parentWorktree, ...(madeBy !== undefined ? { madeBy } : {}) });
+			const { name, folder, repository, commit, madeBy } = event;
+			state.worktrees.set(folder, { name, folder, repository, commit, ...(madeBy !== undefined ? { madeBy } : {}) });
 			break;
 		}
 		case 'worktree.gone': {
@@ -327,15 +417,20 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			}
 			break;
 		}
+		case 'list.cleared': {
+			// The agents that ended leave the list, but for the creators of those it keeps: they name them.
+			const creators = new Set([...state.agents.values()].filter(isLive).map(agent => agent.creator));
+			for (const agent of [...state.agents.values()]) {
+				if (!isLive(agent) && !creators.has(agent.id)) {
+					state.agents.delete(agent.id);
+				}
+			}
+			break;
+		}
 	}
 }
 
-/** Whether an agent has not exited: starting, or running. */
+/** Whether an agent has not ended: starting, running, or stopping. */
 export function isLive(agent: Agent | undefined): agent is LiveAgent {
-	return !!agent && agent.state !== 'exited';
-}
-
-/** An agent's parent now: the agent that started it while that one has not exited; none, the person, else. */
-export function parentOf(state: WorkspaceState, agent: Agent): number | undefined {
-	return agent.parent !== undefined && isLive(state.agents.get(agent.parent)) ? agent.parent : undefined;
+	return !!agent && agent.state !== 'ended';
 }

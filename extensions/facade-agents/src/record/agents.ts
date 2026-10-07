@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { isEqualPath, replaceFile } from '../base/files';
-import { Agent, Caller, Exit, ExitKind, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, parentOf, PERSON, RESERVED_NAMES, WorkspaceState } from './events';
+import { Agent, Caller, End, EndKind, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, StoppedBy, WorkspaceState } from './events';
 import { ClosedBy, LastClose, Ledger, LedgerOptions } from './ledger';
 
 /** The person's token, in the workspace's folder: scripts that hold it act as the person. */
@@ -48,18 +48,21 @@ export interface AgentTableOptions extends LedgerOptions {
 	readonly dir: string;
 }
 
-/** An agent to start: who it is, who starts it, and where it works. */
+/** An agent to start: who it is, who starts it, where it works, and how its task reaches it. */
 export interface NewAgent {
 	readonly name: string;
 	/** The agent that starts it; none for the person. */
-	readonly parent?: number;
+	readonly creator?: number;
 	readonly cli: string;
 	readonly model: string;
 	readonly effort: string;
 	readonly worktree: string;
 	readonly folder: string;
-	/** The task of a CLI that is told of its task in its terminal, given its number: written to a file of its own. */
-	readonly task?: (id: number) => string;
+	/**
+	 * Its task: given its number, the text to type into its terminal, which is written to a file of its
+	 * own (`taskFileOf`); `argument` where it is given on its command line; none where it has no task.
+	 */
+	readonly task?: 'argument' | ((id: number) => string);
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -150,14 +153,14 @@ export class AgentTable {
 		return [...this.state.agents.values()].filter((agent): agent is LiveAgent => isLive(agent) && agent.name === name);
 	}
 
-	/** An agent's parent now: none, the person, once the agent that started it has exited. */
-	parentOf(agent: Agent): number | undefined {
-		return parentOf(this.state, agent);
+	/** The agents the agent `id` started - the person, for none - that have not ended, oldest first. */
+	childrenOf(id: number | undefined): LiveAgent[] {
+		return [...this.state.agents.values()].filter((agent): agent is LiveAgent => isLive(agent) && agent.creator === id);
 	}
 
-	/** The children of the agent `id` - of the person, for none - that have not exited, oldest first. */
-	childrenOf(id: number | undefined): LiveAgent[] {
-		return [...this.state.agents.values()].filter((agent): agent is LiveAgent => isLive(agent) && this.parentOf(agent) === id);
+	/** The file the task of the agent `id` is in, for a CLI told of its task in its terminal. */
+	taskFileOf(id: number): string {
+		return path.join(this.runsDir, `${id}.task.md`);
 	}
 
 	/**
@@ -175,22 +178,20 @@ export class AgentTable {
 		const tokenFile = path.join(this.runsDir, `${id}.token`);
 		fs.mkdirSync(this.runsDir, { recursive: true });
 		fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-		let taskFile: string | undefined;
-		if (agent.task) {
-			taskFile = path.join(this.runsDir, `${id}.task.md`);
-			fs.writeFileSync(taskFile, agent.task(id), { mode: 0o600 });
+		if (typeof agent.task === 'function') {
+			fs.writeFileSync(this.taskFileOf(id), agent.task(id), { mode: 0o600 });
 		}
 		this.ledger.append({
 			type: 'agent.started',
 			id,
 			name,
-			...(agent.parent !== undefined ? { parent: agent.parent } : {}),
+			...(agent.creator !== undefined ? { creator: agent.creator } : {}),
 			cli: agent.cli,
 			model: agent.model,
 			effort: agent.effort,
 			worktree: agent.worktree,
 			folder: agent.folder,
-			...(taskFile !== undefined ? { taskFile } : {}),
+			task: agent.task === undefined ? 'none' : agent.task === 'argument' ? 'argument' : 'pending',
 			tokenHash: hashToken(token)
 		});
 		const started = this.state.agents.get(id);
@@ -200,32 +201,79 @@ export class AgentTable {
 		return { agent: started, token, tokenFile };
 	}
 
-	/** Records that a starting agent is running: its MCP server said hello. */
-	setRunning(id: number): void {
+	/** Records the process of an agent's CLI, once its terminal runs it. */
+	launched(id: number, processId: number): void {
+		if (isLive(this.state.agents.get(id))) {
+			this.ledger.append({ type: 'agent.launched', id, processId });
+		}
+	}
+
+	/** Records that an agent's MCP server said hello to Facade. */
+	connected(id: number): void {
+		const agent = this.state.agents.get(id);
+		if (isLive(agent) && !agent.connected) {
+			this.ledger.append({ type: 'agent.connected', id });
+		}
+	}
+
+	/** Records that a starting agent has started, and runs. */
+	running(id: number): void {
 		if (this.state.agents.get(id)?.state === 'starting') {
 			this.ledger.append({ type: 'agent.running', id });
 		}
 	}
 
-	/** Records that the line telling an agent of its task file was typed into its terminal. */
-	setTaskTyped(id: number): void {
+	/** Records that the line telling an agent of its task file is about to be typed into its terminal: from here on, how far it got is not known. */
+	taskTyping(id: number): void {
 		const agent = this.state.agents.get(id);
-		if (isLive(agent) && agent.taskFile !== undefined && !agent.taskTyped) {
+		if (isLive(agent) && agent.task === 'pending') {
+			this.ledger.append({ type: 'task.typing', id });
+		}
+	}
+
+	/** Records that the line telling an agent of its task file was typed into its terminal, and Enter after it. */
+	taskTyped(id: number): void {
+		const agent = this.state.agents.get(id);
+		if (isLive(agent) && (agent.task === 'pending' || agent.task === 'unknown')) {
 			this.ledger.append({ type: 'task.typed', id });
 		}
 	}
 
-	/** Records how an agent exited, and removes its run files; answers with its exit, or undefined for one that had exited already. */
-	setExited(id: number, kind: ExitKind, reason: string): Exit | undefined {
+	/** Records that an agent called `accept_task`. */
+	accepted(id: number): void {
+		const agent = this.state.agents.get(id);
+		if (isLive(agent) && !agent.accepted) {
+			this.ledger.append({ type: 'task.accepted', id });
+		}
+	}
+
+	/** Records that Facade set out to stop an agent - by whom, and why - until its process has ended. */
+	stopping(id: number, reason: string, by?: StoppedBy): void {
+		const agent = this.state.agents.get(id);
+		if (agent?.state === 'starting' || agent?.state === 'running') {
+			this.ledger.append({ type: 'agent.stopping', id, ...(by !== undefined ? { by } : {}), reason });
+		}
+	}
+
+	/**
+	 * Records how an agent ended - by whom, where someone stopped it, and with its CLI's exit code where it
+	 * is known - and removes its run files; answers with its end, or undefined for one that had ended already.
+	 */
+	end(id: number, kind: EndKind, reason: string, details: { readonly by?: StoppedBy; readonly exitCode?: number } = {}): End | undefined {
 		if (!isLive(this.state.agents.get(id))) {
 			return undefined;
 		}
-		this.ledger.append({ type: 'agent.exited', id, kind, reason });
+		this.ledger.append({ type: 'agent.ended', id, kind, ...(details.by !== undefined ? { by: details.by } : {}), reason, ...(details.exitCode !== undefined ? { exitCode: details.exitCode } : {}) });
 		this.removeRunFiles(each => each === id);
-		return this.state.agents.get(id)?.exit;
+		return this.state.agents.get(id)?.end;
 	}
 
-	/** Records a worktree Facade made for a child. */
+	/** Begins a new list: the agents that ended leave it, but for the creators of those it keeps. */
+	clearList(): void {
+		this.ledger.append({ type: 'list.cleared' });
+	}
+
+	/** Records a worktree Facade made for an agent. */
 	recordWorktree(worktree: MadeWorktree): void {
 		this.ledger.append({ type: 'worktree.made', ...worktree });
 	}

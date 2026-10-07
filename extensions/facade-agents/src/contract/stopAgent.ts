@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe } from '../record/events';
+import { endText } from './listAgents';
 import { Args } from './args';
 import type { ContractTool } from './tools';
 
@@ -12,7 +13,7 @@ export const stopAgentTool: ContractTool = {
 	definition: {
 		name: 'stop_agent',
 		title: 'Stop a child agent',
-		description: 'Stops one of your children, by its number or its @name: its CLI ends and its terminal closes. Its worktree stays as it is. Its own children run on, and are @human\'s from then on.',
+		description: 'Stops one of your children, by its number or its @name: its CLI ends and its terminal closes. Its worktree stays as it is. The agents it started run on.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -26,8 +27,8 @@ export const stopAgentTool: ContractTool = {
 		const args = new Args('stop_agent', ['agent'], input);
 		const stopped = await facade.stopAgent(caller, args.text('agent'));
 		return {
-			text: stopped.alreadyExited
-				? `${describe(stopped)} had exited already (${stopped.exit.kind}: ${stopped.exit.reason}).`
+			text: stopped.alreadyEnded
+				? `${describe(stopped)} had ended already (${endText(stopped.end)}).`
 				: `Stopped ${describe(stopped)}: its terminal closed. Its worktree stays as it is.`,
 			data: stopped
 		};

@@ -6,7 +6,7 @@
 import { Facade } from '../core/facade';
 import { Caller, describe, PERSON } from '../record/events';
 
-const TOOLS = 'Your tools: start_agent starts a child agent and answers with its number once it is up; list_agents lists you, your parent and your children, each with its number and state; stop_agent stops one of your children.';
+const TOOLS = 'Your tools: start_agent starts a child agent and answers with its number once it is up; list_agents lists you, the agent that started you and the agents you started, each with its number and state; stop_agent stops one of your children.';
 
 /** A CLI an agent can start children with, as the skill names it. */
 export interface StartableCli {
@@ -28,7 +28,7 @@ export function instructionsFor(facade: Facade, caller: Caller): string {
 	if (!agent) {
 		return ['You act as the person, @human, in Facade Code.', TOOLS].join('\n');
 	}
-	const starter = agent.parent === undefined ? undefined : facade.agent(agent.parent);
+	const starter = agent.creator === undefined ? undefined : facade.agent(agent.creator);
 	return [
 		`You are ${describe(agent)}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, started by ${describe(starter ?? PERSON)}.`,
 		`You run in ${agent.folder}: the worktree ${agent.worktree}. You are in that folder already: run commands there without cd.`,
@@ -40,13 +40,13 @@ export function instructionsFor(facade: Facade, caller: Caller): string {
  * What a new agent's first message says before its task: who it is and who started it, for a CLI
  * whose model may not see its MCP server's instructions.
  */
-export function openingFor(agent: { readonly id: number; readonly name: string; readonly cliName: string }, parent: Caller): string {
-	return `[facade] You are ${describe(agent)}, ${anAgentOf(agent.cliName)} in Facade Code, started by ${describe(parent)}. Your task:`;
+export function openingFor(agent: { readonly id: number; readonly name: string; readonly cliName: string }, creator: Caller): string {
+	return `[facade] You are ${describe(agent)}, ${anAgentOf(agent.cliName)} in Facade Code, started by ${describe(creator)}. Your task:`;
 }
 
 /**
- * The `facade` skill every agent is handed at its launch: how Facade behaves - agents, their parents and
- * children, the tools, the folder an agent runs in - and the CLIs this machine has to start children
+ * The `facade` skill every agent is handed at its launch: how Facade behaves - agents, who started them
+ * and whom they started, the tools, the folder an agent runs in - and the CLIs this machine has to start children
  * with. Nothing about how to work: that is the person's to choose.
  */
 export function facadeSkill(clis: readonly StartableCli[]): { readonly name: string; readonly description: string; readonly body: string } {
@@ -60,8 +60,9 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'# Working in Facade Code',
 			'',
 			'You are an agent in Facade Code: a coding agent CLI in its own terminal, in a folder of a git',
-			'repository. Each agent has a name and a number, as @name #a7, a parent and children. The person,',
-			'@human, starts the first agents, and the children of an agent that exits are theirs from then on.',
+			'repository. Each agent has a name and a number, as @name #a7, the agent that started it, and the',
+			'agents it starts. The person, @human, starts the first agents. Who started an agent never changes:',
+			'when an agent ends, the agents it started run on.',
 			'A number is Facade\'s own, not a process id: only the tools below take it. The person can see your',
 			'terminal and type into it at any time: answer them there.',
 			'',
@@ -75,9 +76,9 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'  `worktree: "new"` and a `name` in a worktree of its own, on a new branch of that name, starting',
 			'  at your worktree\'s HEAD: commit what the child needs before you start it there. It answers once',
 			'  the child is up, with its number.',
-			'- `list_agents` lists you, your parent and your children: each one\'s name and number, its',
-			'  parent\'s number or @human, its state - starting, running, or exited, how and why - its CLI,',
-			'  model and effort, and its worktree. With `all`, every agent this workspace has had.',
+			'- `list_agents` lists you, the agent that started you and the agents you started: each one\'s',
+			'  name and number, who started it, its state - starting, running, stopping, or ended, how and why -',
+			'  its CLI, model and effort, and its worktree. With `all`, every agent of this window\'s list.',
 			'- `stop_agent` stops one of your children, by its number, as #a7, or its @name. Its worktree stays.',
 			'',
 			'A name is a label, which several agents can have: where more than one running agent has it, name',
@@ -85,8 +86,8 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'',
 			'## Your children',
 			'',
-			'- Facade tells you only what it knows for certain: whether a child is starting, running or has',
-			'  exited, and how. Whether a running child works or is done, its worktree shows: the files there,',
+			'- Facade tells you only what it knows for certain: whether a child is starting, running, stopping',
+			'  or has ended, and how. Whether a running child works or is done, its worktree shows: the files there,',
 			'  `git status` and `git log`.',
 			'- Agents do not message each other yet: give a child a task it can finish on its own, and say',
 			'  where its result should be - a file, or a commit on its branch.',
