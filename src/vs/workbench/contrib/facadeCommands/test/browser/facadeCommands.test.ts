@@ -162,6 +162,12 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			makeWorktree: async (main, branch, options) => {
 				steps.push(`make ${main.path} ${branch} ${options?.startPoint} ${options?.show}`);
 				return URI.file(`/home/me/.facade/worktrees/lab/${branch}`);
+			},
+			removeWorktree: async worktree => {
+				steps.push(`delete ${worktree.path}`);
+				if (worktree.path === '/lab') {
+					throw new Error('/lab is its repository\'s main checkout, which is never deleted.');
+				}
 			}
 		});
 		instantiationService.stub(IFolderTerminalsService, {
@@ -218,6 +224,19 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				'Unexpected type, expected \'boolean\'',
 			],
 			steps: [],
+		});
+	});
+
+	test('a worktree is deleted without asking, as the worktrees delete one, answered once it is gone; why it could not be is the rejection, and a folder that is no URI is refused', async () => {
+		const deleted = await run('_facade.worktree.delete', URI.file('/home/me/.facade/worktrees/lab/clamp'));
+		const mainCheckout = await failureOf('_facade.worktree.delete', URI.file('/lab'));
+		const notAUri = await failureOf('_facade.worktree.delete', '/home/me/.facade/worktrees/lab/clamp');
+
+		assert.deepStrictEqual({ deleted, mainCheckout, notAUri, steps }, {
+			deleted: undefined,
+			mainCheckout: '/lab is its repository\'s main checkout, which is never deleted.',
+			notAUri: 'Unexpected type, expected \'URI\'',
+			steps: ['delete /home/me/.facade/worktrees/lab/clamp', 'delete /lab'],
 		});
 	});
 

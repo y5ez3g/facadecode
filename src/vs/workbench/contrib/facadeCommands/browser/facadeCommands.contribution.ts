@@ -124,7 +124,7 @@ CommandsRegistry.registerCommand('_facade.terminal.whenRestored', async accessor
 
 // `(main, branch, startPoint?, show?)`: a worktree of the repository whose main checkout is `main`, made
 // as New Worktree makes one, without its dialog, for an agent sending a child out
-// (`IWorktreeService.makeWorktree`). Answers with its folder.
+// (`IWorktreeService.makeWorktree`). Answers with its folder, once its setup has run.
 CommandsRegistry.registerCommand('_facade.worktree.create', async (accessor, ...args) => {
 	const [main, branch, startPoint, show] = args;
 	assertType(URI.isUri(main), 'URI');
@@ -134,6 +134,16 @@ CommandsRegistry.registerCommand('_facade.worktree.create', async (accessor, ...
 	assertType(isUndefinedOrNull(show) || isBoolean(show), 'boolean');
 
 	return accessor.get(IWorktreeService).makeWorktree(main, branch, { startPoint: startPoint ?? undefined, show: show ?? undefined });
+});
+
+// `(worktree)`: deletes the worktree as Delete Worktree does, with nothing asked - its changes with it, its
+// branch kept - for an agent stopping the agents in it (`IWorktreeService.removeWorktree`). Rejects with why
+// it could not, in the product's words: a main checkout is never deleted.
+CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...args) => {
+	const [worktree] = args;
+	assertType(URI.isUri(worktree), 'URI');
+
+	await accessor.get(IWorktreeService).removeWorktree(worktree);
 });
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window

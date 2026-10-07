@@ -32,7 +32,7 @@ import { TestInstantiationService } from '../../../../../platform/instantiation/
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
 import { INotificationHandle, INotificationService, IPromptChoice } from '../../../../../platform/notification/common/notification.js';
-import { IProgressService } from '../../../../../platform/progress/common/progress.js';
+import { IProgressService, ProgressLocation } from '../../../../../platform/progress/common/progress.js';
 import { ICommandDetectionCapability, ITerminalCapabilityStore, ITerminalCommand } from '../../../../../platform/terminal/common/capabilities/capabilities.js';
 import { TerminalSettingId } from '../../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
@@ -142,6 +142,8 @@ suite('Worktrees - making and deleting one', () => {
 	let editorAreaTerminals: ITerminalInstance[];
 	/** Whether trust is on, the workspace trusted, trust given when asked, and the repository trusted where that differs. */
 	let trust: { enabled: boolean; trusted: boolean; granted: boolean; repositoryTrusted?: boolean };
+	/** Where each progress was shown. */
+	let progressShown: ProgressLocation[];
 	let instantiationService: TestInstantiationService;
 
 	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean }): ITerminalInstance {
@@ -223,9 +225,10 @@ suite('Worktrees - making and deleting one', () => {
 		}
 	}
 
-	/** The git extension's commands registered, as once it has started: a worktree made for an agent waits for them. */
+	/** The git extension's commands registered, as once it has started: a worktree made or deleted for an agent waits for them. */
 	function gitIsRunning(): void {
 		store.add(CommandsRegistry.registerCommand('_git.prepareWorktreeBaseAt', () => { }));
+		store.add(CommandsRegistry.registerCommand('_git.deleteWorktreeAt', () => { }));
 	}
 
 	setup(() => {
@@ -242,6 +245,7 @@ suite('Worktrees - making and deleting one', () => {
 		terminals = [terminal('its terminal', '/home/me/.facade/worktrees/lab/w2/src'), terminal('another', '/lab')];
 		editorAreaTerminals = [];
 		trust = { enabled: false, trusted: true, granted: false };
+		progressShown = [];
 		repository = { kind: 'repository', main, folder: undefined, branch: 'main', members: [], worktrees: [{ uri: w2, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
 
 		const restored = store.add(new Emitter<void>());
@@ -304,7 +308,15 @@ suite('Worktrees - making and deleting one', () => {
 				return upcastPartial<INotificationHandle>({});
 			}
 		});
-		instantiationService.stub(IFolderTerminalsService, { terminalsOf: () => editorAreaTerminals });
+		instantiationService.stub(IFolderTerminalsService, {
+			terminalsOf: () => editorAreaTerminals,
+			openFor: async folder => {
+				steps.push(`hold setup under ${folder.path}`);
+				const shell = setupTerminal();
+				setupShell.complete(shell);
+				return shell.instance;
+			}
+		});
 		instantiationService.stub(ITerminalService, {
 			get instances() { return terminals; },
 			createTerminal: async () => {
@@ -313,9 +325,14 @@ suite('Worktrees - making and deleting one', () => {
 				return shell.instance;
 			},
 			setActiveInstance: () => { },
-			revealTerminal: async () => { }
+			revealTerminal: async () => { steps.push('reveal setup'); }
 		});
-		instantiationService.stub(IProgressService, { withProgress: async (_options, task) => task({ report: () => { } }) });
+		instantiationService.stub(IProgressService, {
+			withProgress: async (options, task) => {
+				progressShown.push(options.location as ProgressLocation);
+				return task({ report: () => { } });
+			}
+		});
 		instantiationService.stub(IFileService, {
 			hasCapability: () => true,
 			resolve: (() => Promise.reject(new Error('not there'))) as IFileService['resolve'],
@@ -390,6 +407,32 @@ suite('Worktrees - making and deleting one', () => {
 				'listed /home/me/.facade/worktrees/lab/w3',
 				'open /lab',
 			],
+		});
+	});
+
+	test('made without asking, it is set up at once, in a terminal held under its row and not shown, and answered once its setup has run', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		files.set(`${w3.path}/.facade/worktrees.json`, '{ "setup-worktree": ["npm ci", "npm run build"] }');
+		let made = false;
+
+		const making = instantiationService.createInstance(WorktreeService).makeWorktree(main, 'w3').then(() => made = true);
+		const shell = await setupShell.p;
+		shell.integrate();
+		await shell.whenSent(1);
+		shell.finish(shell.sent[0].id);
+		await shell.whenSent(2);
+		await timeout(0);
+		const beforeTheLastFinished = made;
+		shell.finish(shell.sent[1].id);
+		await making;
+
+		assert.deepStrictEqual({ beforeTheLastFinished, made, sent: sentLines(shell), terminal: steps.filter(step => step.includes('setup')) }, {
+			beforeTheLastFinished: false,
+			made: true,
+			sent: ['run npm ci', 'run npm run build'],
+			terminal: ['hold setup under /home/me/.facade/worktrees/lab/w3'],
 		});
 	});
 
@@ -709,6 +752,63 @@ suite('Worktrees - making and deleting one', () => {
 			],
 			type: 'warning',
 			detail: true,
+		});
+	});
+
+	test('deleted without asking, for an agent: nothing asked, then off it and its row gone, out of folders[], its terminals closed and only then git, with force for its changes; its name, colour, place and trust go with it; its progress in the status bar', async () => {
+		gitIsRunning();
+		trust.enabled = true;
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['a.txt'], submodules: false });
+		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
+		savedOrder = [w2, w3];
+
+		await instantiationService.createInstance(WorktreeService).removeWorktree(w2);
+
+		assert.deepStrictEqual({ steps, progressShown }, {
+			steps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'show /lab',
+				'hide /home/me/.facade/worktrees/lab/w2',
+				'remove /home/me/.facade/worktrees/lab/w2',
+				'close its terminal',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
+				'unhide /home/me/.facade/worktrees/lab/w2',
+				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'order /home/me/.facade/worktrees/lab/w3',
+				'untrust /home/me/.facade/worktrees/lab/w2',
+			],
+			progressShown: [ProgressLocation.Window],
+		});
+	});
+
+	test('deleted without asking, it is refused with why: a main checkout, which is never deleted, a folder that is no worktree, and Restricted Mode; one git will not delete comes back to its row, said in the product\'s words and nowhere else', async () => {
+		gitIsRunning();
+		const service = instantiationService.createInstance(WorktreeService);
+		const attempt = (target: URI) => service.removeWorktree(target).then(() => 'deleted', (err: Error) => err.message);
+		const mainCheckout = await attempt(main);
+		const notAWorktree = await attempt(URI.file('/notes'));
+		trust.enabled = true;
+		trust.trusted = false;
+		const restricted = await attempt(w2);
+		trust.trusted = true;
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'error', code: undefined, message: 'fatal: the directory is busy' });
+		const busy = await attempt(w2);
+
+		assert.deepStrictEqual({ mainCheckout, notAWorktree, restricted, busy, steps }, {
+			mainCheckout: '/lab is its repository\'s main checkout, which is never deleted.',
+			notAWorktree: '/notes is not a worktree the workspace knows.',
+			restricted: 'The workspace is in Restricted Mode, where Git does not run. Trust the workspace first.',
+			busy: 'The worktree could not be deleted: fatal: the directory is busy',
+			steps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'show /lab',
+				'hide /home/me/.facade/worktrees/lab/w2',
+				'remove /home/me/.facade/worktrees/lab/w2',
+				'close its terminal',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
+				'unhide /home/me/.facade/worktrees/lab/w2',
+			],
 		});
 	});
 

@@ -186,6 +186,16 @@ function gitExtensionNotRunning(): string {
 	return localize('worktrees.noGitExtension', "Worktrees are made and deleted with the Git extension, which is not running in this window.");
 }
 
+/** Why the Git extension cannot be asked to delete a worktree: `err`, or that it is not running. */
+function gitUnreachableToDelete(err: unknown): string {
+	return CommandsRegistry.getCommand('_git.deleteWorktreeAt') ? localize('worktrees.noGitDelete', "Git could not be reached to delete the worktree: {0}", toErrorMessage(err)) : gitExtensionNotRunning();
+}
+
+/** Why nothing is done for a caller that does not ask, where the person would have been asked for trust. */
+function restrictedUnasked(): string {
+	return localize('worktrees.restrictedUnasked', "The workspace is in Restricted Mode, where Git does not run. Trust the workspace first.");
+}
+
 function noIdentityMessage(): string {
 	return localize('worktrees.noIdentity', "Git user name and email are not configured, and a commit requires them. Set them with {0} and {1}, then try again.", 'git config --global user.name', 'git config --global user.email');
 }
@@ -247,13 +257,23 @@ export interface IWorktreeService {
 
 	/**
 	 * A worktree of `main` on the new branch `branch`, made without asking anything, for a caller that
-	 * has decided already - an agent sending a child out to a worktree of its own. Setup runs as for
-	 * New Worktree. Throws, in the product's words, when it cannot be made.
+	 * has decided already - an agent sending a child out to a worktree of its own. Setup runs at once, in
+	 * a terminal held under the worktree's row and not shown, and the worktree is answered once it has
+	 * run: the agent starts after it (WT-5.11). Throws, in the product's words, when it cannot be made.
 	 *
 	 * Nothing is asked, so nothing that would have been asked is done: a workspace or repository that
 	 * is not trusted, or a folder with no commit yet, is refused rather than trusted or given one.
 	 */
 	makeWorktree(main: URI, branch: string, options?: IMakeWorktreeOptions): Promise<URI>;
+
+	/**
+	 * Deletes the worktree `target` as Delete Worktree does, without asking anything, for a caller that has
+	 * decided already - an agent stopping the agents in it: its uncommitted changes go with it, and its
+	 * branch is kept. Throws, in the product's words, when it cannot: a main checkout, which is never
+	 * deleted, a folder that is no worktree, and a worktree git will not delete - whose row comes back, to
+	 * try again (WT-8.6).
+	 */
+	removeWorktree(target: URI): Promise<void>;
 }
 
 /** How `makeWorktree` makes a worktree. */
@@ -317,7 +337,7 @@ export class WorktreeService implements IWorktreeService {
 		// WT-7, once the run is over: a setup line can take minutes or never end - a server - and neither
 		// holds up the repository's next worktree, nor whoever asked for this one, which is ready.
 		if (worktree) {
-			this.runSetup(main, worktree).catch(onUnexpectedError);
+			this.runSetup(main, worktree, false).catch(onUnexpectedError);
 		}
 	}
 
@@ -330,7 +350,7 @@ export class WorktreeService implements IWorktreeService {
 		const repository = this.workspaceBarService.repositoryFor(target);
 		const worktree = findWorktree(repository, target, this.uriIdentityService.extUri);
 		if (!repository || !worktree) {
-			this.notificationService.info(localize('worktrees.notWorktree', "{0} is not a worktree the workspace knows.", this.labelService.getUriLabel(target)));
+			this.notificationService.info(this.notAWorktree(target));
 			return;
 		}
 
@@ -341,9 +361,23 @@ export class WorktreeService implements IWorktreeService {
 		const root = this.workspaceBarService.repositoryFor(main)?.main ?? main;
 		const worktree = await this.runInTurn(root, () => this.doMakeWorktree(root, branch.trim(), options));
 
-		// As after New Worktree: setup goes on in its own terminal, and holds nothing up.
-		this.runSetup(root, worktree).catch(onUnexpectedError);
+		// Waited for, after the run: the agent starts once its worktree is set up, and the repository's next
+		// worktree is not held up by it. Shown, it is set up as after New Worktree.
+		await this.runSetup(root, worktree, options.show !== true).catch(onUnexpectedError);
 		return worktree;
+	}
+
+	async removeWorktree(target: URI): Promise<void> {
+		const repository = this.workspaceBarService.repositoryFor(target);
+		const worktree = findWorktree(repository, target, this.uriIdentityService.extUri);
+		if (!repository || !worktree) {
+			throw new Error(repository && this.uriIdentityService.extUri.isEqual(repository.main, target)
+				? localize('worktrees.mainNotDeleted', "{0} is its repository's main checkout, which is never deleted.", this.labelService.getUriLabel(target))
+				: this.notAWorktree(target));
+		}
+
+		// One at a time, as Delete Worktree: a second waits for the first, and finds no worktree there
+		await this.runInTurn(worktree.uri, () => this.doRemoveWorktree(repository.main, worktree.uri, worktreeNameFor(this.customizationService, worktree)));
 	}
 
 	/**
@@ -557,7 +591,7 @@ export class WorktreeService implements IWorktreeService {
 
 		const trustEnabled = this.workspaceTrustEnablementService.isWorkspaceTrustEnabled();
 		if (trustEnabled && !this.workspaceTrustManagementService.isWorkspaceTrusted()) {
-			throw new Error(localize('worktrees.restrictedUnasked', "The workspace is in Restricted Mode, where Git does not run. Trust the workspace first."));
+			throw new Error(restrictedUnasked());
 		}
 
 		if (trustEnabled && !(await this.workspaceTrustManagementService.getUriTrustInfo(main)).trusted) {
@@ -699,10 +733,12 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	/**
-	 * WT-7: the lines of `.facade/worktrees.json`, run in a terminal of the worktree - in the person's
-	 * own shell, with the output on screen. A failing line leaves the worktree usable.
+	 * WT-7: the lines of `.facade/worktrees.json`, run in a terminal of the worktree - in the person's own
+	 * shell, with the output on screen, or `held` under the worktree's row and not shown, for an agent's
+	 * (WT-5.11). A failing line leaves the worktree usable. Resolves once the last line has finished -
+	 * where shell integration says it did, else once it is typed - or once the terminal is gone.
 	 */
-	private async runSetup(main: URI, worktree: URI): Promise<void> {
+	private async runSetup(main: URI, worktree: URI, held: boolean): Promise<void> {
 		const content = await this.readFirst([joinPath(worktree, '.facade', 'worktrees.json'), joinPath(main, '.facade', 'worktrees.json')]);
 		if (content === undefined) {
 			return;
@@ -720,16 +756,20 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
-		const terminal = await this.terminalService.createTerminal({
-			config: {
-				name: localize('worktrees.setupTerminal', "Worktree Setup"),
-				cwd: worktree,
-				// Cursor's name for it, so a script written for Cursor's worktrees.json works here.
-				env: { ROOT_WORKTREE_PATH: toOsPath(main, windows) }
-			}
-		});
-		this.terminalService.setActiveInstance(terminal);
-		await this.terminalService.revealTerminal(terminal);
+		const config = {
+			name: localize('worktrees.setupTerminal', "Worktree Setup"),
+			cwd: worktree,
+			// Cursor's name for it, so a script written for Cursor's worktrees.json works here.
+			env: { ROOT_WORKTREE_PATH: toOsPath(main, windows) }
+		};
+		let terminal: ITerminalInstance;
+		if (held) {
+			terminal = await this.folderTerminalsService.openFor(worktree, config);
+		} else {
+			terminal = await this.terminalService.createTerminal({ config });
+			this.terminalService.setActiveInstance(terminal);
+			await this.terminalService.revealTerminal(terminal);
+		}
 
 		// WT-7.4: each line whatever the one before did, one at a time: the next is sent once shell
 		// integration says the last finished, or straight after it without shell integration.
@@ -782,14 +822,12 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
-		const run = (mode: 'check' | 'remove' | 'force') => this.commandService.executeCommand<DeleteWorktreeAtResult>('_git.deleteWorktreeAt', main, worktree, mode);
-
 		// 1  check: what would be lost, before anybody is asked.
 		let check: DeleteWorktreeAtResult | undefined;
 		try {
-			check = await run('check');
+			check = await this.deleteAt(main, worktree, 'check');
 		} catch (err) {
-			this.notificationService.error(CommandsRegistry.getCommand('_git.deleteWorktreeAt') ? localize('worktrees.noGitDelete', "Git could not be reached to delete the worktree: {0}", toErrorMessage(err)) : gitExtensionNotRunning());
+			this.notificationService.error(gitUnreachableToDelete(err));
 			return;
 		}
 
@@ -807,10 +845,57 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
+		const failure = await this.deleteChecked(main, worktree, name, check, ProgressLocation.Notification);
+		if (failure) {
+			this.notificationService.error(failure);
+		}
+	}
+
+	/**
+	 * `removeWorktree`: WT-8 with nothing asked - no confirmation, no trust asked for - its changes deleted
+	 * with it, as the caller decided. Git that is still starting, as a window just opened, is waited for.
+	 */
+	private async doRemoveWorktree(main: URI, worktree: URI, name: string): Promise<void> {
+		if (this.workspaceTrustEnablementService.isWorkspaceTrustEnabled() && !this.workspaceTrustManagementService.isWorkspaceTrusted()) {
+			throw new Error(restrictedUnasked());
+		}
+
+		await whenRegistered('_git.deleteWorktreeAt', GIT_START_TIMEOUT);
+		let check: DeleteWorktreeAtResult | undefined;
+		try {
+			check = await this.deleteAt(main, worktree, 'check');
+		} catch (err) {
+			throw new Error(gitUnreachableToDelete(err));
+		}
+
+		if (!check || check.kind !== 'checked') {
+			const error = check?.kind === 'error' ? check : undefined;
+			throw new Error(explainFailure(error, main)
+				?? localize('worktrees.checkFailed', "The worktree could not be checked before deleting it: {0}", gitMessage(error)));
+		}
+
+		// Its progress in the status bar: nobody asked for this one where they would look for it
+		const failure = await this.deleteChecked(main, worktree, name, check, ProgressLocation.Window);
+		if (failure) {
+			throw new Error(failure);
+		}
+	}
+
+	/** `_git.deleteWorktreeAt`, for `worktree` of `main`. */
+	private deleteAt(main: URI, worktree: URI, mode: 'check' | 'remove' | 'force'): Promise<DeleteWorktreeAtResult | undefined> {
+		return this.commandService.executeCommand<DeleteWorktreeAtResult>('_git.deleteWorktreeAt', main, worktree, mode);
+	}
+
+	/**
+	 * WT-8 from step 3, once what would be lost is known and its deletion decided: everything that could
+	 * hold the directory open gone before git is asked to delete it, by force where `check` found changes
+	 * or submodules. Answers why it failed, in the product's words; nothing once it is deleted.
+	 */
+	private async deleteChecked(main: URI, worktree: URI, name: string, check: { readonly files: readonly string[]; readonly submodules: boolean }, location: ProgressLocation.Notification | ProgressLocation.Window): Promise<string | undefined> {
 		// 3 to 6 under one progress: a large tree takes a while to delete.
 		const force = check.files.length > 0 || check.submodules;
 		const result = await this.progressService.withProgress(
-			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree {0}...", name) },
+			{ location, title: localize('worktrees.deleting', "Deleting worktree {0}...", name) },
 			async (): Promise<DeleteWorktreeAtResult | undefined> => {
 				// 3  move off, to the repository's own row rather than whichever folder is next in the list (WT-8.3).
 				const active = this.activeFolderService.activeFolder;
@@ -831,9 +916,9 @@ export class WorktreeService implements IWorktreeService {
 						instance.dispose(TerminalExitReason.User);
 					}
 
-					// 6  delete. `force` only when the confirmation named what it throws away.
+					// 6  delete. `force` only when what it throws away was known first.
 					try {
-						return await run(force ? 'force' : 'remove');
+						return await this.deleteAt(main, worktree, force ? 'force' : 'remove');
 					} catch (err) {
 						return { kind: 'error', code: undefined, message: toErrorMessage(err) };
 					}
@@ -847,8 +932,7 @@ export class WorktreeService implements IWorktreeService {
 			const error = result?.kind === 'error' ? result : undefined;
 			const message = gitMessage(error);
 			this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} failed: ${message}`);
-			this.notificationService.error(explainFailure(error, main) ?? localize('worktrees.deleteFailed', "The worktree could not be deleted: {0}", message));
-			return;
+			return explainFailure(error, main) ?? localize('worktrees.deleteFailed', "The worktree could not be deleted: {0}", message);
 		}
 
 		// Its name, colour, place and the trust it was given go with it: they are kept by path, and the next
@@ -861,6 +945,12 @@ export class WorktreeService implements IWorktreeService {
 		if (this.workspaceTrustEnablementService.isWorkspaceTrustEnabled()) {
 			await this.workspaceTrustManagementService.setUrisTrust([worktree], false);
 		}
+		return undefined;
+	}
+
+	/** That `target` is no worktree the workspace knows. */
+	private notAWorktree(target: URI): string {
+		return localize('worktrees.notWorktree', "{0} is not a worktree the workspace knows.", this.labelService.getUriLabel(target));
 	}
 
 	/**
