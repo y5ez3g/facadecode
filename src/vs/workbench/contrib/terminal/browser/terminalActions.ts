@@ -64,6 +64,7 @@ import { ITerminalQuickPickItem } from './terminalProfileQuickpick.js';
 import { TerminalTabList } from './terminalTabsList.js';
 import { ResourceContextKey } from '../../../common/contextkeys.js';
 import { SeparatorSelectOption } from '../../../../base/browser/ui/selectBox/selectBox.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 export const switchTerminalShowTabsTitle = localize('showTerminalTabs', "Show Tabs");
 
@@ -809,7 +810,9 @@ export function registerTerminalActions() {
 	registerActiveInstanceAction({
 		id: TerminalCommandId.DetachSession,
 		title: localize2('workbench.action.terminal.detachSession', 'Detach Session'),
-		run: (activeInstance) => activeInstance.detachProcessAndDispose(TerminalExitReason.User)
+		// Facade Code: not for an agent's run, which stays in its window (`isFacadeRunTerminal`)
+		precondition: ContextKeyExpr.and(TerminalContextKeys.processSupported, TerminalContextKeys.facadeRun.negate()),
+		run: (activeInstance) => isFacadeRunTerminal(activeInstance) ? undefined : activeInstance.detachProcessAndDispose(TerminalExitReason.User)
 	});
 
 	registerTerminalAction({
@@ -1036,7 +1039,9 @@ export function registerTerminalActions() {
 	registerActiveInstanceAction({
 		id: TerminalCommandId.Relaunch,
 		title: localize2('workbench.action.terminal.relaunch', 'Relaunch Active Terminal'),
-		run: (activeInstance) => activeInstance.relaunch()
+		// Facade Code: not for an agent's run, which a relaunch would run again (`isFacadeRunTerminal`)
+		precondition: ContextKeyExpr.and(TerminalContextKeys.processSupported, TerminalContextKeys.facadeRun.negate()),
+		run: (activeInstance) => isFacadeRunTerminal(activeInstance) ? undefined : activeInstance.relaunch()
 	});
 
 	registerTerminalAction({

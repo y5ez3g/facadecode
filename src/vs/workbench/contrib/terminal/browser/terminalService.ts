@@ -44,6 +44,7 @@ import { IWorkbenchEnvironmentService } from '../../../services/environment/comm
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { ILifecycleService, ShutdownReason, StartupKind, WillShutdownEvent } from '../../../services/lifecycle/common/lifecycle.js';
 import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { XtermTerminal } from './xterm/xtermTerminal.js';
 import { TerminalInstance } from './terminalInstance.js';
@@ -292,7 +293,8 @@ export class TerminalService extends Disposable implements ITerminalService {
 				const instanceToDetach = this.getInstanceFromResource(getTerminalUri(e.workspaceId, e.instanceId));
 				if (instanceToDetach) {
 					const persistentProcessId = instanceToDetach?.persistentProcessId;
-					if (persistentProcessId && !instanceToDetach.shellLaunchConfig.isFeatureTerminal && !instanceToDetach.shellLaunchConfig.customPtyImplementation) {
+					// Facade Code: nor an agent's run, which stays in its window - dragged into another, it is not detached (`isFacadeRunTerminal`)
+					if (persistentProcessId && !instanceToDetach.shellLaunchConfig.isFeatureTerminal && !instanceToDetach.shellLaunchConfig.customPtyImplementation && !isFacadeRunTerminal(instanceToDetach)) {
 						if (instanceToDetach.target === TerminalLocation.Editor) {
 							this._terminalEditorService.detachInstance(instanceToDetach);
 						} else {

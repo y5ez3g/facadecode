@@ -6,17 +6,23 @@
 import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Emitter } from '../../../../../base/common/event.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
-import { IStorageService, StorageScope, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
-import { TerminalExitReason } from '../../../../../platform/terminal/common/terminal.js';
+import { MockContextKeyService } from '../../../../../platform/keybinding/test/common/mockKeybindingService.js';
+import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
+import { IReconnectionProperties, IShellLaunchConfig, ITerminalBackend, TerminalExitReason } from '../../../../../platform/terminal/common/terminal.js';
+import { IProcessDetails } from '../../../../../platform/terminal/common/terminalProcess.js';
+import { IWorkspace, IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { ILifecycleService, LifecyclePhase } from '../../../../services/lifecycle/common/lifecycle.js';
-import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
-import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
-import { FacadeRunsService, RUNS_STORAGE_KEY } from '../../browser/facadeRuns.js';
+import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
+import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../../terminal/browser/terminal.js';
+import { FacadeRunsService } from '../../browser/facadeRuns.js';
+import { facadeRunOf, facadeRunProperties, IFacadeRun } from '../../common/facadeRun.js';
 
-/** A terminal as far as runs go: its nonce, the process running in it, and how it closed, once it has. */
+/** A terminal as far as runs go: the run it is marked with, the process running in it, and how it closed, once it has. */
 class TestTerminal {
 
 	private readonly _ready = new DeferredPromise<void>();
@@ -25,7 +31,7 @@ class TestTerminal {
 	exitReason: TerminalExitReason | undefined;
 	isDisposed = false;
 
-	constructor(readonly shellIntegrationNonce: string, public processId: number | undefined) {
+	constructor(readonly reconnectionProperties: IReconnectionProperties | undefined, public processId: number | undefined) {
 		if (processId !== undefined) {
 			this._ready.complete();
 		}
@@ -42,15 +48,23 @@ class TestTerminal {
 	asInstance(): ITerminalInstance { return upcastPartial<ITerminalInstance>(this); }
 }
 
-/** The terminal service as far as runs go: the terminals there, those that close, and the moment they are all back. */
+/** A terminal made for agent `id` of the record `workspace`, marked so. */
+function runTerminal(workspace: string, id: number, processId: number | undefined): TestTerminal {
+	return new TestTerminal(facadeRunProperties({ workspace, id }), processId);
+}
+
+/** The terminal service as far as runs go: the terminals there, those that close, the active one, and the moment they are all back. */
 class TestTerminalService extends mock<ITerminalService>() {
 
 	readonly closed = new Emitter<ITerminalInstance>();
+	readonly activated = new Emitter<ITerminalInstance | undefined>();
 	readonly connected = new DeferredPromise<void>();
 
 	override readonly onDidDisposeInstance = this.closed.event;
+	override readonly onDidChangeActiveInstance = this.activated.event;
 	override readonly whenConnected = this.connected.p;
 	override instances: ITerminalInstance[] = [];
+	override activeInstance: ITerminalInstance | undefined;
 
 	/** A terminal closes: gone from the window, why it went said. */
 	close(terminal: TestTerminal, reason: TerminalExitReason, exitCode?: number): void {
@@ -60,52 +74,75 @@ class TestTerminalService extends mock<ITerminalService>() {
 		this.instances = this.instances.filter(instance => instance !== terminal.asInstance());
 		this.closed.fire(terminal.asInstance());
 	}
+
+	/** A terminal is the active one. */
+	activate(terminal: TestTerminal | undefined): void {
+		this.activeInstance = terminal?.asInstance();
+		this.activated.fire(this.activeInstance);
+	}
 }
 
 suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	/** A load of the window over `storage`, the terminals it has given as they come back. */
-	function windowOver(storage: TestStorageService, ...terminals: TestTerminal[]) {
+	/**
+	 * A load of the window, the terminals it has given; `orphans`, the processes the pty host runs for no
+	 * window, which the window takes back where they are runs' - opening each for its folder, a terminal
+	 * reconnected to it.
+	 */
+	function window(terminals: TestTerminal[], orphans: IProcessDetails[] = []) {
 		const terminalService = new TestTerminalService();
 		terminalService.instances = terminals.map(terminal => terminal.asInstance());
 		const eventually = new DeferredPromise<void>();
+		const takenBack: string[] = [];
+		const contextKeyService = new MockContextKeyService();
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ITerminalService, terminalService);
-		instantiationService.stub(IStorageService, storage);
+		instantiationService.stub(ITerminalInstanceService, { getBackend: async () => upcastPartial<ITerminalBackend>({ listProcesses: async () => orphans }) });
+		instantiationService.stub(IFolderTerminalsService, {
+			openFor: async (folder: URI, config: IShellLaunchConfig) => {
+				const details = config.attachPersistentProcess!;
+				takenBack.push(`${folder.path}: ${details.pid}`);
+				const terminal = new TestTerminal(details.reconnectionProperties, details.pid);
+				terminalService.instances = [...terminalService.instances, terminal.asInstance()];
+				return terminal.asInstance();
+			}
+		});
+		instantiationService.stub(IContextKeyService, contextKeyService);
 		instantiationService.stub(ILifecycleService, { when: (phase: LifecyclePhase) => phase === LifecyclePhase.Eventually ? eventually.p : Promise.resolve() });
+		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ id: 'lab-workspace' }) });
+		instantiationService.stub(ILogService, new NullLogService());
 		const runs = disposables.add(instantiationService.createInstance(FacadeRunsService));
 
-		/** The window has every terminal it had back. */
+		/** The window has every terminal it had back, and has taken back what it takes back. */
 		async function restored(): Promise<void> {
 			terminalService.connected.complete();
 			eventually.complete();
 			await runs.whenRestored;
+			await timeout(0);
 		}
-		return { runs, terminalService, restored };
+		return { runs, terminalService, contextKeyService, takenBack, restored };
 	}
 
-	/** What was kept of the runs: each by its number, with its terminal's nonce and its process. */
-	function kept(storage: TestStorageService): string[] {
-		const stored: { id: number; nonce: string; processId?: number }[] = JSON.parse(storage.get(RUNS_STORAGE_KEY, StorageScope.WORKSPACE) ?? '[]');
-		return stored.map(({ id, nonce, processId }) => `#${id} ${nonce} ${processId}`);
+	/** A process the pty host runs for no window of this workspace's, or another's: a run's, marked so, or any other. */
+	function orphan(pid: number, cwd: string, run?: IFacadeRun, workspaceId = 'lab-workspace'): IProcessDetails {
+		return upcastPartial<IProcessDetails>({ id: pid, pid, cwd, workspaceId, isOrphan: true, ...(run ? { reconnectionProperties: facadeRunProperties(run) } : {}) });
 	}
 
-	test('a run is the process its terminal started for it: present while that runs; gone once it ends - closed by the person, or exited, which the window says - and gone, unseen, once its terminal runs another; a number never registered is gone once the terminals are all back, and unknown before', async () => {
-		const storage = disposables.add(new TestStorageService());
-		const closed = new TestTerminal('closed', 11);
-		const exited = new TestTerminal('exited', 22);
-		const relaunched = new TestTerminal('relaunched', 33);
-		const running = new TestTerminal('running', 44);
-		// On Windows the id comes with the process's first output
-		const silent = new TestTerminal('silent', undefined);
-		// Another workspace's, in this window
-		const notes = new TestTerminal('notes', 66);
-		const { runs, terminalService, restored } = windowOver(storage, closed, exited, relaunched, running, silent, notes);
+	test('a run is the process its marked terminal started: present while that runs; gone once it ends - closed by the person, or exited, which the window says - and gone, unseen, once its terminal runs another; a number with no terminal is gone once the terminals are all back, and unknown before', async () => {
 		const lab = 'a1b2';
+		const closed = runTerminal(lab, 1, 11);
+		const exited = runTerminal(lab, 2, 22);
+		const relaunched = runTerminal(lab, 3, 33);
+		const running = runTerminal(lab, 4, 44);
+		// On Windows the id comes with the process's first output
+		const silent = runTerminal(lab, 5, undefined);
+		// Another workspace's, in this window; and a shell, which is no run
+		const notes = runTerminal('c3d4', 1, 66);
+		const shell = new TestTerminal(undefined, 77);
+		const { runs, terminalService, restored } = window([closed, exited, relaunched, running, silent, notes, shell]);
 		[closed, exited, relaunched, running, silent].forEach((terminal, index) => runs.register(terminal.asInstance(), { workspace: lab, id: index + 1 }));
-		runs.register(notes.asInstance(), { workspace: 'c3d4', id: 1 });
 
 		const beforeBack = runs.processes(lab, [4, 9]);
 		await restored();
@@ -121,8 +158,8 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 			silentAtFirst,
 			all: runs.processes(lab),
 			asked: runs.processes(lab, [4, 9]),
-			terminals: [1, 3, 4].map(id => runs.terminalOf({ workspace: lab, id }) === undefined ? 'none' : 'found'),
-			kept: kept(storage)
+			terminals: [1, 3, 4, 5].map(id => runs.terminalOf({ workspace: lab, id }) === undefined ? 'none' : 'found'),
+			notes: runs.processes('c3d4')
 		}, {
 			beforeBack: [{ id: 4, state: 'present' }, { id: 9, state: 'unknown' }],
 			silentAtFirst: [{ id: 5, state: 'present' }],
@@ -134,51 +171,72 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 				{ id: 5, state: 'present' }
 			],
 			asked: [{ id: 4, state: 'present' }, { id: 9, state: 'gone' }],
-			terminals: ['none', 'none', 'found'],
-			kept: ['#4 running 44', '#5 silent 55', '#1 notes 66']
+			terminals: ['none', 'none', 'found', 'found'],
+			notes: [{ id: 1, state: 'present' }]
 		});
 	});
 
-	test('a run whose process may run on is kept for the window after: through a reload its terminal comes back with the same nonce and process, and it is present as soon as it is back; one whose terminal is not back is unknown until the terminals are all back, then gone, and kept no more; one that went with the window is not ended', async () => {
-		const storage = disposables.add(new TestStorageService());
-		const before = windowOver(storage, new TestTerminal('lead', 11), new TestTerminal('tests', 22));
-		const [lead, tests] = before.terminalService.instances;
-		before.runs.register(lead, { workspace: 'a1b2', id: 1 });
-		before.runs.register(tests, { workspace: 'a1b2', id: 2 });
-		await before.restored();
-		// The window reloads, its terminals going with it
+	test('a run\'s terminal that went with the window is not ended: the window after a reload finds it by its mark, reconnected to the same process, whatever its title; one whose terminal is not back is unknown until the terminals are all back, then gone', async () => {
+		const before = window([runTerminal('a1b2', 1, 11), runTerminal('a1b2', 2, 22)]);
 		for (const instance of [...before.terminalService.instances]) {
 			before.terminalService.close(instance as unknown as TestTerminal, TerminalExitReason.Shutdown);
 		}
-		const asTheWindowWent = before.runs.processes('a1b2');
-		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
-		const keptByTheReload = kept(storage);
+		const asTheWindowWent = before.runs.processes('a1b2', [1, 2]);
 
-		// Only the lead's terminal comes back, reconnected to its process
-		const after = windowOver(storage, new TestTerminal('lead', 11));
-		const comingBack = after.runs.processes('a1b2');
+		// Only #1's terminal is back, reconnected to its process
+		const after = window([runTerminal('a1b2', 1, 11)]);
+		const comingBack = after.runs.processes('a1b2', [1, 2]);
 		await after.restored();
 
-		assert.deepStrictEqual({ asTheWindowWent, keptByTheReload, comingBack, back: after.runs.processes('a1b2'), kept: kept(storage) }, {
+		assert.deepStrictEqual({ asTheWindowWent, comingBack, back: after.runs.processes('a1b2', [1, 2]) }, {
 			asTheWindowWent: [{ id: 1, state: 'unknown' }, { id: 2, state: 'unknown' }],
-			keptByTheReload: ['#1 lead 11', '#2 tests 22'],
 			comingBack: [{ id: 1, state: 'present' }, { id: 2, state: 'unknown' }],
-			back: [{ id: 1, state: 'present' }, { id: 2, state: 'gone' }],
-			kept: ['#1 lead 11']
+			back: [{ id: 1, state: 'present' }, { id: 2, state: 'gone' }]
 		});
 	});
 
-	test('a terminal that closed as it was made - its process could not start - is a run that ended, with its exit code', async () => {
-		const storage = disposables.add(new TestStorageService());
-		const { runs } = windowOver(storage);
-		const failed = new TestTerminal('failed', undefined);
+	test('a window that crashed and was reopened takes back the runs of its workspace whose processes the pty host still runs for no window, each for its folder; not one the pty host revived after a restart of the app, which has no process yet, nor another workspace\'s, nor anything else', async () => {
+		const { runs, takenBack, restored } = window([], [
+			orphan(11, '/lab', { workspace: 'a1b2', id: 1 }),
+			// Revived, not started: started, it would run its agent's CLI again
+			orphan(-1, '/lab', { workspace: 'a1b2', id: 2 }),
+			orphan(33, '/lab-worktrees/clamp', { workspace: 'a1b2', id: 3 }),
+			orphan(44, '/lab'),
+			// A window of another workspace crashed, and is not open again
+			orphan(55, '/notes', { workspace: 'c3d4', id: 1 }, 'notes-workspace')
+		]);
+		await restored();
+
+		assert.deepStrictEqual({ takenBack, processes: runs.processes('a1b2', [1, 2, 3]) }, {
+			takenBack: ['/lab: 11', '/lab-worktrees/clamp: 33'],
+			processes: [{ id: 1, state: 'present' }, { id: 2, state: 'gone' }, { id: 3, state: 'present' }]
+		});
+	});
+
+	test('a terminal that closed as it was made - its process could not start - is a run that ended, with its exit code', () => {
+		const { runs } = window([]);
+		const failed = runTerminal('a1b2', 1, undefined);
 		failed.exitCode = 127;
 		failed.isDisposed = true;
 		runs.register(failed.asInstance(), { workspace: 'a1b2', id: 1 });
 
-		assert.deepStrictEqual({ processes: runs.processes('a1b2'), kept: kept(storage) }, {
-			processes: [{ id: 1, state: 'gone', end: { exitCode: 127, byThePerson: false } }],
-			kept: []
+		assert.deepStrictEqual(runs.processes('a1b2'), [{ id: 1, state: 'gone', end: { exitCode: 127, byThePerson: false } }]);
+	});
+
+	test('the window says whether its active terminal is a run\'s, for what its actions offer; a terminal\'s mark reads as its run, and nothing else as one', () => {
+		const lead = runTerminal('a1b2', 1, 11);
+		const shell = new TestTerminal(undefined, 22);
+		const task = new TestTerminal({ ownerId: 'Task', data: { workspace: 'a1b2', id: 1 } }, 33);
+		const { terminalService, contextKeyService } = window([lead, shell, task]);
+		const answers: unknown[] = [];
+		for (const terminal of [lead, shell, task, undefined]) {
+			terminalService.activate(terminal);
+			answers.push(contextKeyService.getContextKeyValue('facadeRunTerminal'));
+		}
+
+		assert.deepStrictEqual({ answers, runs: [lead, shell, task].map(terminal => facadeRunOf(terminal) ?? 'none') }, {
+			answers: [true, false, false, false],
+			runs: [{ workspace: 'a1b2', id: 1 }, 'none', 'none']
 		});
 	});
 });

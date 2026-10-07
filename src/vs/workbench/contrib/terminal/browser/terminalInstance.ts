@@ -74,6 +74,7 @@ import { TERMINAL_BACKGROUND_COLOR } from '../common/terminalColorRegistry.js';
 import { TerminalContextKeys } from '../common/terminalContextKey.js';
 import { getUriLabelForShell, getShellIntegrationTimeout, getWorkspaceForTerminal, preparePathForShell } from '../common/terminalEnvironment.js';
 import { isAgentTerminalIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -784,7 +785,8 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	}
 
 	get persistentProcessId(): number | undefined { return this._processManager.persistentProcessId; }
-	get shouldPersist(): boolean { return this._processManager.shouldPersist && !this.shellLaunchConfig.isTransient && (!this.reconnectionProperties || this._configurationService.getValue('task.reconnection') === true); }
+	// Facade Code: an agent's run is marked as a task is, and persists whatever tasks are set to (`isFacadeRunTerminal`)
+	get shouldPersist(): boolean { return this._processManager.shouldPersist && !this.shellLaunchConfig.isTransient && (!this.reconnectionProperties || isFacadeRunTerminal(this) || this._configurationService.getValue('task.reconnection') === true); }
 
 	public static getXtermConstructor(keybindingService: IKeybindingService, contextKeyService: IContextKeyService) {
 		const keybinding = keybindingService.lookupKeybinding(TerminalContribCommandId.A11yFocusAccessibleBuffer, contextKeyService);
@@ -1793,7 +1795,8 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		} else {
 			if (exitMessage) {
 				const failedDuringLaunch = this._processManager.processState === ProcessState.KilledDuringLaunch;
-				if (failedDuringLaunch || (this._terminalConfigurationService.config.showExitAlert && this.xterm?.lastInputEvent !== /*Ctrl+D*/'\x04')) {
+				// Facade Code: not for an agent's run, whose end Facade's own notice names the agent of (`isFacadeRunTerminal`)
+				if (!isFacadeRunTerminal(this) && (failedDuringLaunch || (this._terminalConfigurationService.config.showExitAlert && this.xterm?.lastInputEvent !== /*Ctrl+D*/'\x04'))) {
 					this._notificationService.notify({
 						message: exitMessage,
 						severity: Severity.Error,
@@ -2366,6 +2369,8 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 			!this._shellLaunchConfig.isExtensionOwnedTerminal &&
 			// Not a reconnected or revived terminal
 			!this._shellLaunchConfig.attachPersistentProcess &&
+			// Facade Code: not an agent's run, which a relaunch would run again (`isFacadeRunTerminal`)
+			!isFacadeRunTerminal(this) &&
 			// Not a Windows remote using ConPTY which cannot relaunch (#187084). ConPTY is used on
 			// Windows builds 18309+.
 			!(this._processManager.remoteAuthority && (await this._processManager.getBackendOS()) === OperatingSystem.Windows && this._processManager.processTraits?.windowsPty?.buildNumber && this._processManager.processTraits.windowsPty.buildNumber >= 18309)

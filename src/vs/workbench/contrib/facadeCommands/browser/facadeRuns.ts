@@ -5,19 +5,18 @@
 
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { isNumber, isObject, isString } from '../../../../base/common/types.js';
+import { URI } from '../../../../base/common/uri.js';
+import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { ILogService } from '../../../../platform/log/common/log.js';
 import { TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
-import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
-
-/** An agent's run: the record of its workspace, by the record's id, and the agent's number in that record. */
-export interface IFacadeRun {
-	readonly workspace: string;
-	readonly id: number;
-}
+import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
+import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../terminal/browser/terminal.js';
+import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
+import { facadeRunOf, IFacadeRun, isFacadeRunTerminal } from '../common/facadeRun.js';
 
 /** How a run's own process ended, as this load of the window saw it end. */
 export interface IFacadeRunEnd {
@@ -42,23 +41,14 @@ export type FacadeRunProcess =
 	| { readonly state: 'gone'; readonly end?: IFacadeRunEnd }
 	| { readonly state: 'unknown' };
 
-/** Whether `candidate` is an `IFacadeRun`: a record's id, and a number. */
-export function isFacadeRun(candidate: unknown): candidate is IFacadeRun {
-	if (!isObject(candidate)) {
-		return false;
-	}
-
-	const { workspace, id } = candidate as Record<string, unknown>;
-	return isString(workspace) && !!workspace && isNumber(id) && Number.isInteger(id) && id > 0;
-}
-
 export const IFacadeRunsService = createDecorator<IFacadeRunsService>('facadeRunsService');
 
 /**
- * The agents' runs the window holds, each registered on the terminal made for it, by the process that
- * terminal started for it: its own. The registration goes with that process through reloads, a window
- * that crashed and was reopened, and moves within the window, whatever the terminal's title. A new process
- * in the terminal - relaunched - is no run, and neither is a new terminal, split from it.
+ * The agents' runs the window holds. A terminal made for a run is marked with it (`facadeRunProperties`),
+ * and the pty host keeps the mark with the terminal's process: a reload, a window that crashed and was
+ * reopened, and a move within the window find it there, whatever the terminal's title. A run's own process
+ * is the one its terminal started for it, or the one the terminal reconnected to after a reload: a new
+ * process in that terminal - relaunched - is none of the run's, and neither is a terminal split from it.
  */
 export interface IFacadeRunsService {
 	readonly _serviceBrand: undefined;
@@ -69,7 +59,7 @@ export interface IFacadeRunsService {
 	 */
 	readonly whenRestored: Promise<void>;
 
-	/** Registers the terminal just made for `run`: the process it starts now is the run's own. */
+	/** Notes the terminal just made for `run`, marked with it: the process it starts now is the run's own. */
 	register(instance: ITerminalInstance, run: IFacadeRun): void;
 
 	/** The terminal the run's own process runs in; undefined for none. */
@@ -77,57 +67,37 @@ export interface IFacadeRunsService {
 
 	/**
 	 * What the window knows of the own processes of `workspace`'s runs: of those numbered `ids`, in their
-	 * order, or of every one it holds. A run it never registered is gone once its terminals are all back.
+	 * order, or of every one it knows of. A run it does not have is gone once its terminals are all back.
 	 */
 	processes(workspace: string, ids?: readonly number[]): readonly (FacadeRunProcess & { readonly id: number })[];
 }
 
-/** Where the runs are kept while their processes may run on, a reload away: `IStoredRun`s. */
-export const RUNS_STORAGE_KEY = 'facade.runs';
-
-/** A run as it is kept: with the nonce of the terminal made for it, and its own process's id once told. */
-interface IStoredRun extends IFacadeRun {
-	/**
-	 * The terminal's shell integration nonce. Made once for each terminal, it goes with the process: a
-	 * reload reconnects to the same one, and a restart of the app revives it - under a new process.
-	 */
-	readonly nonce: string;
-	readonly processId?: number;
-}
-
-/** A run as the window holds it. */
+/** What this load of the window knows of a run beyond its terminal's mark. */
 interface IRunRecord {
 	readonly run: IFacadeRun;
-	readonly nonce: string;
+
+	/** The terminal made for it in this load of the window. */
+	made?: ITerminalInstance;
+
 	/** Its own process's id, once the window has told it: on Windows, with the process's first output. */
-	processId: number | undefined;
+	processId?: number;
+
 	/** How its own process ended, once this load of the window saw it end. */
 	end?: IFacadeRunEnd;
+
 	/** Set as its terminal goes with the window: whether its process comes back is the next load's to say. */
 	leaving?: boolean;
 }
 
-/** What was kept of the runs. Storage that cannot be read keeps nothing, and an entry that is not a run is left out. */
-function readRuns(value: string | undefined): IStoredRun[] {
-	let stored: unknown;
-	try {
-		stored = value ? JSON.parse(value) : undefined;
-	} catch {
-		return [];
-	}
-
-	return Array.isArray(stored) ? stored.filter((candidate): candidate is IStoredRun => {
-		if (!isFacadeRun(candidate)) {
-			return false;
-		}
-		const { nonce, processId } = candidate as unknown as Record<string, unknown>;
-		return isString(nonce) && (processId === undefined || isNumber(processId));
-	}) : [];
-}
-
-/** The key a run is held by. */
+/** The key a run is known by. */
 function keyOf(run: IFacadeRun): string {
 	return `${run.workspace}#${run.id}`;
+}
+
+/** Whether a terminal is marked as made for `run`. */
+function isMadeFor(instance: ITerminalInstance, run: IFacadeRun): boolean {
+	const its = facadeRunOf(instance);
+	return its?.workspace === run.workspace && its.id === run.id;
 }
 
 export class FacadeRunsService extends Disposable implements IFacadeRunsService {
@@ -136,7 +106,7 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 
 	readonly whenRestored: Promise<void>;
 
-	/** Every run this load of the window knows of, those kept by the load before it included, by `keyOf`. */
+	/** The runs this load of the window has seen, by `keyOf`. */
 	private readonly _runs = new Map<string, IRunRecord>();
 
 	/** Whether the window has every terminal it had back (`whenRestored`). */
@@ -144,31 +114,32 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 
 	constructor(
 		@ITerminalService private readonly _terminalService: ITerminalService,
-		@IStorageService private readonly _storageService: IStorageService,
-		@ILifecycleService lifecycleService: ILifecycleService
+		@ITerminalInstanceService private readonly _terminalInstanceService: ITerminalInstanceService,
+		@IFolderTerminalsService private readonly _folderTerminalsService: IFolderTerminalsService,
+		@IContextKeyService contextKeyService: IContextKeyService,
+		@ILifecycleService lifecycleService: ILifecycleService,
+		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@ILogService private readonly _logService: ILogService
 	) {
 		super();
-
-		for (const { workspace, id, nonce, processId } of readRuns(this._storageService.get(RUNS_STORAGE_KEY, StorageScope.WORKSPACE))) {
-			const run = { workspace, id };
-			this._runs.set(keyOf(run), { run, nonce, processId });
-		}
 
 		// ⚠️ Floating windows' terminals come back last: after the editor area's, with their windows
 		this.whenRestored = Promise.all([this._terminalService.whenConnected, lifecycleService.when(LifecyclePhase.Eventually)]).then(() => {
 			this._restored = true;
-			this._save();
 		});
-		this.whenRestored.then(undefined, onUnexpectedError);
+		this.whenRestored.then(() => this._takeBack()).then(undefined, onUnexpectedError);
 
 		this._register(this._terminalService.onDidDisposeInstance(instance => this._closed(instance)));
 
-		// Kept as each change is made, as well: a window that crashes does not save its state as it goes
-		this._register(this._storageService.onWillSaveState(() => this._save()));
+		// What the active terminal's actions offer depends on it
+		const isRun = TerminalContextKeys.facadeRun.bindTo(contextKeyService);
+		const refresh = () => isRun.set(isFacadeRunTerminal(this._terminalService.activeInstance));
+		this._register(this._terminalService.onDidChangeActiveInstance(refresh));
+		refresh();
 	}
 
 	register(instance: ITerminalInstance, run: IFacadeRun): void {
-		const record: IRunRecord = { run, nonce: instance.shellIntegrationNonce, processId: instance.processId };
+		const record: IRunRecord = { run, made: instance, processId: instance.processId };
 		this._runs.set(keyOf(run), record);
 
 		// Its process could not start: the terminal has closed already
@@ -178,51 +149,64 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 			instance.processReady.then(() => {
 				if (record.processId === undefined && !instance.isDisposed) {
 					record.processId = instance.processId;
-					this._save();
 				}
 			}, () => { /* It did not start, and closes */ });
 		}
-		this._save();
 	}
 
 	terminalOf(run: IFacadeRun): ITerminalInstance | undefined {
-		const record = this._runs.get(keyOf(run));
-		const process = record ? this._processOf(record) : undefined;
-		return process?.state === 'present' ? process.instance : undefined;
+		const found = this._processOf(run);
+		return found.state === 'present' ? found.instance : undefined;
 	}
 
 	processes(workspace: string, ids?: readonly number[]): readonly (FacadeRunProcess & { readonly id: number })[] {
-		const records = ids
-			? ids.map(id => this._runs.get(keyOf({ workspace, id })) ?? { run: { workspace, id }, nonce: '', processId: undefined })
-			: [...this._runs.values()].filter(record => record.run.workspace === workspace);
-		return records.map(record => {
-			const process = record.nonce ? this._processOf(record) : this._restored ? { state: 'gone' as const } : { state: 'unknown' as const };
-			return process.state === 'present' ? { id: record.run.id, state: process.state } : { id: record.run.id, ...process };
+		return (ids ?? this._idsOf(workspace)).map(id => {
+			const found = this._processOf({ workspace, id });
+			return found.state === 'gone' ? { id, state: found.state, ...(found.end ? { end: found.end } : {}) } : { id, state: found.state };
 		});
 	}
 
-	/** Where a run's own process is: in which terminal, or how it went. */
-	private _processOf(record: IRunRecord): FacadeRunProcess & { readonly instance?: ITerminalInstance } {
-		if (record.end) {
-			return { state: 'gone', end: record.end };
+	/** The numbers of `workspace`'s runs this load of the window knows of: those it saw, and those whose terminals it has. */
+	private _idsOf(workspace: string): number[] {
+		const ids = new Set<number>();
+		for (const { run } of this._runs.values()) {
+			if (run.workspace === workspace) {
+				ids.add(run.id);
+			}
 		}
-		if (record.leaving) {
+		for (const instance of this._terminalService.instances) {
+			const run = facadeRunOf(instance);
+			if (run?.workspace === workspace) {
+				ids.add(run.id);
+			}
+		}
+		return [...ids].sort((a, b) => a - b);
+	}
+
+	/** Where a run's own process is: in which terminal, or how it went. */
+	private _processOf(run: IFacadeRun): FacadeRunProcess & { readonly instance?: ITerminalInstance } {
+		const known = this._runs.get(keyOf(run));
+		if (known?.end) {
+			return { state: 'gone', end: known.end };
+		}
+		if (known?.leaving) {
 			return { state: 'unknown' };
 		}
 
-		const instance = this._terminalService.instances.find(each => each.shellIntegrationNonce === record.nonce && !each.isDisposed);
+		const instance = this._terminalService.instances.find(each => !each.isDisposed && isMadeFor(each, run));
 		if (!instance) {
 			return this._restored ? { state: 'gone' } : { state: 'unknown' };
 		}
-
-		// The process a reload reconnected to tells its id a moment later. One whose id was never told - the
-		// window went before its first output - had not run long enough to be relaunched: kept with the next save.
-		if (record.processId === undefined && instance.processId !== undefined) {
-			record.processId = instance.processId;
-		}
 		if (instance.processId === undefined) {
-			return record.processId === undefined ? { state: 'present', instance } : { state: 'unknown' };
+			// Made here, its process has not told its id yet; reconnected after a reload, its id comes a moment
+			// after its terminal
+			return instance === known?.made ? { state: 'present', instance } : { state: 'unknown' };
 		}
+
+		// The process a terminal reconnected to after a reload is its run's own: the first one seen in it
+		const record = known ?? { run };
+		this._runs.set(keyOf(run), record);
+		record.processId ??= instance.processId;
 		if (instance.processId !== record.processId) {
 			// Relaunched: the run's own process ended, unseen
 			return { state: 'gone' };
@@ -236,33 +220,39 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 
 	/** A terminal closed: the end of the run whose own process it ran - unless it went with the window. */
 	private _closed(instance: ITerminalInstance): void {
-		const record = [...this._runs.values()].find(each => each.nonce === instance.shellIntegrationNonce && !each.end && !each.leaving);
-		if (!record || (record.processId !== undefined && instance.processId !== undefined && instance.processId !== record.processId)) {
+		const run = facadeRunOf(instance);
+		if (!run) {
+			return;
+		}
+		const record = this._runs.get(keyOf(run)) ?? { run };
+		if (record.end || record.leaving || (record.processId !== undefined && instance.processId !== undefined && instance.processId !== record.processId)) {
 			return;
 		}
 
+		this._runs.set(keyOf(run), record);
 		if (instance.exitReason === TerminalExitReason.Shutdown) {
 			record.leaving = true;
 		} else {
 			record.end = { exitCode: instance.exitCode, byThePerson: instance.exitReason === TerminalExitReason.User && instance.exitCode === undefined };
 		}
-		this._save();
 	}
 
-	/** Keeps the runs whose processes may run on: not seen ending, and not found gone. */
-	private _save(): void {
-		const kept: IStoredRun[] = [];
-		for (const record of this._runs.values()) {
-			if (record.end || (this._restored && !record.leaving && this._processOf(record).state === 'gone')) {
+	/**
+	 * Takes back the runs of this workspace whose processes the pty host still runs for no window: those of
+	 * a window that crashed, reopened as a new window, which brings no agent's terminal back itself
+	 * (`isAgentGoneAtStartup`). One the pty host revived after a restart of the app has no process yet, and
+	 * is never started: it would run its agent's CLI again. Another workspace's are that workspace's window's.
+	 */
+	private async _takeBack(): Promise<void> {
+		const backend = await this._terminalInstanceService.getBackend();
+		const workspaceId = this._workspaceContextService.getWorkspace().id;
+		for (const details of await backend?.listProcesses() ?? []) {
+			const run = facadeRunOf(details);
+			if (this._store.isDisposed || !run || details.workspaceId !== workspaceId || details.pid <= 0 || this._processOf(run).state === 'present') {
 				continue;
 			}
-			kept.push({ ...record.run, nonce: record.nonce, ...(record.processId !== undefined ? { processId: record.processId } : {}) });
-		}
-
-		if (kept.length) {
-			this._storageService.store(RUNS_STORAGE_KEY, JSON.stringify(kept), StorageScope.WORKSPACE, StorageTarget.MACHINE);
-		} else {
-			this._storageService.remove(RUNS_STORAGE_KEY, StorageScope.WORKSPACE);
+			this._logService.info(`[facadeRuns] taking back ${keyOf(run)}, its process ${details.pid} still running`);
+			await this._folderTerminalsService.openFor(URI.file(details.cwd), { attachPersistentProcess: details });
 		}
 	}
 }

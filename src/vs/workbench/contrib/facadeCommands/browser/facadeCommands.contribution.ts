@@ -26,7 +26,8 @@ import { ITerminalProfileResolverService } from '../../terminal/common/terminal.
 import { createTerminalEnvironment, createVariableResolver, getWorkspaceForTerminal, mergeEnvironments } from '../../terminal/common/terminalEnvironment.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IWorktreeService } from '../../worktrees/browser/worktrees.js';
-import { IFacadeRun, IFacadeRunsService, isFacadeRun } from './facadeRuns.js';
+import { facadeRunProperties, IFacadeRun, isFacadeRun } from '../common/facadeRun.js';
+import { IFacadeRunsService } from './facadeRuns.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
 const PROCESS_READY_TIMEOUT_MS = 5_000;
@@ -59,7 +60,7 @@ interface IFacadeTerminalOptions {
 	 */
 	readonly reveal?: boolean;
 
-	/** The agent's run it is made for: the process it starts is that run's own (`IFacadeRunsService`). */
+	/** The agent's run it is made for, which it is marked with: the process it starts is that run's own (`IFacadeRunsService`). */
 	readonly run?: IFacadeRun;
 }
 
@@ -151,7 +152,8 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 		args: options?.args,
 		env: options?.env,
 		cwd: options?.cwd ?? folder,
-		icon: options?.agent !== undefined ? agentIcon(options.agent) : undefined
+		icon: options?.agent !== undefined ? agentIcon(options.agent) : undefined,
+		reconnectionProperties: options?.run ? facadeRunProperties(options.run) : undefined
 	});
 	if (options?.run) {
 		runs.register(instance, options.run);

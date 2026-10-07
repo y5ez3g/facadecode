@@ -30,7 +30,8 @@ import { IEnvironmentVariableService } from '../../../terminal/common/environmen
 import { ITerminalConfiguration, ITerminalProfileResolverService } from '../../../terminal/common/terminal.js';
 import { IWorktreeService } from '../../../worktrees/browser/worktrees.js';
 import '../../browser/facadeCommands.contribution.js';
-import { FacadeRunProcess, IFacadeRun, IFacadeRunsService } from '../../browser/facadeRuns.js';
+import { FacadeRunProcess, IFacadeRunsService } from '../../browser/facadeRuns.js';
+import { facadeRunOf, IFacadeRun } from '../../common/facadeRun.js';
 
 /** A terminal as the folder terminals open one: made before its process is started, its id known once that is ready. */
 class TestTerminal {
@@ -136,9 +137,10 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		}
 	}
 
-	/** What a terminal was opened with: its working directory said as the kind it was given as, its icon by its id. */
-	function launchOf({ name, executable, args, env, cwd, icon }: IShellLaunchConfig) {
-		return { name, executable, args, env, cwd: URI.isUri(cwd) ? `uri ${cwd.path}` : cwd, icon: ThemeIcon.isThemeIcon(icon) ? icon.id : icon };
+	/** What a terminal was opened with: its working directory said as the kind it was given as, its icon by its id, and the run it is marked with. */
+	function launchOf(config: IShellLaunchConfig) {
+		const { name, executable, args, env, cwd, icon } = config;
+		return { name, executable, args, env, cwd: URI.isUri(cwd) ? `uri ${cwd.path}` : cwd, icon: ThemeIcon.isThemeIcon(icon) ? icon.id : icon, run: facadeRunOf(config) };
 	}
 
 	setup(() => {
@@ -219,7 +221,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		});
 	});
 
-	test('a terminal is opened for its folder as it is described - an agent\'s drawn as its CLI - and answered once its process is ready', async () => {
+	test('a terminal is opened for its folder as it is described - an agent\'s drawn as its CLI, and marked with its run - and answered once its process is ready', async () => {
 		const claude = await run('_facade.terminal.create', URI.file('/lab'), {
 			name: '@main #1 · Claude Code',
 			// npm's Claude Code, run as the Node script it runs
@@ -239,10 +241,10 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			answers: Array(4).fill({ processId: 4242, closed: false, exitCode: undefined }),
 			registered: ['register @main #1 · Claude Code as a1b2#1'],
 			launched: [
-				{ name: '@main #1 · Claude Code', executable: 'node.exe', args: ['/npm/claude-code/cli.js', '--model', 'haiku'], env: { FACADE_AGENTS_WAIT_MS: '120000', NO_COLOR: null }, cwd: '/lab/src', icon: 'agent-claude' },
-				{ name: '@docs #2 · Antigravity', executable: 'agy', args: undefined, env: undefined, cwd: 'uri /lab/docs', icon: 'agent-antigravity' },
-				{ name: '@tidy #3 · Gemini', executable: 'gemini', args: undefined, env: undefined, cwd: 'uri /lab', icon: 'robot' },
-				{ name: undefined, executable: undefined, args: undefined, env: undefined, cwd: 'uri /lab', icon: undefined },
+				{ name: '@main #1 · Claude Code', executable: 'node.exe', args: ['/npm/claude-code/cli.js', '--model', 'haiku'], env: { FACADE_AGENTS_WAIT_MS: '120000', NO_COLOR: null }, cwd: '/lab/src', icon: 'agent-claude', run: { workspace: 'a1b2', id: 1 } },
+				{ name: '@docs #2 · Antigravity', executable: 'agy', args: undefined, env: undefined, cwd: 'uri /lab/docs', icon: 'agent-antigravity', run: undefined },
+				{ name: '@tidy #3 · Gemini', executable: 'gemini', args: undefined, env: undefined, cwd: 'uri /lab', icon: 'robot', run: undefined },
+				{ name: undefined, executable: undefined, args: undefined, env: undefined, cwd: 'uri /lab', icon: undefined, run: undefined },
 			],
 		});
 	});
