@@ -25,7 +25,7 @@ import { HostGit } from './git';
 import { HostPerson } from './person';
 import { configFor, timeoutMs } from './settings';
 import { askStartAgent } from './startAgent';
-import { agentTerminalRuns, HostTerminals, terminalEnvironment } from './terminals';
+import { agentProcessesRun, HostTerminals, terminalEnvironment } from './terminals';
 import { JsonFileState, StateStore } from './windowState';
 
 const PIPE_ID_KEY = 'facade.agents.pipeId';
@@ -92,11 +92,16 @@ export class AgentsService implements vscode.Disposable {
 			this.log.info(`The workspace ${workspace} has a new record, ${dir}.`);
 		}
 		// A ledger Facade cannot read is moved aside only at a start of the window that is no reload, with
-		// none of its agents' processes running: the history is in the log.
-		const mayMoveAside = () => !load.reloaded && !agentTerminalRuns(new JsonFileState(path.join(dir, WINDOW_STATE_FILE)));
+		// none of its agents' processes in a terminal of the window: the history is in the log.
+		const owner = await this.owner();
 		let table: AgentTable | undefined;
 		try {
-			table = await this.openTable(dir, await this.owner(), load.id, mayMoveAside);
+			table = await this.openTable(dir, owner, load.id, () => false).catch(async err => {
+				if (err instanceof LedgerUnreadableError && !load.reloaded && !await agentProcessesRun(id)) {
+					return this.openTable(dir, owner, load.id, () => true);
+				}
+				throw err;
+			});
 		} catch (err) {
 			if (err instanceof LedgerLockedError) {
 				this.log.warn(err.message);
@@ -122,10 +127,10 @@ export class AgentsService implements vscode.Disposable {
 			return;
 		}
 
-		// Next to the ledger rather than in the workspace storage, which a folder window becoming a
-		// workspace replaces while agents keep running.
+		// The pipe's id, next to the ledger rather than in the workspace storage, which a folder window
+		// becoming a workspace replaces while agents keep running.
 		const windowState = new JsonFileState(path.join(dir, WINDOW_STATE_FILE));
-		const terminals = new HostTerminals(windowState, message => this.say(message));
+		const terminals = new HostTerminals(id, message => this.say(message));
 		this.disposables.push(terminals);
 
 		const facade = new Facade({
@@ -170,7 +175,6 @@ export class AgentsService implements vscode.Disposable {
 		if (this.stopped) {
 			return;
 		}
-		terminals.recovered();
 		this.facade = facade;
 		this.log.info(`Facade agents are on for ${folders[0].uri.fsPath}. Record ${dir}; pipe ${endpoint.pipe}; CLIs: ${facade.clis().map(each => each.cli.id).join(', ') || 'none'}.`);
 	}

@@ -14,8 +14,7 @@ export interface StateStore {
 }
 
 /**
- * Values the window keeps for its agents - the pipe's id, the terminals' process ids - in a file next
- * to the workspace's ledger. Not the extension's workspace storage, which changes when a folder window
+ * Values the window keeps for its agents - the pipe's id - in a file next to the workspace's ledger. Not the extension's workspace storage, which changes when a folder window
  * becomes a workspace while the agents keep running.
  */
 export class JsonFileState implements StateStore {

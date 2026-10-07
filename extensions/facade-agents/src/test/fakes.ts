@@ -15,15 +15,21 @@ import { ClosedBy } from '../record/ledger';
 import { settled, until } from './clock';
 
 /** The window's terminals, in memory: what was launched, typed and closed, and which run. */
+/**
+ * The agents' terminals in a window in memory, each by the agent's number. The tests name them by their
+ * titles - `@main #a1 · Arg Code` - whose number is the agent's: a terminal of a run's own process comes
+ * back after a reload under the title a test gives it.
+ */
 export class FakeTerminals implements Terminals {
 
 	readonly launched: TerminalLaunch[] = [];
+	/** The titles of the terminals whose agents' processes run. */
 	readonly running = new Set<string>();
-	/** What was typed into each terminal, piece by piece, and which were closed. */
+	/** What was typed into each terminal, piece by piece, and which were closed, by their titles. */
 	readonly typed: string[] = [];
 	/** The next launch fails with this. */
 	failNext: string | undefined;
-	private readonly listeners = new Set<(name: string, end: TerminalEnd) => void>();
+	private readonly listeners = new Set<(id: number, end: TerminalEnd) => void>();
 
 	async launch(launch: TerminalLaunch): Promise<void> {
 		const failure = this.failNext;
@@ -35,37 +41,55 @@ export class FakeTerminals implements Terminals {
 		this.running.add(launch.name);
 	}
 
-	async isAlive(name: string): Promise<boolean> {
-		return this.running.has(name);
+	async isAlive(id: number): Promise<boolean> {
+		return this.titleOf(id) !== undefined;
 	}
 
-	onDidEnd(listener: (name: string, end: TerminalEnd) => void): Disposable {
+	onDidEnd(listener: (id: number, end: TerminalEnd) => void): Disposable {
 		this.listeners.add(listener);
 		return { dispose: () => this.listeners.delete(listener) };
 	}
 
-	/** As the window closes a terminal for the extension: it tells of the end as of any other. */
-	async stop(name: string): Promise<void> {
-		this.typed.push(`${name}: [closed]`);
-		this.end(name);
+	/** As the window ends an agent's process for the extension: it tells of the end as of any other. */
+	async stop(id: number): Promise<void> {
+		const title = this.titleOf(id);
+		if (title !== undefined) {
+			this.typed.push(`${title}: [closed]`);
+			this.end(title);
+		}
 	}
 
-	async type(name: string, text: string): Promise<boolean> {
-		if (!this.running.has(name)) {
+	async type(id: number, text: string): Promise<boolean> {
+		const title = this.titleOf(id);
+		if (title === undefined) {
 			return false;
 		}
-		this.typed.push(`${name}: ${JSON.stringify(text)}`);
+		this.typed.push(`${title}: ${JSON.stringify(text)}`);
 		return true;
 	}
 
-	/** As when a terminal closes, or its process exits. */
-	end(name: string, end: TerminalEnd = { byThePerson: false }): void {
-		if (this.running.delete(name)) {
+	/** As when a terminal closes, or its process exits: the terminal of that title. */
+	end(title: string, end: TerminalEnd = { byThePerson: false }): void {
+		if (this.running.delete(title)) {
 			for (const listener of [...this.listeners]) {
-				listener(name, end);
+				listener(idOf(title), end);
 			}
 		}
 	}
+
+	/** The title of the terminal of agent `id` whose process runs; undefined for none. */
+	private titleOf(id: number): string | undefined {
+		return [...this.running].find(title => idOf(title) === id);
+	}
+}
+
+/** The agent's number a terminal's title says: `@main #a1 · Arg Code` is #a1's. */
+function idOf(title: string): number {
+	const number = /#a(?<id>\d+) /.exec(title)?.groups?.id;
+	if (number === undefined) {
+		throw new Error(`${title} is no agent's terminal`);
+	}
+	return Number(number);
 }
 
 /** Repositories by their main checkout: git's record of their worktrees, all at one HEAD. */
@@ -153,8 +177,8 @@ export class FakePerson implements Person {
 
 	readonly told: string[] = [];
 
-	tell(text: string, terminal: string | undefined): void {
-		this.told.push(`${text}${terminal ? ` (${terminal})` : ''}`);
+	tell(text: string, agent: number | undefined): void {
+		this.told.push(`${text}${agent !== undefined ? ` (#a${agent}'s terminal)` : ''}`);
 	}
 }
 
@@ -271,8 +295,8 @@ export interface WorldOptions {
 	readonly injected?: string;
 	/** How long a new agent may take to come up, where not two minutes. */
 	readonly startTimeoutMs?: number;
-	/** The environment the agents' terminals start with: none of the person's home folders. */
-	readonly environment?: () => Environment;
+	/** The environment the agents' terminals start with, by their folder: none of the person's home folders. */
+	readonly environment?: (folder: string) => Environment;
 	/** Whether a process the ledger's lock names runs, as the operating system says unless set. */
 	readonly isRunning?: (pid: number) => boolean;
 	/** Who opens the ledger: the workspace `lab`'s window unless set. */
@@ -310,7 +334,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			known,
 			installed: () => known.filter(cli => (options.clis ?? ['arg', 'told']).includes(cli.id)).map(cli => ({ cli, config: configFor(cli), executable: path.join(dir, 'bin', `${cli.id}.exe`) })),
 			configOf: configFor,
-			environment: options.environment ?? (() => ({}))
+			environment: async folder => options.environment?.(folder) ?? {}
 		},
 		setup: {
 			mcpServer: tokenFile => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', tokenFile], env: { ELECTRON_RUN_AS_NODE: '1' } }),

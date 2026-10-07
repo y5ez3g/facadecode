@@ -153,7 +153,7 @@ export class Launcher implements Disposable {
 			const env = cli.sharedServer ? { ...spec.env, ...setup.agentEnv(started.token) } : spec.env;
 			this.context.log(`Starting ${terminal} in ${run.folder}, the worktree ${run.worktree}${throughCmd ? ', through cmd.exe' : ''}.`);
 			progress?.(`Starting ${describe(agent)}.`);
-			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined });
+			await ports.terminals.launch({ id: agent.id, name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined });
 		} catch (err) {
 			// A window that closed leaves it to the next one: starting, or gone with its terminal.
 			if (err instanceof FacadeError && err.code === 'UNAVAILABLE') {
@@ -282,14 +282,14 @@ export class Launcher implements Disposable {
 				return;
 			}
 			table.taskTyping(agent.id);
-			if (!await ports.terminals.type(terminal, `[facade] Your task is in ${taskFile}: read that file, then do what it says.`)) {
+			if (!await ports.terminals.type(agent.id, `[facade] Your task is in ${taskFile}: read that file, then do what it says.`)) {
 				throw new Error('its terminal was not there');
 			}
 			await timeout(enterDelay);
 			if (!this.isRunning(agent)) {
 				return;
 			}
-			await ports.terminals.type(terminal, '\r');
+			await ports.terminals.type(agent.id, '\r');
 			if (!this.isRunning(agent)) {
 				return;
 			}

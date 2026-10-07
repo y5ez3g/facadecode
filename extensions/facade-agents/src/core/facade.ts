@@ -138,7 +138,7 @@ export class Facade implements Disposable {
 			fail: (agent, reason) => this.fail(agent, reason),
 			log: message => this.log(message)
 		});
-		this.disposables.push(this.launcher, this.ports.terminals.onDidEnd((terminal, end) => this.terminalEnded(terminal, end)));
+		this.disposables.push(this.launcher, this.ports.terminals.onDidEnd((id, end) => this.terminalEnded(id, end)));
 	}
 
 	dispose(): void {
@@ -214,8 +214,8 @@ export class Facade implements Disposable {
 		}
 		// Everything that can refuse the call is asked before anything is made for it.
 		const place = await this.placeOf(caller, home, request.worktree, name);
+		const env = await this.environmentOf(installed, home);
 		this.stillOpen();
-		const env = this.environmentOf(installed);
 		this.launcher.check(installed, model, effort, home, request.task, env);
 
 		let folder: string;
@@ -291,7 +291,7 @@ export class Facade implements Disposable {
 		}
 		// Recorded as stopped already: a terminal that would not close is the log's to say, not the call's.
 		try {
-			await this.ports.terminals.stop(this.terminalOf(agent));
+			await this.ports.terminals.stop(agent.id);
 		} catch (err) {
 			this.log(`${this.terminalOf(agent)} could not be closed: ${messageOf(err)}`);
 		}
@@ -325,7 +325,7 @@ export class Facade implements Disposable {
 		for (const agent of this.liveAgents()) {
 			// One whose terminal the window does not answer for keeps neither the others nor Facade from coming back.
 			try {
-				if (await this.ports.terminals.isAlive(this.terminalOf(agent))) {
+				if (await this.ports.terminals.isAlive(agent.id)) {
 					cameBack = true;
 					this.launcher.resume(agent);
 				} else {
@@ -388,11 +388,11 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * An agent's terminal ended: the agent ended, unless it had already. Closed by the person, it was
-	 * stopped; else its CLI ended by itself - with its exit code, where it is known - or it did not start.
+	 * An agent's process ended: the agent ended, unless it had already. Closed with its tab by the person,
+	 * it was stopped; else its CLI ended by itself - with its exit code, where it is known - or it did not start.
 	 */
-	private terminalEnded(terminal: string, end: TerminalEnd): void {
-		const agent = this.liveAgents().find(each => this.terminalOf(each) === terminal);
+	private terminalEnded(id: number, end: TerminalEnd): void {
+		const agent = this.liveAgents().find(each => each.id === id);
 		if (!agent) {
 			return;
 		}
@@ -404,7 +404,7 @@ export class Facade implements Disposable {
 				this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', reason, end.exitCode !== undefined ? { exitCode: end.exitCode } : {});
 			}
 		} catch (err) {
-			this.log(`Recording that ${terminal} ended failed: ${messageOf(err)}`);
+			this.log(`Recording that ${this.terminalOf(agent)} ended failed: ${messageOf(err)}`);
 		}
 	}
 
@@ -440,7 +440,7 @@ export class Facade implements Disposable {
 			return;
 		}
 		try {
-			await this.ports.terminals.stop(this.terminalOf(agent));
+			await this.ports.terminals.stop(agent.id);
 		} catch (err) {
 			this.log(`${this.terminalOf(agent)} could not be closed: ${messageOf(err)}`);
 		}
@@ -522,9 +522,9 @@ export class Facade implements Disposable {
 		return found;
 	}
 
-	/** The environment a CLI starts with: the terminals', with what its launch sets in it. */
-	private environmentOf(installed: InstalledCli): Environment {
-		return { ...this.options.clis.environment(), ...installed.config.launch.environment };
+	/** The environment a CLI starts with in `folder`: the terminals' there, with what its launch sets in it. */
+	private async environmentOf(installed: InstalledCli, folder: string): Promise<Environment> {
+		return { ...await this.options.clis.environment(folder), ...installed.config.launch.environment };
 	}
 
 	/**

@@ -7,20 +7,32 @@ import { raceTimeout } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { IProcessEnvironment, isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { assertType, isBoolean, isNumber, isObject, isString, isUndefined, isUndefinedOrNull } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
-import { ITerminalEnvironment } from '../../../../platform/terminal/common/terminal.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { IProductService } from '../../../../platform/product/common/productService.js';
+import { ITerminalEnvironment, TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
-import { ILifecycleService, LifecyclePhase, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
+import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
+import { ILifecycleService, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
-import { ITerminalService } from '../../terminal/browser/terminal.js';
+import { ITerminalConfigurationService, ITerminalInstanceService } from '../../terminal/browser/terminal.js';
+import { IEnvironmentVariableService } from '../../terminal/common/environmentVariable.js';
+import { ITerminalProfileResolverService } from '../../terminal/common/terminal.js';
+import { createTerminalEnvironment, createVariableResolver, getWorkspaceForTerminal, mergeEnvironments } from '../../terminal/common/terminalEnvironment.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IWorktreeService } from '../../worktrees/browser/worktrees.js';
+import { IFacadeRun, IFacadeRunsService, isFacadeRun } from './facadeRuns.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
 const PROCESS_READY_TIMEOUT_MS = 5_000;
+
+/** How long `_facade.terminal.stop` waits for a run's process to end before it answers that it has not yet. */
+const STOP_TIMEOUT_MS = 5_000;
 
 /** The terminal `_facade.terminal.create` opens. What is left out is as for a terminal opened in the window. */
 interface IFacadeTerminalOptions {
@@ -46,6 +58,9 @@ interface IFacadeTerminalOptions {
 	 * the person started, who is there to watch it.
 	 */
 	readonly reveal?: boolean;
+
+	/** The agent's run it is made for: the process it starts is that run's own (`IFacadeRunsService`). */
+	readonly run?: IFacadeRun;
 }
 
 /** What `_facade.terminal.create` answers with: the terminal once its process is ready, or a few seconds on. */
@@ -75,14 +90,15 @@ function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTermin
 		return false;
 	}
 
-	const { name, executable, args, env, cwd, agent, reveal } = candidate as Record<string, unknown>;
+	const { name, executable, args, env, cwd, agent, reveal, run } = candidate as Record<string, unknown>;
 	return (isUndefined(name) || isString(name))
 		&& (isUndefined(executable) || isString(executable))
 		&& (isUndefined(args) || (Array.isArray(args) && args.every(isString)))
 		&& (isUndefined(env) || (isObject(env) && Object.values(env).every(value => isUndefinedOrNull(value) || isString(value))))
 		&& (isUndefined(cwd) || isString(cwd) || URI.isUri(cwd))
 		&& (isUndefined(agent) || isString(agent))
-		&& (isUndefined(reveal) || isBoolean(reveal));
+		&& (isUndefined(reveal) || isBoolean(reveal))
+		&& (isUndefined(run) || isFacadeRun(run));
 }
 
 // `()`: the folder the window is on, as the workspace bar shows it; none in an empty window
@@ -99,12 +115,10 @@ CommandsRegistry.registerCommand('_facade.window.loaded', (accessor): IFacadeWin
 	reloaded: accessor.get(ILifecycleService).startupKind === StartupKind.ReloadedWindow
 }));
 
-// `()`: settles once the window has its terminals back - those reconnected to their processes, and
-// the editor area's restored - so that one the extension host does not find is gone.
+// `()`: settles once the window has its terminals back - those reconnected to their processes, the
+// editor area's and floating windows' restored - so that a run not found is gone (`IFacadeRunsService`).
 CommandsRegistry.registerCommand('_facade.terminal.whenRestored', async accessor => {
-	const terminalService = accessor.get(ITerminalService);
-	const lifecycleService = accessor.get(ILifecycleService);
-	await Promise.all([terminalService.whenConnected, lifecycleService.when(LifecyclePhase.Restored)]);
+	await accessor.get(IFacadeRunsService).whenRestored;
 });
 
 // `(main, branch, startPoint?, show?)`: a worktree of the repository whose main checkout is `main`, made
@@ -122,13 +136,14 @@ CommandsRegistry.registerCommand('_facade.worktree.create', async (accessor, ...
 });
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window
-// (`IFolderTerminalsService.openFor`). Answers with it as it is once its process is ready
-// (`IFacadeTerminal`).
+// (`IFolderTerminalsService.openFor`), and registered under the agent's run it is for. Answers with it as
+// it is once its process is ready (`IFacadeTerminal`).
 CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...args): Promise<IFacadeTerminal> => {
 	const [folder, options] = args;
 	assertType(URI.isUri(folder), 'URI');
 	assertType(isUndefinedOrNull(options) || isFacadeTerminalOptions(options), 'IFacadeTerminalOptions');
 	const folderTerminals = accessor.get(IFolderTerminalsService);
+	const runs = accessor.get(IFacadeRunsService);
 
 	const instance = await folderTerminals.openFor(folder, {
 		name: options?.name,
@@ -138,6 +153,9 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 		cwd: options?.cwd ?? folder,
 		icon: options?.agent !== undefined ? agentIcon(options.agent) : undefined
 	});
+	if (options?.run) {
+		runs.register(instance, options.run);
+	}
 
 	// The terminal made, the command answers with it from here on, whatever becomes of it: a failure would
 	// end the agent starting in it as one that did not start. Put in front on its own, then, as that waits
@@ -160,16 +178,95 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 	return { processId: instance.processId, closed: instance.isDisposed, exitCode: instance.exitCode };
 });
 
-// `(processId)`: puts the terminal running `processId` in front, moving the window onto the folder it is
-// held for when that is another's, as a click on its row would (`IFolderTerminalsService.reveal`).
+// `(workspace, ids?)`: what the window knows of the own processes of `workspace`'s runs - those numbered
+// `ids`, in their order, or every one it holds: present, gone, or unknown (`IFacadeRunsService.processes`).
+CommandsRegistry.registerCommand('_facade.terminal.processes', (accessor, ...args) => {
+	const [workspace, ids] = args;
+	assertType(isString(workspace), 'string');
+	// An argument the extension host gives as undefined comes as null
+	assertType(isUndefinedOrNull(ids) || (Array.isArray(ids) && ids.every(isNumber)), 'number[]');
+
+	return accessor.get(IFacadeRunsService).processes(workspace, ids ?? undefined);
+});
+
+// `(run)`: ends the run's own process, as closing its tab ends it, and answers once it is gone: true;
+// false while it is not, a few seconds on - or while the window cannot tell yet where it is.
+CommandsRegistry.registerCommand('_facade.terminal.stop', async (accessor, ...args) => {
+	const [run] = args;
+	assertType(isFacadeRun(run), 'IFacadeRun');
+	const runs = accessor.get(IFacadeRunsService);
+
+	const [where] = runs.processes(run.workspace, [run.id]);
+	const instance = runs.terminalOf(run);
+	if (!instance) {
+		return where.state === 'gone';
+	}
+
+	// ⚠️ Not closed outright where it can be helped: the terminal's process manager lets go of the process
+	// as it closes, and nothing would say when it is gone. Sent the hang-up closing its tab sends, it ends as
+	// it would then, and its terminal closes after it. Windows has no signals: there its console is closed,
+	// with every process attached to it.
+	if (isWindows) {
+		instance.dispose(TerminalExitReason.Extension);
+		return true;
+	}
+	const store = new DisposableStore();
+	try {
+		const gone = Promise.race([Event.toPromise(instance.onExit, store), Event.toPromise(instance.onDisposed, store)]);
+		await instance.sendSignal('SIGHUP');
+		return await raceTimeout(gone.then(() => true), STOP_TIMEOUT_MS) ?? false;
+	} finally {
+		store.dispose();
+	}
+});
+
+// `(run, text)`: types `text`, as it is, into the terminal the run's own process runs in, and answers once
+// VS Code has passed it on: true; false when its process runs in none.
+CommandsRegistry.registerCommand('_facade.terminal.type', async (accessor, ...args) => {
+	const [run, text] = args;
+	assertType(isFacadeRun(run), 'IFacadeRun');
+	assertType(isString(text), 'string');
+
+	const instance = accessor.get(IFacadeRunsService).terminalOf(run);
+	if (!instance) {
+		return false;
+	}
+	await instance.sendText(text, false);
+	return true;
+});
+
+// `(run)`: puts the terminal the run's own process runs in in front, moving the window onto the folder it
+// is held for when that is another's, as a click on its row would (`IFolderTerminalsService.reveal`).
 // Answers whether it is in front.
 CommandsRegistry.registerCommand('_facade.terminal.reveal', async (accessor, ...args) => {
-	const [processId] = args;
-	assertType(isNumber(processId), 'number');
+	const [run] = args;
+	assertType(isFacadeRun(run), 'IFacadeRun');
 	const folderTerminals = accessor.get(IFolderTerminalsService);
 
-	// Only a terminal whose process runs - an ended one's id can be another process's by now - and only
-	// one: a remote machine's ids and this one's can be the same
-	const running = accessor.get(ITerminalService).instances.filter(instance => instance.processId === processId && instance.exitCode === undefined);
-	return running.length === 1 ? folderTerminals.reveal(running[0]) : false;
+	const instance = accessor.get(IFacadeRunsService).terminalOf(run);
+	return instance ? folderTerminals.reveal(instance) : false;
+});
+
+// `(folder)`: the environment a terminal opened in `folder` gets, as VS Code makes one: the window's, with
+// `terminal.integrated.env.<platform>` over it, its variables resolved, and what extensions add to it
+// (`TerminalProcessManager._resolveEnvironment`). Where an agent's CLI keeps its files can depend on it.
+CommandsRegistry.registerCommand('_facade.terminal.environment', async (accessor, ...args): Promise<IProcessEnvironment> => {
+	const [folder] = args;
+	assertType(URI.isUri(folder), 'URI');
+	const profileResolverService = accessor.get(ITerminalProfileResolverService);
+	const instanceService = accessor.get(ITerminalInstanceService);
+	const configurationResolverService = accessor.get(IConfigurationResolverService);
+	const environmentVariableService = accessor.get(IEnvironmentVariableService);
+	const workspaceFolder = getWorkspaceForTerminal(folder, accessor.get(IWorkspaceContextService), accessor.get(IActiveFolderService));
+	const envFromConfig = accessor.get(IConfigurationService).getValue<ITerminalEnvironment | undefined>(`terminal.integrated.env.${isWindows ? 'windows' : isMacintosh ? 'osx' : 'linux'}`);
+	const version = accessor.get(IProductService).version;
+	const detectLocale = accessor.get(ITerminalConfigurationService).config.detectLocale;
+
+	const baseEnv = await profileResolverService.getEnvironment(undefined);
+	const envForResolver = { ...baseEnv };
+	mergeEnvironments(envForResolver, await (await instanceService.getBackend())?.getShellEnvironment());
+	const variableResolver = createVariableResolver(workspaceFolder, envForResolver, configurationResolverService);
+	const env = await createTerminalEnvironment({ cwd: folder }, envFromConfig, variableResolver, version, detectLocale, baseEnv);
+	await environmentVariableService.mergedCollection.applyToProcessEnvironment(env, { workspaceFolder }, variableResolver);
+	return env;
 });

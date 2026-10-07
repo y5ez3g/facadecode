@@ -13,7 +13,9 @@ export interface Disposable {
 
 /** An agent's CLI, started in a terminal. */
 export interface TerminalLaunch {
-	/** The terminal's name, which finds it again: unique per agent. */
+	/** The agent's number: its run, under which the window finds its terminal again, whatever its title. */
+	readonly id: number;
+	/** The terminal's title. */
 	readonly name: string;
 	/** The command of its CLI, as `PATH` knows it: its terminal is drawn with that CLI's logo. */
 	readonly command: string;
@@ -37,18 +39,22 @@ export interface TerminalEnd {
 	readonly byThePerson: boolean;
 }
 
-/** The agents' terminals, each known by the name its launch gave it. */
+/**
+ * The agents' terminals, each known by its agent's run - the agent's number in the workspace's record -
+ * under which the window registered the process its terminal started: through reloads and moves, a new
+ * process in that terminal is none of the agent's.
+ */
 export interface Terminals {
 	/** Starts the CLI in a terminal held under its folder's row; rejects when it did not start. */
 	launch(launch: TerminalLaunch): Promise<void>;
-	/** Whether the terminal of that name still runs, found again after a reload. */
-	isAlive(name: string): Promise<boolean>;
-	/** Called once for each agent's terminal that ends: closed, or its process gone. */
-	onDidEnd(listener: (name: string, end: TerminalEnd) => void): Disposable;
-	/** Closes the terminal, which ends the CLI in it. */
-	stop(name: string): Promise<void>;
-	/** Types `text` into the terminal as it is, keys and all; false when there is no such terminal. */
-	type(name: string, text: string): Promise<boolean>;
+	/** Whether the agent's process still runs in a terminal of the window, found again after a reload; rejects while the window cannot tell. */
+	isAlive(id: number): Promise<boolean>;
+	/** Called once for each agent whose process ends: closed with its terminal, or exited. */
+	onDidEnd(listener: (id: number, end: TerminalEnd) => void): Disposable;
+	/** Ends the agent's process, as closing its tab ends it. */
+	stop(id: number): Promise<void>;
+	/** Types `text` into the agent's terminal as it is, keys and all; false when its process runs in none. */
+	type(id: number, text: string): Promise<boolean>;
 }
 
 /** The repository a folder is in, as git reads it. */
@@ -97,8 +103,8 @@ export interface Git {
 
 /** What Facade tells the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
 export interface Person {
-	/** A notice of Facade's for the person. Going to it shows `terminal`, the agent's it is about. */
-	tell(text: string, terminal: string | undefined): void;
+	/** A notice of Facade's for the person. Going to it shows the terminal of `agent`, the agent it is about. */
+	tell(text: string, agent: number | undefined): void;
 }
 
 /**
@@ -120,8 +126,8 @@ export interface CliCatalog {
 	installed(): readonly InstalledCli[];
 	/** How the person has Facade start a CLI Facade knows. */
 	configOf(cli: AgentCli): CliConfig;
-	/** The environment the agents' terminals start with, before a launch's own: with it, where each CLI keeps its files. */
-	environment(): Environment;
+	/** The environment a terminal in `folder` starts with, before a launch's own, as the window makes it: with it, where each CLI keeps its files. */
+	environment(folder: string): Promise<Environment>;
 }
 
 /** How long the core waits, as the person sets it: read again at each use. */

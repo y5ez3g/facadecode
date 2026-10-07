@@ -78,6 +78,7 @@ suite('Core: starting an agent, step by step', () => {
 		}, {
 			started: { id: 1, name: 'main', cli: 'arg', model: 'large', effort: 'high', worktree: 'main', folder: lab, newWorktree: false },
 			launched: [{
+				id: 1,
 				name: '@main #a1 · Arg Code',
 				command: 'arg',
 				executable: path.join(temp.dir, 'workspace', 'bin', 'arg.exe'),
@@ -257,7 +258,7 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('anything that fails from the launch on ends the child as failed and closes its terminal, and start_agent says why: a launch the window fails, a CLI that ends as it starts, no hello within two minutes; the person who started it hears of it from the spawn alone', async () => {
+	test('anything that fails from the launch on ends the child as failed and closes its terminal, where it has one, and start_agent says why: a launch the window fails, a CLI that ends as it starts, no hello within two minutes; the person who started it hears of it from the spawn alone', async () => {
 		world.terminals.failNext = 'the window has no terminal for it';
 		const launchFailed = await outcomeOf(world.facade.startAgent(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'One.', folder: lab }));
 		const ending = world.facade.startAgent(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Two.', folder: lab });
@@ -278,7 +279,7 @@ suite('Core: starting an agent, step by step', () => {
 				'#a2 @main by @human failed: its CLI ended with exit code 2',
 				`#a3 @main by @human failed: ${NO_HELLO}`
 			],
-			typed: ['@main #a1 · Arg Code: [closed]', '@main #a3 · Arg Code: [closed]'],
+			typed: ['@main #a3 · Arg Code: [closed]'],
 			told: []
 		});
 	});
