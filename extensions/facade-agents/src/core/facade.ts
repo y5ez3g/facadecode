@@ -13,7 +13,7 @@ import { AgentCli, Environment, InstalledCli } from '../clis/cli';
 import { whyNotInstalled } from '../clis/config';
 import { writeTrust } from '../clis/trust';
 import { agentName, AgentTable, nameOfWorktree } from '../record/agents';
-import { Agent, AgentState, Caller, Exit, ExitKind, isLive, LiveAgent, MadeWorktree, PERSON } from '../record/events';
+import { Agent, agentRef, AgentState, Caller, describe, Exit, ExitKind, isLive, LiveAgent, MadeWorktree, parseAgentReference, PERSON } from '../record/events';
 import { injectedFile } from '../record/paths';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
@@ -27,10 +27,6 @@ import { AgentSetup, CliCatalog, Disposable, Ports, Repository, TerminalEnd, Tim
  */
 const TAKE_BACK_AGAIN_MS = 15_000;
 const TAKE_BACK_TRIES = 12;
-/** An agent's number, as a tool is given it: `#7`, or `7`. */
-const NUMBER = /^#?(?<id>\d+)$/;
-/** An agent as Facade's words name it: `@name #7`. */
-const NAMED_NUMBER = /^@(?<name>\S+)\s+#(?<id>\d+)$/;
 
 /** What the core is made with: the record, the window's ports, the CLIs, and what agents are given. */
 export interface FacadeOptions {
@@ -45,15 +41,15 @@ export interface FacadeOptions {
 	readonly timing?: () => Timing;
 }
 
-/** What a caller asks `spawn` for: the CLI, its model and how hard it thinks, the task, where the child works, and its name. */
-export interface SpawnRequest {
+/** What a caller asks `start_agent` for: the CLI, its model and how hard it thinks, the task, where the child works, and its name. */
+export interface StartRequest {
 	/** The CLI, by its id. */
 	readonly cli: string;
 	/** The model and the effort as the CLI takes them: Facade passes them on as they are, and no CLI checks them as it starts. */
 	readonly model: string;
 	readonly effort: string;
 	/** Its task, if it is given one. */
-	readonly prompt?: string;
+	readonly task?: string;
 	/** Omitted: the caller's folder; `new`: a new worktree on the branch `name`; else a worktree of the caller's repository, by name. */
 	readonly worktree?: string;
 	readonly name?: string;
@@ -61,8 +57,8 @@ export interface SpawnRequest {
 	readonly folder?: string;
 }
 
-/** What `spawn` answers with: the agent started, and where it works. */
-export interface Spawned {
+/** What `start_agent` answers with: the agent started, and where it works. */
+export interface Started {
 	readonly id: number;
 	readonly name: string;
 	readonly cli: string;
@@ -74,7 +70,7 @@ export interface Spawned {
 	readonly newWorktree: boolean;
 }
 
-/** One line of `ps`: an agent as it is now. */
+/** One line of `list_agents`: an agent as it is now. */
 export interface AgentRow {
 	readonly id: number;
 	/** Its parent now: the agent that started it while that one runs; none, the person, else. */
@@ -90,8 +86,8 @@ export interface AgentRow {
 	readonly exit?: Exit;
 }
 
-/** What `kill` answers with: the agent, and how it exited. */
-export interface Killed {
+/** What `stop_agent` answers with: the agent, and how it exited. */
+export interface Stopped {
 	readonly id: number;
 	readonly name: string;
 	/** Whether it had exited before the call: then its exit says how. */
@@ -190,11 +186,11 @@ export class Facade implements Disposable {
 	/**
 	 * Starts a child of the caller in its own UI: beside it, in a worktree of its repository, or in a new
 	 * worktree on the branch `name`, at the caller's HEAD. Answers once the child is up, with its number;
-	 * a child that exits before fails the call. Once begun, a spawn is carried through: a caller that exits
+	 * a child that exits before fails the call. Once begun, a start is carried through: a caller that exits
 	 * meanwhile leaves its child to the person. Its model and effort go to its CLI as they are: the CLI is
 	 * the one that knows which it has.
 	 */
-	async spawn(caller: Caller, request: SpawnRequest, progress?: (message: string) => void): Promise<Spawned> {
+	async startAgent(caller: Caller, request: StartRequest, progress?: (message: string) => void): Promise<Started> {
 		const installed = this.installed(request.cli);
 		const { displayName } = installed.cli;
 		const model = request.model.trim();
@@ -214,7 +210,7 @@ export class Facade implements Disposable {
 		const place = await this.placeOf(caller, home, request.worktree, name);
 		this.stillOpen();
 		const env = this.environmentOf(installed);
-		this.launcher.check(installed, model, effort, home, request.prompt, env);
+		this.launcher.check(installed, model, effort, home, request.task, env);
 
 		let folder: string;
 		let worktree: string;
@@ -237,7 +233,7 @@ export class Facade implements Disposable {
 		if (made) {
 			this.trust(installed, made, env);
 		}
-		const agent = await this.launcher.launch(caller, installed, { name: name ?? nameOfWorktree(worktree), model, effort, prompt: request.prompt, worktree, folder, trusted: !!made }, progress);
+		const agent = await this.launcher.launch(caller, installed, { name: name ?? nameOfWorktree(worktree), model, effort, task: request.task, worktree, folder, trusted: !!made }, progress);
 		return { id: agent.id, name: agent.name, cli: agent.cli, model: agent.model, effort, worktree: agent.worktree, folder: agent.folder, newWorktree: place.kind === 'new' };
 	}
 
@@ -245,7 +241,7 @@ export class Facade implements Disposable {
 	 * The agents as the caller sees them: itself, its parent, and its children - those it started, exited
 	 * ones too, and those that are its own now; with `all`, every agent the workspace has had. By number.
 	 */
-	ps(caller: Caller, all = false): AgentRow[] {
+	listAgents(caller: Caller, all = false): AgentRow[] {
 		const self = this.agentOf(caller);
 		const ownParent = self && this.table.parentOf(self);
 		return [...this.table.state.agents.values()]
@@ -274,24 +270,24 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * Ends one of the caller's children: its CLI ends and its terminal closes; its folder stays as it is.
-	 * Its own children run on, and are the person's now. The person ends any agent.
+	 * Stops one of the caller's children: its CLI ends and its terminal closes; its folder stays as it is.
+	 * Its own children run on, and are the person's now. The person stops any agent.
 	 */
-	async kill(caller: Caller, target: string): Promise<Killed> {
+	async stopAgent(caller: Caller, target: string): Promise<Stopped> {
 		this.stillOpen();
 		const agent = this.agentNamed(target);
 		if (caller.id !== undefined && this.table.parentOf(agent) !== caller.id) {
-			throw new FacadeError('REFUSED', `${describe(agent)} is not your child: an agent kills only its own children, and the person any. ${this.childrenOfText(caller)}`);
+			throw new FacadeError('REFUSED', `${describe(agent)} is not your child: an agent stops only its own children, and @human any. ${this.childrenOfText(caller)}`);
 		}
 		if (agent.exit) {
 			return { id: agent.id, name: agent.name, alreadyExited: true, exit: agent.exit };
 		}
-		const exit = this.exited(agent, 'killed', `killed by ${describe(caller)}`, caller.id === undefined);
+		const exit = this.exited(agent, 'killed', `stopped by ${describe(caller)}`, caller.id === undefined);
 		// Only a window that closed records nothing for an agent that has not exited.
 		if (!exit) {
 			throw new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
 		}
-		// Recorded as killed already: a terminal that would not close is the log's to say, not the call's.
+		// Recorded as stopped already: a terminal that would not close is the log's to say, not the call's.
 		try {
 			await this.ports.terminals.stop(this.terminalOf(agent));
 		} catch (err) {
@@ -303,7 +299,7 @@ export class Facade implements Disposable {
 	/**
 	 * As Facade comes back - after a reload, a restart, or turned on again - an agent whose terminal is
 	 * gone has exited. When the window before was closed - the person quit Facade, closed the window, or
-	 * opened another workspace in it - and none of its agents came back, they went with it: killed by the
+	 * opened another workspace in it - and none of its agents came back, they went with it: stopped by the
 	 * person, as a terminal they close is, without a word to them. After a reload, while Facade was off,
 	 * after a crash, or beside others that came back, one gone ended by itself. One that was starting is
 	 * waited for again, its MCP server's hello coming to this window; one not yet told of its task is told
@@ -405,7 +401,7 @@ export class Facade implements Disposable {
 	/**
 	 * Records how an agent exited - once - and takes back what was put into its folder once no agent runs
 	 * there. The person hears of a child of theirs that exited without their doing, and of the children
-	 * that are theirs now; an agent parent sees it in `ps`. Answers with its exit; undefined for an agent
+	 * that are theirs now; an agent parent sees it in `list_agents`. Answers with its exit; undefined for an agent
 	 * that had exited already, or once the window closed.
 	 */
 	private exited(agent: Agent, kind: ExitKind, reason: string, byThePerson = false): Exit | undefined {
@@ -422,13 +418,13 @@ export class Facade implements Disposable {
 		this.log(`${this.terminalOf(agent)} exited (${kind}): ${reason}`);
 		this.launcher.ended(agent.id, reason);
 		this.withdraw(agent.folder);
-		// A spawn of the person's tells them itself.
-		const spawnOfThePerson = waiter !== undefined && waiter.id === undefined;
-		if (parent === undefined && !byThePerson && !spawnOfThePerson) {
-			this.ports.person.tell(l10n.t("@{0} #{1} exited: {2}.", agent.name, agent.id, reason), undefined);
+		// A start of the person's tells them itself.
+		const startOfThePerson = waiter !== undefined && waiter.id === undefined;
+		if (parent === undefined && !byThePerson && !startOfThePerson) {
+			this.ports.person.tell(l10n.t("{0} exited: {1}.", describe(agent), reason), undefined);
 		}
 		if (orphans.length) {
-			this.ports.person.tell(l10n.t("@{0} #{1} exited, and its children are yours now: {2}.", agent.name, agent.id, orphans.map(describe).join(', ')), this.terminalOf(orphans[0]));
+			this.ports.person.tell(l10n.t("{0} exited, and its children are yours now: {1}.", describe(agent), orphans.map(describe).join(', ')), this.terminalOf(orphans[0]));
 		}
 		return exit;
 	}
@@ -527,38 +523,46 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * The agent a tool names: by its number, `#7`; by `@name`, where one agent that has not exited has
-	 * that name; or as Facade's words name it, `@name #7`, the number that agent's.
+	 * The agent a tool names: by its number, `#a7`, `#7`, `a7` or `7`; by `@name`, where one agent that
+	 * has not exited has that name; or as Facade's words name it, `@name #a7`, the number that agent's. A
+	 * number of another kind, the person, and a bare number an agent that has not exited is also called
+	 * are refused: no agent is named on a guess.
 	 */
 	private agentNamed(target: string): Agent {
-		const text = target.trim();
-		const numbered = NAMED_NUMBER.exec(text)?.groups ?? NUMBER.exec(text)?.groups;
-		if (numbered) {
-			const id = Number(numbered.id);
-			const agent = this.table.get(id);
-			if (!agent) {
-				throw new FacadeError('NOT_FOUND', `No agent is #${id}: ps with all lists every agent this workspace has had.`);
+		const reference = parseAgentReference(target);
+		if (reference.kind === 'other') {
+			throw new FacadeError('INVALID', `${reference.text} is not an agent's number: agents are numbered #a1, #a2 and on.`);
+		}
+		if (reference.kind === 'number') {
+			if (reference.bare) {
+				const named = this.table.liveNamed(target.trim().toLowerCase());
+				if (named.length) {
+					throw new FacadeError('INVALID', `${target.trim()} could be ${agentRef(reference.id)} or the name of ${named.map(describe).join(', ')}: write ${agentRef(reference.id)}, or the name with its number.`);
+				}
 			}
-			if (numbered.name !== undefined && numbered.name.toLowerCase() !== agent.name) {
-				throw new FacadeError('INVALID', `#${id} is @${agent.name}, not @${numbered.name}: name it by its number alone, or by its name.`);
+			const agent = this.table.get(reference.id);
+			if (!agent) {
+				throw new FacadeError('NOT_FOUND', `No agent is ${agentRef(reference.id)}: list_agents with all lists every agent this workspace has had.`);
+			}
+			if (reference.name !== undefined && reference.name !== agent.name) {
+				throw new FacadeError('INVALID', `${agentRef(agent.id)} is @${agent.name}, not @${reference.name}: name it by its number alone, or by its name.`);
 			}
 			return agent;
 		}
-		const name = text.replace(/^@/, '').toLowerCase();
-		if (name === PERSON.name) {
-			throw new FacadeError('REFUSED', `@${name} is the person, whom no agent ends.`);
+		if (reference.name === PERSON.name) {
+			throw new FacadeError('INVALID', `@${reference.name} is the person, not an agent.`);
 		}
-		const named = this.table.liveNamed(name);
+		const named = this.table.liveNamed(reference.name);
 		if (named.length > 1) {
-			throw new FacadeError('INVALID', `${named.length} running agents are called @${name}: ${named.map(describe).join(', ')}. Name one by its number.`);
+			throw new FacadeError('INVALID', `${named.length} running agents are called @${reference.name}: ${named.map(describe).join(', ')}. Name one by its number.`);
 		}
 		if (!named.length) {
-			throw new FacadeError('NOT_FOUND', `No running agent is called @${name}: name an exited one by its number, which ps with all lists.`);
+			throw new FacadeError('NOT_FOUND', `No running agent is called @${reference.name}: name an exited one by its number, which list_agents with all lists.`);
 		}
 		return named[0];
 	}
 
-	/** Whom the caller can kill, for a refusal to name. */
+	/** Whom the caller can stop, for a refusal to name. */
 	private childrenOfText(caller: Caller): string {
 		const children = this.table.childrenOf(caller.id).map(describe);
 		return children.length ? `Your running children: ${children.join(', ')}.` : 'You have no running children.';
@@ -582,9 +586,9 @@ export class Facade implements Disposable {
 		return this.options.clis.known.find(cli => cli.id === id);
 	}
 
-	/** The name of the terminal an agent runs in: unique per agent, and the same after a reload. */
+	/** The name of the terminal an agent runs in, `@lint #a7 · Codex`: unique per agent, and the same after a reload. */
 	private terminalOf(agent: Agent): string {
-		return `@${agent.name} #${agent.id} · ${this.cliName(agent.cli)}`;
+		return `${describe(agent)} · ${this.cliName(agent.cli)}`;
 	}
 
 	private liveAgents(): LiveAgent[] {
@@ -601,9 +605,4 @@ export class Facade implements Disposable {
 			throw new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
 		}
 	}
-}
-
-/** An agent or the person, as Facade's words name them: `@name #7`, or `the person`. */
-function describe(who: Caller): string {
-	return who.id === undefined ? 'the person' : `@${who.name} #${who.id}`;
 }

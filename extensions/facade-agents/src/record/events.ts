@@ -6,14 +6,22 @@
 import { isEqualPath } from '../base/files';
 import { JsonObject } from '../base/json';
 
-/** The person's name: the root of the agents' tree, and the parent of every orphan. The person has no number. */
-const YOU = 'you';
+/** The person's name, `@human`: the root of the agents' tree, and the parent of every orphan. The person has no number. */
+const HUMAN = 'human';
 /** Facade's own name, which no agent takes: its MCP server is called so, and what it says to an agent starts `[facade]`. */
 const FACADE = 'facade';
 /** The first number an agent gets; numbers then count up and are never given twice within a workspace. */
 const FIRST_ID = 1;
-/** Names an agent cannot take. */
-export const RESERVED_NAMES: ReadonlySet<string> = new Set([YOU, FACADE, 'all', 'everyone', 'me', 'init', 'kernel']);
+/** Names an agent cannot take: the person's, Facade's, and words a model reads as someone else. */
+export const RESERVED_NAMES: ReadonlySet<string> = new Set([HUMAN, 'you', 'me', FACADE, 'all', 'everyone', 'init', 'kernel']);
+/** The letter of an agent's number, as Facade writes it: `#a7`. Each kind of number has its own, as M2's messages will, `#m7`. */
+const AGENT_LETTER = 'a';
+/** A number as a tool is given it, with its kind's letter or without: `#a7`, `#m7`, `#7`. */
+const NUMBER_REFERENCE = /^#(?<letter>[a-z])?(?<id>\d+)$/i;
+/** A number written bare, which an agent's name could also be: `a7`, `7`. */
+const BARE_REFERENCE = /^(?<letter>a)?(?<id>\d+)$/i;
+/** An agent as Facade's words name it: `@lint #a7`. */
+const NAMED_REFERENCE = /^@(?<name>\S+)\s+#(?<letter>[a-z])?(?<id>\d+)$/i;
 /** The longest an agent's name is. */
 export const MAX_NAME_LENGTH = 40;
 /** An agent's name: lower case, a letter or digit, then letters, digits, dots, dashes and underscores. */
@@ -44,7 +52,7 @@ export interface Exit {
 
 /** An agent: one CLI running in its own terminal, in one folder. */
 export interface Agent {
-	/** Its number, which no other agent of the workspace gets: #13, as words write it. */
+	/** Its number, which no other agent of the workspace gets: #a13, as words write it (`agentRef`). */
 	readonly id: number;
 	/** A label, which other agents may share. */
 	readonly name: string;
@@ -116,7 +124,46 @@ export interface Caller {
 }
 
 /** The person, as a caller. */
-export const PERSON: Caller = { name: YOU };
+export const PERSON: Caller = { name: HUMAN };
+
+/** An agent's number as Facade writes it: `#a7`. */
+export function agentRef(id: number): string {
+	return `#${AGENT_LETTER}${id}`;
+}
+
+/** An agent as Facade's words name it, `@lint #a7`; the person as `@human`. */
+export function describe(who: Caller): string {
+	return who.id === undefined ? `@${HUMAN}` : `@${who.name} ${agentRef(who.id)}`;
+}
+
+/**
+ * What a tool's reference to an agent says: its number - with its name, or bare, so that it may be a
+ * name as well - its name, or a number of another kind.
+ */
+export type AgentReference =
+	| { readonly kind: 'number'; readonly id: number; readonly name?: string; readonly bare: boolean }
+	| { readonly kind: 'name'; readonly name: string }
+	| { readonly kind: 'other'; readonly text: string };
+
+/**
+ * Reads a tool's reference to an agent: `#a7`, `#7`, `a7` or `7` by its number; `@name` or `name` by
+ * its name; `@name #a7` by both. A number with another kind's letter, `#m7`, is no agent's.
+ */
+export function parseAgentReference(text: string): AgentReference {
+	const trimmed = text.trim();
+	const numbered = NAMED_REFERENCE.exec(trimmed)?.groups ?? NUMBER_REFERENCE.exec(trimmed)?.groups;
+	if (numbered) {
+		if (numbered.letter !== undefined && numbered.letter.toLowerCase() !== AGENT_LETTER) {
+			return { kind: 'other', text: trimmed };
+		}
+		return { kind: 'number', id: Number(numbered.id), ...(numbered.name !== undefined ? { name: numbered.name.toLowerCase() } : {}), bare: false };
+	}
+	const bare = BARE_REFERENCE.exec(trimmed)?.groups;
+	if (bare) {
+		return { kind: 'number', id: Number(bare.id), bare: true };
+	}
+	return { kind: 'name', name: trimmed.replace(/^@/, '').toLowerCase() };
+}
 
 /** What a workspace's ledger says now. */
 export interface WorkspaceState {

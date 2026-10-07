@@ -70,7 +70,7 @@ function manifest(): { readonly sections: readonly { readonly id: string; readon
 suite('CLIs: each launch, argument by argument', () => {
 
 	test('Claude Code runs in its own UI at full access, its warning about it off, with Facade\'s server alone and the person\'s own settings, the switches that would stop it at a question with nobody there off - in its environment, where one is, else in its settings - its skill from the run, on the model and at the effort asked for, the task after the options; without a task it starts at its input box', () => {
-		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', effort: 'xhigh', prompt: '--- Plan\nAdd clamp.' }), '/bin/claude');
+		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', effort: 'xhigh', task: '--- Plan\nAdd clamp.' }), '/bin/claude');
 		const file = (name: string) => JSON.parse(spec.files.find(each => path.basename(each.path) === name)?.content ?? 'null');
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files.map(each => each.path), config: file('7.mcp.json'), settings: file('7.settings.json'), plugin: file('plugin.json'), skill: spec.files[3]?.content, injected: spec.injected, noTask: claudeCli.launch(inputFor(claudeCli), '/bin/claude').args.includes('--') }, {
@@ -110,7 +110,7 @@ suite('CLIs: each launch, argument by argument', () => {
 	});
 
 	test('Codex runs in its own UI at full access, with Facade\'s server and the switches that would stop it at a question as -c overrides, the project\'s hooks unreviewed, in a process of its own, at the effort asked for; its skill goes into the folder', () => {
-		const spec = codexCli.launch(inputFor(codexCli, { model: 'gpt-6-luna', effort: 'max', prompt: '--- Plan' }), '/bin/codex');
+		const spec = codexCli.launch(inputFor(codexCli, { model: 'gpt-6-luna', effort: 'max', task: '--- Plan' }), '/bin/codex');
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected: spec.injected, noTask: codexCli.launch(inputFor(codexCli), '/bin/codex').args.includes('--') }, {
 			executable: '/bin/codex',
@@ -201,7 +201,7 @@ suite('CLIs: each launch, argument by argument', () => {
 	});
 
 	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
-		const spec = antigravityCli.launch(inputFor(antigravityCli, { model: 'gemini-3.8-flash', effort: 'medium', prompt: 'Not given here.' }), '/bin/agy.exe');
+		const spec = antigravityCli.launch(inputFor(antigravityCli, { model: 'gemini-3.8-flash', effort: 'medium', task: 'Not given here.' }), '/bin/agy.exe');
 		const injected = Object.fromEntries(spec.injected.map(file => [file.path, file.path.endsWith('.json') ? JSON.parse(file.content) : file.content]));
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task }, {
@@ -231,7 +231,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			}
 		};
 		const config = readCliConfig(claudeCli, name => set[name]);
-		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', prompt: 'Plan.', config }), '/bin/claude');
+		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', task: 'Plan.', config }), '/bin/claude');
 		// Settings of Facade's with an object in them, which the person changes a part of.
 		const nested: AgentCli = { ...claudeCli, defaults: { path: '', launch: { ...claudeCli.defaults.launch, settings: { permissions: { allow: ['Read'], deny: ['Write'] } } } } };
 		const deeper = readCliConfig(nested, name => name === 'launch' ? { settings: { permissions: { deny: null, ask: ['Bash'] } } } : undefined);

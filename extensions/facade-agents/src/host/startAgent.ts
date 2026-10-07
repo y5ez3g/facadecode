@@ -8,15 +8,15 @@ import * as vscode from 'vscode';
 import { isJsonObject } from '../base/json';
 import { InstalledCli } from '../clis/cli';
 import { knownClis } from '../clis/registry';
-import { SpawnRequest } from '../core/facade';
+import { StartRequest } from '../core/facade';
 
 /**
  * Facade: Start Agent: the person picks the CLI, and types a model, how hard it thinks and a first
  * message, for the worktree on screen; the core starts it. A script gives any of them as the command's
- * argument, `{ cli, model, effort, prompt, folder }`, and is asked only for the rest; `prompt: ''` starts
+ * argument, `{ cli, model, effort, task, folder }`, and is asked only for the rest; `task: ''` starts
  * the agent without a first message.
  */
-export async function askStartAgent(rawArgs: unknown, installed: readonly InstalledCli[]): Promise<SpawnRequest | undefined> {
+export async function askStartAgent(rawArgs: unknown, installed: readonly InstalledCli[]): Promise<StartRequest | undefined> {
 	const args = isJsonObject(rawArgs) ? rawArgs : {};
 	const title = vscode.l10n.t("Start Agent");
 	if (!installed.length) {
@@ -52,15 +52,15 @@ export async function askStartAgent(rawArgs: unknown, installed: readonly Instal
 		return undefined;
 	}
 
-	let prompt = typeof args.prompt === 'string' ? args.prompt : undefined;
-	if (prompt === undefined) {
-		prompt = await vscode.window.showInputBox({ title, prompt: vscode.l10n.t("Its first message. Leave it empty to start it without one."), placeHolder: vscode.l10n.t("What it should do") });
-		if (prompt === undefined) {
+	let task = typeof args.task === 'string' ? args.task : undefined;
+	if (task === undefined) {
+		task = await vscode.window.showInputBox({ title, prompt: vscode.l10n.t("Its first message. Leave it empty to start it without one."), placeHolder: vscode.l10n.t("What it should do") });
+		if (task === undefined) {
 			return undefined;
 		}
 	}
 
-	return { cli: chosen.cli.id, model, effort, prompt: prompt.trim() || undefined, folder };
+	return { cli: chosen.cli.id, model, effort, task: task.trim() || undefined, folder };
 }
 
 /** What a script gave, trimmed, where it gave text; else what the person types, trimmed; undefined where they cancelled. */

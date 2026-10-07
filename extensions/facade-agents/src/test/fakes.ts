@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
-import { Facade, SpawnRequest, Spawned } from '../core/facade';
+import { Facade, StartRequest, Started } from '../core/facade';
 import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
@@ -195,7 +195,7 @@ export function argCli(home: string): AgentCli {
 			const config = path.join(input.runDir, `${input.slug}.config.json`);
 			return {
 				executable,
-				args: launchArgs(cli, input.config, { config, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
+				args: launchArgs(cli, input.config, { config, model: input.model, effort: input.effort, task: input.task ?? '' }, { trust: input.trusted, task: !!input.task }),
 				env: input.config.launch.environment,
 				cwd: input.folder,
 				files: [{ path: config, content: JSON.stringify(input.mcp) }],
@@ -317,7 +317,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
 			agentEnv: token => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: token }),
 			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: '# Working in Facade Code' }],
-			opening: (agent, parent) => `[facade] You are @${agent.name} #${agent.id}, ${agent.cliName}, started by @${parent.name}.`
+			opening: (agent, parent) => `[facade] You are @${agent.name} #a${agent.id}, ${agent.cliName}, started by @${parent.name}.`
 		},
 		timing: () => timing,
 		log: message => logs.push(message),
@@ -337,7 +337,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		agent(id: number): Agent {
 			const found = table.get(id);
 			if (!found) {
-				throw new Error(`no agent is #${id}`);
+				throw new Error(`no agent is #a${id}`);
 			}
 			return found;
 		},
@@ -346,19 +346,19 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			facade.connected(callerOf(this.agent(id)));
 		},
 		/**
-		 * A spawn whose child's MCP server says hello once its terminal is launched, as a CLI's does: what
-		 * the spawn answered, or its error. On a test's clock.
+		 * A start whose child's MCP server says hello once its terminal is launched, as a CLI's does: what
+		 * start_agent answered, or its error. On a test's clock.
 		 */
-		async spawnUp(caller: Caller, request: SpawnRequest): Promise<Spawned> {
+		async startUp(caller: Caller, request: StartRequest): Promise<Started> {
 			const id = table.state.lastId + 1;
 			let over = false;
-			const spawning = facade.spawn(caller, request);
-			spawning.then(() => over = true, () => over = true);
-			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.includes(` #${id} · `)));
+			const starting = facade.startAgent(caller, request);
+			starting.then(() => over = true, () => over = true);
+			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.includes(` #a${id} · `)));
 			if (!over) {
 				facade.connected(callerOf(this.agent(id)));
 			}
-			return settled(spawning);
+			return settled(starting);
 		},
 		/** As the window goes, or as Facade lets go of its agents while the window stays. */
 		dispose(by?: ClosedBy): void {

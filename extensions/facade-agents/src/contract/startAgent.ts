@@ -3,31 +3,32 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { describe } from '../record/events';
 import { Args } from './args';
 import type { ContractTool } from './tools';
 
-const PARAMS = ['cli', 'model', 'effort', 'prompt', 'worktree?', 'name?'];
+const PARAMS = ['cli', 'model', 'effort', 'task', 'worktree?', 'name?'];
 
 /**
- * `spawn`: starts a child of the caller in its own UI, beside it or in a worktree. It answers with the
- * child's number once the child is up.
+ * `start_agent`: starts a child of the caller in its own UI, beside it or in a worktree. It answers with
+ * the child's number once the child is up.
  */
-export const spawnTool: ContractTool = {
+export const startAgentTool: ContractTool = {
 	definition: {
-		name: 'spawn',
+		name: 'start_agent',
 		title: 'Start a child agent',
-		description: 'Starts a child agent in its own UI: a CLI on one of its models, thinking as hard as you say, with its task. It works beside you, in your folder; in a worktree of your repository, by name; or, with worktree "new" and a name, in a new worktree on a new branch of that name, starting at your worktree\'s HEAD - commit what the child needs first. It answers once the child is up, with its number, as #7. The child is yours: ps lists it, and kill ends it. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts: a child given a model its CLI does not have comes up all the same, then fails at its first step, on its screen, or works on the CLI\'s own default model. A child can take a minute or two to come up: a slow spawn is waiting, so do not call it again.',
+		description: 'Starts a child agent in its own UI: a CLI on one of its models, thinking as hard as you say, with its task. It works beside you, in your folder; in a worktree of your repository, by name; or, with worktree "new" and a name, in a new worktree on a new branch of that name, starting at your worktree\'s HEAD - commit what the child needs first. It answers once the child is up, with its number, as #a7. The child is yours: list_agents lists it, and stop_agent stops it. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts: a child given a model its CLI does not have comes up all the same, then fails at its first step, on its screen, or works on the CLI\'s own default model. A child can take a minute or two to come up: a slow start_agent is waiting, so do not call it again.',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				cli: { type: 'string', description: 'The CLI, by its id.' },
 				model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it.' },
 				effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. The levels differ from CLI to CLI, and from model to model.' },
-				prompt: { type: 'string', description: 'Its task.' },
+				task: { type: 'string', description: 'Its task.' },
 				worktree: { type: 'string', description: 'Omitted: your folder. "new": a new worktree on the branch name. A name: that worktree of your repository.' },
 				name: { type: 'string', description: 'Its name, without the @: a label, which other agents may have too. Required with worktree "new"; else your worktree\'s name.' }
 			},
-			required: ['cli', 'model', 'effort', 'prompt'],
+			required: ['cli', 'model', 'effort', 'task'],
 			additionalProperties: false
 		}
 	},
@@ -46,19 +47,19 @@ export const spawnTool: ContractTool = {
 		};
 	},
 	async call(facade, caller, input, progress) {
-		const args = new Args('spawn', PARAMS, input);
-		const spawned = await facade.spawn(caller, {
+		const args = new Args('start_agent', PARAMS, input);
+		const started = await facade.startAgent(caller, {
 			cli: args.text('cli'),
 			model: args.text('model'),
 			effort: args.text('effort'),
-			prompt: args.text('prompt'),
+			task: args.text('task'),
 			worktree: args.optionalText('worktree'),
 			name: args.optionalText('name')
 		}, progress);
-		const where = spawned.newWorktree ? `the new worktree ${spawned.worktree}, on the new branch ${spawned.worktree},` : `the worktree ${spawned.worktree}`;
+		const where = started.newWorktree ? `the new worktree ${started.worktree}, on the new branch ${started.worktree},` : `the worktree ${started.worktree}`;
 		return {
-			text: `Started @${spawned.name} #${spawned.id}: ${facade.cliName(spawned.cli)} on ${spawned.model} at ${spawned.effort}, in ${where} at ${spawned.folder}. It is up and has its task.`,
-			data: spawned
+			text: `Started ${describe(started)}: ${facade.cliName(started.cli)} on ${started.model} at ${started.effort}, in ${where} at ${started.folder}. It is up and has its task.`,
+			data: started
 		};
 	}
 };

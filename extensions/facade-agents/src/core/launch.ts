@@ -12,7 +12,7 @@ import { AgentCli, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec 
 import { launchTarget, unsafeForCmd } from '../clis/executable';
 import { trustTarget } from '../clis/trust';
 import { AgentTable } from '../record/agents';
-import { Agent, Caller, isLive } from '../record/events';
+import { Agent, Caller, describe, isLive } from '../record/events';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
 import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
@@ -23,12 +23,12 @@ import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
  */
 export const START_TIMEOUT_MS = 120_000;
 
-/** A child's start, as `spawn` decided it. */
+/** A child's start, as `start_agent` decided it. */
 export interface Run {
 	readonly name: string;
 	readonly model: string;
 	readonly effort: string;
-	readonly prompt?: string;
+	readonly task?: string;
 	readonly worktree: string;
 	readonly folder: string;
 	/** In a worktree Facade made, whose trust the CLI is given. */
@@ -57,7 +57,7 @@ interface Startup {
 	readonly up: DeferredPromise<void>;
 	/** Ends it as failed once its time to come up is over; cleared by its MCP server's hello. */
 	timer: ReturnType<typeof setTimeout> | undefined;
-	/** The caller whose spawn waits for it; none for one found starting after a reload. */
+	/** The caller whose start waits for it; none for one found starting after a reload. */
 	readonly waiter?: Caller;
 }
 
@@ -81,26 +81,26 @@ export class Launcher implements Disposable {
 		this.disposed = true;
 		for (const startup of this.startups.values()) {
 			clearTimeout(startup.timer);
-			startup.up.error(new FacadeError('UNAVAILABLE', 'The window closed meanwhile: whether the agent came up is not known. ps says, once the window is back.'));
+			startup.up.error(new FacadeError('UNAVAILABLE', 'The window closed meanwhile: whether the agent came up is not known. list_agents says, once the window is back.'));
 		}
 		this.startups.clear();
 	}
 
 	/**
-	 * Throws where `installed` could not be started on `model` at `effort` with `prompt` as the person has
+	 * Throws where `installed` could not be started on `model` at `effort` with `task` as the person has
 	 * it set up, in its environment `env` - a `${name}` its launch or its trust has no value for, or an
-	 * argument that would not reach a CLI Windows starts through cmd.exe as it is - so that a spawn refuses
+	 * argument that would not reach a CLI Windows starts through cmd.exe as it is - so that a start refuses
 	 * before anything is made for it. The launch is computed, not run; the model and the effort are the
 	 * CLI's to take or refuse.
 	 */
-	check(installed: InstalledCli, model: string, effort: string, folder: string, prompt: string | undefined, env: Environment): void {
+	check(installed: InstalledCli, model: string, effort: string, folder: string, task: string | undefined, env: Environment): void {
 		const inTerminal = installed.cli.task === 'terminal' || launchTarget(installed.executable).throughCmd;
 		try {
 			this.launchOf(installed, {
 				folder,
 				// The arguments for a worktree Facade made are checked too.
 				trusted: true,
-				...(!inTerminal && prompt !== undefined ? { prompt } : {}),
+				...(!inTerminal && task !== undefined ? { task } : {}),
 				model,
 				effort,
 				mcp: { command: 'facade', args: [], env: {} },
@@ -125,21 +125,21 @@ export class Launcher implements Disposable {
 		// Windows starts so is told of its task in its terminal, as a CLI whose first conversation has no
 		// MCP tools is.
 		const inTerminal = cli.task === 'terminal' || launchTarget(installed.executable).throughCmd;
-		const { prompt } = run;
-		const first = prompt === undefined ? undefined : (id: number) => `${setup.opening({ id, name: run.name, cliName: cli.displayName }, caller)}\n\n${prompt}`;
+		const { task } = run;
+		const first = task === undefined ? undefined : (id: number) => `${setup.opening({ id, name: run.name, cliName: cli.displayName }, caller)}\n\n${task}`;
 		this.stillOpen();
 		const started = table.start({ name: run.name, parent: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}) });
 		const { agent } = started;
 		const startup = this.watch(agent, caller);
 		const terminal = this.context.terminalOf(agent);
 		if (caller.id !== undefined && !isLive(table.get(caller.id))) {
-			ports.person.tell(l10n.t("@{0} #{1} exited while it started @{2} #{3}, which is yours now.", caller.name, caller.id, agent.name, agent.id), terminal);
+			ports.person.tell(l10n.t("{0} exited while it started {1}, which is yours now.", describe(caller), describe(agent)), terminal);
 		}
 		try {
 			const { spec, args, throughCmd } = this.launchOf(installed, {
 				folder: run.folder,
 				trusted: run.trusted,
-				...(!inTerminal && first ? { prompt: first(agent.id) } : {}),
+				...(!inTerminal && first ? { task: first(agent.id) } : {}),
 				model: run.model,
 				effort: run.effort,
 				mcp: cli.sharedServer ? setup.sharedMcpServer() : setup.mcpServer(started.tokenFile),
@@ -156,7 +156,7 @@ export class Launcher implements Disposable {
 			// A server the same for every launch finds the agent from its environment.
 			const env = cli.sharedServer ? { ...spec.env, ...setup.agentEnv(started.token) } : spec.env;
 			this.context.log(`Starting ${terminal} in ${run.folder}, the worktree ${run.worktree}${throughCmd ? ', through cmd.exe' : ''}.`);
-			progress?.(`Starting @${agent.name} #${agent.id}.`);
+			progress?.(`Starting ${describe(agent)}.`);
 			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined });
 		} catch (err) {
 			// A window that closed leaves it to the next one: starting, or gone with its terminal.
@@ -202,7 +202,7 @@ export class Launcher implements Disposable {
 		}
 	}
 
-	/** The caller whose spawn waits for the agent `id` to come up, if one does. */
+	/** The caller whose start waits for the agent `id` to come up, if one does. */
 	waiterOf(id: number): Caller | undefined {
 		return this.startups.get(id)?.waiter;
 	}
@@ -223,7 +223,7 @@ export class Launcher implements Disposable {
 		return { spec, args, throughCmd: target.throughCmd };
 	}
 
-	/** An agent exited: the spawn that waits for it fails with why. */
+	/** An agent exited: the start that waits for it fails with why. */
 	ended(id: number, reason: string): void {
 		const startup = this.startups.get(id);
 		if (startup) {
@@ -246,7 +246,7 @@ export class Launcher implements Disposable {
 			}, ms),
 			...(waiter !== undefined ? { waiter } : {})
 		};
-		// Seen by the spawn that waits for it, if one does: never a rejection nobody handles.
+		// Seen by the start that waits for it, if one does: never a rejection nobody handles.
 		startup.up.p.catch(() => undefined);
 		this.startups.set(agent.id, startup);
 		return startup;
@@ -298,7 +298,7 @@ export class Launcher implements Disposable {
 		}
 	}
 
-	/** An agent is up: the spawn that waits for it answers. */
+	/** An agent is up: the start that waits for it answers. */
 	private isUp(agent: Agent): void {
 		const startup = this.startups.get(agent.id);
 		if (startup) {
@@ -348,5 +348,5 @@ export class Launcher implements Disposable {
 }
 
 function didNotStart(cli: AgentCli, agent: Agent, reason: string): FacadeError {
-	return new FacadeError('FAILED', `${cli.displayName} did not start as @${agent.name} #${agent.id}: ${reason}`);
+	return new FacadeError('FAILED', `${cli.displayName} did not start as ${describe(agent)}: ${reason}`);
 }

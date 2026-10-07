@@ -8,10 +8,10 @@ import { FacadeError } from '../core/errors';
 import { Facade } from '../core/facade';
 import { Caller } from '../record/events';
 import { Hello, McpTool, ToolResult } from '../transport/protocol';
-import { killTool } from './kill';
+import { listAgentsTool } from './listAgents';
 import { instructionsFor } from './prompts';
-import { psTool } from './ps';
-import { spawnTool } from './spawn';
+import { startAgentTool } from './startAgent';
+import { stopAgentTool } from './stopAgent';
 
 /** A tool's input, as the JSON Schema its definition gives: an object, and its properties. */
 export type ToolSchema = {
@@ -36,12 +36,13 @@ export interface ContractTool {
 	call(facade: Facade, caller: Caller, args: unknown, progress: (message: string) => void): Promise<ToolResult>;
 }
 
-const TOOLS: readonly ContractTool[] = [spawnTool, psTool, killTool];
+const TOOLS: readonly ContractTool[] = [startAgentTool, listAgentsTool, stopAgentTool];
 
 /**
- * The tools of Facade's MCP server, `facade`, as the model sees them: `spawn`, `ps` and `kill`. Each
- * result is text the model reads whole, with the same facts as data. A failure is a result too, marked
- * as an error: it says what is wrong and what would be right, and its data carries one of five codes.
+ * The tools of Facade's MCP server, `facade`, as the model sees them: `start_agent`, `list_agents` and
+ * `stop_agent`. Each result is text the model reads whole, with the same facts as data. A failure is a
+ * result too, marked as an error: it says what is wrong and what would be right, and its data carries
+ * one of five codes.
  */
 export class Contract {
 

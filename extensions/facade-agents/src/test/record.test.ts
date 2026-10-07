@@ -9,7 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
 import { agentName, AgentTable, nameOfWorktree, NewAgent } from '../record/agents';
-import { LedgerEventBody, PERSON } from '../record/events';
+import { agentRef, describe, LedgerEventBody, parseAgentReference, PERSON } from '../record/events';
 import { isLedgerHeld, Ledger, LedgerLockedError, lockWait } from '../record/ledger';
 import { injectedFile, recordDir, workspaceDir, workspacesRoot } from '../record/paths';
 import { cutNextWriteShort, fsError, replaceFsFunction, sleep, tempDir, waitFor } from './util';
@@ -175,7 +175,7 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		const child = table.start(newAgent('clamp', main.id, 'clamp')).agent;
 		const grandchild = table.start(newAgent('slug', child.id, 'slug')).agent;
 		const before = { main: table.parentOf(main), child: table.parentOf(child), grandchild: table.parentOf(grandchild), ofMain: table.childrenOf(main.id).map(each => each.id) };
-		table.setExited(child.id, 'killed', 'killed by @main #1');
+		table.setExited(child.id, 'killed', 'stopped by @main #a1');
 
 		assert.deepStrictEqual({
 			before,
@@ -210,17 +210,40 @@ suite('Record: agents, their numbers, names and tokens', () => {
 
 		assert.deepStrictEqual({
 			named: [agentName('@Clamp'), agentName(' slug.2_x ')],
-			refused: [refused('you'), refused('-x'), refused('a b'), refused('x'.repeat(41))],
-			ofWorktrees: [nameOfWorktree('Feature/Clamp-It'), nameOfWorktree('main'), nameOfWorktree('you'), nameOfWorktree('init'), nameOfWorktree('---')]
+			refused: [refused('human'), refused('you'), refused('-x'), refused('a b'), refused('x'.repeat(41))],
+			ofWorktrees: [nameOfWorktree('Feature/Clamp-It'), nameOfWorktree('main'), nameOfWorktree('human'), nameOfWorktree('init'), nameOfWorktree('---')]
 		}, {
 			named: ['clamp', 'slug.2_x'],
 			refused: [
+				'"human" is reserved: choose another name.',
 				'"you" is reserved: choose another name.',
 				'"-x" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.',
 				'"a b" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.',
 				`"${'x'.repeat(41)}" is not a name: use up to 40 letters, digits, dots, dashes or underscores, starting with a letter or digit.`
 			],
 			ofWorktrees: ['feature-clamp-it', 'main', 'agent', 'agent', 'agent']
+		});
+	});
+
+	test('an agent\'s number is written #a7, and a tool\'s reference reads #a7, #7, a7 and 7 as its number - a7 and 7 bare, as a name could be them too - @name and name as a name, @name #a7 as both, and #m7 as another kind\'s number', () => {
+		assert.deepStrictEqual({
+			written: [agentRef(7), describe({ id: 7, name: 'lint' }), describe(PERSON)],
+			read: ['#a7', '#7', ' a7 ', '7', '#A7', '@Lint', 'lint', '@lint #a7', '@lint #7', '#m7', '@lint #m7'].map(parseAgentReference)
+		}, {
+			written: ['#a7', '@lint #a7', '@human'],
+			read: [
+				{ kind: 'number', id: 7, bare: false },
+				{ kind: 'number', id: 7, bare: false },
+				{ kind: 'number', id: 7, bare: true },
+				{ kind: 'number', id: 7, bare: true },
+				{ kind: 'number', id: 7, bare: false },
+				{ kind: 'name', name: 'lint' },
+				{ kind: 'name', name: 'lint' },
+				{ kind: 'number', id: 7, name: 'lint', bare: false },
+				{ kind: 'number', id: 7, name: 'lint', bare: false },
+				{ kind: 'other', text: '#m7' },
+				{ kind: 'other', text: '@lint #m7' }
+			]
 		});
 	});
 

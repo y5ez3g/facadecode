@@ -103,8 +103,8 @@ export const claudeCli: AgentCli = {
 				pluginDir,
 				model: input.model,
 				effort: input.effort,
-				task: input.prompt ?? ''
-			}, { trust: input.trusted, task: !!input.prompt }),
+				task: input.task ?? ''
+			}, { trust: input.trusted, task: !!input.task }),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [

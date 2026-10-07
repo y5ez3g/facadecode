@@ -89,14 +89,14 @@ suite('Host: the window\'s state, beside the record', () => {
 		const first = new JsonFileState(file);
 		const before = first.get('pipe') ?? 'none';
 		await first.update('pipe', 'b71ef6fd');
-		await first.update('pids', { '@lead #1 · Arg Code': 4242 });
+		await first.update('pids', { '@lead #a1 · Arg Code': 4242 });
 		await first.update('gone', 1);
 		await first.update('gone', undefined);
 
 		const second = new JsonFileState(file);
 		assert.deepStrictEqual(
 			{ before, pipe: second.get('pipe'), pids: second.get('pids'), gone: second.get('gone') ?? 'default', inherited: second.get('toString') ?? 'none' },
-			{ before: 'none', pipe: 'b71ef6fd', pids: { '@lead #1 · Arg Code': 4242 }, gone: 'default', inherited: 'none' });
+			{ before: 'none', pipe: 'b71ef6fd', pids: { '@lead #a1 · Arg Code': 4242 }, gone: 'default', inherited: 'none' });
 	});
 
 	test('a file that does not hold an object of values starts it empty', () => {

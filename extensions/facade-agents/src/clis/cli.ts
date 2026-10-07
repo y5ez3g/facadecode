@@ -126,7 +126,7 @@ export interface LaunchInput {
 	/** Set in a worktree Facade made, for a CLI given the person's trust in its arguments. */
 	readonly trusted: boolean;
 	/** Its first message, for a CLI that is given its task as an argument. */
-	readonly prompt?: string;
+	readonly task?: string;
 	/** The model and how hard it thinks, as the CLI takes them: Facade passes them on as they are. */
 	readonly model: string;
 	readonly effort: string;
@@ -171,7 +171,7 @@ export interface Injected {
  * own: flags, files in its run folder, and files in its folder.
  */
 export interface AgentCli {
-	/** The id `spawn` and Start Agent use. */
+	/** The id `start_agent` and Start Agent use. */
 	readonly id: string;
 	readonly displayName: string;
 	/** Where its settings are: `facade.orchestration.<section>.*`. */

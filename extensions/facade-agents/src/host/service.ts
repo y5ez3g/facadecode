@@ -206,7 +206,7 @@ export class AgentsService implements vscode.Disposable {
 			return undefined;
 		}
 		try {
-			const { id, name } = await facade.spawn(PERSON, request);
+			const { id, name } = await facade.startAgent(PERSON, request);
 			return { id, name };
 		} catch (err) {
 			this.log.error(`Starting an agent failed: ${stackOf(err)}`);

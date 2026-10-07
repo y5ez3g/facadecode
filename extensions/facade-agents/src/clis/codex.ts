@@ -43,7 +43,7 @@ export const codexCli: AgentCli = {
 					'-c', 'mcp_servers.facade.args=${mcpArgs}',
 					'-c', 'mcp_servers.facade.env=${mcpEnv}',
 					'-c', 'mcp_servers.facade.startup_timeout_sec=30',
-					// spawn may wait minutes for a child to come up.
+					// start_agent may wait minutes for a child to come up.
 					'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
 					'-c', 'mcp_servers.facade.required=true',
 					'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
@@ -76,8 +76,8 @@ export const codexCli: AgentCli = {
 				folder: toml(projectKey(input.folder)),
 				model: input.model,
 				effort: input.effort,
-				task: input.prompt ?? ''
-			}, { trust: input.trusted, task: !!input.prompt }),
+				task: input.task ?? ''
+			}, { trust: input.trusted, task: !!input.task }),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],

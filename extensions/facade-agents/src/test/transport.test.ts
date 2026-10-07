@@ -714,7 +714,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 
 		const refused = await main.call('echo', { text: 'still me?' });
 
-		assert.deepStrictEqual([refused.isError, refused.data?.code, refused.text], [true, 'REFUSED', 'Facade no longer accepts @main: it was killed, or exited. Stop working.']);
+		assert.deepStrictEqual([refused.isError, refused.data?.code, refused.text], [true, 'REFUSED', 'Facade no longer accepts @main: it was stopped, or exited. Stop working.']);
 	});
 
 	test('a call made while the window\'s end is away waits for it and runs once it is back; one cut off halfway says so, and is not made again', async () => {

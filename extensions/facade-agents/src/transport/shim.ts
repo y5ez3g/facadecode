@@ -134,7 +134,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 					throw err;
 				}
 				if (code === 'UNAUTHORIZED') {
-					return { text: `Facade no longer accepts ${hello ? `@${hello.name}` : 'this session'}: it was killed, or exited. Stop working.`, isError: true, data: { code: 'REFUSED' } };
+					return { text: `Facade no longer accepts ${hello ? `@${hello.name}` : 'this session'}: it was stopped, or exited. Stop working.`, isError: true, data: { code: 'REFUSED' } };
 				}
 				if (code === 'UNREACHABLE' && Date.now() < deadline) {
 					if (!waiting) {
