@@ -3,10 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'fs';
 import * as l10n from '@vscode/l10n';
 import * as vscode from 'vscode';
 import { messageOf, stackOf } from './base/errors';
-import { AgentsService } from './host/service';
+import { agentsLogOf, AgentsService } from './host/service';
 import { registerShowLaunch } from './host/showLaunch';
 
 /**
@@ -20,7 +21,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		l10n.config({ contents: vscode.l10n.bundle });
 	}
 	const log = vscode.window.createOutputChannel(vscode.l10n.t("Facade Agents"), { log: true });
-	context.subscriptions.push(log, vscode.commands.registerCommand('facade.agents.showLog', () => log.show()), registerShowLaunch());
+	context.subscriptions.push(log, vscode.commands.registerCommand('facade.agents.showLog', () => showAgentsLog(context.workspaceState)), registerShowLaunch());
 
 	let service: AgentsService | undefined;
 	/** The service while it starts: the extension host can go meanwhile, as a folder window becomes a workspace. */
@@ -72,7 +73,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				void vscode.window.showInformationMessage(creating
 					? vscode.l10n.t("Facade agents are starting in this window, finding the agents that ran here: try again in a moment.")
 					: none === 'failed'
-						? vscode.l10n.t("Facade agents could not start in this window: Facade: Show Agents Log says why.")
+						? vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why.")
 						: none === 'noFolder'
 							? vscode.l10n.t("Facade agents need a folder or workspace open in this window.")
 							: vscode.l10n.t("Facade agents are off. Turn on the setting facade.orchestration.enabled, in a window with a folder open."));
@@ -94,6 +95,19 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 	);
 	sync();
+}
+
+/**
+ * Facade: Show Agents Log: opens the person's history of this workspace's agents, each start and each
+ * end, whether Facade runs now or not.
+ */
+async function showAgentsLog(workspaceState: vscode.Memento): Promise<void> {
+	const file = agentsLogOf(workspaceState);
+	if (!file || !fs.existsSync(file)) {
+		void vscode.window.showInformationMessage(vscode.l10n.t("No agent has started in this workspace yet."));
+		return;
+	}
+	await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
 }
 
 /** Nothing to do: what `activate` started goes with the extension's subscriptions. */

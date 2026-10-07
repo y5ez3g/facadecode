@@ -28,7 +28,7 @@ export const stopAgentTool: ContractTool = {
 		const stopped = await facade.stopAgent(caller, args.text('agent'));
 		return {
 			text: stopped.alreadyEnded
-				? `${describe(stopped)} had ended already (${endText(stopped.end)}).`
+				? `${describe(stopped)} had ended already (${endText(facade, stopped.end)}).`
 				: `Stopped ${describe(stopped)}: its terminal closed. Its worktree stays as it is.`,
 			data: stopped
 		};

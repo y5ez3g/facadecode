@@ -17,6 +17,7 @@ import { AgentTable } from '../record/agents';
 import { Caller, isLive, PERSON } from '../record/events';
 import { identityOf, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { ClosedBy, LedgerLockedError, LedgerUnreadableError, lockStateOf, lockWait } from '../record/ledger';
+import { AGENTS_LOG } from '../record/log';
 import { workspacesRoot } from '../record/paths';
 import { PipeEndpoint } from '../transport/endpoint';
 import { PipeHandlers, pipePath } from '../transport/pipe';
@@ -206,7 +207,7 @@ export class AgentsService implements vscode.Disposable {
 			void vscode.window.showInformationMessage(this.noCore === 'otherWindow'
 				? vscode.l10n.t("Another Facade window has this workspace's agents: start agents in that window.")
 				: this.noCore === 'unreadable'
-					? vscode.l10n.t("Facade cannot read this workspace's record while an agent of it may still run: Facade: Show Agents Log says why.")
+					? vscode.l10n.t("Facade cannot read this workspace's record while an agent of it may still run: the Facade Agents output says why.")
 					: vscode.l10n.t("Facade agents need a folder on this machine in the workspace."));
 			return undefined;
 		}
@@ -349,6 +350,15 @@ export class AgentsService implements vscode.Disposable {
 		}
 		return undefined;
 	}
+}
+
+/**
+ * The person's history of the agents of the workspace whose storage is `workspaceState`: its record's
+ * `agents.log`, whether Facade runs now or not; undefined for a workspace Facade never had a record for.
+ */
+export function agentsLogOf(workspaceState: vscode.Memento): string | undefined {
+	const id = workspaceState.get(WORKSPACE_ID_KEY);
+	return isWorkspaceId(id) ? path.join(recordDirOf(workspacesRoot(), id), AGENTS_LOG) : undefined;
 }
 
 /**

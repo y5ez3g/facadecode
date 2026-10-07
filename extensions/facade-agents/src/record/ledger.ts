@@ -42,14 +42,6 @@ export interface LastClose {
 	readonly thisWindow: boolean;
 }
 
-/** How the window that had a ledger before let go of it, as its lock says. */
-export interface LastClose {
-	readonly by: ClosedBy;
-	/** Whether it was this workspace's window: the one whose owner opens it now. */
-	readonly ownWindow: boolean;
-	/** Whether it was this very window, as its extension host started again: the window load that opens it now. */
-	readonly thisWindow: boolean;
-}
 /** How long a ledger closed by its window counts as held: the window may be reloading. */
 const RELOAD_MS = 60_000;
 /** How many times the lock is tried - taken, or read - while another window or program has it busy. */

@@ -99,7 +99,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		});
 	});
 
-	test('start_agent answers once the child is up, in words and as data; stop_agent stops a child, and says of one that exited how it did; list_agents gives the caller\'s view of the agents, a line each, and the same as data, where an agent the person started has no parent\'s number', async () => {
+	test('start_agent answers once the child is up, in words and as data; stop_agent stops a child, and says of one that exited how it did; list_agents gives the caller\'s view of the agents - how many in each state, then a line each - and the same as data, where an agent the person started has no parent\'s number', async () => {
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
 		const beside = await call(lead, 'start_agent', { cli: 'arg', model: 'small', effort: 'high', task: 'Write the tests.', name: 'tests' });
@@ -113,11 +113,12 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			beside: { text: `Started @tests #a2: Arg Code on small at high, in the worktree main at ${lab}. It is up and has its task.`, data: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false } },
 			inNew: `Started @clamp #a3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. It is up and has its task.`,
 			stopped: 'Stopped @tests #a2: its terminal closed. Its worktree stays as it is.',
-			again: '@tests #a2 had ended already (stopped by #a1: with stop_agent).',
+			again: '@tests #a2 had ended already (stopped by @lead #a1: with stop_agent).',
 			listed: [
-				`@lead #a1 (you)  by @human  running  arg on large at high  worktree main at ${lab}  started ${timeOfDay(world.agent(1).startTime)}`,
-				`@tests #a2  by #a1  ended at ${timeOfDay(world.agent(2).end?.time)} (stopped by #a1: with stop_agent)  arg on small at high  worktree main at ${lab}  started ${timeOfDay(world.agent(2).startTime)}`,
-				`@clamp #a3  by #a1  running  arg on small at high  worktree clamp at ${clamp}  started ${timeOfDay(world.agent(3).startTime)}`
+				'3 agents: 2 running, 1 ended',
+				`@lead #a1 (you)  by @human  running  arg large high  worktree main at ${lab}  started ${timeOfDay(world.agent(1).startTime)}  task argument`,
+				`@tests #a2  by @lead #a1  ended at ${timeOfDay(world.agent(2).end?.time)} (stopped by @lead #a1: with stop_agent)  arg small high  worktree main at ${lab}  started ${timeOfDay(world.agent(2).startTime)}  task argument`,
+				`@clamp #a3  by @lead #a1  running  arg small high  worktree clamp at ${clamp}  started ${timeOfDay(world.agent(3).startTime)}  task argument`
 			],
 			rows: ['1<none', '2<1', '3<1']
 		});

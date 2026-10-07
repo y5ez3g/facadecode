@@ -8,8 +8,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { isEqualPath, replaceFile } from '../base/files';
-import { Agent, Caller, End, EndKind, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, StoppedBy, WorkspaceState } from './events';
+import { Agent, agentRef, Caller, describe, End, EndKind, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, StoppedBy, WorkspaceState } from './events';
 import { ClosedBy, LastClose, Ledger, LedgerOptions } from './ledger';
+import { AgentLog } from './log';
 
 /** The person's token, in the workspace's folder: scripts that hold it act as the person. */
 const YOU_TOKEN_FILE = 'you.token';
@@ -83,8 +84,12 @@ export class AgentTable {
 	private personToken = '';
 	/** The highest number given, as `last-id` says it: a ledger begun anew counts on from it. */
 	private lastId = 0;
+	/** The person's history: each start and each end. */
+	private readonly log: AgentLog;
 
-	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) { }
+	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) {
+		this.log = AgentLog.of(options.dir);
+	}
 
 	/** Opens a workspace's ledger, making it the first time. */
 	static open(options: AgentTableOptions): AgentTable {
@@ -123,6 +128,20 @@ export class AgentTable {
 	/** Where each agent's token, task and launch files go. */
 	get runsDir(): string {
 		return path.join(this.options.dir, RUNS_DIR);
+	}
+
+	/** The person's history of the workspace's agents. */
+	get logFile(): string {
+		return this.log.file;
+	}
+
+	/** Who started or stopped an agent, as Facade's words name them: `@lead #a1`, `@human`; a number alone for one the list no longer has. */
+	whoIs(who: StoppedBy | undefined): string {
+		if (who === undefined || who === 'human') {
+			return describe(PERSON);
+		}
+		const agent = this.state.agents.get(who);
+		return agent ? describe(agent) : agentRef(who);
 	}
 
 	/**
@@ -196,8 +215,9 @@ export class AgentTable {
 		});
 		const started = this.state.agents.get(id);
 		if (!started) {
-			throw new Error(`The ledger did not record #${id}.`);
+			throw new Error(`The ledger did not record ${agentRef(id)}.`);
 		}
+		this.log.started(started, this.whoIs(started.creator));
 		return { agent: started, token, tokenFile };
 	}
 
@@ -239,14 +259,6 @@ export class AgentTable {
 		}
 	}
 
-	/** Records that an agent called `accept_task`. */
-	accepted(id: number): void {
-		const agent = this.state.agents.get(id);
-		if (isLive(agent) && !agent.accepted) {
-			this.ledger.append({ type: 'task.accepted', id });
-		}
-	}
-
 	/** Records that Facade set out to stop an agent - by whom, and why - until its process has ended. */
 	stopping(id: number, reason: string, by?: StoppedBy): void {
 		const agent = this.state.agents.get(id);
@@ -265,10 +277,14 @@ export class AgentTable {
 		}
 		this.ledger.append({ type: 'agent.ended', id, kind, ...(details.by !== undefined ? { by: details.by } : {}), reason, ...(details.exitCode !== undefined ? { exitCode: details.exitCode } : {}) });
 		this.removeRunFiles(each => each === id);
-		return this.state.agents.get(id)?.end;
+		const agent = this.state.agents.get(id);
+		if (agent?.end) {
+			this.log.ended(agent, agent.end, agent.end.by === undefined ? undefined : this.whoIs(agent.end.by));
+		}
+		return agent?.end;
 	}
 
-	/** Begins a new list: the agents that ended leave it, but for the creators of those it keeps. */
+	/** Begins a new list: the agents that ended leave it, but for the creators of agents that have not. */
 	clearList(): void {
 		this.ledger.append({ type: 'list.cleared' });
 	}

@@ -158,6 +158,11 @@ export class Facade implements Disposable {
 		return this.table.get(id);
 	}
 
+	/** Who started or stopped an agent, as Facade's words name them: `@lead #a1`, `@human`; a number alone for one the list no longer has. */
+	whoIs(who: StoppedBy | undefined): string {
+		return this.table.whoIs(who);
+	}
+
 	/** The agent a caller is; undefined for the person. */
 	agentOf(caller: Caller): Agent | undefined {
 		return caller.id === undefined ? undefined : this.table.get(caller.id);
@@ -300,7 +305,8 @@ export class Facade implements Disposable {
 	 * window went, without a word to the person. After a reload, while Facade was off, after a crash, or
 	 * beside others that came back, nothing saw one gone end: it is lost, or failed, if it had not started.
 	 * One that was starting is waited for again, its MCP server's hello coming to this window; one whose
-	 * task was not yet typed is told it now. What windows that closed left in folders is taken back.
+	 * task was not yet typed is told it now. What windows that closed left in folders is taken back, and a
+	 * start of the window that is no reload begins a new list.
 	 *
 	 * @param reloaded Whether a reload of the window before loaded this one.
 	 */
@@ -348,6 +354,11 @@ export class Facade implements Disposable {
 		for (const folder of this.injections.held()) {
 			this.withdraw(folder);
 		}
+		// A start of the window that is no reload - nor this window's extension host starting again - begins
+		// a new list: the agents that ended leave it, and the log keeps them.
+		if (!reloaded && !last?.thisWindow && [...this.table.state.agents.values()].some(agent => !isLive(agent))) {
+			this.table.clearList();
+		}
 	}
 
 	/** Where a child of the caller starts: in `home`, a worktree of its repository, or a new worktree to make. */
@@ -389,7 +400,7 @@ export class Facade implements Disposable {
 			if (end.byThePerson) {
 				this.ended(agent, 'stopped', 'its tab was closed', { by: 'human' });
 			} else {
-				const reason = end.exitCode === undefined ? 'its terminal closed' : end.exitCode === 0 ? 'its CLI ended' : `its CLI ended with exit code ${end.exitCode}`;
+				const reason = end.exitCode === undefined ? 'its terminal closed' : `its CLI ended with exit code ${end.exitCode}`;
 				this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', reason, end.exitCode !== undefined ? { exitCode: end.exitCode } : {});
 			}
 		} catch (err) {
@@ -418,7 +429,7 @@ export class Facade implements Disposable {
 		// A start of the person's tells them itself; what the person did, or a window that went, is no news to them.
 		const startOfThePerson = waiter !== undefined && waiter.id === undefined;
 		if (agent.creator === undefined && details.by !== 'human' && !details.quiet && !startOfThePerson) {
-			this.ports.person.tell(endNotice(agent, end), undefined);
+			this.ports.person.tell(endNotice(agent, end, this.table.whoIs(end.by)), undefined);
 		}
 		return end;
 	}
@@ -602,7 +613,7 @@ export class Facade implements Disposable {
 }
 
 /** What the person is told of an agent of theirs that ended without their doing: who, how, and why. */
-function endNotice(agent: Agent, end: End): string {
+function endNotice(agent: Agent, end: End, stopper: string): string {
 	switch (end.kind) {
 		case 'exited':
 			return l10n.t("{0} exited: {1}.", describe(agent), end.reason);
@@ -612,7 +623,7 @@ function endNotice(agent: Agent, end: End): string {
 			return l10n.t("{0} was lost: {1}.", describe(agent), end.reason);
 		case 'stopped':
 			return typeof end.by === 'number'
-				? l10n.t("{0} was stopped by {1}.", describe(agent), agentRef(end.by))
+				? l10n.t("{0} was stopped by {1}.", describe(agent), stopper)
 				: l10n.t("{0} was stopped: {1}.", describe(agent), end.reason);
 	}
 }

@@ -7,8 +7,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DeferredPromise } from '../base/async';
-import { endText } from '../contract/listAgents';
-import { PERSON } from '../record/events';
+import { End, PERSON } from '../record/events';
 import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { outcomeOf, tempDir } from './util';
@@ -18,9 +17,19 @@ type World = ReturnType<typeof fakeWorld>;
 /** What an agent that did not say hello in time fails with. */
 const NO_HELLO = 'it did not come up within 120 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal';
 
+/** How an agent ended, as the tests write it: its kind, who stopped it, and why. */
+function endOf(end: End): string {
+	return `${end.kind}${end.by === undefined ? '' : end.by === 'human' ? ' by @human' : ` by #a${end.by}`}: ${end.reason}`;
+}
+
 /** Every agent of the list, a line each: its number, name, creator, and state - how it ended, once it has. */
 function agents(world: World): string[] {
-	return world.facade.listAgents(PERSON, true).map(row => `#a${row.id} @${row.name} by ${row.creator === undefined ? '@human' : `#a${row.creator}`} ${row.end ? endText(row.end) : row.state}`);
+	return world.facade.listAgents(PERSON, true).map(row => `#a${row.id} @${row.name} by ${row.creator === undefined ? '@human' : `#a${row.creator}`} ${row.end ? endOf(row.end) : row.state}`);
+}
+
+/** The person's history, as agents.log has it, a line each, without its time. */
+function history(world: World): string[] {
+	return fs.readFileSync(world.table.logFile, 'utf8').trimEnd().split('\n').map(line => line.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d {2}/, ''));
 }
 
 /** What a folder holds, folders and files, by their paths in it with forward slashes. */
@@ -489,7 +498,7 @@ suite('Core: exits', () => {
 		temp.remove();
 	});
 
-	test('a terminal the person closes is a stop by the person, of which they are not told; one that ends by itself is an exit, with its CLI\'s exit code where that is not 0, and the person hears of their own child\'s; an agent\'s child\'s exit its creator sees in list_agents', async () => {
+	test('a terminal the person closes is a stop by the person, of which they are not told; one that ends by itself is an exit, with its CLI\'s exit code where it is known, and the person hears of their own child\'s; an agent\'s child\'s exit its creator sees in list_agents', async () => {
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'A.', name: 'a', folder: lab });
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'B.', name: 'b', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', task: 'C.', name: 'c' });
@@ -503,7 +512,7 @@ suite('Core: exits', () => {
 			agents: [
 				'#a1 @a by @human stopped by @human: its tab was closed',
 				'#a2 @b by @human exited: its CLI ended with exit code 1',
-				'#a3 @c by #a1 exited: its CLI ended',
+				'#a3 @c by #a1 exited: its CLI ended with exit code 0',
 				'#a4 @d by @human exited: its terminal closed'
 			],
 			told: ['@b #a2 exited: its CLI ended with exit code 1.', '@d #a4 exited: its terminal closed.']
@@ -522,9 +531,9 @@ suite('Core: exits', () => {
 
 		assert.deepStrictEqual({ started: started.id, agents: agents(world), seenByThePerson: world.facade.listAgents(PERSON).map(row => row.id), told: world.person.told }, {
 			started: 3,
-			agents: ['#a1 @lead by @human exited: its CLI ended', '#a2 @a by #a1 running', '#a3 @b by #a1 running'],
+			agents: ['#a1 @lead by @human exited: its CLI ended with exit code 0', '#a2 @a by #a1 running', '#a3 @b by #a1 running'],
 			seenByThePerson: [1],
-			told: ['@lead #a1 exited: its CLI ended.']
+			told: ['@lead #a1 exited: its CLI ended with exit code 0.']
 		});
 	});
 });
@@ -551,8 +560,11 @@ suite('Core: after a reload', () => {
 		temp.remove();
 	});
 
-	/** The window reloads: the one before closes, and the one after finds the terminals named still running. */
-	function reload(...running: string[]): World {
+	/**
+	 * The window closes and opens again - reloaded, or quit and started again, as `recover` is told - and
+	 * the one after finds the terminals named still running.
+	 */
+	function reopen(...running: string[]): World {
 		world.dispose();
 		world = fakeWorld(dir, { repositories: { [lab]: [] } });
 		for (const name of running) {
@@ -574,9 +586,9 @@ suite('Core: after a reload', () => {
 		const slow = world.facade.startAgent(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Slow.', name: 'slow', folder: lab });
 		await until(() => world.terminals.launched.length === 2);
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Gone.', name: 'gone', folder: lab });
-		const after = reload('@up #a1 · Arg Code', '@slow #a2 · Arg Code');
+		const after = reopen('@up #a1 · Arg Code', '@slow #a2 · Arg Code');
 		const unknown = await outcomeOf(slow);
-		await after.facade.recover();
+		await after.facade.recover(true);
 		const recovered = agents(after);
 		after.hello(2);
 
@@ -591,9 +603,9 @@ suite('Core: after a reload', () => {
 	test('one found starting that does not say hello within two minutes fails, and its terminal closes; the person hears it did not start, no start being there to tell them', async () => {
 		const starting = world.facade.startAgent(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Slow.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
-		const after = reload('@main #a1 · Arg Code');
+		const after = reopen('@main #a1 · Arg Code');
 		await outcomeOf(starting);
-		await after.facade.recover();
+		await after.facade.recover(true);
 		await sleep(120_000);
 
 		assert.deepStrictEqual({ agents: agents(after), typed: after.terminals.typed, told: after.person.told }, {
@@ -607,9 +619,9 @@ suite('Core: after a reload', () => {
 		const starting = world.facade.startAgent(PERSON, { cli: 'told', model: 'deep', effort: 'high', task: 'Plan.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
 		world.hello(1);
-		const after = reload('@main #a1 · Told Code');
+		const after = reopen('@main #a1 · Told Code');
 		await outcomeOf(starting);
-		await after.facade.recover();
+		await after.facade.recover(true);
 		await sleep(1_000);
 		const taskFile = path.join(after.table.runsDir, '1.task.md');
 
@@ -627,9 +639,9 @@ suite('Core: after a reload', () => {
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', task: 'Clamp.', worktree: 'new', name: 'clamp' });
 		const folder = worktreeFolder(lab, 'clamp');
-		const after = reload('@main #a1 · Arg Code');
+		const after = reopen('@main #a1 · Arg Code');
 		fs.rmSync(folder, { recursive: true, force: true });
-		await after.facade.recover();
+		await after.facade.recover(true);
 
 		assert.deepStrictEqual({ made: after.table.madeWorktree(folder), agents: agents(after) }, {
 			made: undefined,
@@ -637,14 +649,15 @@ suite('Core: after a reload', () => {
 		});
 	});
 
-	test('a window the person closed - quitting Facade, or closing the window - takes its agents with it: none comes back, each is stopped as the window went, and the person hears nothing', async () => {
+	test('a window the person closed - quitting Facade, or closing the window - takes its agents with it: none comes back, each is stopped as the window went, and the person hears nothing; the window after begins a new list, the log keeping them', async () => {
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', task: 'Clamp.', worktree: 'new', name: 'clamp' });
-		const after = reload();
+		const after = reopen();
 		await after.facade.recover();
 
-		assert.deepStrictEqual({ agents: agents(after), told: after.person.told }, {
-			agents: ['#a1 @main by @human stopped: its window went', '#a2 @clamp by #a1 stopped: its window went'],
+		assert.deepStrictEqual({ agents: agents(after), ends: history(after).filter(line => line.startsWith('ended')), told: after.person.told }, {
+			agents: [],
+			ends: ['ended    @main #a1  stopped: its window went', 'ended    @clamp #a2  stopped: its window went'],
 			told: []
 		});
 	});
@@ -652,7 +665,7 @@ suite('Core: after a reload', () => {
 	test('a reload that brings none of the agents\' terminals back: nothing saw them end, so each is lost, as after a crash, and the person hears of their own', async () => {
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', task: 'Clamp.', worktree: 'new', name: 'clamp' });
-		const after = reload();
+		const after = reopen();
 		await after.facade.recover(true);
 
 		assert.deepStrictEqual({ agents: agents(after), told: after.person.told }, {
@@ -690,10 +703,12 @@ suite('Core: after a reload', () => {
 		});
 	});
 
-	test('Facade turned off and on again, the window staying: an agent whose terminal ended meanwhile is lost, nothing having seen it end, and the person hears of it', async () => {
+	test('Facade turned off and on again, the window staying: an agent whose terminal ended meanwhile is lost, nothing having seen it end, and the person hears of it; the list stays', async () => {
+		world.dispose();
+		world = fakeWorld(dir, { repositories: { [lab]: [] }, session: 'this-load' });
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
 		world.dispose('facade');
-		world = fakeWorld(dir, { repositories: { [lab]: [] } });
+		world = fakeWorld(dir, { repositories: { [lab]: [] }, session: 'this-load' });
 		await world.facade.recover();
 
 		assert.deepStrictEqual({ agents: agents(world), told: world.person.told }, {
@@ -702,15 +717,47 @@ suite('Core: after a reload', () => {
 		});
 	});
 
-	test('after a crash, one whose terminal is gone is lost, though none comes back: the person hears of an agent of theirs, and not of the agents it started', async () => {
+	test('after a crash, one whose terminal is gone is lost, though none comes back: the person hears of an agent of theirs, and not of the agents it started; the window after begins a new list, the log keeping them', async () => {
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', task: 'Clamp.', worktree: 'new', name: 'clamp' });
 		const after = crash();
 		await after.facade.recover();
 
-		assert.deepStrictEqual({ agents: agents(after), told: after.person.told }, {
-			agents: ['#a1 @main by @human lost: its terminal was gone when Facade came back', '#a2 @clamp by #a1 lost: its terminal was gone when Facade came back'],
+		assert.deepStrictEqual({ agents: agents(after), ends: history(after).filter(line => line.startsWith('ended')), told: after.person.told }, {
+			agents: [],
+			ends: ['ended    @main #a1  lost: its terminal was gone when Facade came back', 'ended    @clamp #a2  lost: its terminal was gone when Facade came back'],
 			told: ['@main #a1 was lost: its terminal was gone when Facade came back.']
+		});
+	});
+
+	test('quitting and starting again begins a new list - the agents since, numbered on from the last - which a reload keeps; the log has every start and end, of this list and those before, in order, each agent named as Facade names it', async () => {
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Test.', name: 'tests' });
+		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Lint.', name: 'lint' });
+		await world.facade.stopAgent(lead, '@tests');
+		world.terminals.end('@lint #a3 · Arg Code', { exitCode: 1, byThePerson: false });
+		const reloaded = reopen('@lead #a1 · Arg Code');
+		await reloaded.facade.recover(true);
+		const keptByTheReload = agents(reloaded);
+		const started = reopen();
+		await started.facade.recover();
+		const newList = agents(started);
+		await started.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Again.', name: 'again', folder: lab });
+
+		assert.deepStrictEqual({ keptByTheReload, newList, list: agents(started), history: history(started) }, {
+			keptByTheReload: ['#a1 @lead by @human running', '#a2 @tests by #a1 stopped by #a1: with stop_agent', '#a3 @lint by #a1 exited: its CLI ended with exit code 1'],
+			newList: [],
+			list: ['#a4 @again by @human running'],
+			history: [
+				`started  @lead #a1  arg large high  by @human  in ${lab}`,
+				`started  @tests #a2  arg small high  by @lead #a1  in ${lab}`,
+				`started  @lint #a3  arg small high  by @lead #a1  in ${lab}`,
+				'ended    @tests #a2  stopped by @lead #a1: with stop_agent',
+				'ended    @lint #a3  exited: its CLI ended with exit code 1',
+				'ended    @lead #a1  stopped: its window went',
+				`started  @again #a4  arg large high  by @human  in ${lab}`
+			]
 		});
 	});
 });

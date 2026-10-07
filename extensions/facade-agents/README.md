@@ -25,13 +25,13 @@ Ten settings. Shown to everyone: the switch, and where each CLI is - `facade.orc
 - **What goes into a folder** for an agent - its MCP server, Facade's skill - for a CLI that reads them from there, is taken back once no agent runs there: what nobody changed meanwhile is as it was, byte for byte, and a file of the person's own that held Facade's part is theirs again, any change of theirs kept.
 - **Across a reload**, and a folder window becoming a workspace, the agents keep running: the record of a workspace's agents, the pipe's name and their terminals' process ids sit under `~/.facade/workspaces/<first folder>-<hash>/`, not in the extension's storage. The window that comes back finds each agent again; one whose terminal is gone has exited.
 - **One window at a time** has a workspace's agents. Another window on the same workspace says so, and starts none.
-- **Facade: Show Agents Log** shows what Facade did: each launch, each exit, and why.
+- **Facade: Show Agents Log** opens the workspace's `agents.log`: each agent's start and end - who started it, how it ended, by whom and why - kept for good. What Facade itself did is in the Facade Agents output.
 
 ## Known limits
 
 - Tested live on Windows only. The code paths for macOS and Linux have their unit tests, but are not claimed to work there.
 - Agents run at full access: an agent can read and change anything the person can.
-- No CLI checks the model it is given as it starts: given one it does not have, the agent comes up all the same, and Claude Code, Codex and Muse Code fail at its first step, on its screen, while Antigravity works on its own default model without a word. An effort a CLI does not have it may ignore, or take a level of its own.
+- No CLI checks the model it is given as it starts: given one it does not have, the agent comes up all the same, and Claude Code, Codex and Muse Code fail at its first step, on its screen, while Antigravity works on its own default model without a word. Facade reads no screen: to it, and to the agent that started it, such an agent is running. An effort a CLI does not have it may ignore, or take a level of its own.
 - Agents do not message each other yet: a child is given a task it can finish on its own, and its result is in its worktree.
 - Quitting Facade, closing a window, or opening another workspace in it ends its agents with it: the window that comes back records them as killed by the person, and says nothing. After a reload, with Facade turned off meanwhile, or after a crash, it records one whose terminal is gone as exited, and tells the person of theirs. While Facade is off, an agent the person closes is recorded so too: nothing is there to see who closed it.
 - A window that cannot take back the pipe its running agents call - the window before still holding it after the timeout - listens on a new one, and the person is told that those agents cannot use Facade's tools any more.

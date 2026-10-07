@@ -35,9 +35,9 @@ export function isAgentName(name: string): boolean {
 }
 
 /**
- * `starting` from its launch until it has started - with a task, once it called `accept_task`; without,
- * once its MCP server said hello - `running` from then on, `stopping` once Facade set out to stop it,
- * until its process ended, and `ended` once its process ended.
+ * `starting` from its launch until it has started - its MCP server said hello, and it has its task: given
+ * on its command line, typed into its terminal, or none - `running` from then on, `stopping` once Facade
+ * set out to stop it, until its process ended, and `ended` once its process ended.
  */
 export type AgentState = 'starting' | 'running' | 'stopping' | 'ended';
 
@@ -82,8 +82,6 @@ export interface Agent {
 	task: TaskDelivery;
 	/** Whether its MCP server said hello to Facade. */
 	connected: boolean;
-	/** Whether it called `accept_task`. */
-	accepted: boolean;
 	/** Its CLI's process, once its terminal runs it. */
 	processId?: number;
 	state: AgentState;
@@ -127,7 +125,7 @@ export type LedgerEventBody =
 		readonly tokenHash: string;
 	}
 	| { readonly type: 'agent.launched'; readonly id: number; readonly processId: number }
-	| { readonly type: 'agent.connected' | 'task.typing' | 'task.typed' | 'task.accepted' | 'agent.running'; readonly id: number }
+	| { readonly type: 'agent.connected' | 'task.typing' | 'task.typed' | 'agent.running'; readonly id: number }
 	| { readonly type: 'agent.stopping'; readonly id: number; readonly by?: StoppedBy; readonly reason: string }
 	| { readonly type: 'agent.ended'; readonly id: number; readonly kind: EndKind; readonly by?: StoppedBy; readonly reason: string; readonly exitCode?: number }
 	| { readonly type: 'worktree.made' } & MadeWorktree
@@ -256,7 +254,6 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 		case 'agent.connected':
 		case 'task.typing':
 		case 'task.typed':
-		case 'task.accepted':
 		case 'agent.running':
 			return isId(value.id) ? { type: value.type, id: value.id } : undefined;
 		case 'agent.stopping': {
@@ -302,7 +299,6 @@ export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 		case 'agent.connected':
 		case 'task.typing':
 		case 'task.typed':
-		case 'task.accepted':
 		case 'agent.running':
 			return state.agents.has(event.id);
 		case 'agent.stopping':
@@ -332,7 +328,6 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				folder: event.folder,
 				task: event.task,
 				connected: false,
-				accepted: false,
 				state: 'starting',
 				startTime: event.time
 			});
@@ -365,13 +360,6 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			const agent = state.agents.get(event.id);
 			if (agent?.task === 'pending' || agent?.task === 'unknown') {
 				agent.task = 'typed';
-			}
-			break;
-		}
-		case 'task.accepted': {
-			const agent = state.agents.get(event.id);
-			if (agent) {
-				agent.accepted = true;
 			}
 			break;
 		}
