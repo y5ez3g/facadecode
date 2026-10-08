@@ -158,6 +158,9 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 
 	const instance = await folderTerminals.openFor(folder, {
 		name: options?.name,
+		// An agent's tab reads what its CLI says it is doing, then which agent it is - `Fix the login bug -
+		// @claude #a1` - and only the latter until the CLI sets a title (AGENT-LAUNCHER.md, L3)
+		titleTemplate: options?.agent !== undefined && options.name ? `\${sequence}\${separator}${options.name}` : undefined,
 		executable: options?.executable,
 		args: options?.args,
 		env: options?.env,
