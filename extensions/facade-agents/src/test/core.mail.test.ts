@@ -549,6 +549,30 @@ suite('Core: messages', () => {
 				logged: true
 			});
 		});
+
+		test('a doorbell that could not be typed is tried again no more once the mailbox is emptied: the next message rings 2 seconds on', async () => {
+			const { lead } = await team('lint');
+			world.terminals.running.delete(terminalOf(2));
+			world.facade.mail.send(lead, ['@lint'], 'Hello?', undefined);
+			await sleep(3_000);
+			world.terminals.running.add(terminalOf(2));
+			await world.fetched(2);
+			world.facade.mail.send(lead, ['@lint'], 'Again.', undefined);
+			await sleep(3_000);
+
+			assert.deepStrictEqual(ringsOf(2), ['[facade] 1 unread message: #m3 from @lead #a1. Call read_messages.']);
+		});
+
+		test('a message fetched while its doorbell is typed is not counted as rung for', async () => {
+			const { lead } = await team('lint');
+			world.facade.mail.send(lead, ['@lint'], 'Quick.', undefined);
+			// The line typed, its Enter a moment on
+			await sleep(2_100);
+			await world.fetched(2);
+			await sleep(1_000);
+
+			assert.deepStrictEqual({ typed: ringsOf(2).length, rings: world.table.state.mail.entries.get(2)?.rings }, { typed: 1, rings: 0 });
+		});
 	});
 
 	suite('messages waiting', () => {

@@ -264,8 +264,9 @@ suite('Core: spawn, step by step', () => {
 		await until(() => world.terminals.launched.length === 2);
 		await sleep(120_000);
 		const timedOut = await silent;
+		await sleep(2_000);
 
-		assert.deepStrictEqual({ launchFailed, ended, timedOut, agents: agents(world), typed: world.terminals.typed, told: world.person.told }, {
+		assert.deepStrictEqual({ launchFailed, ended, timedOut, agents: agents(world), typed: world.terminals.typed, told: world.person.told, notified: world.person.notified.map(each => each.text) }, {
 			launchFailed: 'FAILED: Arg Code did not start as @main #a1: the window has no terminal for it',
 			ended: 'FAILED: Arg Code did not start as @main #a2: its CLI ended with exit code 2',
 			timedOut: `FAILED: Arg Code did not start as @main #a3: ${NO_HELLO}`,
@@ -275,7 +276,8 @@ suite('Core: spawn, step by step', () => {
 				`#3 @main parent the person failed: ${NO_HELLO}`
 			],
 			typed: ['@main #1 · Arg Code: [closed]', '@main #3 · Arg Code: [closed]'],
-			told: []
+			told: [],
+			notified: []
 		});
 	});
 
