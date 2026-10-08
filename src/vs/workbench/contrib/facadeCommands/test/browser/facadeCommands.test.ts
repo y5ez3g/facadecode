@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { IAction } from '../../../../../base/common/actions.js';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { errorHandler, setUnexpectedErrorHandler } from '../../../../../base/common/errors.js';
-import { Emitter } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
@@ -14,14 +15,18 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { runWithFakedTimers } from '../../../../../base/test/common/virtualScheduling/index.js';
 import { CommandsRegistry } from '../../../../../platform/commands/common/commands.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { INotification, INotificationHandle, INotificationService, NotificationPriority } from '../../../../../platform/notification/common/notification.js';
 import { IShellLaunchConfig } from '../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { IHostService } from '../../../../services/host/browser/host.js';
 import { ILifecycleService, LifecyclePhase, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { IWorktreeService } from '../../../worktrees/browser/worktrees.js';
 import '../../browser/facadeCommands.contribution.js';
+import { FacadeNotifications } from '../../browser/facadeNotifications.js';
+import { FacadePersonInput, partsOf } from '../../browser/facadePersonInput.js';
 
 /** A terminal as the folder terminals open one: made before its process is started, its id known once that is ready. */
 class TestTerminal {
@@ -347,5 +352,232 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		await waiting;
 
 		assert.deepStrictEqual({ atFirst, connectedOnly, back, phases }, { atFirst: false, connectedOnly: false, back: true, phases: [LifecyclePhase.Restored] });
+	});
+
+	const ESC = String.fromCharCode(27);
+	const ENTER = String.fromCharCode(13);
+
+	/** A terminal as input reaches it: the person's keys and pastes, and the text programs send it, each told as input data. */
+	class InputTerminal {
+
+		private readonly _onDidInputData = store.add(new Emitter<string>());
+		readonly onDidInputData = this._onDidInputData.event;
+		private readonly _onDisposed = store.add(new Emitter<ITerminalInstance>());
+		readonly onDisposed = this._onDisposed.event;
+		exitCode: number | undefined;
+
+		constructor(readonly processId: number) { }
+
+		/** As the person types or pastes, or the terminal answers a program on its own. */
+		typed(data: string): void {
+			this._onDidInputData.fire(data);
+		}
+
+		/** As a program sends it text: told as input data once it is written. */
+		async sendText(text: string): Promise<void> {
+			await Promise.resolve();
+			this._onDidInputData.fire(text);
+		}
+
+		asInstance(): ITerminalInstance {
+			return upcastPartial<ITerminalInstance>(this);
+		}
+	}
+
+	/** Tracks the person's input in `terminals`, as the window does. */
+	function trackInput(...terminals: InputTerminal[]): void {
+		instantiationService.stub(ITerminalService, { instances: terminals.map(terminal => terminal.asInstance()), onDidCreateInstance: Event.None });
+		store.add(instantiationService.createInstance(FacadePersonInput));
+	}
+
+	/** What `_facade.terminal.input` answers for `processId`, its last key as the milliseconds since `start`. */
+	async function inputAt(processId: unknown, start = 0): Promise<unknown> {
+		const input = await run('_facade.terminal.input', processId) as { pending: boolean; lastKey: number | undefined } | undefined;
+		return input && { pending: input.pending, lastKey: input.lastKey === undefined ? undefined : input.lastKey - start };
+	}
+
+	test('a line is pending from a character the person types or pastes until they press Enter or Ctrl+C there; another key counts only while one is pending', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		const lead = new InputTerminal(41);
+		trackInput(lead);
+		const start = Date.now();
+		const inputOf = (processId: number) => inputAt(processId, start);
+		const steps: unknown[] = [await inputOf(41)];
+		lead.typed('f');
+		steps.push(await inputOf(41));
+		await timeout(1000);
+		lead.typed(`${ESC}[D`);
+		steps.push(await inputOf(41));
+		lead.typed(ENTER);
+		await timeout(1000);
+		lead.typed(`${ESC}[A`);
+		steps.push(await inputOf(41));
+		lead.typed(`${ESC}[200~pas${ENTER}ted${ENTER}${ESC}[201~`);
+		steps.push(await inputOf(41));
+		lead.typed(String.fromCharCode(3));
+		steps.push(await inputOf(41));
+
+		assert.deepStrictEqual(steps, [
+			{ pending: false, lastKey: undefined },
+			{ pending: true, lastKey: 0 },
+			{ pending: true, lastKey: 1000 },
+			{ pending: false, lastKey: 1000 },
+			{ pending: true, lastKey: 2000 },
+			{ pending: false, lastKey: 2000 }
+		]);
+	}));
+
+	test('what the terminal answers a program with on its own is no typing, a line pending or not: a cursor position, focus, attributes, a color', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		const lead = new InputTerminal(41);
+		trackInput(lead);
+		const start = Date.now();
+		const answers = `${ESC}[I${ESC}[12;5R${ESC}[?62;c${ESC}]10;rgb:ffff/ffff/ffff${ESC}\\${ESC}[?1u`;
+		lead.typed(answers);
+		const idle = await inputAt(41, start);
+		lead.typed('x');
+		await timeout(1000);
+		lead.typed(answers);
+
+		assert.deepStrictEqual({ idle, pending: await inputAt(41, start) }, {
+			idle: { pending: false, lastKey: undefined },
+			pending: { pending: true, lastKey: 0 }
+		});
+	}));
+
+	test('what Facade types is not the person\'s, though its Enter sends what they typed along with it; what another program sends - a dropped path, a keybinding\'s sequence - is theirs', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		const lead = new InputTerminal(41);
+		trackInput(lead);
+		const start = Date.now();
+		const inputOf = (processId: number) => inputAt(processId, start);
+		const typed = await run('_facade.terminal.type', 41, '[facade] 1 unread message: #m2 from @lint #a2. Call read_messages.');
+		const afterLine = await inputOf(41);
+		lead.typed('half');
+		await run('_facade.terminal.type', 41, ENTER);
+		const afterEnter = await inputOf(41);
+		await lead.sendText(`${ESC}[200~C:\\lab\\notes.md${ESC}[201~`);
+		const afterDrop = await inputOf(41);
+
+		assert.deepStrictEqual({ typed, afterLine, afterEnter, afterDrop, nowhere: await run('_facade.terminal.type', 99, 'x') }, {
+			typed: true,
+			afterLine: { pending: false, lastKey: undefined },
+			afterEnter: { pending: false, lastKey: 0 },
+			afterDrop: { pending: true, lastKey: 0 },
+			nowhere: false
+		});
+	}));
+
+	test('a terminal is found by the id of the process running in it: not one whose process ended, which another can have since; nor is one tracked before the window looks', async () => {
+		const ended = new InputTerminal(43);
+		ended.exitCode = 0;
+		const created = store.add(new Emitter<ITerminalInstance>());
+		const instances = [ended.asInstance()];
+		instantiationService.stub(ITerminalService, { instances, onDidCreateInstance: created.event });
+		store.add(instantiationService.createInstance(FacadePersonInput));
+		const later = new InputTerminal(42);
+		instances.push(later.asInstance());
+		created.fire(later.asInstance());
+		later.typed('b');
+		ended.typed('x');
+
+		assert.deepStrictEqual({ later: (await inputAt(42) as { pending: boolean }).pending, ended: await inputAt(43), none: await inputAt(99), notAnId: await failureOf('_facade.terminal.input', '42') }, {
+			later: true,
+			ended: undefined,
+			none: undefined,
+			notAnId: 'Unexpected type, expected \'number\''
+		});
+	});
+
+	test('keys as the kitty keyboard protocol and win32 input mode send them: Enter sends the line, Shift+Enter breaks it, Ctrl+C drops it, a character is text, a key let go is none', () => {
+		const kitty = ['13u', '13;2u', '99;5u', '97u', '97;1:3u', '27u', '57399u'].map(params => partsOf(`${ESC}[${params}`)[0]);
+		const win32 = ['13;28;13;1;0;1_', '13;28;13;1;16;1_', '67;46;3;1;8;1_', '65;30;97;1;0;1_', '65;30;97;0;0;1_', '81;16;64;1;9;1_', '37;75;0;1;0;1_'].map(params => partsOf(`${ESC}[${params}`)[0]);
+
+		assert.deepStrictEqual({ kitty, win32 }, {
+			kitty: ['submit', 'text', 'submit', 'text', 'none', 'key', 'key'],
+			win32: ['submit', 'text', 'submit', 'text', 'none', 'text', 'key']
+		});
+	});
+
+	/** The notification service, as far as Facade's notifications use it: each one shown, and whether it closed. */
+	function notifications(): { readonly shown: { readonly notification: INotification; readonly handle: INotificationHandle; closed: boolean }[] } {
+		const shown: { readonly notification: INotification; readonly handle: INotificationHandle; closed: boolean }[] = [];
+		instantiationService.stub(INotificationService, {
+			notify: (notification: INotification) => {
+				const onDidClose = store.add(new Emitter<void>());
+				const entry = {
+					notification,
+					closed: false,
+					handle: upcastPartial<INotificationHandle>({
+						onDidClose: onDidClose.event,
+						close: () => {
+							entry.closed = true;
+							onDidClose.fire();
+						}
+					})
+				};
+				shown.push(entry);
+				return entry.handle;
+			}
+		});
+		store.add(instantiationService.createInstance(FacadeNotifications));
+		return { shown };
+	}
+
+	/** Presses a notification's button, as the person does: its action runs, and the notification closes. */
+	function press(entry: { readonly notification: INotification; readonly handle: INotificationHandle }, label: string): void {
+		entry.notification.actions?.primary?.find((action: IAction) => action.label === label)?.run();
+		entry.handle.close();
+	}
+
+	test('a notification Facade keeps by its key is shown, and the next with that key takes its place as a new one, so that it is shown as the first was; the call answers with the button pressed, or nothing once it closed', async () => {
+		instantiationService.stub(IHostService, { hasFocus: true });
+		const { shown } = notifications();
+		const first = run('_facade.notification.show', 'message:3', '@lint #a3 has something for you: one.', ['Show']);
+		const second = run('_facade.notification.show', 'message:3', '@lint #a3 has something for you: two.', ['Show', 'Later']);
+		const other = run('_facade.notification.show', 'message:4', '@docs #a4 has something for you: done.', ['Show']);
+		press(shown[1], 'Later');
+		shown[2].handle.close();
+
+		assert.deepStrictEqual({
+			answers: [await first, await second, await other],
+			shown: shown.map(({ notification, closed }) => ({ message: notification.message, buttons: notification.actions?.primary?.map(action => action.label), source: notification.source, closed }))
+		}, {
+			answers: [undefined, 'Later', undefined],
+			shown: [
+				{ message: '@lint #a3 has something for you: one.', buttons: ['Show'], source: 'Facade Agents', closed: true },
+				{ message: '@lint #a3 has something for you: two.', buttons: ['Show', 'Later'], source: 'Facade Agents', closed: true },
+				{ message: '@docs #a4 has something for you: done.', buttons: ['Show'], source: 'Facade Agents', closed: true }
+			]
+		});
+	});
+
+	test('a notification from an agent whose terminal has the person\'s focus, the window\'s too, goes quietly into the notification center', async () => {
+		const { shown } = notifications();
+		const terminal = { processId: 41, exitCode: undefined, hasFocus: true };
+		instantiationService.stub(ITerminalService, { instances: [upcastPartial<ITerminalInstance>(terminal)] });
+		instantiationService.stub(IHostService, { hasFocus: true });
+		void run('_facade.notification.show', 'message:3', 'One.', ['Show'], 41);
+		terminal.hasFocus = false;
+		void run('_facade.notification.show', 'message:3', 'Two.', ['Show'], 41);
+		terminal.hasFocus = true;
+		instantiationService.stub(IHostService, { hasFocus: false });
+		void run('_facade.notification.show', 'message:3', 'Three.', ['Show'], 41);
+		instantiationService.stub(IHostService, { hasFocus: true });
+		void run('_facade.notification.show', 'message:5', 'Elsewhere.', ['Show'], 99);
+
+		assert.deepStrictEqual(shown.map(({ notification }) => `${notification.message} ${notification.priority === NotificationPriority.SILENT ? 'quiet' : 'aloud'}`), ['One. quiet', 'Two. aloud', 'Three. aloud', 'Elsewhere. aloud']);
+	});
+
+	test('a notification is refused a key, a message, buttons or a process id of the wrong kind, and none is shown', async () => {
+		const { shown } = notifications();
+		const failures = [
+			await failureOf('_facade.notification.show', 42, 'text', []),
+			await failureOf('_facade.notification.show', 'key', undefined, []),
+			await failureOf('_facade.notification.show', 'key', 'text', ['Show', 2]),
+			await failureOf('_facade.notification.show', 'key', 'text', ['Show'], '41')
+		];
+
+		assert.deepStrictEqual({ failures, shown: shown.length }, {
+			failures: ['Unexpected type, expected \'string\'', 'Unexpected type, expected \'string\'', 'Unexpected type, expected \'string[]\'', 'Unexpected type, expected \'number\''],
+			shown: 0
+		});
 	});
 });

@@ -66,20 +66,24 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 		});
 	};
+	/** Runs a command of the service's, or tells the person why there is none. */
+	const withService = <T>(command: (running: AgentsService) => T): T | undefined => {
+		if (!service) {
+			void vscode.window.showInformationMessage(creating
+				? vscode.l10n.t("Facade agents are starting in this window, finding the agents that ran here: try again in a moment.")
+				: none === 'failed'
+					? vscode.l10n.t("Facade agents could not start in this window: Facade: Show Agents Log says why.")
+					: none === 'noFolder'
+						? vscode.l10n.t("Facade agents need a folder or workspace open in this window.")
+						: vscode.l10n.t("Facade agents are off. Turn on the setting facade.orchestration.enabled, in a window with a folder open."));
+			return undefined;
+		}
+		return command(service);
+	};
 	context.subscriptions.push(
-		vscode.commands.registerCommand('facade.agents.startAgent', (args?: unknown) => {
-			if (!service) {
-				void vscode.window.showInformationMessage(creating
-					? vscode.l10n.t("Facade agents are starting in this window, finding the agents that ran here: try again in a moment.")
-					: none === 'failed'
-						? vscode.l10n.t("Facade agents could not start in this window: Facade: Show Agents Log says why.")
-						: none === 'noFolder'
-							? vscode.l10n.t("Facade agents need a folder or workspace open in this window.")
-							: vscode.l10n.t("Facade agents are off. Turn on the setting facade.orchestration.enabled, in a window with a folder open."));
-				return undefined;
-			}
-			return service.startAgentCommand(args);
-		}),
+		vscode.commands.registerCommand('facade.agents.startAgent', (args?: unknown) => withService(running => running.startAgentCommand(args))),
+		vscode.commands.registerCommand('facade.agents.openChatRoom', () => withService(running => running.openChatRoomCommand())),
+		vscode.commands.registerCommand('facade.agents.deleteChatRooms', () => withService(running => running.deleteChatRoomsCommand())),
 		vscode.workspace.onDidChangeConfiguration(event => {
 			if (event.affectsConfiguration('facade.orchestration.enabled')) {
 				sync();

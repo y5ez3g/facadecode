@@ -12,12 +12,15 @@ import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { ITerminalEnvironment } from '../../../../platform/terminal/common/terminal.js';
+import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { ILifecycleService, LifecyclePhase, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalService } from '../../terminal/browser/terminal.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IWorktreeService } from '../../worktrees/browser/worktrees.js';
+import { FacadeNotifications } from './facadeNotifications.js';
+import { FacadePersonInput } from './facadePersonInput.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
 const PROCESS_READY_TIMEOUT_MS = 5_000;
@@ -173,3 +176,7 @@ CommandsRegistry.registerCommand('_facade.terminal.reveal', async (accessor, ...
 	const running = accessor.get(ITerminalService).instances.filter(instance => instance.processId === processId && instance.exitCode === undefined);
 	return running.length === 1 ? folderTerminals.reveal(running[0]) : false;
 });
+
+registerWorkbenchContribution2(FacadePersonInput.ID, FacadePersonInput, WorkbenchPhase.AfterRestored);
+// Before the extension host starts, which asks once whether the window keeps Facade's notifications
+registerWorkbenchContribution2(FacadeNotifications.ID, FacadeNotifications, WorkbenchPhase.BlockStartup);

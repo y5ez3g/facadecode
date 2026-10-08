@@ -29,6 +29,14 @@ export interface TerminalLaunch {
 	readonly reveal: boolean;
 }
 
+/** What the person typed into a terminal, as the window saw their keys: never its screen. */
+export interface PersonInput {
+	/** Whether they typed since they last pressed Enter there. */
+	readonly pending: boolean;
+	/** When they last typed there. */
+	readonly lastKey?: number;
+}
+
 /** How an agent's terminal ended. */
 export interface TerminalEnd {
 	/** The code its process exited with, where the window knows it. */
@@ -47,8 +55,17 @@ export interface Terminals {
 	onDidEnd(listener: (name: string, end: TerminalEnd) => void): Disposable;
 	/** Closes the terminal, which ends the CLI in it. */
 	stop(name: string): Promise<void>;
+	/**
+	 * Closes what the window brought back under that name after its process was gone: a new shell, in
+	 * the agent's tab, that is no agent's.
+	 */
+	closeRevived(name: string): Promise<void>;
 	/** Types `text` into the terminal as it is, keys and all; false when there is no such terminal. */
 	type(name: string, text: string): Promise<boolean>;
+	/** What the person typed into the terminal; undefined where the window cannot tell, or there is no such terminal. */
+	input(name: string): Promise<PersonInput | undefined>;
+	/** Puts the terminal in front of the person; false when there is no such terminal, or it could not be put there. */
+	reveal(name: string): Promise<boolean>;
 }
 
 /** The repository a folder is in, as git reads it. */
@@ -95,10 +112,30 @@ export interface Git {
 	untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>>;
 }
 
+/** A notification Facade keeps up by its key: another with the same key takes its place. */
+export interface Notification {
+	readonly key: string;
+	readonly text: string;
+	/** Its buttons' labels. */
+	readonly buttons: readonly string[];
+	/**
+	 * The terminal of the agent it is from: while that terminal has the person's focus, the notification
+	 * goes quietly into the notification center rather than over what they read.
+	 */
+	readonly quietIn?: string;
+}
+
 /** What Facade tells the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
 export interface Person {
 	/** A notice of Facade's for the person. Going to it shows `terminal`, the agent's it is about. */
 	tell(text: string, terminal: string | undefined): void;
+	/**
+	 * Shows a notification, or updates the one up with its key in place, as Do Not Disturb has it. Answers
+	 * with the label of the button pressed; undefined once it closed, or another took its place.
+	 */
+	notify(notification: Notification): Promise<string | undefined>;
+	/** Opens a chat room in an editor, at a message of it. */
+	openRoom(file: string, message: number): Promise<void>;
 }
 
 /**
@@ -140,6 +177,6 @@ export interface AgentSetup {
 	agentEnv(token: string): { readonly [name: string]: string };
 	/** The skills every agent is handed, made for the CLIs this machine has then. */
 	skills(): readonly Skill[];
-	/** What a new agent's first message says before its task: who it is, and who started it. */
-	opening(agent: { readonly id: number; readonly name: string; readonly cliName: string }, parent: Caller): string;
+	/** The first line of an agent with a task: who it is, who created it, and the number of its task, which it fetches. */
+	firstLine(agent: { readonly id: number; readonly name: string }, creator: Caller, task: number): string;
 }

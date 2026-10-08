@@ -21,8 +21,8 @@ export interface DescribedCli {
 /**
  * What Facade starts each CLI with now, as a JSONC document for the person to read: by each CLI's
  * section, the program Facade runs - with the script it gives Node for an npm shim, and whether cmd.exe
- * runs it - how its task reaches it, its launch - Facade's own with the person's changes over it - and
- * those changes as they wrote them.
+ * runs it - how an agent's first line, which names its task, reaches it, its launch - Facade's own with
+ * the person's changes over it - and those changes as they wrote them.
  */
 export function launchDocument(clis: readonly DescribedCli[]): string {
 	const shown = Object.fromEntries(clis.map(({ cli, config, yours, program }) => {
@@ -34,14 +34,14 @@ export function launchDocument(clis: readonly DescribedCli[]): string {
 			program: executable,
 			...(args.length ? { script: args.join(' ') } : {}),
 			...(throughCmd ? { throughCmd } : {}),
-			task: cli.task === 'terminal' || throughCmd ? 'terminal' : 'argument',
+			task: cli.task,
 			launch: config.launch,
 			yourChanges: yours ?? {}
 		}];
 	}));
 	return [
 		`// ${l10n.t("What Facade starts each CLI with now: the program it runs, and its launch - Facade's own, with your facade.orchestration.<cli>.launch over it.")}`,
-		`// ${l10n.t("A task reaches the CLI as its argument, or typed into its terminal. This only shows the launch: to change it, write what you change in your settings.")}`,
+		`// ${l10n.t("An agent's first line, which names its task, reaches the CLI as its argument, or typed into its terminal. This only shows the launch: to change it, write what you change in your settings.")}`,
 		JSON.stringify(shown, undefined, '\t'),
 		''
 	].join('\n');

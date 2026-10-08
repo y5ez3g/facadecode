@@ -8,7 +8,8 @@ import * as path from 'path';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
 import { Facade, SpawnRequest, Spawned } from '../core/facade';
-import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Fetched, FetchRequest } from '../core/mail';
+import { Disposable, Git, ListedWorktree, Notification, Person, PersonInput, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy } from '../record/ledger';
@@ -50,12 +51,34 @@ export class FakeTerminals implements Terminals {
 		this.end(name);
 	}
 
+	/** The names under which what the window revived without its process was closed, in order. */
+	readonly closedRevived: string[] = [];
+
+	async closeRevived(name: string): Promise<void> {
+		this.closedRevived.push(name);
+	}
+
 	async type(name: string, text: string): Promise<boolean> {
 		if (!this.running.has(name)) {
 			return false;
 		}
 		this.typed.push(`${name}: ${JSON.stringify(text)}`);
 		return true;
+	}
+
+	/** What the person typed into each terminal, as the window tells it: nothing pending unless a test sets it. */
+	readonly inputs = new Map<string, PersonInput>();
+
+	async input(name: string): Promise<PersonInput | undefined> {
+		return this.running.has(name) ? this.inputs.get(name) ?? { pending: false } : undefined;
+	}
+
+	/** The terminals put in front, in order. */
+	readonly revealed: string[] = [];
+
+	async reveal(name: string): Promise<boolean> {
+		this.revealed.push(name);
+		return this.running.has(name);
 	}
 
 	/** As when a terminal closes, or its process exits. */
@@ -148,13 +171,39 @@ export class FakeGit implements Git {
 	}
 }
 
-/** The person: what Facade told them. */
+/** The person: what Facade told them, the notifications they were shown, and the chat rooms they were taken to. */
 export class FakePerson implements Person {
 
 	readonly told: string[] = [];
+	/** Every notification shown or updated, in order. */
+	readonly notified: Notification[] = [];
+	/** The notifications up now, by key. */
+	readonly shown = new Map<string, Notification>();
+	/** The chat rooms opened, each as its file's name and the message, in order. */
+	readonly opened: string[] = [];
+	private readonly answers = new Map<string, (button: string | undefined) => void>();
 
 	tell(text: string, terminal: string | undefined): void {
 		this.told.push(`${text}${terminal ? ` (${terminal})` : ''}`);
+	}
+
+	notify(notification: Notification): Promise<string | undefined> {
+		this.notified.push(notification);
+		this.answers.get(notification.key)?.(undefined);
+		this.shown.set(notification.key, notification);
+		return new Promise(resolve => this.answers.set(notification.key, resolve));
+	}
+
+	async openRoom(file: string, message: number): Promise<void> {
+		this.opened.push(`${path.basename(file)} #m${message}`);
+	}
+
+	/** As the person presses a button of the notification up with that key: it closes. */
+	press(key: string, button: string): void {
+		const answer = this.answers.get(key);
+		this.answers.delete(key);
+		this.shown.delete(key);
+		answer?.(button);
 	}
 }
 
@@ -182,7 +231,7 @@ export function argCli(home: string): AgentCli {
 		defaults: {
 			path: '',
 			launch: {
-				arguments: { connect: ['--config', '${config}'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
+				arguments: { connect: ['--config', '${config}'], questions: ['--no-asking'], messages: ['--read', '${messagesDir}'], fullAccess: ['--yes'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
 				environment: { ARG_QUIET: '1' },
 				trust: { file: '${argHome}/trust.json', merge: { trusted: ['${repository}'] } },
 				enterDelay: 300,
@@ -195,7 +244,7 @@ export function argCli(home: string): AgentCli {
 			const config = path.join(input.runDir, `${input.slug}.config.json`);
 			return {
 				executable,
-				args: launchArgs(cli, input.config, { config, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
+				args: launchArgs(cli, input.config, { config, messagesDir: input.messagesDir, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
 				env: input.config.launch.environment,
 				cwd: input.folder,
 				files: [{ path: config, content: JSON.stringify(input.mcp) }],
@@ -207,9 +256,9 @@ export function argCli(home: string): AgentCli {
 }
 
 /**
- * A CLI whose first conversation has no MCP tools - told of its task in its terminal - which reads one
- * server for all its agents, and its skills, from files in its folder, and is given the person's trust
- * in its arguments.
+ * A CLI whose first conversation has no MCP tools - its first line typed into its terminal - which reads
+ * one server for all its agents, and its skills, from files in its folder, and is given the person's
+ * trust in its arguments.
  */
 export function toldCli(): AgentCli {
 	const server = (input: { readonly mcp: { readonly command: string; readonly args: readonly string[] } }) => ({ command: input.mcp.command, args: input.mcp.args });
@@ -221,7 +270,7 @@ export function toldCli(): AgentCli {
 		defaults: {
 			path: '',
 			launch: {
-				arguments: { model: ['--model', '${model}'], effort: ['--effort', '${effort}'] },
+				arguments: { fullAccess: ['--yes'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'] },
 				environment: {},
 				trust: { arguments: ['--trust-folder'] },
 				// Typed at once, on a test's clock.
@@ -317,7 +366,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
 			agentEnv: token => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: token }),
 			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: '# Working in Facade Code' }],
-			opening: (agent, parent) => `[facade] You are @${agent.name} #${agent.id}, ${agent.cliName}, started by @${parent.name}.`
+			firstLine: (agent, creator, task) => `[facade] You are @${agent.name} #a${agent.id}, created by @${creator.name}. Your task is #m${task}.`
 		},
 		timing: () => timing,
 		log: message => logs.push(message),
@@ -344,6 +393,10 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		/** As the MCP server of agent `id` says hello: it is running. */
 		hello(id: number): void {
 			facade.connected(callerOf(this.agent(id)));
+		},
+		/** As agent `id` fetches its messages - `request`, else its unread ones - and the result reaches its MCP server. */
+		fetched(id: number, request: FetchRequest = {}): Promise<Fetched> {
+			return facade.mail.fetch(callerOf(this.agent(id)), request, listener => listener(true));
 		},
 		/**
 		 * A spawn whose child's MCP server says hello once its terminal is launched, as a CLI's does: what
