@@ -256,7 +256,8 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		}
 
 		// The agent starts at once in the folder on screen, asking nothing: its settings say how.
-		await this._commandService.executeCommand(START_AGENT_COMMAND, { cli: launcher.id });
+		// A custom agent by its name alone: never a built-in of that name in its place
+		await this._commandService.executeCommand(START_AGENT_COMMAND, { cli: launcher.id, ...(launcher.custom ? { custom: true } : {}) });
 	}
 
 	async configure(): Promise<void> {

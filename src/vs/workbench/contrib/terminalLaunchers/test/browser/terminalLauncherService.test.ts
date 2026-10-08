@@ -133,7 +133,7 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		await denied.open({ id: 'muse', label: 'Muse Code', command: 'muse' });
 
 		assert.deepStrictEqual({ ran, shells: terminals.created.length }, {
-			ran: ['facade.agents.startAgent [{"cli":"codex"}]', 'facade.agents.startAgent [{"cli":"reviewer"}]', 'trust?', 'facade.agents.startAgent [{"cli":"claude"}]', 'trust?'],
+			ran: ['facade.agents.startAgent [{"cli":"codex"}]', 'facade.agents.startAgent [{"cli":"reviewer","custom":true}]', 'trust?', 'facade.agents.startAgent [{"cli":"claude"}]', 'trust?'],
 			shells: 0
 		});
 	});
