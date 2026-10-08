@@ -701,7 +701,11 @@
                     ],
                     "items": {
                       "type": "string"
-                    }
+                    },
+                    "default": [
+                      "--add-dir",
+                      "${messagesDir}"
+                    ]
                   },
                   "fullAccess": {
                     "type": [
@@ -758,6 +762,10 @@
                   "warmUp": [
                     "-i",
                     "Reply with the single word ready, and nothing else."
+                  ],
+                  "messages": [
+                    "--add-dir",
+                    "${messagesDir}"
                   ],
                   "fullAccess": [
                     "--mode",

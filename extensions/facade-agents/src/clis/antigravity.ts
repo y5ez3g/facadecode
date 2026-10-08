@@ -29,6 +29,8 @@ export const antigravityCli: AgentCli = {
 				// without them, and the next one has them. Its first line, typed once Facade's server said
 				// hello, waits behind this one and is that next conversation.
 				warmUp: ['-i', 'Reply with the single word ready, and nothing else.'],
+				// The record's folder of long messages, in its workspace: else it asks whether to read a file there
+				messages: ['--add-dir', '${messagesDir}'],
 				fullAccess: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 				// A model's base name, as `gemini-3.8-flash`, which `--effort` picks a variant of. One it does not
 				// have it puts aside for its own default, and its effort with it, without a word.

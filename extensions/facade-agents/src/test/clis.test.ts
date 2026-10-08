@@ -204,13 +204,13 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
+	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, the folder of long messages in its workspace, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
 		const spec = antigravityCli.launch(inputFor(antigravityCli, { model: 'gemini-3.8-flash', effort: 'medium', prompt: 'Not given here.' }), '/bin/agy.exe');
 		const injected = Object.fromEntries(spec.injected.map(file => [file.path, file.path.endsWith('.json') ? JSON.parse(file.content) : file.content]));
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task }, {
 			executable: '/bin/agy.exe',
-			args: ['-i', 'Reply with the single word ready, and nothing else.', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
+			args: ['-i', 'Reply with the single word ready, and nothing else.', '--add-dir', '/record/messages', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
 			env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
 			cwd: '/lab',
 			files: [],
