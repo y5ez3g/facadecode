@@ -7,13 +7,14 @@ import * as fs from 'fs';
 import * as l10n from '@vscode/l10n';
 import { DeferredPromise } from '../base/async';
 import { messageOf } from '../base/errors';
+import { isYolo } from '../clis/cli';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller, isLive, PERSON, rootOf } from '../record/events';
 import { FACADE, HUMAN, MailboxEntry, Message, NewMessage, Recipient, TEXT_IN_LINE, unreadOf } from '../record/messages';
 import { ChatRooms, rootsOf, whoOf } from '../record/rooms';
 import { Doorbell, NEW_MESSAGE_MS, RING_GAP_MS } from './doorbell';
 import { FacadeError } from './errors';
-import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
+import { AgentSetup, CliCatalog, Disposable, EndedAgent, Ports, Timing } from './ports';
 
 /** A message's number, as a tool is given it: `#m42`, or `m42`. */
 const MESSAGE_NUMBER = /^#?m(?<id>\d+)$/i;
@@ -38,6 +39,8 @@ export interface MailContext {
 	agentNamed(text: string, within?: (agent: Agent) => boolean): Agent;
 	/** The name of the terminal an agent runs in. */
 	terminalOf(agent: Agent): string;
+	/** The agent numbered `id` once it ended, as a notice about it shows it: where its last screen is; undefined while it runs. */
+	endedAgent(id: number): EndedAgent | undefined;
 	log(message: string): void;
 }
 
@@ -126,8 +129,8 @@ export class Mail implements Disposable {
 	private readonly tasks = new Map<number, ReturnType<typeof setTimeout>>();
 	/** When each agent with messages unfetched is looked at again, for whether they waited the timeout. */
 	private readonly delays = new Map<number, ReturnType<typeof setTimeout>>();
-	/** The person's agents that ended unexpectedly, gathered for one notification. */
-	private readonly ends: string[] = [];
+	/** The person's agents that ended unexpectedly, gathered for one notification: each agent's number and its line. */
+	private readonly ends: { readonly id: number; readonly line: string }[] = [];
 	private endsTimer: ReturnType<typeof setTimeout> | undefined;
 	/** When Facade was turned on again in this window, where it was: no doorbell was due while it was off. */
 	private onAgainTime = 0;
@@ -304,7 +307,7 @@ export class Mail implements Disposable {
 		}
 		if (tell) {
 			if (agent.parent === undefined) {
-				this.gatherEnd(l10n.t("@{0} #a{1} ended: {2}.", agent.name, agent.id, how));
+				this.gatherEnd(agent.id, l10n.t("@{0} #a{1} ended: {2}.", agent.name, agent.id, how));
 			} else if (isLive(this.context.table.get(agent.parent))) {
 				this.record({ from: FACADE, to: agent.parent, text: `${agentText(agent)} ended: ${how}. It takes no more messages.`, facade: 'ended', about: agent.id });
 			}
@@ -566,19 +569,34 @@ export class Mail implements Disposable {
 		}
 	}
 
-	/** Gathers the unexpected end of an agent the person started with those at the same moment, for one notification. */
-	private gatherEnd(line: string): void {
-		this.ends.push(line);
+	/**
+	 * Gathers the unexpected end of an agent the person started with those at the same moment, for one
+	 * notification, whose Show shows each: its terminal while that is open, else its last screen.
+	 */
+	private gatherEnd(id: number, line: string): void {
+		this.ends.push({ id, line });
 		if (this.endsTimer !== undefined) {
 			return;
 		}
 		this.endsTimer = setTimeout(() => {
 			this.endsTimer = undefined;
-			const lines = this.ends.splice(0);
-			if (!this.disposed && lines.length) {
-				void this.context.ports.person.notify({ key: `ended:${Date.now()}`, text: lines.join(' '), buttons: [] })
-					.catch(err => this.context.log(`The person could not be told of agents that ended: ${messageOf(err)}`));
+			const ends = this.ends.splice(0);
+			if (this.disposed || !ends.length) {
+				return;
 			}
+			const { ports } = this.context;
+			const show = l10n.t("Show");
+			void ports.person.notify({ key: `ended:${Date.now()}`, text: ends.map(end => end.line).join(' '), buttons: [show] }).then(async choice => {
+				if (choice !== show) {
+					return;
+				}
+				for (const end of ends) {
+					const ended = this.context.endedAgent(end.id);
+					if (ended) {
+						await ports.person.showEnded(ended);
+					}
+				}
+			}).catch(err => this.context.log(`The person could not be told of agents that ended, or shown them: ${messageOf(err)}`));
 		}, ENDS_GATHERED_MS);
 	}
 
@@ -740,7 +758,7 @@ export class Mail implements Disposable {
 			return agent.yolo;
 		}
 		const cli = this.context.clis.known.find(each => each.id === agent.cli);
-		return !!cli && !!this.context.clis.configOf(cli).launch.arguments.fullAccess?.length;
+		return !!cli && isYolo(this.context.clis.configOf(cli));
 	}
 
 	/** A message's text; a note saying so for one whose file went with the chat rooms. */

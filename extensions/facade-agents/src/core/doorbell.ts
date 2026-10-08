@@ -53,7 +53,8 @@ export interface DoorbellContext {
  * message rings 2 seconds after it came, but within a minute of the last doorbell only once the agent
  * has fetched all it had; one a doorbell named rings again while it is unread, 1, 2, 4 and 8 minutes on,
  * each from the doorbell before, then every 15. A doorbell waits for the person typing in that terminal,
- * for 10 seconds without a key at most.
+ * for 10 seconds without a key at most, then takes its turn in the terminal's input, behind what Facade
+ * typed there before (AGENT-DEBUGGING.md D3).
  */
 export class Doorbell implements Disposable {
 
@@ -160,16 +161,17 @@ export class Doorbell implements Disposable {
 			}
 			const task = this.taskOf(agent, now);
 			const line = task ? this.context.firstLine(agent, task) : doorbellLine(now, this.context.senderOf);
-			if (!await this.context.ports.terminals.type(terminal, line)) {
+			// In the terminal's turn, behind what Facade typed there before: its line, then its Enter after the
+			// pause its CLI needs, Facade turned off meanwhile or not - a line left unsent would wait in its input
+			const effect = await this.context.ports.terminals.type(terminal, line, { enter: true, enterDelayMs: agent.enterDelay ?? config.launch.enterDelay });
+			if (!effect) {
 				throw new Error('its terminal was not there');
 			}
-			// Its line typed, its Enter follows, Facade turned off meanwhile or not: a line left unsent would wait in its input
-			await timeout(config.launch.enterDelay);
-			if (!isLive(this.context.table.get(id))) {
-				return;
-			}
-			if (!await this.context.ports.terminals.type(terminal, '\r')) {
-				throw new Error('its terminal was not there');
+			if (effect.outcome !== 'applied') {
+				if (!isLive(this.context.table.get(id))) {
+					return;
+				}
+				throw new Error(effect.pasted ? 'its terminal ended before Enter' : 'its terminal ended first');
 			}
 			if (!this.disposed) {
 				// Those it fetched meanwhile, as the line was typed, it was not rung for

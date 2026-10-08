@@ -77,12 +77,11 @@ suite('Core: messages at random', () => {
 			const problems: string[] = [];
 			let names = 0;
 
-			/** A world over the workspace, its doorbells logged as their Enter is typed: one cut short by the window going did not ring. */
+			/** A world over the workspace, its doorbells logged as they are typed: each line with its Enter, as one input. */
 			const open = (): World => {
 				const made = fakeWorld(dir, { repositories: { [lab]: [] }, session });
 				const type = made.terminals.type.bind(made.terminals);
-				const typed = new Map<string, { readonly agent: number; readonly line: string }>();
-				made.terminals.type = async (name, text) => {
+				made.terminals.type = async (name, text, options) => {
 					const agent = [...made.table.state.agents.values()].find(each => name.startsWith(`@${each.name} #${each.id} `));
 					if (agent && made.terminals.running.has(name)) {
 						if (text.startsWith('[facade]')) {
@@ -91,13 +90,12 @@ suite('Core: messages at random', () => {
 							if (!text.includes('Your task is') && named.join() !== unread.slice(0, 5).join()) {
 								problems.push(`the doorbell of #a${agent.id} named ${named.join()}, its unread being ${unread.join()}`);
 							}
-							typed.set(name, { agent: agent.id, line: text });
-						} else if (text === '\r' && typed.has(name)) {
-							rings.push({ ...typed.get(name) ?? { agent: agent.id, line: '' }, time: Date.now() });
-							typed.delete(name);
+							if (options.enter) {
+								rings.push({ agent: agent.id, line: text, time: Date.now() });
+							}
 						}
 					}
-					return type(name, text);
+					return type(name, text, options);
 				};
 				return made;
 			};

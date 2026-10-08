@@ -9,13 +9,15 @@ an operating system's process id. Facade records what it did and what it knows f
 launch, an MCP server's hello, a terminal that ended - and never reads a screen to decide anything,
 nor guesses whether an agent works.
 
-Chapter 1 is starting, listing and ending agents; looking into an agent's terminal comes next. The
-messages agents send each other and the person are AGENT-MESSAGES.md, which replaces what this chapter
-says of a child's task: the task file, the line typed to tell of it, `task.typed` and the opening are
-gone - a task is the first message in the child's mailbox, and the child's first line names it (M7). A
-creator learns of its children's ends by a message as well as from `ps` (M8). The ledger is version 5,
-reading version 3 (M11). The launch groups gain `questions` and `messages`, and the timeout also times
-the notices of a task or of messages left unfetched (M6). Where the two differ, AGENT-MESSAGES.md holds.
+Chapter 1 is starting, listing and ending agents. Looking into an agent's terminal - reading its
+screen, typing and pressing keys there - is [AGENT-DEBUGGING.md](AGENT-DEBUGGING.md). The messages
+agents send each other and the person are [AGENT-MESSAGES.md](AGENT-MESSAGES.md), which replaces what
+this chapter says of a child's task: the task file, the line typed to tell of it, `task.typed` and the
+opening are gone - a task is the first message in the child's mailbox, and the child's first line names
+it (M7). A creator learns of its children's ends by a message as well as from `ps` (M8). The ledger is
+version 5, reading version 3 (M11). The launch groups gain `questions` and `messages`, and the timeout
+also times the notices of a task or of messages left unfetched (M6). Where this chapter and
+AGENT-MESSAGES.md differ, AGENT-MESSAGES.md holds.
 
 ## Architecture
 

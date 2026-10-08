@@ -65,6 +65,8 @@ export interface NewAgent {
 	readonly folder: string;
 	/** Whether its CLI starts with full access: its YOLO, for good. */
 	readonly yolo: boolean;
+	/** How long after a paste into its terminal Enter is pressed. */
+	readonly enterDelay?: number;
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -192,6 +194,7 @@ export class AgentTable {
 			worktree: agent.worktree,
 			folder: agent.folder,
 			yolo: agent.yolo,
+			...(agent.enterDelay !== undefined ? { enterDelay: agent.enterDelay } : {}),
 			tokenHash: hashToken(token)
 		});
 		const started = this.state.agents.get(id);

@@ -6,6 +6,7 @@
 import * as l10n from '@vscode/l10n';
 import * as vscode from 'vscode';
 import { messageOf, stackOf } from './base/errors';
+import { ScreenDocuments } from './host/screenDocuments';
 import { AgentsService } from './host/service';
 import { registerShowLaunch } from './host/showLaunch';
 
@@ -20,7 +21,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		l10n.config({ contents: vscode.l10n.bundle });
 	}
 	const log = vscode.window.createOutputChannel(vscode.l10n.t("Facade Agents"), { log: true });
-	context.subscriptions.push(log, vscode.commands.registerCommand('facade.agents.showLog', () => log.show()), registerShowLaunch());
+	// The agents' last screens open with Facade agents off too: a notice's Show still goes to one
+	const screens = ScreenDocuments.register();
+	context.subscriptions.push(log, vscode.commands.registerCommand('facade.agents.showLog', () => log.show()), registerShowLaunch(), screens.registration);
 
 	let service: AgentsService | undefined;
 	/** The service while it starts: the extension host can go meanwhile, as a folder window becomes a workspace. */
@@ -38,7 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					none = 'noFolder';
 					return;
 				}
-				const created = creating = new AgentsService(log, context.workspaceState);
+				const created = creating = new AgentsService(log, context.workspaceState, screens.documents);
 				try {
 					await created.start();
 					// Deactivated while it started: what it took since - the ledger's lock, the pipe - goes at once.

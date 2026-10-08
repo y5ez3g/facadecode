@@ -12,6 +12,7 @@ import { isJsonObject } from '../base/json';
 import { installedClis, knownClis } from '../clis/registry';
 import { facadeSkill, firstLineFor } from '../contract/prompts';
 import { Contract } from '../contract/tools';
+import { FacadeError } from '../core/errors';
 import { Facade } from '../core/facade';
 import { AgentTable } from '../record/agents';
 import { Caller, isLive, PERSON } from '../record/events';
@@ -22,6 +23,7 @@ import { PipeHandlers, pipePath } from '../transport/pipe';
 import { HostGit } from './git';
 import { HostPerson } from './person';
 import { confirmDeleteRooms, pickRoom } from './rooms';
+import { ScreenDocuments } from './screenDocuments';
 import { configFor, timeoutMs } from './settings';
 import { askStartAgent } from './startAgent';
 import { agentTerminalRuns, HostTerminals, terminalEnvironment } from './terminals';
@@ -51,6 +53,8 @@ export class AgentsService implements vscode.Disposable {
 
 	private readonly disposables: { dispose(): void }[] = [];
 	private facade: Facade | undefined;
+	/** Where Facade's notices go, and the last screens of agents that ended. */
+	private person: HostPerson | undefined;
 	/** Why there is no core once the service started: another window has the workspace's agents, or no folder is on this machine. */
 	private noCore: 'otherWindow' | 'noFolder' | undefined;
 	private endpoint: PipeEndpoint<Caller> | undefined;
@@ -61,8 +65,11 @@ export class AgentsService implements vscode.Disposable {
 	/** How it stopped first: as the window went, or as Facade let go of its agents. */
 	private stoppedBy: ClosedBy | undefined;
 
-	/** `workspaceState` keeps the record this workspace's agents are in, whatever becomes of its first folder. */
-	constructor(private readonly log: vscode.LogOutputChannel, private readonly workspaceState: vscode.Memento) { }
+	/**
+	 * `workspaceState` keeps the record this workspace's agents are in, whatever becomes of its first folder;
+	 * `screenDocuments` opens their last screens, as it does with Facade agents off.
+	 */
+	constructor(private readonly log: vscode.LogOutputChannel, private readonly workspaceState: vscode.Memento, private readonly screenDocuments: ScreenDocuments) { }
 
 	/**
 	 * Opens the workspace's record, listens for its agents, and finds again those still running. Without
@@ -111,11 +118,12 @@ export class AgentsService implements vscode.Disposable {
 		// workspace replaces while agents keep running.
 		const windowState = new JsonFileState(path.join(dir, WINDOW_STATE_FILE));
 		const terminals = new HostTerminals(windowState, message => this.say(message));
+		const person = this.person = new HostPerson(terminals, this.screenDocuments, message => this.say(message));
 		this.disposables.push(terminals);
 
 		const facade = new Facade({
 			table,
-			ports: { terminals, git: new HostGit(), person: new HostPerson(terminals, message => this.say(message)) },
+			ports: { terminals, git: new HostGit(), person },
 			clis: {
 				known: knownClis(),
 				installed: () => installedClis(configFor),
@@ -168,6 +176,7 @@ export class AgentsService implements vscode.Disposable {
 		this.stopped = true;
 		this.stoppedBy ??= by;
 		this.facade = undefined;
+		this.person = undefined;
 		this.endpoint = undefined;
 		for (const disposable of this.disposables.reverse()) {
 			try {
@@ -209,7 +218,8 @@ export class AgentsService implements vscode.Disposable {
 			return { id, name };
 		} catch (err) {
 			this.log.error(`Starting an agent failed: ${stackOf(err)}`);
-			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
+			const ended = err instanceof FacadeError && typeof err.data?.agent === 'number' ? facade.endedAgent(err.data.agent) : undefined;
+			this.person?.tellNotStarted(messageOf(err), ended);
 			return undefined;
 		}
 	}

@@ -89,6 +89,33 @@ export class Args {
 		}
 		throw invalid(`${name} must be true or false.`);
 	}
+
+	/** A whole number from `min` to `max`, if it is given. */
+	integer(name: string, min: number, max: number): number | undefined {
+		const value = this.values[name];
+		if (value === undefined) {
+			return undefined;
+		}
+		if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+			throw invalid(`${name} must be a whole number from ${min} to ${max}.`);
+		}
+		return value;
+	}
+
+	/** A string with something in it, exactly as it is given: its spaces at the ends too. */
+	exactText(name: string): string {
+		const value = this.values[name];
+		if (value === undefined) {
+			throw invalid(`${name} is required.`);
+		}
+		if (typeof value !== 'string') {
+			throw invalid(`${name} must be a string.`);
+		}
+		if (!value) {
+			throw invalid(`${name} must not be empty.`);
+		}
+		return value;
+	}
 }
 
 function invalid(message: string): FacadeError {

@@ -59,6 +59,8 @@ export interface Agent {
 	readonly folder: string;
 	/** Whether its CLI started with full access, its YOLO on; none where a ledger before messages did not say. */
 	readonly yolo?: boolean;
+	/** How long after a paste into its terminal Enter is pressed, as its launch had it, where it recorded it. */
+	readonly enterDelay?: number;
 	state: AgentState;
 	exit?: Exit;
 	readonly startTime: number;
@@ -96,6 +98,7 @@ export type LedgerEventBody =
 		readonly worktree: string;
 		readonly folder: string;
 		readonly yolo?: boolean;
+		readonly enterDelay?: number;
 		readonly tokenHash: string;
 	}
 	| { readonly type: 'agent.running'; readonly id: number }
@@ -120,6 +123,16 @@ export interface Caller {
 
 /** The person, as a caller. */
 export const PERSON: Caller = { name: YOU };
+
+/** An agent or the person, as Facade's words name them: `@name #a7`, or `the person`. */
+export function describe(who: Caller): string {
+	return who.id === undefined ? 'the person' : `@${who.name} #a${who.id}`;
+}
+
+/** Whether `text` names the person, as an agent may: `you` or `@you`, in any case. */
+export function namesThePerson(text: string): boolean {
+	return text.trim().replace(/^@/, '').toLowerCase() === YOU;
+}
 
 /** What a workspace's ledger says now. */
 export interface WorkspaceState {
@@ -147,6 +160,11 @@ function isExitKind(value: unknown): value is ExitKind {
 	return typeof value === 'string' && EXIT_KINDS.has(value);
 }
 
+/** Whether `value` is a number of milliseconds to wait: a finite one, from 0. */
+function isDelay(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 /** Whether `value` is a string with something in it. */
 function isText(value: unknown): value is string {
 	return typeof value === 'string' && value.length > 0;
@@ -169,12 +187,16 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'agent.started': {
 			// A ledger of the version before messages names the file of a task typed into its terminal: it is no more.
-			const { id, name, parent, cli, model, effort, worktree, folder, yolo, taskFile, tokenHash } = value;
+			const { id, name, parent, cli, model, effort, worktree, folder, yolo, enterDelay, taskFile, tokenHash } = value;
 			if (!isId(id) || typeof name !== 'string' || !isAgentName(name) || (parent !== undefined && !isId(parent)) || !isText(cli) || !isText(model) || !isText(effort)
-				|| !isText(worktree) || !isText(folder) || (yolo !== undefined && typeof yolo !== 'boolean') || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))) {
+				|| !isText(worktree) || !isText(folder) || (yolo !== undefined && typeof yolo !== 'boolean') || (enterDelay !== undefined && !isDelay(enterDelay))
+				|| typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))) {
 				return undefined;
 			}
-			return { type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder, ...(yolo !== undefined ? { yolo } : {}), tokenHash };
+			return {
+				type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder,
+				...(yolo !== undefined ? { yolo } : {}), ...(enterDelay !== undefined ? { enterDelay } : {}), tokenHash
+			};
 		}
 		case 'agent.running':
 		case 'task.typed':
@@ -239,6 +261,7 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				worktree: event.worktree,
 				folder: event.folder,
 				...(event.yolo !== undefined ? { yolo: event.yolo } : {}),
+				...(event.enterDelay !== undefined ? { enterDelay: event.enterDelay } : {}),
 				state: 'starting',
 				startTime: event.time
 			});

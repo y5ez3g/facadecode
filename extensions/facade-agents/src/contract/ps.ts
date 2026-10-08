@@ -7,11 +7,7 @@ import { AgentRow } from '../core/facade';
 import { clockOf, Mailbox } from '../core/mail';
 import { Args } from './args';
 import type { ContractTool } from './tools';
-
-/** A time as `ps` gives it: the time of day, on this machine's clock. */
-function timeOfDay(time: number): string {
-	return new Date(time).toTimeString().slice(0, 8);
-}
+import { timeOfDay } from './words';
 
 /**
  * An agent's mailbox as its line gives it: how many messages are unread, the oldest ten of them, each

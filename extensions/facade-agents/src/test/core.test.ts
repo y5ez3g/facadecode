@@ -15,7 +15,7 @@ import { outcomeOf, tempDir } from './util';
 type World = ReturnType<typeof fakeWorld>;
 
 /** What an agent that did not say hello in time fails with. */
-const NO_HELLO = 'it did not come up within 120 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal';
+const NO_HELLO = 'it did not come up within 120 seconds: its MCP server never said hello to Facade. Its CLI may have been waiting for an answer in its terminal, which was closed with it: its last lines show where it stopped';
 
 /** Every agent the workspace has had, a line each: its number, name, parent now, and state - how it exited, once it has. */
 function agents(world: World): string[] {
@@ -75,7 +75,9 @@ suite('Core: spawn, step by step', () => {
 				args: ['--config', config, '--no-asking', '--read', messages, '--yes', '--model', 'large', '--effort', 'high', '--', '[facade] You are @main #a1, created by @you. Your task is #m1.'],
 				env: { ARG_QUIET: '1' },
 				cwd: lab,
-				reveal: true
+				reveal: true,
+				run: 1,
+				finalScreen: path.join(temp.dir, 'workspace', 'screens', 'a1.json')
 			}],
 			config: { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', path.join(runs, '1.token')], env: { ELECTRON_RUN_AS_NODE: '1' } },
 			token: { id: 1, name: 'main' },
@@ -288,15 +290,12 @@ suite('Core: spawn, step by step', () => {
 		const spawned = await settled(spawning);
 		const atAnswer = [...world.terminals.typed];
 		await sleep(2_000);
-		const beforeEnter = [...world.terminals.typed];
-		await sleep(400);
-		const line = `@main #1 · Told Code: ${JSON.stringify('[facade] You are @main #a1, created by @you. Your task is #m1.')}`;
+		const line = `@main #1 · Told Code: type ${JSON.stringify('[facade] You are @main #a1, created by @you. Your task is #m1.')}, Enter after 400 ms`;
 		const launch = world.terminals.launched[0];
 
 		assert.deepStrictEqual({
 			spawned: [spawned.id, spawned.task],
 			atAnswer,
-			beforeEnter,
 			typed: world.terminals.typed,
 			task: world.table.state.mail.messages.get(1),
 			rings: world.table.state.mail.entries.get(1)?.rings,
@@ -305,8 +304,7 @@ suite('Core: spawn, step by step', () => {
 		}, {
 			spawned: [1, 1],
 			atAnswer: [],
-			beforeEnter: [line],
-			typed: [line, `@main #1 · Told Code: ${JSON.stringify('\r')}`],
+			typed: [line],
 			task: { id: 1, to: 1, text: 'Plan the release.', length: 17, task: true, time: world.table.state.mail.messages.get(1)?.time },
 			rings: 1,
 			args: ['--yes', '--model', 'deep', '--effort', 'high'],
@@ -335,7 +333,7 @@ suite('Core: spawn, step by step', () => {
 			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${messagesDir}, ${model}, ${effort}, ${task}.',
 			inTrust: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.trust.file has ${nowhere}, for which Facade has no value: it has ${home}, ${argHome}, ${repository}.',
 			made: [],
-			slow: 'FAILED: Arg Code did not start as @main #a3: it did not come up within 5 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal'
+			slow: 'FAILED: Arg Code did not start as @main #a3: it did not come up within 5 seconds: its MCP server never said hello to Facade. Its CLI may have been waiting for an answer in its terminal, which was closed with it: its last lines show where it stopped'
 		});
 	});
 });
@@ -472,7 +470,7 @@ suite('Core: exits', () => {
 		temp.remove();
 	});
 
-	test('a terminal the person closes is a kill by the person; one that ends by itself is an exit, with its CLI\'s exit code where that is not 0; the person hears of their own agents\' unexpected ends - an exit code other than 0 - gathered in one notification, and of no other; an agent\'s child\'s exit its parent sees in ps', async () => {
+	test('a terminal the person closes is a kill by the person; one that ends by itself is an exit, with its CLI\'s exit code where that is not 0; the person hears of their own agents\' unexpected ends - an exit code other than 0 - gathered in one notification, whose Show shows each, and of no other; an agent\'s child\'s exit its parent sees in ps', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'A.', name: 'a', folder: lab });
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'B.', name: 'b', folder: lab });
 		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'C.', name: 'c' });
@@ -488,8 +486,11 @@ suite('Core: exits', () => {
 		world.terminals.end('@a #1 · Arg Code', { byThePerson: true });
 		world.terminals.end('@e #5 · Arg Code', { exitCode: 3, byThePerson: false });
 		await sleep(1_000);
+		const notified = world.person.notified.map(each => [each.text, each.buttons]);
+		world.person.press(world.person.notified[0]?.key ?? '', 'Show');
+		await sleep(0);
 
-		assert.deepStrictEqual({ agents: agents(world), told: world.person.told, notified: world.person.notified.map(each => [each.text, each.buttons]) }, {
+		assert.deepStrictEqual({ agents: agents(world), told: world.person.told, notified, shown: world.person.ended.map(agent => agent.terminal) }, {
 			agents: [
 				'#1 @a parent the person killed: the person closed its terminal',
 				'#2 @b parent the person exited: its CLI ended with exit code 1',
@@ -498,7 +499,8 @@ suite('Core: exits', () => {
 				'#5 @e parent the person exited: its CLI ended with exit code 3'
 			],
 			told: [],
-			notified: [['@b #a2 ended: it exited, with exit code 1. @e #a5 ended: it exited, with exit code 3.', []]]
+			notified: [['@b #a2 ended: it exited, with exit code 1. @e #a5 ended: it exited, with exit code 3.', ['Show']]],
+			shown: ['@b #2 · Arg Code', '@e #5 · Arg Code']
 		});
 	});
 
@@ -656,8 +658,7 @@ suite('Core: after a reload', () => {
 
 		assert.deepStrictEqual({ typed: after.terminals.typed, rings: after.table.state.mail.entries.get(1)?.rings, agents: agents(after) }, {
 			typed: [
-				`@main #1 · Told Code: ${JSON.stringify('[facade] You are @main #a1, created by @you. Your task is #m1.')}`,
-				`@main #1 · Told Code: ${JSON.stringify('\r')}`
+				`@main #1 · Told Code: type ${JSON.stringify('[facade] You are @main #a1, created by @you. Your task is #m1.')}, Enter after 400 ms`
 			],
 			rings: 1,
 			agents: ['#1 @main parent the person running']

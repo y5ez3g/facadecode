@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as l10n from '@vscode/l10n';
 import { DeferredPromise } from '../base/async';
 import { messageOf } from '../base/errors';
-import { AgentCli, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec } from '../clis/cli';
+import { AgentCli, Environment, Injected, InstalledCli, isYolo, LaunchInput, LaunchSpec } from '../clis/cli';
 import { launchTarget, unsafeForCmd } from '../clis/executable';
 import { trustTarget } from '../clis/trust';
 import { AgentTable } from '../record/agents';
@@ -17,6 +17,7 @@ import { Message } from '../record/messages';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
 import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
+import { MOST_LINES } from './screens';
 
 /**
  * How long Facade waits where the person sets nothing else: two minutes, for a new agent to come up,
@@ -43,10 +44,14 @@ export interface LaunchContext {
 	readonly clis: CliCatalog;
 	readonly setup: AgentSetup;
 	readonly injections: Injections;
-	/** How long the core waits, as the person sets it. */
-	readonly timing?: () => Timing;
+	/** How long the core waits, as the person sets it now. */
+	timing(): Timing;
 	/** The name of the terminal an agent runs in. */
 	terminalOf(agent: Agent): string;
+	/** The file the window writes an agent's final screen to as its terminal ends. */
+	finalScreenOf(agent: Agent): string;
+	/** The last lines of an agent's screen, or of its final screen once it ended: for why it did not start. */
+	excerptOf(agent: Agent): Promise<{ readonly text: string; readonly finalScreen?: string } | undefined>;
 	/** Ends an agent that did not come up: recorded as failed, its terminal closed. */
 	fail(agent: Agent, reason: string): Promise<void>;
 	/** Records the task the caller gives a new agent: a message to it, sent right after it was recorded. */
@@ -135,7 +140,9 @@ export class Launcher implements Disposable {
 		const { table, ports, setup } = this.context;
 		const { cli } = installed;
 		this.stillOpen();
-		const started = table.start({ name: run.name, parent: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, yolo: !!installed.config.launch.arguments.fullAccess?.length });
+		// As it is launched: settings changed later do not change how it runs
+		const { enterDelay } = installed.config.launch;
+		const started = table.start({ name: run.name, parent: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, yolo: isYolo(installed.config), enterDelay });
 		const { agent } = started;
 		const startup = this.watch(agent, true);
 		const terminal = this.context.terminalOf(agent);
@@ -170,14 +177,14 @@ export class Launcher implements Disposable {
 			const env = cli.sharedServer ? { ...spec.env, ...setup.agentEnv(started.token) } : spec.env;
 			this.context.log(`Starting ${terminal} in ${run.folder}, the worktree ${run.worktree}${throughCmd ? ', through cmd.exe' : ''}.`);
 			progress?.(`Starting @${agent.name} #a${agent.id}.`);
-			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined });
+			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined, run: agent.id, finalScreen: this.context.finalScreenOf(agent) });
 		} catch (err) {
 			// A window that closed leaves it to the next one: starting, or gone with its terminal.
 			if (err instanceof FacadeError && err.code === 'UNAVAILABLE') {
 				throw err;
 			}
 			await this.context.fail(agent, messageOf(err));
-			throw didNotStart(cli, agent, messageOf(err));
+			throw await this.didNotStart(cli, agent, messageOf(err));
 		}
 		if (task && cli.task === 'argument') {
 			try {
@@ -191,9 +198,21 @@ export class Launcher implements Disposable {
 		try {
 			await startup.up.p;
 		} catch (err) {
-			throw err instanceof FacadeError ? err : didNotStart(cli, agent, messageOf(err));
+			throw err instanceof FacadeError ? err : await this.didNotStart(cli, agent, messageOf(err));
 		}
 		return { agent, ...(task ? { task: task.id } : {}) };
+	}
+
+	/**
+	 * Why a launch failed, with the last lines its CLI showed - of its final screen, the terminal closed -
+	 * and the file the whole of that screen is in: what the CLI said is often the reason.
+	 */
+	private async didNotStart(cli: AgentCli, agent: Agent, reason: string): Promise<FacadeError> {
+		const excerpt = await this.context.excerptOf(agent);
+		const message = `${cli.displayName} did not start as @${agent.name} #a${agent.id}: ${reason}`;
+		return new FacadeError('FAILED', excerpt
+			? `${message}\nThe last lines of its screen, as they were (read_screen #a${agent.id} gives up to ${MOST_LINES} of them):\n${excerpt.text}`
+			: message, { agent: agent.id, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
 	}
 
 	/** A starting agent's MCP server said hello: it is running, and up. */
@@ -250,13 +269,13 @@ export class Launcher implements Disposable {
 
 	/** Waits for a starting agent to come up, for the time it has: then it is ended as failed. `waited`: a start waits for it. */
 	private watch(agent: Agent, waited: boolean): Startup {
-		const ms = this.timing().startTimeoutMs;
+		const ms = this.context.timing().startTimeoutMs;
 		const startup: Startup = {
 			up: new DeferredPromise<void>(),
 			timer: setTimeout(() => {
 				startup.timer = undefined;
 				if (this.context.table.get(agent.id)?.state === 'starting') {
-					this.background(`Ending ${this.context.terminalOf(agent)}`, this.context.fail(agent, `it did not come up within ${Math.round(ms / 1000)} seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal`));
+					this.background(`Ending ${this.context.terminalOf(agent)}`, this.context.fail(agent, `it did not come up within ${Math.round(ms / 1000)} seconds: its MCP server never said hello to Facade. Its CLI may have been waiting for an answer in its terminal, which was closed with it: its last lines show where it stopped`));
 				}
 			}, ms),
 			waited
@@ -275,11 +294,6 @@ export class Launcher implements Disposable {
 			clearTimeout(startup.timer);
 			startup.up.complete();
 		}
-	}
-
-	/** How long the core waits, as the person sets it now. */
-	private timing(): Timing {
-		return this.context.timing?.() ?? { startTimeoutMs: START_TIMEOUT_MS };
 	}
 
 	/** Whether the window is open and `agent` has not exited: what is done for it goes on. */
@@ -316,6 +330,3 @@ export class Launcher implements Disposable {
 	}
 }
 
-function didNotStart(cli: AgentCli, agent: Agent, reason: string): FacadeError {
-	return new FacadeError('FAILED', `${cli.displayName} did not start as @${agent.name} #a${agent.id}: ${reason}`);
-}

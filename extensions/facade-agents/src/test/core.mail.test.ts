@@ -15,6 +15,9 @@ import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld } from './fakes';
 import { tempDir } from './util';
 
+/** Enter, as a terminal takes it in. */
+const ENTER = String.fromCharCode(13);
+
 type World = ReturnType<typeof fakeWorld>;
 
 /** What a call came to: what it answered, or the code of what it threw and its message. */
@@ -67,10 +70,10 @@ suite('Core: messages', () => {
 		return `@${agent.name} #${agent.id} · ${agent.cli === 'arg' ? 'Arg Code' : 'Told Code'}`;
 	}
 
-	/** What was typed into agent `id`'s terminal, piece by piece. */
+	/** What was typed into agent `id`'s terminal, piece by piece: each text, and its Enter where it had one. */
 	function typedInto(id: number, of: World = world): string[] {
-		const prefix = `${terminalOf(id, of)}: `;
-		return of.terminals.typed.filter(line => line.startsWith(prefix)).map(line => JSON.parse(line.slice(prefix.length)));
+		const terminal = terminalOf(id, of);
+		return of.terminals.texts.filter(each => each.name === terminal).flatMap(each => each.enter ? [each.text, ENTER] : [each.text]);
 	}
 
 	/** The doorbells typed into agent `id`'s terminal. */
@@ -120,7 +123,7 @@ suite('Core: messages', () => {
 			await sleep(1_999);
 			const early = ringsOf(2);
 			await sleep(1);
-			const line = typedInto(2).slice(-1);
+			const line = world.terminals.typed.slice(-1);
 			await sleep(300);
 			const fetched = await world.fetched(2);
 			const after = world.facade.mail.mailboxOf(2, lead);
@@ -130,7 +133,6 @@ suite('Core: messages', () => {
 				before: [before?.unread.map(message => message.id), before?.fetched, before?.task],
 				early,
 				line,
-				enter: typedInto(2).slice(-1),
 				fetched: shown(fetched),
 				after: [after?.unread.length, after?.fetched],
 				room: fs.readFileSync(path.join(dir, 'rooms', 'lead-a1.md'), 'utf8').includes('@lead #a1 → @lint #a2\nLint the docs.\n')
@@ -138,8 +140,7 @@ suite('Core: messages', () => {
 				sent: [{ id: 2, to: '@lint #a2', toPerson: false }],
 				before: [[2], 1, { id: 1, state: 'delivered' }],
 				early: [],
-				line: ['[facade] 1 unread message: #m2 from @lead #a1. Call read_messages.'],
-				enter: ['\r'],
+				line: ['@lint #2 · Arg Code: type "[facade] 1 unread message: #m2 from @lead #a1. Call read_messages.", Enter after 300 ms'],
 				fetched: ['#m2 new from @lead #a1: Lint the docs.'],
 				after: [0, 2],
 				room: true
@@ -240,7 +241,7 @@ suite('Core: messages', () => {
 			], [
 				'NOT_FOUND: No running agent is called @nobody: name an exited one by its number, which ps with all lists.',
 				'INVALID: to names nobody: give an agent - #a7, @name or @name #a7 - or the person, @you; or several of them.',
-				'NOT_FOUND: No running agent is called @lint: name an exited one by its number, which ps with all lists.',
+				'NOT_FOUND: No running agent is called @lint; @lint #a2 has exited: name one by its number.',
 				'REFUSED: @lint #a2 has ended (killed: the person closed its terminal). Nothing was sent.',
 				'INVALID: #m2 is a message, not an agent: name an agent by its number, as #a7, or by its @name.',
 				'INVALID: text is empty: write what the message says.',
@@ -579,10 +580,13 @@ suite('Core: messages', () => {
 
 		test('a message fetched while its doorbell is typed is not counted as rung for', async () => {
 			const { lead } = await team('lint');
+			// The window takes the line and its Enter a moment on
+			let typed = () => { };
+			world.terminals.hold = new Promise<void>(resolve => typed = resolve);
 			world.facade.mail.send(lead, ['@lint'], 'Quick.', undefined);
-			// The line typed, its Enter a moment on
 			await sleep(2_100);
 			await world.fetched(2);
+			typed();
 			await sleep(1_000);
 
 			assert.deepStrictEqual({ typed: ringsOf(2).length, rings: world.table.state.mail.entries.get(2)?.rings }, { typed: 1, rings: 0 });

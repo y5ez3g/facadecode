@@ -14,7 +14,7 @@ import { settled, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
-const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once its CLI has connected; ps lists you, your parent and your children, each with its number, its state and its mailbox; kill ends one of your children.';
+const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once its CLI has connected; ps lists you, your parent and your children, each with its number, its state and its mailbox; kill ends one of your children. read_screen reads an agent\'s screen as its terminal draws it; type_text types a line into its terminal and press_keys presses keys there, as the person does, for its CLI\'s own interface.';
 const MESSAGES = 'Messages: send_message sends a message to agents, or to the person, @you, and answers at once with its number, as #m42: a reply comes to your mailbox. A line starting [facade] typed into your terminal says you have unread messages: call read_messages, and print the new ones before you act on them. Something for the person: print it whole first, then send it to @you. If an agent started you, message it when you are done, stuck, or need a decision; if the person did, answer them in your terminal. Ask in plain text or by message, never with your CLI\'s tool for questions with buttons. Do not poll or wait for a reply: end your turn.';
 const PERSON_MESSAGES = 'Messages: send_message sends a message to agents and answers with its number, as #m42. Messages to you come as notifications; read_messages with all gives them again.';
 
@@ -88,7 +88,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		}, {
 			name: 'planner',
 			state: 'running',
-			tools: ['spawn', 'ps', 'kill', 'send_message', 'read_messages'],
+			tools: ['spawn', 'ps', 'kill', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'],
 			cli: { type: 'string', enum: ['arg', 'told'], description: 'The CLI: arg (Arg Code), told (Told Code).' },
 			model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it.' },
 			effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. The levels differ from CLI to CLI, and from model to model.' },
@@ -160,7 +160,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const error = (code: string, text: string) => ({ text, isError: true, data: { code } });
 
 		assert.deepStrictEqual(results, [
-			error('INVALID', 'Unknown tool send. The tools: spawn, ps, kill, send_message, read_messages.'),
+			error('INVALID', 'Unknown tool send. The tools: spawn, ps, kill, send_message, read_messages, read_screen, type_text, press_keys.'),
 			error('INVALID', 'spawn takes cli, model, effort, prompt, worktree?, name?; not color.'),
 			error('INVALID', 'spawn takes an object of arguments: cli, model, effort, prompt, worktree?, name?.'),
 			error('INVALID', 'prompt is required.'),

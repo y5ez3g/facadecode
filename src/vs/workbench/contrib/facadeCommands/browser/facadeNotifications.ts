@@ -12,8 +12,13 @@ import { CommandsRegistry } from '../../../../platform/commands/common/commands.
 import { INotificationHandle, INotificationService, NotificationPriority, Severity } from '../../../../platform/notification/common/notification.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IHostService } from '../../../services/host/browser/host.js';
-import { ITerminalService } from '../../terminal/browser/terminal.js';
-import { runningTerminalOf } from './facadePersonInput.js';
+import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
+
+/** The one terminal whose process `processId` runs: not an ended one, whose id can be another process's by now. */
+function runningTerminalOf(terminalService: ITerminalService, processId: number): ITerminalInstance | undefined {
+	const running = terminalService.instances.filter(instance => instance.processId === processId && instance.exitCode === undefined);
+	return running.length === 1 ? running[0] : undefined;
+}
 
 /**
  * Shows Facade's notifications for `_facade.notification.show`, one per key: the next with a key takes the

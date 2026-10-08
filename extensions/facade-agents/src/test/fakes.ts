@@ -9,7 +9,7 @@ import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
 import { Facade, SpawnRequest, Spawned } from '../core/facade';
 import { Fetched, FetchRequest } from '../core/mail';
-import { Disposable, Git, ListedWorktree, Notification, Person, PersonInput, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Disposable, EndedAgent, Git, InputEffect, KeysOptions, ListedWorktree, Notification, Person, PersonInput, Repository, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TypeOptions } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy } from '../record/ledger';
@@ -22,6 +22,16 @@ export class FakeTerminals implements Terminals {
 	readonly running = new Set<string>();
 	/** What was typed into each terminal, piece by piece, and which were closed. */
 	readonly typed: string[] = [];
+	/** Each text typed, into which terminal, and whether Enter went after it. */
+	readonly texts: { readonly name: string; readonly text: string; readonly enter: boolean }[] = [];
+	/** What each terminal shows, by its name: none for an empty screen. */
+	readonly screens = new Map<string, TerminalScreen>();
+	/** The terminals the window was told are agents', after a reload. */
+	readonly registered: string[] = [];
+	/** What the next texts typed and keys pressed answer with, in turn - an effect, or an error thrown - where not all went in. */
+	readonly nextInput: (InputEffect | Error)[] = [];
+	/** While set, a text typed goes in once it settles, as the window's queue holds it: behind the person, or till its Enter. */
+	hold: Promise<void> | undefined;
 	/** The next launch fails with this. */
 	failNext: string | undefined;
 	private readonly listeners = new Set<(name: string, end: TerminalEnd) => void>();
@@ -58,12 +68,43 @@ export class FakeTerminals implements Terminals {
 		this.closedRevived.push(name);
 	}
 
-	async type(name: string, text: string): Promise<boolean> {
+	async read(name: string, lines: number): Promise<TerminalScreen | undefined> {
 		if (!this.running.has(name)) {
-			return false;
+			return undefined;
 		}
-		this.typed.push(`${name}: ${JSON.stringify(text)}`);
-		return true;
+		const screen = this.screens.get(name) ?? { lines: [], buffer: 'normal', older: false, trimmed: false, capturedAt: 1000, exited: false };
+		return { ...screen, lines: screen.lines.slice(Math.max(0, screen.lines.length - lines)), older: screen.older || screen.lines.length > lines };
+	}
+
+	async type(name: string, text: string, options: TypeOptions): Promise<InputEffect | undefined> {
+		if (!this.running.has(name)) {
+			return undefined;
+		}
+		await this.hold;
+		const next = this.nextInput.shift();
+		if (next instanceof Error) {
+			throw next;
+		}
+		this.typed.push(`${name}: type ${JSON.stringify(text)}${options.enter ? `, Enter after ${options.enterDelayMs} ms` : ''}${options.queueTimeoutMs !== undefined ? `, waiting ${options.queueTimeoutMs} ms at most` : ''}`);
+		this.texts.push({ name, text, enter: options.enter });
+		return next ?? { outcome: 'applied', pasted: true, entered: options.enter };
+	}
+
+	async keys(name: string, keys: readonly string[], options: KeysOptions): Promise<InputEffect | undefined> {
+		if (!this.running.has(name)) {
+			return undefined;
+		}
+		const next = this.nextInput.shift();
+		if (next instanceof Error) {
+			throw next;
+		}
+		this.typed.push(`${name}: keys ${keys.join(' ')}${options.queueTimeoutMs !== undefined ? `, waiting ${options.queueTimeoutMs} ms at most` : ''}`);
+		return next ?? { outcome: 'applied', keysSent: keys.length };
+	}
+
+	async register(name: string, run: number, finalScreen: string): Promise<boolean> {
+		this.registered.push(`${name} as #${run}: ${finalScreen}`);
+		return this.running.has(name);
 	}
 
 	/** What the person typed into each terminal, as the window tells it: nothing pending unless a test sets it. */
@@ -182,6 +223,8 @@ export class FakePerson implements Person {
 	/** The chat rooms opened, each as its file's name and the message, in order. */
 	readonly opened: string[] = [];
 	private readonly answers = new Map<string, (button: string | undefined) => void>();
+	/** The agents that ended the person was shown, in turn. */
+	readonly ended: EndedAgent[] = [];
 
 	tell(text: string, terminal: string | undefined): void {
 		this.told.push(`${text}${terminal ? ` (${terminal})` : ''}`);
@@ -196,6 +239,10 @@ export class FakePerson implements Person {
 
 	async openRoom(file: string, message: number): Promise<void> {
 		this.opened.push(`${path.basename(file)} #m${message}`);
+	}
+
+	async showEnded(agent: EndedAgent): Promise<void> {
+		this.ended.push(agent);
 	}
 
 	/** As the person presses a button of the notification up with that key: it closes. */
@@ -347,7 +394,8 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
 	const person = new FakePerson();
 	const settings: { [section: string]: { [name: string]: unknown } } = {};
-	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000 };
+	// The window writes no final screens here: none is waited for
+	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000, finalScreenWaitMs: 0 };
 	const known: readonly AgentCli[] = [argCli(path.join(dir, 'arg-home')), toldCli()];
 	const configFor = (cli: AgentCli) => readCliConfig(cli, name => settings[cli.section]?.[name]);
 	/** What the core wrote to its log, in order. */
