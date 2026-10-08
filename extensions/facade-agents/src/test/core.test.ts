@@ -266,9 +266,9 @@ suite('Core: spawn, step by step', () => {
 		const timedOut = await silent;
 
 		assert.deepStrictEqual({ launchFailed, ended, timedOut, agents: agents(world), typed: world.terminals.typed, told: world.person.told }, {
-			launchFailed: 'FAILED: Arg Code did not start as @main #1: the window has no terminal for it',
-			ended: 'FAILED: Arg Code did not start as @main #2: its CLI ended with exit code 2',
-			timedOut: `FAILED: Arg Code did not start as @main #3: ${NO_HELLO}`,
+			launchFailed: 'FAILED: Arg Code did not start as @main #a1: the window has no terminal for it',
+			ended: 'FAILED: Arg Code did not start as @main #a2: its CLI ended with exit code 2',
+			timedOut: `FAILED: Arg Code did not start as @main #a3: ${NO_HELLO}`,
 			agents: [
 				'#1 @main parent the person failed: the window has no terminal for it',
 				'#2 @main parent the person failed: its CLI ended with exit code 2',
@@ -333,7 +333,7 @@ suite('Core: spawn, step by step', () => {
 			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${messagesDir}, ${model}, ${effort}, ${task}.',
 			inTrust: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.trust.file has ${nowhere}, for which Facade has no value: it has ${home}, ${argHome}, ${repository}.',
 			made: [],
-			slow: 'FAILED: Arg Code did not start as @main #3: it did not come up within 5 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal'
+			slow: 'FAILED: Arg Code did not start as @main #a3: it did not come up within 5 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal'
 		});
 	});
 });
@@ -376,13 +376,13 @@ suite('Core: ps and kill', () => {
 			all: seenBy(3, true),
 			told: world.person.told
 		}, {
-			killed: { id: 2, name: 'a', alreadyExited: false, exit: { kind: 'killed', reason: 'killed by @lead #1', time: 0 } },
+			killed: { id: 2, name: 'a', alreadyExited: false, exit: { kind: 'killed', reason: 'killed by @lead #a1', time: 0 } },
 			lead: ['1<you', '2<1', '3<1'],
 			b: ['1<you', '3<1'],
 			c: ['4<you'],
 			person: ['1<you', '4<you'],
 			all: ['1<you', '2<1', '3<1', '4<you'],
-			told: ['@a #2 exited, and its children are yours now: @c #4. (@c #4 · Arg Code)']
+			told: ['@a #a2 ended, and its children are yours now: @c #a4. (@c #4 · Arg Code)']
 		});
 	});
 
@@ -413,12 +413,12 @@ suite('Core: ps and kill', () => {
 
 		assert.deepStrictEqual({ outcomes, agents: agents(world), typed: world.terminals.typed, told: world.person.told }, {
 			outcomes: [
-				'REFUSED: @twin #2 is not your child: an agent kills only its own children, and the person any. You have no running children.',
+				'REFUSED: @twin #a2 is not your child: an agent kills only its own children, and the person any. You have no running children.',
 				'REFUSED: @you is the person, whom no agent ends.',
-				'NOT_FOUND: No agent is #99: ps with all lists every agent this workspace has had.',
+				'NOT_FOUND: No agent is #a99: ps with all lists every agent this workspace has had.',
 				'NOT_FOUND: No running agent is called @nobody: name an exited one by its number, which ps with all lists.',
-				'INVALID: 2 running agents are called @twin: @twin #2, @twin #3. Name one by its number.',
-				'INVALID: #2 is @twin, not @solo: name it by its number alone, or by its name.',
+				'INVALID: 2 running agents are called @twin: @twin #a2, @twin #a3. Name one by its number.',
+				'INVALID: #a2 is @twin, not @solo: name it by its number alone, or by its name.',
 				'fulfilled',
 				'#2 had exited already',
 				'fulfilled',
@@ -426,8 +426,8 @@ suite('Core: ps and kill', () => {
 			],
 			agents: [
 				'#1 @lead parent the person running',
-				'#2 @twin parent #1 killed: killed by @lead #1',
-				'#3 @twin parent #1 killed: killed by @lead #1',
+				'#2 @twin parent #1 killed: killed by @lead #a1',
+				'#3 @twin parent #1 killed: killed by @lead #a1',
 				'#4 @solo parent the person killed: killed by the person'
 			],
 			typed: ['@twin #2 · Arg Code: [closed]', '@twin #3 · Arg Code: [closed]', '@solo #4 · Arg Code: [closed]'],
@@ -514,7 +514,7 @@ suite('Core: exits', () => {
 			spawned: 3,
 			agents: ['#1 @lead parent the person exited: its CLI ended', '#2 @a parent the person running', '#3 @b parent the person running'],
 			seenByThePerson: [1, 2, 3],
-			told: ['@lead #1 exited, and its children are yours now: @a #2, @b #3. (@a #2 · Arg Code)']
+			told: ['@lead #a1 ended, and its children are yours now: @a #a2, @b #a3. (@a #2 · Arg Code)']
 		});
 	});
 });
@@ -634,9 +634,9 @@ suite('Core: after a reload', () => {
 			returns: [...mail.returns.values()].map(returned => `${returned.known ? 'noted' : returned.as === undefined ? 'unreturned' : 'returned'}: ${returned.reason}`),
 			person: world.person.notified.map(notification => notification.text)
 		}, {
-			failed: 'FAILED: Arg Code did not start as @fails #2: its CLI ended with exit code 1',
-			rootFailed: 'FAILED: Arg Code did not start as @alone #3: its CLI ended with exit code 1',
-			closed: 'FAILED: Arg Code did not start as @closed #4: the person closed its terminal',
+			failed: 'FAILED: Arg Code did not start as @fails #a2: its CLI ended with exit code 1',
+			rootFailed: 'FAILED: Arg Code did not start as @alone #a3: its CLI ended with exit code 1',
+			closed: 'FAILED: Arg Code did not start as @closed #a4: the person closed its terminal',
 			lead: ['you'],
 			returns: ['noted: it exited, with exit code 1', 'noted: it exited, with exit code 1', 'noted: stopped by @you'],
 			person: []
@@ -830,8 +830,8 @@ suite('Core: what Facade puts into a folder', () => {
 		const notJson = await outcomeOf(world.facade.spawn(PERSON, { cli: 'told', model: 'deep', effort: 'high', prompt: 'Two.', folder: lab }));
 
 		assert.deepStrictEqual({ tracked, notJson, left: listed(lab), theirs: fs.readFileSync(mcp, 'utf8'), launched: world.terminals.launched.length }, {
-			tracked: `FAILED: Told Code did not start as @main #1: Told Code is not started: ${mcp} is in the repository, and Facade would have to change it, so that a commit could take Facade's settings with it.`,
-			notJson: `FAILED: Told Code did not start as @main #2: Told Code is not started: ${mcp} is there already, and Facade does not write over it.`,
+			tracked: `FAILED: Told Code did not start as @main #a1: Told Code is not started: ${mcp} is in the repository, and Facade would have to change it, so that a commit could take Facade's settings with it.`,
+			notJson: `FAILED: Told Code did not start as @main #a2: Told Code is not started: ${mcp} is there already, and Facade does not write over it.`,
 			left: ['.mcp.json'],
 			theirs: 'not JSON',
 			launched: 0

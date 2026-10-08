@@ -191,7 +191,7 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ mine, theirs }, {
 				mine: [{ id: 2, to: '@lint #a2', toPerson: false }],
-				theirs: 'INVALID: 2 running agents are called @lint: @lint #2, @lint #3. Name one by its number.'
+				theirs: 'INVALID: 2 running agents are called @lint: @lint #a2, @lint #a3. Name one by its number.'
 			});
 		});
 

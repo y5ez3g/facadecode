@@ -32,7 +32,7 @@ export function instructionsFor(facade: Facade, caller: Caller): string {
 	}
 	const spawner = agent.parent === undefined ? undefined : facade.agent(agent.parent);
 	return [
-		`You are @${agent.name} #${agent.id}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, started by ${spawner ? `@${spawner.name} #${spawner.id}` : `the person, @${PERSON.name}`}.`,
+		`You are @${agent.name} #a${agent.id}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, started by ${spawner ? `@${spawner.name} #a${spawner.id}` : `the person, @${PERSON.name}`}.`,
 		`You run in ${agent.folder}: the worktree ${agent.worktree}. You are in that folder already: run commands there without cd.`,
 		TOOLS,
 		MESSAGES
@@ -67,7 +67,7 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'# Working in Facade Code',
 			'',
 			'You are an agent in Facade Code: a coding agent CLI in its own terminal, in a folder of a git',
-			'repository. Each agent has a name and a number, as @name #7, a parent and children. The person,',
+			'repository. Each agent has a name and a number, as @name #a7, a parent and children. The person,',
 			`${person}, starts the first agents, and the children of an agent that exits are theirs from then on.`,
 			'A number is Facade\'s own, not a process id: only the tools below take it. The person can see your',
 			'terminal and type into it at any time: answer them there.',
@@ -88,7 +88,7 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'  or the person, its state - starting, running, or exited, how and why - its CLI, model and effort,',
 			'  its worktree, and its mailbox: what it has not fetched yet. With `all`, every agent this workspace',
 			'  has had.',
-			'- `kill` ends one of your children, by its number, as #7, or its @name. Its worktree stays.',
+			'- `kill` ends one of your children, by its number, as #a7, or its @name. Its worktree stays.',
 			'',
 			'A name is a label, which several agents can have: where more than one running agent has it, name',
 			'the one you mean by its number.',

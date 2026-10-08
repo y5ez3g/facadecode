@@ -140,7 +140,7 @@ export class Launcher implements Disposable {
 		const startup = this.watch(agent, true);
 		const terminal = this.context.terminalOf(agent);
 		if (caller.id !== undefined && !isLive(table.get(caller.id))) {
-			ports.person.tell(l10n.t("@{0} #{1} exited while it started @{2} #{3}, which is yours now.", caller.name, caller.id, agent.name, agent.id), terminal);
+			ports.person.tell(l10n.t("@{0} #a{1} ended while it started @{2} #a{3}, which is yours now.", caller.name, caller.id, agent.name, agent.id), terminal);
 		}
 		let task: Message | undefined;
 		try {
@@ -169,7 +169,7 @@ export class Launcher implements Disposable {
 			// A server the same for every launch finds the agent from its environment.
 			const env = cli.sharedServer ? { ...spec.env, ...setup.agentEnv(started.token) } : spec.env;
 			this.context.log(`Starting ${terminal} in ${run.folder}, the worktree ${run.worktree}${throughCmd ? ', through cmd.exe' : ''}.`);
-			progress?.(`Starting @${agent.name} #${agent.id}.`);
+			progress?.(`Starting @${agent.name} #a${agent.id}.`);
 			await ports.terminals.launch({ name: terminal, command: cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined });
 		} catch (err) {
 			// A window that closed leaves it to the next one: starting, or gone with its terminal.
@@ -317,5 +317,5 @@ export class Launcher implements Disposable {
 }
 
 function didNotStart(cli: AgentCli, agent: Agent, reason: string): FacadeError {
-	return new FacadeError('FAILED', `${cli.displayName} did not start as @${agent.name} #${agent.id}: ${reason}`);
+	return new FacadeError('FAILED', `${cli.displayName} did not start as @${agent.name} #a${agent.id}: ${reason}`);
 }

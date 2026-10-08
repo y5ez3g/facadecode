@@ -16,7 +16,7 @@ export const spawnTool: ContractTool = {
 	definition: {
 		name: 'spawn',
 		title: 'Start a child agent',
-		description: 'Starts a child agent in its own UI: a CLI on one of its models, thinking as hard as you say, with its task, which Facade sends it as a message from you. It works beside you, in your folder; in a worktree of your repository, by name; or, with worktree "new" and a name, in a new worktree on a new branch of that name, starting at your worktree\'s HEAD - commit what the child needs first. It answers once the child\'s CLI has connected to Facade, with its number, as #7, and its task\'s, as #m12: the child fetches its task itself, and ps shows when it has. The child is yours: ps lists it, and kill ends it. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts: a child given a model its CLI does not have comes up all the same, then fails at its first step, on its screen, or works on the CLI\'s own default model. A child can take a minute or two to come up: a slow spawn is waiting, so do not call it again.',
+		description: 'Starts a child agent in its own UI: a CLI on one of its models, thinking as hard as you say, with its task, which Facade sends it as a message from you. It works beside you, in your folder; in a worktree of your repository, by name; or, with worktree "new" and a name, in a new worktree on a new branch of that name, starting at your worktree\'s HEAD - commit what the child needs first. It answers once the child\'s CLI has connected to Facade, with its number, as #a7, and its task\'s, as #m12: the child fetches its task itself, and ps shows when it has. The child is yours: ps lists it, and kill ends it. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts: a child given a model its CLI does not have comes up all the same, then fails at its first step, on its screen, or works on the CLI\'s own default model. A child can take a minute or two to come up: a slow spawn is waiting, so do not call it again.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -58,7 +58,7 @@ export const spawnTool: ContractTool = {
 		const where = spawned.newWorktree ? `the new worktree ${spawned.worktree}, on the new branch ${spawned.worktree},` : `the worktree ${spawned.worktree}`;
 		const task = spawned.task === undefined ? '' : ` Its task is message #m${spawned.task}, which it fetches itself: ps shows when it has.`;
 		return {
-			text: `Started @${spawned.name} #${spawned.id}: ${facade.cliName(spawned.cli)} on ${spawned.model} at ${spawned.effort}, in ${where} at ${spawned.folder}. Its CLI has connected to Facade.${task}`,
+			text: `Started @${spawned.name} #a${spawned.id}: ${facade.cliName(spawned.cli)} on ${spawned.model} at ${spawned.effort}, in ${where} at ${spawned.folder}. Its CLI has connected to Facade.${task}`,
 			data: spawned
 		};
 	}

@@ -15,7 +15,7 @@ export const killTool: ContractTool = {
 		inputSchema: {
 			type: 'object',
 			properties: {
-				agent: { type: 'string', description: 'One of your children: its number, as #7, or its name, as @name, where only one running agent has it.' }
+				agent: { type: 'string', description: 'One of your children: its number, as #a7, or its name, as @name, where only one running agent has it.' }
 			},
 			required: ['agent'],
 			additionalProperties: false
@@ -26,8 +26,8 @@ export const killTool: ContractTool = {
 		const killed = await facade.kill(caller, args.text('agent'));
 		return {
 			text: killed.alreadyExited
-				? `@${killed.name} #${killed.id} had exited already (${killed.exit.kind}: ${killed.exit.reason}).`
-				: `Killed @${killed.name} #${killed.id}: its terminal closed. Its worktree stays as it is.`,
+				? `@${killed.name} #a${killed.id} had exited already (${killed.exit.kind}: ${killed.exit.reason}).`
+				: `Killed @${killed.name} #a${killed.id}: its terminal closed. Its worktree stays as it is.`,
 			data: killed
 		};
 	}

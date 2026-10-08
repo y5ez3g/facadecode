@@ -33,9 +33,9 @@ function mailboxText(mailbox: Mailbox | undefined, now: number): string {
 
 /** One line of `ps`, as the model reads it; `self` is the caller's number, none for the person. */
 function line(row: AgentRow & { readonly mailbox: Mailbox | undefined }, self: number | undefined, now: number): string {
-	const parent = row.parent === undefined ? 'the person' : `#${row.parent}`;
+	const parent = row.parent === undefined ? 'the person' : `#a${row.parent}`;
 	const state = row.exit ? `exited at ${timeOfDay(row.exit.time)} (${row.exit.kind}: ${row.exit.reason})` : row.state;
-	return `@${row.name} #${row.id}${row.id === self ? ' (you)' : ''}  parent ${parent}  ${state}  ${row.cli} on ${row.model} at ${row.effort}  worktree ${row.worktree} at ${row.folder}  started ${timeOfDay(row.startTime)}  mailbox: ${mailboxText(row.mailbox, now)}`;
+	return `@${row.name} #a${row.id}${row.id === self ? ' (you)' : ''}  parent ${parent}  ${state}  ${row.cli} on ${row.model} at ${row.effort}  worktree ${row.worktree} at ${row.folder}  started ${timeOfDay(row.startTime)}  mailbox: ${mailboxText(row.mailbox, now)}`;
 }
 
 /**
@@ -47,7 +47,7 @@ export const psTool: ContractTool = {
 	definition: {
 		name: 'ps',
 		title: 'List agents',
-		description: 'Lists agents: you, your parent and your children, those that exited too - with all, every agent this workspace has had. Each with its name and number, as @name #7; its parent\'s number, or the person, who takes in the children of an agent that exits; its state - starting, running, or exited, how and why; its CLI, model and effort; its worktree; and its mailbox: the messages it has not fetched, how many it has fetched, when it last fetched, and whether it has fetched its task - whether it has your message. Whether a running agent works or waits is not Facade\'s to know: its worktree and its terminal show it.',
+		description: 'Lists agents: you, your parent and your children, those that exited too - with all, every agent this workspace has had. Each with its name and number, as @name #a7; its parent\'s number, or the person, who takes in the children of an agent that exits; its state - starting, running, or exited, how and why; its CLI, model and effort; its worktree; and its mailbox: the messages it has not fetched, how many it has fetched, when it last fetched, and whether it has fetched its task - whether it has your message. Whether a running agent works or waits is not Facade\'s to know: its worktree and its terminal show it.',
 		inputSchema: {
 			type: 'object',
 			properties: {

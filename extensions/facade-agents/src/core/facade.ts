@@ -509,7 +509,7 @@ export class Facade implements Disposable {
 			this.messagesOfEnded(agent, end);
 		}
 		if (orphans.length) {
-			this.ports.person.tell(l10n.t("@{0} #{1} exited, and its children are yours now: {2}.", agent.name, agent.id, orphans.map(describe).join(', ')), this.terminalOf(orphans[0]));
+			this.ports.person.tell(l10n.t("@{0} #a{1} ended, and its children are yours now: {2}.", agent.name, agent.id, orphans.map(describe).join(', ')), this.terminalOf(orphans[0]));
 		}
 		return exit;
 	}
@@ -635,10 +635,10 @@ export class Facade implements Disposable {
 			const id = Number(numbered.id);
 			const agent = this.table.get(id);
 			if (!agent) {
-				throw new FacadeError('NOT_FOUND', `No agent is #${id}: ps with all lists every agent this workspace has had.`);
+				throw new FacadeError('NOT_FOUND', `No agent is #a${id}: ps with all lists every agent this workspace has had.`);
 			}
 			if (numbered.name !== undefined && numbered.name.toLowerCase() !== agent.name) {
-				throw new FacadeError('INVALID', `#${id} is @${agent.name}, not @${numbered.name}: name it by its number alone, or by its name.`);
+				throw new FacadeError('INVALID', `#a${id} is @${agent.name}, not @${numbered.name}: name it by its number alone, or by its name.`);
 			}
 			return agent;
 		}
@@ -706,7 +706,7 @@ export class Facade implements Disposable {
 
 /** An agent or the person, as Facade's words name them: `@name #7`, or `the person`. */
 function describe(who: Caller): string {
-	return who.id === undefined ? 'the person' : `@${who.name} #${who.id}`;
+	return who.id === undefined ? 'the person' : `@${who.name} #a${who.id}`;
 }
 
 /** An agent or the person, as Facade's messages name them: `@name #a7`, or the person by their name. */

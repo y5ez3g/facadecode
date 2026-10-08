@@ -93,7 +93,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it.' },
 			effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. The levels differ from CLI to CLI, and from model to model.' },
 			instructions: [
-				'You are @planner #2, a Told Code agent in Facade Code, started by @lead #1.',
+				'You are @planner #a2, a Told Code agent in Facade Code, started by @lead #a1.',
 				`You run in ${lab}: the worktree main. You are in that folder already: run commands there without cd.`,
 				TOOLS,
 				MESSAGES
@@ -122,15 +122,15 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const clamp = worktreeFolder(lab, 'clamp');
 
 		assert.deepStrictEqual({ beside, inNew: inNew.text, killed: killed.text, again: again.text, ps: ps.text.split('\n'), rows: JSON.parse(JSON.stringify(ps.data)).agents.map((row: { id: number; parent?: number }) => `${row.id}<${Object.keys(row).includes('parent') ? row.parent : 'none'}`) }, {
-			beside: { text: `Started @tests #2: Arg Code on small at high, in the worktree main at ${lab}. Its CLI has connected to Facade. Its task is message #m2, which it fetches itself: ps shows when it has.`, data: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false, task: 2 } },
-			inNew: `Started @clamp #3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. Its CLI has connected to Facade. Its task is message #m3, which it fetches itself: ps shows when it has.`,
-			killed: 'Killed @tests #2: its terminal closed. Its worktree stays as it is.',
-			again: '@tests #2 had exited already (killed: killed by @lead #1).',
+			beside: { text: `Started @tests #a2: Arg Code on small at high, in the worktree main at ${lab}. Its CLI has connected to Facade. Its task is message #m2, which it fetches itself: ps shows when it has.`, data: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false, task: 2 } },
+			inNew: `Started @clamp #a3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. Its CLI has connected to Facade. Its task is message #m3, which it fetches itself: ps shows when it has.`,
+			killed: 'Killed @tests #a2: its terminal closed. Its worktree stays as it is.',
+			again: '@tests #a2 had exited already (killed: killed by @lead #a1).',
 			// The task @tests had not fetched did not go back to @lead, which ended it: the chat room notes it
 			ps: [
-				`@lead #1 (you)  parent the person  running  arg on large at high  worktree main at ${lab}  started ${timeOfDay(world.agent(1).startTime)}  mailbox: 1 unread: #m1 (@you, 0 min); 0 fetched; task #m1 not fetched yet`,
-				`@tests #2  parent #1  exited at ${timeOfDay(world.agent(2).exit?.time)} (killed: killed by @lead #1)  arg on small at high  worktree main at ${lab}  started ${timeOfDay(world.agent(2).startTime)}  mailbox: nothing unread; 0 fetched; task #m2 not fetched before it ended`,
-				`@clamp #3  parent #1  running  arg on small at high  worktree clamp at ${clamp}  started ${timeOfDay(world.agent(3).startTime)}  mailbox: 1 unread: #m3 (@lead #a1, 0 min); 0 fetched; task #m3 not fetched yet`
+				`@lead #a1 (you)  parent the person  running  arg on large at high  worktree main at ${lab}  started ${timeOfDay(world.agent(1).startTime)}  mailbox: 1 unread: #m1 (@you, 0 min); 0 fetched; task #m1 not fetched yet`,
+				`@tests #a2  parent #a1  exited at ${timeOfDay(world.agent(2).exit?.time)} (killed: killed by @lead #a1)  arg on small at high  worktree main at ${lab}  started ${timeOfDay(world.agent(2).startTime)}  mailbox: nothing unread; 0 fetched; task #m2 not fetched before it ended`,
+				`@clamp #a3  parent #a1  running  arg on small at high  worktree clamp at ${clamp}  started ${timeOfDay(world.agent(3).startTime)}  mailbox: 1 unread: #m3 (@lead #a1, 0 min); 0 fetched; task #m3 not fetched yet`
 			],
 			rows: ['1<none', '2<1', '3<1']
 		});
@@ -170,7 +170,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			error('INVALID', 'all must be true or false.'),
 			error('INVALID', 'agent is required.'),
 			error('REFUSED', '@you is the person, whom no agent ends.'),
-			error('NOT_FOUND', 'No agent is #99: ps with all lists every agent this workspace has had.'),
+			error('NOT_FOUND', 'No agent is #a99: ps with all lists every agent this workspace has had.'),
 			error('UNAVAILABLE', 'Facade cannot start nope here. It starts: arg, told.'),
 			error('FAILED', 'the ledger could not be read')
 		]);
