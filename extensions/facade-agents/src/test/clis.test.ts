@@ -12,7 +12,7 @@ import { messageOf } from '../base/errors';
 import { FileLock } from '../base/lock';
 import { antigravityCli } from '../clis/antigravity';
 import { claudeCli, claudeConfigFile } from '../clis/claude';
-import { AgentCli, ARG_GROUPS, LaunchInput, skillMarkdown } from '../clis/cli';
+import { AgentCli, ARG_GROUPS, capabilitiesOf, LaunchInput, skillMarkdown } from '../clis/cli';
 import { codexCli } from '../clis/codex';
 import { MAX_DELAY_MS, MAX_TIME_S, readCliConfig, secondsSetting } from '../clis/config';
 import { launchDocument } from '../clis/describe';
@@ -55,7 +55,7 @@ function outcome(call: () => unknown): string {
 
 /** What a launch of `cli` is given, as the core gives it for #7: its defaults, YOLO on, with the agent framework, where a test sets nothing else. */
 function inputFor(cli: AgentCli, overrides: Partial<LaunchInput> = {}): LaunchInput {
-	return { folder: '/lab', yolo: true, model: 'model-x', effort: 'high', connection: CONNECTION, skills: [SKILL], config: cli.defaults, runDir: '/runs', slug: '7', ...overrides };
+	return { folder: '/lab', repository: '/lab', messagesDir: '/record/messages', yolo: true, model: 'model-x', effort: 'high', connection: CONNECTION, skills: [SKILL], config: cli.defaults, runDir: '/runs', slug: '7', ...overrides };
 }
 
 /** The folder `/lab` as Codex keys its trust in it: its path, its drive in lower case on Windows. */
@@ -85,6 +85,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				'--plugin-dir', path.join('/runs', '7.plugin'),
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--disallowedTools', 'AskUserQuestion',
+				'--add-dir', '/record/messages',
 				'--dangerously-skip-permissions',
 				'--model', 'opus',
 				'--effort', 'xhigh',
@@ -286,6 +287,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 				'--plugin-dir', path.join('/runs', '7.plugin'),
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--disallowedTools', 'AskUserQuestion',
+				'--add-dir', '/record/messages',
 				'--permission-mode', 'bypassPermissions',
 				'--model', 'opus',
 				'--add-dir', '/shared/opus',
@@ -360,12 +362,27 @@ suite('CLIs: how the person has Facade start each one', () => {
 
 	test('a `${name}` a launch has no value for - whatever is written between the braces - refuses the launch, naming the setting and the values there are', () => {
 		const refused = (launch: unknown) => outcome(() => claudeCli.launch(inputFor(claudeCli, { config: readCliConfig(claudeCli, name => name === 'launch' ? launch : undefined) }), '/bin/claude'));
-		const values = 'it has ${mcpConfig}, ${settingsFile}, ${pluginDir}, ${model}, ${effort}, ${executable}, ${shimFile}, ${pipe}, ${recordDir}, ${tokenFile}, ${waitMs}.';
+		const values = 'it has ${folder}, ${repository}, ${home}, ${messagesDir}, ${model}, ${effort}, ${executable}, ${shimFile}, ${pipe}, ${recordDir}, ${tokenFile}, ${waitMs}, ${mcpConfig}, ${settingsFile}, ${pluginDir}.';
 
-		assert.deepStrictEqual([refused({ arguments: { extra: ['--add-dir', '${home}'] } }), refused({ arguments: { model: ['--model', '${model_name}'] } })], [
-			`facade.agents.claude.launch.arguments.extra has \${home}, for which Facade has no value: ${values}`,
+		assert.deepStrictEqual([refused({ arguments: { extra: ['--add-dir', '${hostname}'] } }), refused({ arguments: { model: ['--model', '${model_name}'] } })], [
+			`facade.agents.claude.launch.arguments.extra has \${hostname}, for which Facade has no value: ${values}`,
 			`facade.agents.claude.launch.arguments.model has \${model_name}, for which Facade has no value: ${values}`
 		]);
+	});
+
+	test('a launch has Facade\'s integration through its connect group - a built-in\'s that the person took out, or a custom agent\'s left out, has none - but for a CLI that reads Facade\'s server from its folder', () => {
+		const without = (cli: AgentCli) => capabilitiesOf(cli, readCliConfig(cli, name => name === 'launch' ? { arguments: { connect: null } } : undefined)).integration;
+		assert.deepStrictEqual(Object.fromEntries(knownClis().map(cli => [cli.id, [capabilitiesOf(cli, cli.defaults).integration, without(cli)]])), {
+			claude: [true, false],
+			codex: [true, false],
+			agy: [true, true],
+			muse: [true, true]
+		});
+	});
+
+	test('every launch has the same values - where it runs, its repository, the home folder, where its messages are, and what it was given - each CLI\'s own files besides', () => {
+		const extra = (cli: AgentCli) => cli.launch(inputFor(cli, { config: readCliConfig(cli, name => name === 'launch' ? { arguments: { extra: ['${folder}', '${repository}', '${home}', '${messagesDir}'] } } : undefined) }), '/bin/cli').args.slice(-4);
+		assert.deepStrictEqual(knownClis().map(extra), knownClis().map(() => ['/lab', '/lab', os.homedir(), '/record/messages']));
 	});
 
 	test('a time the person sets in seconds is one of a second to an hour, in whole seconds; anything but a number is the default', () => {

@@ -24,13 +24,16 @@ class GitError extends Error {
 	}
 }
 
-/** A git command's output, trimmed; it rejects with git's own words when the command fails. */
-function runGit(git: string, args: readonly string[]): Promise<string> {
+/**
+ * A git command's output - trimmed, unless `trim` is false: output whose first character counts, as a
+ * status's - it rejects with git's own words when the command fails.
+ */
+function runGit(git: string, args: readonly string[], trim = true): Promise<string> {
 	return new Promise((resolve, reject) => execFile(git, [...args], { windowsHide: true, timeout: GIT_TIMEOUT_MS }, (err, stdout, stderr) => {
 		if (err) {
 			reject(new GitError(String(stderr).trim() || err.message, typeof err.code === 'number' && !err.killed ? err.code : undefined));
 		} else {
-			resolve(String(stdout).trim());
+			resolve(trim ? String(stdout).trim() : String(stdout));
 		}
 	}));
 }
@@ -73,7 +76,9 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 	}
 	const main = path.dirname(path.normalize(commonDir));
 	// The main checkout's worktree is its branch too; on a detached HEAD, it is its folder's name
-	return { main, worktree: await branchIn(git, folder) ?? path.basename(isEqualPath(gitDir, commonDir) ? main : folder), head };
+	// The main checkout, and a folder in it, has the repository's own git directory; a worktree git added has one of its own.
+	const mainCheckout = isEqualPath(gitDir, commonDir);
+	return { main, mainCheckout, worktree: await branchIn(git, folder) ?? path.basename(mainCheckout ? main : folder), head };
 }
 
 /**
@@ -245,7 +250,8 @@ export async function whyNotBranchNameIn(git: string, main: string, branch: stri
  * lists them - ignored files are git's to drop - relative to the worktree, with forward slashes.
  */
 export async function changedFilesIn(git: string, folder: string): Promise<readonly string[]> {
-	const out = await runGit(git, ['-C', folder, 'status', '--porcelain=v1', '-z', '--untracked-files=all']);
+	// Untrimmed: each entry starts with its two status columns, the first a space for a change not staged.
+	const out = await runGit(git, ['-C', folder, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], false);
 	const files: string[] = [];
 	const entries = out.split('\0');
 	for (let index = 0; index < entries.length; index++) {

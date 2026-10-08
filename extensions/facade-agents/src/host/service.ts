@@ -160,10 +160,7 @@ export class AgentsService implements vscode.Disposable {
 				connection: tokenFile => this.listening().connection(tokenFile, timeoutMs(), dir),
 				sharedMcpServer: () => this.listening().sharedMcpServer(),
 				agentEnv: token => this.listening().agentEnv(token, timeoutMs()),
-				skills: () => [facadeSkill([
-					...installedClis(configFor).map(({ cli }) => ({ id: cli.id, displayName: cli.displayName })),
-					...customAgents().filter(({ config }) => !config.wrong).map(({ cli }) => ({ id: cli.id, displayName: cli.displayName, custom: true }))
-				])],
+				skills: () => [facadeSkill()],
 				opening: openingFor
 			},
 			timing: () => ({ startTimeoutMs: timeoutMs() }),
@@ -240,8 +237,8 @@ export class AgentsService implements vscode.Disposable {
 			// Listed as the person wrote them, found or not: a start says what is wrong.
 			...customAgents().map(({ cli }) => ({ id: cli.id, label: cli.displayName, custom: true }))
 		];
-		const cli = await pickAgent(rawArgs, offered);
-		if (!cli) {
+		const picked = await pickAgent(rawArgs, offered);
+		if (!picked) {
 			return undefined;
 		}
 		const local = (vscode.workspace.workspaceFolders ?? []).filter(each => each.uri.scheme === 'file');
@@ -251,10 +248,10 @@ export class AgentsService implements vscode.Disposable {
 			return undefined;
 		}
 		try {
-			const started = await facade.startForPerson(cli, folder);
+			const started = await facade.startForPerson(picked.id, folder, picked.custom);
 			return { id: started.id, name: started.name };
 		} catch (err) {
-			this.log.error(`Starting ${cli} failed: ${stackOf(err)}`);
+			this.log.error(`Starting ${picked.id} failed: ${stackOf(err)}`);
 			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
 			return undefined;
 		}

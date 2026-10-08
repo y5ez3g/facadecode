@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as os from 'os';
 import { JsonObject } from '../base/json';
 
 /** Environment variables, as `process.env` holds them. */
@@ -177,6 +178,10 @@ export interface Connection {
 export interface LaunchInput {
 	/** The folder it runs in, whose repository - or the folder itself, outside any - it is given the person's trust in. */
 	readonly folder: string;
+	/** The main checkout of the folder's repository; the folder itself outside any. */
+	readonly repository: string;
+	/** Where the workspace's messages are, the agent's task among them. */
+	readonly messagesDir: string;
 	/** Its YOLO: with its launch's `yoloOn` arguments, or its `yoloOff`. */
 	readonly yolo: boolean;
 	/** The notice of its task - who it is, and where its task's message is - for a CLI given it as an argument. */
@@ -275,9 +280,34 @@ export interface InstalledCli {
 	readonly executable: string;
 }
 
+/**
+ * The values every launch has for its `${name}`s (AGENT-LAUNCHER.md, L9): its folder, its repository's main
+ * checkout, the home folder, where its messages are, the model, effort and task notice it was given, and
+ * its connection's. A CLI adds the files of its own launch, and forms of these its arguments need.
+ */
+export function launchValues(input: LaunchInput): { [name: string]: string } {
+	return {
+		folder: input.folder,
+		repository: input.repository,
+		home: os.homedir(),
+		messagesDir: input.messagesDir,
+		...input.model !== undefined ? { model: input.model } : {},
+		...input.effort !== undefined ? { effort: input.effort } : {},
+		...input.task !== undefined ? { task: input.task } : {},
+		...input.connection?.values
+	};
+}
+
+/** The groups of a launch for `input` that apply: those of its integration and YOLO, and of what it was given - a task only where `task` is. */
+export function launchUses(input: LaunchInput, task = input.task !== undefined): LaunchUses {
+	return { framework: !!input.connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task, trust: true };
+}
+
 /** What a launch of `config` takes: Facade's integration, a task, a model and an effort, as `list_agents` tells agents (O6). */
 export function capabilitiesOf(cli: AgentCli, config: CliConfig): { readonly integration: boolean; readonly task: boolean; readonly model: boolean; readonly effort: boolean } {
 	const has = (group: ArgGroup) => (config.launch.arguments[group]?.length ?? 0) > 0;
-	const integration = !cli.custom || has('connect');
+	// A CLI that reads Facade's server from its folder has it there; any other only through its connect group,
+	// which the person can take out (L9).
+	const integration = !!cli.sharedServer || has('connect');
 	return { integration, task: integration && cli.task !== 'none' && (cli.task === 'terminal' || has('task')), model: has('model'), effort: has('effort') };
 }

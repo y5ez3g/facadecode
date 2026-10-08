@@ -42,10 +42,9 @@ export class Args {
 		return value.trim();
 	}
 
-	/** A string with something in it, trimmed, if it is given: an empty one counts as not given. */
+	/** A string with something in it, trimmed, if it is given: an empty one is refused, as a blank one is. */
 	optionalText(name: string): string | undefined {
-		const value = this.values[name];
-		return value === undefined || value === '' ? undefined : this.text(name);
+		return this.values[name] === undefined ? undefined : this.text(name);
 	}
 
 	/** True or false, if it is given. */

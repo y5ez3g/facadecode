@@ -13,8 +13,6 @@ import { isJsonObject, isStringArray } from '../base/json';
 import { withFileLock } from '../base/lock';
 import { Injected } from '../clis/cli';
 
-/** The `.gitignore` of a folder Facade made, which keeps all of it out of git. */
-const IGNORE_ALL = '*\n';
 /** What removing a folder fails with on Windows while a process has it as its current folder. */
 const IN_USE_CODES = new Set(['EBUSY', 'EPERM']);
 
@@ -240,8 +238,9 @@ export class Injections {
 			const entry = record.folders[key] ?? { users: [], files: {}, made: [], lines: [] };
 			const writes = this.decide(record.folders[key], folder, files, cli).filter(write => !write.there);
 			const made = foldersToMake(folder, writes.map(write => path.dirname(write.target)));
-			// A folder Facade makes keeps everything in it out of git by itself, in this worktree only.
-			const ignores = made.filter(each => !made.some(other => other !== each && isInside(each, other))).map(each => ({ file: `${each.split(path.sep).join('/')}/.gitignore`, target: path.join(folder, each, '.gitignore'), content: IGNORE_ALL }));
+			// A folder Facade makes keeps what Facade writes in it out of git by itself, in this worktree only - and
+			// nothing else: what an agent adds there is work of its own, which a deletion counts (O10).
+			const ignores = made.filter(each => !made.some(other => other !== each && isInside(each, other))).map(each => ({ file: `${each.split(path.sep).join('/')}/.gitignore`, target: path.join(folder, each, '.gitignore'), content: ignoreFileOf(path.join(folder, each), writes) }));
 			const all: FileWrite[] = [...writes, ...ignores];
 			const lines = git.exclude ? this.linesFor(folder, files, git, git.exclude).filter(line => !entry.lines.includes(line)) : [];
 			const exclude = git.exclude?.file;
@@ -296,9 +295,10 @@ export class Injections {
 	}
 
 	/**
-	 * The files of `folder` that Facade made there and nobody changed since, relative to it with forward
+	 * The files of `folder` that Facade wrote there and nobody changed since, relative to it with forward
 	 * slashes: not the person's work, for a worktree's deletion to count (AGENT-ORCHESTRATION.md, O5). A file
-	 * of the person's that holds Facade's part is not one: what it held before may be theirs.
+	 * of the person's that holds Facade's part counts as what it held before: whether that was a change of
+	 * theirs, git says once Facade's part is out of it, before the worktree is deleted.
 	 */
 	ownedUnchanged(folder: string): string[] {
 		return withFileLock(this.file, () => {
@@ -309,9 +309,6 @@ export class Injections {
 				return [];
 			}
 			return Object.entries(entry.files).filter(([file, written]) => {
-				if (written.theirs !== undefined) {
-					return false;
-				}
 				try {
 					const current = readBytes(path.join(folder, file));
 					return current !== undefined && hashOf(current) === written.hash;
@@ -759,6 +756,12 @@ function excludeLine(relative: string): string | undefined {
 	}
 	// The file alone, from the root, with any pattern characters escaped.
 	return `/${relative.split(path.sep).join('/').replace(/[*?[\\]/g, '\\$&')}`;
+}
+
+/** The `.gitignore` of `dir`, a folder Facade makes: itself, and the files of `writes` in it, each alone. */
+function ignoreFileOf(dir: string, writes: readonly FileWrite[]): string {
+	const lines = ['/.gitignore', ...writes.filter(write => isInside(write.target, dir)).map(write => excludeLine(path.relative(dir, write.target))).filter((line): line is string => line !== undefined)];
+	return `${[...new Set(lines)].join('\n')}\n`;
 }
 
 /** Which of `lines` an `info/exclude` does not have yet. */

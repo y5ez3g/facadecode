@@ -6,7 +6,7 @@
 import * as path from 'path';
 import { canonicalFolder } from '../base/files';
 import { isJsonObject } from '../base/json';
-import { AgentCli, CliConfig, launchArgs } from './cli';
+import { AgentCli, CliConfig, launchArgs, launchUses, launchValues } from './cli';
 import { launchOf, shown } from './config';
 
 /** The setting that holds the person's custom agents, by name. */
@@ -24,8 +24,8 @@ export interface CustomAgent {
  * in none of them: each group the person filled in applies as a built-in's does, one left out adds nothing.
  * So it gets YOLO, trust, Facade's tools, a model, an effort or a task only as far as the person said how.
  * In its arguments, `${mcpConfig}` stands for a file of its run that names Facade's MCP server in the
- * `mcpServers` form many CLIs read; `${folder}`, `${model}`, `${effort}`, `${task}` and the connection's
- * values as for a built-in. Where its name is not one an agent can have, `nameProblem` says why, and it is
+ * `mcpServers` form many CLIs read; the values every launch has - `${folder}`, `${repository}`, `${home}`,
+ * `${messagesDir}`, `${model}`, `${effort}`, `${task}` and the connection's - as for a built-in. Where its name is not one an agent can have, `nameProblem` says why, and it is
  * not started.
  */
 export function customAgentOf(name: string, value: unknown, nameProblem: string | undefined): CustomAgent {
@@ -71,13 +71,7 @@ export function customAgentOf(name: string, value: unknown, nameProblem: string 
 			const mcpConfig = path.join(input.runDir, `${input.slug}.mcp.json`);
 			return {
 				executable,
-				args: launchArgs(`${setting}.launch`, input.config, {
-					folder: input.folder,
-					...connection ? { mcpConfig, ...connection.values } : {},
-					...input.model !== undefined ? { model: input.model } : {},
-					...input.effort !== undefined ? { effort: input.effort } : {},
-					...input.task !== undefined ? { task: input.task } : {}
-				}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
+				args: launchArgs(`${setting}.launch`, input.config, { ...launchValues(input), ...connection ? { mcpConfig } : {} }, launchUses(input)),
 				env: input.config.launch.environment,
 				cwd: input.folder,
 				files: connection ? [{ path: mcpConfig, content: JSON.stringify({ mcpServers: { facade: { command: connection.mcp.command, args: connection.mcp.args, env: connection.mcp.env } } }, undefined, '\t') }] : [],

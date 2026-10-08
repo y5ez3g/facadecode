@@ -16,12 +16,13 @@ export interface OfferedAgent {
 
 /**
  * Agents: Start Agent... asks only which agent (AGENT-LAUNCHER.md, L3): the agent menu, and a script, give
- * it as `{ cli }`. Answers with its id; undefined where the person chose none.
+ * it as `{ cli, custom? }` - `custom` for the person's custom agent of that name. Answers with its id, and
+ * whether it is a custom agent; undefined where the person chose none.
  */
-export async function pickAgent(rawArgs: unknown, offered: readonly OfferedAgent[]): Promise<string | undefined> {
+export async function pickAgent(rawArgs: unknown, offered: readonly OfferedAgent[]): Promise<{ readonly id: string; readonly custom: boolean } | undefined> {
 	const args = isJsonObject(rawArgs) ? rawArgs : {};
 	if (typeof args.cli === 'string' && args.cli.trim()) {
-		return args.cli.trim();
+		return { id: args.cli.trim(), custom: args.custom === true };
 	}
 	if (!offered.length) {
 		const configure = vscode.l10n.t("Configure Agents");
@@ -31,8 +32,8 @@ export async function pickAgent(rawArgs: unknown, offered: readonly OfferedAgent
 		}
 		return undefined;
 	}
-	const pick = await vscode.window.showQuickPick(offered.map(each => ({ label: each.label, description: each.custom ? vscode.l10n.t("custom") : undefined, id: each.id })), { title: vscode.l10n.t("Start Agent"), placeHolder: vscode.l10n.t("Which agent?") });
-	return pick?.id;
+	const pick = await vscode.window.showQuickPick(offered.map(each => ({ label: each.label, description: each.custom ? vscode.l10n.t("custom") : undefined, agent: each })), { title: vscode.l10n.t("Start Agent"), placeHolder: vscode.l10n.t("Which agent?") });
+	return pick && { id: pick.agent.id, custom: pick.agent.custom };
 }
 
 /** The folder on the person's screen, as Facade's workbench says it; none where it says none, or is not Facade's. */

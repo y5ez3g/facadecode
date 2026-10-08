@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { canonicalFolder } from '../base/files';
-import { AgentCli, launchArgs, skillMarkdown } from './cli';
+import { AgentCli, launchArgs, launchUses, launchValues, skillMarkdown } from './cli';
 
 /** Where Facade's plugin goes in a folder: Antigravity finds plugins under `.agents/plugins/`. */
 const PLUGIN_DIR = '.agents/plugins/facade';
@@ -59,11 +59,7 @@ export const antigravityCli: AgentCli = {
 		return {
 			executable,
 			// The notice of its task is typed into its terminal, never given as an argument.
-			args: launchArgs(antigravityCli.setting + '.launch', input.config, {
-				...input.model !== undefined ? { model: input.model } : {},
-				...input.effort !== undefined ? { effort: input.effort } : {},
-				...connection?.values
-			}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: false, trust: true }),
+			args: launchArgs(antigravityCli.setting + '.launch', input.config, launchValues(input), launchUses(input, false)),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],

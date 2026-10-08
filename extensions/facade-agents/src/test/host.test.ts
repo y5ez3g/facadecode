@@ -7,7 +7,7 @@ import * as assert from 'assert';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { excludeIn, repositoryIn, trackedIn, untrackedIn, worktreesIn } from '../host/gitCli';
+import { changedFilesIn, excludeIn, repositoryIn, trackedIn, untrackedIn, worktreesIn } from '../host/gitCli';
 import { JsonFileState } from '../host/windowState';
 import { outcomeOf, tempDir } from './util';
 
@@ -108,9 +108,9 @@ suite('Host: git\'s records, read with git', function () {
 			trackedGone: /cannot change to/.test(await outcomeOf(trackedIn('git', gone, ['.mcp.json'])))
 		}, {
 			plain: undefined,
-			empty: { main: empty, worktree: 'trunk', head: undefined },
-			orphan: { main: orphan, worktree: 'new', head: undefined },
-			broken: { main: broken, worktree: 'main', head: undefined },
+			empty: { main: empty, mainCheckout: true, worktree: 'trunk', head: undefined },
+			orphan: { main: orphan, mainCheckout: true, worktree: 'new', head: undefined },
+			broken: { main: broken, mainCheckout: true, worktree: 'main', head: undefined },
 			gone: true,
 			excludePlain: undefined,
 			excludeGone: true,
@@ -119,7 +119,7 @@ suite('Host: git\'s records, read with git', function () {
 		});
 	});
 
-	test('in a repository: its main checkout, its HEAD, where its exclude file is, and which of some files it tracks - or a commit of it has - each taken as it is', async () => {
+	test('in a repository: its main checkout - a folder inside it is in it too, a worktree git added is not - its HEAD, where its exclude file is, which of some files it tracks - or a commit of it has - each taken as it is, and what deleting a worktree would lose, a change not staged first', async () => {
 		const lab = path.join(temp.dir, 'lab');
 		fs.mkdirSync(lab);
 		git(lab, 'init', '-q', '-b', 'main');
@@ -132,19 +132,30 @@ suite('Host: git\'s records, read with git', function () {
 		fs.writeFileSync(path.join(lab, '.agents', 'skills', 'facade', 'SKILL.md'), '# Ours');
 		git(lab, 'add', '.agents');
 
+		const added = path.join(temp.dir, 'lab-lint');
+		git(lab, 'worktree', 'add', '-q', '-b', 'lint', added);
+		fs.writeFileSync(path.join(added, '.mcp.json'), '{ "changed": true }');
+		fs.writeFileSync(path.join(added, 'notes.md'), 'new');
+
 		const repository = await repositoryIn('git', lab);
 		const exclude = await excludeIn('git', lab);
 		const files = ['.mcp.json', '.agents/skills/facade/SKILL.md', '.muse/hooks.json', '*.json'];
 		assert.deepStrictEqual({
-			repository: repository && { main: path.relative(temp.dir, repository.main), worktree: repository.worktree, head: repository.head === head },
+			repository: repository && { main: path.relative(temp.dir, repository.main), mainCheckout: repository.mainCheckout, worktree: repository.worktree, head: repository.head === head },
+			inside: (await repositoryIn('git', path.join(lab, '.agents')))?.mainCheckout,
+			worktree: (await repositoryIn('git', added))?.mainCheckout,
 			exclude: exclude && [path.relative(lab, exclude.file), path.relative(temp.dir, exclude.root)],
 			tracked: [...await trackedIn('git', lab, files)],
-			atCommit: [...await trackedIn('git', lab, files, head)]
+			atCommit: [...await trackedIn('git', lab, files, head)],
+			changed: [...await changedFilesIn('git', added)].sort()
 		}, {
-			repository: { main: 'lab', worktree: 'main', head: true },
+			repository: { main: 'lab', mainCheckout: true, worktree: 'main', head: true },
+			inside: true,
+			worktree: false,
 			exclude: [path.join('.git', 'info', 'exclude'), 'lab'],
 			tracked: ['.mcp.json', '.agents/skills/facade/SKILL.md'],
-			atCommit: ['.mcp.json']
+			atCommit: ['.mcp.json'],
+			changed: ['.mcp.json', 'notes.md']
 		});
 	});
 

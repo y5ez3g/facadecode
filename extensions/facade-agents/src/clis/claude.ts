@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { canonicalFolder } from '../base/files';
 import { isJsonObject } from '../base/json';
-import { AgentCli, Environment, launchArgs, skillMarkdown } from './cli';
+import { AgentCli, Environment, launchArgs, launchUses, launchValues, skillMarkdown } from './cli';
 import { homeOf } from './executable';
 
 /** The plugin that carries Facade's skills into a launch. */
@@ -66,6 +66,8 @@ export const claudeCli: AgentCli = {
 				quiet: ['--settings', '${settingsFile}'],
 				// It would leave its terminal waiting for someone to pick an answer.
 				questions: ['--disallowedTools', 'AskUserQuestion'],
+				// Its task's message is outside its folder, where it would ask before reading it with YOLO off.
+				messages: ['--add-dir', '${messagesDir}'],
 				yoloOn: ['--dangerously-skip-permissions'],
 				// Every tool of Facade's server, by the server's name.
 				yoloOff: ['--allowedTools', 'mcp__facade'],
@@ -116,15 +118,7 @@ export const claudeCli: AgentCli = {
 		const withSandbox = HAS_SANDBOX && !isJsonObject(settings.sandbox) ? { ...settings, sandbox: { enabled: !input.yolo } } : settings;
 		return {
 			executable,
-			args: launchArgs(claudeCli.setting + '.launch', input.config, {
-				mcpConfig: configFile,
-				settingsFile,
-				pluginDir,
-				...input.model !== undefined ? { model: input.model } : {},
-				...input.effort !== undefined ? { effort: input.effort } : {},
-				...input.task !== undefined ? { task: input.task } : {},
-				...connection?.values
-			}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
+			args: launchArgs(claudeCli.setting + '.launch', input.config, { ...launchValues(input), mcpConfig: configFile, settingsFile, pluginDir }, launchUses(input)),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [

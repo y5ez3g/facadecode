@@ -5,7 +5,7 @@
 
 import { formatJson, jsonLayoutOf, parseJson } from '../base/files';
 import { isJsonObject } from '../base/json';
-import { AgentCli, launchArgs, skillMarkdown } from './cli';
+import { AgentCli, launchArgs, launchUses, launchValues, skillMarkdown } from './cli';
 
 /**
  * Muse Code in its own UI. YOLO on: no approvals and no sandbox. YOLO off: its sandbox on; it has no way
@@ -50,12 +50,7 @@ export const museCli: AgentCli = {
 		const servers = connection && { facade: { command: connection.mcp.command, args: connection.mcp.args, env: { ...connection.mcp.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS}' } } };
 		return {
 			executable,
-			args: launchArgs(museCli.setting + '.launch', input.config, {
-				...input.model !== undefined ? { model: input.model } : {},
-				...input.effort !== undefined ? { effort: input.effort } : {},
-				...input.task !== undefined ? { task: input.task } : {},
-				...connection?.values
-			}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
+			args: launchArgs(museCli.setting + '.launch', input.config, launchValues(input), launchUses(input)),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],

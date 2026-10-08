@@ -828,6 +828,24 @@ suite('Core: after a reload', () => {
 		});
 	});
 
+	test('one the window cannot tell of as it comes back is asked after again, a while on: found, it goes on as it was; gone, it is lost, and nobody is told', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Up.', name: 'up', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Gone.', name: 'gone', folder: lab });
+		const after = reopen('@up #a1');
+		after.terminals.untold.add(1);
+		after.terminals.untold.add(2);
+		await after.facade.recover(true);
+		const meanwhile = agents(after);
+		after.terminals.untold.clear();
+		await sleep(15_000);
+
+		assert.deepStrictEqual({ meanwhile, agents: agents(after), told: after.person.told }, {
+			meanwhile: ['#a1 @up by @human running', '#a2 @gone by @human running'],
+			agents: ['#a1 @up by @human running', '#a2 @gone by @human lost: its terminal was gone when Facade came back'],
+			told: []
+		});
+	});
+
 	test('one found starting is let start: it stays starting while its CLI has not connected, however long, and starts once it does; nothing is closed, and nobody is told', async () => {
 		const starting = world.facade.startAgent(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Slow.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
@@ -1026,14 +1044,17 @@ suite('Core: what Facade puts into a folder', () => {
 		await world.startUp(PERSON, { cli: 'told', model: 'deep', effort: 'high', task: 'Two.', name: 'two', folder: lab });
 		const whileTheyRun = listed(lab);
 		const excluded = fs.readFileSync(exclude, 'utf8');
+		const ignoredWhileTheyRun = fs.readFileSync(path.join(lab, '.told', '.gitignore'), 'utf8');
 		const server = JSON.parse(fs.readFileSync(mcp, 'utf8'));
 		exits('one', 1);
 		const whileOneRuns = listed(lab);
 		exits('two', 2);
 
-		assert.deepStrictEqual({ whileTheyRun, excluded, server, whileOneRuns, after: listed(lab), excludedAfter: fs.readFileSync(exclude, 'utf8'), record: fs.existsSync(path.join(temp.dir, 'workspace', 'injected.json')) }, {
+		assert.deepStrictEqual({ whileTheyRun, excluded, ignored: ignoredWhileTheyRun, server, whileOneRuns, after: listed(lab), excludedAfter: fs.readFileSync(exclude, 'utf8'), record: fs.existsSync(path.join(temp.dir, 'workspace', 'injected.json')) }, {
 			whileTheyRun: ['.mcp.json', '.told', '.told/.gitignore', '.told/skills', '.told/skills/facade', '.told/skills/facade/SKILL.md'],
 			excluded: '/.mcp.json\n/.told/skills/facade/SKILL.md\n',
+			// Facade's own files alone: what an agent adds beside them is its work, which git shows.
+			ignored: '/.gitignore\n/skills/facade/SKILL.md\n',
 			server: { mcpServers: { facade: { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'] } } },
 			whileOneRuns: whileTheyRun,
 			after: [],
@@ -1308,6 +1329,17 @@ suite('Core: the person\'s own agents', () => {
 		});
 	});
 
+	test('the person\'s start whose CLI ends before it connects - an option it does not know, a login run out - failed, and the person is told, with a way to its terminal: nobody waits for that start\'s answer once its terminal runs', async () => {
+		const facts = await world.facade.startForPerson('arg', lab);
+		world.terminals.end('@arg #a1', { exitCode: 1, byThePerson: false });
+
+		assert.deepStrictEqual({ state: facts.state, agents: agents(world), told: world.person.told }, {
+			state: 'starting',
+			agents: ['#a1 @arg by @human failed: its CLI ended with exit code 1'],
+			told: ['@arg #a1 did not start: its CLI ended with exit code 1. (#a1\'s terminal)']
+		});
+	});
+
 	test('a script acting as the person that names no folder starts its agent in the folder on screen, and the branch it names is one checked out in that folder\'s repository', async () => {
 		world.dispose();
 		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs'] }, activeFolder: lab });
@@ -1390,6 +1422,45 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 			exists: false,
 			made: undefined,
 			told: ['@helper #a3 was stopped by @lead #a1. (#a3\'s terminal)']
+		});
+	});
+
+	test('work that comes while the agents in a worktree stop - an edit a CLI finished as it ended, a build\'s output - keeps the worktree: the agents are stopped, and the answer says what deleting it would lose', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		const late = world.terminals.onDidEnd(() => world.git.changes.set(clamp, { files: ['build/out.js'], unsaved: [] }));
+		const answer = await world.facade.stopAgent(lead, '#a2', { deleteWorktree: true });
+		late.dispose();
+
+		assert.deepStrictEqual({ worktree: answer.worktree, agents: agents(world), steps: world.git.steps, exists: fs.existsSync(clamp) }, {
+			worktree: { folder: clamp, deleted: false, why: 'it has work that deleting it would lose: 1 uncommitted or untracked file (build/out.js). Commit what should stay, or call again with discard_changes: true to lose it' },
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent, its worktree being deleted'],
+			steps: [`make clamp from aaaaaaa in ${lab}`],
+			exists: true
+		});
+	});
+
+	test('a stop that comes while a start opens its terminal ends the start: the terminal is closed once it is open, never left running, and the start says why; a second stop of an agent stopping joins the first, which says who stopped it and why', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		let open = () => { };
+		world.terminals.hold = new Promise<void>(resolve => open = resolve);
+		const start = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: lab }));
+		await sleep(0);
+		const stop = world.facade.stopAgent(lead, '#a2');
+		const joined = world.facade.stopAgent(PERSON, '#a2');
+		await sleep(0);
+		open();
+		world.terminals.hold = undefined;
+		const [stopped] = await Promise.all([stop, joined]);
+
+		assert.deepStrictEqual({ start: await start, stopped: stopped.agent.end?.reason, running: [...world.terminals.running], agents: agents(world) }, {
+			start: 'FAILED: Arg Code did not start as @clamp #a2: it was stopped with stop_agent',
+			stopped: 'with stop_agent',
+			running: ['@lead #a1'],
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent']
 		});
 	});
 
@@ -1479,20 +1550,23 @@ suite('Core: custom agents', () => {
 		});
 	});
 
-	test('a custom agent whose settings are wrong - no program, a name a built-in has, a part a launch does not have - is listed for the person, and refused to every start, naming each', async () => {
-		world.custom.arg = { path: 'arg' };
+	test('a custom agent whose settings are wrong - no program, a name a built-in has, a part a launch does not have - is listed for the person, and refused to every start, naming each; chosen from the agent menu, one named as a built-in is never starts the built-in in its place', async () => {
+		world.custom.arg = { path: '/opt/arg-dev/bin/arg' };
 		world.custom.broken = { launch: { arguments: { tsak: ['--x'] } } };
 		const outcomes = [
 			await outcomeOf(world.facade.startAgent(PERSON, { name: 'one', cli: 'broken', folder: lab })),
+			await outcomeOf(world.facade.startForPerson('arg', lab, true)),
 			await outcomeOf(world.facade.startForPerson('arg', lab))
 		];
 
-		assert.deepStrictEqual({ outcomes, startable: world.facade.startable().map(each => each.id) }, {
+		assert.deepStrictEqual({ outcomes, startable: world.facade.startable().map(each => each.id), launched: world.terminals.launched.map(each => [each.name, each.executable]) }, {
 			outcomes: [
 				'UNAVAILABLE: Facade cannot start broken until the person puts its settings right: facade.agents.custom.broken.path is not set: a custom agent needs the program to start; facade.agents.custom.broken.launch.arguments has tsak, which is no group of broken\'s arguments: it has warmUp, connect, quiet, questions, messages, yoloOn, yoloOff, model, effort, extra, task. Show Agent Launch shows them.',
+				'UNAVAILABLE: Facade cannot start arg until the person puts its settings right: facade.agents.custom.arg: arg is a built-in\'s id. Show Agent Launch shows them.',
 				'fulfilled'
 			],
-			startable: ['arg', 'told']
+			startable: ['arg', 'told'],
+			launched: [['@arg #a1', world.terminals.launched[0]?.executable]]
 		});
 	});
 });

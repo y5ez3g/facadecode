@@ -197,9 +197,14 @@ export class AgentTable {
 		return agents.filter((agent): agent is LiveAgent => isLive(agent) && agent.name === name);
 	}
 
-	/** The file message `id` is in: a task's, until AGENT-MESSAGES.md. */
+	/** Where the workspace's messages are: tasks, until AGENT-MESSAGES.md. */
+	get messagesDir(): string {
+		return path.join(this.options.dir, MESSAGES_DIR);
+	}
+
+	/** The file message `id` is in. */
 	messageFileOf(id: number): string {
-		return path.join(this.options.dir, MESSAGES_DIR, `${id}.md`);
+		return path.join(this.messagesDir, `${id}.md`);
 	}
 
 	/** The file the plan of the launch of the agent `id` is in: what its terminal runs, and its delays. */

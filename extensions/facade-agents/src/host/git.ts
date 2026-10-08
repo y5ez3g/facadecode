@@ -45,8 +45,8 @@ export class HostGit implements Git {
 		return { files, unsaved };
 	}
 
-	async deleteWorktree(folder: string): Promise<void> {
-		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder));
+	async deleteWorktree(folder: string, options: { readonly discardChanges: boolean; readonly ownFiles: readonly string[] }): Promise<void> {
+		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder), { discardChanges: options.discardChanges, ownFiles: options.ownFiles });
 	}
 
 	async excludeOf(folder: string): Promise<{ readonly file: string; readonly root: string } | undefined> {

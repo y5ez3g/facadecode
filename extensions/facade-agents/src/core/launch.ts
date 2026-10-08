@@ -35,6 +35,8 @@ export interface Run {
 	readonly task?: string;
 	readonly worktree: string;
 	readonly folder: string;
+	/** The main checkout of its folder's repository, which its CLI is given the person's trust in; the folder itself outside any. */
+	readonly repository: string;
 	/** Its YOLO: the setting for the person's, its creator's for an agent's. */
 	readonly yolo: boolean;
 	/** Whether the agent framework's integration goes into the launch: the framework was on, and the CLI's launch connects it. */
@@ -90,10 +92,11 @@ interface Startup {
 	readonly up: DeferredPromise<{ readonly why?: string }>;
 	/** Answers the start as not confirmed once its time is over; cleared by its MCP server's hello. */
 	timer: ReturnType<typeof setTimeout> | undefined;
-	/** The caller whose start waits for it. */
-	readonly waiter: Caller;
-	/** Whether nobody waits for the start's answer - the person's own, from the agent menu - so that the person is told should it not be confirmed. */
-	readonly tell: boolean;
+	/**
+	 * Whether the start's caller hears how it goes: a tool call's throughout; the person's own, from the
+	 * agent menu, only until its terminal is up - from then on, the person is told.
+	 */
+	answered: boolean;
 }
 
 /**
@@ -108,6 +111,8 @@ export class Launcher implements Disposable {
 
 	/** The agents on their way up whose starts wait for them, by number. */
 	private readonly startups = new Map<number, Startup>();
+	/** The launches under way, by number: each settles once its terminal is open, or it gave up. */
+	private readonly opening = new Map<number, Promise<void>>();
 	/** The agents whose task notice is being typed into their terminals, by number: once each. */
 	private readonly typing = new Set<number>();
 	private disposed = false;
@@ -137,6 +142,8 @@ export class Launcher implements Disposable {
 		try {
 			const { spec } = this.launchOf(installed, {
 				folder: run.folder,
+				repository: run.repository,
+				messagesDir: table.messagesDir,
 				yolo: run.yolo,
 				...(run.task !== undefined ? { task: taskNotice(opening, 1, path.join(table.dir, 'messages', '1.md')) } : {}),
 				...applied(run),
@@ -146,7 +153,7 @@ export class Launcher implements Disposable {
 				runDir: table.runsDir,
 				slug: 'check'
 			});
-			trustTarget(installed.cli, installed.config, { folder: run.folder, repository: run.folder }, env);
+			trustTarget(installed.cli, installed.config, { folder: run.folder, repository: run.repository }, env);
 			return spec.injected;
 		} catch (err) {
 			throw new FacadeError('UNAVAILABLE', `${installed.cli.displayName} cannot be started as its settings are: ${messageOf(err)}`);
@@ -174,7 +181,9 @@ export class Launcher implements Disposable {
 	 * Records `run` as a new agent of the caller, starts its CLI in its terminal, and - with `wait` - waits
 	 * until it has started, or its time is over. Should its launch fail on the way, or its process end before
 	 * it started, the agent is ended as failed, and the call fails with why. Without `wait` it answers once
-	 * its terminal runs, the agent starting; the person is told should its start not be confirmed in time.
+	 * its terminal runs, the agent starting; from then on the person is told should its start not be
+	 * confirmed in time, or its process end before it started. A stop that comes before its terminal opens
+	 * ends the start there: that terminal is never opened (AGENT-ORCHESTRATION.md, O9).
 	 */
 	async launch(caller: Caller, installed: InstalledCli, run: Run, options: { readonly wait: boolean; readonly progress?: (message: string) => void }): Promise<Launched> {
 		const { table, ports, setup } = this.context;
@@ -200,11 +209,15 @@ export class Launcher implements Disposable {
 		const { agent } = started;
 		const label = describe(agent);
 		const opening = setup.opening({ id: agent.id, name: agent.name, cliName: cli.displayName }, creator ?? PERSON);
-		const startup = this.watch(agent, caller, run.integration, !options.wait);
+		const startup = this.watch(agent, run.integration);
+		const opened = new DeferredPromise<void>();
+		this.opening.set(agent.id, opened.p);
 		try {
 			const connection: Connection | undefined = !run.integration ? undefined : cli.sharedServer ? { mcp: setup.sharedMcpServer(), values: {} } : setup.connection(started.tokenFile);
 			const { spec, args, throughCmd } = this.launchOf(installed, {
 				folder: run.folder,
+				repository: run.repository,
+				messagesDir: table.messagesDir,
 				yolo: run.yolo,
 				...(notice === 'argument' && agent.taskMessage !== undefined ? { task: taskNotice(opening, agent.taskMessage, table.messageFileOf(agent.taskMessage)) } : {}),
 				...applied(run),
@@ -224,6 +237,10 @@ export class Launcher implements Disposable {
 			this.stillOpen();
 			// A server the same for every launch finds the agent from its environment.
 			const env = cli.sharedServer && run.integration ? { ...spec.env, ...setup.agentEnv(started.token) } : spec.env;
+			// A stop that came meanwhile ends the start here, before it has a terminal.
+			if (table.get(agent.id)?.state !== 'starting') {
+				throw new Error('it was stopped before its terminal opened');
+			}
 			this.context.log(`Starting ${label} (${cli.displayName}) in ${run.folder}, the worktree ${run.worktree}, YOLO ${run.yolo ? 'on' : 'off'}${run.integration ? '' : ', without Facade\'s tools'}${throughCmd ? ', through cmd.exe' : ''}.`);
 			options.progress?.(`Starting ${label}.`);
 			const { processId } = await ports.terminals.launch({ id: agent.id, name: label, command: cli.custom ? spec.executable : cli.command, executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined && !options.wait });
@@ -240,15 +257,28 @@ export class Launcher implements Disposable {
 			if (err instanceof FacadeError && err.code === 'UNAVAILABLE') {
 				throw err;
 			}
-			await this.context.fail(agent, messageOf(err));
+			// One stopped meanwhile is the stop's to record.
+			if (table.get(agent.id)?.state === 'starting') {
+				await this.context.fail(agent, messageOf(err));
+			}
 			throw didNotStart(cli, agent, messageOf(err));
+		} finally {
+			this.opening.delete(agent.id);
+			opened.complete();
 		}
 		// A launch without Facade's integration has started once its process runs.
 		if (!run.integration) {
 			this.isUp(agent);
 		}
 		if (!options.wait) {
-			return { agent: table.get(agent.id) ?? agent, status: 'started' };
+			// Its process may have ended as its terminal opened: the person's start says so, as it would have said a failure before.
+			const now = table.get(agent.id) ?? agent;
+			if (now.end) {
+				throw didNotStart(cli, agent, now.end.reason);
+			}
+			// From here on, the person is told how it goes: nobody waits for this start's answer.
+			startup.answered = false;
+			return { agent: now, status: 'started' };
 		}
 		options.progress?.(`Waiting for @${agent.name} to start.`);
 		let up: { readonly why?: string };
@@ -291,9 +321,14 @@ export class Launcher implements Disposable {
 		}
 	}
 
-	/** The caller whose start waits for the agent `id` to come up, if one does. */
-	waiterOf(id: number): Caller | undefined {
-		return this.startups.get(id)?.waiter;
+	/** Whether a start waits for the agent `id` and answers its caller how it goes - a tool call's, or the person's while its terminal is not up. */
+	answers(id: number): boolean {
+		return this.startups.get(id)?.answered ?? false;
+	}
+
+	/** Settles once a launch under way for the agent `id` has opened its terminal, or given up; at once where none is under way. */
+	whenOpened(id: number): Promise<void> {
+		return this.opening.get(id) ?? Promise.resolve();
 	}
 
 	/**
@@ -328,7 +363,7 @@ export class Launcher implements Disposable {
 	 * Where nobody waits for that answer - the person's own start, from the agent menu - the person is told,
 	 * once, with a way to its terminal; a script's start that waits answers the script instead.
 	 */
-	private watch(agent: Agent, waiter: Caller, integration: boolean, tell: boolean): Startup {
+	private watch(agent: Agent, integration: boolean): Startup {
 		const ms = this.timing().startTimeoutMs;
 		const startup: Startup = {
 			up: new DeferredPromise<{ readonly why?: string }>(),
@@ -338,8 +373,7 @@ export class Launcher implements Disposable {
 					? `it has not started within ${Math.round(ms / 1000)} seconds: its CLI is open but has not connected to Facade, and may be slow, or waiting for an answer on its screen`
 					: `its process has not started within ${Math.round(ms / 1000)} seconds`);
 			}, ms),
-			waiter,
-			tell
+			answered: true
 		};
 		// Seen by the start that waits for it: never a rejection nobody handles.
 		startup.up.p.catch(() => undefined);
@@ -356,7 +390,7 @@ export class Launcher implements Disposable {
 		this.startups.delete(agent.id);
 		clearTimeout(startup.timer);
 		this.context.log(`${describe(agent)} is not confirmed to have started: ${why}.`);
-		if (startup.tell && this.isRunning(agent)) {
+		if (!startup.answered && this.isRunning(agent)) {
 			// One nonmodal notice for the person's own: its terminal stays theirs to use (AGENT-LAUNCHER.md, L5).
 			this.context.ports.person.tell(l10n.t("{0} is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.", describe(agent)), agent.id);
 		}
@@ -438,7 +472,7 @@ export class Launcher implements Disposable {
 
 	/** How long the core waits, as the person sets it now. */
 	private timing(): Timing {
-		return this.context.timing?.() ?? { startTimeoutMs: START_TIMEOUT_MS };
+		return timingOf(this.context.timing);
 	}
 
 	/** Whether the window is open and `agent` has not exited: what is done for it goes on. */
@@ -467,17 +501,31 @@ export class Launcher implements Disposable {
 		return { exclude, tracked, untracked };
 	}
 
-	/** Runs `work` on its own: should it fail, the log says what failed and why, and nothing is left unhandled. */
 	private background(what: string, work: Promise<unknown>): void {
-		work.catch(err => this.context.log(`${what} failed: ${messageOf(err)}`));
+		inBackground(what, work, message => this.context.log(message));
 	}
 
 	/** After each of its waits: a window that closed meanwhile does nothing more, and says so. */
 	private stillOpen(): void {
 		if (this.disposed) {
-			throw new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
+			throw windowClosed();
 		}
 	}
+}
+
+/** How long the core waits, as `timing` says the person sets it now; two minutes where nothing does. */
+export function timingOf(timing: (() => Timing) | undefined): Timing {
+	return timing?.() ?? { startTimeoutMs: START_TIMEOUT_MS };
+}
+
+/** Runs `work` on its own: should it fail, `log` says what failed and why, and nothing is left unhandled. */
+export function inBackground(what: string, work: Promise<unknown>, log: (message: string) => void): void {
+	work.catch(err => log(`${what} failed: ${messageOf(err)}`));
+}
+
+/** What a call answers once the window closed under it: it does nothing more. */
+export function windowClosed(): FacadeError {
+	return new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
 }
 
 /** The model and the effort a launch gives its CLI: those the caller gave that its launch has a group for. */

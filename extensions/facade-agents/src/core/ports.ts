@@ -66,6 +66,8 @@ export interface Terminals {
 export interface Repository {
 	/** Its main checkout's folder. */
 	readonly main: string;
+	/** Whether the folder is in the main checkout - its root, or a folder inside it - rather than in a worktree git added: never deleted. */
+	readonly mainCheckout: boolean;
 	/**
 	 * The worktree the folder is, by its label: the branch checked out in it - the main checkout's too - or
 	 * its folder's own name on a detached HEAD. The folder is what names a worktree.
@@ -110,8 +112,12 @@ export interface Git {
 	makeWorktree(main: string, branch: string, startPoint: string): Promise<string>;
 	/** What deleting the worktree `folder` would lose. */
 	changesIn(folder: string): Promise<WorktreeChanges>;
-	/** Deletes the worktree `folder` as Delete Worktree does, with nothing asked, its branch kept; rejects with why it could not. */
-	deleteWorktree(folder: string): Promise<void>;
+	/**
+	 * Deletes the worktree `folder` as Delete Worktree does, with nothing asked, its branch kept; rejects with
+	 * why it could not. Changes git would lose, as the window finds them deleting it, refuse it unless
+	 * `discardChanges` - all but `ownFiles`, what Facade put there that nobody changed.
+	 */
+	deleteWorktree(folder: string, options: { readonly discardChanges: boolean; readonly ownFiles: readonly string[] }): Promise<void>;
 	/**
 	 * The `info/exclude` of the repository `folder` is in, which git reads as a `.gitignore` of its
 	 * own for every worktree, and the root of `folder`'s worktree, where its lines start from;

@@ -20,7 +20,7 @@ import { isLedgerHeld } from '../record/ledger';
 import { injectedFile } from '../record/paths';
 import { FacadeError } from './errors';
 import { InjectionUser, Injections } from './injections';
-import { Launcher, START_TIMEOUT_MS } from './launch';
+import { inBackground, Launched, Launcher, timingOf, windowClosed } from './launch';
 import { AgentSetup, CliCatalog, Disposable, Ports, Repository, TerminalEnd, Timing } from './ports';
 
 /**
@@ -35,6 +35,12 @@ const TAKE_BACK_TRIES = 12;
 const INTERRUPTED = 130;
 /** How many of the files a worktree's deletion would lose a refusal names before saying how many more. */
 const SHOWN_CHANGES = 10;
+/**
+ * How long Facade waits to ask again after an agent whose process the window could not tell of as Facade
+ * came back, and how many times: two minutes, a pty host's slowest start.
+ */
+const FIND_AGAIN_MS = 15_000;
+const FIND_AGAIN_TRIES = 8;
 
 /** What the core is made with: the record, the window's ports, the CLIs, and what agents are given. */
 export interface FacadeOptions {
@@ -278,11 +284,13 @@ export class Facade implements Disposable {
 	/**
 	 * Starts the agent the person chose from the agent menu or Start Agent: in `folder`, the one on screen,
 	 * named after its CLI's id or the custom agent's name, given no model, effort or task, its YOLO the
-	 * setting's (AGENT-LAUNCHER.md, L3). Its terminal comes up in front, focused; the call answers once it
-	 * runs, the agent starting until it connects. A start refused leaves nothing behind.
+	 * setting's (AGENT-LAUNCHER.md, L3). `custom` says it is the custom agent of that name, never a built-in
+	 * started in its place. Its terminal comes up in front, focused; the call answers once it runs, the agent
+	 * starting until it connects. A start refused leaves nothing behind.
 	 */
-	async startForPerson(cli: string, folder: string): Promise<AgentFacts> {
-		const { installed, config } = await this.startableHere(cli, folder);
+	async startForPerson(cli: string, folder: string, custom = false): Promise<AgentFacts> {
+		this.assertNotDeleting(folder);
+		const { installed, config } = await this.startableHere(cli, folder, custom);
 		const yolo = this.yolo(PERSON);
 		const integration = this.options.clis.framework() && capabilitiesOf(installed.cli, config).integration;
 		const name = this.nameOf(installed.cli.id);
@@ -290,11 +298,12 @@ export class Facade implements Disposable {
 		const worktree = repository?.worktree ?? path.basename(folder);
 		const env = await this.environmentOf(installed, folder);
 		this.stillOpen();
-		const files = this.launcher.check(installed, { folder, yolo, integration, ignored: [] }, env);
+		const run = { ignored: [], folder, repository: repository?.main ?? folder, yolo, integration };
+		const files = this.launcher.check(installed, run, env);
 		this.launcher.checkFiles(installed, files, folder);
 		this.stillOpen();
-		this.trust(installed, { folder, repository: repository?.main ?? folder }, env);
-		const { agent } = await this.launcher.launch(PERSON, installed, { name, ignored: [], worktree, folder, yolo, integration }, { wait: false });
+		this.trust(installed, { folder, repository: run.repository }, env);
+		const { agent } = await this.launcher.launch(PERSON, installed, { ...run, name, worktree }, { wait: false });
 		return this.factsOf(agent);
 	}
 
@@ -331,7 +340,8 @@ export class Facade implements Disposable {
 		const env = await this.environmentOf(installed, home);
 		this.stillOpen();
 		// Recorded as asked for; given to the CLI only where its launch has a group for it.
-		const run = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ignored, task, folder: home, yolo, integration };
+		const repository = place.kind === 'new' ? place.repository.main : place.main;
+		const run = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ignored, task, folder: home, repository, yolo, integration };
 		const files = this.launcher.check(installed, run, env);
 		this.launcher.checkFiles(installed, files, place.kind === 'new' ? undefined : place.folder);
 		this.stillOpen();
@@ -354,12 +364,20 @@ export class Facade implements Disposable {
 
 		// Wherever it starts, the CLI is given the person's trust in its folder's repository - or in the folder,
 		// outside any - so that it does not stop to ask.
+		// A worktree made for a start that fails stays, its branch with it: the answer says where (O4).
+		const kept = place.kind === 'new' ? ` The worktree ${worktree} was made for it, at ${folder}, and stays, with its branch: start an agent there by its folder, or delete it.` : '';
 		try {
-			this.trust(installed, { folder, repository: place.kind === 'new' ? place.repository.main : place.main }, env);
+			this.trust(installed, { folder, repository }, env);
 		} catch (err) {
-			throw new FacadeError('FAILED', `${messageOf(err)}${place.kind === 'new' ? ` The worktree ${worktree} was made, at ${folder}: start the child there by its folder once that is put right.` : ''}`);
+			throw new FacadeError('FAILED', `${messageOf(err)}${kept}`);
 		}
-		const { agent, status, why } = await this.launcher.launch(caller, installed, { ...run, name, worktree, folder }, { wait: true, ...(progress ? { progress } : {}) });
+		let launched: Launched;
+		try {
+			launched = await this.launcher.launch(caller, installed, { ...run, name, worktree, folder }, { wait: true, ...(progress ? { progress } : {}) });
+		} catch (err) {
+			throw kept && err instanceof FacadeError && err.code === 'FAILED' ? new FacadeError(err.code, `${err.message}.${kept}`, err.outcome) : err;
+		}
+		const { agent, status, why } = launched;
 		return { status, ...(why !== undefined ? { why } : {}), ...this.factsOf(agent), newWorktree: place.kind === 'new' };
 	}
 
@@ -404,10 +422,10 @@ export class Facade implements Disposable {
 			return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded: false, stopped: [this.factsOf(this.table.get(agent.id) ?? agent)] };
 		}
 
-		// A main checkout, or a folder outside git, is never deleted: the agent alone is stopped.
+		// A main checkout - or a folder in one - or a folder outside git, is never deleted: the agent alone is stopped.
 		const folder = agent.folder;
 		const repository = await this.ports.git.repositoryOf(folder);
-		if (!repository || isEqualPath(repository.main, folder)) {
+		if (!repository || repository.mainCheckout) {
 			if (!alreadyEnded) {
 				await this.stopOne(agent, by, 'with stop_agent');
 			}
@@ -432,8 +450,15 @@ export class Facade implements Disposable {
 				throw new FacadeError('UNAVAILABLE', `Not every agent in ${folder} has ended yet, so it was not deleted: ${stopped.filter(each => each.state !== 'ended').map(each => describe(each)).join(', ')} ${stopped.filter(each => each.state !== 'ended').length === 1 ? 'is' : 'are'} still stopping. Call stop_agent with delete_worktree again once it has ended.`, { outcome: 'pending', agent: agent.id });
 			}
 			this.stillOpen();
+			// Looked at again, the agents gone and what Facade put there taken back: what came meanwhile - an edit
+			// a CLI finished as it ended, a build's output - is work too, and is not deleted unasked.
+			const since = options.discardChanges ? undefined : await this.changesIn(folder);
+			this.stillOpen();
+			if (since) {
+				return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped, worktree: { folder, deleted: false, why: `it has work that deleting it would lose: ${since}. Commit what should stay, or call again with discard_changes: true to lose it` } };
+			}
 			try {
-				await this.ports.git.deleteWorktree(folder);
+				await this.ports.git.deleteWorktree(folder, { discardChanges: !!options.discardChanges, ownFiles: this.ownFilesIn(folder) });
 			} catch (err) {
 				return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped, worktree: { folder, deleted: false, why: messageOf(err) } };
 			}
@@ -468,27 +493,28 @@ export class Facade implements Disposable {
 			}
 		}
 		const gone: LiveAgent[] = [];
+		const untold: LiveAgent[] = [];
 		let cameBack = false;
 		for (const agent of this.liveAgents()) {
-			// One whose terminal the window does not answer for keeps neither the others nor Facade from coming back.
+			// One whose terminal the window does not answer for keeps neither the others nor Facade from coming
+			// back: it is asked after again, a while on.
 			try {
 				if (await this.ports.terminals.isAlive(agent.id)) {
 					cameBack = true;
-					if (agent.state === 'stopping') {
-						// Set out to be stopped before the reload: stopped again.
-						this.background(`Stopping ${describe(agent)} again`, this.stopOne(agent, agent.stopping?.by, agent.stopping?.reason ?? 'with stop_agent'));
-					} else {
-						this.launcher.resume(agent);
-					}
+					this.goOn(agent);
 				} else {
 					gone.push(agent);
 				}
 			} catch (err) {
-				this.log(`Coming back to ${describe(agent)} failed: ${messageOf(err)}`);
+				this.log(`Coming back to ${describe(agent)} failed: ${messageOf(err)}. Facade asks again in a while.`);
+				untold.push(agent);
 			}
 			if (this.disposed) {
 				return;
 			}
+		}
+		if (untold.length) {
+			this.background('Finding the agents the window could not tell of', this.findAgain(untold));
 		}
 		// The window before was closed: another workspace's, or this workspace's and not reloaded - not this
 		// very window, whose extension host started again, and not Facade letting go of its agents
@@ -515,6 +541,59 @@ export class Facade implements Disposable {
 		}
 	}
 
+	/** An agent found again as Facade came back: one set out to be stopped is stopped again; any other goes on as it was. */
+	private goOn(agent: LiveAgent): void {
+		if (agent.state === 'stopping') {
+			this.background(`Stopping ${describe(agent)} again`, this.stopOne(agent, agent.stopping?.by, agent.stopping?.reason ?? 'with stop_agent'));
+		} else {
+			this.launcher.resume(agent);
+		}
+	}
+
+	/**
+	 * Asks again, a while on, after the agents whose processes the window could not tell of as Facade came
+	 * back (AGENT-LAUNCHER.md, L12): one found goes on as it was; one gone ended unseen - stopped, had Facade
+	 * set out to stop it, else lost, or failed had it not started - and nobody is told; one still not told of
+	 * is asked after again, a few times, and then left as it is, which the log says.
+	 */
+	private async findAgain(agents: readonly LiveAgent[]): Promise<void> {
+		let left = [...agents];
+		for (let tries = 0; left.length && tries < FIND_AGAIN_TRIES; tries++) {
+			await timeout(FIND_AGAIN_MS);
+			if (this.disposed) {
+				return;
+			}
+			const still: LiveAgent[] = [];
+			for (const each of left) {
+				const agent = this.table.get(each.id);
+				if (!isLive(agent)) {
+					continue;
+				}
+				let alive: boolean;
+				try {
+					alive = await this.ports.terminals.isAlive(agent.id);
+				} catch {
+					still.push(agent);
+					continue;
+				}
+				if (this.disposed) {
+					return;
+				}
+				if (alive) {
+					this.goOn(agent);
+				} else if (agent.state === 'stopping') {
+					this.ended(agent, 'stopped', agent.stopping?.reason ?? 'with stop_agent', { ...(agent.stopping?.by !== undefined ? { by: agent.stopping.by } : {}) });
+				} else {
+					this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', 'its terminal was gone when Facade came back', { quiet: true });
+				}
+			}
+			left = still;
+		}
+		for (const agent of left) {
+			this.log(`Whether ${describe(agent)} still runs is not known: the window could not tell. It stays as it was; closing its tab, or stop_agent, ends it.`);
+		}
+	}
+
 	/**
 	 * Stops one agent, as closing its tab does: Facade records that it set out to stop it - by whom, and why -
 	 * ends its process, or its start if it has no process yet, and records its end once its process has ended.
@@ -522,11 +601,20 @@ export class Facade implements Disposable {
 	 * ended within the timeout.
 	 */
 	private async stopOne(agent: Agent, by: StoppedBy | undefined, reason: string): Promise<void> {
-		if (!isLive(this.table.get(agent.id))) {
+		const current = this.table.get(agent.id);
+		if (!isLive(current)) {
 			return;
 		}
-		this.table.stopping(agent.id, reason, by);
-		this.launcher.ended(agent.id, `it was stopped ${reason}`);
+		// A stop of one stopping already joins it: who stops it, and why, are the first stop's (O5).
+		const first = current.state === 'stopping' ? current.stopping : undefined;
+		const stopBy = first ? first.by : by;
+		const why = first?.reason ?? reason;
+		if (!first) {
+			this.table.stopping(agent.id, why, stopBy);
+			this.launcher.ended(agent.id, `it was stopped ${why}`);
+		}
+		// A launch under way opens its terminal first, or gives up seeing the stop: never one afterwards (O9).
+		await this.launcher.whenOpened(agent.id);
 		const ms = this.timing().startTimeoutMs;
 		const deadline = Date.now() + ms;
 		for (; ;) {
@@ -543,19 +631,14 @@ export class Facade implements Disposable {
 		}
 		const now = this.table.get(agent.id);
 		if (isLive(now)) {
-			this.ended(now, 'stopped', reason, { ...(by !== undefined ? { by } : {}) });
+			this.ended(now, 'stopped', why, { ...(stopBy !== undefined ? { by: stopBy } : {}) });
 		}
 	}
 
 	/** What deleting `folder` would lose, as a refusal names it - besides what Facade put there and nobody changed; undefined where nothing would be lost. */
 	private async changesIn(folder: string): Promise<string | undefined> {
 		const changes = await this.ports.git.changesIn(folder);
-		let owned: readonly string[] = [];
-		try {
-			owned = this.injections.ownedUnchanged(folder);
-		} catch (err) {
-			this.log(`What Facade put into ${folder} could not be read: ${messageOf(err)}`);
-		}
+		const owned = this.ownFilesIn(folder);
 		const files = changes.files.filter(file => !owned.includes(file));
 		if (!files.length && !changes.unsaved.length) {
 			return undefined;
@@ -565,6 +648,23 @@ export class Facade implements Disposable {
 			...files.length ? [`${files.length} uncommitted or untracked ${files.length === 1 ? 'file' : 'files'} (${named(files)})`] : [],
 			...changes.unsaved.length ? [`${changes.unsaved.length} unsaved ${changes.unsaved.length === 1 ? 'editor' : 'editors'} (${named(changes.unsaved)})`] : []
 		].join(' and ');
+	}
+
+	/** The files Facade put into `folder` that nobody changed since: no one's work. None where its record cannot be read. */
+	private ownFilesIn(folder: string): readonly string[] {
+		try {
+			return this.injections.ownedUnchanged(folder);
+		} catch (err) {
+			this.log(`What Facade put into ${folder} could not be read: ${messageOf(err)}`);
+			return [];
+		}
+	}
+
+	/** Refuses a start in a worktree being deleted. */
+	private assertNotDeleting(folder: string): void {
+		if ([...this.deleting].some(each => isEqualPath(each, folder))) {
+			throw new FacadeError('REFUSED', `${folder} is being deleted: no agent starts there.`);
+		}
 	}
 
 	/**
@@ -584,9 +684,7 @@ export class Facade implements Disposable {
 		if (folder === undefined) {
 			throw new FacadeError('INVALID', 'folder is required here: the person has no folder on screen. Name a folder of the window by its absolute path.');
 		}
-		if ([...this.deleting].some(each => isEqualPath(each, folder))) {
-			throw new FacadeError('REFUSED', `${folder} is being deleted: no agent starts there.`);
-		}
+		this.assertNotDeleting(folder);
 		const repository = await this.ports.git.repositoryOf(folder);
 		if (!newWorktree) {
 			return { kind: 'folder', folder, worktree: repository?.worktree ?? path.basename(folder), main: repository?.main ?? folder };
@@ -677,7 +775,8 @@ export class Facade implements Disposable {
 		if (this.disposed) {
 			return undefined;
 		}
-		const waiter = this.launcher.waiterOf(agent.id);
+		// Read before the start that waits for it, if one does, hears of its end.
+		const answered = this.launcher.answers(agent.id);
 		const end = this.table.end(agent.id, kind, reason, { ...(details.by !== undefined ? { by: details.by } : {}), ...(details.exitCode !== undefined ? { exitCode: details.exitCode } : {}) });
 		if (!end) {
 			return undefined;
@@ -685,10 +784,10 @@ export class Facade implements Disposable {
 		this.log(`${describe(agent)} ended (${kind}): ${reason}`);
 		this.launcher.ended(agent.id, reason);
 		this.withdraw(agent);
-		// A start that waits for it says how it failed itself; what the person did is no news to them.
+		// A start that answers its caller says how it failed itself; what the person did is no news to them.
 		const unexpected = (kind === 'exited' && details.exitCode !== 0 && details.exitCode !== INTERRUPTED)
 			|| (kind === 'stopped' && typeof details.by === 'number')
-			|| (kind === 'failed' && waiter === undefined);
+			|| (kind === 'failed' && !answered);
 		if (agent.creator === undefined && !details.quiet && unexpected) {
 			this.ports.person.tell(endNotice(agent, end, this.table.whoIs(end.by)), agent.id);
 		}
@@ -785,12 +884,13 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * The agent `id` names - a built-in by its id, or a custom agent by its name - as the person has Facade
-	 * start it, found as a terminal in `folder` would find it. Refused, saying why and what can be started:
-	 * one turned off, one not on this machine, and one whose settings are wrong.
+	 * The agent `id` names - a built-in by its id, or a custom agent by its name; with `custom`, only the
+	 * custom agent - as the person has Facade start it, found as a terminal in `folder` would find it.
+	 * Refused, saying why and what can be started: one turned off, one not on this machine, and one whose
+	 * settings are wrong.
 	 */
-	private async startableHere(id: string, folder: string): Promise<{ readonly installed: InstalledCli; readonly config: CliConfig }> {
-		const found = this.cliOf(id);
+	private async startableHere(id: string, folder: string, custom = false): Promise<{ readonly installed: InstalledCli; readonly config: CliConfig }> {
+		const found = this.cliOf(id, custom);
 		const startable = () => this.startable().map(each => each.id).join(', ') || 'none';
 		if (!found) {
 			throw new FacadeError('NOT_FOUND', `${id} is neither a CLI Facade starts nor a custom agent of the person's. It starts: ${startable()}.`);
@@ -812,9 +912,12 @@ export class Facade implements Disposable {
 		return { installed, config };
 	}
 
-	/** A built-in by its id, or a custom agent by its name, as the person has Facade start it now. */
-	private cliOf(id: string): { readonly cli: AgentCli; readonly config: CliConfig } | undefined {
-		const builtIn = this.options.clis.known.find(cli => cli.id === id);
+	/**
+	 * A built-in by its id, or a custom agent by its name - with `custom`, only the custom agent: one named as
+	 * a built-in is, which its settings say is wrong - as the person has Facade start it now.
+	 */
+	private cliOf(id: string, custom = false): { readonly cli: AgentCli; readonly config: CliConfig } | undefined {
+		const builtIn = custom ? undefined : this.options.clis.known.find(cli => cli.id === id);
 		return builtIn ? { cli: builtIn, config: this.options.clis.configOf(builtIn) } : this.options.clis.custom().find(each => each.cli.id === id);
 	}
 
@@ -936,12 +1039,11 @@ export class Facade implements Disposable {
 
 	/** How long the core waits, as the person sets it now. */
 	private timing(): Timing {
-		return this.options.timing?.() ?? { startTimeoutMs: START_TIMEOUT_MS };
+		return timingOf(this.options.timing);
 	}
 
-	/** Runs `work` on its own: should it fail, the log says what failed and why. */
 	private background(what: string, work: Promise<unknown>): void {
-		work.catch(err => this.log(`${what} failed: ${messageOf(err)}`));
+		inBackground(what, work, message => this.log(message));
 	}
 
 	private log(message: string): void {
@@ -951,7 +1053,7 @@ export class Facade implements Disposable {
 	/** After each of its waits: a window that closed meanwhile does nothing more, and says so. */
 	private stillOpen(): void {
 		if (this.disposed) {
-			throw new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
+			throw windowClosed();
 		}
 	}
 }

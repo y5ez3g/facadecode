@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { canonicalFolder } from '../base/files';
-import { AgentCli, launchArgs, skillMarkdown } from './cli';
+import { AgentCli, launchArgs, launchUses, launchValues, skillMarkdown } from './cli';
 
 /** A TOML value for Codex's `-c`: a JSON string is a TOML basic string. */
 function toml(value: string | readonly string[] | { readonly [name: string]: string }): string {
@@ -65,7 +65,7 @@ export const codexCli: AgentCli = {
 			},
 			environment: {},
 			// The whole table: in `projects.<folder>` the folder would be split at its dots.
-			trust: { arguments: ['-c', 'projects={ ${folder} = { trust_level = "trusted" } }'] },
+			trust: { arguments: ['-c', 'projects={ ${folderToml} = { trust_level = "trusted" } }'] },
 			enterDelay: 300,
 			taskDelay: 2000
 		}
@@ -78,12 +78,12 @@ export const codexCli: AgentCli = {
 		return {
 			executable,
 			args: launchArgs(codexCli.setting + '.launch', input.config, {
-				...connection ? { mcpCommand: toml(connection.mcp.command), mcpArgs: toml(connection.mcp.args), mcpEnv: toml(connection.mcp.env), ...connection.values } : {},
-				folder: toml(projectKey(input.folder)),
-				...input.model !== undefined ? { model: input.model } : {},
-				...input.effort !== undefined ? { effort: input.effort, effortToml: toml(input.effort) } : {},
-				...input.task !== undefined ? { task: input.task } : {}
-			}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
+				...launchValues(input),
+				// The forms its `-c` arguments take: TOML values, and the folder as it keys its trust.
+				...connection ? { mcpCommand: toml(connection.mcp.command), mcpArgs: toml(connection.mcp.args), mcpEnv: toml(connection.mcp.env) } : {},
+				folderToml: toml(projectKey(input.folder)),
+				...input.effort !== undefined ? { effortToml: toml(input.effort) } : {}
+			}, launchUses(input)),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],

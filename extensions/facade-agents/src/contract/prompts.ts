@@ -8,13 +8,6 @@ import { agentRef, Caller, describe, PERSON } from '../record/events';
 
 const TOOLS = 'Your tools: start_agent starts an agent, in any folder of this window or a new worktree, and answers with its number once it has started; list_agents lists you, the agent that started you and the agents you started - with all, every agent you reach - and the CLIs you can start; stop_agent stops an agent you reach, and can delete its worktree.';
 
-/** A CLI an agent can start, as the skill names it. */
-export interface StartableCli {
-	readonly id: string;
-	readonly displayName: string;
-	readonly custom?: boolean;
-}
-
 /** An agent of a CLI, by the CLI's name, with its article: `a Coder agent`, `an Editor agent`. */
 function anAgentOf(cliName: string): string {
 	return `${/^[aeiou]/i.test(cliName) ? 'an' : 'a'} ${cliName} agent`;
@@ -50,13 +43,11 @@ export function openingFor(agent: { readonly id: number; readonly name: string; 
 
 /**
  * The `facade` skill every agent with Facade's tools is handed at its launch (AGENT-ORCHESTRATION.md,
- * O7): how Facade behaves, with short examples, and the agents this machine can start. No workflow: when
- * to commit, merge, review or stop is the person's to say, in their own skills.
+ * O7): how Facade behaves, with short examples. The same for every agent, whatever is installed: a folder's
+ * skill is shared by the agents there, and `list_agents` names the CLIs they can start. No workflow: when to
+ * commit, merge, review or stop is the person's to say, in their own skills.
  */
-export function facadeSkill(clis: readonly StartableCli[]): { readonly name: string; readonly description: string; readonly body: string } {
-	const startable = clis.length
-		? clis.map(cli => cli.custom ? `\`${cli.id}\` (custom)` : `\`${cli.id}\` (${cli.displayName})`).join(', ')
-		: 'none, for no CLI Facade starts is installed';
+export function facadeSkill(): { readonly name: string; readonly description: string; readonly body: string } {
 	return {
 		name: 'facade',
 		description: 'How to work in Facade Code with other agents and the person, through the facade tools start_agent, list_agents and stop_agent. Use it when you start agents, look at them, or stop them.',
@@ -74,7 +65,7 @@ export function facadeSkill(clis: readonly StartableCli[]): { readonly name: str
 			'',
 			'## The tools',
 			'',
-			`- \`start_agent\` starts an agent: \`name\` and \`cli\` are required - you can start ${startable} -`,
+			'- `start_agent` starts an agent: `name` and `cli` are required - `list_agents` names the CLIs you can start -',
 			'  and `model`, `effort` and `task` are optional: left out, the CLI\'s own model and effort apply. A',
 			'  task is kept as a message, and the agent is told where to read it. It works in your folder; in',
 			'  another folder of this window, by its absolute path; in a worktree of your repository, by the branch',

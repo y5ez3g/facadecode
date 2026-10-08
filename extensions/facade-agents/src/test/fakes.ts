@@ -46,6 +46,10 @@ export class FakeTerminals implements Terminals {
 	failNext: string | undefined;
 	/** While set, a stop leaves the process running, as one that will not end. */
 	stubborn = false;
+	/** While set, a launch waits for it before its terminal opens, as a window slow to make one. */
+	hold: Promise<void> | undefined;
+	/** The agents whose processes the window cannot tell of, by number: asked whether one runs, it rejects. */
+	readonly untold = new Set<number>();
 	/** The agents whose terminals were put in front, by number, in order. */
 	readonly revealed: number[] = [];
 	private readonly listeners = new Set<(id: number, end: TerminalEnd) => void>();
@@ -56,6 +60,7 @@ export class FakeTerminals implements Terminals {
 		if (failure) {
 			throw new Error(failure);
 		}
+		await this.hold;
 		this.launched.push(launch);
 		this.running.add(launch.name);
 		const processId = ++lastFakeProcess;
@@ -65,6 +70,9 @@ export class FakeTerminals implements Terminals {
 	}
 
 	async isAlive(id: number): Promise<boolean> {
+		if (this.untold.has(id)) {
+			throw new Error('the window cannot tell whether its process runs');
+		}
 		return this.titleOf(id) !== undefined;
 	}
 
@@ -178,7 +186,7 @@ export class FakeGit implements Git {
 
 	async repositoryOf(folder: string): Promise<Repository | undefined> {
 		const found = this.worktreeAt(folder);
-		return found && { main: found.main, worktree: found.worktree.name, head: this.unborn.includes(found.main) ? undefined : this.heads.get(found.worktree.folder) ?? this.head };
+		return found && { main: found.main, mainCheckout: found.main === found.worktree.folder, worktree: found.worktree.name, head: this.unborn.includes(found.main) ? undefined : this.heads.get(found.worktree.folder) ?? this.head };
 	}
 
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
@@ -198,13 +206,18 @@ export class FakeGit implements Git {
 		return this.changes.get(folder) ?? { files: [], unsaved: [] };
 	}
 
-	async deleteWorktree(folder: string): Promise<void> {
+	async deleteWorktree(folder: string, options: { readonly discardChanges: boolean; readonly ownFiles: readonly string[] }): Promise<void> {
 		if (this.failDelete) {
 			throw new Error(this.failDelete);
 		}
 		const found = this.worktreeAt(folder);
 		if (!found || found.main === found.worktree.folder) {
 			throw new Error(`${folder} is no worktree to delete`);
+		}
+		// As the window looks as it deletes it: changes git would lose refuse it unless discarded.
+		const lost = (this.changes.get(folder)?.files ?? []).filter(file => !options.ownFiles.includes(file));
+		if (lost.length && !options.discardChanges) {
+			throw new Error(`${folder} has changes that deleting it would lose: ${lost.join(', ')}`);
 		}
 		this.steps.push(`delete ${folder}`);
 		this.worktrees.set(found.main, (this.worktrees.get(found.main) ?? []).filter(each => each.folder !== found.worktree.folder));

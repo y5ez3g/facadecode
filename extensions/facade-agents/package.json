@@ -164,7 +164,11 @@
 										],
 										"items": {
 											"type": "string"
-										}
+										},
+										"default": [
+											"--add-dir",
+											"${messagesDir}"
+										]
 									},
 									"yoloOn": {
 										"type": [
@@ -255,6 +259,10 @@
 									"questions": [
 										"--disallowedTools",
 										"AskUserQuestion"
+									],
+									"messages": [
+										"--add-dir",
+										"${messagesDir}"
 									],
 									"yoloOn": [
 										"--dangerously-skip-permissions"
@@ -629,7 +637,7 @@
 								"default": {
 									"arguments": [
 										"-c",
-										"projects={ ${folder} = { trust_level = \"trusted\" } }"
+										"projects={ ${folderToml} = { trust_level = \"trusted\" } }"
 									]
 								},
 								"markdownDescription": "%config.launch.trust%"
