@@ -8,24 +8,28 @@ import { isJsonObject } from '../base/json';
 import { AgentCli, launchArgs, skillMarkdown } from './cli';
 
 /**
- * Muse Code in its own UI at full access: no approvals and no sandbox. It reads MCP servers and skills
- * from its folder - `.mcp.json` and `.agents/skills/` - once the folder is trusted: a worktree Facade
- * made by `--trust-workspace`, for the launch alone. Its server finds the agent through `${VAR}`
- * references to its environment. It starts through its own launcher, a `.cmd` on Windows, so its task
- * goes into a file, and a line in its terminal tells it to read it.
+ * Muse Code in its own UI. YOLO on: no approvals and no sandbox. YOLO off: its sandbox on; it has no way
+ * to let Facade's server alone through unasked, so it asks for nothing (AGENT-LAUNCHER.md, L4). It reads
+ * MCP servers and skills from its folder - `.mcp.json` and `.agents/skills/` - once the folder is trusted,
+ * which `--trust-workspace` does for the launch alone. Its server finds the agent through `${VAR}`
+ * references to its environment. The notice of its task is its argument.
  */
 export const museCli: AgentCli = {
 	id: 'muse',
 	displayName: 'Muse Code',
-	section: 'muse',
+	setting: 'facade.agents.muse',
 	command: 'muse',
 	defaults: {
 		path: '',
+		enabled: true,
 		launch: {
 			arguments: {
-				fullAccess: ['--disable-approval', '--disable-sandbox'],
+				yoloOn: ['--disable-approval', '--disable-sandbox'],
+				yoloOff: ['--disable-approval'],
 				model: ['--model', '${model}'],
-				effort: ['--reasoning-effort', '${effort}']
+				effort: ['--reasoning-effort', '${effort}'],
+				// After the end of the options, so that a notice starting with a dash is not read as one.
+				task: ['--', '${task}']
 			},
 			// One version for the agent's whole run: its launcher would otherwise update it as it starts it.
 			environment: { MUSE_NO_AUTO_UPDATE: '1' },
@@ -37,29 +41,36 @@ export const museCli: AgentCli = {
 		}
 	},
 	sharedServer: true,
-	task: 'terminal',
+	task: 'argument',
+	sandbox: { yoloOn: 'off', yoloOff: 'on' },
+	exemption: 'all',
 	launch(input, executable) {
+		const { connection } = input;
 		// Expanded from the agent's own environment when its MCP server starts.
-		const servers = { facade: { command: input.mcp.command, args: input.mcp.args, env: { ...input.mcp.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS}' } } };
+		const servers = connection && { facade: { command: connection.mcp.command, args: connection.mcp.args, env: { ...connection.mcp.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS}' } } };
 		return {
 			executable,
-			// Its task is typed into its terminal, never given as an argument.
-			args: launchArgs(museCli, input.config, { model: input.model, effort: input.effort }, { trust: input.trusted, task: false }),
+			args: launchArgs(museCli.setting + '.launch', input.config, {
+				...input.model !== undefined ? { model: input.model } : {},
+				...input.effort !== undefined ? { effort: input.effort } : {},
+				...input.task !== undefined ? { task: input.task } : {},
+				...connection?.values
+			}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],
-			injected: [
+			injected: servers ? [
 				{ path: '.mcp.json', content: JSON.stringify({ mcpServers: servers }, undefined, '\t'), merge: theirs => withEntries(theirs, 'mcpServers', servers) },
 				...input.skills.map(skill => ({ path: `.agents/skills/${skill.name}/SKILL.md`, content: skillMarkdown(skill) }))
-			]
+			] : []
 		};
 	}
 };
 
 /**
- * The person's JSON file with `entries` added under `key` beside theirs, laid out as theirs is; undefined
- * where they cannot be added without changing what is theirs: a file that is not a JSON object, or an
- * entry of theirs with the same name.
+ * The folder's JSON file with `entries` added under `key` beside what it has, laid out as it is; undefined
+ * where they cannot be added without changing what is there: a file that is not a JSON object, or an
+ * entry with the same name.
  */
 function withEntries(theirs: string, key: string, entries: { readonly [name: string]: unknown }): string | undefined {
 	let file: unknown;

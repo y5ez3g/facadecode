@@ -17,8 +17,13 @@ import { applyEvent, createState, eventOf, fitsState, LedgerEvent, LedgerEventBo
 /** The ledger's file, in the workspace's folder. */
 const LEDGER_FILE = 'ledger.jsonl';
 const LOCK_FILE = 'ledger.lock';
-/** The version of the ledger's events: 4 since an agent's creator never changes, and its end says how, by whom and with what code. */
-const VERSION = 4;
+/**
+ * The version of the ledger's events: 5 since an agent has its YOLO, its tree's root, its sandbox and its
+ * task's message. Lines of version 4, from before, are read too: their agents ran at full access.
+ */
+const VERSION = 5;
+/** The versions a ledger's lines may have, the one written last. */
+const READ_VERSIONS: ReadonlySet<unknown> = new Set([4, VERSION]);
 /** How often the window that has the ledger open touches its lock. */
 const HEARTBEAT_MS = 30_000;
 /** A lock untouched for this long belongs to no window, even if the process it names runs: its id may be reused. */
@@ -306,7 +311,7 @@ function load(dir: string, mayMoveAside: (() => boolean) | undefined): Workspace
 	// What follows the last line break was cut short by a crash.
 	const complete = lines.slice(0, -1);
 	const version = versionOf(complete);
-	if (version !== undefined && version !== VERSION) {
+	if (version !== undefined && !READ_VERSIONS.has(version)) {
 		return unreadable(`${file} is a ledger of version ${version}, which this Facade does not read`, `ledger.v${version}`);
 	}
 	const state = createState();
@@ -320,7 +325,7 @@ function load(dir: string, mayMoveAside: (() => boolean) | undefined): Workspace
 		} catch {
 			return unreadable(`Line ${index + 1} of ${file} is not an event Facade can read`, 'ledger.unreadable');
 		}
-		const event = isJsonObject(parsed) && parsed.v === VERSION && parsed.seq === state.seq + 1 ? eventOf(parsed) : undefined;
+		const event = isJsonObject(parsed) && READ_VERSIONS.has(parsed.v) && parsed.seq === state.seq + 1 ? eventOf(parsed) : undefined;
 		if (!event || !fitsState(state, event)) {
 			return unreadable(`Line ${index + 1} of ${file} is not an event Facade can read`, 'ledger.unreadable');
 		}

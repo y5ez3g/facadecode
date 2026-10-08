@@ -13,8 +13,8 @@ import { homeOf } from './executable';
 /** What became of a trust: written, there already, or the file left alone - one that cannot be read, or not as the CLI writes it. */
 export type TrustOutcome = 'written' | 'there' | 'unreadable';
 
-/** A worktree Facade made: its folder, and its repository's main checkout. */
-export interface TrustedWorktree {
+/** A folder an agent starts in, and what trust in it covers: its repository's main checkout - the whole repository - or, outside any repository, the folder itself. */
+export interface TrustedFolder {
 	readonly folder: string;
 	readonly repository: string;
 }
@@ -26,13 +26,13 @@ export interface TrustedWorktree {
  * arguments, or none. Throws, naming the setting, at a `${name}` with no value, or a file that is no
  * absolute path, which would be written wherever the window runs from.
  */
-export function trustTarget(cli: AgentCli, config: CliConfig, worktree: TrustedWorktree, env: Environment): { readonly file: string; readonly entry: JsonObject } | undefined {
+export function trustTarget(cli: AgentCli, config: CliConfig, trusted: TrustedFolder, env: Environment): { readonly file: string; readonly entry: JsonObject } | undefined {
 	const { trust } = config.launch;
 	if (trust?.file === undefined) {
 		return undefined;
 	}
-	const setting = `facade.orchestration.${cli.section}.launch.trust`;
-	const values = { home: homeOf(env), ...cli.trustValues?.(worktree, env) };
+	const setting = `${cli.setting}.launch.trust`;
+	const values = { home: homeOf(env), ...cli.trustValues?.(trusted, env) };
 	const file = withValues(trust.file, values, `${setting}.file`).replace(/^~(?=$|[\\/])/, () => values.home);
 	if (!path.isAbsolute(file)) {
 		throw new Error(`${setting}.file is ${JSON.stringify(file)}, which is no absolute path: start it with \${home}.`);
@@ -41,20 +41,23 @@ export function trustTarget(cli: AgentCli, config: CliConfig, worktree: TrustedW
 }
 
 /**
- * Gives a CLI that keeps it in a file the person's trust in a worktree Facade made, under `lock`, in the
- * home folder `env` says; answers with what it did, for the log - what it merged, and where - or
- * undefined for a CLI given its trust in its arguments, or none.
+ * Gives a CLI that keeps it in a file the person's trust in a folder an agent starts in - its whole
+ * repository - under `lock`, in the home folder `env` says; answers with what it did and, for the log,
+ * what it merged and where - or undefined for a CLI given its trust in its arguments, or none. A file
+ * that cannot be read, or not as the CLI writes it, is left alone: `unreadable`, for the launch to fail
+ * with rather than wait at the CLI's question (AGENT-LAUNCHER.md, L11).
  */
-export function writeTrust(cli: AgentCli, config: CliConfig, worktree: TrustedWorktree, lock: FileLock, env: Environment): string | undefined {
-	const target = trustTarget(cli, config, worktree, env);
+export function writeTrust(cli: AgentCli, config: CliConfig, trusted: TrustedFolder, lock: FileLock, env: Environment): { readonly outcome: TrustOutcome; readonly text: string } | undefined {
+	const target = trustTarget(cli, config, trusted, env);
 	if (!target) {
 		return undefined;
 	}
 	const { file, entry } = target;
-	switch (mergeIntoJsonFile(file, entry, lock)) {
-		case 'written': return `Facade merged ${JSON.stringify(entry)} into ${file}: ${cli.displayName} trusts ${worktree.folder} now.`;
-		case 'there': return `${file} has ${JSON.stringify(entry)} already: ${cli.displayName} trusted ${worktree.folder} before.`;
-		case 'unreadable': return `${file} could not be read, or is not as ${cli.displayName} writes it, and was left alone: ${cli.displayName} will ask whether to trust ${worktree.folder}.`;
+	const outcome = mergeIntoJsonFile(file, entry, lock);
+	switch (outcome) {
+		case 'written': return { outcome, text: `Facade merged ${JSON.stringify(entry)} into ${file}: ${cli.displayName} trusts ${trusted.folder} now.` };
+		case 'there': return { outcome, text: `${file} has ${JSON.stringify(entry)} already: ${cli.displayName} trusted ${trusted.folder} before.` };
+		case 'unreadable': return { outcome, text: `${file} could not be read, or is not as ${cli.displayName} writes it, so Facade left it alone and cannot give ${cli.displayName} the person's trust in ${trusted.folder}: put the file right, or set ${cli.setting}.launch.trust to null for ${cli.displayName} to ask.` };
 	}
 }
 

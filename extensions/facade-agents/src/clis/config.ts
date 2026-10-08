@@ -8,61 +8,119 @@ import { AgentCli, ARG_GROUPS, ArgGroup, CliConfig, LaunchConfig, TrustConfig } 
 
 /** The longest a launch waits before typing a CLI its task, or between a line and its Enter: a minute. */
 export const MAX_DELAY_MS = 60_000;
-/** The longest time, in seconds, the person can give Facade's waits: a day. */
-export const MAX_TIME_S = 86_400;
+/** The longest time, in seconds, the person can give Facade's waits: an hour (AGENT-LAUNCHER.md, L7). */
+export const MAX_TIME_S = 3_600;
 
 /**
- * A time the person set, in seconds, as milliseconds: kept between one second and {@link MAX_TIME_S}, and
- * `fallbackMs` where the setting holds no number.
+ * A time the person set, in whole seconds, as milliseconds: kept between one second and
+ * {@link MAX_TIME_S}, and `fallbackMs` where the setting holds no number.
  */
 export function secondsSetting(value: unknown, fallbackMs: number): number {
-	return typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, 1), MAX_TIME_S) * 1000 : fallbackMs;
+	return typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(Math.round(value), 1), MAX_TIME_S) * 1000 : fallbackMs;
 }
 
 /**
- * How the person has Facade start `cli`: its `path`, and its launch as the CLI's defaults with the person's
- * `launch` over them. `read` gives a setting by its name under `facade.orchestration.<section>.`, as the window
- * has it; the person's `launch` holds only what they change.
+ * How the person has Facade start `cli`: whether it is offered, its `path`, and its launch as the CLI's
+ * defaults with the person's `launch` over them. `read` gives a setting by its name under `cli.setting`,
+ * as the window has it; the person's `launch` holds only what they change. A value of the wrong kind, or
+ * a key a launch does not have, is in `wrong`, naming the setting: Facade never falls back to its own
+ * value for a setting the person got wrong.
  */
 export function readCliConfig(cli: AgentCli, read: (name: string) => unknown): CliConfig {
+	const section = cli.setting;
+	const wrong: string[] = [];
+	const enabled = read('enabled');
+	if (enabled !== undefined && typeof enabled !== 'boolean') {
+		wrong.push(`${section}.enabled is ${shown(enabled)}, which is neither true nor false`);
+	}
 	const path = read('path');
+	if (path !== undefined && typeof path !== 'string') {
+		wrong.push(`${section}.path is ${shown(path)}, which is no text`);
+	}
 	const launch = read('launch');
+	if (launch !== undefined && !isJsonObject(launch)) {
+		wrong.push(`${section}.launch is ${shown(launch)}, which is no object`);
+	}
 	return {
 		path: typeof path === 'string' ? path.trim() : cli.defaults.path,
-		launch: launchOf(cli.defaults.launch, isJsonObject(launch) ? launch : {})
+		enabled: typeof enabled === 'boolean' ? enabled : cli.defaults.enabled,
+		launch: launchOf(cli, isJsonObject(launch) ? launch : {}, `${section}.launch`, wrong),
+		...(wrong.length ? { wrong } : {})
 	};
 }
 
-/** Why a CLI this machine does not have, as `config` has it found, is not there: its path setting names nothing, or its command is not on PATH. */
-export function whyNotInstalled(cli: AgentCli, config: CliConfig): string {
-	return config.path
-		? `facade.orchestration.${cli.section}.path is ${JSON.stringify(config.path)}, which is no file, nor a command on this machine's PATH`
-		: `${cli.command} is not on this machine's PATH, and facade.orchestration.${cli.section}.path names no other`;
+/**
+ * Why a CLI this machine does not have, as `config` has it found, is not there: its path setting names
+ * nothing, or its command is not on PATH; with what is wrong in its settings first.
+ */
+export function whyNotInstalled(cli: AgentCli, config: CliConfig, onPath = 'this machine\'s PATH'): string {
+	return [
+		...config.wrong ?? [],
+		cli.custom
+			? `${cli.setting}.path is ${JSON.stringify(config.path)}, which is no file, nor a command on ${onPath}`
+			: config.path
+				? `${cli.setting}.path is ${JSON.stringify(config.path)}, which is no file, nor a command on ${onPath}`
+				: `${cli.command} is not on ${onPath}, and ${cli.setting}.path names no other`
+	].join('; ');
+}
+
+/** The groups of arguments `cli`'s launch has: a CLI told of its task in its terminal has no task group. */
+export function argumentGroupsOf(cli: AgentCli): readonly ArgGroup[] {
+	return ARG_GROUPS.filter(group => group !== 'task' || cli.task !== 'terminal');
+}
+
+/** A value of the person's as a message shows it: as JSON, cut short. */
+export function shown(value: unknown): string {
+	const text = JSON.stringify(value) ?? String(value);
+	return text.length > 60 ? `${text.slice(0, 57)}...` : text;
 }
 
 /**
- * A launch as the person changed `defaults` with `set`: a part they set replaces the default's, an
- * object - the environment, Claude Code's settings - key by key, and null takes one out; what is not of
- * its part's kind is left out, the default kept.
+ * `cli`'s launch as the person changed its defaults with `set`, the setting `setting`: a part they set
+ * replaces the default's, an object - the environment, Claude Code's settings - key by key, and null takes
+ * one out. What is wrong goes into `wrong`, the default's part shown in its place.
  */
-function launchOf(defaults: LaunchConfig, set: JsonObject): LaunchConfig {
-	const trust = trustOf(defaults.trust, set.trust);
+export function launchOf(cli: AgentCli, set: JsonObject, setting: string, wrong: string[]): LaunchConfig {
+	const defaults = cli.defaults.launch;
+	const parts = ['arguments', 'environment', 'trust', ...defaults.settings ? ['settings'] : [], 'enterDelay', 'taskDelay'];
+	for (const key of Object.keys(set)) {
+		if (!parts.includes(key)) {
+			wrong.push(`${setting} has ${key}, which ${cli.displayName}'s launch does not have: it has ${parts.join(', ')}`);
+		}
+	}
+	// Part by part, in the order the person reads them.
+	const args = argumentsOf(cli, set.arguments, `${setting}.arguments`, wrong);
+	const environment = variablesOf(defaults.environment, set.environment, `${setting}.environment`, wrong);
+	const trust = trustOf(defaults.trust, set.trust, `${setting}.trust`, wrong);
 	return {
-		arguments: argumentsOf(defaults.arguments, set.arguments),
-		environment: variablesOf(defaults.environment, set.environment),
+		arguments: args,
+		environment,
 		...(trust ? { trust } : {}),
-		...(defaults.settings ? { settings: mergedObject(defaults.settings, set.settings) } : {}),
-		enterDelay: millisecondsIn(set.enterDelay) ?? defaults.enterDelay,
-		taskDelay: millisecondsIn(set.taskDelay) ?? defaults.taskDelay
+		...(defaults.settings ? { settings: settingsOf(defaults.settings, set.settings, `${setting}.settings`, wrong) } : {}),
+		enterDelay: delayOf(defaults.enterDelay, set.enterDelay, `${setting}.enterDelay`, wrong),
+		taskDelay: delayOf(defaults.taskDelay, set.taskDelay, `${setting}.taskDelay`, wrong)
 	};
 }
 
 /** The groups of arguments: each one the person set to a list of strings theirs, one set to null none; the rest the defaults'. */
-function argumentsOf(defaults: LaunchConfig['arguments'], set: unknown): LaunchConfig['arguments'] {
+function argumentsOf(cli: AgentCli, set: unknown, setting: string, wrong: string[]): LaunchConfig['arguments'] {
+	const defaults = cli.defaults.launch.arguments;
+	const known = argumentGroupsOf(cli);
+	if (set !== undefined && !isJsonObject(set)) {
+		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+	}
 	const own = isJsonObject(set) ? set : {};
+	for (const key of Object.keys(own)) {
+		if (!(known as readonly string[]).includes(key)) {
+			wrong.push(`${setting} has ${key}, which is no group of ${cli.displayName}'s arguments: it has ${known.join(', ')}`);
+		}
+	}
 	const groups: { [Group in ArgGroup]?: readonly string[] } = {};
-	for (const group of ARG_GROUPS) {
+	for (const group of known) {
 		const value = own[group];
+		if (value !== undefined && value !== null && !isStringArray(value)) {
+			wrong.push(`${setting}.${group} is ${shown(value)}, which is neither a list of text nor null`);
+		}
 		const args = value === null ? undefined : isStringArray(value) ? value : defaults[group];
 		if (args) {
 			groups[group] = args;
@@ -75,7 +133,10 @@ function argumentsOf(defaults: LaunchConfig['arguments'], set: unknown): LaunchC
  * The variables: the defaults', each one the person set to text theirs, one set to null taken out. On
  * Windows, which takes a variable's name in any case, the person's is the default's whatever its case.
  */
-function variablesOf(defaults: { readonly [name: string]: string }, set: unknown): { readonly [name: string]: string } {
+function variablesOf(defaults: { readonly [name: string]: string }, set: unknown, setting: string, wrong: string[]): { readonly [name: string]: string } {
+	if (set !== undefined && !isJsonObject(set)) {
+		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+	}
 	const variables: { [name: string]: string } = { ...defaults };
 	const keyOf = (name: string) => process.platform === 'win32' ? Object.keys(variables).find(key => key.toUpperCase() === name.toUpperCase()) ?? name : name;
 	for (const [name, value] of Object.entries(isJsonObject(set) ? set : {})) {
@@ -83,6 +144,8 @@ function variablesOf(defaults: { readonly [name: string]: string }, set: unknown
 			delete variables[keyOf(name)];
 		} else if (typeof value === 'string') {
 			variables[keyOf(name)] = value;
+		} else {
+			wrong.push(`${setting}.${name} is ${shown(value)}, which is neither text nor null`);
 		}
 	}
 	return variables;
@@ -90,21 +153,57 @@ function variablesOf(defaults: { readonly [name: string]: string }, set: unknown
 
 /**
  * The trust: none where the person set it to null; their arguments where they set some; else the
- * default's file and entry, each replaced by the person's where they set one; else the default.
+ * default's file and entry, each replaced by the person's where they set one.
  */
-function trustOf(defaults: TrustConfig | undefined, set: unknown): TrustConfig | undefined {
+function trustOf(defaults: TrustConfig | undefined, set: unknown, setting: string, wrong: string[]): TrustConfig | undefined {
 	if (set === null) {
 		return undefined;
 	}
-	if (!isJsonObject(set)) {
+	if (set === undefined) {
 		return defaults;
 	}
-	if (isStringArray(set.arguments)) {
-		return { arguments: set.arguments };
+	if (!isJsonObject(set)) {
+		wrong.push(`${setting} is ${shown(set)}, which is neither an object nor null`);
+		return defaults;
+	}
+	const before = wrong.length;
+	for (const key of Object.keys(set)) {
+		if (key !== 'arguments' && key !== 'file' && key !== 'merge') {
+			wrong.push(`${setting} has ${key}, which a trust does not have: it has arguments, or a file and what to merge into it`);
+		}
+	}
+	const { arguments: args } = set;
+	if (args !== undefined) {
+		if (!isStringArray(args)) {
+			wrong.push(`${setting}.arguments is ${shown(args)}, which is no list of text`);
+			return defaults;
+		}
+		if (set.file !== undefined || set.merge !== undefined) {
+			wrong.push(`${setting} has arguments and a file: a trust is given one way or the other`);
+			return defaults;
+		}
+		return wrong.length === before ? { arguments: args } : defaults;
+	}
+	if (set.file !== undefined && !(typeof set.file === 'string' && set.file.trim())) {
+		wrong.push(`${setting}.file is ${shown(set.file)}, which names no file`);
+	}
+	if (set.merge !== undefined && !isJsonObject(set.merge)) {
+		wrong.push(`${setting}.merge is ${shown(set.merge)}, which is no object`);
 	}
 	const file = typeof set.file === 'string' && set.file.trim() ? set.file.trim() : defaults?.file;
 	const merge = isJsonObject(set.merge) ? set.merge : defaults?.merge;
-	return file !== undefined && merge !== undefined ? { file, merge } : defaults;
+	if (wrong.length === before && (file === undefined || merge === undefined)) {
+		wrong.push(`${setting} has ${file === undefined ? 'what to merge, and no file to merge it into' : 'a file, and nothing to merge into it'}`);
+	}
+	return wrong.length === before && file !== undefined && merge !== undefined ? { file, merge } : defaults;
+}
+
+/** Claude Code's settings: the defaults with the person's over them, key by key. */
+function settingsOf(defaults: JsonObject, set: unknown, setting: string, wrong: string[]): JsonObject {
+	if (set !== undefined && !isJsonObject(set)) {
+		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+	}
+	return mergedObject(defaults, set);
 }
 
 /**
@@ -112,7 +211,7 @@ function trustOf(defaults: TrustConfig | undefined, set: unknown): TrustConfig |
  * value replacing the default's. An object of the person's where the default has none is gone through
  * too, so that no null of theirs reaches the CLI as a value.
  */
-function mergedObject(defaults: JsonObject, set: unknown): JsonObject {
+export function mergedObject(defaults: JsonObject, set: unknown): JsonObject {
 	if (!isJsonObject(set)) {
 		return defaults;
 	}
@@ -128,7 +227,14 @@ function mergedObject(defaults: JsonObject, set: unknown): JsonObject {
 	return merged;
 }
 
-/** A number of milliseconds, zero or more, kept to {@link MAX_DELAY_MS}; undefined for anything else. */
-function millisecondsIn(value: unknown): number | undefined {
-	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.min(value, MAX_DELAY_MS) : undefined;
+/** A delay the person set, in whole milliseconds from 0 to {@link MAX_DELAY_MS}; the default's where they set none. */
+function delayOf(byDefault: number, set: unknown, setting: string, wrong: string[]): number {
+	if (set === undefined) {
+		return byDefault;
+	}
+	if (typeof set !== 'number' || !Number.isInteger(set) || set < 0 || set > MAX_DELAY_MS) {
+		wrong.push(`${setting} is ${shown(set)}, which is no whole number of milliseconds from 0 to ${MAX_DELAY_MS}`);
+		return byDefault;
+	}
+	return set;
 }

@@ -24,7 +24,7 @@ const ANOTHERS_LOCK = '424242 0123456789ab';
 
 /** An agent the person starts, or the agent `creator` does. */
 function newAgent(name: string, creator?: number, worktree = 'main'): NewAgent {
-	return { name, creator, cli: 'arg', model: 'small', effort: 'high', worktree, folder: '/lab' };
+	return { name, creator, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, worktree, folder: '/lab' };
 }
 
 /** A worktree the person had Facade make, called `name`. */
@@ -158,9 +158,10 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		});
 	});
 
-	test('a task to type is written whole to a file of its agent\'s own, made knowing its number; its typing, once begun, is not known to have arrived until it was typed; an argument\'s and none are never typed', () => {
-		const told = table.start({ ...newAgent('main'), task: id => `You are #a${id}.\n\nAdd clamp.` });
-		const byArgument = table.start({ ...newAgent('other'), task: 'argument' });
+	test('a task is kept as a message of its own, numbered on from the last - its notice to type, or its argument; its typing, once begun, is not known to have arrived until it was typed; an argument\'s and none are never typed', () => {
+		const told = table.start({ ...newAgent('main'), task: { notice: 'typed', text: 'Add clamp.' } });
+		const named = table.start({ ...newAgent('long'), task: { notice: 'argument', text: 'A long task.' } });
+		const byArgument = table.start({ ...newAgent('other'), task: { notice: 'argument', text: 'Short.' } });
 		const none = table.start(newAgent('none'));
 		const pending = told.agent.task;
 		table.taskTyping(told.agent.id);
@@ -170,17 +171,22 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		table.taskTyping(byArgument.agent.id);
 		table.taskTyped(none.agent.id);
 		const types = fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).type);
+		const messages = path.join(temp.dir, 'messages');
 
 		assert.deepStrictEqual({
-			taskFile: table.taskFileOf(told.agent.id) === path.join(table.runsDir, '1.task.md'),
-			task: fs.readFileSync(path.join(table.runsDir, '1.task.md'), 'utf8'),
-			tasks: [pending, typing, told.agent.task, byArgument.agent.task, none.agent.task],
+			messageFile: table.messageFileOf(1) === path.join(messages, '1.md'),
+			files: fs.readdirSync(messages).sort().map(name => [name, fs.readFileSync(path.join(messages, name), 'utf8')]),
+			numbers: [told.agent.taskMessage, named.agent.taskMessage, byArgument.agent.taskMessage, none.agent.taskMessage],
+			lastMessage: fs.readFileSync(path.join(temp.dir, 'last-message-id'), 'utf8'),
+			tasks: [pending, typing, told.agent.task, named.agent.task, byArgument.agent.task, none.agent.task],
 			types
 		}, {
-			taskFile: true,
-			task: 'You are #a1.\n\nAdd clamp.',
-			tasks: ['pending', 'unknown', 'typed', 'argument', 'none'],
-			types: ['agent.started', 'agent.started', 'agent.started', 'task.typing', 'task.typed']
+			messageFile: true,
+			files: [['1.md', 'Add clamp.'], ['2.md', 'A long task.'], ['3.md', 'Short.']],
+			numbers: [1, 2, 3, undefined],
+			lastMessage: '3',
+			tasks: ['pending', 'unknown', 'typed', 'argument', 'argument', 'none'],
+			types: ['agent.started', 'agent.started', 'agent.started', 'agent.started', 'task.typing', 'task.typed']
 		});
 	});
 
@@ -266,8 +272,8 @@ suite('Record: agents, their numbers, names and tokens', () => {
 	});
 
 	test('the run files of an agent go once it ends, and those of every agent that has ended go as the table opens', () => {
-		const gone = table.start({ ...newAgent('gone'), task: () => 'Task.' });
-		const runs = table.start({ ...newAgent('runs'), task: () => 'Task.' });
+		const gone = table.start({ ...newAgent('gone'), task: { notice: 'typed', text: 'Task.' } });
+		const runs = table.start({ ...newAgent('runs'), task: { notice: 'typed', text: 'Task.' } });
 		table.end(gone.agent.id, 'exited', 'its terminal closed');
 		const afterExit = fs.readdirSync(table.runsDir).sort();
 		// A file a crash left, of a number the ledger never recorded.
@@ -276,8 +282,8 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		table = AgentTable.open({ dir: temp.dir });
 
 		assert.deepStrictEqual({ afterExit, afterOpening: fs.readdirSync(table.runsDir).sort(), runs: runs.agent.id }, {
-			afterExit: ['2.task.md', '2.token'],
-			afterOpening: ['2.task.md', '2.token'],
+			afterExit: ['2.token'],
+			afterOpening: ['2.token'],
 			runs: 2
 		});
 	});
@@ -285,7 +291,7 @@ suite('Record: agents, their numbers, names and tokens', () => {
 	test('nothing is started once another window took the ledger: no number is given, and no token or task written, which could be that window\'s', () => {
 		table.start(newAgent('main'));
 		fs.writeFileSync(path.join(temp.dir, LOCK), ANOTHERS_LOCK);
-		const refused = outcome(() => table.start({ ...newAgent('late'), task: () => 'Task.' }));
+		const refused = outcome(() => table.start({ ...newAgent('late'), task: { notice: 'typed', text: 'Task.' } }));
 
 		assert.deepStrictEqual({ refused, runs: fs.readdirSync(table.runsDir), lastId: fs.readFileSync(path.join(temp.dir, LAST_ID), 'utf8') }, {
 			refused: takenFrom(temp.dir),
@@ -309,7 +315,7 @@ suite('Record: the ledger on disk', () => {
 
 	test('a reload loses nothing: agents, their states, how they ended, their tasks, their processes, their tokens and the person\'s, the worktrees made', () => {
 		let table = AgentTable.open({ dir: temp.dir });
-		const main = table.start({ ...newAgent('main'), task: () => 'Lead.' });
+		const main = table.start({ ...newAgent('main'), task: { notice: 'typed', text: 'Lead.' } });
 		table.launched(main.agent.id, 4242);
 		table.connected(main.agent.id);
 		table.taskTyping(main.agent.id);
@@ -317,7 +323,7 @@ suite('Record: the ledger on disk', () => {
 		table.running(main.agent.id);
 		const gone = table.start(newAgent('clamp', main.agent.id, 'clamp'));
 		table.end(gone.agent.id, 'failed', 'it did not start within 120 seconds');
-		const stopping = table.start({ ...newAgent('slug', main.agent.id, 'slug'), task: 'argument' });
+		const stopping = table.start({ ...newAgent('slug', main.agent.id, 'slug'), task: { notice: 'argument', text: 'Short.' } });
 		table.stopping(stopping.agent.id, 'with stop_agent', main.agent.id);
 		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', commit: 'c0ffee', madeBy: main.agent.id });
 		const personsToken = fs.readFileSync(path.join(temp.dir, 'you.token'), 'utf8');
@@ -481,7 +487,8 @@ suite('Record: the ledger on disk', () => {
 		}, {
 			asWritten: ['opened', 'opened', 'opened', 'opened', 'opened', 'opened'],
 			thePersons: ['opened', 'opened'],
-			noEffort: said,
+			// An agent may be given no effort: its CLI's own applies.
+			noEffort: 'opened',
 			anEmptyEffort: said,
 			notJson: said,
 			unknownKind: said,
@@ -568,7 +575,7 @@ suite('Record: the ledger on disk', () => {
 		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === broken }, { fresh: { agents: 0, id: 2 }, kept: 1, same: true });
 	});
 
-	test('a new list drops the agents that ended before it, but for the creators of the agents it keeps, and stays so through a reopening: numbers go on, and a creator it dropped is named by its number alone', () => {
+	test('a new list drops the agents that ended before it, but for the creators and the tree roots of the agents it keeps, and stays so through a reopening: numbers go on', () => {
 		let table = AgentTable.open({ dir: temp.dir });
 		const lead = table.start(newAgent('lead')).agent;
 		const child = table.start(newAgent('child', lead.id)).agent;
@@ -583,9 +590,9 @@ suite('Record: the ledger on disk', () => {
 		table = AgentTable.open({ dir: temp.dir });
 
 		assert.deepStrictEqual({ listed, again: [...table.state.agents.keys()], creators: [child, grandchild].map(each => table.whoIs(table.get(each.id)?.creator)), next: table.start(newAgent('next')).agent.id }, {
-			listed: [2, 4],
-			again: [2, 4],
-			creators: ['#a1', '@child #a2'],
+			listed: [1, 2, 4],
+			again: [1, 2, 4],
+			creators: ['@lead #a1', '@child #a2'],
 			next: 5
 		});
 		table.dispose();
@@ -608,11 +615,11 @@ suite('Record: the ledger on disk', () => {
 
 		assert.deepStrictEqual({ lines: lines.map(line => line.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d {2}/, '')), timed: lines.slice(0, -1).every(line => /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d {2}/.test(line)) }, {
 			lines: [
-				'started  @lead #a1  arg small high  by @human  in /lab',
-				'started  @child #a2  arg small high  by @lead #a1  in /lab',
+				'started  @lead #a1  arg small high  YOLO on  by @human  in /lab',
+				'started  @child #a2  arg small high  YOLO on  by @lead #a1  in /lab',
 				'ended    @child #a2  stopped by @lead #a1: with stop_agent',
 				'ended    @lead #a1  exited: its CLI ended with exit code 1',
-				'started  @next #a3  arg small high  by @human  in /lab',
+				'started  @next #a3  arg small high  YOLO on  by @human  in /lab',
 				'ended    @next #a3  stopped by @human: its tab was closed',
 				''
 			],

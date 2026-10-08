@@ -4,33 +4,43 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe } from '../record/events';
-import { endText } from './listAgents';
 import { Args } from './args';
+import { endText } from './listAgents';
 import type { ContractTool } from './tools';
 
-/** `stop_agent`: stops one of the caller's children, by its number or its name. */
+/**
+ * `stop_agent` (AGENT-ORCHESTRATION.md, O5): stops one agent the caller reaches, by its number or its
+ * name, and with `delete_worktree` the other agents in its worktree and then the worktree.
+ */
 export const stopAgentTool: ContractTool = {
 	definition: {
 		name: 'stop_agent',
-		title: 'Stop a child agent',
-		description: 'Stops one of your children, by its number or its @name: its CLI ends and its terminal closes. Its worktree stays as it is. The agents it started run on.',
+		title: 'Stop an agent',
+		description: 'Stops one agent you reach - one you started, another of your tree, your creator, yourself, one the person started - by its number or its @name: its CLI ends and its terminal closes. The agents it started run on. With delete_worktree, the other agents in its worktree are stopped too, then the worktree is deleted, its branch kept; if it holds uncommitted or untracked files, or editors with unsaved changes, nothing is stopped or deleted and the answer lists them, unless discard_changes is true. A main checkout is never deleted. No dialog asks anyone: delete_worktree and discard_changes are the decision. Stopping yourself, or deleting the worktree you are in, may end this call before you read its answer.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				agent: { type: 'string', description: 'One of your children: its number, as #a7, or its name, as @name, where only one running agent has it.' }
+				agent: { type: 'string', description: 'The agent: its number, as #a7, or its name, as @name, where only one agent that has not ended has it.' },
+				delete_worktree: { type: 'boolean', description: 'true: stop every agent in its worktree too, then delete the worktree, keeping its branch.' },
+				discard_changes: { type: 'boolean', description: 'With delete_worktree: true loses the worktree\'s uncommitted work; omitted, a worktree with any refuses the call.' }
 			},
 			required: ['agent'],
 			additionalProperties: false
 		}
 	},
 	async call(facade, caller, input) {
-		const args = new Args('stop_agent', ['agent'], input);
-		const stopped = await facade.stopAgent(caller, args.text('agent'));
-		return {
-			text: stopped.alreadyEnded
-				? `${describe(stopped)} had ended already (${endText(facade, stopped.end)}).`
-				: `Stopped ${describe(stopped)}: its terminal closed. Its worktree stays as it is.`,
-			data: stopped
-		};
+		const args = new Args('stop_agent', ['agent', 'delete_worktree?', 'discard_changes?'], input);
+		const agent = args.text('agent');
+		const deleteWorktree = args.boolean('delete_worktree') ?? false;
+		const discardChanges = args.boolean('discard_changes') ?? false;
+		const stopped = await facade.stopAgent(caller, agent, { deleteWorktree, discardChanges });
+		const ended = stopped.alreadyEnded && stopped.agent.end ? `${describe(stopped.agent)} had ended already (${endText(facade, stopped.agent.end)}).` : '';
+		const others = stopped.stopped.length ? `Stopped ${stopped.stopped.map(each => describe(each)).join(', ')}: ${stopped.stopped.length === 1 ? 'its terminal closed' : 'their terminals closed'}.` : '';
+		const worktree = stopped.worktree === undefined
+			? (stopped.alreadyEnded ? '' : ' Its worktree stays as it is.')
+			: stopped.worktree.deleted
+				? ` ${stopped.worktree.folder} was deleted; its branch stays.`
+				: ` ${stopped.worktree.folder} was not deleted: ${stopped.worktree.why}.`;
+		return { text: `${ended}${ended && others ? ' ' : ''}${others}${worktree}`.trim(), data: stopped };
 	}
 };

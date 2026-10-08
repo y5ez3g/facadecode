@@ -60,11 +60,11 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		this.poll = setInterval(() => this.lookForEnds(), ENDS_POLL_MS);
 	}
 
-	async launch(request: TerminalLaunch): Promise<void> {
+	async launch(request: TerminalLaunch): Promise<{ readonly processId?: number }> {
 		if (!(await vscode.commands.getCommands()).includes('_facade.terminal.create')) {
 			throw new Error('This window has no agents\' terminals: Facade Code\'s workbench makes them.');
 		}
-		const opened = await vscode.commands.executeCommand<{ readonly closed: boolean; readonly exitCode?: number }>('_facade.terminal.create', vscode.Uri.file(request.cwd), {
+		const opened = await vscode.commands.executeCommand<{ readonly processId?: number; readonly closed: boolean; readonly exitCode?: number }>('_facade.terminal.create', vscode.Uri.file(request.cwd), {
 			name: request.name,
 			executable: request.executable,
 			args: request.args,
@@ -79,6 +79,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 			throw new Error(exitedAsItStarted(request.executable, opened.exitCode));
 		}
 		this.watched.add(request.id);
+		return typeof opened.processId === 'number' && opened.processId > 0 ? { processId: opened.processId } : {};
 	}
 
 	onDidEnd(listener: (id: number, end: TerminalEnd) => void): Disposable {

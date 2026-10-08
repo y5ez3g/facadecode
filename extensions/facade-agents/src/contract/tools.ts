@@ -54,8 +54,14 @@ export class Contract {
 		return { name: caller.name, tools: TOOLS.map(tool => tool.describe?.(this.facade) ?? tool.definition), instructions: instructionsFor(this.facade, caller) };
 	}
 
-	/** Runs one tool for one caller. Whatever happens, the answer is a result the model reads. */
+	/**
+	 * Runs one tool for one caller. Whatever happens, the answer is a result the model reads. While the agent
+	 * framework is off, every call answers at once that it is (AGENT-ORCHESTRATION.md, O7).
+	 */
 	async call(caller: Caller, name: string, args: unknown, progress: (message: string) => void): Promise<ToolResult> {
+		if (!this.facade.frameworkOn()) {
+			return { text: 'Facade\'s tools are off: the person turned the agent framework off (facade.orchestration.enabled). Nothing was done; the agents running run on.', isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
+		}
 		try {
 			const tool = TOOLS.find(each => each.definition.name === name);
 			if (!tool) {
@@ -63,7 +69,7 @@ export class Contract {
 			}
 			return await tool.call(this.facade, caller, args, progress);
 		} catch (err) {
-			return { text: messageOf(err), isError: true, data: { code: err instanceof FacadeError ? err.code : 'FAILED' } };
+			return { text: messageOf(err), isError: true, data: { code: err instanceof FacadeError ? err.code : 'FAILED', ...(err instanceof FacadeError && err.outcome ? err.outcome : {}) } };
 		}
 	}
 }

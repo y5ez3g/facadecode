@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { isEqualPath, replaceFile } from '../base/files';
-import { Agent, agentRef, Caller, describe, End, EndKind, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, StoppedBy, WorkspaceState } from './events';
+import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, StoppedBy, WorkspaceState } from './events';
 import { ClosedBy, LastClose, Ledger, LedgerOptions } from './ledger';
 import { AgentLog } from './log';
 
@@ -21,7 +21,11 @@ const YOU_TOKEN_FILE = 'you.token';
 const LAST_ID_FILE = 'last-id';
 /** What `last-id` was called before agents had numbers, the person none: read where there is no `last-id`. */
 const LAST_PID_FILE = 'last-pid';
+/** The highest message number the workspace gave, beside its ledger, as `last-id` is for agents. */
+const LAST_MESSAGE_ID_FILE = 'last-message-id';
 const RUNS_DIR = 'runs';
+/** Where messages are kept, one file each: `<number>.md`. Until AGENT-MESSAGES.md, a task's is the only kind. */
+const MESSAGES_DIR = 'messages';
 /** A file of an agent's run: `<number>.<anything>`. */
 const RUN_FILE = /^(?<id>\d+)\./;
 
@@ -50,21 +54,28 @@ export interface AgentTableOptions extends LedgerOptions {
 	readonly dir: string;
 }
 
-/** An agent to start: who it is, who starts it, where it works, and how its task reaches it. */
+/** An agent to start: who it is, who starts it, how, where it works, and its task. */
 export interface NewAgent {
 	readonly name: string;
 	/** The agent that starts it; none for the person. */
 	readonly creator?: number;
 	readonly cli: string;
-	readonly model: string;
-	readonly effort: string;
+	readonly custom: boolean;
+	/** As its creator asked for them; none where it asked for none. */
+	readonly model?: string;
+	readonly effort?: string;
+	/** What it was asked for that its launch has no group for. */
+	readonly ignored: readonly Ignored[];
+	readonly yolo: boolean;
+	readonly sandbox: SandboxState;
+	readonly integration: boolean;
 	readonly worktree: string;
 	readonly folder: string;
 	/**
-	 * Its task: given its number, the text to type into its terminal, which is written to a file of its
-	 * own (`taskFileOf`); `argument` where it is given on its command line; none where it has no task.
+	 * Its task: kept as a message of its own (`messageFileOf`), whose notice reaches it as its argument or
+	 * typed into its terminal; none where it has no task.
 	 */
-	readonly task?: 'argument' | ((id: number) => string);
+	readonly task?: { readonly text: string; readonly notice: 'argument' | 'typed' };
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -85,6 +96,8 @@ export class AgentTable {
 	private personToken = '';
 	/** The highest number given, as `last-id` says it: a ledger begun anew counts on from it. */
 	private lastId = 0;
+	/** The highest message number given, as `last-message-id` says it. */
+	private lastMessageId = 0;
 	/** The person's history: each start and each end. */
 	private readonly log: AgentLog;
 
@@ -99,6 +112,7 @@ export class AgentTable {
 		try {
 			table.personToken = readOrCreateToken(path.join(options.dir, YOU_TOKEN_FILE));
 			table.lastId = readLastId(path.join(options.dir, LAST_ID_FILE)) || readLastId(path.join(options.dir, LAST_PID_FILE));
+			table.lastMessageId = readLastId(path.join(options.dir, LAST_MESSAGE_ID_FILE));
 		} catch (err) {
 			ledger.close('facade');
 			throw err;
@@ -178,9 +192,19 @@ export class AgentTable {
 		return [...this.state.agents.values()].filter((agent): agent is LiveAgent => isLive(agent) && agent.creator === id);
 	}
 
-	/** The file the task of the agent `id` is in, for a CLI told of its task in its terminal. */
-	taskFileOf(id: number): string {
-		return path.join(this.runsDir, `${id}.task.md`);
+	/** The agents that have not ended and are called `name` among `agents`, ended ones being taken by number. */
+	static liveNamedIn(agents: readonly Agent[], name: string): LiveAgent[] {
+		return agents.filter((agent): agent is LiveAgent => isLive(agent) && agent.name === name);
+	}
+
+	/** The file message `id` is in: a task's, until AGENT-MESSAGES.md. */
+	messageFileOf(id: number): string {
+		return path.join(this.options.dir, MESSAGES_DIR, `${id}.md`);
+	}
+
+	/** The file the plan of the launch of the agent `id` is in: what its terminal runs, and its delays. */
+	launchFileOf(id: number): string {
+		return path.join(this.runsDir, `${id}.launch.json`);
 	}
 
 	/**
@@ -198,20 +222,32 @@ export class AgentTable {
 		const tokenFile = path.join(this.runsDir, `${id}.token`);
 		fs.mkdirSync(this.runsDir, { recursive: true });
 		fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-		if (typeof agent.task === 'function') {
-			fs.writeFileSync(this.taskFileOf(id), agent.task(id), { mode: 0o600 });
+		let taskMessage: number | undefined;
+		if (agent.task) {
+			taskMessage = Math.max(this.state.lastMessageId, this.lastMessageId) + 1;
+			replaceFile(path.join(this.options.dir, LAST_MESSAGE_ID_FILE), String(taskMessage));
+			this.lastMessageId = taskMessage;
+			fs.mkdirSync(path.join(this.options.dir, MESSAGES_DIR), { recursive: true });
+			fs.writeFileSync(this.messageFileOf(taskMessage), agent.task.text, { mode: 0o600 });
 		}
+		const creator = agent.creator === undefined ? undefined : this.state.agents.get(agent.creator);
 		this.ledger.append({
 			type: 'agent.started',
 			id,
 			name,
-			...(agent.creator !== undefined ? { creator: agent.creator } : {}),
+			...(agent.creator !== undefined ? { creator: agent.creator, root: creator?.root ?? agent.creator } : {}),
 			cli: agent.cli,
-			model: agent.model,
-			effort: agent.effort,
+			...(agent.custom ? { custom: true } : {}),
+			...(agent.model !== undefined ? { model: agent.model } : {}),
+			...(agent.effort !== undefined ? { effort: agent.effort } : {}),
+			...(agent.ignored.length ? { ignored: agent.ignored } : {}),
+			yolo: agent.yolo,
+			sandbox: agent.sandbox,
+			integration: agent.integration,
 			worktree: agent.worktree,
 			folder: agent.folder,
-			task: agent.task === undefined ? 'none' : agent.task === 'argument' ? 'argument' : 'pending',
+			...(taskMessage !== undefined ? { taskMessage } : {}),
+			task: agent.task === undefined ? 'none' : agent.task.notice === 'typed' ? 'pending' : 'argument',
 			tokenHash: hashToken(token)
 		});
 		const started = this.state.agents.get(id);

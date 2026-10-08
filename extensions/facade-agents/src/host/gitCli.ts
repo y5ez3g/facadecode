@@ -162,16 +162,20 @@ export async function excludeIn(git: string, folder: string): Promise<{ readonly
 }
 
 /**
- * Which of `files`, paths relative to `folder`, git tracks there: none in a folder git says is in no
- * repository. git failing otherwise rejects with why: taken for "none tracked", a file the repository
- * tracks would be written into.
+ * Which of `files`, paths relative to `folder`, git tracks there - or, with `commit`, that commit of its
+ * repository has, `folder` the root of a worktree of it: none in a folder git says is in no repository.
+ * git failing otherwise rejects with why: taken for "none tracked", a file the repository tracks would
+ * be written into.
  */
-export async function trackedIn(git: string, folder: string, files: readonly string[]): Promise<ReadonlySet<string>> {
+export async function trackedIn(git: string, folder: string, files: readonly string[], commit?: string): Promise<ReadonlySet<string>> {
 	const posix = (file: string) => file.split(path.sep).join('/');
 	let listed: string[];
 	try {
-		// Relative to the folder, as it lists them; each file taken as it is, not as a pattern.
-		listed = (await runGit(git, ['-C', folder, 'ls-files', '-z', '--', ...files.map(file => `:(literal)${posix(file)}`)])).split('\0');
+		// Relative to the folder, as it lists them; each file taken as it is, not as a pattern. A commit's,
+		// from the root of the repository.
+		listed = (await runGit(git, commit === undefined
+			? ['-C', folder, 'ls-files', '-z', '--', ...files.map(file => `:(literal)${posix(file)}`)]
+			: ['-C', folder, 'ls-tree', '-r', '-z', '--name-only', '--full-tree', commit, '--', ...files.map(posix)])).split('\0');
 	} catch (err) {
 		if (inNoRepository(err)) {
 			return new Set();
@@ -221,4 +225,39 @@ export async function untrackedIn(git: string, folder: string, files: readonly s
 		}
 	}
 	return found;
+}
+
+/**
+ * Why `branch` cannot be a branch's name, as `git check-ref-format --branch` says - `a..b`, `x.lock`, a
+ * name ending with a dot; undefined where it can.
+ */
+export async function whyNotBranchNameIn(git: string, main: string, branch: string): Promise<string | undefined> {
+	try {
+		await runGit(git, ['-C', main, 'check-ref-format', '--branch', branch]);
+		return undefined;
+	} catch {
+		return `git does not take ${JSON.stringify(branch)} for a branch's name`;
+	}
+}
+
+/**
+ * The files deleting the worktree `folder` would lose: changed, staged and untracked, as `git status`
+ * lists them - ignored files are git's to drop - relative to the worktree, with forward slashes.
+ */
+export async function changedFilesIn(git: string, folder: string): Promise<readonly string[]> {
+	const out = await runGit(git, ['-C', folder, 'status', '--porcelain=v1', '-z', '--untracked-files=all']);
+	const files: string[] = [];
+	const entries = out.split('\0');
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		if (entry.length < 4) {
+			continue;
+		}
+		files.push(entry.slice(3));
+		// A rename or a copy names where it came from next.
+		if (entry[0] === 'R' || entry[0] === 'C') {
+			index++;
+		}
+	}
+	return files;
 }

@@ -33,7 +33,7 @@ export class AgentLog {
 
 	/** An agent started, by `creator`, as Facade's words name it. */
 	started(agent: Agent, creator: string): void {
-		this.write(`${logTime(agent.startTime)}  started  ${describe(agent)}  ${agent.cli} ${agent.model} ${agent.effort}  by ${creator}  in ${agent.folder}`);
+		this.write(`${logTime(agent.startTime)}  started  ${describe(agent)}  ${agent.cli} ${agent.model ?? 'its own model'} ${agent.effort ?? 'its own effort'}  YOLO ${agent.yolo ? 'on' : 'off'}  by ${creator}  in ${agent.folder}`);
 	}
 
 	/** An agent ended: how, by whom - as Facade's words name them - and why, which says its CLI's exit code where it is known. */

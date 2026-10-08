@@ -13,14 +13,14 @@ import { outcomeOf, tempDir } from './util';
 
 suite('Host: Facade: Start Agent', () => {
 
-	test('until the popup lands, the Command Palette has one command that starts an agent in the worktree on screen: Facade: Start Agent...', () => {
+	test('the Command Palette has one command that starts an agent in the folder on screen, under Agents: Start Agent...', () => {
 		const extension = path.join(__dirname, '..', '..');
 		const manifest = JSON.parse(fs.readFileSync(path.join(extension, 'package.json'), 'utf8'));
 		const names = JSON.parse(fs.readFileSync(path.join(extension, 'package.nls.json'), 'utf8'));
 		const command = (manifest.contributes?.commands ?? []).find((each: { command?: string }) => each.command === 'facade.agents.startAgent');
 		const hidden = (manifest.contributes?.menus?.commandPalette ?? []).some((each: { command?: string; when?: string }) => each.command === 'facade.agents.startAgent' && each.when === 'false');
 
-		assert.deepStrictEqual({ title: names[String(command?.title).replace(/^%|%$/g, '')], category: names[String(command?.category).replace(/^%|%$/g, '')], hidden }, { title: 'Start Agent...', category: 'Facade', hidden: false });
+		assert.deepStrictEqual({ title: names[String(command?.title).replace(/^%|%$/g, '')], category: names[String(command?.category).replace(/^%|%$/g, '')], hidden }, { title: 'Start Agent...', category: 'Agents', hidden: false });
 	});
 });
 
@@ -119,7 +119,7 @@ suite('Host: git\'s records, read with git', function () {
 		});
 	});
 
-	test('in a repository: its main checkout, its HEAD, where its exclude file is, and which of some files it tracks, each taken as it is', async () => {
+	test('in a repository: its main checkout, its HEAD, where its exclude file is, and which of some files it tracks - or a commit of it has - each taken as it is', async () => {
 		const lab = path.join(temp.dir, 'lab');
 		fs.mkdirSync(lab);
 		git(lab, 'init', '-q', '-b', 'main');
@@ -127,17 +127,24 @@ suite('Host: git\'s records, read with git', function () {
 		git(lab, 'add', '.mcp.json');
 		git(lab, '-c', 'user.name=Test', '-c', 'user.email=test@test.invalid', 'commit', '-q', '-m', 'first');
 		const head = git(lab, 'rev-parse', 'HEAD').stdout.trim();
+		// Tracked since, in the index: the first commit has none of it.
+		fs.mkdirSync(path.join(lab, '.agents', 'skills', 'facade'), { recursive: true });
+		fs.writeFileSync(path.join(lab, '.agents', 'skills', 'facade', 'SKILL.md'), '# Ours');
+		git(lab, 'add', '.agents');
 
 		const repository = await repositoryIn('git', lab);
 		const exclude = await excludeIn('git', lab);
+		const files = ['.mcp.json', '.agents/skills/facade/SKILL.md', '.muse/hooks.json', '*.json'];
 		assert.deepStrictEqual({
 			repository: repository && { main: path.relative(temp.dir, repository.main), worktree: repository.worktree, head: repository.head === head },
 			exclude: exclude && [path.relative(lab, exclude.file), path.relative(temp.dir, exclude.root)],
-			tracked: [...await trackedIn('git', lab, ['.mcp.json', '.muse/hooks.json', '*.json'])]
+			tracked: [...await trackedIn('git', lab, files)],
+			atCommit: [...await trackedIn('git', lab, files, head)]
 		}, {
 			repository: { main: 'lab', worktree: 'main', head: true },
 			exclude: [path.join('.git', 'info', 'exclude'), 'lab'],
-			tracked: ['.mcp.json']
+			tracked: ['.mcp.json', '.agents/skills/facade/SKILL.md'],
+			atCommit: ['.mcp.json']
 		});
 	});
 

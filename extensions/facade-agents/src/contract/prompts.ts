@@ -4,14 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Facade } from '../core/facade';
-import { Caller, describe, PERSON } from '../record/events';
+import { agentRef, Caller, describe, PERSON } from '../record/events';
 
-const TOOLS = 'Your tools: start_agent starts a child agent, in any folder of this window or a new worktree, and answers with its number once it has started; list_agents lists you, the agent that started you and the agents you started, each with its number and state; stop_agent stops one of your children.';
+const TOOLS = 'Your tools: start_agent starts an agent, in any folder of this window or a new worktree, and answers with its number once it has started; list_agents lists you, the agent that started you and the agents you started - with all, every agent you reach - and the CLIs you can start; stop_agent stops an agent you reach, and can delete its worktree.';
 
-/** A CLI an agent can start children with, as the skill names it. */
+/** A CLI an agent can start, as the skill names it. */
 export interface StartableCli {
 	readonly id: string;
 	readonly displayName: string;
+	readonly custom?: boolean;
 }
 
 /** An agent of a CLI, by the CLI's name, with its article: `a Coder agent`, `an Editor agent`. */
@@ -20,85 +21,92 @@ function anAgentOf(cliName: string): string {
 }
 
 /**
- * What an agent's MCP server tells the model as it starts: who it is, who started it, where it runs, and
- * what the tools do. Nothing about how to work: that is the skill's.
+ * What an agent's MCP server tells the model as it starts (AGENT-ORCHESTRATION.md, O7): who it is, who
+ * started it, its tree, where it runs, its YOLO, and what the tools do. How to work is the skill's.
  */
 export function instructionsFor(facade: Facade, caller: Caller): string {
 	const agent = facade.agentOf(caller);
 	if (!agent) {
-		return ['You act as the person, @human, in Facade Code.', TOOLS].join('\n');
+		return ['You act as the person, @human, in Facade Code, and reach every agent of this window.', TOOLS].join('\n');
 	}
 	const starter = agent.creator === undefined ? undefined : facade.agent(agent.creator);
 	return [
-		`You are ${describe(agent)}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, started by ${describe(starter ?? PERSON)}.`,
+		`You are ${describe(agent)}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, started by ${starter ? describe(starter) : agent.creator !== undefined ? agentRef(agent.creator) : describe(PERSON)}; your tree is ${agentRef(agent.root)}'s.`,
 		`You run in ${agent.folder}: the worktree ${agent.worktree}. You are in that folder already: run commands there without cd.`,
+		agent.yolo
+			? 'Your YOLO is on: you reach every agent of this window, and the agents you start have YOLO on.'
+			: 'Your YOLO is off: you reach your own tree only, and the agents you start have YOLO off too. Facade\'s tools never need anyone\'s approval.',
 		TOOLS
 	].join('\n');
 }
 
 /**
- * What a new agent's first message says before its task: who it is and who started it, for a CLI
+ * What a new agent's task notice says before where its task is: who it is and who started it, for a CLI
  * whose model may not see its MCP server's instructions.
  */
 export function openingFor(agent: { readonly id: number; readonly name: string; readonly cliName: string }, creator: Caller): string {
-	return `[facade] You are ${describe(agent)}, ${anAgentOf(agent.cliName)} in Facade Code, started by ${describe(creator)}. Your task:`;
+	return `[facade] You are ${describe(agent)}, ${anAgentOf(agent.cliName)} in Facade Code, started by ${describe(creator)}.`;
 }
 
 /**
- * The `facade` skill every agent is handed at its launch: how Facade behaves - agents, who started them
- * and whom they started, the tools, the folder an agent runs in - and the CLIs this machine has to start children
- * with. Nothing about how to work: that is the person's to choose.
+ * The `facade` skill every agent with Facade's tools is handed at its launch (AGENT-ORCHESTRATION.md,
+ * O7): how Facade behaves, with short examples, and the agents this machine can start. No workflow: when
+ * to commit, merge, review or stop is the person's to say, in their own skills.
  */
 export function facadeSkill(clis: readonly StartableCli[]): { readonly name: string; readonly description: string; readonly body: string } {
 	const startable = clis.length
-		? clis.map(cli => `\`${cli.id}\` (${cli.displayName})`).join(', ')
+		? clis.map(cli => cli.custom ? `\`${cli.id}\` (custom)` : `\`${cli.id}\` (${cli.displayName})`).join(', ')
 		: 'none, for no CLI Facade starts is installed';
 	return {
 		name: 'facade',
-		description: 'How to work in Facade Code with your children and the person, through the facade tools start_agent, list_agents and stop_agent. Use it when you start children, look at what they are, or stop them.',
+		description: 'How to work in Facade Code with other agents and the person, through the facade tools start_agent, list_agents and stop_agent. Use it when you start agents, look at them, or stop them.',
 		body: [
 			'# Working in Facade Code',
 			'',
-			'You are an agent in Facade Code: a coding agent CLI in its own terminal, in a folder of a git',
-			'repository. Each agent has a name and a number, as @name #a7, the agent that started it, and the',
-			'agents it starts. The person, @human, starts the first agents. Who started an agent never changes:',
-			'when an agent ends, the agents it started run on.',
-			'A number is Facade\'s own, not a process id: only the tools below take it. The person can see your',
-			'terminal and type into it at any time: answer them there.',
+			'You are an agent in Facade Code: a coding agent CLI in its own terminal, in a folder of this window.',
+			'Each agent has a name and a number, as @name #a7, the agent that started it, and a tree: the agent',
+			'the person, @human, started, and every agent that comes from it. Who started an agent never changes:',
+			'when an agent ends, the agents it started run on. A number is Facade\'s own, not a process id.',
+			'The person can see your terminal and type into it at any time: answer them there.',
+			'',
+			'The agents you start with Facade are separate CLIs in terminals of their own, which the person sees -',
+			'not the subagents your own CLI may have.',
 			'',
 			'## The tools',
 			'',
-			`- \`start_agent\` starts a child: \`name\`, \`cli\`, \`model\` and \`effort\` are required - the CLIs on this machine are ${startable} -`,
-			'  and `task` is its task, if you give it one. Facade gives the model and the effort to the CLI as they',
-			'  are, as its own options take them, and no CLI checks them as it starts: a child given a model its CLI',
-			'  does not have starts all the same, then fails at its first step, on its screen, or works on the',
-			'  CLI\'s own default model.',
-			'  It works in your folder; in another folder of this window, by its absolute path; in a worktree of',
-			'  your repository, by the branch checked out in it; or, with `new_worktree`, in a worktree of its own,',
-			'  on a new branch named after it - starting at your commit in your repository, so commit what the',
-			'  child needs before you start it there. It answers once the child has started, with its number;',
-			'  if it has not within the timeout, that its start is not confirmed, and why: the child stays',
-			'  starting, and may start yet.',
-			'- `list_agents` lists you, the agent that started you and the agents you started: each one\'s',
-			'  name and number, who started it, its state - starting, running, stopping, or ended, how and why -',
-			'  its CLI, model and effort, and its worktree. With `all`, every agent of this window\'s list.',
-			'- `stop_agent` stops one of your children, by its number, as #a7, or its @name. Its worktree stays.',
+			`- \`start_agent\` starts an agent: \`name\` and \`cli\` are required - you can start ${startable} -`,
+			'  and `model`, `effort` and `task` are optional: left out, the CLI\'s own model and effort apply. A',
+			'  task is kept as a message, and the agent is told where to read it. It works in your folder; in',
+			'  another folder of this window, by its absolute path; in a worktree of your repository, by the branch',
+			'  checked out in it; or, with `new_worktree`, in a worktree of its own on a new branch named after it.',
+			'  A new worktree starts at your commit: uncommitted changes are not in it, so commit what it needs',
+			'  first. It answers once the agent has started; if it has not within the timeout, that its start is',
+			'  not confirmed - the agent stays starting: look at it with `list_agents`, or stop it, but do not start',
+			'  it again.',
+			'  Example: `start_agent(name: "lint", cli: "codex", task: "Fix the lint errors in src/", new_worktree: true)`.',
+			'- `list_agents` lists you, the agent that started you and the agents you started; with `all`, every',
+			'  agent you reach. Each with its state, CLI, model and effort, YOLO and sandbox, worktree and task\'s',
+			'  message - and the CLIs you can start, with what each takes.',
+			'- `stop_agent` stops an agent you reach, by its number, as #a7, or its @name. With',
+			'  `delete_worktree`, the agents in its worktree are stopped too and the worktree is deleted, its branch',
+			'  kept; uncommitted work refuses that unless you say `discard_changes`.',
 			'',
-			'A name is a label, which several agents can have: where more than one running agent has it, name',
-			'the one you mean by its number.',
+			'Your YOLO decides your reach: on, every agent of this window; off, your own tree only. The agents you',
+			'start take your YOLO. Facade\'s tools never ask anyone for approval.',
 			'',
-			'## Your children',
+			'## Working together',
 			'',
-			'- Facade tells you only what it knows for certain: whether a child is starting, running, stopping',
-			'  or has ended, and how. Whether a running child works or is done, its worktree shows: the files there,',
-			'  `git status` and `git log`.',
-			'- Agents do not message each other yet: give a child a task it can finish on its own, and say',
-			'  where its result should be - a file, or a commit on its branch.',
+			'- Agents editing at the same time work in worktrees of their own.',
+			'- Read a tool\'s answer before you call it again: a start, a stop or a deletion may have happened.',
+			'- Do not use tools that wait for someone to pick an answer: ask in words, in your own terminal.',
+			'- Whether a running agent works or is done, its terminal and its worktree show: the files there,',
+			'  `git status` and `git log`. Facade tells you only what it knows for certain.',
 			'',
 			'## Your folder',
 			'',
 			'- You run in your folder already: run commands there without `cd`.',
-			'- Files Facade put in your folder for you are not yours to commit.'
+			'- Files Facade put in your folder for your CLI - its MCP server, its skills - are temporary and not',
+			'  yours to commit.'
 		].join('\n')
 	};
 }

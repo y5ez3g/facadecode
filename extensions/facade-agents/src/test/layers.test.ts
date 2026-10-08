@@ -7,7 +7,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** What each layer may import of the others: the table in AGENT-FRAMEWORK.md, Code. */
+/** What each layer may import of the others: the boundaries of AGENT-LAUNCHER.md, L8. */
 const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 	'extension.ts': ['host', 'base'],
 	host: ['contract', 'core', 'record', 'clis', 'transport', 'base'],

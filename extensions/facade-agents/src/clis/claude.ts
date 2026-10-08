@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { canonicalFolder } from '../base/files';
+import { isJsonObject } from '../base/json';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from './cli';
 import { homeOf } from './executable';
 
@@ -13,7 +14,7 @@ import { homeOf } from './executable';
 const PLUGIN = {
 	name: 'facade',
 	version: '1.0.0',
-	description: 'How to work in Facade Code with your children and the person.',
+	description: 'How to work in Facade Code with other agents and the person.',
 	author: { name: 'Facade Code' }
 };
 
@@ -36,28 +37,41 @@ function claudeProjectKey(folder: string): string {
 	return real.split(path.win32.sep).join('/').replace(/^(?<drive>[a-z]):/, (_, drive: string) => `${drive.toUpperCase()}:`);
 }
 
+/** Whether Claude Code has a sandbox here: on macOS and Linux, not on Windows. */
+const HAS_SANDBOX = process.platform !== 'win32';
+
 /**
- * Claude Code in its own UI at full access: every command and edit without asking, outside any
- * sandbox. The person's own settings apply - their hooks, rules and plugins - but not their MCP
- * servers: `--strict-mcp-config` loads Facade's alone. Facade's skills and the settings that keep it
- * from stopping at a question come with the launch, in its run folder and its environment. In a worktree
- * Facade made, the person's trust goes into its global configuration, as Claude Code writes it when they
- * answer its question - where its documentation allows it to be set by hand.
+ * Claude Code in its own UI. YOLO on: every command and edit without asking, its sandbox off. YOLO off:
+ * its sandbox on, asking before its own commands and edits as it asks the person outside Facade, but
+ * never before a call of Facade's tools, which `--allowedTools` lets through by their server's name. The
+ * person's own settings apply - their hooks, rules, plugins and MCP servers, Facade's server beside theirs -
+ * and a deny of theirs wins over Facade's allow. Facade's skills and the settings that keep it from
+ * stopping at a question nobody asked for come with the launch, in its run folder and its environment;
+ * its question tool is taken away, so that an agent asks in words. Wherever an agent starts, the person's
+ * trust in its repository goes into Claude Code's global configuration, as it writes it when they answer
+ * its question.
  */
 export const claudeCli: AgentCli = {
 	id: 'claude',
 	displayName: 'Claude Code',
-	section: 'claude',
+	setting: 'facade.agents.claude',
 	command: 'claude',
 	defaults: {
 		path: '',
+		enabled: true,
 		launch: {
 			arguments: {
-				connect: ['--mcp-config', '${mcpConfig}', '--strict-mcp-config', '--settings', '${settingsFile}', '--plugin-dir', '${pluginDir}'],
-				fullAccess: ['--dangerously-skip-permissions'],
+				connect: ['--mcp-config', '${mcpConfig}', '--plugin-dir', '${pluginDir}'],
+				// Its settings for the launch: tips, emoji, the warning about skipped permissions, its sandbox.
+				quiet: ['--settings', '${settingsFile}'],
+				// It would leave its terminal waiting for someone to pick an answer.
+				questions: ['--disallowedTools', 'AskUserQuestion'],
+				yoloOn: ['--dangerously-skip-permissions'],
+				// Every tool of Facade's server, by the server's name.
+				yoloOff: ['--allowedTools', 'mcp__facade'],
 				model: ['--model', '${model}'],
 				effort: ['--effort', '${effort}'],
-				// After the end of the options, so that a task starting with a dash is not read as one.
+				// After the end of the options, so that a notice starting with a dash is not read as one.
 				task: ['--', '${task}']
 			},
 			environment: {
@@ -74,12 +88,12 @@ export const claudeCli: AgentCli = {
 				CLAUDE_CODE_AUTO_CONNECT_IDE: 'false',
 				CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '1'
 			},
-			// Claude Code keys trust on the repository's root - for a worktree, its main checkout's - so one
-			// entry covers all of the repository's worktrees.
+			// Claude Code keys trust on the repository's root - for a worktree, its main checkout's.
 			trust: { file: '${configFile}', merge: { projects: { '${repository}': { hasTrustDialogAccepted: true } } } },
-			// Only what no variable does: a value of a kind it does not take makes it drop the whole file.
+			// Only what no variable does: a value of a kind it does not take makes it drop the whole file. Its
+			// sandbox is set apart, by the agent's YOLO.
 			settings: {
-				// Facade starts it at full access, which it would otherwise warn about at each launch.
+				// With YOLO on it would otherwise warn about skipped permissions at each launch.
 				skipDangerousModePermissionPrompt: true,
 				spinnerTipsEnabled: false,
 				emojiCompletionEnabled: false
@@ -90,28 +104,36 @@ export const claudeCli: AgentCli = {
 	},
 	trustValues: ({ repository }, env) => ({ configFile: claudeConfigFile(env), repository: claudeProjectKey(repository) }),
 	task: 'argument',
+	sandbox: { yoloOn: 'off', yoloOff: HAS_SANDBOX ? 'on' : 'unavailable' },
+	exemption: 'precise',
 	launch(input, executable) {
 		const configFile = path.join(input.runDir, `${input.slug}.mcp.json`);
 		const settingsFile = path.join(input.runDir, `${input.slug}.settings.json`);
 		const pluginDir = path.join(input.runDir, `${input.slug}.plugin`);
-		const config = { mcpServers: { facade: { type: 'stdio', command: input.mcp.command, args: input.mcp.args, env: input.mcp.env } } };
+		const { connection } = input;
+		const settings = input.config.launch.settings ?? {};
+		// Its sandbox by the agent's YOLO, unless the person's launch says otherwise.
+		const withSandbox = HAS_SANDBOX && !isJsonObject(settings.sandbox) ? { ...settings, sandbox: { enabled: !input.yolo } } : settings;
 		return {
 			executable,
-			args: launchArgs(claudeCli, input.config, {
+			args: launchArgs(claudeCli.setting + '.launch', input.config, {
 				mcpConfig: configFile,
 				settingsFile,
 				pluginDir,
-				model: input.model,
-				effort: input.effort,
-				task: input.task ?? ''
-			}, { trust: input.trusted, task: !!input.task }),
+				...input.model !== undefined ? { model: input.model } : {},
+				...input.effort !== undefined ? { effort: input.effort } : {},
+				...input.task !== undefined ? { task: input.task } : {},
+				...connection?.values
+			}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [
-				{ path: configFile, content: JSON.stringify(config, undefined, '\t') },
-				{ path: settingsFile, content: JSON.stringify(input.config.launch.settings ?? {}, undefined, '\t') },
-				{ path: path.join(pluginDir, '.claude-plugin', 'plugin.json'), content: JSON.stringify(PLUGIN, undefined, '\t') },
-				...input.skills.map(skill => ({ path: path.join(pluginDir, 'skills', skill.name, 'SKILL.md'), content: skillMarkdown(skill) }))
+				{ path: settingsFile, content: JSON.stringify(withSandbox, undefined, '\t') },
+				...connection ? [
+					{ path: configFile, content: JSON.stringify({ mcpServers: { facade: { type: 'stdio', command: connection.mcp.command, args: connection.mcp.args, env: connection.mcp.env } } }, undefined, '\t') },
+					{ path: path.join(pluginDir, '.claude-plugin', 'plugin.json'), content: JSON.stringify(PLUGIN, undefined, '\t') },
+					...input.skills.map(skill => ({ path: path.join(pluginDir, 'skills', skill.name, 'SKILL.md'), content: skillMarkdown(skill) }))
+				] : []
 			],
 			injected: []
 		};

@@ -26,7 +26,7 @@ export class HostPerson implements Person {
 	private async show(text: string, agent: number | undefined): Promise<void> {
 		const firstLine = text.split('\n')[0];
 		const shown = firstLine.length > SHOWN_CHARS ? `${firstLine.slice(0, SHOWN_CHARS)}...` : firstLine;
-		const showTerminal = vscode.l10n.t("Show Terminal");
+		const showTerminal = vscode.l10n.t("Show");
 		const choice = await vscode.window.showInformationMessage(vscode.l10n.t("Facade: {0}", shown), ...(agent !== undefined ? [showTerminal] : []));
 		if (choice === showTerminal && agent !== undefined && !await this.terminals.reveal(agent)) {
 			this.log(`${agentRef(agent)}'s terminal could not be put in front: it is gone, or the window did not go to it.`);

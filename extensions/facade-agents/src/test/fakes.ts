@@ -5,10 +5,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { isProcessRunning } from '../base/system';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
+import { customAgentOf } from '../clis/custom';
 import { Facade, StartRequest, Started } from '../core/facade';
-import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals, WorktreeChanges } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy } from '../record/ledger';
@@ -17,21 +19,38 @@ import { settled, until } from './clock';
 /** The window's terminals, in memory: what was launched, typed and closed, and which run. */
 /**
  * The agents' terminals in a window in memory, each by the agent's number. The tests name them by their
- * titles - `@main #a1 · Arg Code` - whose number is the agent's: a terminal of a run's own process comes
+ * titles - `@main #a1` - whose number is the agent's: a terminal of a run's own process comes
  * back after a reload under the title a test gives it.
  */
+/** The processes the fake terminals of every world run, by their ids: above any id a system gives. */
+const FAKE_PROCESSES = new Set<number>();
+let lastFakeProcess = 5_000_000;
+
+/** Whether a process runs: one of a fake terminal's while it does, else as the operating system says. */
+export function isFakeProcessRunning(pid: number): boolean {
+	return FAKE_PROCESSES.has(pid) || (pid <= 5_000_000 && isProcessRunning(pid));
+}
+
 export class FakeTerminals implements Terminals {
 
 	readonly launched: TerminalLaunch[] = [];
+	/** The process each agent's terminal runs, by the agent's number. */
+	readonly processes = new Map<number, number>();
+	/** While set, a launch does not say its process's id, as a terminal on Windows whose CLI has shown nothing yet. */
+	noProcessIds = false;
 	/** The titles of the terminals whose agents' processes run. */
 	readonly running = new Set<string>();
 	/** What was typed into each terminal, piece by piece, and which were closed, by their titles. */
 	readonly typed: string[] = [];
 	/** The next launch fails with this. */
 	failNext: string | undefined;
+	/** While set, a stop leaves the process running, as one that will not end. */
+	stubborn = false;
+	/** The agents whose terminals were put in front, by number, in order. */
+	readonly revealed: number[] = [];
 	private readonly listeners = new Set<(id: number, end: TerminalEnd) => void>();
 
-	async launch(launch: TerminalLaunch): Promise<void> {
+	async launch(launch: TerminalLaunch): Promise<{ readonly processId?: number }> {
 		const failure = this.failNext;
 		this.failNext = undefined;
 		if (failure) {
@@ -39,6 +58,10 @@ export class FakeTerminals implements Terminals {
 		}
 		this.launched.push(launch);
 		this.running.add(launch.name);
+		const processId = ++lastFakeProcess;
+		FAKE_PROCESSES.add(processId);
+		this.processes.set(launch.id, processId);
+		return this.noProcessIds ? {} : { processId };
 	}
 
 	async isAlive(id: number): Promise<boolean> {
@@ -54,9 +77,17 @@ export class FakeTerminals implements Terminals {
 	async stop(id: number): Promise<void> {
 		const title = this.titleOf(id);
 		if (title !== undefined) {
+			if (this.stubborn) {
+				throw new Error('its process has not ended yet');
+			}
 			this.typed.push(`${title}: [closed]`);
 			this.end(title);
 		}
+	}
+
+	async reveal(id: number): Promise<boolean> {
+		this.revealed.push(id);
+		return this.titleOf(id) !== undefined;
 	}
 
 	async type(id: number, text: string): Promise<boolean> {
@@ -71,6 +102,7 @@ export class FakeTerminals implements Terminals {
 	/** As when a terminal closes, or its process exits: the terminal of that title. */
 	end(title: string, end: TerminalEnd = { byThePerson: false }): void {
 		if (this.running.delete(title)) {
+			FAKE_PROCESSES.delete(this.processes.get(idOf(title)) ?? 0);
 			for (const listener of [...this.listeners]) {
 				listener(idOf(title), end);
 			}
@@ -83,9 +115,9 @@ export class FakeTerminals implements Terminals {
 	}
 }
 
-/** The agent's number a terminal's title says: `@main #a1 · Arg Code` is #a1's. */
+/** The agent's number a terminal's title says: `@main #a1` is #a1's. */
 function idOf(title: string): number {
-	const number = /#a(?<id>\d+) /.exec(title)?.groups?.id;
+	const number = /#a(?<id>\d+)\b/.exec(title)?.groups?.id;
 	if (number === undefined) {
 		throw new Error(`${title} is no agent's terminal`);
 	}
@@ -102,6 +134,10 @@ export class FakeGit implements Git {
 	readonly untrackedFiles = new Set<string>();
 	/** While set, listing a repository's worktrees waits for it. */
 	hold: Promise<void> | undefined;
+	/** What deleting a worktree would lose, by its folder: nothing unless a test says. */
+	readonly changes = new Map<string, WorktreeChanges>();
+	/** While set, deleting a worktree fails with this. */
+	failDelete: string | undefined;
 	private readonly worktrees = new Map<string, ListedWorktree[]>();
 	/** The branches of each repository that no worktree has checked out, by its main checkout. */
 	private readonly otherBranches = new Map<string, Set<string>>();
@@ -154,6 +190,27 @@ export class FakeGit implements Git {
 		return (this.worktrees.get(main) ?? []).some(each => each.branch === branch) || !!this.otherBranches.get(main)?.has(branch);
 	}
 
+	async whyNotBranchName(_main: string, branch: string): Promise<string | undefined> {
+		return branch.includes('..') || branch.endsWith('.lock') || branch.endsWith('.') ? `git does not take ${JSON.stringify(branch)} for a branch's name` : undefined;
+	}
+
+	async changesIn(folder: string): Promise<WorktreeChanges> {
+		return this.changes.get(folder) ?? { files: [], unsaved: [] };
+	}
+
+	async deleteWorktree(folder: string): Promise<void> {
+		if (this.failDelete) {
+			throw new Error(this.failDelete);
+		}
+		const found = this.worktreeAt(folder);
+		if (!found || found.main === found.worktree.folder) {
+			throw new Error(`${folder} is no worktree to delete`);
+		}
+		this.steps.push(`delete ${folder}`);
+		this.worktrees.set(found.main, (this.worktrees.get(found.main) ?? []).filter(each => each.folder !== found.worktree.folder));
+		fs.rmSync(folder, { recursive: true, force: true });
+	}
+
 	async makeWorktree(main: string, branch: string, startPoint: string): Promise<string> {
 		const worktrees = this.worktrees.get(main) ?? [];
 		if (await this.hasBranch(main, branch)) {
@@ -172,7 +229,11 @@ export class FakeGit implements Git {
 		return found && { file: path.join(this.gitDir, path.basename(found.main), 'info', 'exclude'), root: found.worktree.folder };
 	}
 
-	async tracks(folder: string, files: readonly string[]): Promise<ReadonlySet<string>> {
+	/** With `commit`, the files tracked in `folder`, the main checkout, stand for the commit's. */
+	async tracks(folder: string, files: readonly string[], commit?: string): Promise<ReadonlySet<string>> {
+		if (commit !== undefined) {
+			this.steps.push(`ls-tree ${commit.slice(0, 7)} in ${folder}`);
+		}
 		return new Set(files.filter(file => this.trackedFiles.has(path.join(folder, file))));
 	}
 
@@ -234,12 +295,13 @@ export function argCli(home: string): AgentCli {
 	const cli: AgentCli = {
 		id: 'arg',
 		displayName: 'Arg Code',
-		section: 'arg',
+		setting: 'facade.agents.arg',
 		command: 'arg',
 		defaults: {
 			path: '',
+			enabled: true,
 			launch: {
-				arguments: { connect: ['--config', '${config}'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
+				arguments: { connect: ['--config', '${config}'], questions: ['--no-ask'], yoloOn: ['--yolo'], yoloOff: ['--sandbox', '--allow', 'facade'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
 				environment: { ARG_QUIET: '1' },
 				trust: { file: '${argHome}/trust.json', merge: { trusted: ['${repository}'] } },
 				enterDelay: 300,
@@ -248,14 +310,21 @@ export function argCli(home: string): AgentCli {
 		},
 		trustValues: ({ repository }, env) => ({ argHome: env.ARG_HOME ?? home, repository }),
 		task: 'argument',
+		sandbox: { yoloOn: 'off', yoloOff: 'on' },
+		exemption: 'precise',
 		launch: (input, executable) => {
 			const config = path.join(input.runDir, `${input.slug}.config.json`);
 			return {
 				executable,
-				args: launchArgs(cli, input.config, { config, model: input.model, effort: input.effort, task: input.task ?? '' }, { trust: input.trusted, task: !!input.task }),
+				args: launchArgs(cli.setting + '.launch', input.config, {
+					config,
+					...input.model !== undefined ? { model: input.model } : {},
+					...input.effort !== undefined ? { effort: input.effort } : {},
+					...input.task !== undefined ? { task: input.task } : {}
+				}, { framework: !!input.connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
 				env: input.config.launch.environment,
 				cwd: input.folder,
-				files: [{ path: config, content: JSON.stringify(input.mcp) }],
+				files: input.connection ? [{ path: config, content: JSON.stringify(input.connection.mcp) }] : [],
 				injected: []
 			};
 		}
@@ -269,14 +338,15 @@ export function argCli(home: string): AgentCli {
  * in its arguments.
  */
 export function toldCli(): AgentCli {
-	const server = (input: { readonly mcp: { readonly command: string; readonly args: readonly string[] } }) => ({ command: input.mcp.command, args: input.mcp.args });
+	const server = (mcp: { readonly command: string; readonly args: readonly string[] }) => ({ command: mcp.command, args: mcp.args });
 	const cli: AgentCli = {
 		id: 'told',
 		displayName: 'Told Code',
-		section: 'told',
+		setting: 'facade.agents.told',
 		command: 'told',
 		defaults: {
 			path: '',
+			enabled: true,
 			launch: {
 				arguments: { model: ['--model', '${model}'], effort: ['--effort', '${effort}'] },
 				environment: {},
@@ -288,29 +358,37 @@ export function toldCli(): AgentCli {
 		},
 		sharedServer: true,
 		task: 'terminal',
-		launch: (input, executable) => ({
-			executable,
-			args: launchArgs(cli, input.config, { model: input.model, effort: input.effort }, { trust: input.trusted }),
-			env: input.config.launch.environment,
-			cwd: input.folder,
-			files: [],
-			injected: [
-				{
-					path: '.mcp.json',
-					content: JSON.stringify({ mcpServers: { facade: server(input) } }, undefined, '\t'),
-					merge: theirs => {
-						let file: { mcpServers?: { [name: string]: unknown } };
-						try {
-							file = JSON.parse(theirs);
-						} catch {
-							return undefined;
+		sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' },
+		exemption: 'all',
+		launch: (input, executable) => {
+			const { connection } = input;
+			return {
+				executable,
+				args: launchArgs(cli.setting + '.launch', input.config, {
+					...input.model !== undefined ? { model: input.model } : {},
+					...input.effort !== undefined ? { effort: input.effort } : {}
+				}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: false, trust: true }),
+				env: input.config.launch.environment,
+				cwd: input.folder,
+				files: [],
+				injected: connection ? [
+					{
+						path: '.mcp.json',
+						content: JSON.stringify({ mcpServers: { facade: server(connection.mcp) } }, undefined, '\t'),
+						merge: theirs => {
+							let file: { mcpServers?: { [name: string]: unknown } };
+							try {
+								file = JSON.parse(theirs);
+							} catch {
+								return undefined;
+							}
+							return file.mcpServers?.facade ? undefined : JSON.stringify({ ...file, mcpServers: { ...file.mcpServers, facade: server(connection.mcp) } }, undefined, 2);
 						}
-						return file.mcpServers?.facade ? undefined : JSON.stringify({ ...file, mcpServers: { ...file.mcpServers, facade: server(input) } }, undefined, 2);
-					}
-				},
-				...input.skills.map(skill => ({ path: `.told/skills/${skill.name}/SKILL.md`, content: skillMarkdown(skill) }))
-			]
-		})
+					},
+					...input.skills.map(skill => ({ path: `.told/skills/${skill.name}/SKILL.md`, content: skillMarkdown(skill) }))
+				] : []
+			};
+		}
 	};
 	return cli;
 }
@@ -332,8 +410,14 @@ export interface WorldOptions {
 	readonly startTimeoutMs?: number;
 	/** The environment the agents' terminals start with, by their folder: none of the person's home folders. */
 	readonly environment?: (folder: string) => Environment;
+	/** The body of the skill every agent is handed, as this build of Facade writes it. */
+	readonly skill?: string;
+	/** Where a terminal with the environment `env` finds a CLI, by its id: where the window does unless set; undefined for nowhere. */
+	readonly locate?: (cli: string, env: Environment) => string | undefined;
 	/** Whether a process the ledger's lock names runs, as the operating system says unless set. */
 	readonly isRunning?: (pid: number) => boolean;
+	/** The folder on the person's screen: none unless set. */
+	readonly activeFolder?: string;
 	/** Who opens the ledger: the workspace `lab`'s window unless set. */
 	readonly owner?: string;
 	/** The load of the window it opens in: a new one for each world unless set. */
@@ -358,29 +442,52 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const person = new FakePerson();
 	const settings: { [section: string]: { [name: string]: unknown } } = {};
 	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000 };
+	const switches: { yolo: unknown; framework: boolean } = { yolo: true, framework: true };
+	/** The person's custom agents, `facade.agents.custom`, as a test sets them: by name, in order. */
+	const custom: { [name: string]: unknown } = {};
 	const known: readonly AgentCli[] = [argCli(path.join(dir, 'arg-home')), toldCli()];
-	const configFor = (cli: AgentCli) => readCliConfig(cli, name => settings[cli.section]?.[name]);
+	const sectionOf = (cli: AgentCli) => cli.setting.replace(/^facade\.agents\./, '');
+	const configFor = (cli: AgentCli) => readCliConfig(cli, name => settings[sectionOf(cli)]?.[name]);
+	const executableOf = (cli: AgentCli) => cli.custom ? path.join(dir, 'bin', `${cli.command}.exe`) : path.join(dir, 'bin', `${cli.id}.exe`);
+	const onMachine = (cli: AgentCli) => cli.custom ? true : (options.clis ?? ['arg', 'told']).includes(cli.id);
+	const installed = () => known.filter(cli => onMachine(cli) && configFor(cli).enabled).map(cli => ({ cli, config: configFor(cli), executable: executableOf(cli) }));
 	/** What the core wrote to its log, in order. */
 	const logs: string[] = [];
 	const facade = new Facade({
 		table,
-		ports: { terminals, git, workspace: { folders: () => [...Object.keys(options.repositories ?? {}), ...options.folders ?? []] }, person },
+		ports: { terminals, git, workspace: { folders: () => [...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder }, person },
 		clis: {
 			known,
-			installed: () => known.filter(cli => (options.clis ?? ['arg', 'told']).includes(cli.id)).map(cli => ({ cli, config: configFor(cli), executable: path.join(dir, 'bin', `${cli.id}.exe`) })),
+			custom: () => Object.entries(custom).map(([name, value]) => customAgentOf(name, value, known.some(cli => cli.id === name) ? `${name} is a built-in's id` : undefined)),
+			installed,
+			locate: (cli, config, env) => {
+				const found = options.locate ? options.locate(cli.id, env) : onMachine(cli) ? executableOf(cli) : undefined;
+				return found ? { cli, config, executable: found } : undefined;
+			},
+			yolo: () => {
+				if (typeof switches.yolo !== 'boolean') {
+					throw new Error(`facade.agents.yolo is ${JSON.stringify(switches.yolo)}, which is neither true nor false`);
+				}
+				return switches.yolo;
+			},
+			framework: () => switches.framework,
 			configOf: configFor,
 			environment: async folder => options.environment?.(folder) ?? {}
 		},
 		setup: {
-			mcpServer: tokenFile => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', tokenFile], env: { ELECTRON_RUN_AS_NODE: '1' } }),
+			connection: tokenFile => ({
+				mcp: { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', tokenFile], env: { ELECTRON_RUN_AS_NODE: '1' } },
+				values: { executable: '/facade/facade', shimFile: '/facade/shim.js', pipe: 'pipe', recordDir: dir, tokenFile, waitMs: '120000' }
+			}),
 			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
 			agentEnv: token => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: token }),
-			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: '# Working in Facade Code' }],
+			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: options.skill ?? '# Working in Facade Code' }],
 			opening: (agent, parent) => `[facade] You are @${agent.name} #a${agent.id}, ${agent.cliName}, started by @${parent.name}.`
 		},
 		timing: () => timing,
 		log: message => logs.push(message),
-		injected: options.injected ?? path.join(dir, 'injected.json')
+		injected: options.injected ?? path.join(dir, 'injected.json'),
+		isRunning: isFakeProcessRunning
 	});
 	return {
 		table,
@@ -392,6 +499,10 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		settings,
 		/** How long the core waits, as the person set it: a test changes it as it goes. */
 		timing,
+		/** The person's switches: YOLO, on unless a test turns it off or sets it to what is no switch, and the agent framework, on. */
+		switches,
+		/** The person's custom agents, by name: a test adds them. */
+		custom,
 		/** The agent numbered `id`. */
 		agent(id: number): Agent {
 			const found = table.get(id);
@@ -413,7 +524,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			let over = false;
 			const starting = facade.startAgent(caller, request);
 			starting.then(() => over = true, () => over = true);
-			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.includes(` #a${id} · `)));
+			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.endsWith(` #a${id}`)));
 			if (!over) {
 				facade.connected(callerOf(this.agent(id)));
 			}

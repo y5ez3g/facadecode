@@ -12,24 +12,17 @@ import { formatJson, isEqualPath, jsonLayoutOf, parseJson, replaceFile } from '.
 import { isJsonObject, isStringArray } from '../base/json';
 import { withFileLock } from '../base/lock';
 import { Injected } from '../clis/cli';
-import { isLedgerHeld } from '../record/ledger';
 
 /** The `.gitignore` of a folder Facade made, which keeps all of it out of git. */
 const IGNORE_ALL = '*\n';
 /** What removing a folder fails with on Windows while a process has it as its current folder. */
 const IN_USE_CODES = new Set(['EBUSY', 'EPERM']);
 
-/** What Facade put into one folder, and the windows whose agents need it there. */
-interface FolderRecord {
-	/** The windows whose agents run there, by their workspace records' folders. */
-	holders: string[];
-	/** Each file Facade wrote, by its path relative to the folder. */
-	files: { [file: string]: WrittenFile };
-	/** The folders Facade made, relative to the folder, outermost first. */
-	made: string[];
-	/** The repository's `info/exclude`, and the lines the files need in it. */
-	exclude?: string;
-	lines: string[];
+/** An agent that uses what Facade put into a folder: by its workspace's record and its number, with its process once it has one. */
+export interface InjectionUser {
+	readonly workspace: string;
+	readonly id: number;
+	readonly processId?: number;
 }
 
 /**
@@ -40,6 +33,31 @@ interface WrittenFile {
 	hash: string;
 	theirs?: string;
 	ours?: string;
+}
+
+/**
+ * What a put is writing into a folder, recorded before it writes anything and dropped once it is done:
+ * each file with what it held before - in base64; none where there was none - and Facade's record of it
+ * before, where it had one; the folders it makes, and the exclude lines it adds. What a window comes upon
+ * here was cut short, and is taken back.
+ */
+interface Writing {
+	files: { [file: string]: { before?: string; record?: WrittenFile } };
+	made: string[];
+	lines: string[];
+}
+
+/** What Facade put into one folder, and the agents that use it. */
+interface FolderRecord {
+	users: InjectionUser[];
+	/** Each file Facade wrote, by its path relative to the folder. */
+	files: { [file: string]: WrittenFile };
+	/** The folders Facade made, relative to the folder, outermost first. */
+	made: string[];
+	/** The repository's `info/exclude`, and the lines the files need in it. */
+	exclude?: string;
+	lines: string[];
+	writing?: Writing;
 }
 
 interface InjectedRecord {
@@ -77,18 +95,67 @@ function folderRecordOf(value: unknown): FolderRecord | undefined {
 	if (!isJsonObject(value)) {
 		return undefined;
 	}
-	const { holders, files, made, exclude, lines } = value;
-	if (!isStringArray(holders) || !isJsonObject(files) || !isStringArray(made) || !isStringArray(lines) || (exclude !== undefined && typeof exclude !== 'string')) {
+	const { users, files, made, exclude, lines, writing } = value;
+	if (!Array.isArray(users) || !isJsonObject(files) || !isStringArray(made) || !isStringArray(lines) || (exclude !== undefined && typeof exclude !== 'string')) {
 		return undefined;
 	}
+	const checkedUsers = users.map(userOf);
 	const written: FolderRecord['files'] = {};
 	for (const [file, entry] of Object.entries(files)) {
-		if (!isJsonObject(entry) || typeof entry.hash !== 'string' || (entry.theirs !== undefined && typeof entry.theirs !== 'string') || (entry.ours !== undefined && typeof entry.ours !== 'string')) {
+		const checked = writtenFileOf(entry);
+		if (!checked) {
 			return undefined;
 		}
-		written[file] = { hash: entry.hash, ...(typeof entry.theirs === 'string' ? { theirs: entry.theirs } : {}), ...(typeof entry.ours === 'string' ? { ours: entry.ours } : {}) };
+		written[file] = checked;
 	}
-	return { holders: [...holders], files: written, made: [...made], ...(exclude !== undefined ? { exclude } : {}), lines: [...lines] };
+	const checkedWriting = writing === undefined ? undefined : writingOf(writing);
+	if (checkedUsers.some(user => !user) || (writing !== undefined && !checkedWriting)) {
+		return undefined;
+	}
+	return {
+		users: checkedUsers.filter((user): user is InjectionUser => !!user),
+		files: written,
+		made: [...made],
+		...(exclude !== undefined ? { exclude } : {}),
+		lines: [...lines],
+		...(checkedWriting ? { writing: checkedWriting } : {})
+	};
+}
+
+function userOf(value: unknown): InjectionUser | undefined {
+	if (!isJsonObject(value) || typeof value.workspace !== 'string' || !isNumberFrom1(value.id) || (value.processId !== undefined && !isNumberFrom1(value.processId))) {
+		return undefined;
+	}
+	return { workspace: value.workspace, id: value.id, ...(value.processId !== undefined ? { processId: value.processId } : {}) };
+}
+
+function writtenFileOf(value: unknown): WrittenFile | undefined {
+	if (!isJsonObject(value) || typeof value.hash !== 'string' || (value.theirs !== undefined && typeof value.theirs !== 'string') || (value.ours !== undefined && typeof value.ours !== 'string')) {
+		return undefined;
+	}
+	return { hash: value.hash, ...(typeof value.theirs === 'string' ? { theirs: value.theirs } : {}), ...(typeof value.ours === 'string' ? { ours: value.ours } : {}) };
+}
+
+function writingOf(value: unknown): Writing | undefined {
+	if (!isJsonObject(value) || !isJsonObject(value.files) || !isStringArray(value.made) || !isStringArray(value.lines)) {
+		return undefined;
+	}
+	const files: Writing['files'] = {};
+	for (const [file, entry] of Object.entries(value.files)) {
+		if (!isJsonObject(entry) || (entry.before !== undefined && typeof entry.before !== 'string')) {
+			return undefined;
+		}
+		const record = entry.record === undefined ? undefined : writtenFileOf(entry.record);
+		if (entry.record !== undefined && !record) {
+			return undefined;
+		}
+		files[file] = { ...(typeof entry.before === 'string' ? { before: entry.before } : {}), ...(record ? { record } : {}) };
+	}
+	return { files, made: [...value.made], lines: [...value.lines] };
+}
+
+function isNumberFrom1(value: unknown): value is number {
+	return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
 /** What git says of the folder files go into. */
@@ -101,111 +168,261 @@ export interface InjectionGit {
 	readonly untracked: ReadonlySet<string>;
 }
 
+/** A file a put writes: where, what, and the person's file it takes the place of, in base64. */
+interface FileWrite {
+	readonly file: string;
+	readonly target: string;
+	readonly content: string;
+	readonly theirs?: string;
+	/** Whether it holds that already, as Facade wrote it for other agents. */
+	readonly there?: boolean;
+}
+
 /**
- * The files Facade puts into folders for its agents, recorded in one file every window shares, so that
- * what one window's agents need stays while another window's exit.
+ * The files Facade puts into folders for its agents, recorded in one file every window shares,
+ * `~/.facade/injected.json`, with the agents that use them, by workspace and number.
  *
- * - The person's own file stays theirs. An agent is not started over it unless git does not track it
- *   and its launch can add Facade's part to it; it then holds that part while agents run there, and is
- *   theirs again, byte for byte, afterwards.
+ * - The person's own file stays theirs. An agent is not started over it unless its launch can add
+ *   Facade's part to it beside theirs - a file git tracks too, whose change shows in `git diff` while
+ *   agents use it, never hidden with index flags (AGENT-ORCHESTRATION.md, O10); it then holds that part
+ *   while agents use it, and is theirs again, byte for byte, afterwards.
+ * - Agents that need the same files share them; a file in use with other content refuses the launch.
+ * - Copies first: what a put is about to write, and the person's files as they were, are recorded
+ *   before anything is written, and the folder's entry marked done once it is. A put that fails part way
+ *   takes back what it wrote; one a window comes upon not done - cut short as its window went - is taken
+ *   back the same way.
  * - Each file gets a line in the repository's `info/exclude`, so that no agent commits it, unless some
  *   worktree of the repository has a file of the person's at that place that git neither tracks nor
  *   ignores: git would then feel free to write over theirs.
- * - The files are taken back once no agent of any window runs there, and only while they hold what
- *   Facade wrote. The person's file that they changed meanwhile keeps their change and loses Facade's
- *   part, where both are JSON; one that holds nothing of Facade's any more is left alone, and what it
- *   held before is kept beside the record, which the person is told of.
- * - A window holds a folder while it is open, and for a minute after it closed, which covers a reload.
- * - A folder Facade made that a process still has in use is removed later.
+ * - The files are taken back once no agent that uses them may still run - each has ended, or its
+ *   process is gone - and only while they hold what Facade wrote. The person's file that they changed
+ *   meanwhile keeps their change and loses Facade's part, where both are JSON; one that holds nothing of
+ *   Facade's any more is left alone, and what it held before is kept beside the record, which the person
+ *   is told of. A reload, Facade being off, or time passing takes nothing back.
+ * - What cannot be taken back yet - a file the disk refuses, a folder a process has in use - is tried again.
  */
 export class Injections {
 
 	constructor(
 		/** The record every window shares. */
 		private readonly file: string,
-		/** This window, by its workspace record's folder. */
-		private readonly holder: string,
 		private readonly log: (message: string) => void,
 		/** Tells the person something they need to act on. */
 		private readonly tell: (text: string) => void,
-		/** Whether the window of a workspace record is open, or closed a moment ago as it reloads. */
-		private readonly isHeld: (holder: string) => boolean = isLedgerHeld
+		/** Whether an agent that uses what Facade put into a folder may still run: it has not ended, and its process is not gone. */
+		private readonly mayRun: (user: InjectionUser) => boolean
 	) { }
 
-	/** Puts `files` into `folder` for an agent of `cli`: all of them, or none, with an error that says why. */
-	put(folder: string, files: readonly Injected[], git: InjectionGit, cli: string): void {
+	/** Refuses, with why, `files` that {@link put} would not put into `folder` for an agent of `cli` now; writes nothing. */
+	check(folder: string, files: readonly Injected[], cli: string): void {
 		withFileLock(this.file, () => {
 			const record = this.read();
+			const key = keyFor(record.folders, folder);
+			const entry = key === undefined ? undefined : record.folders[key];
+			// A put cut short is taken back first: what it wrote is no one's.
+			const settled = entry && { ...entry, files: Object.fromEntries(Object.entries(entry.files).filter(([file]) => !entry.writing?.files[file])) };
+			this.decide(settled, folder, files, cli);
+		});
+	}
+
+	/**
+	 * Puts `files` into `folder` for `user`, an agent of `cli`: all of them, or none, with an error that
+	 * says why.
+	 */
+	put(folder: string, files: readonly Injected[], git: InjectionGit, cli: string, user: InjectionUser): void {
+		withFileLock(this.file, () => {
+			const record = this.read();
+			// What no agent may still use goes first, and what a window left half written.
+			if (this.settle(record)) {
+				this.write(record);
+			}
 			const key = keyFor(record.folders, folder) ?? folder;
-			const entry = record.folders[key] ?? { holders: [], files: {}, made: [], lines: [] };
-			// Everything is decided before anything is written, so that a refusal leaves the folder as it was.
-			const writes = files.map(file => {
-				const target = path.join(folder, file.path);
-				const refused = new Error(`${cli} is not started: ${target} is there already, and Facade does not write over it.`);
-				let current: Buffer | undefined;
-				try {
-					current = readBytes(target);
-				} catch {
-					throw refused;
-				}
-				const written = entry.files[file.path];
-				const isOurs = current !== undefined && written !== undefined && hashOf(current) === written.hash;
-				let theirs: string | undefined;
-				if (isOurs) {
-					theirs = written.theirs;
-				} else if (current !== undefined) {
-					if (git.tracked.has(file.path)) {
-						throw new Error(`${cli} is not started: ${target} is in the repository, and Facade would have to change it, so that a commit could take Facade's settings with it.`);
-					}
-					// The person's file, which they changed while Facade's part was in it: theirs is it without that part.
-					const changed = written?.theirs !== undefined && written.ours !== undefined
-						? withoutOurs(current.toString('utf8'), Buffer.from(written.theirs, 'base64').toString('utf8'), Buffer.from(written.ours, 'base64').toString('utf8'))
-						: undefined;
-					theirs = changed !== undefined ? Buffer.from(changed).toString('base64') : current.toString('base64');
-				}
-				const content = theirs === undefined ? file.content : file.merge?.(Buffer.from(theirs, 'base64').toString('utf8'));
-				if (content === undefined) {
-					throw refused;
-				}
-				if (isOurs && hashOf(Buffer.from(content)) !== written.hash && entry.holders.some(holder => !isEqualPath(holder, this.holder) && this.isHeld(holder))) {
-					throw new Error(`${cli} is not started: ${target} holds what another Facade window wrote there for its agents, which would change under them.`);
-				}
-				return { file: file.path, target, content, theirs };
-			});
-			for (const write of writes) {
-				entry.made.push(...makeFolders(folder, path.dirname(write.target)));
-				replaceFile(write.target, write.content);
+			const entry = record.folders[key] ?? { users: [], files: {}, made: [], lines: [] };
+			const writes = this.decide(record.folders[key], folder, files, cli).filter(write => !write.there);
+			const made = foldersToMake(folder, writes.map(write => path.dirname(write.target)));
+			// A folder Facade makes keeps everything in it out of git by itself, in this worktree only.
+			const ignores = made.filter(each => !made.some(other => other !== each && isInside(each, other))).map(each => ({ file: `${each.split(path.sep).join('/')}/.gitignore`, target: path.join(folder, each, '.gitignore'), content: IGNORE_ALL }));
+			const all: FileWrite[] = [...writes, ...ignores];
+			const lines = git.exclude ? this.linesFor(folder, files, git, git.exclude).filter(line => !entry.lines.includes(line)) : [];
+			const exclude = git.exclude?.file;
+			const missing = exclude ? linesMissing(exclude, lines) : [];
+
+			// Copies first: what is about to be written, and what each file held, before anything is.
+			entry.writing = {
+				files: Object.fromEntries(all.map(write => {
+					const before = readBytes(write.target);
+					const previous = entry.files[write.file];
+					return [write.file, { ...(before !== undefined ? { before: before.toString('base64') } : {}), ...(previous ? { record: previous } : {}) }];
+				})),
+				made,
+				lines
+			};
+			for (const write of all) {
 				const hash = hashOf(Buffer.from(write.content));
 				entry.files[write.file] = write.theirs === undefined ? { hash } : { hash, theirs: write.theirs, ours: Buffer.from(write.content).toString('base64') };
-				if (write.theirs !== undefined) {
-					this.log(`${write.target} is the person's: Facade's part is added to it while agents run there.`);
-				}
 			}
-			// A folder Facade made keeps everything in it out of git by itself, in this worktree only.
-			for (const made of entry.made.filter(each => !entry.made.some(other => other !== each && isInside(each, other)))) {
-				const ignore = `${made.split(path.sep).join('/')}/.gitignore`;
-				if (entry.files[ignore] === undefined && !fs.existsSync(path.join(folder, ignore))) {
-					fs.writeFileSync(path.join(folder, ignore), IGNORE_ALL);
-					entry.files[ignore] = { hash: hashOf(Buffer.from(IGNORE_ALL)) };
-				}
-			}
-			if (!entry.holders.some(holder => isEqualPath(holder, this.holder))) {
-				entry.holders.push(this.holder);
-			}
-			if (git.exclude) {
-				this.excludeFromGit(record, entry, folder, files, git, git.exclude);
+			entry.made.push(...made);
+			entry.lines.push(...lines);
+			if (exclude) {
+				entry.exclude = exclude;
+				const addedKey = keyFor(record.added, exclude) ?? exclude;
+				record.added[addedKey] = [...new Set([...record.added[addedKey] ?? [], ...missing])];
 			}
 			record.folders[key] = entry;
+			this.write(record);
+
+			try {
+				for (const dir of made) {
+					fs.mkdirSync(path.join(folder, dir));
+				}
+				for (const write of all) {
+					replaceFile(write.target, write.content);
+					if (write.theirs !== undefined) {
+						this.log(`${write.target} is the person's: Facade's part is added to it while agents use it.`);
+					}
+				}
+				if (exclude && missing.length) {
+					appendLines(exclude, missing);
+				}
+			} catch (err) {
+				this.rollBack(record, key);
+				this.write(record);
+				throw new Error(`${cli} is not started: what Facade puts into ${folder} could not be written, and what was is taken back: ${messageOf(err)}`);
+			}
+			delete entry.writing;
+			entry.users.push(user);
 			this.write(record);
 		});
 	}
 
-	private excludeFromGit(record: InjectedRecord, entry: FolderRecord, folder: string, files: readonly Injected[], git: InjectionGit, exclude: { readonly file: string; readonly root: string }): void {
+	/**
+	 * The files of `folder` that Facade made there and nobody changed since, relative to it with forward
+	 * slashes: not the person's work, for a worktree's deletion to count (AGENT-ORCHESTRATION.md, O5). A file
+	 * of the person's that holds Facade's part is not one: what it held before may be theirs.
+	 */
+	ownedUnchanged(folder: string): string[] {
+		return withFileLock(this.file, () => {
+			const record = this.read();
+			const key = keyFor(record.folders, folder);
+			const entry = key === undefined ? undefined : record.folders[key];
+			if (!entry) {
+				return [];
+			}
+			return Object.entries(entry.files).filter(([file, written]) => {
+				if (written.theirs !== undefined) {
+					return false;
+				}
+				try {
+					const current = readBytes(path.join(folder, file));
+					return current !== undefined && hashOf(current) === written.hash;
+				} catch {
+					return false;
+				}
+			}).map(([file]) => file.split(path.sep).join('/'));
+		});
+	}
+
+	/** Records the process of an agent that uses what Facade put into folders, by which it is known to run. */
+	launched(user: InjectionUser, processId: number): void {
+		withFileLock(this.file, () => {
+			const record = this.read();
+			let changed = false;
+			for (const entry of Object.values(record.folders)) {
+				entry.users = entry.users.map(each => {
+					if (isEqualPath(each.workspace, user.workspace) && each.id === user.id) {
+						changed = true;
+						return { ...each, processId };
+					}
+					return each;
+				});
+			}
+			if (changed) {
+				this.write(record);
+			}
+		});
+	}
+
+	/**
+	 * Lets go of what `user`, an agent that ended, used: what no agent may still use is taken back, in
+	 * its folder and any other. Answers whether something is left to take back later, for {@link sweep}.
+	 */
+	release(user: InjectionUser): boolean {
+		return withFileLock(this.file, () => {
+			const record = this.read();
+			for (const entry of Object.values(record.folders)) {
+				entry.users = entry.users.filter(each => !isEqualPath(each.workspace, user.workspace) || each.id !== user.id);
+			}
+			this.settle(record);
+			this.write(record);
+			return hasLeftovers(record);
+		});
+	}
+
+	/**
+	 * Takes back what no agent may still use, whatever its workspace, what a window left half written, and
+	 * what could not be taken back before. Answers whether something is left to take back later.
+	 */
+	sweep(): boolean {
+		return withFileLock(this.file, () => {
+			const record = this.read();
+			if (this.settle(record)) {
+				this.write(record);
+			}
+			return hasLeftovers(record);
+		});
+	}
+
+	/**
+	 * What `files` would be written into `folder`, whose record is `entry`: refused, with why, where git
+	 * tracks one, one is the person's that cannot take Facade's part, one leads out of the folder, or one
+	 * in use holds other content.
+	 */
+	private decide(entry: FolderRecord | undefined, folder: string, files: readonly Injected[], cli: string): FileWrite[] {
+		const used = !!entry?.users.some(user => this.mayRun(user));
+		return files.map(file => {
+			const target = path.join(folder, file.path);
+			if (!isInside(target, folder)) {
+				throw new Error(`${cli} is not started: ${file.path} leads out of ${folder}, where Facade puts nothing.`);
+			}
+			const refused = new Error(`${cli} is not started: ${target} is there already, and Facade does not write over it.`);
+			let current: Buffer | undefined;
+			try {
+				current = readBytes(target);
+			} catch {
+				throw refused;
+			}
+			const written = entry?.files[file.path];
+			const isOurs = current !== undefined && written !== undefined && hashOf(current) === written.hash;
+			let theirs: string | undefined;
+			if (isOurs) {
+				theirs = written.theirs;
+			} else if (current !== undefined) {
+				// The person's file, which they changed while Facade's part was in it: theirs is it without that part.
+				const changed = written?.theirs !== undefined && written.ours !== undefined
+					? withoutOurs(current.toString('utf8'), Buffer.from(written.theirs, 'base64').toString('utf8'), Buffer.from(written.ours, 'base64').toString('utf8'))
+					: undefined;
+				theirs = changed !== undefined ? Buffer.from(changed).toString('base64') : current.toString('base64');
+			}
+			const content = theirs === undefined ? file.content : file.merge?.(Buffer.from(theirs, 'base64').toString('utf8'));
+			if (content === undefined) {
+				throw refused;
+			}
+			const same = isOurs && hashOf(Buffer.from(content)) === written.hash;
+			if (isOurs && used && !same) {
+				throw new Error(`${cli} is not started: ${target} holds what Facade put there for other agents, which use it, and this one needs other content in it.`);
+			}
+			return { file: file.path, target, content, ...(theirs !== undefined ? { theirs } : {}), ...(same ? { there: true } : {}) };
+		});
+	}
+
+	/** The `info/exclude` lines `files` need in `folder`: none for one a file of the person's in some worktree is at. */
+	private linesFor(folder: string, files: readonly Injected[], git: InjectionGit, exclude: { readonly file: string; readonly root: string }): string[] {
 		const lines: string[] = [];
 		for (const file of files) {
 			const relative = path.relative(exclude.root, path.join(folder, file.path));
 			const line = excludeLine(relative);
-			if (line === undefined) {
+			// A file git tracks takes no line: an exclude does nothing to it, and its change shows as it is.
+			if (line === undefined || git.tracked.has(file.path)) {
 				continue;
 			}
 			if (git.untracked.has(file.path)) {
@@ -214,107 +431,127 @@ export class Injections {
 			}
 			lines.push(line);
 		}
-		entry.exclude = exclude.file;
-		entry.lines = [...new Set([...entry.lines, ...lines])];
-		const appended = appendLines(exclude.file, lines);
-		if (appended.length) {
-			const key = keyFor(record.added, exclude.file) ?? exclude.file;
-			record.added[key] = [...(record.added[key] ?? []), ...appended];
+		return [...new Set(lines)];
+	}
+
+	/**
+	 * Takes back what a window left half written, drops the agents that cannot run any more, and takes
+	 * back what no agent uses; answers whether the record changed.
+	 */
+	private settle(record: InjectedRecord): boolean {
+		let changed = false;
+		for (const [key, entry] of Object.entries(record.folders)) {
+			if (entry.writing) {
+				this.log(`What Facade was putting into ${key} as its window went is taken back.`);
+				this.rollBack(record, key);
+				changed = true;
+			}
+			const current = record.folders[key];
+			if (!current) {
+				continue;
+			}
+			const users = current.users.filter(user => this.mayRun(user));
+			if (users.length !== current.users.length) {
+				current.users = users;
+				changed = true;
+			}
+			if (!users.length) {
+				changed = true;
+				this.takeBack(record, key);
+			}
+		}
+		return changed;
+	}
+
+	/** Takes back what the put into the folder `key` that is not done wrote: each file as it was before, and its record. */
+	private rollBack(record: InjectedRecord, key: string): void {
+		const entry = record.folders[key];
+		const writing = entry.writing;
+		if (!writing) {
+			return;
+		}
+		for (const [file, { before, record: previous }] of Object.entries(writing.files)) {
+			const target = path.join(key, file);
+			try {
+				const now = readBytes(target);
+				const wrote = entry.files[file];
+				if (now !== undefined && wrote !== undefined && hashOf(now) === wrote.hash) {
+					if (before === undefined) {
+						fs.rmSync(target, { force: true });
+					} else {
+						replaceFile(target, Buffer.from(before, 'base64').toString('utf8'));
+					}
+				}
+			} catch (err) {
+				this.log(`${target} could not be put back as it was: ${messageOf(err)}`);
+			}
+			if (previous) {
+				entry.files[file] = previous;
+			} else {
+				delete entry.files[file];
+			}
+		}
+		for (const made of [...writing.made].reverse()) {
+			try {
+				fs.rmdirSync(path.join(key, made));
+			} catch {
+				// Something else is in it, or it was never made.
+			}
+		}
+		entry.made = entry.made.filter(made => !writing.made.includes(made));
+		entry.lines = entry.lines.filter(line => !writing.lines.includes(line));
+		delete entry.writing;
+		if (!Object.keys(entry.files).length && !entry.made.length && !entry.users.length) {
+			delete record.folders[key];
+		}
+		if (entry.exclude !== undefined) {
+			this.removeExcludeLines(record, entry.exclude, writing.lines);
 		}
 	}
 
 	/**
-	 * Lets go of `folder` for this window, whose agents there have all exited: what Facade put there is
-	 * taken back once no window holds it. Answers whether a folder is left in use, for {@link sweep}.
+	 * Takes back what Facade put into the folder `key`, which no agent uses any more. What cannot be taken
+	 * back yet - a file the disk refuses, a folder a process has in use - stays in the record for later.
 	 */
-	release(folder: string): boolean {
-		return withFileLock(this.file, () => {
-			const record = this.read();
-			const key = keyFor(record.folders, folder);
-			if (key === undefined) {
-				return false;
-			}
-			const entry = record.folders[key];
-			entry.holders = entry.holders.filter(holder => !isEqualPath(holder, this.holder) && this.isHeld(holder));
-			if (!entry.holders.length) {
-				this.takeBack(record, key);
-			}
-			this.write(record);
-			return hasFoldersInUse(record);
-		});
-	}
-
-	/**
-	 * Takes back what Facade put where only windows that are gone held it, whatever their workspace, and
-	 * removes the folders a process still had in use when they were taken back. Answers whether a folder
-	 * is left in use.
-	 */
-	sweep(): boolean {
-		return withFileLock(this.file, () => {
-			const record = this.read();
-			let changed = false;
-			for (const [key, entry] of Object.entries(record.folders)) {
-				const holders = entry.holders.filter(holder => this.isHeld(holder));
-				if (holders.length && holders.length === entry.holders.length) {
-					continue;
-				}
-				changed = true;
-				entry.holders = holders;
-				if (!holders.length) {
-					if (Object.keys(entry.files).length) {
-						this.log(`No open window holds ${key}: what Facade put there for its agents is taken back.`);
-					}
-					this.takeBack(record, key);
-				}
-			}
-			if (changed) {
-				this.write(record);
-			}
-			return hasFoldersInUse(record);
-		});
-	}
-
-	/** The folders this window holds. */
-	held(): string[] {
-		return Object.entries(this.read().folders).filter(([, entry]) => entry.holders.some(holder => isEqualPath(holder, this.holder))).map(([folder]) => folder);
-	}
-
-	/** Takes back what Facade put into the folder `key`, which no window holds any more. */
 	private takeBack(record: InjectedRecord, key: string): void {
 		const entry = record.folders[key];
+		const left: FolderRecord['files'] = {};
 		for (const [file, written] of Object.entries(entry.files)) {
 			const target = path.join(key, file);
 			try {
 				this.takeBackFile(target, written);
 			} catch (err) {
-				this.log(`${target} could not be taken back: ${messageOf(err)}`);
+				left[file] = written;
+				this.log(`${target} could not be taken back yet, and is tried again later: ${messageOf(err)}`);
 			}
 		}
-		// Innermost first; one that a process has in use stays for later, with the folders around it.
-		const inUse: string[] = [];
+		// Innermost first. One with a file of Facade's left in it, or one a process has in use, is tried
+		// again later, with the folders around it; one with something of the person's in it stays.
+		const leftMade: string[] = [];
 		for (const made of [...entry.made].reverse()) {
-			if (inUse.some(inner => isInside(inner, made))) {
-				inUse.push(made);
+			const dir = path.join(key, made);
+			if ([...leftMade, ...Object.keys(left)].some(inner => isInside(path.join(key, inner), dir))) {
+				leftMade.unshift(made);
 				continue;
 			}
 			try {
-				fs.rmdirSync(path.join(key, made));
+				fs.rmdirSync(dir);
 			} catch (err) {
 				if (IN_USE_CODES.has(codeOf(err) ?? '')) {
-					inUse.push(made);
+					leftMade.unshift(made);
 				}
-				// Otherwise something else is in it, or it went with its worktree.
+				// Otherwise something of the person's is in it, or it went with its worktree.
 			}
 		}
 		delete record.folders[key];
-		if (inUse.length) {
-			if (Object.keys(entry.files).length) {
-				this.log(`${path.join(key, inUse[0])} is still in use by a process of an agent that exited: Facade removes it once it is not.`);
+		if (Object.keys(left).length || leftMade.length) {
+			if (leftMade.length && !Object.keys(left).length) {
+				this.log(`${path.join(key, leftMade[0])} is still in use by a process of an agent that ended: Facade removes it once it is not.`);
 			}
-			record.folders[key] = { holders: [], files: {}, made: inUse.reverse(), lines: [] };
+			record.folders[key] = { users: [], files: left, made: leftMade, ...(entry.exclude !== undefined ? { exclude: entry.exclude } : {}), lines: Object.keys(left).length ? entry.lines : [] };
 		}
-		if (entry.exclude !== undefined) {
-			this.removeExcludeLines(record, entry, entry.exclude);
+		if (entry.exclude !== undefined && !Object.keys(left).length) {
+			this.removeExcludeLines(record, entry.exclude, entry.lines);
 		}
 	}
 
@@ -323,8 +560,8 @@ export class Injections {
 		if (current === undefined) {
 			if (written.theirs !== undefined) {
 				const kept = this.keep(target, written.theirs);
-				this.log(`${target} was gone when its agents exited: what it held before Facade's part went in is kept at ${kept}.`);
-				this.tell(l10n.t("{0} was gone when its agents exited: what it held before Facade's part went in is kept at {1}.", target, kept));
+				this.log(`${target} was gone when its agents ended: what it held before Facade's part went in is kept at ${kept}.`);
+				this.tell(l10n.t("{0} was gone when its agents ended: what it held before Facade's part went in is kept at {1}.", target, kept));
 			}
 			return;
 		}
@@ -345,21 +582,26 @@ export class Injections {
 			this.log(`${target} changed while Facade's part was in it: the change is kept, and Facade's part taken out.`);
 		} else if (written.theirs !== undefined) {
 			const kept = this.keep(target, written.theirs);
-			this.log(`${target} changed while agents ran there and holds nothing of Facade's: it is left as it is, and what it held before is kept at ${kept}.`);
-			this.tell(l10n.t("{0} changed while agents ran there and holds nothing of Facade's: it is left as it is, and what it held before is kept at {1}.", target, kept));
+			this.log(`${target} changed while agents used it and holds nothing of Facade's: it is left as it is, and what it held before is kept at ${kept}.`);
+			this.tell(l10n.t("{0} changed while agents used it and holds nothing of Facade's: it is left as it is, and what it held before is kept at {1}.", target, kept));
 		} else {
 			this.log(`${target} changed since Facade put it there: it is left as it is.`);
 		}
 	}
 
-	private removeExcludeLines(record: InjectedRecord, entry: FolderRecord, exclude: string): void {
+	/** Takes `lines` out of `exclude` where Facade added them and no folder's files need them any more. */
+	private removeExcludeLines(record: InjectedRecord, exclude: string, lines: readonly string[]): void {
 		const needed = new Set(Object.values(record.folders).filter(each => each.exclude !== undefined && isEqualPath(each.exclude, exclude)).flatMap(each => each.lines));
 		const key = keyFor(record.added, exclude);
 		if (key === undefined) {
 			return;
 		}
-		const gone = record.added[key].filter(line => entry.lines.includes(line) && !needed.has(line));
-		removeLines(exclude, gone);
+		const gone = record.added[key].filter(line => lines.includes(line) && !needed.has(line));
+		try {
+			removeLines(exclude, gone);
+		} catch (err) {
+			this.log(`${exclude} could not be changed: Facade's lines ${gone.join(', ')} stay in it. ${messageOf(err)}`);
+		}
 		const kept = record.added[key].filter(line => !gone.includes(line));
 		if (kept.length) {
 			record.added[key] = kept;
@@ -485,25 +727,29 @@ function hashOf(bytes: Buffer): string {
 	return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
-/** Whether a folder was left in use when it was taken back. */
-function hasFoldersInUse(record: InjectedRecord): boolean {
-	return Object.values(record.folders).some(entry => !entry.holders.length);
+/** Whether something is left to take back later: a folder no agent uses that still holds what Facade put there. */
+function hasLeftovers(record: InjectedRecord): boolean {
+	return Object.values(record.folders).some(entry => !entry.users.length);
 }
 
-/** Whether the folder `inner` is inside `outer`. */
+/** Whether `inner` is inside the folder `outer`. */
 function isInside(inner: string, outer: string): boolean {
 	const relative = path.relative(outer, inner);
 	return !!relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-/** Makes `dir` in `folder`, and answers with the folders it made, relative to `folder`, outermost first. */
-function makeFolders(folder: string, dir: string): string[] {
+/** The folders in `folder` that `dirs` need and that are not there yet, relative to `folder`, outermost first. */
+function foldersToMake(folder: string, dirs: readonly string[]): string[] {
 	const missing: string[] = [];
-	for (let each = dir; !isEqualPath(each, folder) && path.dirname(each) !== each && !fs.existsSync(each); each = path.dirname(each)) {
-		missing.unshift(each);
+	for (const dir of dirs) {
+		for (let each = dir; !isEqualPath(each, folder) && path.dirname(each) !== each && !fs.existsSync(each); each = path.dirname(each)) {
+			const relative = path.relative(folder, each);
+			if (!missing.includes(relative)) {
+				missing.push(relative);
+			}
+		}
 	}
-	fs.mkdirSync(dir, { recursive: true });
-	return missing.map(each => path.relative(folder, each));
+	return missing.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
 }
 
 /** The `info/exclude` line for one file, by its path relative to its worktree's root; undefined for one outside it. */
@@ -515,21 +761,30 @@ function excludeLine(relative: string): string | undefined {
 	return `/${relative.split(path.sep).join('/').replace(/[*?[\\]/g, '\\$&')}`;
 }
 
-/** Adds the lines an `info/exclude` does not have yet; answers with those it added. */
-function appendLines(file: string, lines: readonly string[]): string[] {
+/** Which of `lines` an `info/exclude` does not have yet. */
+function linesMissing(file: string, lines: readonly string[]): string[] {
 	let listed = '';
 	try {
 		listed = fs.readFileSync(file, 'utf8');
 	} catch {
-		// Created below.
+		// Made as the lines are added.
 	}
 	const present = new Set(listed.split(/\r?\n/));
-	const missing = [...new Set(lines)].filter(line => !present.has(line));
-	if (missing.length) {
-		fs.mkdirSync(path.dirname(file), { recursive: true });
-		fs.appendFileSync(file, `${listed && !listed.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
+	return [...new Set(lines)].filter(line => !present.has(line));
+}
+
+/** Adds `lines` to an `info/exclude`, after what it has. */
+function appendLines(file: string, lines: readonly string[]): void {
+	let listed = '';
+	try {
+		listed = fs.readFileSync(file, 'utf8');
+	} catch (err) {
+		if (codeOf(err) !== 'ENOENT') {
+			throw err;
+		}
 	}
-	return missing;
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.appendFileSync(file, `${listed && !listed.endsWith('\n') ? '\n' : ''}${lines.join('\n')}\n`);
 }
 
 /** Removes `lines` from an `info/exclude`, leaving the rest as it is. */

@@ -9,12 +9,12 @@ import * as vscode from 'vscode';
 import { timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
-import { installedClis, knownClis } from '../clis/registry';
+import { installedClis, knownClis, locateCli } from '../clis/registry';
 import { facadeSkill, openingFor } from '../contract/prompts';
 import { Contract } from '../contract/tools';
-import { Facade, StartRequest } from '../core/facade';
+import { Facade } from '../core/facade';
 import { AgentTable } from '../record/agents';
-import { Caller, describe, isLive, PERSON } from '../record/events';
+import { Caller, isLive } from '../record/events';
 import { identityOf, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { ClosedBy, LedgerLockedError, LedgerUnreadableError, lockStateOf, lockWait } from '../record/ledger';
 import { AGENTS_LOG } from '../record/log';
@@ -23,8 +23,8 @@ import { PipeEndpoint } from '../transport/endpoint';
 import { PipeHandlers, pipePath } from '../transport/pipe';
 import { HostGit } from './git';
 import { HostPerson } from './person';
-import { configFor, timeoutMs } from './settings';
-import { askStartAgent } from './startAgent';
+import { configFor, customAgents, frameworkOn, timeoutMs, yolo } from './settings';
+import { folderOnScreen, OfferedAgent, pickAgent } from './startAgent';
 import { agentProcessesRun, HostTerminals, terminalEnvironment } from './terminals';
 import { JsonFileState, StateStore } from './windowState';
 
@@ -43,10 +43,11 @@ const HANDOVER_MS = 10_000;
 const HANDOVER_POLL_MS = 250;
 
 /**
- * Facade's agents while `facade.orchestration.enabled` is on, and the one place the layers are put
- * together: the workspace's record under ~/.facade/workspaces, the core with the window as its ports,
- * the contract behind the pipe, and the agents still running after a reload found again. Off, none of
- * it exists.
+ * Facade's agents, and the one place the layers are put together: the workspace's record under
+ * ~/.facade/workspaces, the core with the window as its ports, the contract behind the pipe, and the agents
+ * still running after a reload found again. The agent framework's switch, `facade.orchestration.enabled`,
+ * takes away only what agents do to agents: off, the tools answer that it is, and new launches get none of
+ * its integration, while the person's agents start, run and end as ever (AGENT-LAUNCHER.md, L13).
  */
 export class AgentsService implements vscode.Disposable {
 
@@ -138,21 +139,31 @@ export class AgentsService implements vscode.Disposable {
 			ports: {
 				terminals,
 				git: new HostGit(),
-				workspace: { folders: () => (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath) },
+				workspace: {
+					folders: () => (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath),
+					activeFolder: folderOnScreen
+				},
 				person: new HostPerson(terminals, message => this.say(message))
 			},
 			clis: {
 				known: knownClis(),
+				custom: customAgents,
 				installed: () => installedClis(configFor),
+				locate: (cli, config, env) => locateCli(cli, config, env),
+				yolo,
+				framework: frameworkOn,
 				configOf: configFor,
 				environment: terminalEnvironment
 			},
 			// No agent starts before the endpoint below listens: their MCP servers call it.
 			setup: {
-				mcpServer: tokenFile => this.listening().mcpServer(tokenFile, timeoutMs()),
+				connection: tokenFile => this.listening().connection(tokenFile, timeoutMs(), dir),
 				sharedMcpServer: () => this.listening().sharedMcpServer(),
 				agentEnv: token => this.listening().agentEnv(token, timeoutMs()),
-				skills: () => [facadeSkill(installedClis(configFor).map(({ cli }) => ({ id: cli.id, displayName: cli.displayName })))],
+				skills: () => [facadeSkill([
+					...installedClis(configFor).map(({ cli }) => ({ id: cli.id, displayName: cli.displayName })),
+					...customAgents().filter(({ config }) => !config.wrong).map(({ cli }) => ({ id: cli.id, displayName: cli.displayName, custom: true }))
+				])],
 				opening: openingFor
 			},
 			timing: () => ({ startTimeoutMs: timeoutMs() }),
@@ -181,12 +192,12 @@ export class AgentsService implements vscode.Disposable {
 			return;
 		}
 		this.facade = facade;
-		this.log.info(`Facade agents are on for ${folders[0].uri.fsPath}. Record ${dir}; pipe ${endpoint.pipe}; CLIs: ${facade.clis().map(each => each.cli.id).join(', ') || 'none'}.`);
+		this.log.info(`Facade agents are ready for ${folders[0].uri.fsPath}. Record ${dir}; pipe ${endpoint.pipe}; agents: ${facade.startable().map(each => each.id).join(', ') || 'none'}; the agent framework ${frameworkOn() ? 'on' : 'off'}.`);
 	}
 
 	/**
-	 * Stops: as the window goes, or as Facade lets go of its agents while the window stays - turned off, or
-	 * a start that failed - which the workspace's ledger records for the next window to know.
+	 * Stops: as the window goes, or as Facade lets go of its agents while the window stays - a start that
+	 * failed - which the workspace's ledger records for the next window to know.
 	 */
 	dispose(by: ClosedBy = 'window'): void {
 		this.stopped = true;
@@ -210,45 +221,40 @@ export class AgentsService implements vscode.Disposable {
 	}
 
 	/**
-	 * Facade: Start Agent. Answers with the new agent's number and name, and whether it has started, for a
-	 * script that started it; the person is told where its start is not confirmed.
+	 * Agents: Start Agent..., and the agent menu's items: the agent chosen starts at once in the folder on
+	 * screen, asking nothing more (AGENT-LAUNCHER.md, L3). Answers with the new agent's number and name, for a
+	 * script that started it; the person is told why a start was refused.
 	 */
-	async startAgentCommand(rawArgs: unknown): Promise<{ readonly id: number; readonly name: string; readonly status: 'started' | 'unconfirmed' } | undefined> {
+	async startAgentCommand(rawArgs: unknown): Promise<{ readonly id: number; readonly name: string } | undefined> {
 		const facade = this.facade;
 		if (!facade) {
 			void vscode.window.showInformationMessage(this.noCore === 'otherWindow'
 				? vscode.l10n.t("Another Facade window has this workspace's agents: start agents in that window.")
 				: this.noCore === 'unreadable'
 					? vscode.l10n.t("Facade cannot read this workspace's record while an agent of it may still run: the Facade Agents output says why.")
-					: vscode.l10n.t("Facade agents need a folder on this machine in the workspace."));
+					: vscode.l10n.t("Open a folder on this machine to start an agent in it."));
 			return undefined;
 		}
-		const installed = facade.clis();
-		// A CLI whose path setting names nothing is not offered: the person is told why, each time they look.
-		for (const cli of knownClis()) {
-			const { path: setPath } = configFor(cli);
-			if (setPath && !installed.some(each => each.cli.id === cli.id)) {
-				void vscode.window.showWarningMessage(vscode.l10n.t("{0} is not offered: the setting facade.orchestration.{1}.path is {2}, which is no file, nor a command on PATH.", cli.displayName, cli.section, setPath));
-			}
-		}
-		let request: StartRequest | undefined;
-		try {
-			request = await askStartAgent(rawArgs, installed, await facade.windowFolders());
-		} catch (err) {
-			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
+		const offered: OfferedAgent[] = [
+			...facade.startable().filter(each => !each.custom).map(each => ({ id: each.id, label: each.displayName, custom: false })),
+			// Listed as the person wrote them, found or not: a start says what is wrong.
+			...customAgents().map(({ cli }) => ({ id: cli.id, label: cli.displayName, custom: true }))
+		];
+		const cli = await pickAgent(rawArgs, offered);
+		if (!cli) {
 			return undefined;
 		}
-		if (!request) {
+		const local = (vscode.workspace.workspaceFolders ?? []).filter(each => each.uri.scheme === 'file');
+		const folder = await folderOnScreen() ?? local.at(0)?.uri.fsPath;
+		if (folder === undefined) {
+			void vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to start an agent in it."));
 			return undefined;
 		}
 		try {
-			const started = await facade.startAgent(PERSON, request);
-			if (started.status === 'unconfirmed') {
-				void vscode.window.showWarningMessage(vscode.l10n.t("{0} is not confirmed to have started: {1}. It stays starting; its tab shows what it waits for.", describe(started), started.why ?? ''));
-			}
-			return { id: started.id, name: started.name, status: started.status };
+			const started = await facade.startForPerson(cli, folder);
+			return { id: started.id, name: started.name };
 		} catch (err) {
-			this.log.error(`Starting an agent failed: ${stackOf(err)}`);
+			this.log.error(`Starting ${cli} failed: ${stackOf(err)}`);
 			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
 			return undefined;
 		}

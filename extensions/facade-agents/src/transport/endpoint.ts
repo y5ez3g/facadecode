@@ -70,6 +70,18 @@ export class PipeEndpoint<C> {
 	}
 
 	/**
+	 * How an agent reaches this window (AGENT-ORCHESTRATION.md, O9): its MCP server, and the values a launch
+	 * names them by - `${executable}`, `${shimFile}`, `${pipe}`, `${recordDir}`, `${tokenFile}`, `${waitMs}` - for
+	 * a custom agent's connect group to put together a server of its own.
+	 */
+	connection(tokenFile: string, waitMs: number, recordDir: string): { readonly mcp: McpServerLaunch; readonly values: { readonly [name: string]: string } } {
+		return {
+			mcp: this.mcpServer(tokenFile, waitMs),
+			values: { executable: this.runtime, shimFile: this.shim, pipe: this.pipe, recordDir, tokenFile, waitMs: String(waitMs) }
+		};
+	}
+
+	/**
 	 * An MCP server the same for every agent, for a CLI that reads its servers from a file every agent
 	 * in a worktree shares: it finds the window and the agent from the agent's environment, `agentEnv`,
 	 * and waits for the window through a reload as an agent's own does.

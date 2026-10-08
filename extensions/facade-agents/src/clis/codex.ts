@@ -24,18 +24,20 @@ function projectKey(folder: string): string {
 }
 
 /**
- * Codex in its own UI at full access: no approvals and no sandbox. Facade's MCP server comes as `-c`
- * overrides, and so do the settings that would stop it at a question with nobody at the keyboard, and,
- * in a worktree Facade made, the person's trust in the folder, for the launch alone. Nothing is written
- * into the person's own config.toml.
+ * Codex in its own UI. YOLO on: no approvals and no sandbox. YOLO off: its workspace-write sandbox, asking
+ * before what the sandbox does not allow, while its server setting lets Facade's tools through unasked.
+ * Facade's MCP server comes as `-c` overrides, and so do the settings that would stop it at a question
+ * nobody asked for, and the person's trust in the folder it starts in, for the launch alone. Nothing is
+ * written into the person's own config.toml.
  */
 export const codexCli: AgentCli = {
 	id: 'codex',
 	displayName: 'Codex',
-	section: 'codex',
+	setting: 'facade.agents.codex',
 	command: 'codex',
 	defaults: {
 		path: '',
+		enabled: true,
 		launch: {
 			arguments: {
 				connect: [
@@ -46,6 +48,7 @@ export const codexCli: AgentCli = {
 					// start_agent may wait minutes for a child to come up.
 					'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
 					'-c', 'mcp_servers.facade.required=true',
+					// Facade's tools unasked, whatever the agent's YOLO.
 					'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
 					// A process of its own: a session of the shared background server would run with the
 					// environment of whoever started that server.
@@ -53,9 +56,11 @@ export const codexCli: AgentCli = {
 				],
 				quiet: ['-c', 'check_for_update_on_startup=false', '-c', 'tui.show_tooltips=false', '-c', 'notice.hide_rate_limit_model_nudge=true'],
 				// The project's hooks would otherwise stop it at their review screen.
-				fullAccess: ['--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust'],
+				yoloOn: ['--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust'],
+				yoloOff: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'],
 				model: ['--model', '${model}'],
-				effort: ['-c', 'model_reasoning_effort="${effort}"'],
+				// A whole TOML string, so that an effort with a quote or a line break in it stays one.
+				effort: ['-c', 'model_reasoning_effort=${effortToml}'],
 				task: ['--', '${task}']
 			},
 			environment: {},
@@ -66,22 +71,23 @@ export const codexCli: AgentCli = {
 		}
 	},
 	task: 'argument',
+	sandbox: { yoloOn: 'off', yoloOff: process.platform === 'win32' ? 'unavailable' : 'on' },
+	exemption: 'precise',
 	launch(input, executable) {
+		const { connection } = input;
 		return {
 			executable,
-			args: launchArgs(codexCli, input.config, {
-				mcpCommand: toml(input.mcp.command),
-				mcpArgs: toml(input.mcp.args),
-				mcpEnv: toml(input.mcp.env),
+			args: launchArgs(codexCli.setting + '.launch', input.config, {
+				...connection ? { mcpCommand: toml(connection.mcp.command), mcpArgs: toml(connection.mcp.args), mcpEnv: toml(connection.mcp.env), ...connection.values } : {},
 				folder: toml(projectKey(input.folder)),
-				model: input.model,
-				effort: input.effort,
-				task: input.task ?? ''
-			}, { trust: input.trusted, task: !!input.task }),
+				...input.model !== undefined ? { model: input.model } : {},
+				...input.effort !== undefined ? { effort: input.effort, effortToml: toml(input.effort) } : {},
+				...input.task !== undefined ? { task: input.task } : {}
+			}, { framework: !!connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],
-			injected: input.skills.map(skill => ({ path: `.agents/skills/${skill.name}/SKILL.md`, content: skillMarkdown(skill) }))
+			injected: connection ? input.skills.map(skill => ({ path: `.agents/skills/${skill.name}/SKILL.md`, content: skillMarkdown(skill) })) : []
 		};
 	}
 };
