@@ -9,8 +9,13 @@ an operating system's process id. Facade records what it did and what it knows f
 launch, an MCP server's hello, a terminal that ended - and never reads a screen to decide anything,
 nor guesses whether an agent works.
 
-Chapter 1 is starting, listing and ending agents. Messages between agents and looking into an agent's
-terminal come next.
+Chapter 1 is starting, listing and ending agents; looking into an agent's terminal comes next. The
+messages agents send each other and the person are AGENT-MESSAGES.md, which replaces what this chapter
+says of a child's task: the task file, the line typed to tell of it, `task.typed` and the opening are
+gone - a task is the first message in the child's mailbox, and the child's first line names it (M7). A
+creator learns of its children's ends by a message as well as from `ps` (M8). The ledger is version 5,
+reading version 3 (M11). The launch groups gain `questions` and `messages`, and the timeout also times
+the notices of a task or of messages left unfetched (M6). Where the two differ, AGENT-MESSAGES.md holds.
 
 ## Architecture
 
@@ -279,7 +284,9 @@ Facade that comes back - with a reload, a restart, or turned on again - finds ea
 exited, once the window has its terminals back: reconnected to their processes, the editor area
 restored, the window given a minute at most. An agent's terminal is the one running its process: a tab
 whose process VS Code could not reconnect to comes back as a new shell under the old title, and is not
-the agent's. One starting is given the timeout again for its hello;
+the agent's: once its agent is found gone, it is closed, as the agent's terminal would have been, so
+that no shell under an agent's name outlives it, or comes back with the next restart. One starting is
+given the timeout again for its hello;
 one running but not yet told of its task is told. One whose terminal is gone went with the window when
 the window before was closed - another workspace's, or this workspace's and not reloaded - and none of
 its agents came back: killed, by the person, who is not told. After a reload, while Facade was off,
