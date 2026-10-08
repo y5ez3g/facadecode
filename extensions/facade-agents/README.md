@@ -2,7 +2,7 @@
 
 **Notice:** This extension is bundled with Facade Code. It can be disabled but not uninstalled.
 
-Vendors' agent CLIs - Claude Code, Codex, Antigravity and Muse Code - in their own terminal UIs, in the folders and worktrees of a Facade window. Each agent has a name and a number, as `@main #1`, a parent and children; the person, `@you`, starts the first agents, and the children of an agent that exits are theirs. An agent starts children beside it or in a worktree of their own, lists them, and ends them, through Facade's MCP server; agents and the person send each other numbered messages through it too. The design is `facade-code-spec/AGENT-FRAMEWORK.md`, and, for the messages, `facade-code-spec/AGENT-MESSAGES.md`.
+Vendors' agent CLIs - Claude Code, Codex, Antigravity and Muse Code - in their own terminal UIs, in the folders and worktrees of a Facade window. Each agent has a name and a number, as `@main #a1`, a parent and children; the person, `@you`, starts the first agents, and the children of an agent that exits are theirs. An agent starts children beside it or in a worktree of their own, lists them, and ends them, through Facade's MCP server; agents and the person send each other numbered messages through it too. The design is `facade-code-spec/AGENT-FRAMEWORK.md`, and, for the messages, `facade-code-spec/AGENT-MESSAGES.md`.
 
 ## The switch
 
