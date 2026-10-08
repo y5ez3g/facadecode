@@ -7,6 +7,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { FacadeError } from '../core/errors';
+import { keyOf } from '../core/keys';
 import { TerminalScreen } from '../core/ports';
 import { PERSON } from '../record/events';
 import { finalScreenFile, screensDir } from '../record/screens';
@@ -98,7 +99,8 @@ suite('Core: agents\' screens', () => {
 			descendantEnded: (await world.facade.screens.read(worker, '#3')).source,
 			otherTree: await outcomeOf(world.facade.screens.read(worker, '#4')),
 			person: (await world.facade.screens.read(PERSON, '#4')).id,
-			personsOwn: await outcomeOf(world.facade.screens.read(worker, '@you'))
+			personsOwn: await outcomeOf(world.facade.screens.read(worker, '@you')),
+			typeOtherTree: await outcomeOf(world.facade.screens.type(worker, '#4', 'hi', false))
 		};
 		world.settings.arg = { launch: { arguments: { fullAccess: ['--yolo'] } } };
 		const stillOff = await outcomeOf(world.facade.screens.read(worker, '#4'));
@@ -112,7 +114,8 @@ suite('Core: agents\' screens', () => {
 			descendantEnded: 'none',
 			otherTree: outsideYourTree,
 			person: 4,
-			personsOwn: 'REFUSED: The person, @you, has no terminal of Facade\'s: read_screen reads agents\' terminals.',
+			personsOwn: 'REFUSED: The person, @you, has no terminal of Facade\'s: these tools read and type into agents\' terminals.',
+			typeOtherTree: outsideYourTree,
 			stillOff: outsideYourTree,
 			recorded: [false, true],
 			yolo: 4
@@ -200,22 +203,113 @@ suite('Core: agents\' screens', () => {
 		});
 	});
 
-	test('an agent still starting has no terminal to read yet; one the window has not given back after a reload is not there now', async () => {
+	test('text typed goes in as one paste, Enter after the delay the CLI was launched with, waiting for its turn at most the timeout; the log says what was about to go in and what did; the answer has the screen two seconds on', async () => {
+		await twoTrees();
+		shows(2, ['> yes']);
+		// Launched with 300 ms: what the settings say later does not change it
+		world.settings.arg = { launch: { enterDelay: 50 } };
+		const text = ' yes, keep the tests as they are and fix only the docs ';
+		const result = await settled(world.facade.screens.type(callerOf(world.agent(1)), '#2', text, true));
+		const pressed = await settled(world.facade.screens.press(callerOf(world.agent(1)), '#2', ['Down', 'Enter']));
+		const shown = JSON.stringify(`${text.slice(0, 40)}...`);
+
+		assert.deepStrictEqual({ result: { ...result, screen: result.screen?.text }, pressed: pressed.effect, typed: world.terminals.typed.slice(-2), logs: world.logs.filter(line => line.includes('@worker #2\'s terminal')) }, {
+			result: { id: 2, name: 'worker', effect: { outcome: 'applied', pasted: true, entered: true }, screen: '> yes' },
+			pressed: { outcome: 'applied', keysSent: 2 },
+			typed: [
+				`@worker #2 · Arg Code: type ${JSON.stringify(text)}, Enter after 300 ms, waiting 120000 ms at most`,
+				'@worker #2 · Arg Code: keys Down Enter, waiting 120000 ms at most'
+			],
+			logs: [
+				`@lead #1 typing ${text.length} characters, ${shown}, and Enter, into @worker #2's terminal.`,
+				`@lead #1 typing ${text.length} characters, ${shown}, and Enter, into @worker #2's terminal: the text went in, and Enter.`,
+				'@lead #1 pressing Down, Enter in @worker #2\'s terminal.',
+				'@lead #1 pressing Down, Enter in @worker #2\'s terminal: all 2 keys went in.'
+			]
+		});
+	});
+
+	test('what did not go in all is said with what did: nothing while it waited its turn, nothing into a terminal that ended first, a part before it ended, and unknown where the window could not say', async () => {
+		await twoTrees();
+		const lead = callerOf(world.agent(1));
+		world.terminals.nextInput.push(
+			{ outcome: 'not_applied', reason: 'timeout', pasted: false, entered: false },
+			{ outcome: 'not_applied', reason: 'ended', keysSent: 0 },
+			{ outcome: 'partial', reason: 'ended', keysSent: 1 },
+			new Error('the extension host restarted')
+		);
+
+		assert.deepStrictEqual([
+			await failureOf(settled(world.facade.screens.type(lead, '#2', 'yes', true))),
+			await failureOf(settled(world.facade.screens.press(lead, '#2', ['Enter']))),
+			await failureOf(settled(world.facade.screens.press(lead, '#2', ['Down', 'Enter']))),
+			await failureOf(settled(world.facade.screens.type(lead, '#2', 'yes', false)))
+		], [
+			{ code: 'UNAVAILABLE', message: 'Nothing went into @worker #2\'s terminal: it waited 120 seconds for its turn, behind what the person was typing there or what Facade typed before. Read its screen, then try again.', data: { outcome: 'not_applied', reason: 'timeout', pasted: false, entered: false } },
+			{ code: 'REFUSED', message: 'Nothing went into @worker #2\'s terminal: it ended first. read_screen shows its last screen.', data: { outcome: 'not_applied', reason: 'ended', keysSent: 0 } },
+			{ code: 'FAILED', message: '@worker #2\'s terminal ended partway: 1 of its keys went in.', data: { outcome: 'partial', reason: 'ended', keysSent: 1 } },
+			{ code: 'UNAVAILABLE', message: 'Whether it went into @worker #2\'s terminal is not known: the extension host restarted. Read its screen before you type or press anything again.', data: { outcome: 'unknown' } }
+		]);
+	});
+
+	test('input that went in partway, its terminal gone before Facade knows, answers with the last lines of the final screen the window kept', async () => {
+		await twoTrees();
+		keeps(2, { final: { buffer: 'normal', lines: ['Bye!'] } });
+		world.terminals.nextInput.push({ outcome: 'partial', reason: 'ended', pasted: true, entered: false });
+
+		assert.deepStrictEqual(await failureOf(settled(world.facade.screens.type(callerOf(world.agent(1)), '#2', 'yes', true))), {
+			code: 'FAILED',
+			message: '@worker #2\'s terminal ended partway: the text went in, without Enter. Its last lines:\nBye!',
+			data: { outcome: 'partial', reason: 'ended', pasted: true, entered: false, finalScreen: finalScreenFile(screensDir(world.table.dir), 2) }
+		});
+	});
+
+	test('an agent still starting has no terminal to read or type into yet; one the window has not given back after a reload is not there now; input that went in whose screen could not be read after says so', async () => {
 		await twoTrees();
 		const lead = callerOf(world.agent(1));
 		const spawning = world.facade.spawn(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'New.', folder: lab, name: 'new' });
 		await until(() => world.terminals.launched.length === 5);
 		world.terminals.running.delete(terminalOf(5));
-		const starting = (await world.facade.screens.read(PERSON, '#5')).empty;
+		const starting = { read: (await world.facade.screens.read(PERSON, '#5')).empty, type: await failureOf(world.facade.screens.type(PERSON, '#5', 'hi', true)) };
 		world.terminals.running.delete(terminalOf(2));
-		const notBack = await outcomeOf(world.facade.screens.read(lead, '#2'));
+		const notBack = { read: await outcomeOf(world.facade.screens.read(lead, '#2')), keys: await failureOf(world.facade.screens.press(lead, '#2', ['Enter'])) };
+		world.terminals.running.add(terminalOf(2));
+		const typed = world.terminals.typed.length;
+		const typing = world.facade.screens.type(lead, '#2', 'yes', true);
+		await until(() => world.terminals.typed.length > typed);
+		world.terminals.running.delete(terminalOf(2));
+		const unread = await settled(typing);
 		world.terminals.running.add(terminalOf(5));
 		world.hello(5);
 		await settled(spawning);
 
-		assert.deepStrictEqual({ starting, notBack }, {
-			starting: 'not_created',
-			notBack: 'UNAVAILABLE: @worker #2\'s terminal is not there now: the window may still be giving its terminals back after a reload. Try again in a moment.'
+		assert.deepStrictEqual({ starting, notBack, unread }, {
+			starting: {
+				read: 'not_created',
+				type: { code: 'REFUSED', message: '@new #5 has no terminal yet: it is still starting. Nothing was typed.', data: { outcome: 'not_applied' } }
+			},
+			notBack: {
+				read: 'UNAVAILABLE: @worker #2\'s terminal is not there now: the window may still be giving its terminals back after a reload. Try again in a moment.',
+				keys: { code: 'UNAVAILABLE', message: '@worker #2\'s terminal is not there now: the window may still be giving its terminals back after a reload. Nothing was typed; try again in a moment.', data: { outcome: 'not_applied' } }
+			},
+			unread: { id: 2, name: 'worker', effect: { outcome: 'applied', pasted: true, entered: true }, screenUnavailable: '@worker #2\'s terminal is not there now: the window may still be giving its terminals back after a reload. Try again in a moment.' }
+		});
+	});
+
+	test('an agent that ended takes no input, and the log says who was refused what; an agent may type into its own terminal', async () => {
+		await twoTrees();
+		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
+		const worker = callerOf(world.agent(2));
+		const own = await settled(world.facade.screens.press(worker, '#2', ['Escape']));
+
+		assert.deepStrictEqual({
+			ended: await failureOf(world.facade.screens.type(worker, '#3', 'hi', true)),
+			logged: world.logs.filter(line => line.includes('was refused')),
+			own: own.effect
+		}, {
+			ended: { code: 'REFUSED', message: '@helper #3 ended (killed: killed by @worker #2): its terminal takes nothing more. read_screen shows its last screen.', data: { outcome: 'not_applied', reason: 'ended' } },
+			logged: ['@worker #2 was refused typing 2 characters, "hi", and Enter, into "#3"\'s terminal: @helper #3 ended (killed: killed by @worker #2): its terminal takes nothing more. read_screen shows its last screen.'],
+			own: { outcome: 'applied', keysSent: 1 }
 		});
 	});
 
@@ -259,5 +353,12 @@ suite('Core: agents\' screens', () => {
 			afterRestart: false,
 			read: 'discarded'
 		});
+	});
+
+	test('a key is named as press_keys takes it: a name in any case, spaced or not, an alias, or one printable character', () => {
+		assert.deepStrictEqual(
+			['enter', 'ESC', 'ctrl + c', '^z', 'Shift+Tab', 'page up', 'ArrowDown', 'return', ' ', 'y', 'Y', '1', '?', String.fromCharCode(0x4e2d), 'F1', 'ctrl+1', 'yes', '', '\t', '\x1b', String.fromCharCode(0x200b)].map(keyOf),
+			['Enter', 'Escape', 'Ctrl+C', 'Ctrl+Z', 'Shift+Tab', 'PageUp', 'Down', 'Enter', 'Space', 'y', 'Y', '1', '?', String.fromCharCode(0x4e2d), undefined, undefined, undefined, undefined, undefined, undefined, undefined]
+		);
 	});
 });

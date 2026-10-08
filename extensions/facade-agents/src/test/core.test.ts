@@ -284,7 +284,7 @@ suite('Core: spawn, step by step', () => {
 		const beforeEnter = [...world.terminals.typed];
 		const spawned = await settled(spawning);
 		const taskFile = path.join(world.table.runsDir, '1.task.md');
-		const line = `@main #1 · Told Code: ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}`;
+		const line = `@main #1 · Told Code: type ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}, Enter after 400 ms`;
 		const launch = world.terminals.launched[0];
 
 		assert.deepStrictEqual({
@@ -299,7 +299,7 @@ suite('Core: spawn, step by step', () => {
 		}, {
 			beforeHello: [],
 			beforeEnter: [line],
-			typed: [line, `@main #1 · Told Code: ${JSON.stringify('\r')}`],
+			typed: [line],
 			task: '[facade] You are @main #1, Told Code, started by @you.\n\nPlan the release.',
 			args: ['--model', 'deep', '--effort', 'high'],
 			agent: { pipe: 'pipe', token: { id: 1, name: 'main' } },
@@ -595,8 +595,7 @@ suite('Core: after a reload', () => {
 
 		assert.deepStrictEqual({ typed: after.terminals.typed, taskTyped: after.agent(1).taskTyped, agents: agents(after) }, {
 			typed: [
-				`@main #1 · Told Code: ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}`,
-				`@main #1 · Told Code: ${JSON.stringify('\r')}`
+				`@main #1 · Told Code: type ${JSON.stringify(`[facade] Your task is in ${taskFile}: read that file, then do what it says.`)}, Enter after 400 ms`
 			],
 			taskTyped: true,
 			agents: ['#1 @main parent the person running']

@@ -51,6 +51,35 @@ export interface TerminalScreen {
 	readonly exited: boolean;
 }
 
+/** What input into a terminal did: what went in, and why the rest did not. */
+export interface InputEffect {
+	/** `applied`: all of it; `partial`: a first part, the terminal ending before the rest; `not_applied`: nothing. */
+	readonly outcome: 'applied' | 'partial' | 'not_applied';
+	/** Why not all of it went in: the terminal ended, or the input waited behind the person's typing past its time. */
+	readonly reason?: 'ended' | 'timeout';
+	/** For text: whether it was pasted. */
+	readonly pasted?: boolean;
+	/** For text: whether Enter followed. */
+	readonly entered?: boolean;
+	/** For keys: how many went in, from the first. */
+	readonly keysSent?: number;
+}
+
+/** How a line is typed into a terminal: with Enter after it or not, and how long it may wait for its turn. */
+export interface TypeOptions {
+	readonly enter: boolean;
+	/** How long after the paste Enter is pressed: the time the CLI needs to take the paste in. */
+	readonly enterDelayMs: number;
+	/** How long it may wait for its turn; none to wait as long as the person's typing holds it. */
+	readonly queueTimeoutMs?: number;
+}
+
+/** How keys are pressed in a terminal: how long they may wait for their turn. */
+export interface KeysOptions {
+	/** How long they may wait for their turn; none to wait as long as the person's typing holds them. */
+	readonly queueTimeoutMs?: number;
+}
+
 /** How an agent's terminal ended. */
 export interface TerminalEnd {
 	/** The code its process exited with, where the window knows it. */
@@ -69,14 +98,24 @@ export interface Terminals {
 	onDidEnd(listener: (name: string, end: TerminalEnd) => void): Disposable;
 	/** Closes the terminal, which ends the CLI in it. */
 	stop(name: string): Promise<void>;
-	/** Types `text` into the terminal as it is, keys and all; false when there is no such terminal. */
-	type(name: string, text: string): Promise<boolean>;
 	/**
 	 * The bottom `lines` lines of the terminal's screen, read without changing anything of it; undefined
 	 * where there is no such terminal, or it has no screen. A terminal the window is still giving back
 	 * after a reload is waited for.
 	 */
 	read(name: string, lines: number): Promise<TerminalScreen | undefined>;
+	/**
+	 * Types `text` into the terminal as one paste and, with `options.enter`, presses Enter after it: in the
+	 * terminal's turn, after what the window typed there before, and once the person's typing there lets
+	 * it. Undefined where there is no such terminal. Rejects where what went in is not known.
+	 */
+	type(name: string, text: string, options: TypeOptions): Promise<InputEffect | undefined>;
+	/**
+	 * Presses `keys` - as `keyOf` names them - in the terminal, in order, as it sends them for keys the
+	 * person presses; in its turn as `type` types. Undefined where there is no such terminal. Rejects where
+	 * what went in is not known.
+	 */
+	keys(name: string, keys: readonly string[], options: KeysOptions): Promise<InputEffect | undefined>;
 	/**
 	 * Tells the window that the terminal is the agent `run`'s, its final screen going to `finalScreen`:
 	 * for a terminal the window gave back after a reload. False where there is no such terminal, or the
@@ -177,7 +216,10 @@ export interface CliCatalog {
 
 /** How long the core waits, as the person sets it: read again at each use. */
 export interface Timing {
-	/** How long a new agent has to come up - its MCP server's hello - before it is ended as failed: the person's timeout. */
+	/**
+	 * How long a new agent has to come up - its MCP server's hello - before it is ended as failed: the
+	 * person's timeout. A call typing or pressing keys in a terminal waits for its turn no longer.
+	 */
 	readonly startTimeoutMs: number;
 	/**
 	 * How long the final screen of an agent that just ended is waited for, the window writing it as the

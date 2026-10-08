@@ -15,7 +15,7 @@ import { settled, useFakeClock } from './clock';
 import { callerOf, fakeWorld } from './fakes';
 import { tempDir } from './util';
 
-suite('Contract: agents\' screens', () => {
+suite('Contract: agents\' screens, typing and keys', () => {
 
 	useFakeClock();
 
@@ -66,16 +66,23 @@ suite('Contract: agents\' screens', () => {
 		fs.writeFileSync(finalScreenFile(dir, id), typeof screen === 'string' ? screen : JSON.stringify(screen));
 	}
 
-	test('read_screen is offered as the person\'s way of looking at a terminal: what it takes', () => {
+	test('the three tools are offered as the person\'s ways into a terminal: what each takes, and what it is for', () => {
 		const tools = JSON.parse(JSON.stringify(contract.hello(lead).tools)) as { name: string; inputSchema: { required: string[]; properties: { [name: string]: unknown } } }[];
-		const read = tools.find(each => each.name === 'read_screen');
+		const shape = (name: string) => {
+			const tool = tools.find(each => each.name === name);
+			return tool && { required: tool.inputSchema.required, properties: tool.inputSchema.properties };
+		};
 
-		assert.deepStrictEqual(read && { required: read.inputSchema.required, properties: read.inputSchema.properties }, {
-			required: ['agent'],
-			properties: {
-				agent: { type: 'string', description: 'The agent: its number, as #7, or its @name, where only one running agent has it. One that ended, by its number.' },
-				lines: { type: 'integer', minimum: 1, maximum: 2000, description: 'How many of its bottom lines: 50 unless given, 2000 at most. A line the terminal wraps over several rows counts as one.' }
-			}
+		assert.deepStrictEqual({ read: shape('read_screen'), type: shape('type_text')?.required, keys: shape('press_keys')?.properties.keys }, {
+			read: {
+				required: ['agent'],
+				properties: {
+					agent: { type: 'string', description: 'The agent: its number, as #7, or its @name, where only one running agent has it. One that ended, by its number.' },
+					lines: { type: 'integer', minimum: 1, maximum: 2000, description: 'How many of its bottom lines: 50 unless given, 2000 at most. A line the terminal wraps over several rows counts as one.' }
+				}
+			},
+			type: ['agent', 'text'],
+			keys: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 50, description: 'The keys, in order: names such as Enter, Down, Escape, Ctrl+C, or one printable character each, such as y or 1. Up to 50.' }
 		});
 	});
 
@@ -120,6 +127,59 @@ suite('Contract: agents\' screens', () => {
 		assert.deepStrictEqual({ texts, bounds: bounds.map(read => [read.requested, read.selected]) }, {
 			texts: Array(5).fill('lines must be a whole number from 1 to 2000.'),
 			bounds: [[1, 1], [2000, 2]]
+		});
+	});
+
+	test('text typed is one line of plain text, up to two thousand characters, kept as it is: anything else is refused whole, and nothing is typed', async () => {
+		const refusals = await Promise.all([
+			{ agent: '#2', text: 'two\nlines' },
+			{ agent: '#2', text: 'tab\there' },
+			{ agent: '#2', text: '\x1b[A' },
+			{ agent: '#2', text: `line${String.fromCharCode(0x2028)}separator` },
+			{ agent: '#2', text: 'x'.repeat(2_001) },
+			{ agent: '#2', text: '' },
+			{ agent: '#2', text: 'ok', enter: 'yes' },
+			{ agent: '#2', text: 'ok', lines: 3 }
+		].map(async args => (await call(lead, 'type_text', args)).text));
+		const typed = await call(lead, 'type_text', { agent: '#2', text: `  ${String.fromCharCode(0x4e2d)} kept as is  `, enter: true });
+
+		assert.deepStrictEqual({ refusals, typed: typed.text, terminal: world.terminals.typed.filter(line => line.startsWith('@worker')) }, {
+			refusals: [
+				...Array(4).fill('text has a line break, Escape, a tab or another control character in it: type one line with type_text, and press Enter, Escape, Tab and the like with press_keys. Nothing was typed.'),
+				'text is 2001 characters, past the 2000 type_text types: give more in a file, and type its path.',
+				'text must not be empty.',
+				'enter must be true or false.',
+				'type_text takes agent, text, enter?; not lines.'
+			],
+			typed: 'Typed 16 characters into @worker #2\'s terminal, as one paste, and pressed Enter. Its screen 2 seconds after:\n@worker #2 (Arg Code), running. Its screen: nothing on it yet.',
+			terminal: [`@worker #2 · Arg Code: type ${JSON.stringify(`  ${String.fromCharCode(0x4e2d)} kept as is  `)}, Enter after 300 ms, waiting 120000 ms at most`]
+		});
+	});
+
+	test('keys are named as the person knows them, in any case, an alias or one character; one press_keys does not know refuses them all, and nothing is pressed', async () => {
+		const pressed = await call(lead, 'press_keys', { agent: '#2', keys: ['down', 'Ctrl + C', '^a', 'Esc', ' ', 'y'] });
+		const refused = await call(lead, 'press_keys', { agent: '#2', keys: ['Down', 'F5', 'Ctrl+Alt+Del'] });
+		const none = await call(lead, 'press_keys', { agent: '#2', keys: [] });
+		const tooMany = await call(lead, 'press_keys', { agent: '#2', keys: Array(51).fill('Down') });
+
+		assert.deepStrictEqual({ pressed: pressed.text.split('\n')[0], data: (pressed.data as { keys: string[] }).keys, refused: refused.text, none: none.text, tooMany: tooMany.text, terminal: world.terminals.typed.filter(line => line.startsWith('@worker')) }, {
+			pressed: 'Pressed Down, Ctrl+C, Ctrl+A, Escape, Space, y in @worker #2\'s terminal. Its screen 2 seconds after:',
+			data: ['Down', 'Ctrl+C', 'Ctrl+A', 'Escape', 'Space', 'y'],
+			refused: 'press_keys does not know "F5", "Ctrl+Alt+Del", and pressed nothing. It takes Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, and Ctrl+A to Ctrl+Z - in any case, spaces between their parts or none; Return, Esc, ArrowUp, ArrowDown, ArrowLeft, ArrowRight and ^A to ^Z for them too; or one printable character, such as y or 1. Type text with type_text.',
+			none: 'keys has 0: press 1 to 50 keys at a time.',
+			tooMany: 'keys has 51: press 1 to 50 keys at a time.',
+			terminal: ['@worker #2 · Arg Code: keys Down Ctrl+C Ctrl+A Escape Space y, waiting 120000 ms at most']
+		});
+	});
+
+	test('a call that failed partway says what went in, beside its code, in its data', async () => {
+		world.terminals.nextInput.push({ outcome: 'partial', reason: 'ended', pasted: true, entered: false });
+		const result = await call(lead, 'type_text', { agent: '#2', text: 'yes', enter: true });
+
+		assert.deepStrictEqual(result, {
+			text: '@worker #2\'s terminal ended partway: the text went in, without Enter.',
+			isError: true,
+			data: { outcome: 'partial', reason: 'ended', pasted: true, entered: false, code: 'FAILED' }
 		});
 	});
 });

@@ -8,7 +8,7 @@ import * as path from 'path';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
 import { Facade, SpawnRequest, Spawned } from '../core/facade';
-import { Disposable, EndedAgent, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen } from '../core/ports';
+import { Disposable, EndedAgent, Git, InputEffect, KeysOptions, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TypeOptions } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy } from '../record/ledger';
@@ -25,6 +25,8 @@ export class FakeTerminals implements Terminals {
 	readonly screens = new Map<string, TerminalScreen>();
 	/** The terminals the window was told are agents', after a reload. */
 	readonly registered: string[] = [];
+	/** What the next texts typed and keys pressed answer with, in turn - an effect, or an error thrown - where not all went in. */
+	readonly nextInput: (InputEffect | Error)[] = [];
 	/** The next launch fails with this. */
 	failNext: string | undefined;
 	private readonly listeners = new Set<(name: string, end: TerminalEnd) => void>();
@@ -62,12 +64,28 @@ export class FakeTerminals implements Terminals {
 		return { ...screen, lines: screen.lines.slice(Math.max(0, screen.lines.length - lines)), older: screen.older || screen.lines.length > lines };
 	}
 
-	async type(name: string, text: string): Promise<boolean> {
+	async type(name: string, text: string, options: TypeOptions): Promise<InputEffect | undefined> {
 		if (!this.running.has(name)) {
-			return false;
+			return undefined;
 		}
-		this.typed.push(`${name}: ${JSON.stringify(text)}`);
-		return true;
+		const next = this.nextInput.shift();
+		if (next instanceof Error) {
+			throw next;
+		}
+		this.typed.push(`${name}: type ${JSON.stringify(text)}${options.enter ? `, Enter after ${options.enterDelayMs} ms` : ''}${options.queueTimeoutMs !== undefined ? `, waiting ${options.queueTimeoutMs} ms at most` : ''}`);
+		return next ?? { outcome: 'applied', pasted: true, entered: options.enter };
+	}
+
+	async keys(name: string, keys: readonly string[], options: KeysOptions): Promise<InputEffect | undefined> {
+		if (!this.running.has(name)) {
+			return undefined;
+		}
+		const next = this.nextInput.shift();
+		if (next instanceof Error) {
+			throw next;
+		}
+		this.typed.push(`${name}: keys ${keys.join(' ')}${options.queueTimeoutMs !== undefined ? `, waiting ${options.queueTimeoutMs} ms at most` : ''}`);
+		return next ?? { outcome: 'applied', keysSent: keys.length };
 	}
 
 	async register(name: string, run: number, finalScreen: string): Promise<boolean> {

@@ -62,6 +62,8 @@ export interface NewAgent {
 	readonly task?: (id: number) => string;
 	/** Whether it is launched with YOLO on: its CLI's approvals and sandbox off. */
 	readonly yolo?: boolean;
+	/** How long after a paste into its terminal Enter is pressed. */
+	readonly enterDelay?: number;
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -194,7 +196,8 @@ export class AgentTable {
 			folder: agent.folder,
 			...(taskFile !== undefined ? { taskFile } : {}),
 			tokenHash: hashToken(token),
-			...(agent.yolo !== undefined ? { yolo: agent.yolo } : {})
+			...(agent.yolo !== undefined ? { yolo: agent.yolo } : {}),
+			...(agent.enterDelay !== undefined ? { enterDelay: agent.enterDelay } : {})
 		});
 		const started = this.state.agents.get(id);
 		if (!started) {

@@ -133,8 +133,9 @@ export class Launcher implements Disposable {
 		const { prompt } = run;
 		const first = prompt === undefined ? undefined : (id: number) => `${setup.opening({ id, name: run.name, cliName: cli.displayName }, caller)}\n\n${prompt}`;
 		this.stillOpen();
-		// As it is launched: settings changed later do not change what it reaches
-		const started = table.start({ name: run.name, parent: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}), yolo: isYolo(installed.config) });
+		// As it is launched: settings changed later do not change how it runs
+		const { enterDelay } = installed.config.launch;
+		const started = table.start({ name: run.name, parent: caller.id, cli: cli.id, model: run.model, effort: run.effort, worktree: run.worktree, folder: run.folder, ...(inTerminal && first ? { task: first } : {}), yolo: isYolo(installed.config), enterDelay });
 		const { agent } = started;
 		const startup = this.watch(agent, caller);
 		const terminal = this.context.terminalOf(agent);
@@ -297,16 +298,16 @@ export class Launcher implements Disposable {
 			if (!this.isRunning(agent)) {
 				return;
 			}
-			if (!await ports.terminals.type(terminal, `[facade] Your task is in ${taskFile}: read that file, then do what it says.`)) {
+			// In the terminal's turn, as all Facade types there, and behind what the person is typing
+			const effect = await ports.terminals.type(terminal, `[facade] Your task is in ${taskFile}: read that file, then do what it says.`, { enter: true, enterDelayMs: agent.enterDelay ?? enterDelay });
+			if (!this.isRunning(agent)) {
+				return;
+			}
+			if (!effect) {
 				throw new Error('its terminal was not there');
 			}
-			await timeout(enterDelay);
-			if (!this.isRunning(agent)) {
-				return;
-			}
-			await ports.terminals.type(terminal, '\r');
-			if (!this.isRunning(agent)) {
-				return;
+			if (effect.outcome !== 'applied') {
+				throw new Error(effect.pasted ? 'its terminal ended before Enter' : 'its terminal ended first');
 			}
 			table.setTaskTyped(agent.id);
 			this.context.log(`${terminal} was told of its task, in ${taskFile}.`);

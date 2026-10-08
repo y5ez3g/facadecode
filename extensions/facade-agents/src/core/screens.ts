@@ -10,7 +10,7 @@ import { AgentTable } from '../record/agents';
 import { Agent, AgentState, Caller, describe, Exit, isLive, namesThePerson } from '../record/events';
 import { discardScreens, FinalScreen, finalScreenFile, readFinalScreen, writeScreenSnapshot } from '../record/screens';
 import { FacadeError } from './errors';
-import { CliCatalog, Ports, TerminalScreen, Timing } from './ports';
+import { CliCatalog, InputEffect, Ports, TerminalScreen, Timing } from './ports';
 
 /** How many lines `read_screen` gives where it is not told. */
 export const DEFAULT_LINES = 50;
@@ -18,12 +18,20 @@ export const DEFAULT_LINES = 50;
 export const MOST_LINES = 2_000;
 /** The most characters of a screen a result holds: past it, every line given goes to a file of its own. */
 export const MOST_INLINE_CHARS = 8_000;
-/** How many lines of the screen the answer to a failure gives. */
+/** The most characters `type_text` types at once. */
+export const MOST_TYPED = 2_000;
+/** The most keys `press_keys` presses at once. */
+export const MOST_KEYS = 50;
+/** How long after the last input the screen is read for the answer. */
+export const ANSWER_DELAY_MS = 2_000;
+/** How many lines of the screen an answer to an input, or a failure, gives. */
 const ANSWER_LINES = 20;
 /** How long an agent that just ended has for its final screen to be written: the window writes it as the terminal goes. */
 const FINAL_SCREEN_WAIT_MS = 2_000;
 /** How often a final screen still to be written is looked for. */
 const FINAL_SCREEN_POLL_MS = 100;
+/** How many characters of a text typed the log says. */
+const LOGGED_CHARS = 40;
 /** What a final screen read gives before each part, where it gives both. */
 const FRAME_HEADING = '[the last full-screen frame it drew before it left it]';
 const FINAL_HEADING = '[its screen as its terminal ended]';
@@ -35,7 +43,7 @@ export interface ScreensContext {
 	readonly clis: CliCatalog;
 	/** The screens folder of the workspace's record. */
 	readonly dir: string;
-	/** How long the core waits, as the person sets it now. */
+	/** How long the core waits, as the person sets it now: a call waits its turn in a terminal no longer than its start timeout. */
 	timing(): Timing;
 	/** A CLI Facade knows, by its id. */
 	cliOf(id: string): AgentCli | undefined;
@@ -43,7 +51,7 @@ export interface ScreensContext {
 	agentNamed(target: string): Agent;
 	/** The name of the terminal an agent runs in. */
 	terminalOf(agent: Agent): string;
-	/** A line of Facade's log. */
+	/** A line of Facade's log: who typed or pressed what, where. */
 	log(message: string): void;
 }
 
@@ -103,6 +111,17 @@ export interface ScreenRead {
 	readonly parts?: readonly ScreenReadPart[];
 }
 
+/** What typing or pressing keys did, and the agent's screen two seconds after. */
+export interface InputResult {
+	readonly id: number;
+	readonly name: string;
+	readonly effect: InputEffect;
+	/** Its bottom {@link ANSWER_LINES} lines {@link ANSWER_DELAY_MS} after the last input. */
+	readonly screen?: ScreenRead;
+	/** Why the screen could not be read, where it could not. */
+	readonly screenUnavailable?: string;
+}
+
 /** An ended agent's final screen as its file has it, or why there is none to read. */
 interface KeptScreen {
 	/** None where there is none to read. */
@@ -114,10 +133,11 @@ interface KeptScreen {
 }
 
 /**
- * Agents looking into agents (AGENT-DEBUGGING.md): an agent's screen read as its terminal draws it, and its
- * final screen once it ended. A caller reaches the agents its launch lets it: with YOLO on, every agent of
- * the window; with YOLO off, those of its own tree, ended ones too; the person, every agent. Facade reads a
- * screen only when a tool asks, and decides nothing by what it says: that is the caller's to judge.
+ * Agents looking into agents (AGENT-DEBUGGING.md): an agent's screen read as its terminal draws it, text
+ * typed and keys pressed in its terminal as the person types and presses them, and its final screen once
+ * it ended. A caller reaches the agents its launch lets it: with YOLO on, every agent of the window; with
+ * YOLO off, those of its own tree, ended ones too; the person, every agent. Facade reads a screen only
+ * when a tool asks, and decides nothing by what it says: that is the caller's to judge.
  */
 export class Screens {
 
@@ -131,13 +151,39 @@ export class Screens {
 		return this.screenOf(this.reachable(caller, target), lines);
 	}
 
+	/** Types `text` into the terminal of the agent `target` names, as one paste, and Enter after it where `enter`. */
+	async type(caller: Caller, target: string, text: string, enter: boolean): Promise<InputResult> {
+		const chars = [...text];
+		const shown = chars.length > LOGGED_CHARS ? `${chars.slice(0, LOGGED_CHARS).join('')}...` : text;
+		const doing = `typing ${chars.length} characters, ${JSON.stringify(shown)}${enter ? ', and Enter,' : ''} into`;
+		const agent = this.inputTarget(caller, target, doing);
+		const timing = this.context.timing();
+		return this.input(caller, agent, doing, timing, terminal => this.context.ports.terminals.type(terminal, text, {
+			enter,
+			enterDelayMs: this.enterDelayOf(agent),
+			queueTimeoutMs: timing.startTimeoutMs
+		}));
+	}
+
+	/** Presses `keys`, as `keyOf` names them, in the terminal of the agent `target` names. */
+	async press(caller: Caller, target: string, keys: readonly string[]): Promise<InputResult> {
+		const doing = `pressing ${keys.join(', ')} in`;
+		const agent = this.inputTarget(caller, target, doing);
+		const timing = this.context.timing();
+		return this.input(caller, agent, doing, timing, terminal => this.context.ports.terminals.keys(terminal, keys, { queueTimeoutMs: timing.startTimeoutMs }));
+	}
+
 	/**
 	 * The last {@link ANSWER_LINES} lines of an agent's screen, for the answer to a failure: of its terminal
-	 * while it is open, else of its final screen. Undefined where there are none.
+	 * while it is open, else of its final screen. With `ended`, its terminal just ended, which Facade may
+	 * not know yet: its final screen, waited for a moment. Undefined where there are none.
 	 */
-	async excerptOf(agent: Agent): Promise<ScreenRead | undefined> {
+	async excerptOf(agent: Agent, ended = false): Promise<ScreenRead | undefined> {
 		try {
-			const read = await this.screenOf(this.context.table.get(agent.id) ?? agent, ANSWER_LINES);
+			const now = this.context.table.get(agent.id) ?? agent;
+			const read = ended && isLive(now)
+				? this.finalScreen(now, ANSWER_LINES, await this.keptScreenOf(now, Date.now()))
+				: await this.screenOf(now, ANSWER_LINES);
 			return read.selected ? read : undefined;
 		} catch (err) {
 			this.context.log(`The last lines of ${describe(agent)}'s screen could not be read: ${messageOf(err)}`);
@@ -168,7 +214,7 @@ export class Screens {
 	/** The agent `target` names, which the caller reaches: the person has no terminal. */
 	private reachable(caller: Caller, target: string): Agent {
 		if (namesThePerson(target)) {
-			throw new FacadeError('REFUSED', 'The person, @you, has no terminal of Facade\'s: read_screen reads agents\' terminals.');
+			throw new FacadeError('REFUSED', 'The person, @you, has no terminal of Facade\'s: these tools read and type into agents\' terminals.');
 		}
 		const agent = this.context.agentNamed(target);
 		const self = caller.id === undefined ? undefined : this.context.table.get(caller.id);
@@ -176,6 +222,65 @@ export class Screens {
 			throw new FacadeError('REFUSED', `${describe(agent)} is outside your tree: you were started with YOLO off, so you reach only the agents of your own tree - the agent the person started it from and every agent started under it, those that ended too.`);
 		}
 		return agent;
+	}
+
+	/** The agent `target` names, which the caller may type into: one that has not ended. A refusal is logged with what it was to be. */
+	private inputTarget(caller: Caller, target: string, doing: string): Agent {
+		try {
+			const agent = this.reachable(caller, target);
+			if (agent.exit) {
+				throw new FacadeError('REFUSED', `${describe(agent)} ended (${agent.exit.kind}: ${agent.exit.reason}): its terminal takes nothing more. read_screen shows its last screen.`, { outcome: 'not_applied', reason: 'ended' });
+			}
+			return agent;
+		} catch (err) {
+			this.context.log(`${describe(caller)} was refused ${doing} ${JSON.stringify(target)}'s terminal: ${messageOf(err)}`);
+			throw err;
+		}
+	}
+
+	/**
+	 * Sends input to an agent's terminal: says in the log what is about to go in, then what did. Answers
+	 * with what went in and the screen {@link ANSWER_DELAY_MS} on; fails with what went in, where that was
+	 * not all, and with `outcome: unknown` where it cannot be known.
+	 */
+	private async input(caller: Caller, agent: Agent, doing: string, timing: Timing, send: (terminal: string) => Promise<InputEffect | undefined>): Promise<InputResult> {
+		const who = `${describe(caller)} ${doing} ${describe(agent)}'s terminal`;
+		this.context.log(`${who}.`);
+		let effect: InputEffect | undefined;
+		try {
+			effect = await send(this.context.terminalOf(agent));
+		} catch (err) {
+			// One the window says outright, nothing gone in; any other leaves what went in unknown
+			if (err instanceof FacadeError) {
+				this.context.log(`${who}: ${err.message}`);
+				throw err;
+			}
+			this.context.log(`${who}: what went in is not known: ${messageOf(err)}`);
+			throw new FacadeError('UNAVAILABLE', `Whether it went into ${describe(agent)}'s terminal is not known: ${messageOf(err)}. Read its screen before you type or press anything again.`, { outcome: 'unknown' });
+		}
+		if (!effect) {
+			this.context.log(`${who}: nothing went in, its terminal not there.`);
+			throw this.context.table.get(agent.id)?.state === 'starting'
+				? new FacadeError('REFUSED', `${describe(agent)} has no terminal yet: it is still starting. Nothing was typed.`, { outcome: 'not_applied' })
+				: new FacadeError('UNAVAILABLE', `${describe(agent)}'s terminal is not there now: the window may still be giving its terminals back after a reload. Nothing was typed; try again in a moment.`, { outcome: 'not_applied' });
+		}
+		this.context.log(`${who}: ${effectText(effect)}.`);
+		const facts = { ...effect };
+		if (effect.outcome === 'not_applied') {
+			throw effect.reason === 'timeout'
+				? new FacadeError('UNAVAILABLE', `Nothing went into ${describe(agent)}'s terminal: it waited ${Math.round(timing.startTimeoutMs / 1000)} seconds for its turn, behind what the person was typing there or what Facade typed before. Read its screen, then try again.`, facts)
+				: new FacadeError('REFUSED', `Nothing went into ${describe(agent)}'s terminal: it ended first. read_screen shows its last screen.`, facts);
+		}
+		if (effect.outcome === 'partial') {
+			const excerpt = await this.excerptOf(agent, true);
+			throw new FacadeError('FAILED', `${describe(agent)}'s terminal ended partway: ${effectText(effect)}.${excerpt ? ` Its last lines:\n${excerpt.text}` : ''}`, { ...facts, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
+		}
+		await timeout(ANSWER_DELAY_MS);
+		try {
+			return { id: agent.id, name: agent.name, effect, screen: await this.screenOf(this.context.table.get(agent.id) ?? agent, ANSWER_LINES) };
+		} catch (err) {
+			return { id: agent.id, name: agent.name, effect, screenUnavailable: messageOf(err) };
+		}
 	}
 
 	/** The bottom `lines` lines of an agent's screen, or of its final screen once it ended. */
@@ -306,6 +411,15 @@ export class Screens {
 		const cli = this.context.cliOf(agent.cli);
 		return !!cli && isYolo(this.context.clis.configOf(cli));
 	}
+
+	/** How long after a paste an agent's CLI is given before Enter: its launch's `enterDelay`. */
+	private enterDelayOf(agent: Agent): number {
+		if (agent.enterDelay !== undefined) {
+			return agent.enterDelay;
+		}
+		const cli = this.context.cliOf(agent.cli);
+		return cli ? this.context.clis.configOf(cli).launch.enterDelay : 0;
+	}
 }
 
 /**
@@ -333,4 +447,12 @@ function inlinePart(lines: readonly string[]): { readonly text: string; readonly
 	}
 	const text = lines.slice(lines.length - kept).join('\n');
 	return { text, omitted: { lines: lines.length - kept, chars: whole.length - text.length, partialFirstLine: false } };
+}
+
+/** What went in, as the log and an error say it. */
+function effectText(effect: InputEffect): string {
+	if (effect.keysSent !== undefined) {
+		return effect.outcome === 'applied' ? `all ${effect.keysSent} keys went in` : `${effect.keysSent} of its keys went in`;
+	}
+	return effect.entered ? 'the text went in, and Enter' : effect.pasted ? 'the text went in, without Enter' : 'nothing went in';
 }

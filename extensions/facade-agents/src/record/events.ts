@@ -67,6 +67,8 @@ export interface Agent {
 	 * `fullAccess` arguments turn them off - where its launch recorded it.
 	 */
 	readonly yolo?: boolean;
+	/** How long after a paste into its terminal Enter is pressed, as its launch had it, where it recorded it. */
+	readonly enterDelay?: number;
 	state: AgentState;
 	exit?: Exit;
 	readonly startTime: number;
@@ -104,6 +106,7 @@ export type LedgerEventBody =
 		readonly taskFile?: string;
 		readonly tokenHash: string;
 		readonly yolo?: boolean;
+		readonly enterDelay?: number;
 	}
 	| { readonly type: 'agent.running'; readonly id: number }
 	| { readonly type: 'task.typed'; readonly id: number }
@@ -163,6 +166,11 @@ function isId(value: unknown): value is number {
 	return typeof value === 'number' && Number.isInteger(value) && value >= FIRST_ID;
 }
 
+/** Whether `value` is a number of milliseconds to wait: a finite one, from 0. */
+function isDelay(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 /** Whether `value` is a string with something in it. */
 function isText(value: unknown): value is string {
 	return typeof value === 'string' && value.length > 0;
@@ -184,15 +192,15 @@ export function eventOf(value: JsonObject): LedgerEvent | undefined {
 function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'agent.started': {
-			const { id, name, parent, cli, model, effort, worktree, folder, taskFile, tokenHash, yolo } = value;
+			const { id, name, parent, cli, model, effort, worktree, folder, taskFile, tokenHash, yolo, enterDelay } = value;
 			if (!isId(id) || typeof name !== 'string' || !isAgentName(name) || (parent !== undefined && !isId(parent)) || !isText(cli) || !isText(model) || !isText(effort)
 				|| !isText(worktree) || !isText(folder) || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))
-				|| (yolo !== undefined && typeof yolo !== 'boolean')) {
+				|| (yolo !== undefined && typeof yolo !== 'boolean') || (enterDelay !== undefined && !isDelay(enterDelay))) {
 				return undefined;
 			}
 			return {
 				type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder, tokenHash, ...(taskFile !== undefined ? { taskFile } : {}),
-				...(yolo !== undefined ? { yolo } : {})
+				...(yolo !== undefined ? { yolo } : {}), ...(enterDelay !== undefined ? { enterDelay } : {})
 			};
 		}
 		case 'agent.running':
@@ -254,6 +262,7 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				folder: event.folder,
 				...(event.taskFile !== undefined ? { taskFile: event.taskFile } : {}),
 				...(event.yolo !== undefined ? { yolo: event.yolo } : {}),
+				...(event.enterDelay !== undefined ? { enterDelay: event.enterDelay } : {}),
 				state: 'starting',
 				startTime: event.time
 			});

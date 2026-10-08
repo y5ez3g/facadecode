@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DEFAULT_LINES, MOST_INLINE_CHARS, MOST_LINES, ScreenRead } from '../core/screens';
+import { ANSWER_DELAY_MS, DEFAULT_LINES, InputResult, MOST_INLINE_CHARS, MOST_LINES, ScreenRead } from '../core/screens';
 import { Args } from './args';
 import type { ContractTool } from './tools';
 import { timeOfDay } from './words';
@@ -63,6 +63,14 @@ export function screenText(read: ScreenRead, cliName: string): string {
 		? ` Past the ${MOST_INLINE_CHARS} characters a result holds, here are its last ${lines(read.selected - read.omitted.lines)}${read.omitted.partialFirstLine ? ', the first of them only the end of it' : ''}; the ${read.omitted.chars} characters before them are in ${read.snapshot ?? read.finalScreen}, with the rest: read that file for them.`
 		: '';
 	return `${who}. ${from}.${omitted} The lines, as they are - [[...]] marks inverse video, {{...}} dim text:\n${read.text}`;
+}
+
+/** The screen an input's answer ends with, as the model reads it. */
+export function screenAfter(result: InputResult, cliName: string): string {
+	const after = `${ANSWER_DELAY_MS / 1000} seconds after`;
+	return result.screen
+		? `Its screen ${after}:\n${screenText(result.screen, cliName)}`
+		: `Its screen could not be read ${after}: ${result.screenUnavailable}`;
 }
 
 /** `read_screen`: an agent's screen, as its terminal draws it; for one that ended, its last screen. */
