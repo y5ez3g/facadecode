@@ -25,7 +25,7 @@ import { IEnvironmentVariableService } from '../../terminal/common/environmentVa
 import { ITerminalProfileResolverService } from '../../terminal/common/terminal.js';
 import { createTerminalEnvironment, createVariableResolver, getWorkspaceForTerminal, mergeEnvironments } from '../../terminal/common/terminalEnvironment.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
-import { IWorktreeService } from '../../worktrees/browser/worktrees.js';
+import { IRemoveWorktreeOptions, IWorktreeService } from '../../worktrees/browser/worktrees.js';
 import { facadeRunProperties, IFacadeRun, isFacadeRun } from '../common/facadeRun.js';
 import { IFacadeRunsService } from './facadeRuns.js';
 
@@ -136,15 +136,28 @@ CommandsRegistry.registerCommand('_facade.worktree.create', async (accessor, ...
 	return accessor.get(IWorktreeService).makeWorktree(main, branch, { startPoint: startPoint ?? undefined, show: show ?? undefined });
 });
 
-// `(worktree)`: deletes the worktree as Delete Worktree does, with nothing asked - its changes with it, its
-// branch kept - for an agent stopping the agents in it (`IWorktreeService.removeWorktree`). Rejects with why
-// it could not, in the product's words: a main checkout is never deleted.
+// `(worktree, options?)`: deletes the worktree as Delete Worktree does, with nothing asked, its branch
+// kept, for an agent stopping the agents in it (`IWorktreeService.removeWorktree`): changes git would lose
+// refuse it unless `options.discardChanges` - all but `options.ownFiles`, what Facade put there. Rejects with
+// why it could not, in the product's words: a main checkout is never deleted.
 CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...args) => {
-	const [worktree] = args;
+	const [worktree, options] = args;
 	assertType(URI.isUri(worktree), 'URI');
+	// An argument the extension host gives as undefined comes as null
+	assertType(isUndefinedOrNull(options) || isRemoveWorktreeOptions(options), 'IRemoveWorktreeOptions');
 
-	await accessor.get(IWorktreeService).removeWorktree(worktree);
+	await accessor.get(IWorktreeService).removeWorktree(worktree, options ?? undefined);
 });
+
+function isRemoveWorktreeOptions(candidate: unknown): candidate is IRemoveWorktreeOptions {
+	if (!isObject(candidate)) {
+		return false;
+	}
+
+	const { discardChanges, ownFiles } = candidate as Record<string, unknown>;
+	return (isUndefined(discardChanges) || isBoolean(discardChanges))
+		&& (isUndefined(ownFiles) || (Array.isArray(ownFiles) && ownFiles.every(isString)));
+}
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window
 // (`IFolderTerminalsService.openFor`), and registered under the agent's run it is for. Answers with it as

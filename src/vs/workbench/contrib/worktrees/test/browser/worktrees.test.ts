@@ -755,14 +755,14 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
-	test('deleted without asking, for an agent: nothing asked, then off it and its row gone, out of folders[], its terminals closed and only then git, with force for its changes; its name, colour, place and trust go with it; its progress in the status bar', async () => {
+	test('deleted without asking, for an agent: nothing asked, then off it and its row gone, out of folders[], its terminals closed and only then git, with force for the changes it was told to discard; its name, colour, place and trust go with it; its progress in the status bar', async () => {
 		gitIsRunning();
 		trust.enabled = true;
 		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['a.txt'], submodules: false });
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
 		savedOrder = [w2, w3];
 
-		await instantiationService.createInstance(WorktreeService).removeWorktree(w2);
+		await instantiationService.createInstance(WorktreeService).removeWorktree(w2, { discardChanges: true });
 
 		assert.deepStrictEqual({ steps, progressShown }, {
 			steps: [
@@ -778,6 +778,23 @@ suite('Worktrees - making and deleting one', () => {
 				'untrust /home/me/.facade/worktrees/lab/w2',
 			],
 			progressShown: [ProgressLocation.Window],
+		});
+	});
+
+	test('deleted without asking, changes git would lose that it was not told to discard refuse it, listed, with nothing done - all but the caller\'s own files, which go with it by force', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json', 'build/out.js'], submodules: false });
+		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
+		const service = instantiationService.createInstance(WorktreeService);
+		const refused = await service.removeWorktree(w2, { ownFiles: ['.mcp.json'] }).then(() => 'deleted', (err: Error) => err.message);
+		const stepsWhenRefused = [...steps];
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json'], submodules: false });
+		await service.removeWorktree(w2, { ownFiles: ['.mcp.json'] });
+
+		assert.deepStrictEqual({ refused, stepsWhenRefused, deletedBy: steps.filter(step => step.startsWith('_git.deleteWorktreeAt') && !step.endsWith('check')) }, {
+			refused: '/home/me/.facade/worktrees/lab/w2 has changes that deleting it would lose: build/out.js. Nothing was deleted.',
+			stepsWhenRefused: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
+			deletedBy: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force']
 		});
 	});
 

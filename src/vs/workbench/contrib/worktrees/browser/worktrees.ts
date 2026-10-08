@@ -224,7 +224,7 @@ const RESTORE_TIMEOUT = 5000;
  */
 const GIT_START_TIMEOUT = 30000;
 
-/** How many files a confirmation names before it says how many more there are. */
+/** How many files a confirmation, or a deletion refused, names before it says how many more there are. */
 const LISTED_FILES = 10;
 
 /** How many of the files `.worktreeinclude` could not copy a notification names. */
@@ -268,12 +268,20 @@ export interface IWorktreeService {
 
 	/**
 	 * Deletes the worktree `target` as Delete Worktree does, without asking anything, for a caller that has
-	 * decided already - an agent stopping the agents in it: its uncommitted changes go with it, and its
-	 * branch is kept. Throws, in the product's words, when it cannot: a main checkout, which is never
-	 * deleted, a folder that is no worktree, and a worktree git will not delete - whose row comes back, to
-	 * try again (WT-8.6).
+	 * decided already - an agent stopping the agents in it - its branch kept. Changes git would lose, as it
+	 * finds them deleting it, refuse it unless `options` says to discard them (WT-8.10). Throws, in the
+	 * product's words, when it cannot: those changes, a main checkout, which is never deleted, a folder that
+	 * is no worktree, and a worktree git will not delete - whose row comes back, to try again (WT-8.6).
 	 */
-	removeWorktree(target: URI): Promise<void>;
+	removeWorktree(target: URI, options?: IRemoveWorktreeOptions): Promise<void>;
+}
+
+/** What `removeWorktree` may lose of a worktree. */
+export interface IRemoveWorktreeOptions {
+	/** Whether its changes go with it; without, any change git would lose refuses its deletion. */
+	readonly discardChanges?: boolean;
+	/** Files that go with it all the same, relative to it with forward slashes: what the caller put there and nobody changed. */
+	readonly ownFiles?: readonly string[];
 }
 
 /** How `makeWorktree` makes a worktree. */
@@ -367,7 +375,7 @@ export class WorktreeService implements IWorktreeService {
 		return worktree;
 	}
 
-	async removeWorktree(target: URI): Promise<void> {
+	async removeWorktree(target: URI, options: IRemoveWorktreeOptions = {}): Promise<void> {
 		const repository = this.workspaceBarService.repositoryFor(target);
 		const worktree = findWorktree(repository, target, this.uriIdentityService.extUri);
 		if (!repository || !worktree) {
@@ -377,7 +385,7 @@ export class WorktreeService implements IWorktreeService {
 		}
 
 		// One at a time, as Delete Worktree: a second waits for the first, and finds no worktree there
-		await this.runInTurn(worktree.uri, () => this.doRemoveWorktree(repository.main, worktree.uri, worktreeNameFor(this.customizationService, worktree)));
+		await this.runInTurn(worktree.uri, () => this.doRemoveWorktree(repository.main, worktree.uri, worktreeNameFor(this.customizationService, worktree), options));
 	}
 
 	/**
@@ -853,9 +861,10 @@ export class WorktreeService implements IWorktreeService {
 
 	/**
 	 * `removeWorktree`: WT-8 with nothing asked - no confirmation, no trust asked for - its changes deleted
-	 * with it, as the caller decided. Git that is still starting, as a window just opened, is waited for.
+	 * with it where the caller said so, and refusing it otherwise (WT-8.10). Git that is still starting, as a
+	 * window just opened, is waited for.
 	 */
-	private async doRemoveWorktree(main: URI, worktree: URI, name: string): Promise<void> {
+	private async doRemoveWorktree(main: URI, worktree: URI, name: string, options: IRemoveWorktreeOptions): Promise<void> {
 		if (this.workspaceTrustEnablementService.isWorkspaceTrustEnabled() && !this.workspaceTrustManagementService.isWorkspaceTrusted()) {
 			throw new Error(restrictedUnasked());
 		}
@@ -872,6 +881,15 @@ export class WorktreeService implements IWorktreeService {
 			const error = check?.kind === 'error' ? check : undefined;
 			throw new Error(explainFailure(error, main)
 				?? localize('worktrees.checkFailed', "The worktree could not be checked before deleting it: {0}", gitMessage(error)));
+		}
+
+		// Changes the caller did not decide on - come since it looked, say - are not deleted unasked (WT-8.10)
+		const lost = check.files.filter(file => !options.ownFiles?.includes(file));
+		if (lost.length && !options.discardChanges) {
+			const label = this.labelService.getUriLabel(worktree);
+			throw new Error(lost.length > LISTED_FILES
+				? localize('worktrees.wouldLoseMore', "{0} has changes that deleting it would lose: {1} and {2} more. Nothing was deleted.", label, lost.slice(0, LISTED_FILES).join(', '), lost.length - LISTED_FILES)
+				: localize('worktrees.wouldLose', "{0} has changes that deleting it would lose: {1}. Nothing was deleted.", label, lost.join(', ')));
 		}
 
 		// Its progress in the status bar: nobody asked for this one where they would look for it
