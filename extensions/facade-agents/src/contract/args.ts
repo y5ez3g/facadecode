@@ -56,6 +56,18 @@ export class Args {
 		}
 		throw invalid(`${name} must be true or false.`);
 	}
+
+	/** A whole number from `min` to `max`, if it is given. */
+	integer(name: string, min: number, max: number): number | undefined {
+		const value = this.values[name];
+		if (value === undefined) {
+			return undefined;
+		}
+		if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+			throw invalid(`${name} must be a whole number from ${min} to ${max}.`);
+		}
+		return value;
+	}
 }
 
 function invalid(message: string): FacadeError {

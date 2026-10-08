@@ -13,7 +13,7 @@ import { settled, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
-const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once it is up; ps lists you, your parent and your children, each with its number and state; kill ends one of your children.';
+const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once it is up; ps lists you, your parent and your children, each with its number and state; kill ends one of your children. read_screen reads an agent\'s screen as its terminal draws it.';
 
 suite('Contract: what the model sees, and what it gets back', () => {
 
@@ -77,7 +77,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		}, {
 			name: 'planner',
 			state: 'running',
-			tools: ['spawn', 'ps', 'kill'],
+			tools: ['spawn', 'ps', 'kill', 'read_screen'],
 			cli: { type: 'string', enum: ['arg', 'told'], description: 'The CLI: arg (Arg Code), told (Told Code).' },
 			model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it.' },
 			effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. The levels differ from CLI to CLI, and from model to model.' },
@@ -147,7 +147,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const error = (code: string, text: string) => ({ text, isError: true, data: { code } });
 
 		assert.deepStrictEqual(results, [
-			error('INVALID', 'Unknown tool send. The tools: spawn, ps, kill.'),
+			error('INVALID', 'Unknown tool send. The tools: spawn, ps, kill, read_screen.'),
 			error('INVALID', 'spawn takes cli, model, effort, prompt, worktree?, name?; not color.'),
 			error('INVALID', 'spawn takes an object of arguments: cli, model, effort, prompt, worktree?, name?.'),
 			error('INVALID', 'prompt is required.'),

@@ -60,6 +60,8 @@ export interface NewAgent {
 	readonly folder: string;
 	/** The task of a CLI that is told of its task in its terminal, given its number: written to a file of its own. */
 	readonly task?: (id: number) => string;
+	/** Whether it is launched with YOLO on: its CLI's approvals and sandbox off. */
+	readonly yolo?: boolean;
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -191,7 +193,8 @@ export class AgentTable {
 			worktree: agent.worktree,
 			folder: agent.folder,
 			...(taskFile !== undefined ? { taskFile } : {}),
-			tokenHash: hashToken(token)
+			tokenHash: hashToken(token),
+			...(agent.yolo !== undefined ? { yolo: agent.yolo } : {})
 		});
 		const started = this.state.agents.get(id);
 		if (!started) {

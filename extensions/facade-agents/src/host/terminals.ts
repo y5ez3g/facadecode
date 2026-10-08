@@ -6,10 +6,11 @@
 import * as vscode from 'vscode';
 import { timeout } from '../base/async';
 import { messageOf } from '../base/errors';
-import { isJsonObject } from '../base/json';
+import { isJsonObject, isStringArray } from '../base/json';
 import { isProcessRunning } from '../base/system';
 import { Environment } from '../clis/cli';
-import { Disposable, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { FacadeError } from '../core/errors';
+import { Disposable, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen } from '../core/ports';
 import { endOf } from './terminalEnd';
 import { agentTerminalIndex } from './terminalMatch';
 import { StateStore } from './windowState';
@@ -30,6 +31,8 @@ const EXITS_POLL_MS = 5_000;
 const FIND_POLL_MS = 250;
 /** How often a terminal just launched is looked for among the window's. */
 const LAUNCHED_POLL_MS = 100;
+/** Why a window cannot read agents' screens: in English, as Facade's errors say it to the agent. */
+const WITHOUT_WORKBENCH = 'This window cannot read agents\' screens: it runs without Facade\'s workbench.';
 
 /**
  * The core's Terminals port. Agents run in Facade's own terminals, each in its own UI: the person
@@ -124,17 +127,9 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 	}
 
 	async isAlive(name: string): Promise<boolean> {
-		let terminal = await this.find(name);
-		if (!terminal) {
-			// The window can still be giving its terminals back, and telling the extension host of each: of
-			// its process id too, by which one whose title changed is found.
-			const deadline = await this.foundBy;
-			terminal = await this.find(name);
-			while (!terminal && Date.now() < deadline) {
-				await timeout(FIND_POLL_MS);
-				terminal = await this.find(name);
-			}
-		}
+		// The window can still be giving its terminals back, and telling the extension host of each: of its
+		// process id too, by which one whose title changed is found.
+		const terminal = await this.findRestored(name);
 		return !!terminal && terminal.exitStatus === undefined;
 	}
 
@@ -146,6 +141,46 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		const terminal = await this.find(name);
 		terminal?.sendText(text, false);
 		return !!terminal;
+	}
+
+	async read(name: string, lines: number): Promise<TerminalScreen | undefined> {
+		if (!await hasCommand('_facade.terminal.read')) {
+			throw new FacadeError('UNAVAILABLE', WITHOUT_WORKBENCH);
+		}
+		const target = await this.workbenchTarget(name);
+		return target && screenOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.read', target.processId ?? null, lines, name));
+	}
+
+	async register(name: string, run: number, finalScreen: string): Promise<boolean> {
+		if (!await hasCommand('_facade.terminal.register')) {
+			return false;
+		}
+		const target = await this.workbenchTarget(name);
+		return !!target && await vscode.commands.executeCommand<boolean>('_facade.terminal.register', target.processId ?? null, { run, finalScreen: vscode.Uri.file(finalScreen) }, name) === true;
+	}
+
+	/**
+	 * The terminal `name` as the workbench finds it: by its process id, where the window has told it, else
+	 * by its name. A terminal the window is still giving back after a reload is waited for. Undefined where
+	 * there is none.
+	 */
+	private async workbenchTarget(name: string): Promise<{ readonly processId: number | undefined } | undefined> {
+		const terminal = await this.findRestored(name);
+		return terminal && { processId: await processIdOf(terminal) };
+	}
+
+	/** The terminal `name`, waited for while the window may still be giving its terminals back after a reload. */
+	private async findRestored(name: string): Promise<vscode.Terminal | undefined> {
+		let terminal = await this.find(name);
+		if (!terminal) {
+			const deadline = await this.foundBy;
+			terminal = await this.find(name);
+			while (!terminal && Date.now() < deadline) {
+				await timeout(FIND_POLL_MS);
+				terminal = await this.find(name);
+			}
+		}
+		return terminal;
 	}
 
 	/**
@@ -206,7 +241,9 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 				env: request.env,
 				cwd: request.cwd,
 				agent: request.command,
-				reveal: request.reveal
+				reveal: request.reveal,
+				run: request.run,
+				finalScreen: vscode.Uri.file(request.finalScreen)
 			});
 			// Closed already: its process could not start.
 			if (opened.closed) {
@@ -397,6 +434,22 @@ function exitedAsItStarted(executable: string, exitCode: number | undefined): st
 /** Whether the window has the command `id`: Facade's own are there only in Facade's workbench. */
 async function hasCommand(id: string): Promise<boolean> {
 	return (await vscode.commands.getCommands()).includes(id);
+}
+
+/** The screen the workbench answered `_facade.terminal.read` with; undefined for an answer that is not one. */
+function screenOf(value: unknown): TerminalScreen | undefined {
+	if (!isJsonObject(value) || !isStringArray(value.lines) || (value.buffer !== 'normal' && value.buffer !== 'alternate') || typeof value.capturedAt !== 'number') {
+		return undefined;
+	}
+	return {
+		lines: value.lines,
+		buffer: value.buffer,
+		older: value.older === true,
+		trimmed: value.trimmed === true,
+		capturedAt: value.capturedAt,
+		...(typeof value.lastOutput === 'number' ? { lastOutput: value.lastOutput } : {}),
+		exited: value.exited === true
+	};
 }
 
 /**

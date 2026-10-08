@@ -75,6 +75,14 @@ export interface LaunchConfig {
 }
 
 /**
+ * Whether a CLI started as `config` says runs with YOLO on: its approvals and sandbox off, as its launch's
+ * `fullAccess` arguments turn them off - all four built-in CLIs' by default.
+ */
+export function isYolo(config: CliConfig): boolean {
+	return !!config.launch.arguments.fullAccess?.length;
+}
+
+/**
  * How Facade starts a CLI: a CLI's definition holds its defaults, and the person changes them with
  * `facade.orchestration.<section>.path` and `.launch`. In an argument, `${name}` stands for a value the launch
  * gives it.

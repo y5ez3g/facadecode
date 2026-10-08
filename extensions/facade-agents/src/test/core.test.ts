@@ -15,7 +15,7 @@ import { outcomeOf, tempDir } from './util';
 type World = ReturnType<typeof fakeWorld>;
 
 /** What an agent that did not say hello in time fails with. */
-const NO_HELLO = 'it did not come up within 120 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal';
+const NO_HELLO = 'it did not come up within 120 seconds: its MCP server never said hello to Facade. Its CLI may have been waiting for an answer in its terminal, which was closed with it: its last lines show where it stopped';
 
 /** Every agent the workspace has had, a line each: its number, name, parent now, and state - how it exited, once it has. */
 function agents(world: World): string[] {
@@ -74,7 +74,9 @@ suite('Core: spawn, step by step', () => {
 				args: ['--config', config, '--model', 'large', '--effort', 'high', '--', '[facade] You are @main #1, Arg Code, started by @you.\n\nTidy the docs.'],
 				env: { ARG_QUIET: '1' },
 				cwd: lab,
-				reveal: true
+				reveal: true,
+				run: 1,
+				finalScreen: path.join(temp.dir, 'workspace', 'screens', 'a1.json')
 			}],
 			config: { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', path.join(runs, '1.token')], env: { ELECTRON_RUN_AS_NODE: '1' } },
 			token: { id: 1, name: 'main' },
@@ -327,7 +329,7 @@ suite('Core: spawn, step by step', () => {
 			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}.',
 			inTrust: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.trust.file has ${nowhere}, for which Facade has no value: it has ${home}, ${argHome}, ${repository}.',
 			made: [],
-			slow: 'FAILED: Arg Code did not start as @main #3: it did not come up within 5 seconds: its MCP server never said hello to Facade, so its CLI may be waiting for an answer in its terminal'
+			slow: 'FAILED: Arg Code did not start as @main #3: it did not come up within 5 seconds: its MCP server never said hello to Facade. Its CLI may have been waiting for an answer in its terminal, which was closed with it: its last lines show where it stopped'
 		});
 	});
 });

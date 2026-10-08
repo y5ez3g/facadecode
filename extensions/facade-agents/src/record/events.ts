@@ -62,6 +62,11 @@ export interface Agent {
 	readonly taskFile?: string;
 	/** Set once the line that tells it of its task file was typed into its terminal. */
 	taskTyped?: boolean;
+	/**
+	 * Whether it was launched with YOLO on - its CLI's approvals and sandbox off, as its launch's
+	 * `fullAccess` arguments turn them off - where its launch recorded it.
+	 */
+	readonly yolo?: boolean;
 	state: AgentState;
 	exit?: Exit;
 	readonly startTime: number;
@@ -98,6 +103,7 @@ export type LedgerEventBody =
 		readonly folder: string;
 		readonly taskFile?: string;
 		readonly tokenHash: string;
+		readonly yolo?: boolean;
 	}
 	| { readonly type: 'agent.running'; readonly id: number }
 	| { readonly type: 'task.typed'; readonly id: number }
@@ -117,6 +123,16 @@ export interface Caller {
 
 /** The person, as a caller. */
 export const PERSON: Caller = { name: YOU };
+
+/** An agent or the person, as Facade's words name them: `@name #7`, or `the person`. */
+export function describe(who: Caller): string {
+	return who.id === undefined ? 'the person' : `@${who.name} #${who.id}`;
+}
+
+/** Whether `text` names the person, as an agent may: `you` or `@you`, in any case. */
+export function namesThePerson(text: string): boolean {
+	return text.trim().replace(/^@/, '').toLowerCase() === YOU;
+}
 
 /** What a workspace's ledger says now. */
 export interface WorkspaceState {
@@ -168,12 +184,16 @@ export function eventOf(value: JsonObject): LedgerEvent | undefined {
 function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'agent.started': {
-			const { id, name, parent, cli, model, effort, worktree, folder, taskFile, tokenHash } = value;
+			const { id, name, parent, cli, model, effort, worktree, folder, taskFile, tokenHash, yolo } = value;
 			if (!isId(id) || typeof name !== 'string' || !isAgentName(name) || (parent !== undefined && !isId(parent)) || !isText(cli) || !isText(model) || !isText(effort)
-				|| !isText(worktree) || !isText(folder) || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))) {
+				|| !isText(worktree) || !isText(folder) || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))
+				|| (yolo !== undefined && typeof yolo !== 'boolean')) {
 				return undefined;
 			}
-			return { type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder, tokenHash, ...(taskFile !== undefined ? { taskFile } : {}) };
+			return {
+				type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder, tokenHash, ...(taskFile !== undefined ? { taskFile } : {}),
+				...(yolo !== undefined ? { yolo } : {})
+			};
 		}
 		case 'agent.running':
 		case 'task.typed':
@@ -233,6 +253,7 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				worktree: event.worktree,
 				folder: event.folder,
 				...(event.taskFile !== undefined ? { taskFile: event.taskFile } : {}),
+				...(event.yolo !== undefined ? { yolo: event.yolo } : {}),
 				state: 'starting',
 				startTime: event.time
 			});

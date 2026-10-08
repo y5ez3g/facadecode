@@ -13,12 +13,14 @@ import { AgentCli, Environment, InstalledCli } from '../clis/cli';
 import { whyNotInstalled } from '../clis/config';
 import { writeTrust } from '../clis/trust';
 import { agentName, AgentTable, nameOfWorktree } from '../record/agents';
-import { Agent, AgentState, Caller, Exit, ExitKind, isLive, LiveAgent, MadeWorktree, PERSON } from '../record/events';
+import { Agent, AgentState, Caller, describe, Exit, ExitKind, isLive, LiveAgent, MadeWorktree, PERSON } from '../record/events';
 import { injectedFile } from '../record/paths';
+import { screensDir } from '../record/screens';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
-import { Launcher } from './launch';
-import { AgentSetup, CliCatalog, Disposable, Ports, Repository, TerminalEnd, Timing } from './ports';
+import { Launcher, START_TIMEOUT_MS } from './launch';
+import { AgentSetup, CliCatalog, Disposable, EndedAgent, Ports, Repository, TerminalEnd, Timing } from './ports';
+import { Screens } from './screens';
 
 /**
  * How often, and how many times, the folders Facade made that a process of an exited agent still had
@@ -121,6 +123,8 @@ export class Facade implements Disposable {
 	/** What this window put into folders for its agents, beside what other windows did. */
 	private readonly injections: Injections;
 	private readonly launcher: Launcher;
+	/** The agents' screens: read, typed into, and kept as their terminals end. */
+	readonly screens: Screens;
 	/** When the folders a process had in use are tried again, while some are. */
 	private takingBack: ReturnType<typeof setTimeout> | undefined;
 	private takeBackTriesLeft = 0;
@@ -130,14 +134,27 @@ export class Facade implements Disposable {
 		this.table = options.table;
 		this.ports = options.ports;
 		this.injections = new Injections(options.injected ?? injectedFile(), this.table.dir, message => this.log(message), text => this.ports.person.tell(text, undefined));
+		this.screens = new Screens({
+			table: this.table,
+			ports: this.ports,
+			clis: options.clis,
+			dir: screensDir(this.table.dir),
+			timing: () => this.timing(),
+			cliOf: id => this.cliOf(id),
+			agentNamed: target => this.agentNamed(target),
+			terminalOf: agent => this.terminalOf(agent),
+			log: message => this.log(message)
+		});
 		this.launcher = new Launcher({
 			table: this.table,
 			ports: this.ports,
 			clis: options.clis,
 			setup: options.setup,
 			injections: this.injections,
-			...(options.timing ? { timing: options.timing } : {}),
+			timing: () => this.timing(),
 			terminalOf: agent => this.terminalOf(agent),
+			finalScreenOf: agent => this.screens.finalScreenOf(agent),
+			excerptOf: agent => this.screens.excerptOf(agent),
 			fail: (agent, reason) => this.fail(agent, reason),
 			log: message => this.log(message)
 		});
@@ -164,6 +181,12 @@ export class Facade implements Disposable {
 	/** The agent a caller is; undefined for the person. */
 	agentOf(caller: Caller): Agent | undefined {
 		return caller.id === undefined ? undefined : this.table.get(caller.id);
+	}
+
+	/** The agent numbered `id` once it ended, as a notice about it shows it: where its last screen is; undefined while it runs. */
+	endedAgent(id: number): EndedAgent | undefined {
+		const agent = this.table.get(id);
+		return agent?.exit && { id, name: agent.name, terminal: this.terminalOf(agent), finalScreen: this.screens.finalScreenOf(agent), ending: `${agent.exit.kind}: ${agent.exit.reason}` };
 	}
 
 	/** A CLI's name for people, by its id. */
@@ -321,6 +344,7 @@ export class Facade implements Disposable {
 				this.table.forgetWorktree(made.folder);
 			}
 		}
+		const endedBefore = new Set([...this.table.state.agents.values()].filter(agent => !isLive(agent)).map(agent => agent.id));
 		const gone: LiveAgent[] = [];
 		let cameBack = false;
 		for (const agent of this.liveAgents()) {
@@ -329,6 +353,10 @@ export class Facade implements Disposable {
 				if (await this.ports.terminals.isAlive(this.terminalOf(agent))) {
 					cameBack = true;
 					this.launcher.resume(agent);
+					// The window gave its terminal back knowing nothing of it: where its final screen goes, among others
+					if (!await this.ports.terminals.register(this.terminalOf(agent), agent.id, this.screens.finalScreenOf(agent))) {
+						this.log(`${this.terminalOf(agent)} came back, but the window could not be told it is an agent's: its final screen will not be kept.`);
+					}
 				} else {
 					gone.push(agent);
 				}
@@ -344,6 +372,10 @@ export class Facade implements Disposable {
 		const last = this.table.lastClose;
 		const windowClosed = last?.by === 'window' && !last.thisWindow && (!last.ownWindow || !reloaded);
 		const closedByThePerson = windowClosed && !cameBack;
+		// A fresh start: the screens of agents that ended before it are let go of with them
+		if (windowClosed) {
+			this.screens.discard(endedBefore);
+		}
 		// Children before their parents: a parent's exit then leaves no child that went with it to tell of as the person's
 		for (const agent of gone.sort((a, b) => b.id - a.id)) {
 			if (closedByThePerson) {
@@ -424,8 +456,9 @@ export class Facade implements Disposable {
 		this.withdraw(agent.folder);
 		// A spawn of the person's tells them itself.
 		const spawnOfThePerson = waiter !== undefined && waiter.id === undefined;
-		if (parent === undefined && !byThePerson && !spawnOfThePerson) {
-			this.ports.person.tell(l10n.t("@{0} #{1} exited: {2}.", agent.name, agent.id, reason), undefined);
+		const ended = this.endedAgent(agent.id);
+		if (parent === undefined && !byThePerson && !spawnOfThePerson && ended) {
+			this.ports.person.tellEnded(l10n.t("@{0} #{1} exited: {2}.", agent.name, agent.id, reason), ended);
 		}
 		if (orphans.length) {
 			this.ports.person.tell(l10n.t("@{0} #{1} exited, and its children are yours now: {2}.", agent.name, agent.id, orphans.map(describe).join(', ')), this.terminalOf(orphans[0]));
@@ -553,7 +586,10 @@ export class Facade implements Disposable {
 			throw new FacadeError('INVALID', `${named.length} running agents are called @${name}: ${named.map(describe).join(', ')}. Name one by its number.`);
 		}
 		if (!named.length) {
-			throw new FacadeError('NOT_FOUND', `No running agent is called @${name}: name an exited one by its number, which ps with all lists.`);
+			const ended = [...this.table.state.agents.values()].filter(agent => !isLive(agent) && agent.name === name);
+			throw new FacadeError('NOT_FOUND', ended.length
+				? `No running agent is called @${name}; ${ended.map(describe).join(', ')} ${ended.length === 1 ? 'has' : 'have'} exited: name one by its number.`
+				: `No running agent is called @${name}: name an exited one by its number, which ps with all lists.`);
 		}
 		return named[0];
 	}
@@ -582,6 +618,11 @@ export class Facade implements Disposable {
 		return this.options.clis.known.find(cli => cli.id === id);
 	}
 
+	/** How long the core waits, as the person sets it now. */
+	private timing(): Timing {
+		return this.options.timing?.() ?? { startTimeoutMs: START_TIMEOUT_MS };
+	}
+
 	/** The name of the terminal an agent runs in: unique per agent, and the same after a reload. */
 	private terminalOf(agent: Agent): string {
 		return `@${agent.name} #${agent.id} · ${this.cliName(agent.cli)}`;
@@ -601,9 +642,4 @@ export class Facade implements Disposable {
 			throw new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
 		}
 	}
-}
-
-/** An agent or the person, as Facade's words name them: `@name #7`, or `the person`. */
-function describe(who: Caller): string {
-	return who.id === undefined ? 'the person' : `@${who.name} #${who.id}`;
 }

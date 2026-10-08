@@ -6,11 +6,7 @@
 import { AgentRow } from '../core/facade';
 import { Args } from './args';
 import type { ContractTool } from './tools';
-
-/** A time as `ps` gives it: the time of day, on this machine's clock. */
-function timeOfDay(time: number): string {
-	return new Date(time).toTimeString().slice(0, 8);
-}
+import { timeOfDay } from './words';
 
 /** One line of `ps`, as the model reads it; `self` is the caller's number, none for the person. */
 function line(row: AgentRow, self: number | undefined): string {

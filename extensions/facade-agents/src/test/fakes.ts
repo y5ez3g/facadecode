@@ -8,7 +8,7 @@ import * as path from 'path';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
 import { Facade, SpawnRequest, Spawned } from '../core/facade';
-import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Disposable, EndedAgent, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy } from '../record/ledger';
@@ -21,6 +21,10 @@ export class FakeTerminals implements Terminals {
 	readonly running = new Set<string>();
 	/** What was typed into each terminal, piece by piece, and which were closed. */
 	readonly typed: string[] = [];
+	/** What each terminal shows, by its name: none for an empty screen. */
+	readonly screens = new Map<string, TerminalScreen>();
+	/** The terminals the window was told are agents', after a reload. */
+	readonly registered: string[] = [];
 	/** The next launch fails with this. */
 	failNext: string | undefined;
 	private readonly listeners = new Set<(name: string, end: TerminalEnd) => void>();
@@ -50,12 +54,25 @@ export class FakeTerminals implements Terminals {
 		this.end(name);
 	}
 
+	async read(name: string, lines: number): Promise<TerminalScreen | undefined> {
+		if (!this.running.has(name)) {
+			return undefined;
+		}
+		const screen = this.screens.get(name) ?? { lines: [], buffer: 'normal', older: false, trimmed: false, capturedAt: 1000, exited: false };
+		return { ...screen, lines: screen.lines.slice(Math.max(0, screen.lines.length - lines)), older: screen.older || screen.lines.length > lines };
+	}
+
 	async type(name: string, text: string): Promise<boolean> {
 		if (!this.running.has(name)) {
 			return false;
 		}
 		this.typed.push(`${name}: ${JSON.stringify(text)}`);
 		return true;
+	}
+
+	async register(name: string, run: number, finalScreen: string): Promise<boolean> {
+		this.registered.push(`${name} as #${run}: ${finalScreen}`);
+		return this.running.has(name);
 	}
 
 	/** As when a terminal closes, or its process exits. */
@@ -152,9 +169,16 @@ export class FakeGit implements Git {
 export class FakePerson implements Person {
 
 	readonly told: string[] = [];
+	/** The agents that ended whose notices had Show, in turn. */
+	readonly ended: EndedAgent[] = [];
 
 	tell(text: string, terminal: string | undefined): void {
 		this.told.push(`${text}${terminal ? ` (${terminal})` : ''}`);
+	}
+
+	tellEnded(text: string, agent: EndedAgent): void {
+		this.told.push(text);
+		this.ended.push(agent);
 	}
 }
 
@@ -298,7 +322,8 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
 	const person = new FakePerson();
 	const settings: { [section: string]: { [name: string]: unknown } } = {};
-	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000 };
+	// The window writes no final screens here: none is waited for
+	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000, finalScreenWaitMs: 0 };
 	const known: readonly AgentCli[] = [argCli(path.join(dir, 'arg-home')), toldCli()];
 	const configFor = (cli: AgentCli) => readCliConfig(cli, name => settings[cli.section]?.[name]);
 	/** What the core wrote to its log, in order. */

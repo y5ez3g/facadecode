@@ -27,6 +27,28 @@ export interface TerminalLaunch {
 	 * it. An agent's child opens without disturbing the window.
 	 */
 	readonly reveal: boolean;
+	/** The number of the agent whose run it is. */
+	readonly run: number;
+	/** The file the window writes its final screen to as it ends. */
+	readonly finalScreen: string;
+}
+
+/** A terminal's screen as the window read it: its bottom lines, as it draws them. */
+export interface TerminalScreen {
+	/** Top to bottom: inverse-video text marked `[[...]]`, dim text `{{...}}`. */
+	readonly lines: readonly string[];
+	/** The normal buffer with its scrollback, or a full-screen program's alternate buffer. */
+	readonly buffer: 'normal' | 'alternate';
+	/** Whether the buffer holds lines above those read. */
+	readonly older: boolean;
+	/** Whether the terminal let go of lines above all those it holds: its scrollback is full. */
+	readonly trimmed: boolean;
+	/** When it was read, in milliseconds since 1970. */
+	readonly capturedAt: number;
+	/** When the terminal last showed new output, where the window knows it. */
+	readonly lastOutput?: number;
+	/** Whether its process has ended, the terminal kept open. */
+	readonly exited: boolean;
 }
 
 /** How an agent's terminal ended. */
@@ -49,6 +71,18 @@ export interface Terminals {
 	stop(name: string): Promise<void>;
 	/** Types `text` into the terminal as it is, keys and all; false when there is no such terminal. */
 	type(name: string, text: string): Promise<boolean>;
+	/**
+	 * The bottom `lines` lines of the terminal's screen, read without changing anything of it; undefined
+	 * where there is no such terminal, or it has no screen. A terminal the window is still giving back
+	 * after a reload is waited for.
+	 */
+	read(name: string, lines: number): Promise<TerminalScreen | undefined>;
+	/**
+	 * Tells the window that the terminal is the agent `run`'s, its final screen going to `finalScreen`:
+	 * for a terminal the window gave back after a reload. False where there is no such terminal, or the
+	 * window keeps no final screens.
+	 */
+	register(name: string, run: number, finalScreen: string): Promise<boolean>;
 }
 
 /** The repository a folder is in, as git reads it. */
@@ -95,10 +129,27 @@ export interface Git {
 	untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>>;
 }
 
+/** An agent that ended, as a notice about it shows it. */
+export interface EndedAgent {
+	readonly id: number;
+	readonly name: string;
+	/** The name of the terminal it ran in. */
+	readonly terminal: string;
+	/** Its final screen's file, kept as its terminal ended. */
+	readonly finalScreen: string;
+	/** How it ended, for the person to read where no final screen was kept. */
+	readonly ending: string;
+}
+
 /** What Facade tells the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
 export interface Person {
 	/** A notice of Facade's for the person. Going to it shows `terminal`, the agent's it is about. */
 	tell(text: string, terminal: string | undefined): void;
+	/**
+	 * A notice about an agent that ended. Going to it shows its terminal while that is still open, else
+	 * its last screen, read-only; where none was kept, how it ended.
+	 */
+	tellEnded(text: string, agent: EndedAgent): void;
 }
 
 /**
@@ -128,6 +179,11 @@ export interface CliCatalog {
 export interface Timing {
 	/** How long a new agent has to come up - its MCP server's hello - before it is ended as failed: the person's timeout. */
 	readonly startTimeoutMs: number;
+	/**
+	 * How long the final screen of an agent that just ended is waited for, the window writing it as the
+	 * terminal goes: two seconds where left out.
+	 */
+	readonly finalScreenWaitMs?: number;
 }
 
 /** What every agent is given at its launch, and how it reaches the window. */
