@@ -13,7 +13,7 @@ import { getBaseLayerHoverDelegate } from '../../../../base/browser/ui/hover/hov
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { IAction } from '../../../../base/common/actions.js';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { isCancellationError } from '../../../../base/common/errors.js';
+import { isCancellationError, onUnexpectedError } from '../../../../base/common/errors.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -50,6 +50,9 @@ export const CONFIGURE_AGENTS = 'facade.agent.configure';
 
 const AGENTS_PRECONDITION = ContextKeyExpr.or(TerminalContextKeys.processSupported, TerminalContextKeys.webExtensionContributedProfile);
 
+/** The category the agents' commands are under, as the agents' extension's are (AGENT-LAUNCHER.md, L7). */
+const AGENTS_CATEGORY = localize2('facade.agents.category', "Agents");
+
 /**
  * The agent button, drawn as a dropdown anchored to itself: upstream's action widget, as its own
  * pickers of agents are (`ChatContinueInSessionActionItem`), because a context menu draws no icons
@@ -78,8 +81,12 @@ class AgentMenuActionViewItem extends ActionWidgetDropdownActionViewItem impleme
 		@ITelemetryService telemetryService: ITelemetryService,
 		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService
 	) {
-		// Read on every opening, because the agents are commands that come and go with the setting
-		const rows = () => agentMenuRows(menuService.getMenuActions(AGENT_MENU, contextKeyService), notificationService);
+		// Read on every opening, because the agents are commands that come and go with the settings; and
+		// every opening looks for the built-ins again, for the next one to show what this machine has now
+		const rows = () => {
+			_launcherService.refreshAvailable().catch(onUnexpectedError);
+			return agentMenuRows(menuService.getMenuActions(AGENT_MENU, contextKeyService), notificationService);
+		};
 
 		super(action, {
 			actionProvider: { getActions: () => rows().agents },
@@ -220,6 +227,7 @@ class ShowAgentMenuAction extends Action2 {
 		super({
 			id: SHOW_AGENT_MENU,
 			title: localize2('facade.agent.showMenu', "Show Agent Menu"),
+			category: AGENTS_CATEGORY,
 			f1: true,
 			precondition: AGENTS_PRECONDITION,
 			keybinding: {
@@ -262,6 +270,7 @@ class ShowActiveAgentsAction extends Action2 {
 		super({
 			id: SHOW_ACTIVE_AGENTS,
 			title: localize2('facade.agent.showActive', "Show Active Agents..."),
+			category: AGENTS_CATEGORY,
 			f1: true,
 			precondition: AGENTS_PRECONDITION,
 			menu: {
@@ -277,13 +286,14 @@ class ShowActiveAgentsAction extends Action2 {
 	}
 }
 
-/** The dialog on its own, for somebody who wants to change an agent rather than start one. */
+/** VS Code's settings at the agents' own, for somebody who wants to change how an agent starts rather than start one. */
 class ConfigureAgentsAction extends Action2 {
 
 	constructor() {
 		super({
 			id: CONFIGURE_AGENTS,
 			title: localize2('facade.agent.configure', "Configure Agents..."),
+			category: AGENTS_CATEGORY,
 			f1: true,
 			precondition: AGENTS_PRECONDITION,
 			menu: {

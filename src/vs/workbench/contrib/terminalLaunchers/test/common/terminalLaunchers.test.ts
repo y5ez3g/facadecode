@@ -59,18 +59,17 @@ suite('Terminal launchers - what to look for', () => {
 		], [false, true, true, true]);
 	});
 
-	test('a built-in is a name and a command, and carries no artwork at all', () => {
+	test('a built-in is a name, a command and where its settings are, and carries no artwork at all', () => {
 		// Naming a product to say what a button starts is nominative use and is fine; shipping its
 		// mark is a separate permission that Apache-2.0 section 6 declines to grant in as many words.
 		// There used to be an `icon` per row and an assertion that it held a codicon id rather than a
 		// path or a url. Every agent is drawn with the same robot now, so there is no field for a mark
 		// to arrive in - which is a stronger guarantee than a test that one has not.
 		assert.deepStrictEqual(BUILT_IN_LAUNCHERS.map(l => [l.id, l.label, l.command, Object.keys(l).sort()]), [
-			['claude', 'Claude Code', 'claude', ['command', 'id', 'label']],
-			['codex', 'Codex', 'codex', ['command', 'id', 'label']],
-			['antigravity', 'Antigravity', 'agy', ['command', 'id', 'label']],
-			['muse', 'Muse Code', 'muse', ['command', 'id', 'label']],
-			['grok', 'Grok Build', 'grok', ['command', 'id', 'label']]
+			['claude', 'Claude Code', 'claude', ['command', 'id', 'label', 'setting']],
+			['codex', 'Codex', 'codex', ['command', 'id', 'label', 'setting']],
+			['agy', 'Antigravity', 'agy', ['command', 'id', 'label', 'setting']],
+			['muse', 'Muse Code', 'muse', ['command', 'id', 'label', 'setting']]
 		]);
 	});
 

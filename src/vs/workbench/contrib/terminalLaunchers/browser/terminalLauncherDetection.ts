@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { isWindows } from '../../../../base/common/platform.js';
+import { IProcessEnvironment, isWindows } from '../../../../base/common/platform.js';
 import { joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
@@ -38,8 +38,8 @@ export class TerminalLauncherDetection {
 	/**
 	 * The ids of the launchers whose command was found.
 	 */
-	async detect(launchers: readonly ITerminalLauncher[]): Promise<Set<string>> {
-		const [searchPath, extensions] = await Promise.all([this._searchPath(), this._pathExtensions()]);
+	async detect(launchers: readonly ITerminalLauncher[], env?: IProcessEnvironment): Promise<Set<string>> {
+		const [searchPath, extensions] = await Promise.all([this._searchPath(env), this._pathExtensions(env)]);
 		const found = new Set<string>();
 
 		if (searchPath.length === 0) {
@@ -93,9 +93,12 @@ export class TerminalLauncherDetection {
 		}
 	}
 
-	/** The directories on the resolved shell `PATH`, in order and without repeats. */
-	private async _searchPath(): Promise<URI[]> {
-		const resolved = await this._resolveVariables('${env:PATH}');
+	/**
+	 * The directories on the `PATH` a terminal gets - `env`'s, where the caller has it - else on the
+	 * resolved shell `PATH`, in order and without repeats.
+	 */
+	private async _searchPath(env: IProcessEnvironment | undefined): Promise<URI[]> {
+		const resolved = env ? env.PATH ?? env.Path : await this._resolveVariables('${env:PATH}');
 		if (!resolved) {
 			return [];
 		}
@@ -107,12 +110,12 @@ export class TerminalLauncherDetection {
 	 * The extensions a bare command can carry, which is `PATHEXT` on Windows and nothing anywhere
 	 * else. Falls back to the usual four only when the variable cannot be read.
 	 */
-	private async _pathExtensions(): Promise<readonly string[]> {
+	private async _pathExtensions(env: IProcessEnvironment | undefined): Promise<readonly string[]> {
 		if (!isWindows) {
 			return [];
 		}
 
-		const resolved = await this._resolveVariables('${env:PATHEXT}');
+		const resolved = env ? env.PATHEXT : await this._resolveVariables('${env:PATHEXT}');
 		const extensions = (resolved ?? '')
 			.split(';')
 			.map(entry => entry.trim().toLowerCase())

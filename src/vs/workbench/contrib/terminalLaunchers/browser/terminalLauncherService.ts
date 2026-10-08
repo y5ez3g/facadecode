@@ -4,40 +4,36 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { onUnexpectedError } from '../../../../base/common/errors.js';
-import { Event } from '../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { IContextViewService } from '../../../../platform/contextview/browser/contextView.js';
+import { IProcessEnvironment } from '../../../../base/common/platform.js';
+import { localize } from '../../../../nls.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
-import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
-import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
-import { ACTIVE_GROUP } from '../../../services/editor/common/editorService.js';
-import { IHostService } from '../../../services/host/browser/host.js';
-import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
-import { resolveActiveFolderTerminalCwd } from '../../terminal/browser/terminalActions.js';
-import { agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, AGENTS_SETTING, BUILT_IN_LAUNCHERS, facadeCliOf, IAgentName, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, readConfiguredLaunchers, restoreAgentLaunch, seedLaunchers, toConfiguredLaunchers } from '../common/terminalLaunchers.js';
+import { agentLaunchOf, BUILT_IN_LAUNCHERS, IAgentName, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, restoreAgentLaunch } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
-import { showAgentsDialog } from './terminalLauncherDialog.js';
 
 export const ITerminalLauncherService = createDecorator<ITerminalLauncherService>('terminalLauncherService');
 
 /** Where the names of the agents a window has running are kept across a reload (`readAgentNames`). */
 export const AGENT_NAMES_STORAGE_KEY = 'facade.agent.names';
 
-/** Facade's switch, which its agents' extension contributes: whether Facade starts the agents. */
-const FACADE_ENABLED_SETTING = 'facade.orchestration.enabled';
-
-/** Facade: Start Agent, which takes the CLI to start as `{ cli }`. */
+/** Agents: Start Agent..., which the agents' extension contributes: it takes the agent to start as `{ cli }`. */
 const START_AGENT_COMMAND = 'facade.agents.startAgent';
+
+/** The search Configure Agents opens the settings at, the same every time: the agents' extension's settings. */
+const AGENT_SETTINGS_QUERY = '@ext:vscode.facade-agents';
 
 /**
  * The agent button, as much of it as anything outside the tool bar needs.
@@ -80,13 +76,26 @@ export interface ITerminalLauncherService {
 	readonly agentTerminals: readonly ITerminalInstance[];
 
 	/**
-	 * Starts an agent in a terminal tab, in the folder the window is on - or, while Facade is on, one of the
-	 * CLIs Facade starts with Facade: Start Agent, that CLI chosen.
+	 * Starts the agent `launcher` is in the folder on screen, with Agents: Start Agent - asking VS Code's own
+	 * question first in Restricted Mode, and nothing where the person does not trust the workspace.
 	 */
 	open(launcher: ITerminalLauncher): Promise<void>;
 
-	/** Shows the dialog that decides which agents there are, and saves what it answers. */
+	/** Opens VS Code's settings at the agents' own, the same search every time. */
 	configure(): Promise<void>;
+
+	/** The built-ins this machine has and the person offers, by id, as last found. Changes with `onDidChangeAvailable`. */
+	readonly available: ReadonlySet<string>;
+
+	/** Fires when `available` changed. */
+	readonly onDidChangeAvailable: Event<void>;
+
+	/**
+	 * Looks for the built-ins again, as a terminal in the folder on screen would find them: the path setting
+	 * of each the person offers, else its command on the PATH a terminal gets. Nothing is written into the
+	 * settings.
+	 */
+	refreshAvailable(): Promise<void>;
 
 	/**
 	 * Records a button as drawn, until the returned disposable says it is gone.
@@ -120,16 +129,21 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	 */
 	private readonly _names: Map<string, IAgentName>;
 
+	private _available: ReadonlySet<string> = new Set();
+	private readonly _onDidChangeAvailable = this._register(new Emitter<void>());
+	readonly onDidChangeAvailable = this._onDidChangeAvailable.event;
+	/** Set while the built-ins are looked for; looked for again once that is done, where asked meanwhile. */
+	private _looking: Promise<void> | undefined;
+	private _lookAgain = false;
+
 	constructor(
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@ITerminalService private readonly _terminalService: ITerminalService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
-		@IConfigurationResolverService private readonly _configurationResolverService: IConfigurationResolverService,
-		@IWorkbenchLayoutService private readonly _layoutService: IWorkbenchLayoutService,
-		@IKeybindingService private readonly _keybindingService: IKeybindingService,
-		@IHostService private readonly _hostService: IHostService,
-		@IContextViewService private readonly _contextViewService: IContextViewService,
+		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@IWorkspaceTrustManagementService private readonly _workspaceTrustManagementService: IWorkspaceTrustManagementService,
+		@IWorkspaceTrustRequestService private readonly _workspaceTrustRequestService: IWorkspaceTrustRequestService,
 		@IStorageService private readonly _storageService: IStorageService,
 		@ILifecycleService private readonly _lifecycleService: ILifecycleService,
 		@ICommandService private readonly _commandService: ICommandService,
@@ -230,86 +244,72 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	}
 
 	async open(launcher: ITerminalLauncher): Promise<void> {
-		// Facade starts its CLIs itself, as agents it knows: Start Agent asks for the rest, the CLI's launch
-		// settings say how it starts, and the launcher's command line goes unused (AGENT-FRAMEWORK.md, 2.9.8)
-		const cli = facadeCliOf(launcher.command);
-		if (cli && this._configurationService.getValue<boolean>(FACADE_ENABLED_SETTING) === true) {
-			await this._commandService.executeCommand(START_AGENT_COMMAND, { cli });
-			return;
-		}
-
-		const cwd = (await resolveActiveFolderTerminalCwd(this._activeFolderService, this._configurationService, this._configurationResolverService))?.cwd;
-
-		const instance = await this._terminalService.createTerminal({
-			cwd,
-			location: { viewColumn: ACTIVE_GROUP },
-			config: {
-				// `name` is the fallback rather than the title: with a template set it becomes the
-				// process name, which `computeLabel` returns whenever the template comes out empty.
-				// So the tab reads `Claude Code` until the agent says otherwise, and never `powershell`.
-				name: launcher.label,
-
-				// The agent's own title wins, which is the whole point - a row of tabs all reading
-				// `Claude Code` says nothing, while the titles an agent sets say what each is doing.
-				//
-				// Asked for here rather than left to `terminal.integrated.tabs.allowAgentCliTitle`,
-				// which does this already but only for the five CLIs upstream recognises by name.
-				// Anything somebody puts in the list is an agent as far as this button is concerned.
-				titleTemplate: AGENT_TITLE_TEMPLATE,
-
-				// The agent's logo, or the robot - and the thing that says this terminal is an agent's
-				// (`isAgentTerminalIcon`), which is why it comes from the one function
-				icon: agentIcon(launcher.command)
+		// The agents' extension runs only in a trusted workspace: VS Code's own question first, and the same
+		// start goes on once the person trusts it (AGENT-LAUNCHER.md, L3).
+		if (!this._workspaceTrustManagementService.isWorkspaceTrusted()) {
+			const trusted = await this._workspaceTrustRequestService.requestWorkspaceTrust({
+				message: localize('facade.agent.trustToStart', "An agent works in the folders of this workspace. Trust the workspace to start {0}.", launcher.label)
+			});
+			if (!trusted) {
+				return;
 			}
-		});
-
-		await instance.focusWhenReady();
-
-		const command = launcher.command.trim();
-		if (!command) {
-			return;
 		}
 
-		// Typed at the shell rather than launched as the process, so the command line is the one
-		// somebody wrote - quoting, flags and all - and the shell is still there when the agent exits
-		try {
-			await instance.sendText(command, true);
-		} catch (error) {
-			this._logService.error(`[terminalLaunchers] could not start ${launcher.id}`, error);
-		}
+		// The agent starts at once in the folder on screen, asking nothing: its settings say how.
+		await this._commandService.executeCommand(START_AGENT_COMMAND, { cli: launcher.id });
 	}
 
 	async configure(): Promise<void> {
-		// No guard against a second one. Every way in - the menu item, the palette, the command -
-		// needs focus, and taking focus dismisses the dialog that is up, so two of these cannot be
-		// on screen together. A guard was tried and measured: it turned a legitimate second opening
-		// into nothing at all, because the first promise was still settling when the second arrived.
-		const launchers = readConfiguredLaunchers(this._configurationService.getValue(AGENTS_SETTING));
+		await this._commandService.executeCommand('workbench.action.openSettings', AGENT_SETTINGS_QUERY);
+	}
 
-		const kept = await showAgentsDialog(launchers, () => this._detect(), {
-			layoutService: this._layoutService,
-			keybindingService: this._keybindingService,
-			hostService: this._hostService,
-			contextViewService: this._contextViewService
+	get available(): ReadonlySet<string> {
+		return this._available;
+	}
+
+	refreshAvailable(): Promise<void> {
+		if (this._looking) {
+			this._lookAgain = true;
+			return this._looking;
+		}
+		this._looking = this._lookForBuiltIns().finally(() => {
+			this._looking = undefined;
+			if (this._lookAgain) {
+				this._lookAgain = false;
+				this.refreshAvailable().catch(onUnexpectedError);
+			}
 		});
+		return this._looking;
+	}
 
-		if (kept) {
-			await this._configurationService.updateValue(AGENTS_SETTING, toConfiguredLaunchers(kept), ConfigurationTarget.USER);
+	/** The built-ins the person offers, each at its path setting or its command, found as a terminal in the folder on screen finds them. */
+	private async _lookForBuiltIns(): Promise<void> {
+		const offered = BUILT_IN_LAUNCHERS
+			.filter(launcher => this._configurationService.getValue(`${launcher.setting}.enabled`) !== false)
+			.map(launcher => {
+				const path = this._configurationService.getValue<unknown>(`${launcher.setting}.path`);
+				return typeof path === 'string' && path.trim() ? { ...launcher, command: `"${path.trim()}"` } : launcher;
+			});
+		const env = await this._terminalEnvironment();
+		const found = await this._instantiationService.createInstance(TerminalLauncherDetection).detect(offered, env);
+		if (found.size !== this._available.size || [...found].some(id => !this._available.has(id))) {
+			this._available = found;
+			this._onDidChangeAvailable.fire();
 		}
 	}
 
-	/**
-	 * What this machine looks like it has, for the dialog to fill an empty list with.
-	 *
-	 * Asked for rather than run on opening. The scan sees the `PATH` this window was started with,
-	 * which Windows does not refresh for a running process - measured here, an installed `agy` was
-	 * absent from it while sitting on the stored `PATH` the whole time. A guess that stale should be
-	 * something somebody reaches for, not something that happens to them.
-	 */
-	private async _detect(): Promise<readonly ITerminalLauncher[]> {
-		const detection = this._instantiationService.createInstance(TerminalLauncherDetection);
-
-		return seedLaunchers(await detection.detect(BUILT_IN_LAUNCHERS));
+	/** The environment a terminal in the folder on screen gets, as the workbench makes it; none where it cannot say. */
+	private async _terminalEnvironment(): Promise<IProcessEnvironment | undefined> {
+		const folder = (this._activeFolderService.activeFolder ?? this._workspaceContextService.getWorkspace().folders.at(0))?.uri;
+		if (!folder || folder.scheme !== 'file') {
+			return undefined;
+		}
+		try {
+			return await this._commandService.executeCommand<IProcessEnvironment>('_facade.terminal.environment', folder);
+		} catch (error) {
+			this._logService.trace('[terminalLaunchers] the environment a terminal gets could not be read', error);
+			return undefined;
+		}
 	}
 }
 

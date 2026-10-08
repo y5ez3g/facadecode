@@ -49,19 +49,6 @@ function programOf(command: string): string | undefined {
 	return commandExecutable(command)?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, '').toLowerCase();
 }
 
-/** The CLIs Facade starts, by the programs that start them, as its agents' extension knows them by id. */
-const FACADE_CLIS: ReadonlySet<string> = new Set(['claude', 'codex', 'muse', 'agy']);
-
-/**
- * The CLI of Facade's that a launcher's command starts - `claude`, `codex`, `muse` or `agy` - by its program,
- * as `agentIcon` reads it; undefined for any other. While Facade is on, such a launcher is Start Agent with
- * that CLI chosen: the CLI's launch settings say how it starts, and the rest of the command line is not used.
- */
-export function facadeCliOf(command: string): string | undefined {
-	const program = programOf(command);
-	return program && FACADE_CLIS.has(program) ? program : undefined;
-}
-
 /**
  * Every icon an agent's terminal can have, which is how one is recognised afterwards.
  *
@@ -179,36 +166,54 @@ export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names:
 }
 
 /**
- * Something the agent button can start: a name and a command line.
+ * Something the agent menu can start: an agent, by the id Start Agent takes - a built-in's, or a custom
+ * agent's name - with its label and the program that runs it, which gives its logo.
  */
 export interface ITerminalLauncher {
 	readonly id: string;
 	readonly label: string;
 
-	/** Sent to a new shell in the active folder. An empty command means just the shell. */
+	/** The program it runs: a built-in's command, or the path a custom agent's setting names. */
 	readonly command: string;
+
+	/** Where its settings are: `facade.agents.<cli>` for a built-in; none for a custom agent. */
+	readonly setting?: string;
+
+	/** Whether it is one of the person's custom agents. */
+	readonly custom?: boolean;
 }
 
 /**
- * The launchers this fork knows about. A table rather than a fixed set of buttons, so that adding
- * one costs a row.
+ * The built-in agents, in the order the agent menu lists them (AGENT-LAUNCHER.md, L3): Claude Code, Codex,
+ * Antigravity, Muse Code - each by the id Start Agent takes, its settings, and the command looked for.
  *
- * A name and a command, and nothing else. No glyph to store: an agent's is worked out from its
- * command (`agentIcon`), so there is no per-agent icon to pick, to keep, or to get wrong.
- *
- * And nothing about where the thing is installed. An earlier version carried a list of directories
- * per launcher and it was a list of Windows paths copied off one machine: `%LOCALAPPDATA%` means
- * nothing on macOS, and there was no macOS or Linux entry to mean anything instead. Where a tool
- * lives is what the shell's own `PATH` already answers, on every platform, without a table that
- * goes stale the next time an installer moves.
+ * Nothing about where the thing is installed: where a tool lives is what the terminal's own `PATH`
+ * answers, on every platform, or the person's path setting.
  */
 export const BUILT_IN_LAUNCHERS: readonly ITerminalLauncher[] = [
-	{ id: 'claude', label: 'Claude Code', command: 'claude' },
-	{ id: 'codex', label: 'Codex', command: 'codex' },
-	{ id: 'antigravity', label: 'Antigravity', command: 'agy' },
-	{ id: 'muse', label: 'Muse Code', command: 'muse' },
-	{ id: 'grok', label: 'Grok Build', command: 'grok' }
+	{ id: 'claude', label: 'Claude Code', command: 'claude', setting: 'facade.agents.claude' },
+	{ id: 'codex', label: 'Codex', command: 'codex', setting: 'facade.agents.codex' },
+	{ id: 'agy', label: 'Antigravity', command: 'agy', setting: 'facade.agents.antigravity' },
+	{ id: 'muse', label: 'Muse Code', command: 'muse', setting: 'facade.agents.muse' }
 ];
+
+/** The setting that holds the person's custom agents, by name: `{ "<name>": { "path": "...", "launch": { ... } } }`. */
+export const CUSTOM_AGENTS_SETTING = 'facade.agents.custom';
+
+/**
+ * The person's custom agents, in the order they wrote them, out of the setting's raw value: each by its
+ * name, run by the program its `path` names. One whose program is missing is listed all the same, so
+ * that choosing it says what is wrong.
+ */
+export function readCustomAgents(value: unknown): ITerminalLauncher[] {
+	if (!isObject(value) || Array.isArray(value)) {
+		return [];
+	}
+	return Object.entries(value).map(([name, entry]) => {
+		const program = isObject(entry) && isString((entry as Record<string, unknown>).path) ? ((entry as Record<string, unknown>).path as string).trim() : '';
+		return { id: name, label: name, command: program, custom: true };
+	});
+}
 
 /**
  * What a bare command could be called on Windows when `PATHEXT` cannot be read.
@@ -217,9 +222,6 @@ export const BUILT_IN_LAUNCHERS: readonly ITerminalLauncher[] = [
  * `TerminalLauncherDetection` asks for, and it carries entries like `.PS1` that this does not.
  */
 export const WINDOWS_PATH_EXTENSIONS: readonly string[] = ['.com', '.exe', '.bat', '.cmd'];
-
-/** The setting that holds the agents somebody has added to the button. */
-export const AGENTS_SETTING = 'facade.agents';
 
 /**
  * The executable a command line starts with, or `undefined` when there is no command. Quoted
@@ -258,85 +260,6 @@ export function executableFileNames(executable: string, pathExtensions: readonly
 /** Whether a command names a location rather than something to look for on the search path. */
 export function isPathLike(executable: string): boolean {
 	return executable.includes('/') || executable.includes('\\');
-}
-
-/**
- * The agents somebody has added, out of the setting's raw value.
- *
- * Hand-edited JSON, so every field is checked and a row that does not answer is dropped rather
- * than drawn as a button that cannot start anything. An empty command is kept: it means the shell.
- */
-export function readConfiguredLaunchers(value: unknown): ITerminalLauncher[] {
-	if (!Array.isArray(value)) {
-		return [];
-	}
-
-	const launchers: ITerminalLauncher[] = [];
-	const seen = new Set<string>();
-
-	for (const entry of value) {
-		if (!entry || typeof entry !== 'object') {
-			continue;
-		}
-
-		const { id, label, command } = entry as Record<string, unknown>;
-		if (typeof id !== 'string' || !id.trim() || typeof command !== 'string' || seen.has(id)) {
-			continue;
-		}
-
-		seen.add(id);
-		launchers.push({
-			id,
-			label: typeof label === 'string' && label.trim() ? label : id,
-			command
-		});
-	}
-
-	return launchers;
-}
-
-/** What goes back into the setting: the fields somebody can change, and nothing else. */
-export function toConfiguredLaunchers(launchers: readonly ITerminalLauncher[]): object[] {
-	return launchers.map(({ id, label, command }) => ({ id, label, command }));
-}
-
-/**
- * The agents to start somebody off with, the first time the dialog is opened and never again.
- *
- * A seed and not a verdict. The scan reads the `PATH` the window was started with, and Windows
- * does not hand a new one to a process that is already running - measured here, `agy` was on the
- * stored `PATH` and absent from the running one, so an installed agent looked missing. Whatever
- * comes back, the list is somebody's to edit from then on.
- */
-export function seedLaunchers(detected: ReadonlySet<string>): ITerminalLauncher[] {
-	const found = BUILT_IN_LAUNCHERS.filter(launcher => detected.has(launcher.id));
-
-	// Nothing found is usually the scan being wrong rather than the machine being empty, so the
-	// whole table is offered instead of an empty form
-	return [...(found.length ? found : BUILT_IN_LAUNCHERS)];
-}
-
-/**
- * An id for a row somebody just added, from the name they gave it.
- *
- * Only ever computed for a new row: an id already in the setting is what its command is registered
- * under, and renaming an agent should not make it a different one.
- */
-export function uniqueLauncherId(label: string, taken: ReadonlySet<string>): string {
-	const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
-	if (!taken.has(base)) {
-		return base;
-	}
-
-	// Bounded by what is already there, so the loop cannot outlive the set it is avoiding
-	for (let suffix = 2; suffix <= taken.size + 2; suffix++) {
-		const candidate = `${base}-${suffix}`;
-		if (!taken.has(candidate)) {
-			return candidate;
-		}
-	}
-
-	return `${base}-${taken.size + 3}`;
 }
 
 /**
