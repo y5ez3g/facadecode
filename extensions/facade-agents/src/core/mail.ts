@@ -143,6 +143,7 @@ export class Mail implements Disposable {
 			terminalOf: agent => context.terminalOf(agent),
 			firstLine: (agent, task) => this.firstLineOf(agent, task.id),
 			senderOf: message => this.whoOf(message.from),
+			fetchesDone: id => this.fetching.get(id) ?? Promise.resolve(),
 			log: message => context.log(message)
 		});
 	}

@@ -563,6 +563,20 @@ suite('Core: messages', () => {
 			assert.deepStrictEqual(ringsOf(2), ['[facade] 1 unread message: #m3 from @lead #a1. Call read_messages.']);
 		});
 
+		test('a doorbell due while its agent fetches waits for the fetch to be done: what it took is not rung for', async () => {
+			const { lead, children: [lint] } = await team('lint');
+			world.facade.mail.send(lead, ['@lint'], 'Taken as it rings.', undefined);
+			await sleep(1_500);
+			let write: ((written: boolean) => void) | undefined;
+			await world.facade.mail.fetch(lint, {}, listener => write = listener);
+			await sleep(2_000);
+			const whileFetching = ringsOf(2).length;
+			write?.(true);
+			await sleep(2_000);
+
+			assert.deepStrictEqual({ whileFetching, after: ringsOf(2).length, delivered: world.table.state.mail.entries.get(2)?.state }, { whileFetching: 0, after: 0, delivered: 'delivered' });
+		});
+
 		test('a message fetched while its doorbell is typed is not counted as rung for', async () => {
 			const { lead } = await team('lint');
 			world.facade.mail.send(lead, ['@lint'], 'Quick.', undefined);

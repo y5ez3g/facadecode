@@ -41,6 +41,8 @@ export interface DoorbellContext {
 	firstLine(agent: Agent, task: Message): string;
 	/** A message's sender, as Facade writes it. */
 	senderOf(message: Message): string;
+	/** Settles once the agent's fetches under way are done: whether their results went out is known. */
+	fetchesDone(id: number): Promise<void>;
 	log(message: string): void;
 }
 
@@ -150,6 +152,8 @@ export class Doorbell implements Disposable {
 		this.ringing.add(id);
 		try {
 			await this.waitForThePerson(agent, terminal);
+			// What a fetch under way takes is not rung for
+			await this.context.fetchesDone(id);
 			const now = unreadOf(this.context.table.state.mail, id);
 			if (this.disposed || !isLive(this.context.table.get(id)) || !now.length) {
 				return;
