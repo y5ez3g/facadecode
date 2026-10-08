@@ -123,11 +123,14 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 	) {
 		super();
 
-		// ⚠️ Floating windows' terminals come back last: after the editor area's, with their windows
-		this.whenRestored = Promise.all([this._terminalService.whenConnected, lifecycleService.when(LifecyclePhase.Eventually)]).then(() => {
-			this._restored = true;
-		});
-		this.whenRestored.then(() => this._takeBack()).then(undefined, onUnexpectedError);
+		// ⚠️ Floating windows' terminals come back last: after the editor area's, with their windows. The agents
+		// whose processes outlived a crashed window are taken back before then: until they are, one is not gone
+		this.whenRestored = Promise.all([this._terminalService.whenConnected, lifecycleService.when(LifecyclePhase.Eventually)])
+			.then(() => this._takeBack())
+			.then(undefined, onUnexpectedError)
+			.then(() => {
+				this._restored = true;
+			});
 
 		this._register(this._terminalService.onDidDisposeInstance(instance => this._closed(instance)));
 
