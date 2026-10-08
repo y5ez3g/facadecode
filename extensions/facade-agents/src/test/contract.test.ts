@@ -8,12 +8,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Contract } from '../contract/tools';
 import { Caller, PERSON } from '../record/events';
+import { ResultListener } from '../transport/pipe';
 import { ToolResult } from '../transport/protocol';
 import { settled, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
-const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once it is up; ps lists you, your parent and your children, each with its number and state; kill ends one of your children.';
+const TOOLS = 'Your tools: spawn starts a child agent and answers with its number once its CLI has connected; ps lists you, your parent and your children, each with its number, its state and its mailbox; kill ends one of your children.';
+const MESSAGES = 'Messages: send_message sends a message to agents, or to the person, @you, and answers at once with its number, as #m42: a reply comes to your mailbox. A line starting [facade] typed into your terminal says you have unread messages: call read_messages, and print the new ones before you act on them. Something for the person: print it whole first, then send it to @you. If an agent started you, message it when you are done, stuck, or need a decision; if the person did, answer them in your terminal. Ask in plain text or by message, never with your CLI\'s tool for questions with buttons. Do not poll or wait for a reply: end your turn.';
+const PERSON_MESSAGES = 'Messages: send_message sends a message to agents and answers with its number, as #m42. Messages to you come as notifications; read_messages with all gives them again.';
 
 suite('Contract: what the model sees, and what it gets back', () => {
 
@@ -37,17 +40,25 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		temp.remove();
 	});
 
-	/** A tool call, answered as its caller's client gets it: a child it starts says hello through the contract once its terminal is launched. */
+	/**
+	 * A tool call, answered as its caller's client gets it, its result written to that client: a child it
+	 * starts says hello through the contract once its terminal is launched.
+	 */
 	async function call(caller: Caller, tool: string, args: unknown): Promise<ToolResult> {
 		const launched = world.terminals.launched.length;
+		const listeners: ResultListener[] = [];
 		let over = false;
-		const calling = contract.call(caller, tool, args, () => undefined);
+		const calling = contract.call(caller, tool, args, () => undefined, listener => listeners.push(listener));
 		void calling.then(() => over = true);
 		await until(() => over || world.terminals.launched.length > launched);
 		if (!over) {
 			contract.hello(callerOf(world.agent(world.table.state.lastId)));
 		}
-		return settled(calling);
+		const result = await settled(calling);
+		for (const listener of listeners) {
+			listener(true);
+		}
+		return result;
 	}
 
 	/** A time as ps gives it. */
@@ -77,16 +88,17 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		}, {
 			name: 'planner',
 			state: 'running',
-			tools: ['spawn', 'ps', 'kill'],
+			tools: ['spawn', 'ps', 'kill', 'send_message', 'read_messages'],
 			cli: { type: 'string', enum: ['arg', 'told'], description: 'The CLI: arg (Arg Code), told (Told Code).' },
 			model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it.' },
 			effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. The levels differ from CLI to CLI, and from model to model.' },
 			instructions: [
 				'You are @planner #2, a Told Code agent in Facade Code, started by @lead #1.',
 				`You run in ${lab}: the worktree main. You are in that folder already: run commands there without cd.`,
-				TOOLS
+				TOOLS,
+				MESSAGES
 			],
-			person: { name: 'you', instructions: ['You act as the person, @you, in Facade Code.', TOOLS] }
+			person: { name: 'you', instructions: ['You act as the person, @you, in Facade Code.', TOOLS, PERSON_MESSAGES] }
 		});
 	});
 
@@ -99,7 +111,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		});
 	});
 
-	test('spawn answers once the child is up, in words and as data; kill ends a child, and says of one that exited how it did; ps gives the caller\'s view of the agents, a line each, and the same as data, where an agent the person started has no parent\'s number', async () => {
+	test('spawn answers once the child\'s CLI has connected, with its task\'s number, in words and as data; kill ends a child, and says of one that exited how it did; ps gives the caller\'s view of the agents, a line each with its mailbox, and the same as data, where an agent the person started has no parent\'s number', async () => {
 		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
 		const beside = await call(lead, 'spawn', { cli: 'arg', model: 'small', effort: 'high', prompt: 'Write the tests.', name: 'tests' });
@@ -110,14 +122,15 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const clamp = worktreeFolder(lab, 'clamp');
 
 		assert.deepStrictEqual({ beside, inNew: inNew.text, killed: killed.text, again: again.text, ps: ps.text.split('\n'), rows: JSON.parse(JSON.stringify(ps.data)).agents.map((row: { id: number; parent?: number }) => `${row.id}<${Object.keys(row).includes('parent') ? row.parent : 'none'}`) }, {
-			beside: { text: `Started @tests #2: Arg Code on small at high, in the worktree main at ${lab}. It is up and has its task.`, data: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false } },
-			inNew: `Started @clamp #3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. It is up and has its task.`,
+			beside: { text: `Started @tests #2: Arg Code on small at high, in the worktree main at ${lab}. Its CLI has connected to Facade. Its task is message #m2, which it fetches itself: ps shows when it has.`, data: { id: 2, name: 'tests', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: lab, newWorktree: false, task: 2 } },
+			inNew: `Started @clamp #3: Arg Code on small at high, in the new worktree clamp, on the new branch clamp, at ${clamp}. Its CLI has connected to Facade. Its task is message #m3, which it fetches itself: ps shows when it has.`,
 			killed: 'Killed @tests #2: its terminal closed. Its worktree stays as it is.',
 			again: '@tests #2 had exited already (killed: killed by @lead #1).',
+			// The task @tests had not fetched did not go back to @lead, which ended it: the chat room notes it
 			ps: [
-				`@lead #1 (you)  parent the person  running  arg on large at high  worktree main at ${lab}  started ${timeOfDay(world.agent(1).startTime)}`,
-				`@tests #2  parent #1  exited at ${timeOfDay(world.agent(2).exit?.time)} (killed: killed by @lead #1)  arg on small at high  worktree main at ${lab}  started ${timeOfDay(world.agent(2).startTime)}`,
-				`@clamp #3  parent #1  running  arg on small at high  worktree clamp at ${clamp}  started ${timeOfDay(world.agent(3).startTime)}`
+				`@lead #1 (you)  parent the person  running  arg on large at high  worktree main at ${lab}  started ${timeOfDay(world.agent(1).startTime)}  mailbox: 1 unread: #m1 (@you, 0 min); 0 fetched; task #m1 not fetched yet`,
+				`@tests #2  parent #1  exited at ${timeOfDay(world.agent(2).exit?.time)} (killed: killed by @lead #1)  arg on small at high  worktree main at ${lab}  started ${timeOfDay(world.agent(2).startTime)}  mailbox: nothing unread; 0 fetched; task #m2 not fetched before it ended`,
+				`@clamp #3  parent #1  running  arg on small at high  worktree clamp at ${clamp}  started ${timeOfDay(world.agent(3).startTime)}  mailbox: 1 unread: #m3 (@lead #a1, 0 min); 0 fetched; task #m3 not fetched yet`
 			],
 			rows: ['1<none', '2<1', '3<1']
 		});
@@ -147,7 +160,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const error = (code: string, text: string) => ({ text, isError: true, data: { code } });
 
 		assert.deepStrictEqual(results, [
-			error('INVALID', 'Unknown tool send. The tools: spawn, ps, kill.'),
+			error('INVALID', 'Unknown tool send. The tools: spawn, ps, kill, send_message, read_messages.'),
 			error('INVALID', 'spawn takes cli, model, effort, prompt, worktree?, name?; not color.'),
 			error('INVALID', 'spawn takes an object of arguments: cli, model, effort, prompt, worktree?, name?.'),
 			error('INVALID', 'prompt is required.'),

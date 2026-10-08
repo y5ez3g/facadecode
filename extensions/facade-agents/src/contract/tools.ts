@@ -7,10 +7,13 @@ import { messageOf } from '../base/errors';
 import { FacadeError } from '../core/errors';
 import { Facade } from '../core/facade';
 import { Caller } from '../record/events';
+import type { ResultListener } from '../transport/pipe';
 import { Hello, McpTool, ToolResult } from '../transport/protocol';
 import { killTool } from './kill';
 import { instructionsFor } from './prompts';
 import { psTool } from './ps';
+import { readMessagesTool } from './readMessages';
+import { sendMessageTool } from './sendMessage';
 import { spawnTool } from './spawn';
 
 /** A tool's input, as the JSON Schema its definition gives: an object, and its properties. */
@@ -32,16 +35,21 @@ export interface ContractTool {
 	readonly definition: Tool;
 	/** Its definition as the model is shown it, where that depends on what this machine has. */
 	describe?(facade: Facade): Tool;
-	/** Runs it; `progress` tells the caller's client how a long call goes. */
-	call(facade: Facade, caller: Caller, args: unknown, progress: (message: string) => void): Promise<ToolResult>;
+	/**
+	 * Runs it; `progress` tells the caller's client how a long call goes. A listener given to `whenWritten`
+	 * hears whether its result went out to the caller: never so when the call fails.
+	 */
+	call(facade: Facade, caller: Caller, args: unknown, progress: (message: string) => void, whenWritten: (listener: ResultListener) => void): Promise<ToolResult>;
 }
 
-const TOOLS: readonly ContractTool[] = [spawnTool, psTool, killTool];
+const TOOLS: readonly ContractTool[] = [spawnTool, psTool, killTool, sendMessageTool, readMessagesTool];
 
 /**
- * The tools of Facade's MCP server, `facade`, as the model sees them: `spawn`, `ps` and `kill`. Each
- * result is text the model reads whole, with the same facts as data. A failure is a result too, marked
- * as an error: it says what is wrong and what would be right, and its data carries one of five codes.
+ * The tools of Facade's MCP server, `facade`, as the model sees them: `spawn`, `ps` and `kill`, and
+ * `send_message` and `read_messages`. Each result is text the model reads whole, with the same facts as
+ * data; messages come only from `read_messages`, never along with another tool's result. A failure is a
+ * result too, marked as an error: it says what is wrong and what would be right, and its data carries
+ * one of five codes.
  */
 export class Contract {
 
@@ -53,16 +61,28 @@ export class Contract {
 		return { name: caller.name, tools: TOOLS.map(tool => tool.describe?.(this.facade) ?? tool.definition), instructions: instructionsFor(this.facade, caller) };
 	}
 
-	/** Runs one tool for one caller. Whatever happens, the answer is a result the model reads. */
-	async call(caller: Caller, name: string, args: unknown, progress: (message: string) => void): Promise<ToolResult> {
+	/**
+	 * Runs one tool for one caller. Whatever happens, the answer is a result the model reads. Its listeners
+	 * given to `whenWritten` hear whether it went out, as the pipe tells; those of a call that failed hear no.
+	 */
+	async call(caller: Caller, name: string, args: unknown, progress: (message: string) => void, whenWritten: (listener: ResultListener) => void): Promise<ToolResult> {
+		const listeners: ResultListener[] = [];
+		let result: ToolResult;
 		try {
 			const tool = TOOLS.find(each => each.definition.name === name);
 			if (!tool) {
 				throw new FacadeError('INVALID', `Unknown tool ${name}. The tools: ${TOOLS.map(each => each.definition.name).join(', ')}.`);
 			}
-			return await tool.call(this.facade, caller, args, progress);
+			result = await tool.call(this.facade, caller, args, progress, listener => listeners.push(listener));
 		} catch (err) {
+			for (const listener of listeners) {
+				listener(false);
+			}
 			return { text: messageOf(err), isError: true, data: { code: err instanceof FacadeError ? err.code : 'FAILED' } };
 		}
+		for (const listener of listeners) {
+			whenWritten(listener);
+		}
+		return result;
 	}
 }

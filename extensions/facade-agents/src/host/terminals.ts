@@ -9,7 +9,7 @@ import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { isProcessRunning } from '../base/system';
 import { Environment } from '../clis/cli';
-import { Disposable, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Disposable, PersonInput, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
 import { endOf } from './terminalEnd';
 import { agentTerminalIndex } from './terminalMatch';
 import { StateStore } from './windowState';
@@ -142,10 +142,56 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		(await this.find(name))?.dispose();
 	}
 
+	async closeRevived(name: string): Promise<void> {
+		// A name is an agent's alone: a terminal of it not running the agent's own process is one the window
+		// revived. The agent's own, its process ended and its terminal kept to show how, stays for the person.
+		const pid = this.pids()[name];
+		// Without the agent's process id, one is not told from the other; nor is it found gone by its name then
+		if (pid === undefined) {
+			return;
+		}
+		for (const terminal of vscode.window.terminals.filter(each => isNamed(each, name))) {
+			if (await processIdOf(terminal) !== pid) {
+				this.log(`${name} came back without its agent: a shell the window started in its tab. Closed.`);
+				terminal.dispose();
+			}
+		}
+	}
+
 	async type(name: string, text: string): Promise<boolean> {
 		const terminal = await this.find(name);
-		terminal?.sendText(text, false);
-		return !!terminal;
+		if (!terminal) {
+			return false;
+		}
+		// Through Facade's workbench, which tells what Facade typed from what the person typed
+		const processId = await hasCommand('_facade.terminal.type') ? await processIdOf(terminal) : undefined;
+		if (processId === undefined) {
+			terminal.sendText(text, false);
+			return true;
+		}
+		return await vscode.commands.executeCommand<boolean>('_facade.terminal.type', processId, text) === true;
+	}
+
+	/** What the person typed into the terminal, as Facade's workbench saw their keys; undefined without it, or without the terminal's process id. */
+	async input(name: string): Promise<PersonInput | undefined> {
+		if (!await hasCommand('_facade.terminal.input')) {
+			return undefined;
+		}
+		const processId = await this.processId(name);
+		if (processId === undefined) {
+			return undefined;
+		}
+		const input = await vscode.commands.executeCommand<unknown>('_facade.terminal.input', processId);
+		if (!isJsonObject(input) || typeof input.pending !== 'boolean') {
+			return undefined;
+		}
+		return { pending: input.pending, ...(typeof input.lastKey === 'number' ? { lastKey: input.lastKey } : {}) };
+	}
+
+	/** The id of the process the terminal runs, as the window tells it; undefined without the terminal, or without word from the window. */
+	async processId(name: string): Promise<number | undefined> {
+		const terminal = await this.find(name);
+		return terminal && processIdOf(terminal);
 	}
 
 	/**
@@ -394,9 +440,15 @@ function exitedAsItStarted(executable: string, exitCode: number | undefined): st
 	return exitCode === undefined ? `${executable} exited as it started.` : `${executable} exited as it started (exit code ${exitCode}).`;
 }
 
+/** The commands of Facade's workbench found in the window: once there, they stay. */
+const commandsFound = new Set<string>();
+
 /** Whether the window has the command `id`: Facade's own are there only in Facade's workbench. */
 async function hasCommand(id: string): Promise<boolean> {
-	return (await vscode.commands.getCommands()).includes(id);
+	if (!commandsFound.has(id) && (await vscode.commands.getCommands()).includes(id)) {
+		commandsFound.add(id);
+	}
+	return commandsFound.has(id);
 }
 
 /**

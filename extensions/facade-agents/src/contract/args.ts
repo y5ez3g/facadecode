@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { isJsonObject, JsonObject } from '../base/json';
+import { isJsonObject, isStringArray, JsonObject } from '../base/json';
 import { FacadeError } from '../core/errors';
 
 /**
@@ -29,6 +29,15 @@ export class Args {
 
 	/** A string with something in it, trimmed. */
 	text(name: string): string {
+		const value = this.string(name);
+		if (!value.trim()) {
+			throw invalid(`${name} must not be empty.`);
+		}
+		return value.trim();
+	}
+
+	/** A string as it is given, its spaces and all: a message's text, say. */
+	string(name: string): string {
 		const value = this.values[name];
 		if (value === undefined) {
 			throw invalid(`${name} is required.`);
@@ -36,10 +45,34 @@ export class Args {
 		if (typeof value !== 'string') {
 			throw invalid(`${name} must be a string.`);
 		}
-		if (!value.trim()) {
-			throw invalid(`${name} must not be empty.`);
+		return value;
+	}
+
+	/** A list of strings, each as it is given; a string alone is a list of one, as a model may give it. */
+	strings(name: string): string[] {
+		const value = this.values[name];
+		if (value === undefined) {
+			throw invalid(`${name} is required.`);
 		}
-		return value.trim();
+		if (typeof value === 'string') {
+			return [value];
+		}
+		if (!isStringArray(value)) {
+			throw invalid(`${name} must be a list of strings.`);
+		}
+		return [...value];
+	}
+
+	/** A list of strings, if it is given: one given must have one at least. */
+	optionalStrings(name: string): string[] | undefined {
+		if (this.values[name] === undefined) {
+			return undefined;
+		}
+		const value = this.strings(name);
+		if (!value.length) {
+			throw invalid(`${name} must have one at least, or be left out.`);
+		}
+		return value;
 	}
 
 	/** A string with something in it, trimmed, if it is given: an empty one counts as not given. */

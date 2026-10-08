@@ -22,7 +22,7 @@ const ANOTHERS_LOCK = '424242 0123456789ab';
 
 /** An agent the person starts, or the agent `parent` does. */
 function newAgent(name: string, parent?: number, worktree = 'main'): NewAgent {
-	return { name, parent, cli: 'arg', model: 'small', effort: 'high', worktree, folder: '/lab' };
+	return { name, parent, cli: 'arg', model: 'small', effort: 'high', worktree, folder: '/lab', yolo: true };
 }
 
 /** A worktree the person had Facade make, called `name`. */
@@ -149,24 +149,26 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		});
 	});
 
-	test('a task is written whole to a file of its agent\'s own, made knowing its number; that the line telling of it was typed is recorded once, for an agent that has one', () => {
-		const told = table.start({ ...newAgent('main'), task: id => `You are #${id}.\n\nAdd clamp.` });
-		const untold = table.start(newAgent('other'));
-		table.setTaskTyped(told.agent.id);
-		table.setTaskTyped(told.agent.id);
-		table.setTaskTyped(untold.agent.id);
-		const types = fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).type);
+	test('a ledger of the version before messages reads as it was, its task files and their typing no more, and what is appended to it is of this version; a line of that version after one of this does not fit', () => {
+		table.dispose();
+		const file = path.join(temp.dir, LEDGER);
+		fs.writeFileSync(file, [
+			`{"v":3,"seq":1,"time":1,"type":"agent.started","id":1,"name":"main","cli":"arg","model":"small","effort":"high","worktree":"main","folder":"/lab","taskFile":"/runs/1.task.md","tokenHash":"${'ab'.repeat(32)}"}`,
+			'{"v":3,"seq":2,"time":2,"type":"agent.running","id":1}',
+			'{"v":3,"seq":3,"time":3,"type":"task.typed","id":1}',
+			''
+		].join('\n'));
+		table = AgentTable.open({ dir: temp.dir });
+		const read = structuredClone(table.state.agents.get(1));
+		table.setExited(1, 'exited', 'its CLI ended');
+		const versions = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).v);
+		table.dispose();
+		fs.appendFileSync(file, '{"v":3,"seq":5,"time":5,"type":"worktree.gone","folder":"/lab"}\n');
 
-		assert.deepStrictEqual({
-			taskFile: told.agent.taskFile === path.join(table.runsDir, '1.task.md'),
-			task: fs.readFileSync(path.join(table.runsDir, '1.task.md'), 'utf8'),
-			typed: [told.agent.taskTyped, untold.agent.taskTyped, untold.agent.taskFile],
-			types
-		}, {
-			taskFile: true,
-			task: 'You are #1.\n\nAdd clamp.',
-			typed: [true, undefined, undefined],
-			types: ['agent.started', 'agent.started', 'task.typed']
+		assert.deepStrictEqual({ read, versions, refused: outcome(() => AgentTable.open({ dir: temp.dir })) }, {
+			read: { id: 1, name: 'main', cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: '/lab', state: 'running', startTime: 1, runningTime: 2 },
+			versions: [3, 3, 3, 5],
+			refused: `Line 5 of ${file} is not an event Facade can read, so the workspace's agents are not loaded. Move the file away to start with no agents.`
 		});
 	});
 
@@ -225,8 +227,8 @@ suite('Record: agents, their numbers, names and tokens', () => {
 	});
 
 	test('the run files of an agent go once it exits, and those of every agent that is not running go as the table opens', () => {
-		const gone = table.start({ ...newAgent('gone'), task: () => 'Task.' });
-		const runs = table.start({ ...newAgent('runs'), task: () => 'Task.' });
+		const gone = table.start(newAgent('gone'));
+		const runs = table.start(newAgent('runs'));
 		table.setExited(gone.agent.id, 'exited', 'its terminal closed');
 		const afterExit = fs.readdirSync(table.runsDir).sort();
 		// A file a crash left, of a number the ledger never recorded.
@@ -235,16 +237,16 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		table = AgentTable.open({ dir: temp.dir });
 
 		assert.deepStrictEqual({ afterExit, afterOpening: fs.readdirSync(table.runsDir).sort(), runs: runs.agent.id }, {
-			afterExit: ['2.task.md', '2.token'],
-			afterOpening: ['2.task.md', '2.token'],
+			afterExit: ['2.token'],
+			afterOpening: ['2.token'],
 			runs: 2
 		});
 	});
 
-	test('nothing is started once another window took the ledger: no number is given, and no token or task written, which could be that window\'s', () => {
+	test('nothing is started once another window took the ledger: no number is given, and no token written, which could be that window\'s', () => {
 		table.start(newAgent('main'));
 		fs.writeFileSync(path.join(temp.dir, LOCK), ANOTHERS_LOCK);
-		const refused = outcome(() => table.start({ ...newAgent('late'), task: () => 'Task.' }));
+		const refused = outcome(() => table.start(newAgent('late')));
 
 		assert.deepStrictEqual({ refused, runs: fs.readdirSync(table.runsDir), lastId: fs.readFileSync(path.join(temp.dir, LAST_ID), 'utf8') }, {
 			refused: takenFrom(temp.dir),
@@ -266,11 +268,10 @@ suite('Record: the ledger on disk', () => {
 		temp.remove();
 	});
 
-	test('a reload loses nothing: agents, their states, how they exited, their tasks, their tokens and the person\'s, the worktrees made', () => {
+	test('a reload loses nothing: agents, their states, how they exited, their tokens and the person\'s, the worktrees made', () => {
 		let table = AgentTable.open({ dir: temp.dir });
-		const main = table.start({ ...newAgent('main'), task: () => 'Lead.' });
+		const main = table.start(newAgent('main'));
 		table.setRunning(main.agent.id);
-		table.setTaskTyped(main.agent.id);
 		const gone = table.start(newAgent('clamp', main.agent.id, 'clamp'));
 		table.setExited(gone.agent.id, 'failed', 'it did not come up within 120 seconds');
 		table.recordWorktree({ name: 'clamp', folder: '/lab-worktrees/clamp', repository: '/lab', parentWorktree: 'main', madeBy: main.agent.id });
@@ -389,7 +390,7 @@ suite('Record: the ledger on disk', () => {
 		const file = path.join(temp.dir, LEDGER);
 		const lines = fs.readFileSync(file, 'utf8');
 		const broken = (line: string) => {
-			fs.writeFileSync(file, `${lines}${line}\n{"v":3,"seq":3,"time":1,"type":"agent.running","id":1}\n`);
+			fs.writeFileSync(file, `${lines}${line}\n{"v":5,"seq":3,"time":1,"type":"agent.running","id":1}\n`);
 			try {
 				AgentTable.open({ dir: temp.dir }).dispose();
 				return 'opened';
@@ -400,8 +401,8 @@ suite('Record: the ledger on disk', () => {
 			}
 		};
 		// #2 started by #1, and a worktree made by #1, as Facade writes them but for `fields`.
-		const started = (fields: object) => JSON.stringify({ v: 3, seq: 2, time: 1, type: 'agent.started', id: 2, name: 'clamp', parent: 1, cli: 'arg', model: 'small', effort: 'high', worktree: 'clamp', folder: '/lab', tokenHash: 'ab'.repeat(32), ...fields });
-		const worktree = (fields: object) => JSON.stringify({ v: 3, seq: 2, time: 1, type: 'worktree.made', name: 'clamp', folder: '/lab-clamp', repository: '/lab', parentWorktree: 'main', madeBy: 1, ...fields });
+		const started = (fields: object) => JSON.stringify({ v: 5, seq: 2, time: 1, type: 'agent.started', id: 2, name: 'clamp', parent: 1, cli: 'arg', model: 'small', effort: 'high', worktree: 'clamp', folder: '/lab', tokenHash: 'ab'.repeat(32), ...fields });
+		const worktree = (fields: object) => JSON.stringify({ v: 5, seq: 2, time: 1, type: 'worktree.made', name: 'clamp', folder: '/lab-clamp', repository: '/lab', parentWorktree: 'main', madeBy: 1, ...fields });
 		const said = `Line 2 of ${file} is not an event Facade can read, so the workspace's agents are not loaded. Move the file away to start with no agents.`;
 
 		assert.deepStrictEqual({
@@ -409,10 +410,10 @@ suite('Record: the ledger on disk', () => {
 			thePersons: [broken(started({ parent: undefined })), broken(worktree({ madeBy: undefined }))],
 			noEffort: broken(started({ effort: undefined })),
 			anEmptyEffort: broken(started({ effort: '' })),
-			notJson: broken('{"v":3,'),
-			unknownKind: broken('{"v":3,"seq":2,"time":1,"type":"agent.later","id":1}'),
-			wrongField: broken('{"v":3,"seq":2,"time":1,"type":"agent.exited","id":1,"kind":"vanished","reason":"?"}'),
-			outOfTurn: broken('{"v":3,"seq":5,"time":1,"type":"agent.running","id":1}'),
+			notJson: broken('{"v":5,'),
+			unknownKind: broken('{"v":5,"seq":2,"time":1,"type":"agent.later","id":1}'),
+			wrongField: broken('{"v":5,"seq":2,"time":1,"type":"agent.exited","id":1,"kind":"vanished","reason":"?"}'),
+			outOfTurn: broken('{"v":5,"seq":5,"time":1,"type":"agent.running","id":1}'),
 			anOlderVersions: broken('{"v":2,"seq":2,"time":1,"type":"process.running","pid":1}'),
 			noNumber: broken(started({ id: 0 })),
 			aNumberGivenBefore: broken(started({ id: 1, parent: undefined })),
@@ -423,7 +424,7 @@ suite('Record: the ledger on disk', () => {
 			aReservedName: broken(started({ name: 'you' })),
 			noFolder: broken(started({ folder: '' })),
 			noTokenHash: broken(started({ tokenHash: 'a token' })),
-			anUnknownAgent: broken('{"v":3,"seq":2,"time":1,"type":"agent.exited","id":9,"kind":"killed","reason":"?"}'),
+			anUnknownAgent: broken('{"v":5,"seq":2,"time":1,"type":"agent.exited","id":9,"kind":"killed","reason":"?"}'),
 			anUnknownMaker: broken(worktree({ madeBy: 9 })),
 			aWorktreeWithoutFolder: broken(worktree({ folder: '' })),
 			lockLeft: fs.existsSync(path.join(temp.dir, LOCK))
