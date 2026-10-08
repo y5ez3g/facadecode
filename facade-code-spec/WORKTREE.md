@@ -166,7 +166,7 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   folders have the same name.
 - **WT-2.4** Making a worktree writes nothing into the repository: no `.gitignore` entry, no
   `.git/info/exclude` entry, no `files.exclude` default. While agents run in a worktree, the files
-  put there for them get `info/exclude` lines that go with them (AGENT-FRAMEWORK.md, 1.7).
+  put there for them get `info/exclude` lines that go with them (AGENT-ORCHESTRATION.md, O10).
 - **WT-2.5** No `core.longpaths` and no path-length check. A path too long for Windows fails with
   git's own "Filename too long", said on screen.
 
@@ -314,12 +314,17 @@ From the `+` on a folder row (WT-1.13), the row's menu (WT-1.11), or the command
   work is a second click, and does nothing. The worktrees agents ask for in one repository are made
   one after another, none refused because another is being made; a New Worktree the person asks for
   meanwhile goes once the agent's is made.
-- **WT-5.11** An agent's worktree (AGENT-FRAMEWORK.md, 1.3) is made through
-  `_facade.worktree.create` by the same service, without the dialog: from the parent worktree's HEAD;
-  refused, with the reason, in an untrusted workspace or repository and in a folder with no commit,
-  rather than trusted or prepared (WT-5.8); the window stays where it is unless asked to show the
-  worktree; setup runs at once, in a terminal of its own, revealed - not held under the worktree's
-  row as an agent's is.
+- **WT-5.11** An agent's worktree (AGENT-ORCHESTRATION.md, O3 and O4) is made through
+  `_facade.worktree.create` by the same service, without the dialog, at the commit the start resolved
+  when it was accepted: the caller's HEAD, or, in another repository, that repository's main checkout's
+  HEAD. It is refused, with the reason, in an untrusted workspace or repository and in a folder with no
+  commit, rather than trusted or prepared (WT-5.8). It does not join `folders[]` and the window stays
+  where it is: the worktree shows on the bar as any worktree git records (WT-1.3). Setup runs at once, in
+  a terminal of its own held under the worktree's row, not revealed, once the repository's queue
+  (WT-5.10) has moved on. The command answers once the worktree is made and its setup started; the
+  setup's outcome is asked for apart: with shell integration, each line's exit code once the last has
+  finished; without it, that the lines were sent, their completion unknown. A start cancelled meanwhile
+  closes the setup terminal; the worktree stays.
 
 ---
 
@@ -412,6 +417,15 @@ directory open is gone before git is asked to delete it.
   it until step 6 is done - seconds, for a large worktree. When step 6 is over, git's files are read
   again before the row may come back: after a deletion that worked it does not, after one that
   failed it does.
+- **WT-8.10** An agent's deletion (AGENT-ORCHESTRATION.md, O5) goes through `_facade.worktree.delete` by
+  the same service. Step 1 comes first, and with it the editors of the worktree with unsaved changes:
+  files that would be lost - besides what Facade put there for agents and nobody changed
+  (AGENT-ORCHESTRATION.md, O10) - or unsaved editors refuse the deletion, listed, unless the call says
+  to discard them. Then steps 3 to 7 run with nothing asked - asking for it in the call is the
+  confirmation - `force` where step 1 found changes or submodules, the unsaved editors closed without
+  saving. It is refused, with the reason, for a main checkout and in Restricted Mode, rather than trust
+  asked for; its progress is in the status bar; and a failure is the call's answer, not a notification,
+  the row coming back as WT-8.6 has it.
 
 ---
 
