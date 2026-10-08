@@ -112,9 +112,9 @@ export interface Mailbox {
  * The messages (AGENT-MESSAGES.md): each numbered as it is sent and put into its recipient's mailbox;
  * Facade rings the recipient's doorbell and it fetches them with `read_messages`. Every message is
  * delivered at least once - a result that did not reach the pipe is given again, marked - or, its
- * recipient ending, goes back to its sender, or is noted in its chat room where its sender ended or knew
- * of the end; the chat rooms keep them all. An agent whose YOLO is off reaches the agents of its own tree
- * only, and the person. Every message is recorded before anything is done with it.
+ * recipient ending, goes back to its sender, or is noted in its chat room where its sender ended or was
+ * told of the end otherwise; the chat rooms keep them all. An agent whose YOLO is off reaches the agents
+ * of its own tree only, and the person. Every message is recorded before anything is done with it.
  */
 export class Mail implements Disposable {
 
@@ -293,8 +293,8 @@ export class Mail implements Disposable {
 	/**
 	 * An agent ended, `how` saying how; `tell` says whether its creator is told: an agent creator by a
 	 * message of Facade's, while it runs; the person, for an agent they started, by a notification. Its
-	 * unread messages go back to their senders, oldest first - but to `knownTo`, who ended it or was told
-	 * by its start, and to a sender that ended: for those its chat room notes it.
+	 * unread messages go back to their senders, oldest first - but to `knownTo`, told of the end otherwise
+	 * (its start, or its window closing), and to a sender that ended: for those its chat room notes it.
 	 */
 	ended(agent: Agent, how: string, tell: boolean, knownTo: readonly Recipient[] = []): void {
 		this.doorbell.forget(agent.id);

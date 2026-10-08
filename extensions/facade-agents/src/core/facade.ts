@@ -120,8 +120,9 @@ interface End {
 	 */
 	readonly tell: boolean;
 	/**
-	 * Who ended it, or the start that waited for it, where that one knows of the end: its messages to the
-	 * agent go back to it only as a note in the chat room.
+	 * Whose messages to the agent are noted in its chat room rather than sent back (AGENT-LAUNCHER.md L6):
+	 * the creator whose start said it failed, which its task going back would say again, and the person
+	 * when its window closed, as no notice comes of a shutdown.
 	 */
 	readonly knownTo?: readonly Recipient[];
 }
@@ -332,8 +333,7 @@ export class Facade implements Disposable {
 			kind: 'killed',
 			reason: `killed by ${describe(caller)}`,
 			how: `stopped by ${messageText(caller)}`,
-			tell: agent.parent === undefined ? caller.id !== undefined : agent.parent !== caller.id,
-			knownTo: [caller.id ?? HUMAN]
+			tell: agent.parent === undefined ? caller.id !== undefined : agent.parent !== caller.id
 		});
 		// Only a window that closed records nothing for an agent that has not exited.
 		if (!exit) {
@@ -469,7 +469,7 @@ export class Facade implements Disposable {
 		const creator = agent.parent ?? HUMAN;
 		try {
 			if (end.byThePerson) {
-				this.exited(agent, { kind: 'killed', reason: 'the person closed its terminal', how: `stopped by ${messageText(PERSON)}`, tell: agent.parent !== undefined && !reported, knownTo: reported ? [HUMAN, creator] : [HUMAN] });
+				this.exited(agent, { kind: 'killed', reason: 'the person closed its terminal', how: `stopped by ${messageText(PERSON)}`, tell: agent.parent !== undefined && !reported, ...(reported ? { knownTo: [creator] } : {}) });
 			} else {
 				const reason = end.exitCode === undefined ? 'its terminal closed' : end.exitCode === 0 ? 'its CLI ended' : `its CLI ended with exit code ${end.exitCode}`;
 				const how = end.exitCode === undefined ? 'its terminal closed' : `it exited, with exit code ${end.exitCode}`;

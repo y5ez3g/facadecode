@@ -85,7 +85,7 @@ export interface Return {
 	readonly reason: string;
 	/** The message of Facade's that took it back; none where it could not go back, or needed not. */
 	readonly as?: number;
-	/** Set where it needed not go back: its sender knew its recipient ended - it ended it, or was told so. */
+	/** Set where it needed not go back: its sender was told of the end otherwise - by the start that failed, or the window closing. */
 	readonly known?: true;
 	readonly time: number;
 }

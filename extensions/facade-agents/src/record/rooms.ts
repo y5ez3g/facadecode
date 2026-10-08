@@ -161,7 +161,7 @@ export class ChatRooms {
 			return undefined;
 		}
 		if (returned.known) {
-			return `> #m${message.id} was not fetched by ${whoOf(state, message.to)} before it ended (${returned.reason}). It was not returned: ${whoOf(state, message.from)} knew it ended.\n\n`;
+			return `> #m${message.id} was not fetched by ${whoOf(state, message.to)} before it ended (${returned.reason}). It was not returned: ${whoOf(state, message.from)} was told it ended.\n\n`;
 		}
 		// The person's go back to them always: only an agent's whose sender ended, and Facade's, do not
 		const why = message.from === FACADE ? 'Facade\'s own messages are not returned' : `${whoOf(state, message.from)}, its sender, had ended`;
