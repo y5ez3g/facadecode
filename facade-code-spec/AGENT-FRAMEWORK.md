@@ -9,8 +9,9 @@ an operating system's process id. Facade records what it did and what it knows f
 launch, an MCP server's hello, a terminal that ended - and never reads a screen to decide anything,
 nor guesses whether an agent works.
 
-Chapter 1 is starting, listing and ending agents. Messages between agents and looking into an agent's
-terminal come next.
+Chapter 1 is starting, listing and ending agents. Looking into an agent's terminal - reading its
+screen, typing and pressing keys there - is [AGENT-DEBUGGING.md](AGENT-DEBUGGING.md); messages between
+agents come next.
 
 ## Architecture
 
