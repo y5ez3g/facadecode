@@ -19,8 +19,9 @@ import { IWorkspaceFolder } from '../../../../../platform/workspace/common/works
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { ILifecycleService, LifecyclePhase, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
-import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
+import { ITerminalContribution, ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { IWorktreeService } from '../../../worktrees/browser/worktrees.js';
+import { FacadeAgentTerminal, IAgentKeysOptions, IAgentTerminalOptions, IAgentTypeOptions } from '../../browser/facadeAgentTerminal.js';
 import '../../browser/facadeCommands.contribution.js';
 
 /** A terminal as the folder terminals open one: made before its process is started, its id known once that is ready. */
@@ -34,8 +35,12 @@ class TestTerminal {
 
 	isDisposed = false;
 	exitCode: number | undefined;
+	/** Its Facade contribution, as a test makes it. */
+	agent: ITerminalContribution | undefined;
 
 	constructor(readonly title: string | undefined) { }
+
+	getContribution<T extends ITerminalContribution>(id: string): T | null { return (id === FacadeAgentTerminal.ID ? this.agent ?? null : null) as T | null; }
 
 	get processId(): number | undefined { return this._processId; }
 
@@ -101,6 +106,40 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		return { name, executable, args, env, cwd: URI.isUri(cwd) ? `uri ${cwd.path}` : cwd, icon: ThemeIcon.isThemeIcon(icon) ? icon.id : icon };
 	}
 
+	/** A terminal of the window titled `title` as it was opened, with its Facade contribution. */
+	function windowTerminal(title: string, processId: number | undefined, exitCode: number | undefined, isAgent = true): ITerminalInstance {
+		const agent: ITerminalContribution = agentTerminal(title, isAgent, exitCode !== undefined);
+		return upcastPartial<ITerminalInstance>({
+			title,
+			shellLaunchConfig: { name: title },
+			processId,
+			exitCode,
+			isDisposed: false,
+			getContribution: <T extends ITerminalContribution>(id: string) => (id === FacadeAgentTerminal.ID ? agent : null) as T | null
+		});
+	}
+
+	/** The Facade contribution of the terminal titled `title`, its calls kept in `steps`. */
+	function agentTerminal(title: string | undefined, isAgent = true, exited = false): FacadeAgentTerminal {
+		return upcastPartial<FacadeAgentTerminal>({
+			isAgent,
+			exited,
+			register: (options: IAgentTerminalOptions) => steps.push(`register ${title} as #${options.run}, its final screen in ${options.finalScreen.path}`),
+			read: async (lines: number) => {
+				steps.push(`read ${lines} of ${title}`);
+				return { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined };
+			},
+			type: async (text: string, options: IAgentTypeOptions) => {
+				steps.push(`type ${JSON.stringify(text)} into ${title} ${JSON.stringify(options)}`);
+				return { outcome: 'applied', pasted: true, entered: true };
+			},
+			keys: async (keys: readonly string[], options: IAgentKeysOptions) => {
+				steps.push(`press ${keys.join(' ')} in ${title} ${JSON.stringify(options)}`);
+				return { outcome: 'applied', keysSent: keys.length };
+			}
+		});
+	}
+
 	setup(() => {
 		steps = [];
 		launched = [];
@@ -121,6 +160,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				steps.push(`open for ${folder.path}: ${config.name}`);
 				launched.push(config);
 				const terminal = new TestTerminal(config.name);
+				terminal.agent = agentTerminal(config.name);
 				afterOpening(terminal);
 				return terminal.asInstance();
 			}
@@ -347,5 +387,88 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		await waiting;
 
 		assert.deepStrictEqual({ atFirst, connectedOnly, back, phases }, { atFirst: false, connectedOnly: false, back: true, phases: [LifecyclePhase.Restored] });
+	});
+
+	test('a terminal opened for an agent\'s run is registered as its terminal, its final screen going to its file', async () => {
+		await run('_facade.terminal.create', URI.file('/lab'), { name: '@lint #3 - Codex', executable: 'codex', agent: 'codex', run: 3, finalScreen: URI.file('/rec/screens/a3.json') });
+		await run('_facade.terminal.create', URI.file('/lab'), { name: 'a shell' });
+		const failures = await Promise.all([{ run: '3' }, { finalScreen: '/rec/screens/a3.json' }].map(options => failureOf('_facade.terminal.create', URI.file('/lab'), options)));
+
+		assert.deepStrictEqual({ failures, steps }, {
+			failures: Array(2).fill('Unexpected type, expected \'IFacadeTerminalOptions\''),
+			steps: ['open for /lab: @lint #3 - Codex', 'register @lint #3 - Codex as #3, its final screen in /rec/screens/a3.json', 'open for /lab: a shell'],
+		});
+	});
+
+	test('an agent\'s terminal is read, typed into, pressed keys in and registered by its process\'s id, or its name before it has one; a terminal no agent\'s is only read', async () => {
+		instantiationService.stub(ITerminalService, {
+			instances: [
+				windowTerminal('@lint #3 - Codex', 4242, undefined),
+				windowTerminal('ended', 4242, 1),
+				windowTerminal('@new #4 - Antigravity', undefined, undefined),
+				windowTerminal('@gone #5 - Codex', 77, 0),
+				windowTerminal('a shell', 5151, undefined, false),
+			]
+		});
+
+		const answers = {
+			read: await run('_facade.terminal.read', 4242, 20, '@lint #3 - Codex'),
+			readEnded: await run('_facade.terminal.read', 77, 50),
+			readByName: await run('_facade.terminal.read', null, 5, '@new #4 - Antigravity'),
+			readNone: await run('_facade.terminal.read', 99, 5),
+			typed: await run('_facade.terminal.type', 4242, 'yes', { enter: true, enterDelayMs: 250.4, queueTimeoutMs: 120000 }),
+			pressed: await run('_facade.terminal.keys', 4242, ['Down', 'Enter', 'y'], { queueTimeoutMs: null }),
+			typedIntoShell: await run('_facade.terminal.type', 5151, 'ls', { enter: true }),
+			pressedInShell: await run('_facade.terminal.keys', 5151, ['Enter'], {}),
+			registered: await run('_facade.terminal.register', null, { run: 4, finalScreen: URI.file('/rec/screens/a4.json') }, '@new #4 - Antigravity'),
+			registeredNone: await run('_facade.terminal.register', 99, { run: 9, finalScreen: URI.file('/rec/screens/a9.json') }),
+		};
+		const failures = [
+			await failureOf('_facade.terminal.read', 4242, 0),
+			await failureOf('_facade.terminal.read', 4242, 2001),
+			await failureOf('_facade.terminal.read', '4242', 5),
+			await failureOf('_facade.terminal.type', 4242, 42, {}),
+			await failureOf('_facade.terminal.type', 4242, 'yes', { enterDelayMs: -1 }),
+			await failureOf('_facade.terminal.keys', 4242, [], {}),
+			await failureOf('_facade.terminal.keys', 4242, ['F1'], {}),
+			await failureOf('_facade.terminal.keys', 4242, ['Enter'], { queueTimeoutMs: Number.POSITIVE_INFINITY }),
+			await failureOf('_facade.terminal.register', 4242, { run: 3 }),
+			await failureOf('_facade.terminal.register', 4242, { run: 3, finalScreen: '/rec/screens/a3.json' }),
+		];
+
+		assert.deepStrictEqual({ answers, failures, steps }, {
+			answers: {
+				read: { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined, exited: false },
+				readEnded: { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined, exited: true },
+				readByName: { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined, exited: false },
+				readNone: undefined,
+				typed: { outcome: 'applied', pasted: true, entered: true },
+				pressed: { outcome: 'applied', keysSent: 3 },
+				typedIntoShell: undefined,
+				pressedInShell: undefined,
+				registered: true,
+				registeredNone: false,
+			},
+			failures: [
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'string\'',
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'string[]\'',
+				'Unexpected type, expected \'string[]\'',
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'IAgentTerminalOptions\'',
+				'Unexpected type, expected \'IAgentTerminalOptions\'',
+			],
+			steps: [
+				'read 20 of @lint #3 - Codex',
+				'read 50 of @gone #5 - Codex',
+				'read 5 of @new #4 - Antigravity',
+				'type "yes" into @lint #3 - Codex {"enter":true,"enterDelayMs":250,"queueTimeoutMs":120000}',
+				'press Down Enter y in @lint #3 - Codex {}',
+				'register @new #4 - Antigravity as #4, its final screen in /rec/screens/a4.json',
+			],
+		});
 	});
 });
