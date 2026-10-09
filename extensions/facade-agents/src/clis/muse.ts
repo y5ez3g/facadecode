@@ -47,6 +47,7 @@ export const museCli: AgentCli = {
 			executable,
 			args: launchArgs(museCli, input.config, {
 				messagesDir: input.messagesDir,
+				screensDir: input.screensDir,
 				model: input.model,
 				effort: input.effort,
 				task: input.prompt ?? ''

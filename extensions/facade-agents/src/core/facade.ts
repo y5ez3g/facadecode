@@ -171,7 +171,7 @@ export class Facade implements Disposable {
 			dir: screensDir(this.table.dir),
 			timing: () => this.timing(),
 			cliOf: id => this.cliOf(id),
-			agentNamed: target => this.agentNamed(target),
+			agentNamed: (target, within) => this.agentNamed(target, within),
 			inReach: (caller, id) => this.mail.inReach(caller, id),
 			terminalOf: agent => this.terminalOf(agent),
 			log: message => this.log(message)
@@ -201,6 +201,7 @@ export class Facade implements Disposable {
 			agentNamed: (text, within) => this.agentNamed(text, within),
 			terminalOf: agent => this.terminalOf(agent),
 			endedAgent: id => this.endedAgent(id),
+			excerptOf: agent => this.screens.excerptOf(agent),
 			log: message => this.log(message)
 		});
 		this.disposables.push(this.launcher, this.mail, this.ports.terminals.onDidEnd((terminal, end) => this.terminalEnded(terminal, end)));

@@ -183,9 +183,10 @@ suite('Core: messages at random', () => {
 				} else {
 					// The window goes: reloaded, Facade turned off and on in it, or closed
 					const kind = random() < 0.5 ? 'reload' : random() < 0.6 ? 'off' : 'closed';
-					const before = structuredClone(world.table.state.mail);
 					const names = kind === 'closed' ? [] : running().map(agent => terminalOf(agent.id));
 					world.dispose(kind === 'off' ? 'facade' : 'window');
+					// As the window left it: a child's end still waiting for its last screen is told of as Facade goes
+					const before = structuredClone(world.table.state.mail);
 					if (kind !== 'off') {
 						session = `sim-${++loads}`;
 					}

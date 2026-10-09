@@ -15,6 +15,7 @@ import { ChatRooms, rootsOf, whoOf } from '../record/rooms';
 import { Doorbell, NEW_MESSAGE_MS, RING_GAP_MS } from './doorbell';
 import { FacadeError } from './errors';
 import { AgentSetup, CliCatalog, Disposable, EndedAgent, Ports, Timing } from './ports';
+import { excerptText } from './screens';
 
 /** A message's number, as a tool is given it: `#m42`, or `m42`. */
 const MESSAGE_NUMBER = /^#?m(?<id>\d+)$/i;
@@ -41,6 +42,8 @@ export interface MailContext {
 	terminalOf(agent: Agent): string;
 	/** The agent numbered `id` once it ended, as a notice about it shows it: where its last screen is; undefined while it runs. */
 	endedAgent(id: number): EndedAgent | undefined;
+	/** The last lines of an agent's screen - of its final screen once it ended, waited for a moment - or undefined where there are none. */
+	excerptOf(agent: Agent): Promise<{ readonly text: string } | undefined>;
 	log(message: string): void;
 }
 
@@ -131,6 +134,8 @@ export class Mail implements Disposable {
 	private readonly delays = new Map<number, ReturnType<typeof setTimeout>>();
 	/** The person's agents that ended unexpectedly, gathered for one notification: each agent's number and its line. */
 	private readonly ends: { readonly id: number; readonly line: string }[] = [];
+	/** Children whose creators are told of their ends once their last screens are kept, by number: each notice's first line. */
+	private readonly endsToTell = new Map<number, string>();
 	private endsTimer: ReturnType<typeof setTimeout> | undefined;
 	/** When Facade was turned on again in this window, where it was: no doorbell was due while it was off. */
 	private onAgainTime = 0;
@@ -152,6 +157,11 @@ export class Mail implements Disposable {
 	}
 
 	dispose(): void {
+		// Ends whose last screens are still awaited are told of now, without them: their notices outlive Facade
+		for (const [id, first] of [...this.endsToTell]) {
+			this.endsToTell.delete(id);
+			this.tellEnd(id, first, undefined, true);
+		}
 		this.disposed = true;
 		this.doorbell.dispose();
 		for (const timer of [...this.tasks.values(), ...this.delays.values()]) {
@@ -309,11 +319,49 @@ export class Mail implements Disposable {
 			if (agent.parent === undefined) {
 				this.gatherEnd(agent.id, l10n.t("@{0} #a{1} ended: {2}.", agent.name, agent.id, how));
 			} else if (isLive(this.context.table.get(agent.parent))) {
-				this.record({ from: FACADE, to: agent.parent, text: `${agentText(agent)} ended: ${how}. It takes no more messages.`, facade: 'ended', about: agent.id });
+				this.tellCreatorOfEnd(agent, how);
 			}
 		}
 		for (const message of unreadOf(this.context.table.state.mail, agent.id)) {
 			this.giveBack(message, agent, how, message.from !== FACADE && knownTo.includes(message.from ?? HUMAN));
+		}
+	}
+
+	/**
+	 * Tells an agent's creator that it ended, by a message of Facade's: how, then the last lines of its screen, which
+	 * the window keeps a moment after the end (AGENT-DEBUGGING.md D6) - or that none was kept.
+	 */
+	private tellCreatorOfEnd(agent: Agent, how: string): void {
+		const first = `${agentText(agent)} ended: ${how}. It takes no more messages.`;
+		this.endsToTell.set(agent.id, first);
+		void this.context.excerptOf(agent).catch(err => {
+			this.context.log(`The last lines of ${agentText(agent)}'s screen could not be read for its creator: ${messageOf(err)}`);
+			return undefined;
+		}).then(excerpt => {
+			// Told of already, as Facade stopped meanwhile
+			if (this.endsToTell.delete(agent.id)) {
+				this.tellEnd(agent.id, first, excerpt?.text);
+			}
+		});
+	}
+
+	/**
+	 * Records the notice of agent `id`'s end for its creator, while that runs: `first`, then the last lines of its screen
+	 * where it was kept - or, `stopping`, that Facade stopped before it read them: the window keeps the screen all the same.
+	 */
+	private tellEnd(id: number, first: string, excerpt: string | undefined, stopping = false): void {
+		const agent = this.context.table.get(id);
+		const creator = agent?.parent === undefined ? undefined : this.context.table.get(agent.parent);
+		if (!agent || !creator || !isLive(creator)) {
+			return;
+		}
+		const text = excerpt !== undefined ? `${first}\n${excerptText(id, excerpt)}`
+			: stopping ? `${first} Its last screen was not read before Facade stopped: read_screen #a${id} shows it once Facade is back.`
+				: `${first} Its last screen was not kept: read_screen #a${id} says why.`;
+		try {
+			this.record({ from: FACADE, to: creator.id, text, facade: 'ended', about: id });
+		} catch (err) {
+			this.context.log(`The creator of ${agentText(agent)} could not be told of its end: ${messageOf(err)}`);
 		}
 	}
 
@@ -630,7 +678,7 @@ export class Mail implements Disposable {
 			this.record({
 				from: FACADE,
 				to: agent.parent ?? HUMAN,
-				text: `${agentText(agent)} has not fetched its task #m${task} since it started${why ? `: ${why}` : ''}. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: its terminal shows that.`,
+				text: `${agentText(agent)} has not fetched its task #m${task} since it started${why ? `: ${why}` : ''}. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: ${whereToLook(id, agent.parent ?? HUMAN)}.`,
 				facade: 'taskNotFetched',
 				about: id
 			});
@@ -709,7 +757,7 @@ export class Mail implements Disposable {
 			this.record({
 				from: FACADE,
 				to: oldest.from ?? HUMAN,
-				text: `${agentText(agent)} has not fetched ${ids} in ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: its terminal shows that.`,
+				text: `${agentText(agent)} has not fetched ${ids} in ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: ${whereToLook(id, oldest.from ?? HUMAN)}.`,
 				facade: 'delayed',
 				about: id
 			});
@@ -794,6 +842,11 @@ export function agentText(agent: { readonly id: number; readonly name: string })
 	return `@${agent.name} #a${agent.id}`;
 }
 
+/** Where the one told of agent `id` sees what holds it up: an agent reads its screen with read_screen, the person has its terminal. */
+function whereToLook(id: number, told: Recipient | typeof FACADE): string {
+	return told === HUMAN ? 'its terminal shows that' : `read_screen #a${id} shows its screen`;
+}
+
 /** Whether `text` names the person: `@you`, or `@human`, as the other specs write them. */
 function isPerson(text: string): boolean {
 	const name = text.replace(/^@/, '').toLowerCase();
@@ -839,7 +892,7 @@ export function headingOf(message: FetchedMessage): string {
 		clockOf(message.time),
 		...(message.replyTo !== undefined ? [`re #m${message.replyTo}`] : []),
 		...(message.task ? ['task'] : []),
-		`${message.length.toLocaleString('en-US')} characters`,
+		`${message.length.toLocaleString('en-US')} ${message.length === 1 ? 'character' : 'characters'}`,
 		message.state
 	].join(' · ');
 }

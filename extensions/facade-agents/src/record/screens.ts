@@ -11,6 +11,12 @@ import { isJsonObject, isStringArray } from '../base/json';
 /** Where a workspace's record keeps its agents' screens. */
 const SCREENS_DIR = 'screens';
 
+/**
+ * The language of an agent's last screen in the editor: one of its own, whose color decorators are off - the editor
+ * would take an agent's number, as `#a27`, for a color and draw a swatch before it.
+ */
+export const SCREEN_LANGUAGE = 'facade-screen';
+
 /** A screen file of an agent's: `a7.json` for its final screen, `a7-<time>.txt` for a screen read while it ran. */
 const SCREEN_FILE = /^a(?<id>\d+)(?:\.json|-\d+(?:-\d+)?\.txt)$/;
 

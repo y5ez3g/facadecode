@@ -14,10 +14,11 @@ import { trustTarget } from '../clis/trust';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller, isLive } from '../record/events';
 import { Message } from '../record/messages';
+import { screensDir } from '../record/screens';
 import { FacadeError } from './errors';
 import { Injections } from './injections';
 import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
-import { MOST_LINES } from './screens';
+import { excerptText } from './screens';
 
 /**
  * How long Facade waits where the person sets nothing else: two minutes, for a new agent to come up,
@@ -123,6 +124,7 @@ export class Launcher implements Disposable {
 				skills: [],
 				runDir: this.context.table.runsDir,
 				messagesDir: this.context.table.messages.folder,
+				screensDir: screensDir(this.context.table.dir),
 				slug: 'check'
 			});
 			trustTarget(installed.cli, installed.config, { folder, repository: folder }, env);
@@ -165,6 +167,7 @@ export class Launcher implements Disposable {
 				skills: setup.skills(),
 				runDir: table.runsDir,
 				messagesDir: table.messages.folder,
+				screensDir: screensDir(table.dir),
 				slug: String(agent.id)
 			});
 			for (const file of spec.files) {
@@ -210,9 +213,7 @@ export class Launcher implements Disposable {
 	private async didNotStart(cli: AgentCli, agent: Agent, reason: string): Promise<FacadeError> {
 		const excerpt = await this.context.excerptOf(agent);
 		const message = `${cli.displayName} did not start as @${agent.name} #a${agent.id}: ${reason}`;
-		return new FacadeError('FAILED', excerpt
-			? `${message}\nThe last lines of its screen, as they were (read_screen #a${agent.id} gives up to ${MOST_LINES} of them):\n${excerpt.text}`
-			: message, { agent: agent.id, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
+		return new FacadeError('FAILED', excerpt ? `${message}\n${excerptText(agent.id, excerpt.text)}` : message, { agent: agent.id, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
 	}
 
 	/** A starting agent's MCP server said hello: it is running, and up. */

@@ -6,8 +6,11 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { screenAfter, screenText } from '../contract/readScreen';
 import { Contract } from '../contract/tools';
+import { timeOfDay } from '../contract/words';
 import { TerminalScreen } from '../core/ports';
+import { ScreenRead } from '../core/screens';
 import { Caller, PERSON } from '../record/events';
 import { finalScreenFile, screensDir } from '../record/screens';
 import { ToolResult } from '../transport/protocol';
@@ -119,6 +122,42 @@ suite('Contract: agents\' screens, typing and keys', () => {
 		});
 	});
 
+	test('a screen\'s first line says each case as it is: no terminal yet, a last screen\'s file that is none, a full-screen frame whose output came minutes ago, a read not timed, a last screen whose final frame is left out, the end of a line too long; an answer whose screen could not be read says why', () => {
+		const at = new Date(2026, 9, 8, 1, 2, 3).getTime();
+		const ended = { kind: 'exited' as const, reason: 'its CLI ended, with exit code 1', time: at };
+		const read: ScreenRead = { id: 2, name: 'worker', cli: 'arg', state: 'running', source: 'normal', requested: 50, selected: 2, older: false, text: 'a\nb', capturedAt: at };
+		const firstLines = [
+			screenText({ ...read, state: 'starting', source: 'none', empty: 'not_created', selected: 0, text: '' }, 'Arg Code'),
+			screenText({ ...read, state: 'exited', exit: ended, source: 'none', empty: 'unreadable', selected: 0, text: '' }, 'Arg Code'),
+			screenText({ ...read, source: 'alternate', lastOutput: at - 5 * 60_000 }, 'Arg Code'),
+			screenText({ ...read, capturedAt: undefined }, 'Arg Code'),
+			screenText({ ...read, state: 'exited', exit: ended, source: 'final', finalScreen: 'a2.json', parts: [{ kind: 'final', lines: 2, of: 2 }, { kind: 'frame', lines: 0, of: 30 }] }, 'Arg Code'),
+			screenText({ ...read, selected: 50, omitted: { lines: 49, chars: 9_000, partialFirstLine: true }, snapshot: 'a2-1.txt', text: 'the end of it' }, 'Arg Code'),
+			screenAfter({ id: 2, name: 'worker', effect: { outcome: 'applied', pasted: true, entered: true }, screenUnavailable: 'its terminal was not there' }, 'Arg Code')
+		].map(text => text.split('\n')[0]);
+		const heading = 'The lines, as they are - [[...]] marks inverse video, {{...}} dim text:';
+
+		assert.deepStrictEqual(firstLines, [
+			'@worker #a2 (Arg Code), starting. Nothing to read: it has no terminal yet: it is still starting.',
+			`@worker #a2 (Arg Code), ended at ${timeOfDay(at)} (exited: its CLI ended, with exit code 1). Nothing to read: the file of its last screen could not be read: it is not one.`,
+			`@worker #a2 (Arg Code), running. A full-screen program's frame on its screen at ${timeOfDay(at)}, which last showed new output 5 minutes ago: all 2 lines it has. ${heading}`,
+			`@worker #a2 (Arg Code), running. Its screen at this moment: all 2 lines it has. ${heading}`,
+			`@worker #a2 (Arg Code), ended at ${timeOfDay(at)} (exited: its CLI ended, with exit code 1). Its last screen, kept as its terminal ended: all 2 lines of it. The file also has the last full-screen frame it drew before it left it, 30 lines. All of it is in a2.json. ${heading}`,
+			`@worker #a2 (Arg Code), running. Its screen at ${timeOfDay(at)}: its bottom 50 lines. Past the 8000 characters a result holds, here are its last 1 line, the first of them only the end of it; the 9000 characters before them are in a2-1.txt, with the rest: read that file for them. ${heading}`,
+			'Its screen could not be read 2 seconds after: its terminal was not there'
+		]);
+	});
+
+	test('an answer to typing or to keys has the bottom 20 lines of the screen two seconds on', async () => {
+		workerShows(Array.from({ length: 30 }, (_, i) => `line ${i + 1}`));
+		const typed = await call(lead, 'type_text', { agent: '#2', text: 'go' });
+		const pressed = await call(lead, 'press_keys', { agent: '#2', keys: ['Enter'] });
+		const bottom = (result: ToolResult) => result.text.split('\n').filter(line => line.startsWith('line '));
+		const last20 = Array.from({ length: 20 }, (_, i) => `line ${i + 11}`);
+
+		assert.deepStrictEqual({ typed: bottom(typed), pressed: bottom(pressed) }, { typed: last20, pressed: last20 });
+	});
+
 	test('lines is a whole number from 1 to 2000: anything else is refused, and nothing is read', async () => {
 		workerShows(['one', 'two']);
 		const texts = await Promise.all([0, 2001, 1.5, '50', -1].map(async lines => (await call(lead, 'read_screen', { agent: '#2', lines })).text));
@@ -138,6 +177,8 @@ suite('Contract: agents\' screens, typing and keys', () => {
 			{ agent: '#2', text: `line${String.fromCharCode(0x2028)}separator` },
 			{ agent: '#2', text: 'x'.repeat(2_001) },
 			{ agent: '#2', text: '' },
+			{ agent: '#2' },
+			{ agent: '#2', text: 5 },
 			{ agent: '#2', text: 'ok', enter: 'yes' },
 			{ agent: '#2', text: 'ok', lines: 3 }
 		].map(async args => (await call(lead, 'type_text', args)).text));
@@ -148,11 +189,28 @@ suite('Contract: agents\' screens, typing and keys', () => {
 				...Array(4).fill('text has a line break, Escape, a tab or another control character in it: type one line with type_text, and press Enter, Escape, Tab and the like with press_keys. Nothing was typed.'),
 				'text is 2001 characters, past the 2000 type_text types: give more in a file, and type its path.',
 				'text must not be empty.',
+				'text is required.',
+				'text must be a string.',
 				'enter must be true or false.',
 				'type_text takes agent, text, enter?; not lines.'
 			],
 			typed: 'Typed 16 characters into @worker #a2\'s terminal, as one paste, and pressed Enter. Its screen 2 seconds after:\n@worker #a2 (Arg Code), running. Its screen: nothing on it yet.',
 			terminal: [`@worker #2 · Arg Code: type ${JSON.stringify(`  ${String.fromCharCode(0x4e2d)} kept as is  `)}, Enter after 300 ms, waiting 120000 ms at most`]
+		});
+	});
+
+	test('one character typed and one key pressed are said as one, in the answer and in the log', async () => {
+		const typed = await call(lead, 'type_text', { agent: '#2', text: 'y' });
+		await call(lead, 'press_keys', { agent: '#2', keys: ['Enter'] });
+
+		assert.deepStrictEqual({ typed: typed.text.split('\n')[0], logs: world.logs.filter(line => line.includes('@worker #a2\'s terminal')) }, {
+			typed: 'Typed 1 character into @worker #a2\'s terminal, as one paste, without Enter. Its screen 2 seconds after:',
+			logs: [
+				'@lead #a1 typing 1 character, "y" into @worker #a2\'s terminal.',
+				'@lead #a1 typing 1 character, "y" into @worker #a2\'s terminal: the text went in, without Enter.',
+				'@lead #a1 pressing Enter in @worker #a2\'s terminal.',
+				'@lead #a1 pressing Enter in @worker #a2\'s terminal: the key went in.'
+			]
 		});
 	});
 
@@ -169,6 +227,17 @@ suite('Contract: agents\' screens, typing and keys', () => {
 			none: 'keys has 0: press 1 to 50 keys at a time.',
 			tooMany: 'keys has 51: press 1 to 50 keys at a time.',
 			terminal: ['@worker #2 · Arg Code: keys Down Ctrl+C Ctrl+A Escape Space y, waiting 120000 ms at most']
+		});
+	});
+
+	test('keys given as one string, not a list, are a list of one, as every list argument of the tools: that key is pressed; one that names no key presses nothing', async () => {
+		const one = await call(lead, 'press_keys', { agent: '#2', keys: 'Enter' });
+		const unknown = await call(lead, 'press_keys', { agent: '#2', keys: 'abc' });
+
+		assert.deepStrictEqual({ one: one.text.split('\n')[0], unknown: [unknown.isError, (unknown.data as { code: string }).code], terminal: world.terminals.typed.filter(line => line.startsWith('@worker')) }, {
+			one: 'Pressed Enter in @worker #a2\'s terminal. Its screen 2 seconds after:',
+			unknown: [true, 'INVALID'],
+			terminal: ['@worker #2 · Arg Code: keys Enter, waiting 120000 ms at most']
 		});
 	});
 

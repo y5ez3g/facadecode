@@ -8,9 +8,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { messageOf } from '../base/errors';
 import { FacadeError } from '../core/errors';
-import { Fetched } from '../core/mail';
+import { Fetched, headingOf } from '../core/mail';
 import { Caller, PERSON } from '../record/events';
 import { HUMAN, TEXT_IN_LINE } from '../record/messages';
+import { finalScreenFile, screensDir } from '../record/screens';
 import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld } from './fakes';
 import { tempDir } from './util';
@@ -155,8 +156,8 @@ suite('Core: messages', () => {
 			const refused = outcome(() => world.facade.mail.send(lead, ['@lint', '#a4'], 'Again?', undefined));
 
 			assert.deepStrictEqual({ sent, refused, unchanged: world.table.state.mail.lastMessage === last }, {
-				// #m4 told the lead that @gone ended
-				sent: [{ id: 5, to: '@lint #a2', toPerson: false }, { id: 6, to: '@docs #a3', toPerson: false }, { id: 7, to: '@you', toPerson: true }],
+				// The lead is told that @gone ended a moment later, its last screen waited for
+				sent: [{ id: 4, to: '@lint #a2', toPerson: false }, { id: 5, to: '@docs #a3', toPerson: false }, { id: 6, to: '@you', toPerson: true }],
 				refused: 'REFUSED: @gone #a4 has ended (exited: its CLI ended). Nothing was sent.',
 				unchanged: true
 			});
@@ -261,6 +262,7 @@ suite('Core: messages', () => {
 			world.terminals.end(terminalOf(3), { byThePerson: true });
 			world.terminals.end(terminalOf(4), { exitCode: 0, byThePerson: false });
 			await world.facade.kill(lead, '@stopped');
+			await sleep(1_000);
 			const fetched = await world.fetched(1);
 			await world.spawnUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'solo', folder: lab });
 			await world.spawnUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'boom', folder: lab });
@@ -270,11 +272,77 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ told: shown(fetched), person: world.person.notified.filter(each => each.key.startsWith('ended:')).map(each => each.text) }, {
 				told: [
-					'#m5 new from Facade: @crash #a2 ended: it exited, with exit code 1. It takes no more messages.',
-					'#m6 new from Facade: @closed #a3 ended: stopped by @you. It takes no more messages.',
-					'#m7 new from Facade: @done #a4 ended: it exited, with exit code 0. It takes no more messages.'
+					'#m5 new from Facade: @crash #a2 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.',
+					'#m6 new from Facade: @closed #a3 ended: stopped by @you. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.',
+					'#m7 new from Facade: @done #a4 ended: it exited, with exit code 0. It takes no more messages. Its last screen was not kept: read_screen #a4 says why.'
 				],
 				person: ['@boom #a7 ended: it exited, with exit code 2.']
+			});
+		});
+
+		test('a child\'s end told of to its creator brings the last lines of the screen its terminal left - the window keeps it a moment after the end - and how to read more of it; with none kept, it says so', async () => {
+			world.timing.finalScreenWaitMs = 2_000;
+			await team('crash', 'quiet');
+			world.terminals.end(terminalOf(2), { exitCode: 1, byThePerson: false });
+			world.terminals.end(terminalOf(3), { exitCode: 0, byThePerson: false });
+			// The window writes the final screen as the terminal goes, a moment after Facade hears of its end
+			await sleep(500);
+			const early = facadeNotices(1).length;
+			fs.mkdirSync(screensDir(world.table.dir), { recursive: true });
+			fs.writeFileSync(finalScreenFile(screensDir(world.table.dir), 2), JSON.stringify({ final: { buffer: 'normal', lines: ['Working on it', 'Error: out of memory'] } }));
+			await sleep(3_000);
+			const fetched = await world.fetched(1);
+
+			assert.deepStrictEqual({ early, told: texts(fetched) }, {
+				early: 0,
+				told: [
+					'@crash #a2 ended: it exited, with exit code 1. It takes no more messages.\nThe last lines of its screen, as they were (read_screen #a2 gives up to 2000 of them):\nWorking on it\nError: out of memory',
+					'@quiet #a3 ended: it exited, with exit code 0. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.'
+				]
+			});
+		});
+
+		test('a child that ends as Facade is turned off, before its last screen is kept, is told of to its creator all the same, without the screen', async () => {
+			world.timing.finalScreenWaitMs = 2_000;
+			const { lead } = await team('late');
+			world.terminals.end(terminalOf(2), { exitCode: 1, byThePerson: false });
+			world.dispose('facade');
+			const ledger = fs.readFileSync(path.join(dir, 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+
+			assert.deepStrictEqual(ledger.filter(event => event.type === 'message.sent' && event.facade === 'ended').map(event => ({ to: event.to, about: event.about, text: event.text })), [
+				{ to: lead.id, about: 2, text: '@late #a2 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not read before Facade stopped: read_screen #a2 shows it once Facade is back.' }
+			]);
+		});
+
+		test('with no wait set, as the window sets none, a child\'s last screen is waited for 2 seconds after its end, no more', async () => {
+			delete (world.timing as { finalScreenWaitMs?: number }).finalScreenWaitMs;
+			await team('soon', 'late');
+			world.terminals.end(terminalOf(2), { exitCode: 1, byThePerson: false });
+			world.terminals.end(terminalOf(3), { exitCode: 1, byThePerson: false });
+			fs.mkdirSync(screensDir(world.table.dir), { recursive: true });
+			await sleep(1_500);
+			fs.writeFileSync(finalScreenFile(screensDir(world.table.dir), 2), JSON.stringify({ final: { buffer: 'normal', lines: ['in time'] } }));
+			await sleep(1_000);
+			fs.writeFileSync(finalScreenFile(screensDir(world.table.dir), 3), JSON.stringify({ final: { buffer: 'normal', lines: ['too late'] } }));
+			await sleep(2_000);
+			const fetched = await world.fetched(1);
+
+			assert.deepStrictEqual(texts(fetched).map(text => text.split('\n').pop()), [
+				'in time',
+				'@late #a3 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.'
+			]);
+		});
+
+		test('a child\'s end whose last screen could not be read is told of to its creator all the same, saying where to read why', async () => {
+			await team('crash');
+			const screens = (world.facade as unknown as { readonly screens: { excerptOf(agent: unknown): Promise<unknown> } }).screens;
+			screens.excerptOf = () => Promise.reject(new Error('EIO: i/o error, read'));
+			world.terminals.end(terminalOf(2), { exitCode: 1, byThePerson: false });
+			await sleep(1_000);
+
+			assert.deepStrictEqual({ told: facadeNotices(1), logged: world.logs.filter(line => line.includes('could not be read for its creator')) }, {
+				told: ['@crash #a2 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.'],
+				logged: ['The last lines of @crash #a2\'s screen could not be read for its creator: EIO: i/o error, read']
 			});
 		});
 
@@ -403,6 +471,27 @@ suite('Core: messages', () => {
 			});
 		});
 
+		test('a fetch whose delivery Facade fails to record gives its messages all the same, and again next time, marked: none is lost', async () => {
+			const { lead } = await team('lint');
+			world.facade.mail.send(lead, ['@lint'], 'One.', undefined);
+			const messages = world.table.messages;
+			const delivered = messages.delivered.bind(messages);
+			messages.delivered = () => {
+				messages.delivered = delivered;
+				throw new Error('EPERM: operation not permitted');
+			};
+			const first = await world.fetched(2);
+			const again = await world.fetched(2);
+			const after = await world.fetched(2);
+
+			assert.deepStrictEqual({ first: shown(first), again: shown(again), after: shown(after), logged: world.logs.filter(line => line.includes('has its messages could not be recorded')) }, {
+				first: ['#m2 new from @lead #a1: One.'],
+				again: ['#m2 given before (before) from @lead #a1: One.'],
+				after: [],
+				logged: ['That #a2 has its messages could not be recorded: EPERM: operation not permitted. They are given again, marked.']
+			});
+		});
+
 		test('a message from before the window last started is in the chat rooms only: fetched by its number, it is refused, saying which room has it', async () => {
 			const { lead } = await team('lint');
 			world.facade.mail.send(lead, ['@lint'], 'Old.', undefined);
@@ -418,6 +507,39 @@ suite('Core: messages', () => {
 				none: 'No message is #m9: the last one is #m2.'
 			});
 		});
+
+		test('a number before any message was sent is refused, saying so; one from before the window last started whose chat rooms were deleted is gone', async () => {
+			await team();
+			const none = await world.fetched(1, { ids: ['#m1'] }).then(() => 'fetched', err => messageOf(err));
+			world.facade.mail.send(callerOf(world.agent(1)), ['@you'], 'Old.', undefined);
+			world.facade.mail.deleteRooms();
+			world.dispose();
+			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			await world.facade.recover();
+			await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: lab });
+			const gone = await world.fetched(2, { ids: ['#m1'] }).then(() => 'fetched', err => messageOf(err));
+
+			assert.deepStrictEqual({ none, gone }, {
+				none: 'No message is #m1: none has been sent.',
+				gone: '#m1 is from before this window last started, and the chat rooms with it were deleted: it is gone.'
+			});
+		});
+
+		test('a reply is fetched under a heading naming the message it answers; the person replies only to a message sent to them', async () => {
+			const { lead, children: [lint] } = await team('lint');
+			const [ask] = world.facade.mail.send(lead, ['@lint'], 'Report?', undefined);
+			world.facade.mail.send(lint, ['@lead'], 'Done.', `#m${ask.id}`);
+			const [toYou] = world.facade.mail.send(lint, ['@you'], 'All done.', undefined);
+			const fetched = await world.fetched(1);
+			const notYours = outcome(() => world.facade.mail.send(PERSON, ['@lint'], 'Thanks.', `#m${ask.id}`));
+			const yours = outcome(() => world.facade.mail.send(PERSON, ['@lint'], 'Thanks.', `#m${toYou.id}`).map(message => message.id));
+
+			assert.deepStrictEqual({ answers: fetched.messages.map(message => [message.id, message.replyTo, headingOf(message).split(' · ').filter(part => part.startsWith('re '))]), notYours, yours }, {
+				answers: [[3, 2, ['re #m2']]],
+				notYours: 'INVALID: #m2 was sent to @lint #a2, not to you: reply_to names a message sent to you.',
+				yours: [5]
+			});
+		});
 	});
 
 	suite('the doorbell', () => {
@@ -431,6 +553,35 @@ suite('Core: messages', () => {
 			await sleep(2_000);
 
 			assert.deepStrictEqual(ringsOf(2), ['[facade] 7 unread messages: #m2 from @lead #a1, #m3 from @lead #a1, #m4 from @lead #a1, #m5 from @lead #a1, #m6 from @lead #a1, and 2 more. Call read_messages.']);
+		});
+
+		test('a doorbell waits while Facade\'s own input goes into its terminal, then names what is unread as it goes in; Facade turned off while it waits, it is never typed', async () => {
+			const { lead } = await team('lint');
+			world.terminals.inputs.set(terminalOf(2), { pending: false, busy: true });
+			world.facade.mail.send(lead, ['@lint'], 'First.', undefined);
+			await sleep(3_000);
+			const whileBusy = ringsOf(2).length;
+			world.facade.mail.send(lead, ['@lint'], 'Second.', undefined);
+			await world.fetched(2, { ids: ['#m2'] });
+			world.terminals.inputs.set(terminalOf(2), { pending: false, busy: false });
+			await sleep(2_000);
+			const rung = ringsOf(2);
+			const mailbox = world.facade.mail.mailboxOf(2, lead);
+			world.terminals.inputs.set(terminalOf(2), { pending: false, busy: true });
+			await world.fetched(2);
+			await sleep(61_000);
+			world.facade.mail.send(lead, ['@lint'], 'Third.', undefined);
+			await sleep(3_000);
+			world.dispose('facade');
+			world.terminals.inputs.set(terminalOf(2), { pending: false, busy: false });
+			await sleep(5_000);
+
+			assert.deepStrictEqual({ whileBusy, rung, unread: mailbox?.unread.map(message => message.id), after: ringsOf(2).length }, {
+				whileBusy: 0,
+				rung: ['[facade] 1 unread message: #m3 from @lead #a1. Call read_messages.'],
+				unread: [3],
+				after: 1
+			});
 		});
 
 		test('a message not fetched rings again a minute after, then 2, 4 and 8 minutes after the ring before, then every 15; it is never returned while its recipient runs', async () => {
@@ -532,6 +683,18 @@ suite('Core: messages', () => {
 			});
 		});
 
+		test('a window that cannot tell what the person typed does not hold the doorbell back: it rings, and the log says why it did not wait', async () => {
+			const { lead } = await team('lint');
+			world.terminals.input = () => Promise.reject(new Error('the window did not answer'));
+			world.facade.mail.send(lead, ['@lint'], 'Hello?', undefined);
+			await sleep(3_000);
+
+			assert.deepStrictEqual({ rung: ringsOf(2), logged: world.logs.filter(line => line.startsWith('What the person typed into')) }, {
+				rung: ['[facade] 1 unread message: #m2 from @lead #a1. Call read_messages.'],
+				logged: ['What the person typed into @lint #2 · Arg Code could not be told: the window did not answer']
+			});
+		});
+
 		test('a doorbell that could not be typed - its terminal away for a moment - is tried again a minute on', async () => {
 			const { lead } = await team('lint');
 			world.terminals.running.delete(terminalOf(2));
@@ -610,7 +773,7 @@ suite('Core: messages', () => {
 				person: world.person.notified.map(each => each.text),
 				still: [world.facade.mail.mailboxOf(child.id, lead)?.unread.map(message => message.id), world.facade.mail.mailboxOf(own.id, PERSON)?.unread.map(message => message.id)]
 			}, {
-				told: ['#m3 new from Facade: @stuck #a2 has not fetched its task #m1 since it started. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: its terminal shows that.'],
+				told: ['#m3 new from Facade: @stuck #a2 has not fetched its task #m1 since it started. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: read_screen #a2 shows its screen.'],
 				again: 0,
 				person: ['Facade: @mine #a3 has not fetched its task #m2 since it started. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: its terminal shows that.'],
 				still: [[1], [2]]
@@ -619,7 +782,9 @@ suite('Core: messages', () => {
 
 		test('messages unfetched for the timeout from their first doorbell are told of once to the sender of the oldest - an agent, or the person - with what holds them up where Facade knows; told again only once the mailbox was emptied', async () => {
 			world.timing.startTimeoutMs = 30_000;
-			const tail = 'The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: its terminal shows that.';
+			// An agent told of it reads the screen with read_screen; the person sees the terminal
+			const tail = 'The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: read_screen #a2 shows its screen.';
+			const personsTail = 'The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: its terminal shows that.';
 			const { lead } = await team('lint', 'docs');
 			world.facade.mail.send(lead, ['@lint'], 'Report?', undefined);
 			await sleep(31_000);
@@ -647,7 +812,40 @@ suite('Core: messages', () => {
 				told: [`@lint #a2 has not fetched #m3 in 32 seconds. ${tail}`],
 				once: 1,
 				again: [`@lint #a2 has not fetched #m7 in 32 seconds. ${tail}`],
-				person: [`Facade: ${`@docs #a3 has not fetched #m6 in 32 seconds: its doorbell waits while the person types in its terminal. ${tail}`.slice(0, 200)}...`]
+				person: [`Facade: ${`@docs #a3 has not fetched #m6 in 32 seconds: its doorbell waits while the person types in its terminal. ${personsTail}`.slice(0, 200)}...`]
+			});
+		});
+
+		test('what holds a doorbell up is said too: Facade\'s own input going into the terminal, which it waits behind, or a terminal away for a moment, tried again each minute', async () => {
+			world.timing.startTimeoutMs = 30_000;
+			const tail = (id: number) => `The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: read_screen #a${id} shows its screen.`;
+			const { lead } = await team('lint', 'docs');
+			// Facade types into @lint's terminal all along; @docs's terminal is away
+			world.terminals.inputs.set(terminalOf(2), { pending: false, busy: true });
+			world.terminals.running.delete(terminalOf(3));
+			world.facade.mail.send(lead, ['@lint'], 'Report?', undefined);
+			world.facade.mail.send(lead, ['@docs'], 'Report?', undefined);
+			await sleep(33_000);
+
+			assert.deepStrictEqual(facadeNotices(1).sort(), [
+				`@docs #a3 has not fetched #m4 in 32 seconds: its doorbell could not be typed into its terminal, and is tried again each minute. ${tail(3)}`,
+				`@lint #a2 has not fetched #m3 in 32 seconds: its doorbell waits behind what Facade types into its terminal. ${tail(2)}`
+			]);
+		});
+
+		test('a mailbox is summed up by its ten oldest unread messages and a count of the rest: in ps, and when they wait unfetched', async () => {
+			world.timing.startTimeoutMs = 30_000;
+			const { lead } = await team('lint');
+			for (let i = 1; i <= 12; i++) {
+				world.facade.mail.send(lead, ['@lint'], `Message ${i}.`, undefined);
+			}
+			await sleep(33_000);
+			const mailbox = world.facade.mail.mailboxOf(2, lead);
+
+			assert.deepStrictEqual({ listed: mailbox?.unread.map(message => message.id), more: mailbox?.more, told: facadeNotices(1).map(text => text.split(' in ')[0]) }, {
+				listed: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+				more: 2,
+				told: ['@lint #a2 has not fetched #m2, #m3, #m4, #m5, #m6, #m7, #m8, #m9, #m10, #m11, and 2 more']
 			});
 		});
 
@@ -686,14 +884,16 @@ suite('Core: messages', () => {
 			world.facade.mail.send(lead, ['@lint'], 'First.', undefined);
 			world.facade.mail.send(lead, ['@lint'], 'Second.', undefined);
 			world.terminals.end(terminalOf(2), { byThePerson: true });
+			// The notice of its end waits a moment for its last screen; what it did not fetch goes back at once
+			await sleep(1_000);
 			const back = await world.fetched(1);
 			const original = await world.fetched(1, { ids: ['#m2'] });
 
 			assert.deepStrictEqual({ back: texts(back), original: shown(original), lint: lint.name }, {
 				back: [
-					'@lint #a2 ended: stopped by @you. It takes no more messages.',
 					'#m2 was not fetched by @lint #a2 before it ended (stopped by @you).\nOriginal message:\nFirst.',
-					'#m3 was not fetched by @lint #a2 before it ended (stopped by @you).\nOriginal message:\nSecond.'
+					'#m3 was not fetched by @lint #a2 before it ended (stopped by @you).\nOriginal message:\nSecond.',
+					'@lint #a2 ended: stopped by @you. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.'
 				],
 				original: ['#m2 returned from @lead #a1 to @lint #a2: First.'],
 				lint: 'lint'
@@ -706,6 +906,7 @@ suite('Core: messages', () => {
 			world.facade.mail.send(PERSON, ['@docs'], 'From you.', undefined);
 			world.terminals.end(terminalOf(2), { exitCode: 0, byThePerson: false });
 			world.terminals.end(terminalOf(3), { exitCode: 0, byThePerson: false });
+			await sleep(1_000);
 			const room = fs.readFileSync(path.join(dir, 'rooms', 'lead-a1.md'), 'utf8');
 
 			assert.deepStrictEqual({
@@ -849,8 +1050,8 @@ suite('Core: messages', () => {
 			assert.deepStrictEqual({ lint: ringsOf(2).length, back: texts(back).map(text => text.split('\n')[0]) }, {
 				lint: 1,
 				back: [
-					'@docs #a3 ended: it was lost: its terminal was gone when Facade came back. It takes no more messages.',
-					'#m4 was not fetched by @docs #a3 before it ended (it was lost: its terminal was gone when Facade came back).'
+					'#m4 was not fetched by @docs #a3 before it ended (it was lost: its terminal was gone when Facade came back).',
+					'@docs #a3 ended: it was lost: its terminal was gone when Facade came back. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.'
 				]
 			});
 		});

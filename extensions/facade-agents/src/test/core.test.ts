@@ -330,7 +330,7 @@ suite('Core: spawn, step by step', () => {
 		assert.deepStrictEqual({ first: [first.args.slice(6, 10), first.env], second: [second.args.slice(6, 9), second.env], inArguments, inTrust, made: world.git.steps, slow: await slow }, {
 			first: [['--model', 'large', '--effort', 'high'], { ARG_QUIET: '1' }],
 			second: [['--model', 'huge', '--verbose'], { ARG_COLOR: 'never' }],
-			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${messagesDir}, ${model}, ${effort}, ${task}.',
+			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${messagesDir}, ${screensDir}, ${model}, ${effort}, ${task}.',
 			inTrust: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.orchestration.arg.launch.trust.file has ${nowhere}, for which Facade has no value: it has ${home}, ${argHome}, ${repository}.',
 			made: [],
 			slow: 'FAILED: Arg Code did not start as @main #a3: it did not come up within 5 seconds: its MCP server never said hello to Facade. Its CLI may have been waiting for an answer in its terminal, which was closed with it: its last lines show where it stopped'
@@ -521,6 +521,28 @@ suite('Core: exits', () => {
 			told: ['@lead #a1 ended, and its children are yours now: @a #a2, @b #a3. (@a #2 · Arg Code)']
 		});
 	});
+
+	test('an agent that ends before its child is even started - git still asked for its worktree - leaves the child to the person all the same, who is told as it starts', async () => {
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', prompt: 'Lead.', name: 'lead', folder: lab });
+		const git = new DeferredPromise<void>();
+		world.git.hold = git.p;
+		const coming = world.facade.spawn(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', prompt: 'Kid.', name: 'kid', worktree: 'main' });
+		await sleep(1_000);
+		world.terminals.end('@lead #1 · Arg Code', { exitCode: 0, byThePerson: false });
+		await sleep(1_000);
+		const toldBefore = [...world.person.told];
+		git.complete();
+		await until(() => world.terminals.launched.length === 2);
+		world.hello(2);
+		const spawned = await settled(coming);
+
+		assert.deepStrictEqual({ spawned: spawned.id, agents: agents(world), toldBefore, told: world.person.told.slice(toldBefore.length) }, {
+			spawned: 2,
+			agents: ['#1 @lead parent the person exited: its CLI ended', '#2 @kid parent the person running'],
+			toldBefore: [],
+			told: ['@lead #a1 ended while it started @kid #a2, which is yours now. (@kid #2 · Arg Code)']
+		});
+	});
 });
 
 suite('Core: after a reload', () => {
@@ -606,8 +628,8 @@ suite('Core: after a reload', () => {
 		}, {
 			agents: ['#1 @main parent the person running', `#2 @slow parent #1 failed: ${NO_HELLO}`, `#3 @quiet parent the person failed: ${NO_HELLO}`],
 			creator: [
-				`@slow #a2 ended: it did not start: ${NO_HELLO}. It takes no more messages.`,
-				`#m2 was not fetched by @slow #a2 before it ended (it did not start: ${NO_HELLO}).\nOriginal message:\nSlow.`
+				`#m2 was not fetched by @slow #a2 before it ended (it did not start: ${NO_HELLO}).\nOriginal message:\nSlow.`,
+				`@slow #a2 ended: it did not start: ${NO_HELLO}. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.`
 			],
 			person: [`@quiet #a3 ended: it did not start: ${NO_HELLO}.`],
 			told: []

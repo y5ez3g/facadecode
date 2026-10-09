@@ -10,7 +10,7 @@ import { FacadeError } from '../core/errors';
 import { keyOf } from '../core/keys';
 import { TerminalScreen } from '../core/ports';
 import { PERSON } from '../record/events';
-import { finalScreenFile, screensDir } from '../record/screens';
+import { finalScreenFile, SCREEN_LANGUAGE, screensDir } from '../record/screens';
 import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld } from './fakes';
 import { outcomeOf, tempDir } from './util';
@@ -124,6 +124,32 @@ suite('Core: agents\' screens', () => {
 		});
 	});
 
+	test('with YOLO off, a name two trees have is the one of the caller\'s own tree, as send_message takes it; a name only another tree has is out of the caller\'s reach', async () => {
+		world.settings.arg = { launch: { arguments: { fullAccess: null } } };
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Lead.', folder: lab, name: 'lead' });
+		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Twin.', name: 'twin' });
+		await world.spawnUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Other.', folder: lab, name: 'other' });
+		await world.spawnUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Twin.', name: 'twin' });
+		await world.spawnUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Far.', name: 'far' });
+		shows(2, ['the lead\'s twin']);
+		shows(4, ['the other\'s twin']);
+		const lead = callerOf(world.agent(1));
+
+		assert.deepStrictEqual({
+			read: (await world.facade.screens.read(lead, '@twin')).id,
+			typed: (await settled(world.facade.screens.type(lead, '@twin', 'hi', false))).id,
+			pressed: (await settled(world.facade.screens.press(lead, '@twin', ['Enter']))).id,
+			sent: world.facade.mail.send(lead, ['@twin'], 'Hi.', undefined).map(each => each.to),
+			far: await outcomeOf(world.facade.screens.read(lead, '@far'))
+		}, {
+			read: 2,
+			typed: 2,
+			pressed: 2,
+			sent: ['@twin #a2'],
+			far: 'REFUSED: @far #a5 is outside your tree: you were started with YOLO off, so you reach only the agents of your own tree - the agent the person started it from and every agent started under it, those that ended too.'
+		});
+	});
+
 	test('an agent is named as every Facade tool names one: by number, or by a name only one running agent has; a name only ended agents had gives their numbers', async () => {
 		await twoTrees();
 		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
@@ -158,6 +184,27 @@ suite('Core: agents\' screens', () => {
 			empty: ['normal', 'no_text', ''],
 			past: { omitted: { lines: 20, chars: 2_000, partialFirstLine: false }, first: '020 ', length: 7_999, inScreens: true, snapshot: true },
 			oneLine: { omitted: { lines: 1, chars: 1_006, partialFirstLine: true }, text: true }
+		});
+	});
+
+	test('a line too long to give whole, with lines below it - the blank row the cursor is on, a prompt: its end fills what they leave, said to be partial; a line that could fit whole is left out whole', async () => {
+		await twoTrees();
+		const lead = callerOf(world.agent(1));
+		shows(2, ['short', 'y'.repeat(9_000), '']);
+		const cursorBelow = await world.facade.screens.read(lead, '#2');
+		shows(2, ['short', 'y'.repeat(9_000), 'tail']);
+		const promptBelow = await world.facade.screens.read(lead, '#2');
+		shows(2, ['short', 'y'.repeat(7_000), 'z'.repeat(1_500)]);
+		const fitsWhole = await world.facade.screens.read(lead, '#2');
+
+		assert.deepStrictEqual({
+			cursorBelow: { omitted: cursorBelow.omitted, text: cursorBelow.text === `${'y'.repeat(7_999)}\n` },
+			promptBelow: { omitted: promptBelow.omitted, text: promptBelow.text === `${'y'.repeat(7_995)}\ntail` },
+			fitsWhole: { omitted: fitsWhole.omitted, text: fitsWhole.text === 'z'.repeat(1_500) }
+		}, {
+			cursorBelow: { omitted: { lines: 1, chars: 1_007, partialFirstLine: true }, text: true },
+			promptBelow: { omitted: { lines: 1, chars: 1_011, partialFirstLine: true }, text: true },
+			fitsWhole: { omitted: { lines: 2, chars: 7_007, partialFirstLine: false }, text: true }
 		});
 	});
 
@@ -367,5 +414,17 @@ suite('Core: agents\' screens', () => {
 			['enter', 'ESC', 'ctrl + c', '^z', 'Shift+Tab', 'page up', 'ArrowDown', 'return', ' ', 'y', 'Y', '1', '?', String.fromCharCode(0x4e2d), 'F1', 'ctrl+1', 'yes', '', '\t', '\x1b', String.fromCharCode(0x200b)].map(keyOf),
 			['Enter', 'Escape', 'Ctrl+C', 'Ctrl+Z', 'Shift+Tab', 'PageUp', 'Down', 'Enter', 'Space', 'y', 'Y', '1', '?', String.fromCharCode(0x4e2d), undefined, undefined, undefined, undefined, undefined, undefined, undefined]
 		);
+	});
+});
+
+suite('Screens: a last screen in the editor', () => {
+
+	test('a last screen opens in a language of its own, whose color decorators are off: an agent\'s number, as #a27, is drawn as it is, not as a color', () => {
+		const { contributes } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+
+		assert.deepStrictEqual({
+			language: (contributes.languages ?? []).some((language: { id: string }) => language.id === SCREEN_LANGUAGE),
+			colorDecorators: contributes.configurationDefaults?.[`[${SCREEN_LANGUAGE}]`]?.['editor.colorDecorators']
+		}, { language: true, colorDecorators: false });
 	});
 });

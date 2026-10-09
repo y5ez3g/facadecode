@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { EndedAgent } from '../core/ports';
-import { FinalScreen, readFinalScreen } from '../record/screens';
+import { FinalScreen, readFinalScreen, SCREEN_LANGUAGE } from '../record/screens';
 
 /** The scheme of an agent's last screen, as an editor shows it. */
 const SCREEN_SCHEME = 'facade-screen';
@@ -29,7 +29,8 @@ export class ScreenDocuments implements vscode.TextDocumentContentProvider {
 	async open(agent: EndedAgent): Promise<void> {
 		const title = vscode.l10n.t("@{0} #a{1} · last screen", agent.name, agent.id);
 		const uri = vscode.Uri.from({ scheme: SCREEN_SCHEME, path: `/${title}`, query: new URLSearchParams({ file: agent.finalScreen, ending: agent.ending }).toString() });
-		await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri), { preview: true });
+		const document = await vscode.languages.setTextDocumentLanguage(await vscode.workspace.openTextDocument(uri), SCREEN_LANGUAGE);
+		await vscode.window.showTextDocument(document, { preview: true });
 	}
 
 	provideTextDocumentContent(uri: vscode.Uri): string {

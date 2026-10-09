@@ -30,6 +30,19 @@
     "test": "node ../../node_modules/mocha/bin/mocha --ui tdd --timeout 30000 \"out/test/**/*.test.js\""
   },
   "contributes": {
+    "languages": [
+      {
+        "id": "facade-screen",
+        "aliases": [
+          "Facade Screen"
+        ]
+      }
+    ],
+    "configurationDefaults": {
+      "[facade-screen]": {
+        "editor.colorDecorators": false
+      }
+    },
     "commands": [
       {
         "command": "facade.agents.startAgent",
@@ -181,7 +194,8 @@
                     },
                     "default": [
                       "--add-dir",
-                      "${messagesDir}"
+                      "${messagesDir}",
+                      "${screensDir}"
                     ]
                   },
                   "fullAccess": {
@@ -262,7 +276,8 @@
                   ],
                   "messages": [
                     "--add-dir",
-                    "${messagesDir}"
+                    "${messagesDir}",
+                    "${screensDir}"
                   ],
                   "fullAccess": [
                     "--dangerously-skip-permissions"
@@ -704,7 +719,9 @@
                     },
                     "default": [
                       "--add-dir",
-                      "${messagesDir}"
+                      "${messagesDir}",
+                      "--add-dir",
+                      "${screensDir}"
                     ]
                   },
                   "fullAccess": {
@@ -765,7 +782,9 @@
                   ],
                   "messages": [
                     "--add-dir",
-                    "${messagesDir}"
+                    "${messagesDir}",
+                    "--add-dir",
+                    "${screensDir}"
                   ],
                   "fullAccess": [
                     "--mode",

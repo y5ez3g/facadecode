@@ -30,7 +30,8 @@ export const antigravityCli: AgentCli = {
 				// hello, waits behind this one and is that next conversation.
 				warmUp: ['-i', 'Reply with the single word ready, and nothing else.'],
 				// The record's folder of long messages, in its workspace: else it asks whether to read a file there
-				messages: ['--add-dir', '${messagesDir}'],
+				// One folder a flag
+				messages: ['--add-dir', '${messagesDir}', '--add-dir', '${screensDir}'],
 				fullAccess: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 				// A model's base name, as `gemini-3.8-flash`, which `--effort` picks a variant of. One it does not
 				// have it puts aside for its own default, and its effort with it, without a word.
@@ -53,7 +54,7 @@ export const antigravityCli: AgentCli = {
 		return {
 			executable,
 			// Its first line is typed into its terminal, never given as an argument.
-			args: launchArgs(antigravityCli, input.config, { messagesDir: input.messagesDir, model: input.model, effort: input.effort }, { trust: input.trusted, task: false }),
+			args: launchArgs(antigravityCli, input.config, { messagesDir: input.messagesDir, screensDir: input.screensDir, model: input.model, effort: input.effort }, { trust: input.trusted, task: false }),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],

@@ -30,6 +30,14 @@ const ANSWER_LINES = 20;
 const FINAL_SCREEN_WAIT_MS = 2_000;
 /** How often a final screen still to be written is looked for. */
 const FINAL_SCREEN_POLL_MS = 100;
+
+/**
+ * The last lines of agent `id`'s screen as a failure or an end says them: what they are, and how to read more of
+ * them (AGENT-DEBUGGING.md D6).
+ */
+export function excerptText(id: number, lines: string): string {
+	return `The last lines of its screen, as they were (read_screen #a${id} gives up to ${MOST_LINES} of them):\n${lines}`;
+}
 /** How many characters of a text typed the log says. */
 const LOGGED_CHARS = 40;
 /** What a final screen read gives before each part, where it gives both. */
@@ -47,8 +55,8 @@ export interface ScreensContext {
 	timing(): Timing;
 	/** A CLI Facade knows, by its id. */
 	cliOf(id: string): AgentCli | undefined;
-	/** The agent a tool names, as every Facade tool takes one. */
-	agentNamed(target: string): Agent;
+	/** The agent a tool names, as every Facade tool takes one - by a name several have, the one `within` the caller's reach. */
+	agentNamed(target: string, within?: (agent: Agent) => boolean): Agent;
 	/** Whether the agent `id` is in the caller's reach, as for every Facade tool: its own tree with its YOLO off, else any. */
 	inReach(caller: Caller, id: number): boolean;
 	/** The name of the terminal an agent runs in. */
@@ -157,7 +165,7 @@ export class Screens {
 	async type(caller: Caller, target: string, text: string, enter: boolean): Promise<InputResult> {
 		const chars = [...text];
 		const shown = chars.length > LOGGED_CHARS ? `${chars.slice(0, LOGGED_CHARS).join('')}...` : text;
-		const doing = `typing ${chars.length} characters, ${JSON.stringify(shown)}${enter ? ', and Enter,' : ''} into`;
+		const doing = `typing ${chars.length} ${chars.length === 1 ? 'character' : 'characters'}, ${JSON.stringify(shown)}${enter ? ', and Enter,' : ''} into`;
 		const agent = this.inputTarget(caller, target, doing);
 		const timing = this.context.timing();
 		return this.input(caller, agent, doing, timing, terminal => this.context.ports.terminals.type(terminal, text, {
@@ -218,7 +226,8 @@ export class Screens {
 		if (namesThePerson(target)) {
 			throw new FacadeError('REFUSED', 'The person, @you, has no terminal of Facade\'s: these tools read and type into agents\' terminals.');
 		}
-		const agent = this.context.agentNamed(target);
+		// A name two trees have is the one in reach, as send_message takes it
+		const agent = this.context.agentNamed(target, each => this.context.inReach(caller, each.id));
 		if (!this.context.inReach(caller, agent.id)) {
 			throw new FacadeError('REFUSED', `${describe(agent)} is outside your tree: you were started with YOLO off, so you reach only the agents of your own tree - the agent the person started it from and every agent started under it, those that ended too.`);
 		}
@@ -403,7 +412,8 @@ export class Screens {
 
 /**
  * `lines` as one text, at most {@link MOST_INLINE_CHARS} characters of it: past that, the last whole
- * lines that fit - or, where the last line alone does not, its end - and what that leaves out.
+ * lines that fit, and what that leaves out. A line too long to fit alone is never given whole: its end
+ * fills what the lines below it leave - the cursor's blank row, a prompt - and the text says so.
  */
 function inlinePart(lines: readonly string[]): { readonly text: string; readonly omitted?: { readonly lines: number; readonly chars: number; readonly partialFirstLine: boolean } } {
 	const whole = lines.join('\n');
@@ -420,18 +430,24 @@ function inlinePart(lines: readonly string[]): { readonly text: string; readonly
 		length += next;
 		kept++;
 	}
-	if (!kept) {
-		const text = [...lines[lines.length - 1]].slice(-MOST_INLINE_CHARS).join('');
-		return { text, omitted: { lines: lines.length - 1, chars: whole.length - text.length, partialFirstLine: true } };
+	const below = lines.slice(lines.length - kept);
+	const over = lines[lines.length - 1 - kept];
+	const room = MOST_INLINE_CHARS - length - (kept ? 1 : 0);
+	if (over.length > MOST_INLINE_CHARS && room > 0) {
+		const text = [[...over].slice(-room).join(''), ...below].join('\n');
+		return { text, omitted: { lines: lines.length - kept - 1, chars: whole.length - text.length, partialFirstLine: true } };
 	}
-	const text = lines.slice(lines.length - kept).join('\n');
+	const text = below.join('\n');
 	return { text, omitted: { lines: lines.length - kept, chars: whole.length - text.length, partialFirstLine: false } };
 }
 
 /** What went in, as the log and an error say it. */
 function effectText(effect: InputEffect): string {
 	if (effect.keysSent !== undefined) {
-		return effect.outcome === 'applied' ? `all ${effect.keysSent} keys went in` : `${effect.keysSent} of its keys went in`;
+		if (effect.outcome === 'applied') {
+			return effect.keysSent === 1 ? 'the key went in' : `all ${effect.keysSent} keys went in`;
+		}
+		return `${effect.keysSent} of its keys went in`;
 	}
 	return effect.entered ? 'the text went in, and Enter' : effect.pasted ? 'the text went in, without Enter' : 'nothing went in';
 }

@@ -149,7 +149,7 @@ export class ChatRooms {
 			...(message.replyTo !== undefined ? [`re #m${message.replyTo}`] : []),
 			...(message.task ? ['task'] : [])
 		];
-		const text = this.messages.textOf(message) ?? `(Its text, ${message.length} characters, is gone with the chat rooms deleted before.)`;
+		const text = this.messages.textOf(message) ?? `(Its text, ${message.length} ${message.length === 1 ? 'character' : 'characters'}, is gone with the chat rooms deleted before.)`;
 		return `## #m${message.id} · ${timeText(message.time)} · ${whoOf(state, message.from)} → ${whoOf(state, message.to)}${marks.map(mark => ` · ${mark}`).join('')}\n${text}\n\n`;
 	}
 

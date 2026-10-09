@@ -41,7 +41,8 @@ export const typeTextTool: ContractTool = {
 		}
 		const enter = args.boolean('enter') ?? false;
 		const result = await facade.screens.type(caller, agent, text, enter);
-		const typed = `Typed ${[...text].length} characters into @${result.name} #a${result.id}'s terminal, as one paste${result.effect.entered ? ', and pressed Enter' : ', without Enter'}.`;
+		const chars = [...text].length;
+		const typed = `Typed ${chars} ${chars === 1 ? 'character' : 'characters'} into @${result.name} #a${result.id}'s terminal, as one paste${result.effect.entered ? ', and pressed Enter' : ', without Enter'}.`;
 		return { text: `${typed} ${screenAfter(result, facade.cliName(facade.agent(result.id)?.cli ?? ''))}`, data: result };
 	}
 };

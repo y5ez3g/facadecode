@@ -199,7 +199,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		if (!isJsonObject(input) || typeof input.pending !== 'boolean') {
 			return undefined;
 		}
-		return { pending: input.pending, ...(typeof input.lastKey === 'number' ? { lastKey: input.lastKey } : {}) };
+		return { pending: input.pending, ...(typeof input.lastKey === 'number' ? { lastKey: input.lastKey } : {}), ...(input.busy === true ? { busy: true } : {}) };
 	}
 
 	async register(name: string, run: number, finalScreen: string): Promise<boolean> {

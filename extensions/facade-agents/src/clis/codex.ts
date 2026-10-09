@@ -75,6 +75,7 @@ export const codexCli: AgentCli = {
 				mcpEnv: toml(input.mcp.env),
 				folder: toml(projectKey(input.folder)),
 				messagesDir: input.messagesDir,
+				screensDir: input.screensDir,
 				model: input.model,
 				effort: input.effort,
 				task: input.prompt ?? ''

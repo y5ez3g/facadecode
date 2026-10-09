@@ -86,6 +86,8 @@ export interface PersonInput {
 	readonly pending: boolean;
 	/** When they last typed there. */
 	readonly lastKey?: number;
+	/** Whether Facade's own input goes in there now, or waits its turn: a doorbell waits until none does. */
+	readonly busy?: boolean;
 }
 
 /** How an agent's terminal ended. */

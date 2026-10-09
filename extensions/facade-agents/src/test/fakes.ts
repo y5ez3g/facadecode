@@ -291,7 +291,7 @@ export function argCli(home: string): AgentCli {
 			const config = path.join(input.runDir, `${input.slug}.config.json`);
 			return {
 				executable,
-				args: launchArgs(cli, input.config, { config, messagesDir: input.messagesDir, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
+				args: launchArgs(cli, input.config, { config, messagesDir: input.messagesDir, screensDir: input.screensDir, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
 				env: input.config.launch.environment,
 				cwd: input.folder,
 				files: [{ path: config, content: JSON.stringify(input.mcp) }],

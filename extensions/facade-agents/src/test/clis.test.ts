@@ -53,7 +53,7 @@ function outcome(call: () => unknown): string {
 
 /** What a launch of `cli` is given, as the core gives it for #7: its defaults, where a test sets nothing else. */
 function inputFor(cli: AgentCli, overrides: Partial<LaunchInput> = {}): LaunchInput {
-	return { folder: '/lab', trusted: false, model: 'model-x', effort: 'high', mcp: MCP, skills: [SKILL], config: cli.defaults, runDir: '/runs', messagesDir: '/record/messages', slug: '7', ...overrides };
+	return { folder: '/lab', trusted: false, model: 'model-x', effort: 'high', mcp: MCP, skills: [SKILL], config: cli.defaults, runDir: '/runs', messagesDir: '/record/messages', screensDir: '/record/screens', slug: '7', ...overrides };
 }
 
 /** The extension's package.json - its settings and its commands - and its descriptions by key. */
@@ -69,7 +69,7 @@ function manifest(): { readonly sections: readonly { readonly id: string; readon
 
 suite('CLIs: each launch, argument by argument', () => {
 
-	test('Claude Code runs in its own UI at full access, its warning about it off, with Facade\'s server alone and the person\'s own settings, the switches that would stop it at a question with nobody there off - in its environment, where one is, else in its settings - let read the message files, its skill from the run, on the model and at the effort asked for, its first line after the options; without one it starts at its input box; it has no tool for asking with buttons', () => {
+	test('Claude Code runs in its own UI at full access, its warning about it off, with Facade\'s server alone and the person\'s own settings, the switches that would stop it at a question with nobody there off - in its environment, where one is, else in its settings - let read the files of long messages and of screens, its skill from the run, on the model and at the effort asked for, its first line after the options; without one it starts at its input box; it has no tool for asking with buttons', () => {
 		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', effort: 'xhigh', prompt: '--- Plan\nAdd clamp.' }), '/bin/claude');
 		const file = (name: string) => JSON.parse(spec.files.find(each => path.basename(each.path) === name)?.content ?? 'null');
 
@@ -81,7 +81,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--plugin-dir', path.join('/runs', '7.plugin'),
 				'--disallowedTools', 'AskUserQuestion',
-				'--add-dir', '/record/messages',
+				'--add-dir', '/record/messages', '/record/screens',
 				'--dangerously-skip-permissions',
 				'--model', 'opus',
 				'--effort', 'xhigh',
@@ -204,13 +204,13 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, the folder of long messages in its workspace, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
+	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, the folders of long messages and of screens in its workspace, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
 		const spec = antigravityCli.launch(inputFor(antigravityCli, { model: 'gemini-3.8-flash', effort: 'medium', prompt: 'Not given here.' }), '/bin/agy.exe');
 		const injected = Object.fromEntries(spec.injected.map(file => [file.path, file.path.endsWith('.json') ? JSON.parse(file.content) : file.content]));
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task }, {
 			executable: '/bin/agy.exe',
-			args: ['-i', 'Reply with the single word ready, and nothing else.', '--add-dir', '/record/messages', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
+			args: ['-i', 'Reply with the single word ready, and nothing else.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
 			env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
 			cwd: '/lab',
 			files: [],
@@ -247,7 +247,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--plugin-dir', path.join('/runs', '7.plugin'),
 				'--disallowedTools', 'AskUserQuestion',
-				'--add-dir', '/record/messages',
+				'--add-dir', '/record/messages', '/record/screens',
 				'--permission-mode', 'bypassPermissions',
 				'--model', 'opus',
 				'--add-dir', '/shared/opus',
@@ -307,7 +307,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 
 	test('a `${name}` a launch has no value for - whatever is written between the braces - refuses the launch, naming the setting and the values there are', () => {
 		const refused = (launch: unknown) => outcome(() => claudeCli.launch(inputFor(claudeCli, { config: readCliConfig(claudeCli, name => name === 'launch' ? launch : undefined) }), '/bin/claude'));
-		const values = 'it has ${mcpConfig}, ${settingsFile}, ${pluginDir}, ${messagesDir}, ${model}, ${effort}, ${task}.';
+		const values = 'it has ${mcpConfig}, ${settingsFile}, ${pluginDir}, ${messagesDir}, ${screensDir}, ${model}, ${effort}, ${task}.';
 
 		assert.deepStrictEqual([refused({ arguments: { extra: ['--add-dir', '${home}'] } }), refused({ arguments: { model: ['--model', '${model_name}'] } })], [
 			`facade.orchestration.claude.launch.arguments.extra has \${home}, for which Facade has no value: ${values}`,

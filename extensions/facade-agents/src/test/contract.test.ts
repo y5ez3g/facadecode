@@ -6,6 +6,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { facadeSkill, firstLineFor } from '../contract/prompts';
 import { Contract } from '../contract/tools';
 import { Caller, PERSON } from '../record/events';
 import { ResultListener } from '../transport/pipe';
@@ -100,6 +101,20 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			],
 			person: { name: 'you', instructions: ['You act as the person, @you, in Facade Code.', TOOLS, PERSON_MESSAGES] }
 		});
+	});
+
+	test('an agent\'s first line names it, its creator - an agent by its number, the person by name - and its task\'s number, which it fetches itself: never the task\'s text', () => {
+		assert.deepStrictEqual([firstLineFor({ id: 2, name: 'lint' }, { id: 1, name: 'lead' }, 3), firstLineFor({ id: 1, name: 'lead' }, PERSON, 1)], [
+			'[facade] You are @lint #a2, created by @lead #a1. Your task is #m3. Call read_messages, read the task, then carry it out.',
+			'[facade] You are @lead #a1, created by @you. Your task is #m1. Call read_messages, read the task, then carry it out.'
+		]);
+	});
+
+	test('the skill has a child whose creator has ended message the person, its questions and its report: a child\'s terminal is one the person may not be watching', () => {
+		const body = facadeSkill([]).body.replace(/\s+/g, ' ');
+		const orphan = /If your creator has ended[^.]*\./.exec(body)?.[0] ?? '';
+
+		assert.deepStrictEqual({ byMessage: /send_message/.test(orphan) && orphan.includes(`@${PERSON.name}`), report: /report/.test(orphan) }, { byMessage: true, report: true });
 	});
 
 	test('the spawn tool requires a model and an effort beside the CLI and the task, and names no model or level of its own: the CLI is the one that knows them', () => {

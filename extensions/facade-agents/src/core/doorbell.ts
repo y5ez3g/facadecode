@@ -53,8 +53,9 @@ export interface DoorbellContext {
  * message rings 2 seconds after it came, but within a minute of the last doorbell only once the agent
  * has fetched all it had; one a doorbell named rings again while it is unread, 1, 2, 4 and 8 minutes on,
  * each from the doorbell before, then every 15. A doorbell waits for the person typing in that terminal,
- * for 10 seconds without a key at most, then takes its turn in the terminal's input, behind what Facade
- * typed there before (AGENT-DEBUGGING.md D3).
+ * for 10 seconds without a key at most, and for what Facade types there to have gone in; only then is its
+ * line made, of what is unread as it goes in (AGENT-MESSAGES.md M5), and it takes its turn in the terminal's
+ * input (AGENT-DEBUGGING.md D3). Facade turned off while it waits, it never goes in (M10).
  */
 export class Doorbell implements Disposable {
 
@@ -66,6 +67,8 @@ export class Doorbell implements Disposable {
 	private readonly ringing = new Set<number>();
 	/** The agents whose doorbells wait for the person typing in their terminals. */
 	private readonly waiting = new Set<number>();
+	/** The agents whose doorbells wait behind what Facade types into their terminals. */
+	private readonly behind = new Set<number>();
 	private disposed = false;
 
 	constructor(private readonly context: DoorbellContext) { }
@@ -107,6 +110,9 @@ export class Doorbell implements Disposable {
 	holdUp(id: number): string | undefined {
 		if (this.waiting.has(id)) {
 			return 'its doorbell waits while the person types in its terminal';
+		}
+		if (this.behind.has(id)) {
+			return 'its doorbell waits behind what Facade types into its terminal';
 		}
 		if (this.retryAt.has(id)) {
 			return 'its doorbell could not be typed into its terminal, and is tried again each minute';
@@ -152,7 +158,7 @@ export class Doorbell implements Disposable {
 		const terminal = this.context.terminalOf(agent);
 		this.ringing.add(id);
 		try {
-			await this.waitForThePerson(agent, terminal);
+			await this.waitForTurn(agent, terminal);
 			// What a fetch under way takes is not rung for
 			await this.context.fetchesDone(id);
 			const now = unreadOf(this.context.table.state.mail, id);
@@ -194,10 +200,12 @@ export class Doorbell implements Disposable {
 	}
 
 	/**
-	 * Waits while the person types in the agent's terminal: a line typed and not sent with Enter, and a
-	 * key within the last 10 seconds. A window that cannot tell does not hold the doorbell back.
+	 * Waits for the doorbell's turn in the agent's terminal: while the person types there - a line typed and not
+	 * sent with Enter, and a key within the last 10 seconds - and while Facade's own input goes in there or waits
+	 * its turn. Its line is made only then, of what is unread as it goes in; and Facade turned off meanwhile, it
+	 * never goes in. A window that cannot tell does not hold the doorbell back.
 	 */
-	private async waitForThePerson(agent: Agent, terminal: string): Promise<void> {
+	private async waitForTurn(agent: Agent, terminal: string): Promise<void> {
 		try {
 			while (!this.disposed && isLive(this.context.table.get(agent.id))) {
 				let input: PersonInput | undefined;
@@ -207,14 +215,17 @@ export class Doorbell implements Disposable {
 					this.context.log(`What the person typed into ${terminal} could not be told: ${messageOf(err)}`);
 					return;
 				}
-				if (!input?.pending || input.lastKey === undefined || Date.now() - input.lastKey >= TYPING_IDLE_MS) {
+				const typing = !!input?.pending && input.lastKey !== undefined && Date.now() - input.lastKey < TYPING_IDLE_MS;
+				if (!typing && !input?.busy) {
 					return;
 				}
-				this.waiting.add(agent.id);
+				(typing ? this.waiting : this.behind).add(agent.id);
+				(typing ? this.behind : this.waiting).delete(agent.id);
 				await timeout(TYPING_POLL_MS);
 			}
 		} finally {
 			this.waiting.delete(agent.id);
+			this.behind.delete(agent.id);
 		}
 	}
 

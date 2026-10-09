@@ -151,6 +151,8 @@ export interface LaunchInput {
 	readonly runDir: string;
 	/** The record's folder of message files: `${messagesDir}`. */
 	readonly messagesDir: string;
+	/** The record's folder of screens - large reads' snapshots, final screens: `${screensDir}`. */
+	readonly screensDir: string;
 	/** Unique per agent, for the names of those files: its number. */
 	readonly slug: string;
 }
