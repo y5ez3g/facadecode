@@ -154,7 +154,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 					return { text: `Facade could not read the call to ${name}, so it did not run. ${messageOf(err)}`, isError: true, data: { code: 'INVALID' } };
 				}
 				if (code === 'NOT_CONNECTED') {
-					return { text: `Facade's window went away during ${name} (${messageOf(err)}), as it does while it reloads, so ${name} may have run. Find out whether it did before you call it again.`, isError: true, data: { code: 'UNAVAILABLE' } };
+					return { text: `Facade's window went away during ${name} (${messageOf(err)}), as it does while it reloads, so ${name} may have run. Find out whether it did before you call it again.`, isError: true, data: { code: 'UNAVAILABLE', outcome: 'unknown' } };
 				}
 				return { text: `${name} failed in Facade's window: ${messageOf(err)}`, isError: true, data: { code: 'FAILED' } };
 			}

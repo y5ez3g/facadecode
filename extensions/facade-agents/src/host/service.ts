@@ -10,8 +10,9 @@ import { timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { installedClis, knownClis } from '../clis/registry';
-import { facadeSkill, openingFor } from '../contract/prompts';
+import { facadeSkill, firstLineFor } from '../contract/prompts';
 import { Contract } from '../contract/tools';
+import { FacadeError } from '../core/errors';
 import { Facade } from '../core/facade';
 import { AgentTable } from '../record/agents';
 import { Caller, isLive, PERSON } from '../record/events';
@@ -21,6 +22,8 @@ import { PipeEndpoint } from '../transport/endpoint';
 import { PipeHandlers, pipePath } from '../transport/pipe';
 import { HostGit } from './git';
 import { HostPerson } from './person';
+import { confirmDeleteRooms, pickRoom } from './rooms';
+import { ScreenDocuments } from './screenDocuments';
 import { configFor, timeoutMs } from './settings';
 import { askStartAgent } from './startAgent';
 import { agentTerminalRuns, HostTerminals, terminalEnvironment } from './terminals';
@@ -50,6 +53,8 @@ export class AgentsService implements vscode.Disposable {
 
 	private readonly disposables: { dispose(): void }[] = [];
 	private facade: Facade | undefined;
+	/** Where Facade's notices go, and the last screens of agents that ended. */
+	private person: HostPerson | undefined;
 	/** Why there is no core once the service started: another window has the workspace's agents, or no folder is on this machine. */
 	private noCore: 'otherWindow' | 'noFolder' | undefined;
 	private endpoint: PipeEndpoint<Caller> | undefined;
@@ -60,8 +65,11 @@ export class AgentsService implements vscode.Disposable {
 	/** How it stopped first: as the window went, or as Facade let go of its agents. */
 	private stoppedBy: ClosedBy | undefined;
 
-	/** `workspaceState` keeps the record this workspace's agents are in, whatever becomes of its first folder. */
-	constructor(private readonly log: vscode.LogOutputChannel, private readonly workspaceState: vscode.Memento) { }
+	/**
+	 * `workspaceState` keeps the record this workspace's agents are in, whatever becomes of its first folder;
+	 * `screenDocuments` opens their last screens, as it does with Facade agents off.
+	 */
+	constructor(private readonly log: vscode.LogOutputChannel, private readonly workspaceState: vscode.Memento, private readonly screenDocuments: ScreenDocuments) { }
 
 	/**
 	 * Opens the workspace's record, listens for its agents, and finds again those still running. Without
@@ -110,11 +118,12 @@ export class AgentsService implements vscode.Disposable {
 		// workspace replaces while agents keep running.
 		const windowState = new JsonFileState(path.join(dir, WINDOW_STATE_FILE));
 		const terminals = new HostTerminals(windowState, message => this.say(message));
+		const person = this.person = new HostPerson(terminals, this.screenDocuments, message => this.say(message));
 		this.disposables.push(terminals);
 
 		const facade = new Facade({
 			table,
-			ports: { terminals, git: new HostGit(), person: new HostPerson(terminals, message => this.say(message)) },
+			ports: { terminals, git: new HostGit(), person },
 			clis: {
 				known: knownClis(),
 				installed: () => installedClis(configFor),
@@ -127,7 +136,7 @@ export class AgentsService implements vscode.Disposable {
 				sharedMcpServer: () => this.listening().sharedMcpServer(),
 				agentEnv: token => this.listening().agentEnv(token, timeoutMs()),
 				skills: () => [facadeSkill(installedClis(configFor).map(({ cli }) => ({ id: cli.id, displayName: cli.displayName })))],
-				opening: openingFor
+				firstLine: firstLineFor
 			},
 			timing: () => ({ startTimeoutMs: timeoutMs() }),
 			log: message => this.say(message)
@@ -138,7 +147,7 @@ export class AgentsService implements vscode.Disposable {
 		const endpoint = this.endpoint = await this.listen(windowState, dir, {
 			authenticate: token => table.authenticate(token),
 			hello: caller => contract.hello(caller),
-			call: (caller, tool, args, progress) => contract.call(caller, tool, args, progress),
+			call: (caller, tool, args, progress, whenWritten) => contract.call(caller, tool, args, progress, whenWritten),
 			log: message => this.log.error(message)
 		}, [...table.state.agents.values()].some(isLive));
 		if (!endpoint) {
@@ -167,6 +176,7 @@ export class AgentsService implements vscode.Disposable {
 		this.stopped = true;
 		this.stoppedBy ??= by;
 		this.facade = undefined;
+		this.person = undefined;
 		this.endpoint = undefined;
 		for (const disposable of this.disposables.reverse()) {
 			try {
@@ -188,9 +198,7 @@ export class AgentsService implements vscode.Disposable {
 	async startAgentCommand(rawArgs: unknown): Promise<{ readonly id: number; readonly name: string } | undefined> {
 		const facade = this.facade;
 		if (!facade) {
-			void vscode.window.showInformationMessage(this.noCore === 'otherWindow'
-				? vscode.l10n.t("Another Facade window has this workspace's agents: start agents in that window.")
-				: vscode.l10n.t("Facade agents need a folder on this machine in the workspace."));
+			this.tellNoCore(vscode.l10n.t("Another Facade window has this workspace's agents: start agents in that window."));
 			return undefined;
 		}
 		const installed = facade.clis();
@@ -210,9 +218,46 @@ export class AgentsService implements vscode.Disposable {
 			return { id, name };
 		} catch (err) {
 			this.log.error(`Starting an agent failed: ${stackOf(err)}`);
-			void vscode.window.showErrorMessage(vscode.l10n.t("The agent could not start: {0}", messageOf(err)));
+			const ended = err instanceof FacadeError && typeof err.data?.agent === 'number' ? facade.endedAgent(err.data.agent) : undefined;
+			this.person?.tellNotStarted(messageOf(err), ended);
 			return undefined;
 		}
+	}
+
+	/** Facade: Open Chat Room. */
+	async openChatRoomCommand(): Promise<void> {
+		const facade = this.facade;
+		if (!facade) {
+			this.tellNoCore(vscode.l10n.t("Another Facade window has this workspace's agents: open their chat rooms in that window."));
+			return;
+		}
+		await pickRoom(facade.mail.rooms.list());
+	}
+
+	/** Facade: Delete Chat Rooms: once the person said so, the rooms and the files of long messages are gone for good. */
+	async deleteChatRoomsCommand(): Promise<void> {
+		if (!this.facade) {
+			this.tellNoCore(vscode.l10n.t("Another Facade window has this workspace's agents: delete their chat rooms in that window."));
+			return;
+		}
+		if (!await confirmDeleteRooms()) {
+			return;
+		}
+		try {
+			// The window may have gone meanwhile
+			if (!this.facade) {
+				throw new Error(vscode.l10n.t("Facade agents stopped in this window."));
+			}
+			this.facade.mail.deleteRooms();
+		} catch (err) {
+			this.log.error(`Deleting the chat rooms failed: ${stackOf(err)}`);
+			void vscode.window.showErrorMessage(vscode.l10n.t("The chat rooms could not all be deleted: {0}", messageOf(err)));
+		}
+	}
+
+	/** Tells the person why a command finds no agents here: another window has them - `otherWindow` - or no folder is on this machine. */
+	private tellNoCore(otherWindow: string): void {
+		void vscode.window.showInformationMessage(this.noCore === 'otherWindow' ? otherWindow : vscode.l10n.t("Facade agents need a folder on this machine in the workspace."));
 	}
 
 	/** Who this workspace's window is to its ledger: made once, and the same through its reloads. */

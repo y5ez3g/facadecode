@@ -8,7 +8,8 @@ import * as path from 'path';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
 import { Facade, SpawnRequest, Spawned } from '../core/facade';
-import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Fetched, FetchRequest } from '../core/mail';
+import { Disposable, EndedAgent, Git, InputEffect, KeysOptions, ListedWorktree, Notification, Person, PersonInput, Repository, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TypeOptions } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy } from '../record/ledger';
@@ -21,6 +22,16 @@ export class FakeTerminals implements Terminals {
 	readonly running = new Set<string>();
 	/** What was typed into each terminal, piece by piece, and which were closed. */
 	readonly typed: string[] = [];
+	/** Each text typed, into which terminal, and whether Enter went after it. */
+	readonly texts: { readonly name: string; readonly text: string; readonly enter: boolean }[] = [];
+	/** What each terminal shows, by its name: none for an empty screen. */
+	readonly screens = new Map<string, TerminalScreen>();
+	/** The terminals the window was told are agents', after a reload. */
+	readonly registered: string[] = [];
+	/** What the next texts typed and keys pressed answer with, in turn - an effect, or an error thrown - where not all went in. */
+	readonly nextInput: (InputEffect | Error)[] = [];
+	/** While set, a text typed goes in once it settles, as the window's queue holds it: behind the person, or till its Enter. */
+	hold: Promise<void> | undefined;
 	/** The next launch fails with this. */
 	failNext: string | undefined;
 	private readonly listeners = new Set<(name: string, end: TerminalEnd) => void>();
@@ -50,12 +61,65 @@ export class FakeTerminals implements Terminals {
 		this.end(name);
 	}
 
-	async type(name: string, text: string): Promise<boolean> {
+	/** The names under which what the window revived without its process was closed, in order. */
+	readonly closedRevived: string[] = [];
+
+	async closeRevived(name: string): Promise<void> {
+		this.closedRevived.push(name);
+	}
+
+	async read(name: string, lines: number): Promise<TerminalScreen | undefined> {
 		if (!this.running.has(name)) {
-			return false;
+			return undefined;
 		}
-		this.typed.push(`${name}: ${JSON.stringify(text)}`);
-		return true;
+		const screen = this.screens.get(name) ?? { lines: [], buffer: 'normal', older: false, trimmed: false, capturedAt: 1000, exited: false };
+		return { ...screen, lines: screen.lines.slice(Math.max(0, screen.lines.length - lines)), older: screen.older || screen.lines.length > lines };
+	}
+
+	async type(name: string, text: string, options: TypeOptions): Promise<InputEffect | undefined> {
+		if (!this.running.has(name)) {
+			return undefined;
+		}
+		await this.hold;
+		const next = this.nextInput.shift();
+		if (next instanceof Error) {
+			throw next;
+		}
+		this.typed.push(`${name}: type ${JSON.stringify(text)}${options.enter ? `, Enter after ${options.enterDelayMs} ms` : ''}${options.queueTimeoutMs !== undefined ? `, waiting ${options.queueTimeoutMs} ms at most` : ''}`);
+		this.texts.push({ name, text, enter: options.enter });
+		return next ?? { outcome: 'applied', pasted: true, entered: options.enter };
+	}
+
+	async keys(name: string, keys: readonly string[], options: KeysOptions): Promise<InputEffect | undefined> {
+		if (!this.running.has(name)) {
+			return undefined;
+		}
+		const next = this.nextInput.shift();
+		if (next instanceof Error) {
+			throw next;
+		}
+		this.typed.push(`${name}: keys ${keys.join(' ')}${options.queueTimeoutMs !== undefined ? `, waiting ${options.queueTimeoutMs} ms at most` : ''}`);
+		return next ?? { outcome: 'applied', keysSent: keys.length };
+	}
+
+	async register(name: string, run: number, finalScreen: string): Promise<boolean> {
+		this.registered.push(`${name} as #${run}: ${finalScreen}`);
+		return this.running.has(name);
+	}
+
+	/** What the person typed into each terminal, as the window tells it: nothing pending unless a test sets it. */
+	readonly inputs = new Map<string, PersonInput>();
+
+	async input(name: string): Promise<PersonInput | undefined> {
+		return this.running.has(name) ? this.inputs.get(name) ?? { pending: false } : undefined;
+	}
+
+	/** The terminals put in front, in order. */
+	readonly revealed: string[] = [];
+
+	async reveal(name: string): Promise<boolean> {
+		this.revealed.push(name);
+		return this.running.has(name);
 	}
 
 	/** As when a terminal closes, or its process exits. */
@@ -148,13 +212,45 @@ export class FakeGit implements Git {
 	}
 }
 
-/** The person: what Facade told them. */
+/** The person: what Facade told them, the notifications they were shown, and the chat rooms they were taken to. */
 export class FakePerson implements Person {
 
 	readonly told: string[] = [];
+	/** Every notification shown or updated, in order. */
+	readonly notified: Notification[] = [];
+	/** The notifications up now, by key. */
+	readonly shown = new Map<string, Notification>();
+	/** The chat rooms opened, each as its file's name and the message, in order. */
+	readonly opened: string[] = [];
+	private readonly answers = new Map<string, (button: string | undefined) => void>();
+	/** The agents that ended the person was shown, in turn. */
+	readonly ended: EndedAgent[] = [];
 
 	tell(text: string, terminal: string | undefined): void {
 		this.told.push(`${text}${terminal ? ` (${terminal})` : ''}`);
+	}
+
+	notify(notification: Notification): Promise<string | undefined> {
+		this.notified.push(notification);
+		this.answers.get(notification.key)?.(undefined);
+		this.shown.set(notification.key, notification);
+		return new Promise(resolve => this.answers.set(notification.key, resolve));
+	}
+
+	async openRoom(file: string, message: number): Promise<void> {
+		this.opened.push(`${path.basename(file)} #m${message}`);
+	}
+
+	async showEnded(agent: EndedAgent): Promise<void> {
+		this.ended.push(agent);
+	}
+
+	/** As the person presses a button of the notification up with that key: it closes. */
+	press(key: string, button: string): void {
+		const answer = this.answers.get(key);
+		this.answers.delete(key);
+		this.shown.delete(key);
+		answer?.(button);
 	}
 }
 
@@ -182,7 +278,7 @@ export function argCli(home: string): AgentCli {
 		defaults: {
 			path: '',
 			launch: {
-				arguments: { connect: ['--config', '${config}'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
+				arguments: { connect: ['--config', '${config}'], questions: ['--no-asking'], messages: ['--read', '${messagesDir}'], fullAccess: ['--yes'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
 				environment: { ARG_QUIET: '1' },
 				trust: { file: '${argHome}/trust.json', merge: { trusted: ['${repository}'] } },
 				enterDelay: 300,
@@ -195,7 +291,7 @@ export function argCli(home: string): AgentCli {
 			const config = path.join(input.runDir, `${input.slug}.config.json`);
 			return {
 				executable,
-				args: launchArgs(cli, input.config, { config, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
+				args: launchArgs(cli, input.config, { config, messagesDir: input.messagesDir, screensDir: input.screensDir, model: input.model, effort: input.effort, task: input.prompt ?? '' }, { trust: input.trusted, task: !!input.prompt }),
 				env: input.config.launch.environment,
 				cwd: input.folder,
 				files: [{ path: config, content: JSON.stringify(input.mcp) }],
@@ -207,9 +303,9 @@ export function argCli(home: string): AgentCli {
 }
 
 /**
- * A CLI whose first conversation has no MCP tools - told of its task in its terminal - which reads one
- * server for all its agents, and its skills, from files in its folder, and is given the person's trust
- * in its arguments.
+ * A CLI whose first conversation has no MCP tools - its first line typed into its terminal - which reads
+ * one server for all its agents, and its skills, from files in its folder, and is given the person's
+ * trust in its arguments.
  */
 export function toldCli(): AgentCli {
 	const server = (input: { readonly mcp: { readonly command: string; readonly args: readonly string[] } }) => ({ command: input.mcp.command, args: input.mcp.args });
@@ -221,7 +317,7 @@ export function toldCli(): AgentCli {
 		defaults: {
 			path: '',
 			launch: {
-				arguments: { model: ['--model', '${model}'], effort: ['--effort', '${effort}'] },
+				arguments: { fullAccess: ['--yes'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'] },
 				environment: {},
 				trust: { arguments: ['--trust-folder'] },
 				// Typed at once, on a test's clock.
@@ -298,7 +394,8 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
 	const person = new FakePerson();
 	const settings: { [section: string]: { [name: string]: unknown } } = {};
-	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000 };
+	// The window writes no final screens here: none is waited for
+	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000, finalScreenWaitMs: 0 };
 	const known: readonly AgentCli[] = [argCli(path.join(dir, 'arg-home')), toldCli()];
 	const configFor = (cli: AgentCli) => readCliConfig(cli, name => settings[cli.section]?.[name]);
 	/** What the core wrote to its log, in order. */
@@ -317,7 +414,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
 			agentEnv: token => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: token }),
 			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: '# Working in Facade Code' }],
-			opening: (agent, parent) => `[facade] You are @${agent.name} #${agent.id}, ${agent.cliName}, started by @${parent.name}.`
+			firstLine: (agent, creator, task) => `[facade] You are @${agent.name} #a${agent.id}, created by @${creator.name}. Your task is #m${task}.`
 		},
 		timing: () => timing,
 		log: message => logs.push(message),
@@ -344,6 +441,10 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		/** As the MCP server of agent `id` says hello: it is running. */
 		hello(id: number): void {
 			facade.connected(callerOf(this.agent(id)));
+		},
+		/** As agent `id` fetches its messages - `request`, else its unread ones - and the result reaches its MCP server. */
+		fetched(id: number, request: FetchRequest = {}): Promise<Fetched> {
+			return facade.mail.fetch(callerOf(this.agent(id)), request, listener => listener(true));
 		},
 		/**
 		 * A spawn whose child's MCP server says hello once its terminal is launched, as a CLI's does: what

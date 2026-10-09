@@ -54,6 +54,11 @@ export const claudeCli: AgentCli = {
 		launch: {
 			arguments: {
 				connect: ['--mcp-config', '${mcpConfig}', '--strict-mcp-config', '--settings', '${settingsFile}', '--plugin-dir', '${pluginDir}'],
+				// A question asked with buttons waits in its terminal for someone to click, where a doorbell's Enter
+				// would answer it: every agent asks in plain text, or by message.
+				questions: ['--disallowedTools', 'AskUserQuestion'],
+				// Each takes one or more values: what follows them is another option.
+				messages: ['--add-dir', '${messagesDir}', '${screensDir}'],
 				fullAccess: ['--dangerously-skip-permissions'],
 				model: ['--model', '${model}'],
 				effort: ['--effort', '${effort}'],
@@ -101,6 +106,8 @@ export const claudeCli: AgentCli = {
 				mcpConfig: configFile,
 				settingsFile,
 				pluginDir,
+				messagesDir: input.messagesDir,
+				screensDir: input.screensDir,
 				model: input.model,
 				effort: input.effort,
 				task: input.prompt ?? ''

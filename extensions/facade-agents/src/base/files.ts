@@ -18,6 +18,21 @@ export const HELD_OPEN_CODES: ReadonlySet<string> = new Set(['EPERM', 'EACCES', 
 /** How many times a file another program writes too is read, or written, again when it changed meanwhile. */
 const CHANGED_ATTEMPTS = 3;
 
+/** The number `file` holds, as a workspace's last number is kept; 0 when there is none, or nothing a number can be. */
+export function readLastNumber(file: string): number {
+	let text: string;
+	try {
+		text = fs.readFileSync(file, 'utf8');
+	} catch (err) {
+		if (codeOf(err) === 'ENOENT') {
+			return 0;
+		}
+		throw err;
+	}
+	const id = Number(text.trim());
+	return Number.isInteger(id) && id > 0 ? id : 0;
+}
+
 /** Whether the file system names one file or folder by both paths: case is ignored on Windows and macOS. */
 export function isEqualPath(a: string, b: string): boolean {
 	const normalize = (value: string) => {

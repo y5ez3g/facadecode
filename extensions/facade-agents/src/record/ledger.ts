@@ -17,8 +17,13 @@ import { applyEvent, createState, eventOf, fitsState, LedgerEvent, LedgerEventBo
 /** The ledger's file, in the workspace's folder. */
 const LEDGER_FILE = 'ledger.jsonl';
 const LOCK_FILE = 'ledger.lock';
-/** The version of the ledger's events: 3 since agents have numbers, and the person none. */
-const VERSION = 3;
+/** The version of the ledger's events: 3 since agents have numbers, and the person none; 5 since they send messages. */
+const VERSION = 5;
+/**
+ * The version before messages, whose events this one has too: a ledger of it is read as it is, and what
+ * is appended to it is of this version.
+ */
+const PREVIOUS_VERSION = 3;
 /** How often the window that has the ledger open touches its lock. */
 const HEARTBEAT_MS = 30_000;
 /** A lock untouched for this long belongs to no window, even if the process it names runs: its id may be reused. */
@@ -208,12 +213,18 @@ export class Ledger {
 	append(body: LedgerEventBody): LedgerEvent {
 		this.assertOpen();
 		const event: LedgerEvent = { ...body, seq: this.state.seq + 1, time: (this.options.now ?? Date.now)() };
+		const line = JSON.stringify({ v: VERSION, ...event });
+		// Only a line the ledger reads back is written: one the next load refused would stop the workspace's agents
+		const back = eventOf(JSON.parse(line));
+		if (!back || !fitsState(this.state, back)) {
+			throw new Error(`Facade did not record ${body.type}: its ledger could not read it back.`);
+		}
 		if (this.fd === undefined) {
 			this.fd = fs.openSync(path.join(this.dir, LEDGER_FILE), 'a', 0o600);
 		}
 		const size = fs.fstatSync(this.fd).size;
 		try {
-			fs.writeFileSync(this.fd, `${JSON.stringify({ v: VERSION, ...event })}\n`);
+			fs.writeFileSync(this.fd, `${line}\n`);
 			fs.fsyncSync(this.fd);
 		} catch (err) {
 			try {
@@ -294,11 +305,13 @@ function load(dir: string): WorkspaceState {
 	// What follows the last line break was cut short by a crash.
 	const complete = lines.slice(0, -1);
 	const version = versionOf(complete);
-	if (version !== undefined && version !== VERSION) {
+	if (version !== undefined && version !== VERSION && version !== PREVIOUS_VERSION) {
 		fs.renameSync(file, path.join(dir, `ledger.v${version}.${Date.now()}.jsonl`));
 		return createState();
 	}
 	const state = createState();
+	// The lines of the version before come first, if any: once a line of this version came, all are
+	let current = false;
 	complete.forEach((line, index) => {
 		if (!line.trim()) {
 			return;
@@ -309,7 +322,10 @@ function load(dir: string): WorkspaceState {
 		} catch {
 			throw new LedgerCorruptError(file, index + 1);
 		}
-		const event = isJsonObject(parsed) && parsed.v === VERSION && parsed.seq === state.seq + 1 ? eventOf(parsed) : undefined;
+		const lineVersion = isJsonObject(parsed) ? parsed.v : undefined;
+		current ||= lineVersion === VERSION;
+		const known = lineVersion === VERSION || (lineVersion === PREVIOUS_VERSION && !current);
+		const event = isJsonObject(parsed) && known && parsed.seq === state.seq + 1 ? eventOf(parsed) : undefined;
 		if (!event || !fitsState(state, event)) {
 			throw new LedgerCorruptError(file, index + 1);
 		}

@@ -7,9 +7,10 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
-import { isEqualPath, replaceFile } from '../base/files';
+import { isEqualPath, readLastNumber, replaceFile } from '../base/files';
 import { Agent, Caller, Exit, ExitKind, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, parentOf, PERSON, RESERVED_NAMES, WorkspaceState } from './events';
 import { ClosedBy, LastClose, Ledger, LedgerOptions } from './ledger';
+import { HUMAN, MessageRecord } from './messages';
 
 /** The person's token, in the workspace's folder: scripts that hold it act as the person. */
 const YOU_TOKEN_FILE = 'you.token';
@@ -24,10 +25,14 @@ const RUNS_DIR = 'runs';
 /** A file of an agent's run: `<number>.<anything>`. */
 const RUN_FILE = /^(?<id>\d+)\./;
 
-/** An agent's name as given - `@clamp` or `Clamp` - in its form: lower case, without the `@`. Throws with why one is no name. */
+/**
+ * An agent's name as given - `@clamp` or `Clamp` - in its form: lower case, without the `@`. Throws with
+ * why one is no name. `human` is the person's, as messages name them, though a ledger may have an agent of
+ * it from before.
+ */
 export function agentName(text: string): string {
 	const name = text.trim().replace(/^@/, '').toLowerCase();
-	if (RESERVED_NAMES.has(name)) {
+	if (RESERVED_NAMES.has(name) || name === HUMAN) {
 		throw new Error(`"${name}" is reserved: choose another name.`);
 	}
 	if (!isAgentName(name)) {
@@ -39,7 +44,7 @@ export function agentName(text: string): string {
 /** The name an agent gets from its worktree when it is given none: `feature/Clamp` gives `feature-clamp`. */
 export function nameOfWorktree(worktree: string): string {
 	const name = worktree.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, MAX_NAME_LENGTH).replace(/[^a-z0-9]+$/, '');
-	return isAgentName(name) ? name : 'agent';
+	return isAgentName(name) && name !== HUMAN ? name : 'agent';
 }
 
 /** Where a workspace's agents are recorded, and what tests replace of the ledger's. */
@@ -58,8 +63,10 @@ export interface NewAgent {
 	readonly effort: string;
 	readonly worktree: string;
 	readonly folder: string;
-	/** The task of a CLI that is told of its task in its terminal, given its number: written to a file of its own. */
-	readonly task?: (id: number) => string;
+	/** Whether its CLI starts with full access: its YOLO, for good. */
+	readonly yolo: boolean;
+	/** How long after a paste into its terminal Enter is pressed. */
+	readonly enterDelay?: number;
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -81,15 +88,16 @@ export class AgentTable {
 	/** The highest number given, as `last-id` says it: a ledger begun anew counts on from it. */
 	private lastId = 0;
 
-	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) { }
+	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger, readonly messages: MessageRecord) { }
 
 	/** Opens a workspace's ledger, making it the first time. */
 	static open(options: AgentTableOptions): AgentTable {
 		const ledger = Ledger.open(options.dir, options);
-		const table = new AgentTable(options, ledger);
+		let table: AgentTable;
 		try {
+			table = new AgentTable(options, ledger, new MessageRecord(options.dir, ledger));
 			table.personToken = readOrCreateToken(path.join(options.dir, YOU_TOKEN_FILE));
-			table.lastId = readLastId(path.join(options.dir, LAST_ID_FILE)) || readLastId(path.join(options.dir, LAST_PID_FILE));
+			table.lastId = readLastNumber(path.join(options.dir, LAST_ID_FILE)) || readLastNumber(path.join(options.dir, LAST_PID_FILE));
 		} catch (err) {
 			ledger.close('facade');
 			throw err;
@@ -117,7 +125,7 @@ export class AgentTable {
 		return this.options.dir;
 	}
 
-	/** Where each agent's token, task and launch files go. */
+	/** Where each agent's token and launch files go. */
 	get runsDir(): string {
 		return path.join(this.options.dir, RUNS_DIR);
 	}
@@ -161,8 +169,8 @@ export class AgentTable {
 	}
 
 	/**
-	 * Records a new agent under the next number, and writes its token and its task. Nothing is written
-	 * once the ledger is closed or another window's: the number may be one that window gave.
+	 * Records a new agent under the next number, and writes its token. Nothing is written once the ledger
+	 * is closed or another window's: the number may be one that window gave.
 	 */
 	start(agent: NewAgent): StartedAgent {
 		const name = agentName(agent.name);
@@ -175,11 +183,6 @@ export class AgentTable {
 		const tokenFile = path.join(this.runsDir, `${id}.token`);
 		fs.mkdirSync(this.runsDir, { recursive: true });
 		fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-		let taskFile: string | undefined;
-		if (agent.task) {
-			taskFile = path.join(this.runsDir, `${id}.task.md`);
-			fs.writeFileSync(taskFile, agent.task(id), { mode: 0o600 });
-		}
 		this.ledger.append({
 			type: 'agent.started',
 			id,
@@ -190,7 +193,8 @@ export class AgentTable {
 			effort: agent.effort,
 			worktree: agent.worktree,
 			folder: agent.folder,
-			...(taskFile !== undefined ? { taskFile } : {}),
+			yolo: agent.yolo,
+			...(agent.enterDelay !== undefined ? { enterDelay: agent.enterDelay } : {}),
 			tokenHash: hashToken(token)
 		});
 		const started = this.state.agents.get(id);
@@ -207,12 +211,12 @@ export class AgentTable {
 		}
 	}
 
-	/** Records that the line telling an agent of its task file was typed into its terminal. */
-	setTaskTyped(id: number): void {
-		const agent = this.state.agents.get(id);
-		if (isLive(agent) && agent.taskFile !== undefined && !agent.taskTyped) {
-			this.ledger.append({ type: 'task.typed', id });
-		}
+	/**
+	 * Records that the list starts again, as a window starts that is not a reload: the mailboxes of the
+	 * agents that exited are emptied; numbers go on.
+	 */
+	clearList(): void {
+		this.ledger.append({ type: 'list.cleared' });
 	}
 
 	/** Records how an agent exited, and removes its run files; answers with its exit, or undefined for one that had exited already. */
@@ -286,19 +290,4 @@ function readOrCreateToken(file: string): string {
 	const token = crypto.randomBytes(32).toString('base64url');
 	replaceFile(file, token);
 	return token;
-}
-
-/** The highest number `file` says the workspace gave; 0 when it says none, or nothing a number can be. */
-function readLastId(file: string): number {
-	let text: string;
-	try {
-		text = fs.readFileSync(file, 'utf8');
-	} catch (err) {
-		if (codeOf(err) === 'ENOENT') {
-			return 0;
-		}
-		throw err;
-	}
-	const id = Number(text.trim());
-	return Number.isInteger(id) && id > 0 ? id : 0;
 }

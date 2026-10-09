@@ -11,8 +11,8 @@ import { AgentCli, launchArgs, skillMarkdown } from './cli';
  * Muse Code in its own UI at full access: no approvals and no sandbox. It reads MCP servers and skills
  * from its folder - `.mcp.json` and `.agents/skills/` - once the folder is trusted: a worktree Facade
  * made by `--trust-workspace`, for the launch alone. Its server finds the agent through `${VAR}`
- * references to its environment. It starts through its own launcher, a `.cmd` on Windows, so its task
- * goes into a file, and a line in its terminal tells it to read it.
+ * references to its environment. It starts through its own launcher, a `.cmd` on Windows, through
+ * cmd.exe: its first line, Facade's own text and nothing cmd.exe reads, is its prompt argument.
  */
 export const museCli: AgentCli = {
 	id: 'muse',
@@ -25,7 +25,9 @@ export const museCli: AgentCli = {
 			arguments: {
 				fullAccess: ['--disable-approval', '--disable-sandbox'],
 				model: ['--model', '${model}'],
-				effort: ['--reasoning-effort', '${effort}']
+				effort: ['--reasoning-effort', '${effort}'],
+				// Its first line starts with a bracket, which no option does.
+				task: ['${task}']
 			},
 			// One version for the agent's whole run: its launcher would otherwise update it as it starts it.
 			environment: { MUSE_NO_AUTO_UPDATE: '1' },
@@ -37,14 +39,19 @@ export const museCli: AgentCli = {
 		}
 	},
 	sharedServer: true,
-	task: 'terminal',
+	task: 'argument',
 	launch(input, executable) {
 		// Expanded from the agent's own environment when its MCP server starts.
 		const servers = { facade: { command: input.mcp.command, args: input.mcp.args, env: { ...input.mcp.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS}' } } };
 		return {
 			executable,
-			// Its task is typed into its terminal, never given as an argument.
-			args: launchArgs(museCli, input.config, { model: input.model, effort: input.effort }, { trust: input.trusted, task: false }),
+			args: launchArgs(museCli, input.config, {
+				messagesDir: input.messagesDir,
+				screensDir: input.screensDir,
+				model: input.model,
+				effort: input.effort,
+				task: input.prompt ?? ''
+			}, { trust: input.trusted, task: !!input.prompt }),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],

@@ -41,11 +41,13 @@ function yamlText(text: string): string {
 /**
  * The groups of a launch's arguments, in the order a launch gives them; a CLI has the groups it uses:
  * `warmUp`, a first message of its own; `connect`, how Facade's tools, skills and settings reach it;
- * `quiet`, what keeps it from stopping at a question nobody is there to answer; `fullAccess`; `model`;
- * `effort`, how hard it thinks; `extra`, the person's own; and `task`, where its task is given as an
- * argument. The arguments of a trust given for a launch come after `connect`.
+ * `quiet`, what keeps it from stopping at a question nobody is there to answer; `questions`, what takes
+ * away its tools for asking with buttons, which wait in its terminal for someone to click; `messages`,
+ * what lets it read the record's message files without asking; `fullAccess`; `model`; `effort`, how hard
+ * it thinks; `extra`, the person's own; and `task`, where its first line is given as an argument. The
+ * arguments of a trust given for a launch come after `connect`.
  */
-export const ARG_GROUPS = ['warmUp', 'connect', 'quiet', 'fullAccess', 'model', 'effort', 'extra', 'task'] as const;
+export const ARG_GROUPS = ['warmUp', 'connect', 'quiet', 'questions', 'messages', 'fullAccess', 'model', 'effort', 'extra', 'task'] as const;
 
 /** One of {@link ARG_GROUPS}. */
 export type ArgGroup = (typeof ARG_GROUPS)[number];
@@ -70,8 +72,19 @@ export interface LaunchConfig {
 	readonly settings?: JsonObject;
 	/** Milliseconds between typing a line into its terminal and pressing Enter: a CLI can take fast typing for a paste. */
 	readonly enterDelay: number;
-	/** Milliseconds after its MCP server's hello before a CLI told of its task in its terminal is typed the line that names it. */
+	/**
+	 * Milliseconds after its MCP server's hello before anything is typed into its terminal: the first line
+	 * of a CLI told of its task there, or a doorbell.
+	 */
 	readonly taskDelay: number;
+}
+
+/**
+ * Whether a CLI started as `config` says runs with YOLO on: its approvals and sandbox off, as its launch's
+ * `fullAccess` arguments turn them off - all four built-in CLIs' by default.
+ */
+export function isYolo(config: CliConfig): boolean {
+	return !!config.launch.arguments.fullAccess?.length;
 }
 
 /**
@@ -101,8 +114,8 @@ export function withValues(text: string, values: { readonly [name: string]: stri
 /**
  * A launch's arguments: the groups of `config` in their order, each `${name}` in them replaced by
  * `values[name]`, with the arguments of a trust given for the launch after `connect` where `uses` has
- * `trust`, and the task left out where `uses` has `task: false`. Throws, naming the setting, at a
- * `${name}` the launch has no value for.
+ * `trust`, and the task left out where it has `task: false`. Throws, naming the setting, at a `${name}`
+ * the launch has no value for.
  */
 export function launchArgs(cli: AgentCli, config: CliConfig, values: { readonly [name: string]: string }, uses: { readonly trust?: boolean; readonly task?: boolean } = {}): string[] {
 	const setting = `facade.orchestration.${cli.section}.launch`;
@@ -125,7 +138,7 @@ export interface LaunchInput {
 	readonly folder: string;
 	/** Set in a worktree Facade made, for a CLI given the person's trust in its arguments. */
 	readonly trusted: boolean;
-	/** Its first message, for a CLI that is given its task as an argument. */
+	/** Its first line, which names its task, for a CLI that is given it as an argument. */
 	readonly prompt?: string;
 	/** The model and how hard it thinks, as the CLI takes them: Facade passes them on as they are. */
 	readonly model: string;
@@ -136,6 +149,10 @@ export interface LaunchInput {
 	readonly config: CliConfig;
 	/** Where the launch writes its own files. */
 	readonly runDir: string;
+	/** The record's folder of message files: `${messagesDir}`. */
+	readonly messagesDir: string;
+	/** The record's folder of screens - large reads' snapshots, final screens: `${screensDir}`. */
+	readonly screensDir: string;
 	/** Unique per agent, for the names of those files: its number. */
 	readonly slug: string;
 }
@@ -188,8 +205,8 @@ export interface AgentCli {
 	/** Its MCP server comes from a file in its folder that every agent there reads: the server finds the agent from its environment. */
 	readonly sharedServer?: boolean;
 	/**
-	 * How it gets its task: `argument`, on its command line; `terminal`, in a file, with a line typed into
-	 * its terminal once its MCP server said hello, for a CLI whose first conversation has no MCP tools.
+	 * How it gets its first line, which names its task: `argument`, on its command line; `terminal`, typed
+	 * into its terminal once its MCP server said hello, for a CLI whose first conversation has no MCP tools.
 	 */
 	readonly task: 'argument' | 'terminal';
 	launch(input: LaunchInput, executable: string): LaunchSpec;

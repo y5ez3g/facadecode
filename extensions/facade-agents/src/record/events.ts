@@ -5,11 +5,10 @@
 
 import { isEqualPath } from '../base/files';
 import { JsonObject } from '../base/json';
+import { applyMessages, clearMailboxes, createMessagesState, FACADE, fitsMessages, isId, messageBodyOf, MessageEventBody, MessagesState } from './messages';
 
 /** The person's name: the root of the agents' tree, and the parent of every orphan. The person has no number. */
 const YOU = 'you';
-/** Facade's own name, which no agent takes: its MCP server is called so, and what it says to an agent starts `[facade]`. */
-const FACADE = 'facade';
 /** The first number an agent gets; numbers then count up and are never given twice within a workspace. */
 const FIRST_ID = 1;
 /** Names an agent cannot take. */
@@ -58,13 +57,15 @@ export interface Agent {
 	/** The name of its worktree: `main` for a repository's own checkout, else its branch. */
 	readonly worktree: string;
 	readonly folder: string;
-	/** The file its task is in, for a CLI that is told of its task in its terminal. */
-	readonly taskFile?: string;
-	/** Set once the line that tells it of its task file was typed into its terminal. */
-	taskTyped?: boolean;
+	/** Whether its CLI started with full access, its YOLO on; none where a ledger before messages did not say. */
+	readonly yolo?: boolean;
+	/** How long after a paste into its terminal Enter is pressed, as its launch had it, where it recorded it. */
+	readonly enterDelay?: number;
 	state: AgentState;
 	exit?: Exit;
 	readonly startTime: number;
+	/** When it was running: its MCP server said hello. */
+	runningTime?: number;
 }
 
 /** An agent that has not exited. */
@@ -96,14 +97,19 @@ export type LedgerEventBody =
 		readonly effort: string;
 		readonly worktree: string;
 		readonly folder: string;
-		readonly taskFile?: string;
+		readonly yolo?: boolean;
+		readonly enterDelay?: number;
 		readonly tokenHash: string;
 	}
 	| { readonly type: 'agent.running'; readonly id: number }
+	/** A ledger of the version before messages: the line telling a CLI of its task file was typed. Nothing now. */
 	| { readonly type: 'task.typed'; readonly id: number }
 	| { readonly type: 'agent.exited'; readonly id: number; readonly kind: ExitKind; readonly reason: string }
 	| { readonly type: 'worktree.made' } & MadeWorktree
-	| { readonly type: 'worktree.gone'; readonly folder: string };
+	| { readonly type: 'worktree.gone'; readonly folder: string }
+	/** A start of the window that is not a reload: the mailboxes of the agents that ended are emptied. */
+	| { readonly type: 'list.cleared' }
+	| MessageEventBody;
 
 /** An event as the ledger keeps it: numbered, with the time it happened. */
 export type LedgerEvent = LedgerEventBody & { readonly seq: number; readonly time: number };
@@ -118,6 +124,16 @@ export interface Caller {
 /** The person, as a caller. */
 export const PERSON: Caller = { name: YOU };
 
+/** An agent or the person, as Facade's words name them: `@name #a7`, or `the person`. */
+export function describe(who: Caller): string {
+	return who.id === undefined ? 'the person' : `@${who.name} #a${who.id}`;
+}
+
+/** Whether `text` names the person, as an agent may: `you` or `@you`, in any case. */
+export function namesThePerson(text: string): boolean {
+	return text.trim().replace(/^@/, '').toLowerCase() === YOU;
+}
+
 /** What a workspace's ledger says now. */
 export interface WorkspaceState {
 	seq: number;
@@ -129,11 +145,13 @@ export interface WorkspaceState {
 	readonly tokens: Map<string, number>;
 	/** The worktrees Facade made, by folder. */
 	readonly worktrees: Map<string, MadeWorktree>;
+	/** The messages, and the mailboxes. */
+	readonly mail: MessagesState;
 }
 
-/** The state of a workspace with no ledger yet: no agent, the next number the first. */
+/** The state of a workspace with no ledger yet: no agent and no message, the next numbers the first. */
 export function createState(): WorkspaceState {
-	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), tokens: new Map(), worktrees: new Map() };
+	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), tokens: new Map(), worktrees: new Map(), mail: createMessagesState() };
 }
 
 const EXIT_KINDS: ReadonlySet<string> = new Set<ExitKind>(['exited', 'killed', 'failed']);
@@ -142,9 +160,9 @@ function isExitKind(value: unknown): value is ExitKind {
 	return typeof value === 'string' && EXIT_KINDS.has(value);
 }
 
-/** Whether `value` is a number an agent can have. */
-function isId(value: unknown): value is number {
-	return typeof value === 'number' && Number.isInteger(value) && value >= FIRST_ID;
+/** Whether `value` is a number of milliseconds to wait: a finite one, from 0. */
+function isDelay(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 /** Whether `value` is a string with something in it. */
@@ -168,12 +186,17 @@ export function eventOf(value: JsonObject): LedgerEvent | undefined {
 function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'agent.started': {
-			const { id, name, parent, cli, model, effort, worktree, folder, taskFile, tokenHash } = value;
+			// A ledger of the version before messages names the file of a task typed into its terminal: it is no more.
+			const { id, name, parent, cli, model, effort, worktree, folder, yolo, enterDelay, taskFile, tokenHash } = value;
 			if (!isId(id) || typeof name !== 'string' || !isAgentName(name) || (parent !== undefined && !isId(parent)) || !isText(cli) || !isText(model) || !isText(effort)
-				|| !isText(worktree) || !isText(folder) || typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))) {
+				|| !isText(worktree) || !isText(folder) || (yolo !== undefined && typeof yolo !== 'boolean') || (enterDelay !== undefined && !isDelay(enterDelay))
+				|| typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (taskFile !== undefined && !isText(taskFile))) {
 				return undefined;
 			}
-			return { type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder, tokenHash, ...(taskFile !== undefined ? { taskFile } : {}) };
+			return {
+				type: 'agent.started', id, name, ...(parent !== undefined ? { parent } : {}), cli, model, effort, worktree, folder,
+				...(yolo !== undefined ? { yolo } : {}), ...(enterDelay !== undefined ? { enterDelay } : {}), tokenHash
+			};
 		}
 		case 'agent.running':
 		case 'task.typed':
@@ -194,8 +217,10 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 			const { folder } = value;
 			return isText(folder) ? { type: 'worktree.gone', folder } : undefined;
 		}
+		case 'list.cleared':
+			return { type: 'list.cleared' };
 	}
-	return undefined;
+	return messageBodyOf(value);
 }
 
 /**
@@ -214,7 +239,10 @@ export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 		case 'worktree.made':
 			return event.madeBy === undefined || state.agents.has(event.madeBy);
 		case 'worktree.gone':
+		case 'list.cleared':
 			return true;
+		default:
+			return fitsMessages(state.agents, state.mail, event);
 	}
 }
 
@@ -232,7 +260,8 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				effort: event.effort,
 				worktree: event.worktree,
 				folder: event.folder,
-				...(event.taskFile !== undefined ? { taskFile: event.taskFile } : {}),
+				...(event.yolo !== undefined ? { yolo: event.yolo } : {}),
+				...(event.enterDelay !== undefined ? { enterDelay: event.enterDelay } : {}),
 				state: 'starting',
 				startTime: event.time
 			});
@@ -244,16 +273,12 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			const agent = state.agents.get(event.id);
 			if (agent?.state === 'starting') {
 				agent.state = 'running';
+				agent.runningTime = event.time;
 			}
 			break;
 		}
-		case 'task.typed': {
-			const agent = state.agents.get(event.id);
-			if (agent && agent.taskFile !== undefined) {
-				agent.taskTyped = true;
-			}
+		case 'task.typed':
 			break;
-		}
 		case 'agent.exited': {
 			const agent = state.agents.get(event.id);
 			if (agent && agent.state !== 'exited') {
@@ -280,6 +305,11 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			}
 			break;
 		}
+		case 'list.cleared':
+			clearMailboxes(state.mail, id => isLive(state.agents.get(id)));
+			break;
+		default:
+			applyMessages(state.mail, event, event.time);
 	}
 }
 
@@ -291,4 +321,17 @@ export function isLive(agent: Agent | undefined): agent is LiveAgent {
 /** An agent's parent now: the agent that started it while that one has not exited; none, the person, else. */
 export function parentOf(state: WorkspaceState, agent: Agent): number | undefined {
 	return agent.parent !== undefined && isLive(state.agents.get(agent.parent)) ? agent.parent : undefined;
+}
+
+/**
+ * The agent the person started at the top of `agent`'s creators, those that exited too: the root of its
+ * tree, which it keeps for good, whoever of its creators exits.
+ */
+export function rootOf(agents: ReadonlyMap<number, Agent>, agent: Agent): Agent {
+	let root = agent;
+	// A creator has a lower number than the agents it started
+	for (let parent = agents.get(root.parent ?? 0); parent && parent.id < root.id; parent = agents.get(root.parent ?? 0)) {
+		root = parent;
+	}
+	return root;
 }

@@ -53,7 +53,7 @@ function outcome(call: () => unknown): string {
 
 /** What a launch of `cli` is given, as the core gives it for #7: its defaults, where a test sets nothing else. */
 function inputFor(cli: AgentCli, overrides: Partial<LaunchInput> = {}): LaunchInput {
-	return { folder: '/lab', trusted: false, model: 'model-x', effort: 'high', mcp: MCP, skills: [SKILL], config: cli.defaults, runDir: '/runs', slug: '7', ...overrides };
+	return { folder: '/lab', trusted: false, model: 'model-x', effort: 'high', mcp: MCP, skills: [SKILL], config: cli.defaults, runDir: '/runs', messagesDir: '/record/messages', screensDir: '/record/screens', slug: '7', ...overrides };
 }
 
 /** The extension's package.json - its settings and its commands - and its descriptions by key. */
@@ -69,7 +69,7 @@ function manifest(): { readonly sections: readonly { readonly id: string; readon
 
 suite('CLIs: each launch, argument by argument', () => {
 
-	test('Claude Code runs in its own UI at full access, its warning about it off, with Facade\'s server alone and the person\'s own settings, the switches that would stop it at a question with nobody there off - in its environment, where one is, else in its settings - its skill from the run, on the model and at the effort asked for, the task after the options; without a task it starts at its input box', () => {
+	test('Claude Code runs in its own UI at full access, its warning about it off, with Facade\'s server alone and the person\'s own settings, the switches that would stop it at a question with nobody there off - in its environment, where one is, else in its settings - let read the files of long messages and of screens, its skill from the run, on the model and at the effort asked for, its first line after the options; without one it starts at its input box; it has no tool for asking with buttons', () => {
 		const spec = claudeCli.launch(inputFor(claudeCli, { model: 'opus', effort: 'xhigh', prompt: '--- Plan\nAdd clamp.' }), '/bin/claude');
 		const file = (name: string) => JSON.parse(spec.files.find(each => path.basename(each.path) === name)?.content ?? 'null');
 
@@ -80,6 +80,8 @@ suite('CLIs: each launch, argument by argument', () => {
 				'--strict-mcp-config',
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--plugin-dir', path.join('/runs', '7.plugin'),
+				'--disallowedTools', 'AskUserQuestion',
+				'--add-dir', '/record/messages', '/record/screens',
 				'--dangerously-skip-permissions',
 				'--model', 'opus',
 				'--effort', 'xhigh',
@@ -164,11 +166,12 @@ suite('CLIs: each launch, argument by argument', () => {
 		assert.strictEqual(spec.args.find(arg => arg.startsWith('mcp_servers.facade.env=')), 'mcp_servers.facade.env={ ELECTRON_RUN_AS_NODE = "1", "NODE.OPTIONS" = "--no-warnings" }');
 	});
 
-	test('Muse Code runs in its own UI at full access - no approvals, no sandbox - its launcher\'s update off, trusting a worktree Facade made for the run alone, at the effort asked for; its server, which finds the agent from its environment, and its skill go into the folder', () => {
+	test('Muse Code runs in its own UI at full access - no approvals, no sandbox - its launcher\'s update off, trusting a worktree Facade made for the run alone, at the effort asked for, its first line its prompt argument; its server, which finds the agent from its environment, and its skill go into the folder', () => {
 		const spec = museCli.launch(inputFor(museCli, { trusted: true, model: 'muse-spark-1.3', effort: 'max' }), '/bin/muse.cmd');
 		const injected = Object.fromEntries(spec.injected.map(file => [file.path, file.path.endsWith('.json') ? JSON.parse(file.content) : file.content]));
+		const firstLine = '[facade] You are @lint #a7, created by @you. Your task is #m12. Call read_messages, read the task, then carry it out.';
 
-		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, untrusted: museCli.launch(inputFor(museCli), '/bin/muse.cmd').args }, {
+		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, untrusted: museCli.launch(inputFor(museCli), '/bin/muse.cmd').args, withTask: museCli.launch(inputFor(museCli, { prompt: firstLine }), '/bin/muse.cmd').args.slice(-2) }, {
 			executable: '/bin/muse.cmd',
 			args: ['--trust-workspace', '--disable-approval', '--disable-sandbox', '--model', 'muse-spark-1.3', '--reasoning-effort', 'max'],
 			env: { MUSE_NO_AUTO_UPDATE: '1' },
@@ -178,7 +181,8 @@ suite('CLIs: each launch, argument by argument', () => {
 				'.mcp.json': { mcpServers: { facade: { command: MCP.command, args: MCP.args, env: { ...MCP.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS}' } } } },
 				'.agents/skills/facade/SKILL.md': SKILL_MD
 			},
-			untrusted: ['--disable-approval', '--disable-sandbox', '--model', 'model-x', '--reasoning-effort', 'high']
+			untrusted: ['--disable-approval', '--disable-sandbox', '--model', 'model-x', '--reasoning-effort', 'high'],
+			withTask: ['high', firstLine]
 		});
 	});
 
@@ -200,13 +204,13 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
+	test('Antigravity runs in its own UI without asking, its background update off, warming up on a first message of its own, the folders of long messages and of screens in its workspace, on a model\'s base name with the effort that picks its variant; its server and skill go into the folder as one plugin, which every agent there shares', () => {
 		const spec = antigravityCli.launch(inputFor(antigravityCli, { model: 'gemini-3.8-flash', effort: 'medium', prompt: 'Not given here.' }), '/bin/agy.exe');
 		const injected = Object.fromEntries(spec.injected.map(file => [file.path, file.path.endsWith('.json') ? JSON.parse(file.content) : file.content]));
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task }, {
 			executable: '/bin/agy.exe',
-			args: ['-i', 'Reply with the single word ready, and nothing else.', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
+			args: ['-i', 'Reply with the single word ready, and nothing else.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
 			env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
 			cwd: '/lab',
 			files: [],
@@ -242,6 +246,8 @@ suite('CLIs: how the person has Facade start each one', () => {
 				'--strict-mcp-config',
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--plugin-dir', path.join('/runs', '7.plugin'),
+				'--disallowedTools', 'AskUserQuestion',
+				'--add-dir', '/record/messages', '/record/screens',
 				'--permission-mode', 'bypassPermissions',
 				'--model', 'opus',
 				'--add-dir', '/shared/opus',
@@ -301,7 +307,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 
 	test('a `${name}` a launch has no value for - whatever is written between the braces - refuses the launch, naming the setting and the values there are', () => {
 		const refused = (launch: unknown) => outcome(() => claudeCli.launch(inputFor(claudeCli, { config: readCliConfig(claudeCli, name => name === 'launch' ? launch : undefined) }), '/bin/claude'));
-		const values = 'it has ${mcpConfig}, ${settingsFile}, ${pluginDir}, ${model}, ${effort}, ${task}.';
+		const values = 'it has ${mcpConfig}, ${settingsFile}, ${pluginDir}, ${messagesDir}, ${screensDir}, ${model}, ${effort}, ${task}.';
 
 		assert.deepStrictEqual([refused({ arguments: { extra: ['--add-dir', '${home}'] } }), refused({ arguments: { model: ['--model', '${model_name}'] } })], [
 			`facade.orchestration.claude.launch.arguments.extra has \${home}, for which Facade has no value: ${values}`,
@@ -372,11 +378,11 @@ suite('CLIs: how the person has Facade start each one', () => {
 		assert.deepStrictEqual({ list, under: keys.filter(key => key === list || key.startsWith(`${list}.`)) }, { list: 'facade.agents', under: [] });
 	});
 
-	test('Facade: Show Agent Launch shows, by each CLI\'s section, the program Facade runs - with the script it gives Node for an npm shim, and whether cmd.exe runs it - how its task reaches it, its launch as Facade starts it now - Facade\'s own with the person\'s changes over it - and those changes as the person wrote them', () => {
+	test('Facade: Show Agent Launch shows, by each CLI\'s section, the program Facade runs - with the script it gives Node for an npm shim, and whether cmd.exe runs it - how an agent\'s first line reaches it, its launch as Facade starts it now - Facade\'s own with the person\'s changes over it - and those changes as the person wrote them', () => {
 		const yours = { environment: { DISABLE_AUTOUPDATER: null } };
 		const config = readCliConfig(claudeCli, name => name === 'launch' ? yours : undefined);
 		const document = launchDocument([
-			// One that cmd.exe runs is told of its task in its terminal, whatever the CLI.
+			// One that cmd.exe runs takes its first line as its argument too: Facade's own text, which cmd.exe reads nothing in.
 			{ cli: claudeCli, config, yours, program: { target: { executable: 'C:/tools/claude.cmd', args: [], throughCmd: true } } },
 			{ cli: codexCli, config: codexCli.defaults, yours: undefined, program: { target: { executable: 'C:/node/node.exe', args: ['C:/npm/codex.js'], throughCmd: false } } },
 			{ cli: museCli, config: museCli.defaults, yours: {}, program: { target: { executable: 'C:/muse/muse.exe', args: [], throughCmd: false } } },
@@ -388,9 +394,9 @@ suite('CLIs: how the person has Facade start each one', () => {
 		assert.deepStrictEqual({ comments: [first.startsWith('// '), second.startsWith('// ')], shown: JSON.parse(json.join('\n')), autoupdater: config.launch.environment.DISABLE_AUTOUPDATER }, {
 			comments: [true, true],
 			shown: {
-				claude: { program: 'C:/tools/claude.cmd', throughCmd: true, task: 'terminal', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours },
+				claude: { program: 'C:/tools/claude.cmd', throughCmd: true, task: 'argument', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours },
 				codex: { program: 'C:/node/node.exe', script: 'C:/npm/codex.js', task: 'argument', launch: launch(codexCli), yourChanges: {} },
-				muse: { program: 'C:/muse/muse.exe', task: 'terminal', launch: launch(museCli), yourChanges: {} },
+				muse: { program: 'C:/muse/muse.exe', task: 'argument', launch: launch(museCli), yourChanges: {} },
 				antigravity: { program: 'not on this machine: agy is not on this machine\'s PATH', launch: launch(antigravityCli), yourChanges: {} }
 			},
 			autoupdater: undefined

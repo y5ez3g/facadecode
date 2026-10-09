@@ -30,10 +30,35 @@
     "test": "node ../../node_modules/mocha/bin/mocha --ui tdd --timeout 30000 \"out/test/**/*.test.js\""
   },
   "contributes": {
+    "languages": [
+      {
+        "id": "facade-screen",
+        "aliases": [
+          "Facade Screen"
+        ]
+      }
+    ],
+    "configurationDefaults": {
+      "[facade-screen]": {
+        "editor.colorDecorators": false
+      }
+    },
     "commands": [
       {
         "command": "facade.agents.startAgent",
         "title": "%command.startAgent%",
+        "category": "%command.category%",
+        "enablement": "config.facade.orchestration.enabled"
+      },
+      {
+        "command": "facade.agents.openChatRoom",
+        "title": "%command.openChatRoom%",
+        "category": "%command.category%",
+        "enablement": "config.facade.orchestration.enabled"
+      },
+      {
+        "command": "facade.agents.deleteChatRooms",
+        "title": "%command.deleteChatRooms%",
         "category": "%command.category%",
         "enablement": "config.facade.orchestration.enabled"
       },
@@ -52,6 +77,14 @@
       "commandPalette": [
         {
           "command": "facade.agents.startAgent",
+          "when": "config.facade.orchestration.enabled"
+        },
+        {
+          "command": "facade.agents.openChatRoom",
+          "when": "config.facade.orchestration.enabled"
+        },
+        {
+          "command": "facade.agents.deleteChatRooms",
           "when": "config.facade.orchestration.enabled"
         }
       ]
@@ -138,6 +171,33 @@
                       "type": "string"
                     }
                   },
+                  "questions": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--disallowedTools",
+                      "AskUserQuestion"
+                    ]
+                  },
+                  "messages": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--add-dir",
+                      "${messagesDir}",
+                      "${screensDir}"
+                    ]
+                  },
                   "fullAccess": {
                     "type": [
                       "array",
@@ -209,6 +269,15 @@
                     "${settingsFile}",
                     "--plugin-dir",
                     "${pluginDir}"
+                  ],
+                  "questions": [
+                    "--disallowedTools",
+                    "AskUserQuestion"
+                  ],
+                  "messages": [
+                    "--add-dir",
+                    "${messagesDir}",
+                    "${screensDir}"
                   ],
                   "fullAccess": [
                     "--dangerously-skip-permissions"
@@ -382,6 +451,24 @@
                       "-c",
                       "notice.hide_rate_limit_model_nudge=true"
                     ]
+                  },
+                  "questions": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "messages": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
                   },
                   "fullAccess": {
                     "type": [
@@ -613,6 +700,30 @@
                       "type": "string"
                     }
                   },
+                  "questions": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "messages": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "--add-dir",
+                      "${messagesDir}",
+                      "--add-dir",
+                      "${screensDir}"
+                    ]
+                  },
                   "fullAccess": {
                     "type": [
                       "array",
@@ -668,6 +779,12 @@
                   "warmUp": [
                     "-i",
                     "Reply with the single word ready, and nothing else."
+                  ],
+                  "messages": [
+                    "--add-dir",
+                    "${messagesDir}",
+                    "--add-dir",
+                    "${screensDir}"
                   ],
                   "fullAccess": [
                     "--mode",
@@ -799,6 +916,24 @@
                       "type": "string"
                     }
                   },
+                  "questions": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "messages": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "fullAccess": {
                     "type": [
                       "array",
@@ -846,6 +981,18 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "task": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "default": [
+                      "${task}"
+                    ]
                   }
                 },
                 "additionalProperties": false,
@@ -861,6 +1008,9 @@
                   "effort": [
                     "--reasoning-effort",
                     "${effort}"
+                  ],
+                  "task": [
+                    "${task}"
                   ]
                 },
                 "markdownDescription": "%config.launch.arguments%"
