@@ -128,7 +128,8 @@ read_messages(ids?, all?)
 ```
 
 - No arguments: the caller's unread messages.
-- ids: a nonempty list of message references, written `#m42` or `m42`.
+- ids: a nonempty list of message references, written `#m42` or `m42`. A single
+  reference given alone is a list of one.
 - all: boolean, false by default; true returns all messages addressed to the caller in the current session,
   including delivered and returned messages, for context recovery.
 

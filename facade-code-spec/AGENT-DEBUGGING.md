@@ -185,7 +185,8 @@ press_keys(agent, keys)
 ```
 
 `agent` follows D4. `keys` is an array of 1–50 strings, each naming one supported
-key or one printable Unicode character.
+key or one printable Unicode character. A single string given alone is an array of
+one, as for every list argument of Facade's tools.
 
 Supported names are Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down,
 Left, Right, Home, End, PageUp, PageDown, Space, and Ctrl+A through Ctrl+Z.
@@ -309,7 +310,7 @@ second terminal emulator, vendor-specific screen reader or prompt classifier.
 | _facade.terminal.read(run, lines) | Snapshot the rendered buffer with D2's annotations and metadata |
 | _facade.terminal.type(run, text, options) | Paste with the requested Enter behavior; return observed write effects |
 | _facade.terminal.keys(run, keys) | Encode/send the validated keys in the current terminal modes; return the prefix sent |
-| _facade.terminal.input(run) | Answer D3's observed human input - a draft pending and the last key - for the doorbell scheduler (M6) |
+| _facade.terminal.input(run) | Answer D3's observed human input - a draft pending and the last key - and whether Facade's own input is going in or queued, for the doorbell scheduler: a doorbell makes its line only once neither holds it, from the messages unread then (M5, M6, M10) |
 | Terminal creation/disposal hooks | Register run identity, input tracking and final-screen destination |
 
 Use xterm's parsed buffers and cell attributes, joining wrapped rows. Ensure the
