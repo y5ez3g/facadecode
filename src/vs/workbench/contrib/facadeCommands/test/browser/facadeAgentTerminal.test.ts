@@ -350,16 +350,29 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
 			await agent.type('from Facade', { enter: true, enterDelayMs: 0 });
-			const afterFacade = agent.personInput();
+			const afterFacade = agent.inputState();
 			await timeout(1_000);
 			terminal.type('draft');
-			const afterDraft = agent.personInput();
+			const afterDraft = agent.inputState();
 			terminal.type(String.fromCharCode(13));
-			assert.deepStrictEqual({ afterFacade, afterDraft, afterEnter: agent.personInput() }, {
-				afterFacade: { pending: false, lastKey: undefined },
-				afterDraft: { pending: true, lastKey: 1000 },
-				afterEnter: { pending: false, lastKey: 1000 }
+			assert.deepStrictEqual({ afterFacade, afterDraft, afterEnter: agent.inputState() }, {
+				afterFacade: { pending: false, lastKey: undefined, busy: false },
+				afterDraft: { pending: true, lastKey: 1000, busy: false },
+				afterEnter: { pending: false, lastKey: 1000, busy: false }
 			});
+		}));
+
+		test('tells whether Facade\'s own input goes in there, or waits its turn, now: a doorbell waits until none does, then says what is unread', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			const terminal = new TestTerminal(store, xterm());
+			const agent = contributionOf(terminal);
+			const idle = agent.inputState().busy;
+			const typing = agent.type('one', { enter: true, enterDelayMs: 300 });
+			const pressing = agent.keys(['Enter'], {});
+			const whileTyping = agent.inputState().busy;
+			await typing;
+			const whilePressing = agent.inputState().busy;
+			await pressing;
+			assert.deepStrictEqual({ idle, whileTyping, whilePressing, after: agent.inputState().busy }, { idle: false, whileTyping: true, whilePressing: true, after: false });
 		}));
 
 		test('gives up on a call still waiting at its queue timeout - wherever it is in the queue - and never types it later', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {

@@ -141,7 +141,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				steps.push(`press ${keys.join(' ')} in ${title} ${JSON.stringify(options)}`);
 				return { outcome: 'applied', keysSent: keys.length };
 			},
-			personInput: () => ({ pending: true, lastKey: 7 })
+			inputState: () => ({ pending: true, lastKey: 7, busy: true })
 		});
 	}
 
@@ -543,8 +543,8 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				pressedInShell: undefined,
 				registered: true,
 				registeredNone: false,
-				input: { pending: true, lastKey: 7 },
-				inputByName: { pending: true, lastKey: 7 },
+				input: { pending: true, lastKey: 7, busy: true },
+				inputByName: { pending: true, lastKey: 7, busy: true },
 				inputOfShell: undefined,
 				inputNone: undefined,
 			},

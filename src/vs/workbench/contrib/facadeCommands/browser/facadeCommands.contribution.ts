@@ -22,7 +22,7 @@ import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IWorktreeService } from '../../worktrees/browser/worktrees.js';
 import { isAgentKey } from './facadeAgentKeys.js';
 import { MOST_SCREEN_LINES } from './facadeAgentScreen.js';
-import { FacadeAgentTerminal, IAgentInputEffect, IAgentPersonInput, IAgentScreenRead, IAgentTerminalOptions } from './facadeAgentTerminal.js';
+import { FacadeAgentTerminal, IAgentInputEffect, IAgentInputState, IAgentScreenRead, IAgentTerminalOptions } from './facadeAgentTerminal.js';
 import { FacadeNotifications } from './facadeNotifications.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
@@ -308,13 +308,14 @@ CommandsRegistry.registerCommand('_facade.terminal.keys', async (accessor, ...ar
 });
 
 // `(processId, name?)`: what the person typed into the terminal of `processId` - `name`, as
-// `agentTerminalOf` finds it - since they last pressed Enter or Ctrl+C there, and when they last typed:
-// what holds `_facade.terminal.type` and `_facade.terminal.keys` back (`IAgentPersonInput`). None where
-// there is no such terminal, or it is not registered as an agent's: the person's keys are watched there alone.
-CommandsRegistry.registerCommand('_facade.terminal.input', (accessor, ...args): IAgentPersonInput | undefined => {
+// `agentTerminalOf` finds it - since they last pressed Enter or Ctrl+C there, and when they last typed; and
+// whether Facade's own input goes in there or waits its turn: what holds `_facade.terminal.type` and
+// `_facade.terminal.keys` back (`IAgentInputState`). None where there is no such terminal, or it is not
+// registered as an agent's: the person's keys are watched there alone.
+CommandsRegistry.registerCommand('_facade.terminal.input', (accessor, ...args): IAgentInputState | undefined => {
 	const [processId, name] = args;
 	assertType(isNumber(processId) || processId === null, 'number');
 	assertType(isUndefinedOrNull(name) || isString(name), 'string');
 	const terminal = agentTerminalOf(accessor, processId, name);
-	return terminal?.isAgent ? terminal.personInput() : undefined;
+	return terminal?.isAgent ? terminal.inputState() : undefined;
 });

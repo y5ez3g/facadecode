@@ -81,6 +81,12 @@ export interface IAgentPersonInput {
 	readonly lastKey: number | undefined;
 }
 
+/** What holds automated input into an agent's terminal back now: the person's typing, and Facade's own input there. */
+export interface IAgentInputState extends IAgentPersonInput {
+	/** Whether Facade's own input goes in there, or waits its turn. */
+	readonly busy: boolean;
+}
+
 /** xterm's terminal with the write buffer its core keeps, as `xtermTerminal.ts` reaches the core: internal to xterm. */
 interface ITerminalWithWriteBuffer extends RawXtermTerminal {
 	readonly _core?: { readonly _writeBuffer?: { flushSync?(): void } };
@@ -179,6 +185,11 @@ class InputQueue extends Disposable {
 	/** Settles once the terminal's process ended, or the queue went with its terminal. */
 	get whenEnded(): Promise<void> {
 		return this.ended.p;
+	}
+
+	/** Whether an operation goes in now, or waits its turn. */
+	get busy(): boolean {
+		return this.draining || this.queued.length > 0;
 	}
 
 	add(run: IQueuedInput['run'], queueTimeoutMs: number | undefined, notApplied: IAgentInputEffect): Promise<IAgentInputEffect> {
@@ -372,9 +383,12 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 		return this.ctx.instance.exitCode !== undefined;
 	}
 
-	/** What the person typed there, as holds Facade's input back: watched from when it is registered as an agent's. */
-	personInput(): IAgentPersonInput {
-		return this.person.state();
+	/**
+	 * What holds Facade's input there back now: what the person typed, watched from when it is registered as an
+	 * agent's, and whether Facade's own input goes in or waits its turn.
+	 */
+	inputState(): IAgentInputState {
+		return { ...this.person.state(), busy: this.queue.busy };
 	}
 
 	/**
