@@ -113,7 +113,8 @@ start if trust is granted. A denied request creates no agent.
 Before the CLI supplies a title, the terminal reads `@claude #a1`. Afterwards it
 reads, for example, `Fix the login bug · @claude #a1`. A user-renamed terminal keeps
 the agent suffix; renaming its display title does not change the agent's identity.
-Use the CLI logo, or the standard robot icon for an unrecognized custom program.
+A built-in agent uses its CLI's logo; every custom agent uses the standard robot icon,
+whatever program it runs.
 
 The button counts all starting, running and stopping agents in the window.
 Workspace rows display their agents' logos using the existing workspace bar
@@ -139,30 +140,43 @@ A YOLO-on caller can therefore reach an agent in a YOLO-off tree.
 A human-created agent snapshots the setting at launch. A child inherits its
 creator's mode, regardless of later changes to the setting. A reload preserves it.
 
-Approval policy is resolved independently:
+Who started an agent is the second switch beside YOLO. An agent the person starts from the UI - the agent
+menu, Start Agent - is theirs: its CLI runs as it usually does. It may ask them for approval, put a question up
+and update itself; Facade adds only what it needs to work - its server, the trust step, the messages folder and
+the agent's instructions. An agent started through `start_agent` - by another agent, or by the person's scripts
+as `@human` - runs where nobody may be watching: nothing in it may wait for an answer.
 
-1. With YOLO on, disable the CLI's tool approvals.
-2. With YOLO off, exempt the whole Facade MCP server from approval if the CLI
-   supports that exemption. Other tools retain the CLI's normal approval behavior.
-3. If a precise exemption is unavailable, disable all tool approvals while keeping
-   the supported sandbox enabled. Automatic collaboration takes priority.
-4. An explicit conflicting user override must be visible in Show Agent Launch and
-   launch diagnostics; it must not be reported as a working exemption.
+| | Started by the person | Started through `start_agent` |
+| --- | --- | --- |
+| YOLO on | Approvals off; sandbox off | Approvals off; sandbox off |
+| YOLO off | Sandbox on; Facade's tools exempt from approval where the CLI can exempt them; anything else, leaving the sandbox included, asks the person as the CLI does | Sandbox on; Facade's tools exempt; anything else that would ask is refused unasked: nothing waits, and nothing leaves the sandbox |
+
+1. Where the CLI cannot exempt Facade's tools alone, YOLO off turns all of its tool approvals off and keeps its
+   supported sandbox on: automatic collaboration takes priority.
+2. A sandbox that offers the agent a way out of it - a command run outside it - is closed for an agent started
+   through `start_agent`; for one the person started, using it asks the person.
+3. A project's own hooks or settings that the CLI would stop to have reviewed: for an agent the person started,
+   the CLI asks as it usually does. Through `start_agent` with YOLO on, Facade passes the CLI's switch that
+   trusts them for this run; with YOLO off, hooks nobody has reviewed neither run nor wait - the CLI's switch that
+   runs none this time where it has one, else the start is refused, saying the project's hooks are not trusted
+   yet and how to trust them.
+4. An explicit conflicting override of the person's must be visible in Show Agent Launch and the launch's
+   diagnostics; it is never reported as a working exemption.
 
 A CLI without a native sandbox does not acquire one from Facade. Show Agent Launch
 and agent metadata must identify the effective sandbox as on, off or unavailable.
 Do not silently turn a supported sandbox off to implement YOLO off. Platform
 capabilities and the supported launch configuration must be verified in L14.
 
-All Facade-created agents, including human-created roots, are launched with
-blocking question tools disabled wherever the CLI provides a launch setting for
-them. This includes Claude Code's `AskUserQuestion` and equivalent tools that leave
-a terminal waiting for someone to select an answer. Disable nonessential onboarding,
-tips, surveys, update prompts and similar interruptions through existing CLI
-configuration. This uses launch configuration, not a vendor-specific message driver.
+An agent started through `start_agent` is launched with blocking question tools disabled wherever the CLI
+provides a launch setting for them - Claude Code's `AskUserQuestion` and equivalent tools that leave a terminal
+waiting for someone to select an answer. Its launch also turns off, through the CLI's own configuration, what
+would interrupt it or wait: update prompts and self-update, surveys, onboarding, tips and input-box helpers.
+An agent the person started keeps all of these as the CLI has them: its questions are theirs to answer. This
+uses launch configuration, not a vendor-specific message driver.
 
-Where a CLI cannot remove a question tool, the startup instructions explicitly tell
-the agent to ask through Facade messages instead. A CLI-specific limitation is
+Where a CLI cannot remove a question tool, the startup instructions of an agent started through `start_agent`
+explicitly tell it to ask through Facade messages instead. A CLI-specific limitation is
 documented in its verified launch record. An unexpected prompt is handled through
 the debug tools; the normal recovery is not a notification asking the person to
 visit a child terminal and click an answer.
@@ -338,8 +352,18 @@ override remains empty when defaults change in a future release.
 | `settings` | Per-launch settings, recursively merged; primarily for Claude Code |
 | `taskDelay` | Delay before the first typed task notification after connection, integer 0–60000 ms |
 | `enterDelay` | Delay between a paste and Enter, integer 0–60000 ms |
+| `unattended` | What an agent started through `start_agent` runs with in place of parts of the launch (L4): its own `arguments` groups, each replacing the launch's group of the same name (an empty or null one leaves that group out), and `environment` and `settings` merged over the launch's (null removes the launch's key too). The person's own agents run with the launch alone |
 
-The question-suppression group applies to every run. The messages group grants
+A group of the launch that the person changes does not reach an agent started through
+`start_agent` where the unattended part has a group of that name: they change it there
+too. A change meant for the person's own agents never makes an unattended one wait.
+
+The questions group, and what keeps updates, surveys, tips and input-box helpers from
+a run, are part of the unattended part of each built-in's launch: they apply to agents
+started through `start_agent` only (L4). An agent started that way with no task, of a
+CLI whose question tool no launch removes and that takes its notice as an argument, is
+given its opening line alone as that argument - who it is, and to ask in words;
+Antigravity's warm-up says the same. The messages group grants
 access to message and snapshot files when necessary, including with a sandbox.
 warmUp, connect and messages apply only with the framework enabled. Exactly one of
 yoloOn/yoloOff applies. model and effort apply only when supplied; task contains
@@ -355,7 +379,8 @@ configuration errors. Inapplicable groups are not expanded.
 
 Expose the full supported object schema and completion in settings.json. Reject
 unknown keys, wrong types and invalid delays before launch. Show Agent Launch
-shows defaults plus overrides, effective sandbox/approval behavior, persistent
+shows defaults plus overrides, effective sandbox/approval behavior - for an agent
+the person starts and for one started through `start_agent`, each - persistent
 trust effects and configuration errors, without tokens or inherited secrets.
 
 The default enterDelay is 250 ms and taskDelay is 0 ms. A built-in may override

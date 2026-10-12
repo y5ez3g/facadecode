@@ -238,6 +238,9 @@ reorder         Move Folder Up / Down (Alt+Up / Alt+Down). `reorderFolders`, que
                 relauncher watches folders[0] for the deprecated `workspace.rootPath`
 remove          confirmed with the path named; "do not ask again" is
                 `facade.workspaceBar.confirmRemoveFolder`, written only when the answer was yes.
+                Every way in asks the same - the bar's row, Workspaces: Remove Folder from
+                Workspace... and the Explorer's Remove Folder from Workspace - as each stops the
+                folder's agents and closes the editors kept for it
                 The window moves to the row that took the index; the folder's editors go with it,
                 its name and colour stay (they are the folder's, kept per profile)
 customize       a display name, one of ten colours and one of ten glyphs (§7), per profile
