@@ -14,6 +14,7 @@ import { IConfigurationResolverService } from '../../../services/configurationRe
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { TerminalContribCommandId } from '../terminalContribExports.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 export abstract class BaseTerminalBackend extends Disposable {
 	private _isPtyHostUnresponsive: boolean = false;
@@ -114,7 +115,10 @@ export abstract class BaseTerminalBackend extends Disposable {
 			this._logService.warn(`Could not revive serialized processes, wrong version "${crossVersionState.version}"`, crossVersionState);
 			return undefined;
 		}
-		return crossVersionState.state as ISerializedTerminalState[];
+		// Facade Code: never an agent's run. Revived, its process is started once a window takes its terminal back -
+		// a reload later, whatever came of the agent meanwhile - and its CLI runs again (L12: never replay a
+		// launch; N-30). The window that comes back ends it, its process gone with the app (`isAgentGoneAtStartup`)
+		return (crossVersionState.state as ISerializedTerminalState[]).filter(state => !isFacadeRunTerminal(state.shellLaunchConfig));
 	}
 
 	protected _getWorkspaceId(): string {

@@ -60,6 +60,8 @@ export interface IProcessDetails {
 	hasChildProcesses: boolean;
 	shellIntegrationNonce: string;
 	tabActions?: ITerminalTabAction[];
+	/** Facade Code: the code it exited with, for one listed as exited lately (`IListProcessesOptions.exited`). */
+	exitCode?: number;
 }
 
 export type ITerminalTabLayoutInfoDto = IRawTerminalTabLayoutInfo<IProcessDetails>;

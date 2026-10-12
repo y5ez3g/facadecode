@@ -34,9 +34,10 @@ import { ILogService, NullLogService } from '../../../../../platform/log/common/
 import { INotificationHandle, INotificationService, IPromptChoice } from '../../../../../platform/notification/common/notification.js';
 import { IProgressService, ProgressLocation } from '../../../../../platform/progress/common/progress.js';
 import { ICommandDetectionCapability, ITerminalCapabilityStore, ITerminalCommand } from '../../../../../platform/terminal/common/capabilities/capabilities.js';
-import { TerminalSettingId } from '../../../../../platform/terminal/common/terminal.js';
+import { ITerminalBackend, TerminalSettingId } from '../../../../../platform/terminal/common/terminal.js';
+import { IProcessDetails } from '../../../../../platform/terminal/common/terminalProcess.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, IWorkspaceTrustUriInfo } from '../../../../../platform/workspace/common/workspaceTrust.js';
 // For the keys every focused list has, which the bar's own have to win over.
 import '../../../../browser/actions/listCommands.js';
@@ -45,11 +46,19 @@ import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/wor
 import { INewWorktreeAnswer, IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IEditorIdentifier } from '../../../../common/editor.js';
+import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
+import { IWorkingCopy } from '../../../../services/workingCopy/common/workingCopy.js';
+import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
+import { IFilesConfigurationService } from '../../../../services/filesConfiguration/common/filesConfigurationService.js';
+import { IFacadeRunsService } from '../../../facadeCommands/browser/facadeRuns.js';
+import { facadeRunProperties, IFacadeRun } from '../../../facadeCommands/common/facadeRun.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
-import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
-import { DeleteWorktreeAction, freeWorktreeName, freeWorktreeUri, NewWorktreeAction, readSetupCommands, worktreeFolderName, WorktreeService } from '../../browser/worktrees.js';
+import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../../terminal/browser/terminal.js';
+import { DeleteWorktreeAction, freeWorktreeName, freeWorktreeUri, IRemoveWorktreeOptions, NewWorktreeAction, readSetupCommands, worktreeFolderName, WorktreeService } from '../../browser/worktrees.js';
 
 suite('Worktrees - names, paths and setup', () => {
 
@@ -119,6 +128,8 @@ suite('Worktrees - making and deleting one', () => {
 	const main = URI.file('/lab');
 	const w2 = URI.file('/home/me/.facade/worktrees/lab/w2');
 	const w3 = URI.file('/home/me/.facade/worktrees/lab/w3');
+	/** The SHA-256 of `{}`, in hex. */
+	const SHA256_OF_EMPTY_OBJECT = '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a';
 
 	/** What the service did that anybody would notice, in the order it did it. */
 	let steps: string[];
@@ -133,26 +144,60 @@ suite('Worktrees - making and deleting one', () => {
 	let answer: INewWorktreeAnswer | undefined;
 	/** The files on disk, by path: `.facade/worktrees.json` of a worktree or a repository. */
 	let files: Map<string, string>;
+	/** Symbolic links to folders, by their paths: a path through one has the folder's as its real path. */
+	let links: Map<string, string>;
 	/** How long a new terminal's shell integration is waited for (`terminal.integrated.shellIntegration.timeout`). */
 	let shellIntegrationTimeout: number;
 	/** The terminal setup runs in, once there is one. */
 	let setupShell: DeferredPromise<ISetupTerminal>;
 	let terminals: ITerminalInstance[];
+	/** What the pty host runs for every window: other windows' terminals among them. */
+	let ptyProcesses: IProcessDetails[];
 	/** The terminals of the worktree's editor area, whatever they started in (`IFolderTerminalsService`). */
 	let editorAreaTerminals: ITerminalInstance[];
 	/** Whether trust is on, the workspace trusted, trust given when asked, and the repository trusted where that differs. */
 	let trust: { enabled: boolean; trusted: boolean; granted: boolean; repositoryTrusted?: boolean };
 	/** Where each progress was shown. */
 	let progressShown: ProgressLocation[];
+	/** The files open with unsaved changes, editors and notebooks alike. */
+	let unsaved: IWorkingCopy[];
+	/** The window's working copies of files with nothing unsaved. */
+	let open: IWorkingCopy[];
+	/** Fired as a working copy comes: a file opened. */
+	let registered: Emitter<IWorkingCopy>;
+	/** Called with each command the service runs, as it runs it. */
+	let whenCommand: ((command: string) => void) | undefined;
+	/** The files open in editors, saved or not. */
+	let opened: URI[];
+	/** The window's folders, `folders[]`. */
+	let workspaceFolders: URI[];
+	/** What the runs service was told of terminals the person's deletion closes, and why. */
+	let closing: string[];
 	let instantiationService: TestInstantiationService;
 
-	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean }): ITerminalInstance {
+	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean; readonly run?: IFacadeRun; readonly exitCode?: number }): ITerminalInstance {
 		return upcastPartial<ITerminalInstance>({
+			title: name,
 			cwd,
 			initialCwd: cwd,
 			remoteAuthority: options?.remoteAuthority,
 			hasChildProcesses: !!options?.running,
+			reconnectionProperties: options?.run && facadeRunProperties(options.run),
+			exitCode: options?.exitCode,
 			dispose: () => { steps.push(`close ${name}`); }
+		});
+	}
+
+	/** A file of a worktree open with unsaved changes. */
+	function unsavedFile(path: string): IWorkingCopy {
+		const resource = URI.file(path);
+		opened.push(resource);
+		return upcastPartial<IWorkingCopy>({
+			resource,
+			revert: async () => {
+				steps.push(`revert ${path}`);
+				unsaved = unsaved.filter(each => each.resource.path !== path);
+			}
 		});
 	}
 
@@ -163,8 +208,12 @@ suite('Worktrees - making and deleting one', () => {
 		readonly sent: { readonly line: string; readonly id: string | undefined }[];
 		/** Shell integration lighting up, a moment after the shell starts. */
 		integrate(): void;
-		/** The shell saying a command finished: the one run with `id`, or with none, one of somebody else's. */
-		finish(id: string | undefined): void;
+		/** The shell saying a command finished: the one run with `id`, or with none, one of somebody else's - with its exit code and output. */
+		finish(id: string | undefined, exitCode?: number, output?: string): void;
+		/** The shell ending in the middle of a line - its `exit 7` - with that code, the line having written `output`. */
+		exit(exitCode: number, output?: string): void;
+		/** Whether its terminal was closed. */
+		readonly closed: () => boolean;
 		/** Resolves once `count` lines have been sent. */
 		whenSent(count: number): Promise<void>;
 	}
@@ -173,33 +222,47 @@ suite('Worktrees - making and deleting one', () => {
 		const added = store.add(new Emitter<ICommandDetectionCapability>());
 		const finished = store.add(new Emitter<ITerminalCommand>());
 		const disposed = store.add(new Emitter<ITerminalInstance>());
+		const exited = store.add(new Emitter<number | undefined>());
 		const onDidSend = store.add(new Emitter<void>());
-		const detection = upcastPartial<ICommandDetectionCapability>({ onCommandFinished: finished.event });
+		let executing: ITerminalCommand | undefined;
+		const detection = upcastPartial<ICommandDetectionCapability>({ onCommandFinished: finished.event, get executingCommandObject() { return executing; } });
 		let integrated = false;
+		let closed = false;
 		const sent: { line: string; id: string | undefined }[] = [];
 		const send = (line: string, id: string | undefined) => {
 			sent.push({ line, id });
 			onDidSend.fire();
 		};
 
-		return {
-			instance: upcastPartial<ITerminalInstance>({
-				isDisposed: false,
-				hasRemoteAuthority: false,
-				onDisposed: disposed.event,
-				capabilities: upcastPartial<ITerminalCapabilityStore>({
-					get: (() => integrated ? detection : undefined) as ITerminalCapabilityStore['get'],
-					onDidAddCommandDetectionCapability: added.event
-				}),
-				runCommand: async (line, _execute, id) => send(line, id),
-				sendText: async line => send(line, undefined)
+		const instance = upcastPartial<ITerminalInstance>({
+			get isDisposed() { return closed; },
+			hasRemoteAuthority: false,
+			onDisposed: disposed.event,
+			onExit: exited.event,
+			capabilities: upcastPartial<ITerminalCapabilityStore>({
+				get: (() => integrated ? detection : undefined) as ITerminalCapabilityStore['get'],
+				onDidAddCommandDetectionCapability: added.event
 			}),
+			runCommand: async (line, _execute, id) => send(line, id),
+			sendText: async line => send(line, undefined),
+			dispose: () => {
+				closed = true;
+				disposed.fire(instance);
+			}
+		});
+		return {
+			instance,
 			sent,
+			closed: () => closed,
 			integrate: () => {
 				integrated = true;
 				added.fire(detection);
 			},
-			finish: id => finished.fire(upcastPartial<ITerminalCommand>({ id })),
+			finish: (id, exitCode = 0, output) => finished.fire(upcastPartial<ITerminalCommand>({ id, exitCode, getOutput: () => output })),
+			exit: (exitCode, output) => {
+				executing = upcastPartial<ITerminalCommand>({ getOutput: () => output });
+				exited.fire(exitCode);
+			},
 			whenSent: async count => {
 				if (sent.length < count) {
 					await Event.toPromise(Event.filter(onDidSend.event, () => sent.length >= count));
@@ -240,15 +303,23 @@ suite('Worktrees - making and deleting one', () => {
 		savedOrder = undefined;
 		answer = undefined;
 		files = new Map();
+		links = new Map();
 		shellIntegrationTimeout = 60000;
 		setupShell = new DeferredPromise<ISetupTerminal>();
 		terminals = [terminal('its terminal', '/home/me/.facade/worktrees/lab/w2/src'), terminal('another', '/lab')];
 		editorAreaTerminals = [];
 		trust = { enabled: false, trusted: true, granted: false };
 		progressShown = [];
+		unsaved = [];
+		open = [];
+		whenCommand = undefined;
+		opened = [];
+		workspaceFolders = [];
+		closing = [];
 		repository = { kind: 'repository', main, folder: undefined, branch: 'main', members: [], worktrees: [{ uri: w2, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
 
 		const restored = store.add(new Emitter<void>());
+		registered = store.add(new Emitter<IWorkingCopy>());
 		instantiationService = store.add(new TestInstantiationService());
 		instantiationService.stub(IWorkspaceBarService, {
 			onDidRestoreEditors: restored.event,
@@ -285,6 +356,7 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(ICommandService, {
 			executeCommand: async <T>(id: string, ...args: unknown[]) => {
 				steps.push(describeCommand(id, args));
+				whenCommand?.(describeCommand(id, args));
 				if (missingCommands.has(id)) {
 					throw new Error(`command '${id}' not found`);
 				}
@@ -317,6 +389,9 @@ suite('Worktrees - making and deleting one', () => {
 				return shell.instance;
 			}
 		});
+		ptyProcesses = [];
+		// As the pty host answers: the orphans alone, unless every one is asked for
+		instantiationService.stub(ITerminalInstanceService, { getBackend: async () => upcastPartial<ITerminalBackend>({ listProcesses: async options => options?.attached ? ptyProcesses : ptyProcesses.filter(each => each.isOrphan) }) });
 		instantiationService.stub(ITerminalService, {
 			get instances() { return terminals; },
 			createTerminal: async () => {
@@ -337,6 +412,10 @@ suite('Worktrees - making and deleting one', () => {
 			hasCapability: () => true,
 			resolve: (() => Promise.reject(new Error('not there'))) as IFileService['resolve'],
 			exists: async () => false,
+			realpath: async (uri: URI) => {
+				const link = [...links.keys()].find(each => uri.path.startsWith(`${each}/`));
+				return link === undefined ? uri : URI.file(`${links.get(link)}${uri.path.slice(link.length)}`);
+			},
 			readFile: async uri => {
 				const content = files.get(uri.path);
 				if (content === undefined) {
@@ -366,6 +445,25 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(ILabelService, { getUriLabel: uri => uri.path, getSeparator: () => '/' });
 		instantiationService.stub(IUriIdentityService, { extUri });
 		instantiationService.stub(ILogService, new NullLogService());
+		instantiationService.stub(IWorkingCopyService, {
+			get dirtyWorkingCopies() { return unsaved; },
+			get workingCopies() { return [...open, ...unsaved]; },
+			onDidRegister: registered.event
+		});
+		instantiationService.stub(IFilesConfigurationService, {
+			isReadonly: () => false,
+			updateReadonly: (async (resources: URI | URI[], readonly: unknown) => {
+				steps.push(`${readonly === 'reset' ? 'writable' : 'read-only'} ${[resources].flat().map(uri => uri.path).join(', ')}`);
+			}) as IFilesConfigurationService['updateReadonly']
+		});
+		instantiationService.stub(IEditorService, {
+			getEditors: () => opened.map(resource => upcastPartial<IEditorIdentifier>({ editor: upcastPartial<EditorInput>({ resource }), groupId: 1 })),
+			closeEditors: (async (editors: readonly IEditorIdentifier[]) => {
+				steps.push(`close editors ${editors.map(({ editor }) => editor.resource?.path).join(', ')}`);
+			}) as IEditorService['closeEditors']
+		});
+		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ folders: workspaceFolders.map(uri => upcastPartial<IWorkspaceFolder>({ uri })) }) });
+		instantiationService.stub(IFacadeRunsService, { closingBecause: (instance, reason) => { closing.push(`${instance.title} ${reason}`); } });
 	});
 
 	test('making one: named and coloured before its row is drawn, trusted, its record read, its repository opened, and the window taken to it', async () => {
@@ -397,7 +495,7 @@ suite('Worktrees - making and deleting one', () => {
 
 		const made = await instantiationService.createInstance(WorktreeService).makeWorktree(main, ' w3 ', { startPoint: commit });
 
-		assert.deepStrictEqual({ made: made.path, steps }, {
+		assert.deepStrictEqual({ made: made.worktree.path, steps }, {
 			made: '/home/me/.facade/worktrees/lab/w3',
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
@@ -410,29 +508,100 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
-	test('made without asking, it is set up at once, in a terminal held under its row and not shown, and answered once its setup has run', async () => {
+	test('made without asking, it is answered once its setup has started, in a terminal held under its row and not shown; how the setup came out is asked for apart - the first line that failed, its exit code and output, once the last has finished (WT-5.11)', async () => {
 		gitIsRunning();
 		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
 		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
 		files.set(`${w3.path}/.facade/worktrees.json`, '{ "setup-worktree": ["npm ci", "npm run build"] }');
-		let made = false;
+		const service = instantiationService.createInstance(WorktreeService);
 
-		const making = instantiationService.createInstance(WorktreeService).makeWorktree(main, 'w3').then(() => made = true);
+		const making = service.makeWorktree(main, 'w3');
+		const shell = await setupShell.p;
+		const made = await making;
+		let outcome: unknown = 'not yet';
+		const asking = service.setupOutcome(made.worktree).then(result => outcome = result);
+		shell.integrate();
+		await shell.whenSent(1);
+		shell.finish(shell.sent[0].id, 3, 'npm ERR! missing script');
+		await shell.whenSent(2);
+		await timeout(0);
+		const beforeTheLastFinished = outcome;
+		shell.finish(shell.sent[1].id, 0);
+		await asking;
+
+		assert.deepStrictEqual({ made: made.worktree.path, beforeTheLastFinished, outcome, sent: sentLines(shell), terminal: steps.filter(step => step.includes('setup')) }, {
+			made: '/home/me/.facade/worktrees/lab/w3',
+			beforeTheLastFinished: 'not yet',
+			outcome: { kind: 'failed', line: 'npm ci', exitCode: 3, output: 'npm ERR! missing script' },
+			sent: ['run npm ci', 'run npm run build'],
+			terminal: ['hold setup under /home/me/.facade/worktrees/lab/w3'],
+		});
+	});
+
+	test('a setup line that ends its shell - its `exit 7` - ends with it: the setup failed on it, with the shell\'s code and the line\'s output; one that exits 0 before the last line failed too, the lines after it not run (AS-33)', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		answers.set('_git.createWorktreeAt w4', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		const service = instantiationService.createInstance(WorktreeService);
+		const outcomeOfSetup = async (branch: string, lines: string[], exitCode: number, output: string) => {
+			setupShell = new DeferredPromise<ISetupTerminal>();
+			files.set(`/home/me/.facade/worktrees/lab/${branch}/.facade/worktrees.json`, JSON.stringify({ 'setup-worktree': lines }));
+			const made = await service.makeWorktree(main, branch);
+			const shell = await setupShell.p;
+			const asking = service.setupOutcome(made.worktree);
+			shell.integrate();
+			await shell.whenSent(1);
+			shell.exit(exitCode, output);
+			return { outcome: await asking, sent: sentLines(shell) };
+		};
+
+		assert.deepStrictEqual({
+			seven: await outcomeOfSetup('w3', ['echo set up; exit 7', 'npm ci'], 7, 'set up'),
+			zero: await outcomeOfSetup('w4', ['exit 0', 'npm ci'], 0, '')
+		}, {
+			seven: { outcome: { kind: 'failed', line: 'echo set up; exit 7', exitCode: 7, output: 'set up\nThe shell ended with this line: the lines after it did not run.' }, sent: ['run echo set up; exit 7'] },
+			zero: { outcome: { kind: 'failed', line: 'exit 0', exitCode: 0, output: 'The shell ended with this line: the lines after it did not run.' }, sent: ['run exit 0'] }
+		});
+	});
+
+	test('an agent\'s worktree: setup that went well is said so; without shell integration, its lines sent and their completion unknown; one stopped - its start cancelled - closes its terminal; what could not be copied and a failed hook are answered, not shown to the person, and no notification says it is being made', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: ['x.secret'], hookFailure: 'the hook says no' });
+		files.set(`${w3.path}/.facade/worktrees.json`, '{ "setup-worktree": ["npm ci"] }');
+		const service = instantiationService.createInstance(WorktreeService);
+
+		const made = await service.makeWorktree(main, 'w3');
 		const shell = await setupShell.p;
 		shell.integrate();
 		await shell.whenSent(1);
-		shell.finish(shell.sent[0].id);
-		await shell.whenSent(2);
-		await timeout(0);
-		const beforeTheLastFinished = made;
-		shell.finish(shell.sent[1].id);
-		await making;
+		shell.finish(shell.sent[0].id, 0);
+		const succeeded = await service.setupOutcome(made.worktree);
 
-		assert.deepStrictEqual({ beforeTheLastFinished, made, sent: sentLines(shell), terminal: steps.filter(step => step.includes('setup')) }, {
-			beforeTheLastFinished: false,
-			made: true,
-			sent: ['run npm ci', 'run npm run build'],
-			terminal: ['hold setup under /home/me/.facade/worktrees/lab/w3'],
+		shellIntegrationTimeout = 0;
+		setupShell = new DeferredPromise();
+		const typed = await service.makeWorktree(main, 'w3');
+		const typedShell = await setupShell.p;
+		await typedShell.whenSent(1);
+		const submitted = await service.setupOutcome(typed.worktree);
+
+		setupShell = new DeferredPromise();
+		shellIntegrationTimeout = 60_000;
+		const cancelled = await service.makeWorktree(main, 'w3');
+		const cancelledShell = await setupShell.p;
+		service.stopSetup(cancelled.worktree);
+		const stopped = await service.setupOutcome(cancelled.worktree);
+
+		assert.deepStrictEqual({ copyFailures: made.copyFailures, hookFailure: made.hookFailure, succeeded, submitted, stopped, closed: cancelledShell.closed(), warned: steps.filter(step => step.startsWith('warn')), progress: progressShown }, {
+			copyFailures: ['x.secret'],
+			hookFailure: 'the hook says no',
+			succeeded: { kind: 'succeeded' },
+			submitted: { kind: 'submitted' },
+			stopped: { kind: 'stopped' },
+			closed: true,
+			warned: [],
+			progress: [],
 		});
 	});
 
@@ -487,7 +656,7 @@ suite('Worktrees - making and deleting one', () => {
 		missingCommands.add('_git.prepareWorktreeBaseAt');
 		const notRunning = await service.makeWorktree(main, 'w4').then(() => 'made', (err: Error) => err.message);
 
-		assert.deepStrictEqual({ made: made.path, whileStarting, notRunning }, {
+		assert.deepStrictEqual({ made: made.worktree.path, whileStarting, notRunning }, {
 			made: '/home/me/.facade/worktrees/lab/w3',
 			whileStarting: ['git registers its commands', '_git.prepareWorktreeBaseAt /lab inspect'],
 			notRunning: 'Worktrees are made and deleted with the Git extension, which is not running in this window.',
@@ -504,13 +673,13 @@ suite('Worktrees - making and deleting one', () => {
 		const made = () => steps.filter(step => step.startsWith('_git.createWorktreeAt'));
 
 		const first = service.makeWorktree(main, 'w3');
-		const second = service.makeWorktree(main, 'w4').then(worktree => worktree.path, (err: Error) => err.message);
+		const second = service.makeWorktree(main, 'w4').then(made => made.worktree.path, (err: Error) => err.message);
 		await stepTaken('_git.createWorktreeAt');
 		await timeout(0);
 		const whileW3IsMade = made();
 		makingW3.complete({ kind: 'created', copyFailures: [], hookFailure: undefined });
 
-		assert.deepStrictEqual({ first: (await first).path, second: await second, whileW3IsMade, made: made() }, {
+		assert.deepStrictEqual({ first: (await first).worktree.path, second: await second, whileW3IsMade, made: made() }, {
 			first: '/home/me/.facade/worktrees/lab/w3',
 			second: '/home/me/.facade/worktrees/lab/w4',
 			whileW3IsMade: ['_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3'],
@@ -742,6 +911,7 @@ suite('Worktrees - making and deleting one', () => {
 				'confirm',
 				'show /lab',
 				'hide /home/me/.facade/worktrees/lab/w2',
+				'_facade.agents.worktreeDeleting /home/me/.facade/worktrees/lab/w2',
 				'remove /home/me/.facade/worktrees/lab/w2',
 				'close its terminal',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
@@ -786,15 +956,201 @@ suite('Worktrees - making and deleting one', () => {
 		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json', 'build/out.js'], submodules: false });
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
 		const service = instantiationService.createInstance(WorktreeService);
-		const refused = await service.removeWorktree(w2, { ownFiles: ['.mcp.json'] }).then(() => 'deleted', (err: Error) => err.message);
+		files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{}');
+		const ownFiles = [{ path: '.mcp.json', sha256: SHA256_OF_EMPTY_OBJECT }];
+		const refused = await service.removeWorktree(w2, { ownFiles }).then(() => 'deleted', (err: Error) => err.message);
 		const stepsWhenRefused = [...steps];
 		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json'], submodules: false });
-		await service.removeWorktree(w2, { ownFiles: ['.mcp.json'] });
+		await service.removeWorktree(w2, { ownFiles });
 
 		assert.deepStrictEqual({ refused, stepsWhenRefused, deletedBy: steps.filter(step => step.startsWith('_git.deleteWorktreeAt') && !step.endsWith('check')) }, {
 			refused: '/home/me/.facade/worktrees/lab/w2 has changes that deleting it would lose: build/out.js. Nothing was deleted.',
 			stepsWhenRefused: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
 			deletedBy: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force']
+		});
+	});
+
+	test('deleted without asking, a file the caller put there is its own only as it wrote it: changed since, by its hash, it is the person\'s work, and refuses it (X-73)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json'], submodules: false });
+		files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{"mcpServers":{"docs":{}}}');
+
+		const refused = await instantiationService.createInstance(WorktreeService).removeWorktree(w2, { ownFiles: [{ path: '.mcp.json', sha256: SHA256_OF_EMPTY_OBJECT }] }).then(() => 'deleted', (err: Error) => err.message);
+
+		assert.deepStrictEqual({ refused, steps }, {
+			refused: '/home/me/.facade/worktrees/lab/w2 has changes that deleting it would lose: .mcp.json. Nothing was deleted.',
+			steps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check']
+		});
+	});
+
+	test('deleted without asking, unsaved editors of its files and its submodules refuse it, named, with nothing done; told to discard, the editors are closed without saving before anything could ask to save them, and it goes by force (X-14, X-73)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
+		unsaved = [unsavedFile('/home/me/.facade/worktrees/lab/w2/src/a.ts'), unsavedFile('/elsewhere/b.ts')];
+		const service = instantiationService.createInstance(WorktreeService);
+		const attempt = (options: IRemoveWorktreeOptions) => service.removeWorktree(w2, options).then(() => 'deleted', (err: Error) => err.message);
+		const editors = await attempt({});
+		unsaved = unsaved.slice(1);
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: true });
+		const submodules = await attempt({});
+		const refusedSteps = [...steps];
+		steps = [];
+		opened = [];
+		unsaved = [unsavedFile('/home/me/.facade/worktrees/lab/w2/src/a.ts')];
+		const discarded = await attempt({ discardChanges: true });
+
+		assert.deepStrictEqual({ editors, submodules, refusedSteps, discarded, steps }, {
+			editors: '/home/me/.facade/worktrees/lab/w2 has changes that deleting it would lose: src/a.ts (unsaved). Nothing was deleted.',
+			submodules: '/home/me/.facade/worktrees/lab/w2 has submodules, which would go with it with any of their commits not pushed. Nothing was deleted.',
+			refusedSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check', '_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
+			discarded: 'deleted',
+			steps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'revert /home/me/.facade/worktrees/lab/w2/src/a.ts',
+				'close editors /home/me/.facade/worktrees/lab/w2/src/a.ts',
+				'show /lab',
+				'hide /home/me/.facade/worktrees/lab/w2',
+				'remove /home/me/.facade/worktrees/lab/w2',
+				'close its terminal',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
+				'unhide /home/me/.facade/worktrees/lab/w2',
+				'customize /home/me/.facade/worktrees/lab/w2 {}',
+			]
+		});
+	});
+
+	test('an unsaved editor of a file of the worktree opened through a link to it is the worktree\'s by its real path: it refuses a deletion, named, and told to discard, it is closed without saving (X-71; SP-25)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		// Nothing but the unsaved editor, discarded: git's own remove, no force
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		links.set('/tmp/link', '/home/me/.facade/worktrees/lab/w2');
+		unsaved = [unsavedFile('/tmp/link/README.md')];
+		const service = instantiationService.createInstance(WorktreeService);
+		const refused = await service.removeWorktree(w2, {}).then(() => 'deleted', (err: Error) => err.message);
+		// The same editor, unsaved again
+		steps = [];
+		opened = [];
+		unsaved = [unsavedFile('/tmp/link/README.md')];
+		await service.removeWorktree(w2, { discardChanges: true });
+
+		assert.deepStrictEqual({ refused, discarded: steps.filter(step => step.startsWith('revert') || step.startsWith('close editors')) }, {
+			refused: '/home/me/.facade/worktrees/lab/w2 has changes that deleting it would lose: README.md (unsaved). Nothing was deleted.',
+			discarded: ['revert /tmp/link/README.md', 'close editors /tmp/link/README.md']
+		});
+	});
+
+	test('deleted without asking, it is looked at once more right before git deletes it: a file come meanwhile, an unsaved edit, or the person\'s edit to a file the caller put there, keep it - nothing lost, nothing asked, and a folder of the window is put back (X-73)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json'], submodules: false });
+		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
+		files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{}');
+		workspaceFolders = [main, w2];
+		instantiationService.stub(IWorkspaceBarService, 'add', async (uris: readonly URI[]) => { steps.push(`add ${uris.map(uri => uri.path).join(', ')}`); });
+		// As the deletion closes its terminals, the person types into an editor of it and edits Facade's own file
+		terminals = [upcastPartial<ITerminalInstance>({
+			title: 'its terminal', cwd: '/home/me/.facade/worktrees/lab/w2', initialCwd: '/home/me/.facade/worktrees/lab/w2', dispose: () => {
+				steps.push('close its terminal');
+				unsaved = [unsavedFile('/home/me/.facade/worktrees/lab/w2/src/a.ts')];
+				files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{"mcpServers":{"docs":{}}}');
+				answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json', 'late.txt'], submodules: false });
+			}
+		})];
+
+		const refused = await instantiationService.createInstance(WorktreeService).removeWorktree(w2, { ownFiles: [{ path: '.mcp.json', sha256: SHA256_OF_EMPTY_OBJECT }] }).then(() => 'deleted', (err: Error) => err.message);
+
+		assert.deepStrictEqual({ refused, steps }, {
+			refused: '/home/me/.facade/worktrees/lab/w2 was not deleted: changes came into it as it was being deleted, which deleting it would lose: .mcp.json, late.txt, src/a.ts (unsaved).',
+			steps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'show /lab',
+				'hide /home/me/.facade/worktrees/lab/w2',
+				'remove /home/me/.facade/worktrees/lab/w2',
+				'close its terminal',
+				'read-only /home/me/.facade/worktrees/lab/w2/src/a.ts',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'writable /home/me/.facade/worktrees/lab/w2/src/a.ts',
+				'unhide /home/me/.facade/worktrees/lab/w2',
+				'add /home/me/.facade/worktrees/lab/w2',
+			]
+		});
+	});
+
+	test('deleted without asking, its files open in the window are read-only from the last look to git\'s end - one opened meanwhile too - and then as they were: nothing typed into one after the look goes unseen (N-41)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const file = (path: string) => upcastPartial<IWorkingCopy>({ resource: URI.file(path) });
+		open = [file('/home/me/.facade/worktrees/lab/w2/src/a.ts'), file('/lab/elsewhere.ts')];
+		// The person opens another of its files as git deletes it
+		whenCommand = command => {
+			if (command.endsWith(' remove')) {
+				registered.fire(file('/home/me/.facade/worktrees/lab/w2/b.ts'));
+			}
+		};
+
+		await instantiationService.createInstance(WorktreeService).removeWorktree(w2, {});
+
+		assert.deepStrictEqual(steps, [
+			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+			'show /lab',
+			'hide /home/me/.facade/worktrees/lab/w2',
+			'remove /home/me/.facade/worktrees/lab/w2',
+			'close its terminal',
+			'read-only /home/me/.facade/worktrees/lab/w2/src/a.ts',
+			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
+			'read-only /home/me/.facade/worktrees/lab/w2/b.ts',
+			'writable /home/me/.facade/worktrees/lab/w2/src/a.ts, /home/me/.facade/worktrees/lab/w2/b.ts',
+			'unhide /home/me/.facade/worktrees/lab/w2',
+			'customize /home/me/.facade/worktrees/lab/w2 {}'
+		]);
+	});
+
+	test('deleted without asking, it closes the terminals of the agents the caller stopped, and the person\'s; another agent still working inside it - wherever it was started - refuses it, named, with no terminal closed (X-74)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const stopped = { workspace: 'record', id: 2 };
+		terminals = [
+			terminal('@b1 #a2', '/home/me/.facade/worktrees/lab/w2', { run: stopped }),
+			terminal('@x #a3', '/home/me/.facade/worktrees/lab/w2/src', { run: { workspace: 'record', id: 3 } }),
+			terminal('@old #a1', '/home/me/.facade/worktrees/lab/w2', { run: { workspace: 'record', id: 1 }, exitCode: 0 }),
+			terminal('zsh', '/home/me/.facade/worktrees/lab/w2'),
+		];
+		const service = instantiationService.createInstance(WorktreeService);
+		const refused = await service.removeWorktree(w2, { runs: [stopped] }).then(() => 'deleted', (err: Error) => err.message);
+		const refusedSteps = steps.filter(step => step.startsWith('close') || step.startsWith('_git'));
+		steps = [];
+		const deleted = await service.removeWorktree(w2, { runs: [stopped, { workspace: 'record', id: 3 }] }).then(() => 'deleted', (err: Error) => err.message);
+
+		assert.deepStrictEqual({ refused, refusedSteps, deleted, closed: steps.filter(step => step.startsWith('close')) }, {
+			refused: '/home/me/.facade/worktrees/lab/w2 was not deleted: an agent the call did not stop is working inside it, in @x #a3. Stop it first.',
+			refusedSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
+			deleted: 'deleted',
+			closed: ['close @b1 #a2', 'close @x #a3', 'close @old #a1', 'close zsh']
+		});
+	});
+
+	test('deleted without asking while the bar lists no worktrees, and so knows no repository: by the main checkout the caller read from git; without it, it is no worktree the workspace knows, and the main checkout itself is never deleted (X-41)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		instantiationService.stub(IWorkspaceBarService, 'repositoryFor', () => undefined);
+		const service = instantiationService.createInstance(WorktreeService);
+		const attempt = (target: URI, options: IRemoveWorktreeOptions) => service.removeWorktree(target, options).then(() => 'deleted', (err: Error) => err.message);
+
+		assert.deepStrictEqual({
+			unknown: await attempt(w2, {}),
+			mainCheckout: await attempt(main, { main }),
+			deleted: await attempt(w2, { main }),
+			git: steps.filter(step => step.startsWith('_git')),
+		}, {
+			unknown: '/home/me/.facade/worktrees/lab/w2 is not a worktree the workspace knows.',
+			mainCheckout: '/lab is its repository\'s main checkout, which is never deleted.',
+			deleted: 'deleted',
+			git: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check', '_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check', '_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove'],
 		});
 	});
 
@@ -823,10 +1179,26 @@ suite('Worktrees - making and deleting one', () => {
 				'hide /home/me/.facade/worktrees/lab/w2',
 				'remove /home/me/.facade/worktrees/lab/w2',
 				'close its terminal',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 			],
 		});
+	});
+
+	test('the person\'s Delete Worktree says why the agents\' terminals in it close - its worktree was deleted - before anything closes; a caller\'s deletion, which stopped its agents first, does not (N-04)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		terminals = [terminal('@clamp #a2', '/home/me/.facade/worktrees/lab/w2', { run: { workspace: 'record', id: 2 } })];
+		const service = instantiationService.createInstance(WorktreeService);
+		await service.deleteWorktree(w2);
+		const byThePerson = [...closing];
+		closing = [];
+		terminals = [terminal('@clamp #a2', '/home/me/.facade/worktrees/lab/w2', { run: { workspace: 'record', id: 2 }, exitCode: 0 })];
+		await service.removeWorktree(w2, { runs: [{ workspace: 'record', id: 2 }] });
+
+		assert.deepStrictEqual({ byThePerson, byACaller: closing }, { byThePerson: ['@clamp #a2 worktreeDeleted'], byACaller: [] });
 	});
 
 	test('a delete git refuses brings the row back and says why, and the worktree keeps its name, colour and trust', async () => {
@@ -838,6 +1210,7 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual(steps.slice(steps.indexOf('confirm') + 1), [
 			'show /lab',
 			'hide /home/me/.facade/worktrees/lab/w2',
+			'_facade.agents.worktreeDeleting /home/me/.facade/worktrees/lab/w2',
 			'remove /home/me/.facade/worktrees/lab/w2',
 			'close its terminal',
 			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
@@ -863,6 +1236,42 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 			],
+		});
+	});
+
+	test('an agent\'s terminal in the worktree is said to be running while its CLI runs, children or not - one still connecting has none; one that ended is not (WT-8.1; N-35)', async () => {
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const said = async (agent: ITerminalInstance) => {
+			terminals = [agent];
+			confirmations.length = 0;
+			await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+			return (confirmations[0].detail as IMarkdownString).value.includes('Something is running');
+		};
+
+		assert.deepStrictEqual({
+			connecting: await said(terminal('@late #a2', `${w2.path}`, { run: { workspace: 'record', id: 2 } })),
+			ended: await said(terminal('@done #a3', `${w2.path}`, { run: { workspace: 'record', id: 3 }, exitCode: 0 })),
+			shell: await said(terminal('zsh', `${w2.path}`))
+		}, { connecting: true, ended: false, shell: false });
+	});
+
+	test('a worktree in which another window\'s agent works is not deleted - by the person or by a caller - before anything is closed: refused naming it (SP-18; N-37)', async () => {
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		gitIsRunning();
+		// Attached to its own window, as a running agent is: no orphan
+		ptyProcesses = [upcastPartial<IProcessDetails>({ title: '@sp18o #a208', pid: 4242, cwd: `${w2.path}/src`, workspaceId: 'another window', isOrphan: false, reconnectionProperties: facadeRunProperties({ workspace: 'other', id: 208 }) })];
+		terminals = [terminal('zsh', w2.path)];
+		const service = instantiationService.createInstance(WorktreeService);
+		const byCaller = await service.removeWorktree(w2, { runs: [] }).then(() => 'deleted', (err: Error) => err.message);
+		const callerSteps = steps.splice(0);
+		await service.deleteWorktree(w2);
+
+		assert.deepStrictEqual({ byCaller, callerSteps, personSteps: steps }, {
+			byCaller: '/home/me/.facade/worktrees/lab/w2 was not deleted: an agent of another window is working inside it, @sp18o #a208. Stop it in that window first.',
+			callerSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
+			personSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check', 'confirm', 'error: /home/me/.facade/worktrees/lab/w2 was not deleted: an agent of another window is working inside it, @sp18o #a208. Stop it in that window first.']
 		});
 	});
 

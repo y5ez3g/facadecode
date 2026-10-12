@@ -28,11 +28,14 @@ import { IViewDescriptorService } from '../../../../common/views.js';
 import { ITerminalConfigurationService, ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../browser/terminal.js';
 import { TerminalConfigurationService } from '../../browser/terminalConfigurationService.js';
 import { parseExitResult, TerminalInstance, TerminalLabelComputer } from '../../browser/terminalInstance.js';
-import { IEnvironmentVariableService } from '../../common/environmentVariable.js';
+import { IEnvironmentVariableInfo, IEnvironmentVariableService } from '../../common/environmentVariable.js';
 import { EnvironmentVariableService } from '../../common/environmentVariableService.js';
 import { ITerminalProfileResolverService, ProcessState, DEFAULT_COMMANDS_TO_SKIP_SHELL } from '../../common/terminal.js';
 import { TestViewDescriptorService } from './xterm/xtermTerminal.test.js';
 import { AGENT_TERMINAL_ICON } from '../../../terminalLaunchers/common/terminalLaunchers.js';
+import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
+import { TerminalStatus } from '../../browser/terminalStatusList.js';
+import Severity from '../../../../../base/common/severity.js';
 import { fixPath } from '../../../../services/search/test/browser/queryBuilder.test.js';
 import { TestTerminalProfileResolverService, workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
@@ -183,13 +186,15 @@ suite('Workbench - TerminalInstance', () => {
 			terminalInstanceService?: TestTerminalInstanceService,
 			workspace?: Workspace,
 			requestWorkspaceTrust: () => Promise<boolean> = async () => true,
-			workspaceTrustRequestService?: IWorkspaceTrustRequestService
+			workspaceTrustRequestService?: IWorkspaceTrustRequestService,
+			enablePersistentSessions?: boolean
 		) {
 			const instantiationService = workbenchInstantiationService({
 				configurationService: () => new TestConfigurationService({
 					files: {},
 					terminal: {
 						integrated: {
+							...(enablePersistentSessions !== undefined ? { enablePersistentSessions } : {}),
 							fontFamily: 'monospace',
 							scrollback: 1000,
 							fastScrollSensitivity: 2,
@@ -285,6 +290,69 @@ suite('Workbench - TerminalInstance', () => {
 			await exitPromise;
 
 			strictEqual(terminalInstanceService.createProcessCount, 0);
+		});
+
+		test('Facade Code: what the person types while input is held back reaches the process after the last hold, in order; what they typed and did not send is known until Enter, Ctrl+C or Ctrl+U (X-43)', async () => {
+			// A process that is ready: what is typed reaches it, and only then is it input
+			const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => new ReadyTestTerminalChildProcess(false))));
+			await instance.processReady;
+			const reached: string[] = [];
+			store.add(instance.onDidInputData(data => reached.push(data)));
+			const type = async (data: string) => {
+				instance.xterm!.raw.input(data, true);
+				await timeout(0);
+			};
+			await type('ab');
+			const unsent = [instance.hasUnsentInput];
+			await type('\r');
+			unsent.push(instance.hasUnsentInput);
+			const first = instance.holdInput();
+			const second = instance.holdInput();
+			await type('c');
+			await type('d');
+			first.dispose();
+			first.dispose();
+			const whileHeld = [...reached];
+			second.dispose();
+			await timeout(0);
+			await type('e\x15');
+			unsent.push(instance.hasUnsentInput);
+
+			deepStrictEqual({ unsent, whileHeld, reached }, { unsent: [true, false, false], whileHeld: ['ab', '\r'], reached: ['ab', '\r', 'c', 'd', 'e\x15'] });
+		});
+
+		test('Facade Code: what the person has not sent is text they typed - a cursor key, Escape, a paste\'s brackets and the terminal\'s own answers to its program add none, and what they erase, by character or by word, is taken off (N-84)', async () => {
+			const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => new ReadyTestTerminalChildProcess(false))));
+			await instance.processReady;
+			const type = async (data: string) => {
+				instance.xterm!.raw.input(data, true);
+				await timeout(0);
+				return instance.hasUnsentInput;
+			};
+
+			deepStrictEqual([
+				await type('\x1b[A'),
+				await type('\x1b'),
+				// The terminal's answers: a colour its program asked for, its attributes, the cursor's place, a
+				// focus change, the mouse - in today's form and the old one's three bytes
+				await type('\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\'),
+				await type('\x1b]10;rgb:cccc/cccc/cccc\x07'),
+				await type('\x1b[?1;2c'),
+				await type('\x1b[12;1R'),
+				await type('\x1b[I'),
+				await type('\x1b[<0;10;5M'),
+				await type('\x1b[M !!'),
+				await type('ab'),
+				await type('\x7f\x7f'),
+				await type('\x1b[200~x\x1b[201~'),
+				await type('\r'),
+				// A word typed and erased as a word: Ctrl+W, Option+Backspace
+				await type('one two'),
+				await type('\x17'),
+				await type('\x1b\x7f'),
+				await type('x'),
+				await type('\x15')
+			], [false, false, false, false, false, false, false, false, false, true, false, true, false, true, true, false, true, false]);
 		});
 
 		test('should not create a process with an unexpected cwd in an empty workspace', async () => {
@@ -495,6 +563,54 @@ suite('Workbench - TerminalInstance', () => {
 			} finally {
 				container.remove();
 			}
+		});
+
+		test('Facade Code: one shown in a terminal editor and put out of it for another before its xterm is made still starts its process, and opens once shown again (N-82)', async () => {
+			const terminalInstanceService = store.add(new TestTerminalInstanceService());
+			const instance = store.add(createTerminalInstantiationService(terminalInstanceService).createInstance(TerminalInstance, terminalShellTypeContextKey, {}));
+			const container = document.createElement('div');
+			document.body.appendChild(container);
+			try {
+				// Two agents started at once: the editor shows the first, then the second in its place -
+				// `TerminalEditor.setInput` detaches the first without hiding it
+				instance.attachToElement(container);
+				instance.setVisible(true);
+				instance.detachFromElement();
+				await instance.xtermReadyPromise;
+				await terminalInstanceService.processCreatedPromise;
+				instance.attachToElement(container);
+				instance.setVisible(true);
+
+				deepStrictEqual({ processes: terminalInstanceService.createProcessCount, opened: !!instance.xterm?.raw.element }, { processes: 1, opened: true });
+			} finally {
+				container.remove();
+			}
+		});
+
+		test('an agent\'s run is not offered a relaunch for an environment that changed - it would run its CLI again - where any other terminal is', async () => {
+			const statuses: Record<string, string[]> = {};
+			const stale: IEnvironmentVariableInfo = { requiresAction: true, getStatus: () => ({ id: TerminalStatus.RelaunchNeeded, severity: Severity.Warning }) };
+			for (const [name, reconnectionProperties] of [['run', facadeRunProperties({ workspace: 'w', id: 1 })], ['plain', undefined]] as const) {
+				const instance = await createTerminalInstance(undefined, undefined, { executable: 'claude', reconnectionProperties });
+				await (instance as unknown as Record<string, (info: IEnvironmentVariableInfo) => Promise<void>>)['_refreshEnvironmentVariableInfoWidgetState'](stale);
+				statuses[name] = instance.statusList.statuses.map(status => status.id);
+			}
+
+			deepStrictEqual(statuses, { run: [], plain: [TerminalStatus.RelaunchNeeded] });
+		});
+
+		test('an agent\'s run persists through a reload only with persistent sessions on: off, the reload ends it, and its tab is not kept to come back as a shell under its name (N-47)', async () => {
+			const persists: Record<string, boolean> = {};
+			for (const enablePersistentSessions of [true, false]) {
+				const terminalInstanceService = store.add(new TestTerminalInstanceService());
+				const instantiationService = createTerminalInstantiationService(terminalInstanceService, undefined, undefined, undefined, enablePersistentSessions);
+				const instance = store.add(instantiationService.createInstance(TerminalInstance, terminalShellTypeContextKey, { executable: 'claude', reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }));
+				await instance.xtermReadyPromise;
+				await terminalInstanceService.processCreatedPromise;
+				persists[enablePersistentSessions ? 'on' : 'off'] = instance.shouldPersist;
+			}
+
+			deepStrictEqual(persists, { on: true, off: false });
 		});
 
 		test('a path inserted into an agent\'s terminal is not PowerShell\'s command to run it, as it is in any other terminal', async () => {
@@ -759,6 +875,31 @@ suite('Workbench - TerminalInstance', () => {
 			terminalLabelComputer.refreshLabel(createInstance({ capabilities, processName: 'process', workspaceFolder: { uri: URI.from({ scheme: Schemas.file, path: 'folder' }) } as IWorkspaceFolder, staticTitle: 'my-title' }));
 			strictEqual(terminalLabelComputer.title, 'my-title');
 			strictEqual(terminalLabelComputer.description, 'folder');
+		});
+		test('a renamed terminal whose own template is built around its sequence keeps the rest: an agent\'s keeps its suffix (Facade Code, X-52)', () => {
+			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}', description: '${cwd}' } } } });
+			const titleOf = (partial: Partial<ITerminalInstance>) => {
+				terminalLabelComputer.refreshLabel(createInstance({ capabilities, sequence: 'Fix it', processName: 'node', ...partial }));
+				return terminalLabelComputer.title;
+			};
+			deepStrictEqual([
+				titleOf({ staticTitle: 'mine', shellLaunchConfig: { titleTemplate: '${sequence}${separator}@claude #a1' } }),
+				titleOf({ staticTitle: 'mine', shellLaunchConfig: { titleTemplate: '${sequence}' } }),
+				titleOf({ staticTitle: 'mine', shellLaunchConfig: { titleTemplate: '${process}' } })
+			], ['mine - @claude #a1', 'mine', 'mine']);
+		});
+		test('a terminal come back after a reload or a crash, whose static title is only the name it was opened with, is not taken as renamed: its sequence, or none, before its suffix (Facade Code, N-59)', () => {
+			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}', description: '${cwd}' } } } });
+			const titleOf = (partial: Partial<ITerminalInstance>) => {
+				terminalLabelComputer.refreshLabel(createInstance({ capabilities, processName: 'node', ...partial }));
+				return terminalLabelComputer.title;
+			};
+			const opened = { name: '@claude #a1', titleTemplate: '${sequence}${separator}@claude #a1' };
+			deepStrictEqual([
+				titleOf({ staticTitle: '@claude #a1', sequence: '', shellLaunchConfig: opened }),
+				titleOf({ staticTitle: '@claude #a1', sequence: 'Fix it', shellLaunchConfig: opened }),
+				titleOf({ staticTitle: 'mine', sequence: 'Fix it', shellLaunchConfig: opened })
+			], ['@claude #a1', 'Fix it - @claude #a1', 'mine - @claude #a1']);
 		});
 		test('should use shellLaunchConfig.titleTemplate as template when set', () => {
 			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}', description: '${cwd}' } } } });

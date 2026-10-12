@@ -239,6 +239,13 @@ export interface ILifecycleService {
 	readonly startupKind: StartupKind;
 
 	/**
+	 * Facade Code: how this window's workspace last shut down - closed, quit, reloaded, or left for another - or
+	 * undefined where it did not: its window crashed, or it was never open. `startupKind` reads a crash and a
+	 * close alike, and they are not alike for what ran in the pty host: it outlives a crash (N-49).
+	 */
+	readonly lastShutdownReason: ShutdownReason | undefined;
+
+	/**
 	 * A flag indicating in what phase of the lifecycle we currently are.
 	 */
 	phase: LifecyclePhase;

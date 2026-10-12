@@ -6,30 +6,46 @@
 import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Emitter } from '../../../../../base/common/event.js';
-import { URI } from '../../../../../base/common/uri.js';
+import { URI, UriComponents } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
+import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { MockContextKeyService } from '../../../../../platform/keybinding/test/common/mockKeybindingService.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
+import { IStorageService } from '../../../../../platform/storage/common/storage.js';
 import { IReconnectionProperties, IShellLaunchConfig, ITerminalBackend, TerminalExitReason } from '../../../../../platform/terminal/common/terminal.js';
 import { IProcessDetails } from '../../../../../platform/terminal/common/terminalProcess.js';
 import { IWorkspace, IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { GroupModelChangeKind } from '../../../../common/editor.js';
+import { EditorInput } from '../../../../common/editor/editorInput.js';
+import { IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';
+import { IEditorsChangeEvent, IEditorService } from '../../../../services/editor/common/editorService.js';
 import { ILifecycleService, LifecyclePhase } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { FacadeRunsService } from '../../browser/facadeRuns.js';
-import { facadeRunOf, facadeRunProperties, IFacadeRun } from '../../common/facadeRun.js';
+import { facadeRunOf, facadeRunProperties, IFacadeRun, IFacadeRunTerminal } from '../../common/facadeRun.js';
+
+let terminals = 0;
 
 /** A terminal as far as runs go: the run it is marked with, the process running in it, and how it closed, once it has. */
 class TestTerminal {
 
 	private readonly _ready = new DeferredPromise<void>();
+	private readonly _exit = new Emitter<number | undefined>();
+	private readonly _disposed = new Emitter<ITerminalInstance>();
+	readonly onExit = this._exit.event;
+	readonly onDisposed = this._disposed.event;
 
 	exitCode: number | undefined;
 	exitReason: TerminalExitReason | undefined;
 	isDisposed = false;
+	/** How it was made: one that came back after a reload is made to reconnect to its process. */
+	shellLaunchConfig: IShellLaunchConfig = {};
+	/** What its tab in the editor area opens. */
+	readonly resource = URI.from({ scheme: 'vscode-terminal', path: `/${++terminals}` });
 
 	constructor(readonly reconnectionProperties: IReconnectionProperties | undefined, public processId: number | undefined) {
 		if (processId !== undefined) {
@@ -38,6 +54,16 @@ class TestTerminal {
 	}
 
 	get processReady(): Promise<void> { return this._ready.p; }
+
+	/** Its process ends, its terminal staying open - as a tab in the editor area does, waiting for a key. */
+	exit(code: number | undefined): void {
+		this._exit.fire(code);
+	}
+
+	/** It is gone from the window. */
+	disposed(): void {
+		this._disposed.fire(this.asInstance());
+	}
 
 	/** Its process tells its id, as on Windows it does with its first output. */
 	ready(processId: number): void {
@@ -66,6 +92,10 @@ class TestTerminalService extends mock<ITerminalService>() {
 	override instances: ITerminalInstance[] = [];
 	override activeInstance: ITerminalInstance | undefined;
 
+	override getInstanceFromResource(resource: UriComponents | undefined): ITerminalInstance | undefined {
+		return resource ? this.instances.find(instance => instance.resource.toString() === URI.revive(resource).toString()) : undefined;
+	}
+
 	/** A terminal closes: gone from the window, why it went said. */
 	close(terminal: TestTerminal, reason: TerminalExitReason, exitCode?: number): void {
 		terminal.exitReason = reason;
@@ -73,6 +103,7 @@ class TestTerminalService extends mock<ITerminalService>() {
 		terminal.isDisposed = true;
 		this.instances = this.instances.filter(instance => instance !== terminal.asInstance());
 		this.closed.fire(terminal.asInstance());
+		terminal.disposed();
 	}
 
 	/** A terminal is the active one. */
@@ -91,7 +122,8 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 	 * window, which the window takes back where they are runs' - opening each for its folder, a terminal
 	 * reconnected to it.
 	 */
-	function window(terminals: TestTerminal[], orphans: IProcessDetails[] = []) {
+	function window(terminals: TestTerminal[], orphans: IProcessDetails[] = [], exited: IProcessDetails[] = []) {
+		const listings: (boolean | undefined)[] = [];
 		const terminalService = new TestTerminalService();
 		terminalService.instances = terminals.map(terminal => terminal.asInstance());
 		const eventually = new DeferredPromise<void>();
@@ -99,11 +131,21 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 		const contextKeyService = new MockContextKeyService();
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ITerminalService, terminalService);
-		instantiationService.stub(ITerminalInstanceService, { getBackend: async () => upcastPartial<ITerminalBackend>({ listProcesses: async () => orphans }) });
+		instantiationService.stub(ITerminalInstanceService, {
+			getBackend: async () => upcastPartial<ITerminalBackend>({
+				listProcesses: async options => {
+					if (options?.exited) {
+						return [...exited];
+					}
+					listings.push(options?.attached);
+					return options?.attached ? [...orphans] : orphans.filter(each => each.isOrphan);
+				}
+			})
+		});
 		instantiationService.stub(IFolderTerminalsService, {
 			openFor: async (folder: URI, config: IShellLaunchConfig) => {
 				const details = config.attachPersistentProcess!;
-				takenBack.push(`${folder.path}: ${details.pid}`);
+				takenBack.push(`${folder.path}: ${details.pid}${config.name ? ` as ${config.name}` : ''}`);
 				const terminal = new TestTerminal(details.reconnectionProperties, details.pid);
 				terminalService.instances = [...terminalService.instances, terminal.asInstance()];
 				return terminal.asInstance();
@@ -113,24 +155,94 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 		instantiationService.stub(ILifecycleService, { when: (phase: LifecyclePhase) => phase === LifecyclePhase.Eventually ? eventually.p : Promise.resolve() });
 		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ id: 'lab-workspace' }) });
 		instantiationService.stub(ILogService, new NullLogService());
+		// The editor parts restored - floating windows, with their terminals, come last - and the window's state kept
+		const editorsRestored = new DeferredPromise<void>();
+		const editorsChanged = disposables.add(new Emitter<IEditorsChangeEvent>());
+		const kept = { times: 0 };
+		instantiationService.stub(IEditorGroupsService, { whenRestored: editorsRestored.p });
+		instantiationService.stub(IEditorService, { onDidEditorsChange: editorsChanged.event });
+		instantiationService.stub(IStorageService, { flush: async () => { kept.times++; } });
 		const runs = disposables.add(instantiationService.createInstance(FacadeRunsService));
 
 		/** The window has every terminal it had back, and has taken back what it takes back. */
 		async function restored(): Promise<void> {
 			terminalService.connected.complete();
 			eventually.complete();
+			editorsRestored.complete();
 			await runs.whenRestored;
 			await timeout(0);
 		}
-		return { runs, terminalService, contextKeyService, takenBack, restored };
+		return { runs, terminalService, contextKeyService, takenBack, restored, listings, eventually, editorsRestored, editorsChanged, kept };
 	}
 
 	/** A process the pty host runs for no window of this workspace's, or another's: a run's, marked so, or any other. */
-	function orphan(pid: number, cwd: string, run?: IFacadeRun, workspaceId = 'lab-workspace'): IProcessDetails {
-		return upcastPartial<IProcessDetails>({ id: pid, pid, cwd, workspaceId, isOrphan: true, ...(run ? { reconnectionProperties: facadeRunProperties(run) } : {}) });
+	function orphan(pid: number, cwd: string, run?: IFacadeRun, workspaceId = 'lab-workspace', isOrphan = true): IProcessDetails {
+		return upcastPartial<IProcessDetails>({ id: pid, pid, cwd, workspaceId, isOrphan, ...(run ? { reconnectionProperties: facadeRunProperties(run) } : {}) });
 	}
 
-	test('a run is the process its marked terminal started: present while that runs; gone once it ends - closed by the person, or exited, which the window says - and gone, unseen, once its terminal runs another; a number with no terminal is gone once the terminals are all back, and unknown before', async () => {
+	test('a run whose process exited while the window was away - reloading - as the pty host saw it, is gone with its code, not unseen; another workspace\'s exit is not this window\'s (N-14; REC-07)', async () => {
+		const lab = 'a1b2';
+		const exited = (id: number, exitCode: number | undefined, workspaceId = 'lab-workspace') => upcastPartial<IProcessDetails>({ id, pid: 100 + id, workspaceId, reconnectionProperties: facadeRunProperties({ workspace: lab, id }), ...(exitCode !== undefined ? { exitCode } : {}) });
+		const { runs, restored } = window([], [], [exited(1, 3), exited(2, undefined), exited(4, 0, 'other-workspace')]);
+		await restored();
+
+		assert.deepStrictEqual(runs.processes(lab, [1, 2, 3, 4]), [
+			{ id: 1, state: 'gone', end: { exitCode: 3, byThePerson: false } },
+			{ id: 2, state: 'gone', end: { exitCode: undefined, byThePerson: false } },
+			{ id: 3, state: 'gone' },
+			{ id: 4, state: 'gone' }
+		]);
+	});
+
+	test('a run\'s terminal that came back after a reload for a process that had ended meanwhile - it never had it - closing is no one stopping its agent: how the agent ended is the pty host\'s, its code - 128 and the signal\'s number for one killed - and unknown until the window has asked; one that did reconnect, closed by the person, is the person\'s (N-51, N-58; REC-07)', async () => {
+		const lab = 'a1b2';
+		const exitedDuring = runTerminal(lab, 1, undefined);
+		const killedAway = runTerminal(lab, 2, undefined);
+		const reconnected = runTerminal(lab, 3, 33);
+		for (const [terminal, id] of [[exitedDuring, 1], [killedAway, 2], [reconnected, 3]] as const) {
+			terminal.shellLaunchConfig = { attachPersistentProcess: upcastPartial<IProcessDetails>({ id, pid: 100 + id, reconnectionProperties: facadeRunProperties({ workspace: lab, id }) }) };
+		}
+		const exited = (id: number, exitCode: number) => upcastPartial<IProcessDetails>({ id, pid: 100 + id, workspaceId: 'lab-workspace', reconnectionProperties: facadeRunProperties({ workspace: lab, id }), exitCode });
+		const { runs, terminalService, restored } = window([exitedDuring, killedAway, reconnected], [], [exited(1, 3), exited(2, 137)]);
+		// Its process gone, the terminal that came back for it closes as the window comes back
+		terminalService.close(exitedDuring, TerminalExitReason.User);
+		const beforeAsked = runs.processes(lab, [1]);
+		await restored();
+		terminalService.close(killedAway, TerminalExitReason.User);
+		terminalService.close(reconnected, TerminalExitReason.User);
+
+		assert.deepStrictEqual({ beforeAsked, after: runs.processes(lab, [1, 2, 3]) }, {
+			beforeAsked: [{ id: 1, state: 'unknown' }],
+			after: [
+				{ id: 1, state: 'gone', end: { exitCode: 3, byThePerson: false } },
+				{ id: 2, state: 'gone', end: { exitCode: 137, byThePerson: false } },
+				{ id: 3, state: 'gone', end: { exitCode: undefined, byThePerson: true } }
+			]
+		});
+	});
+
+	test('a run whose process ended - killed, with no code - its tab kept open and closed by the person after, ended by its process, not by the person; one closed while its process ran is the person\'s (C-WB-16; X-40)', async () => {
+		const lab = 'a1b2';
+		const killed = runTerminal(lab, 1, 11);
+		const exited = runTerminal(lab, 2, 22);
+		const running = runTerminal(lab, 3, 33);
+		const { runs, terminalService, restored } = window([killed, exited, running]);
+		[killed, exited, running].forEach((terminal, index) => runs.register(terminal.asInstance(), { workspace: lab, id: index + 1 }));
+		await restored();
+		killed.exit(undefined);
+		exited.exit(3);
+		terminalService.close(killed, TerminalExitReason.User);
+		terminalService.close(exited, TerminalExitReason.User);
+		terminalService.close(running, TerminalExitReason.User);
+
+		assert.deepStrictEqual(runs.processes(lab), [
+			{ id: 1, state: 'gone', end: { exitCode: undefined, byThePerson: false } },
+			{ id: 2, state: 'gone', end: { exitCode: 3, byThePerson: false } },
+			{ id: 3, state: 'gone', end: { exitCode: undefined, byThePerson: true } }
+		]);
+	});
+
+	test('a run is the process its marked terminal started: present while that runs, with its id once told - the agents\' extension keeps it for an agent it finds again (N-79; C4-07b); gone once it ends - closed by the person, or exited, which the window says - and gone, unseen, once its terminal runs another; a number with no terminal is gone once the terminals are all back, and unknown before', async () => {
 		const lab = 'a1b2';
 		const closed = runTerminal(lab, 1, 11);
 		const exited = runTerminal(lab, 2, 22);
@@ -161,18 +273,18 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 			terminals: [1, 3, 4, 5].map(id => runs.terminalOf({ workspace: lab, id }) === undefined ? 'none' : 'found'),
 			notes: runs.processes('c3d4')
 		}, {
-			beforeBack: [{ id: 4, state: 'present' }, { id: 9, state: 'unknown' }],
+			beforeBack: [{ id: 4, state: 'present', processId: 44 }, { id: 9, state: 'unknown' }],
 			silentAtFirst: [{ id: 5, state: 'present' }],
 			all: [
 				{ id: 1, state: 'gone', end: { exitCode: undefined, byThePerson: true } },
 				{ id: 2, state: 'gone', end: { exitCode: 2, byThePerson: false } },
 				{ id: 3, state: 'gone' },
-				{ id: 4, state: 'present' },
-				{ id: 5, state: 'present' }
+				{ id: 4, state: 'present', processId: 44 },
+				{ id: 5, state: 'present', processId: 55 }
 			],
-			asked: [{ id: 4, state: 'present' }, { id: 9, state: 'gone' }],
+			asked: [{ id: 4, state: 'present', processId: 44 }, { id: 9, state: 'gone' }],
 			terminals: ['none', 'none', 'found', 'found'],
-			notes: [{ id: 1, state: 'present' }]
+			notes: [{ id: 1, state: 'present', processId: 66 }]
 		});
 	});
 
@@ -190,10 +302,59 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 
 		assert.deepStrictEqual({ asTheWindowWent, comingBack, back: after.runs.processes('a1b2', [1, 2]) }, {
 			asTheWindowWent: [{ id: 1, state: 'unknown' }, { id: 2, state: 'unknown' }],
-			comingBack: [{ id: 1, state: 'present' }, { id: 2, state: 'unknown' }],
-			back: [{ id: 1, state: 'present' }, { id: 2, state: 'gone' }]
+			comingBack: [{ id: 1, state: 'present', processId: 11 }, { id: 2, state: 'unknown' }],
+			back: [{ id: 1, state: 'present', processId: 11 }, { id: 2, state: 'gone' }]
 		});
 	});
+
+	test('a crashed window\'s floating windows come back last, their terminals with them: a run whose terminal a floating window brings back stays there - taken back as the window was past its phases, it opened in the main editor area, its floating window left empty (N-49; WIN-13)', async () => {
+		const { runs, terminalService, takenBack, eventually, editorsRestored } = window([], [orphan(11, '/lab', { workspace: 'a1b2', id: 1 })]);
+		terminalService.connected.complete();
+		eventually.complete();
+		await timeout(0);
+		const beforeFloating = [...takenBack];
+		// The floating window restores its tab, reconnecting to the process
+		terminalService.instances = [runTerminal('a1b2', 1, 11).asInstance()];
+		editorsRestored.complete();
+		await runs.whenRestored;
+		await timeout(0);
+
+		assert.deepStrictEqual({ beforeFloating, takenBack, processes: runs.processes('a1b2', [1]) }, {
+			beforeFloating: [],
+			takenBack: [],
+			processes: [{ id: 1, state: 'present', processId: 11 }]
+		});
+	});
+
+	test('a window whose editor parts are not restored a while on takes back its runs\' orphans all the same, within the minute the pty host keeps them (N-49)', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		const { runs, terminalService, takenBack, eventually } = window([], [orphan(11, '/lab', { workspace: 'a1b2', id: 1 })]);
+		terminalService.connected.complete();
+		eventually.complete();
+		await timeout(10_000);
+		await runs.whenRestored;
+		await timeout(0);
+
+		assert.deepStrictEqual({ takenBack, processes: runs.processes('a1b2', [1]) }, { takenBack: ['/lab: 11'], processes: [{ id: 1, state: 'present', processId: 11 }] });
+	}));
+
+	test('an agent\'s tab placed - opened in the editor area or a floating window, moved - is kept a moment on, not with the window\'s next save a minute later: its process outlives a crash of the window, which comes back as it was last kept; any other tab is the window\'s to keep (N-49; WIN-13)', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		const agent = runTerminal('a1b2', 1, 11);
+		const file = new TestTerminal(undefined, 22);
+		const { editorsChanged, kept } = window([agent, file]);
+		const tabOf = (terminal: TestTerminal) => upcastPartial<EditorInput>({ resource: terminal.resource });
+		const change = (kind: GroupModelChangeKind, terminal: TestTerminal) => editorsChanged.fire({ groupId: 1, event: { kind, editor: tabOf(terminal), editorIndex: 0 } });
+
+		change(GroupModelChangeKind.EDITOR_ACTIVE, agent);
+		change(GroupModelChangeKind.EDITOR_OPEN, file);
+		await timeout(2_000);
+		const others = kept.times;
+		// Moved into a floating window: out of one group, into another
+		change(GroupModelChangeKind.EDITOR_CLOSE, agent);
+		change(GroupModelChangeKind.EDITOR_OPEN, agent);
+		await timeout(2_000);
+
+		assert.deepStrictEqual({ others, placed: kept.times }, { others: 0, placed: 1 });
+	}));
 
 	test('a window that crashed and was reopened takes back the runs of its workspace whose processes the pty host still runs for no window, each for its folder; not one the pty host revived after a restart of the app, which has no process yet, nor another workspace\'s, nor anything else', async () => {
 		const { runs, takenBack, restored } = window([], [
@@ -209,9 +370,59 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 
 		assert.deepStrictEqual({ takenBack, processes: runs.processes('a1b2', [1, 2, 3]) }, {
 			takenBack: ['/lab: 11', '/lab-worktrees/clamp: 33'],
-			processes: [{ id: 1, state: 'present' }, { id: 2, state: 'gone' }, { id: 3, state: 'present' }]
+			processes: [{ id: 1, state: 'present', processId: 11 }, { id: 2, state: 'gone' }, { id: 3, state: 'present', processId: 33 }]
 		});
 	});
+
+	test('a run whose tab the window brought back itself after a crash - an editor tab reconnecting to its process - is not taken back a second time, which gave one process two tabs; nor one whose tab the person closed before it reconnected, whose end stands; one with no tab is taken back (N-54; REC-11)', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		const restoredTab = runTerminal('a1b2', 1, undefined);
+		const closedTab = runTerminal('a1b2', 2, undefined);
+		const { runs, terminalService, takenBack, restored } = window([restoredTab, closedTab], [orphan(11, '/lab', { workspace: 'a1b2', id: 1 }), orphan(22, '/lab', { workspace: 'a1b2', id: 2 }), orphan(33, '/lab', { workspace: 'a1b2', id: 3 })]);
+		terminalService.close(closedTab, TerminalExitReason.User);
+		await restored();
+		restoredTab.ready(11);
+		await timeout(2_100);
+
+		assert.deepStrictEqual({ takenBack, processes: runs.processes('a1b2', [1, 2, 3]) }, {
+			takenBack: ['/lab: 33'],
+			processes: [{ id: 1, state: 'present', processId: 11 }, { id: 2, state: 'gone', end: { exitCode: undefined, byThePerson: true } }, { id: 3, state: 'present', processId: 33 }]
+		});
+	}));
+
+	test('a run taken back after a crash reads `@name #aN` and is held for the folder it was opened for, not where its process went since; one from before the window became a workspace - another workspace id, this window\'s record - is taken back once the window knows its record (X-31; C-WB-10; C-WB-11)', async () => {
+		const marked = (pid: number, cwd: string, run: IFacadeRun, opened: IFacadeRunTerminal, workspaceId = 'lab-workspace') => upcastPartial<IProcessDetails>({ id: pid, pid, cwd, workspaceId, isOrphan: true, reconnectionProperties: facadeRunProperties(run, opened) });
+		const { runs, takenBack, restored } = window([], [
+			marked(11, '/lab/src', { workspace: 'a1b2', id: 1 }, { name: '@lead #a1', folder: '/lab' }),
+			marked(22, '/lab', { workspace: 'a1b2', id: 2 }, { name: '@before #a2', folder: '/lab' }, 'folder-workspace')
+		]);
+		await restored();
+		const beforeKnown = [...takenBack];
+		runs.setLive('a1b2', [1, 2]);
+		await timeout(10);
+
+		assert.deepStrictEqual({ beforeKnown, takenBack }, { beforeKnown: ['/lab: 11 as @lead #a1'], takenBack: ['/lab: 11 as @lead #a1', '/lab: 22 as @before #a2'] });
+	});
+
+	test('a run whose process the pty host still runs for a window that went - reloaded again before the pty host saw it go - is neither present nor gone: the window takes it back once it is an orphan; one the pty host no longer has is gone', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		const leftBehind = orphan(11, '/lab', { workspace: 'a1b2', id: 1 }, 'lab-workspace', false);
+		const processes = [leftBehind, orphan(22, '/lab', { workspace: 'a1b2', id: 2 }, 'lab-workspace', false)];
+		const { runs, takenBack, restored, listings } = window([], processes);
+		await restored();
+		const meanwhile = runs.processes('a1b2', [1, 2, 3]);
+
+		// The pty host sees the window gone: one is an orphan now, the other has ended
+		(leftBehind as { isOrphan: boolean }).isOrphan = true;
+		processes.pop();
+		const listed = listings.length;
+		await timeout(2_100);
+		const later = { takenBack: [...takenBack], processes: runs.processes('a1b2', [1, 2, 3]), listedAgain: listings.length > listed };
+
+		assert.deepStrictEqual({ meanwhile, later, attached: listings.every(attached => attached === true) }, {
+			meanwhile: [{ id: 1, state: 'unknown' }, { id: 2, state: 'unknown' }, { id: 3, state: 'gone' }],
+			later: { takenBack: ['/lab: 11'], processes: [{ id: 1, state: 'present', processId: 11 }, { id: 2, state: 'gone' }, { id: 3, state: 'gone' }], listedAgain: true },
+			attached: true
+		});
+	}));
 
 	test('a terminal that closed as it was made - its process could not start - is a run that ended, with its exit code', () => {
 		const { runs } = window([]);

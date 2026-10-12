@@ -1051,6 +1051,32 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		});
 	});
 
+	test('a reveal that may not join leaves a terminal held for a row that has not joined where it is: the workspace and the window stay as they are', async () => {
+		const alpha = folder('alpha');
+		const p1 = folder('p1');
+		const column = new TestGroup(0, []);
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], []);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+		bar.rows.push(p1.uri);
+		bar.moving = async () => {
+			context.addFolder(p1);
+			await folders.switchTo(p1);
+		};
+
+		const agent = await folderTerminals.openFor(p1.uri, { name: 'agent' });
+		const inFront = await folderTerminals.reveal(agent, { join: false });
+
+		assert.deepStrictEqual({ inFront, moves: bar.moves, tabs: column.names(), revealed: terminals.revealed, held: folderTerminals.terminalsOf(p1.uri).includes(agent), joined: context.folders.map(each => each.name) }, {
+			inFront: false,
+			moves: [],
+			tabs: [],
+			revealed: [],
+			held: true,
+			joined: ['alpha'],
+		});
+	});
+
 	test('revealing a terminal on its way with the window to the next folder puts it in front once that folder\'s editors are up, without moving the window', async () => {
 		const alpha = folder('alpha');
 		const beta = folder('beta');

@@ -730,6 +730,11 @@ interface ITerminalEditorInputObject {
 	readonly hideFromUser?: boolean;
 	readonly reconnectionProperties?: IReconnectionProperties;
 	readonly shellIntegrationNonce: string;
+	/**
+	 * Facade Code: an agent's tab written though its terminal is not kept - persistent sessions off - so that it
+	 * never comes back, and the floating window saved holding it is known to have come back emptied (D10, N-88).
+	 */
+	readonly notKept?: boolean;
 }
 
 export interface ISerializedTerminalEditorInput extends ITerminalEditorInputObject {
@@ -1233,6 +1238,18 @@ export interface ITerminalInstance extends IBaseTerminalInstance {
 	 * interpreted as a shell keybinding.
 	 */
 	sendText(text: string, shouldExecute: boolean, bracketedPasteMode?: boolean): Promise<void>;
+
+	/**
+	 * Facade Code: whether the person typed into it since they last pressed Enter - or cleared what they
+	 * typed with Ctrl+C or Ctrl+U: a line of theirs not sent yet, which a line typed for them would join.
+	 */
+	readonly hasUnsentInput: boolean;
+
+	/**
+	 * Facade Code: holds back what the person types into it - kept, in order, and sent once the last hold is
+	 * disposed - so that a line typed into it meanwhile with {@link sendText} reaches it whole (X-43).
+	 */
+	holdInput(): IDisposable;
 
 	/**
 	 * Sends a signal to the terminal instance's process.

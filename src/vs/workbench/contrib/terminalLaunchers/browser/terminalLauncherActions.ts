@@ -12,6 +12,7 @@ import { IHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate.
 import { getBaseLayerHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate2.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { IAction } from '../../../../base/common/actions.js';
+import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { isCancellationError, onUnexpectedError } from '../../../../base/common/errors.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
@@ -97,6 +98,16 @@ class AgentMenuActionViewItem extends ActionWidgetDropdownActionViewItem impleme
 
 		this._hoverDelegate = options.hoverDelegate;
 		this._register(this._launcherService.registerButton(this));
+
+		// What this opening looked for came back different while the menu is open: it shows what the machine
+		// has now, not what the opening before found (UI-04; X-50). After the menu's own listener has set the
+		// rows' context keys from it.
+		const reopen = this._register(new RunOnceScheduler(() => {
+			if (this.isOpen()) {
+				this.show();
+			}
+		}, 0));
+		this._register(this._launcherService.onDidChangeAvailable(() => reopen.schedule()));
 	}
 
 	/**
@@ -118,7 +129,7 @@ class AgentMenuActionViewItem extends ActionWidgetDropdownActionViewItem impleme
 		badge.setAttribute('aria-hidden', 'true');
 
 		const update = () => {
-			const count = this._launcherService.agentTerminals.length;
+			const count = this._launcherService.activeAgentCount;
 			badge.textContent = String(count);
 			badge.style.display = count ? '' : 'none';
 			this.updateTooltip();
@@ -137,7 +148,7 @@ class AgentMenuActionViewItem extends ActionWidgetDropdownActionViewItem impleme
 	protected override getTooltip(): string {
 		const tooltip = this.keybindingService.appendKeybinding(this.action.tooltip || this.action.label, SHOW_AGENT_MENU, this.contextKeyService);
 
-		const count = this._launcherService.agentTerminals.length;
+		const count = this._launcherService.activeAgentCount;
 		if (count === 0) {
 			return tooltip;
 		}

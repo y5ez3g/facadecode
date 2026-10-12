@@ -3,10 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { raceTimeout } from '../../../../base/common/async.js';
+import { coalesce } from '../../../../base/common/arrays.js';
+import { disposableTimeout, raceTimeout, timeout } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IProcessEnvironment, isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { assertType, isBoolean, isNumber, isObject, isString, isUndefined, isUndefinedOrNull } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -14,9 +15,10 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
-import { ITerminalEnvironment, TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
+import { ITerminalEnvironment, TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { ILifecycleService, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
@@ -25,8 +27,8 @@ import { IEnvironmentVariableService } from '../../terminal/common/environmentVa
 import { ITerminalProfileResolverService } from '../../terminal/common/terminal.js';
 import { createTerminalEnvironment, createVariableResolver, getWorkspaceForTerminal, mergeEnvironments } from '../../terminal/common/terminalEnvironment.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
-import { IRemoveWorktreeOptions, IWorktreeService } from '../../worktrees/browser/worktrees.js';
-import { facadeRunProperties, IFacadeRun, isFacadeRun } from '../common/facadeRun.js';
+import { IOwnedWorktreeFile, IRemoveWorktreeOptions, IWorktreeService } from '../../worktrees/browser/worktrees.js';
+import { facadeRunOf, facadeRunProperties, IFacadeRun, isFacadeRun } from '../common/facadeRun.js';
 import { IFacadeRunsService } from './facadeRuns.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
@@ -54,6 +56,8 @@ interface IFacadeTerminalOptions {
 	 * its title across a reload.
 	 */
 	readonly agent?: string;
+	/** Whether the agent is one of the person's custom agents: drawn with the robot, whatever program it runs (X-60). */
+	readonly custom?: boolean;
 	/**
 	 * Whether it is put in front once it is open, as `_facade.terminal.reveal` puts one: for an agent
 	 * the person started, who is there to watch it.
@@ -83,6 +87,22 @@ interface IFacadeWindowLoad {
 	readonly id: string;
 	/** Whether a reload of the window before loaded this one. */
 	readonly reloaded: boolean;
+	/** The agents' record this load of the window has, once the extension said which (`_facade.window.record`). */
+	readonly record?: IFacadeWindowRecord;
+}
+
+/** The record of a window's agents: its id under ~/.facade/workspaces, and who the window is to its ledger. */
+interface IFacadeWindowRecord {
+	readonly id: string;
+	readonly owner: string;
+}
+
+function isFacadeWindowRecord(candidate: unknown): candidate is IFacadeWindowRecord {
+	if (!isObject(candidate)) {
+		return false;
+	}
+	const { id, owner } = candidate as Record<string, unknown>;
+	return isString(id) && !!id && isString(owner) && !!owner;
 }
 
 /** Whether `candidate` is `IFacadeTerminalOptions`: an object whose every option is of its own kind. */
@@ -102,6 +122,11 @@ function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTermin
 		&& (isUndefined(run) || isFacadeRun(run));
 }
 
+/** Whether a terminal's process starts from the window's resolved shell environment (`terminal.integrated.inheritEnv`). */
+function inheritsShellEnvironment(configurationService: IConfigurationService): boolean {
+	return configurationService.getValue<boolean>(TerminalSettingId.InheritEnv) !== false;
+}
+
 // `()`: the folder the window is on, as the workspace bar shows it; none in an empty window
 CommandsRegistry.registerCommand('_facade.folder.active', accessor => accessor.get(IActiveFolderService).activeFolder?.uri);
 
@@ -113,8 +138,24 @@ const WINDOW_LOAD = generateUuid();
 // closed, the app quit, or the window crashed.
 CommandsRegistry.registerCommand('_facade.window.loaded', (accessor): IFacadeWindowLoad => ({
 	id: WINDOW_LOAD,
-	reloaded: accessor.get(ILifecycleService).startupKind === StartupKind.ReloadedWindow
+	reloaded: accessor.get(ILifecycleService).startupKind === StartupKind.ReloadedWindow,
+	...(windowRecord ? { record: windowRecord } : {})
 }));
+
+/**
+ * The record this load of the window has. Kept here, in the window, because the extension host can start
+ * again under it: a folder window becoming a workspace, Save Workspace As, a restart or a crash of the
+ * extension host. VS Code then gives the extension the new workspace's storage, which knows nothing of the
+ * record, while the agents of the window run on (AGENT-LAUNCHER.md, L12). A reload starts with none.
+ */
+let windowRecord: IFacadeWindowRecord | undefined;
+
+// `(record)`: the record this load of the window has, as the extension chose it (`IFacadeWindowRecord`)
+CommandsRegistry.registerCommand('_facade.window.record', (_accessor, ...args) => {
+	const [record] = args;
+	assertType(isFacadeWindowRecord(record), 'IFacadeWindowRecord');
+	windowRecord = { id: record.id, owner: record.owner };
+});
 
 // `()`: settles once the window has its terminals back - those reconnected to their processes, the
 // editor area's and floating windows' restored - so that a run not found is gone (`IFacadeRunsService`).
@@ -124,7 +165,8 @@ CommandsRegistry.registerCommand('_facade.terminal.whenRestored', async accessor
 
 // `(main, branch, startPoint?, show?)`: a worktree of the repository whose main checkout is `main`, made
 // as New Worktree makes one, without its dialog, for an agent sending a child out
-// (`IWorktreeService.makeWorktree`). Answers with its folder, once its setup has run.
+// (`IWorktreeService.makeWorktree`). Answers with its folder - and what could not be copied into it, how a
+// git hook failed - once its setup has started (WT-5.11); `_facade.worktree.setupOutcome` says how that went.
 CommandsRegistry.registerCommand('_facade.worktree.create', async (accessor, ...args) => {
 	const [main, branch, startPoint, show] = args;
 	assertType(URI.isUri(main), 'URI');
@@ -136,10 +178,31 @@ CommandsRegistry.registerCommand('_facade.worktree.create', async (accessor, ...
 	return accessor.get(IWorktreeService).makeWorktree(main, branch, { startPoint: startPoint ?? undefined, show: show ?? undefined });
 });
 
+// `(worktree)`: how the setup of a worktree `_facade.worktree.create` made came out, once it has
+// (`IWorktreeService.setupOutcome`).
+CommandsRegistry.registerCommand('_facade.worktree.setupOutcome', async (accessor, ...args) => {
+	const [worktree] = args;
+	assertType(URI.isUri(worktree), 'URI');
+
+	return accessor.get(IWorktreeService).setupOutcome(worktree);
+});
+
+// `(worktree)`: closes the setup terminal of a worktree `_facade.worktree.create` made, its agent's start
+// cancelled; the worktree stays (`IWorktreeService.stopSetup`).
+CommandsRegistry.registerCommand('_facade.worktree.stopSetup', (accessor, ...args) => {
+	const [worktree] = args;
+	assertType(URI.isUri(worktree), 'URI');
+
+	accessor.get(IWorktreeService).stopSetup(worktree);
+});
+
 // `(worktree, options?)`: deletes the worktree as Delete Worktree does, with nothing asked, its branch
-// kept, for an agent stopping the agents in it (`IWorktreeService.removeWorktree`): changes git would lose
-// refuse it unless `options.discardChanges` - all but `options.ownFiles`, what Facade put there. Rejects with
-// why it could not, in the product's words: a main checkout is never deleted.
+// kept, for an agent stopping the agents in it (`IWorktreeService.removeWorktree`): changes git would lose,
+// unsaved editors and submodules refuse it unless `options.discardChanges` - all but `options.ownFiles`, what
+// Facade put there and nobody changed, by hash. `options.main` is its main checkout, for a bar that lists no
+// worktrees; `options.runs` the agents' runs stopped in it, the only agents' terminals it closes;
+// `options.leftover` says it is what a deletion left of one, which git no longer lists. Rejects with why it could
+// not, in the product's words: a main checkout is never deleted.
 CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...args) => {
 	const [worktree, options] = args;
 	assertType(URI.isUri(worktree), 'URI');
@@ -154,10 +217,50 @@ function isRemoveWorktreeOptions(candidate: unknown): candidate is IRemoveWorktr
 		return false;
 	}
 
-	const { discardChanges, ownFiles } = candidate as Record<string, unknown>;
+	const { discardChanges, ownFiles, main, runs, leftover } = candidate as Record<string, unknown>;
 	return (isUndefined(discardChanges) || isBoolean(discardChanges))
-		&& (isUndefined(ownFiles) || (Array.isArray(ownFiles) && ownFiles.every(isString)));
+		&& (isUndefined(leftover) || isBoolean(leftover))
+		&& (isUndefined(ownFiles) || (Array.isArray(ownFiles) && ownFiles.every(isOwnedWorktreeFile)))
+		&& (isUndefined(main) || URI.isUri(main))
+		&& (isUndefined(runs) || (Array.isArray(runs) && runs.every(isFacadeRun)));
 }
+
+function isOwnedWorktreeFile(candidate: unknown): candidate is IOwnedWorktreeFile {
+	if (!isObject(candidate)) {
+		return false;
+	}
+
+	const { path, sha256 } = candidate as Record<string, unknown>;
+	return isString(path) && isString(sha256);
+}
+
+// `(workspace, ids)`: the runs of the record `workspace` that are live now - starting, running or stopping - as the
+// agents' extension says each time its record changes: what the agent button counts (X-51).
+CommandsRegistry.registerCommand('_facade.agents.live', (accessor, ...args) => {
+	const [workspace, ids] = args;
+	assertType(isString(workspace), 'string');
+	assertType(Array.isArray(ids) && ids.every(isNumber), 'number[]');
+
+	accessor.get(IFacadeRunsService).setLive(workspace, ids);
+});
+
+// `(folder)`: the agents' runs whose terminals work inside `folder` - where they are now, or where they started
+// - with their processes still running: those deleting it would close (`IWorktreeService.terminalsInside`).
+CommandsRegistry.registerCommand('_facade.terminal.inside', async (accessor, ...args): Promise<IFacadeRun[]> => {
+	const [folder] = args;
+	assertType(URI.isUri(folder), 'URI');
+
+	return coalesce((await accessor.get(IWorktreeService).terminalsInside(folder)).map(instance => instance.exitCode === undefined ? facadeRunOf(instance) : undefined));
+});
+
+// `(folder)`: the titles of other windows' agents whose processes run inside `folder` - an agent's deletion of a
+// worktree that would leave one without its folder is refused before anything is stopped (N-53)
+CommandsRegistry.registerCommand('_facade.terminal.elsewhere', async (accessor, ...args): Promise<string[]> => {
+	const [folder] = args;
+	assertType(URI.isUri(folder), 'URI');
+
+	return accessor.get(IWorktreeService).otherWindowsAgentsIn(folder);
+});
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window
 // (`IFolderTerminalsService.openFor`), and registered under the agent's run it is for. Answers with it as
@@ -168,6 +271,8 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 	assertType(isUndefinedOrNull(options) || isFacadeTerminalOptions(options), 'IFacadeTerminalOptions');
 	const folderTerminals = accessor.get(IFolderTerminalsService);
 	const runs = accessor.get(IFacadeRunsService);
+	const activeFolder = accessor.get(IActiveFolderService);
+	const uriIdentity = accessor.get(IUriIdentityService);
 
 	const instance = await folderTerminals.openFor(folder, {
 		name: options?.name,
@@ -177,9 +282,14 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 		executable: options?.executable,
 		args: options?.args,
 		env: options?.env,
+		// The agent's CLI is started as itself, not through a login shell: it gets the environment a
+		// terminal's shell would set up - the window's resolved shell environment - as VS Code's own
+		// terminals do (`terminal.integrated.inheritEnv`). Started from the Dock, the window's own PATH is
+		// launchd's, without the person's CLIs on it.
+		useShellEnvironment: inheritsShellEnvironment(accessor.get(IConfigurationService)),
 		cwd: options?.cwd ?? folder,
-		icon: options?.agent !== undefined ? agentIcon(options.agent) : undefined,
-		reconnectionProperties: options?.run ? facadeRunProperties(options.run) : undefined
+		icon: options?.agent !== undefined ? agentIcon(options.agent, options.custom) : undefined,
+		reconnectionProperties: options?.run ? facadeRunProperties(options.run, { name: options.name, folder: folder.fsPath }) : undefined
 	});
 	if (options?.run) {
 		runs.register(instance, options.run);
@@ -187,9 +297,13 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 
 	// The terminal made, the command answers with it from here on, whatever becomes of it: a failure would
 	// end the agent starting in it as one that did not start. Put in front on its own, then, as that waits
-	// for the window to go there.
-	if (options?.reveal) {
-		folderTerminals.reveal(instance).then(undefined, onUnexpectedError);
+	// for the window to go there - but never by putting a row's folder in the workspace, which would make a
+	// single folder window a workspace nobody picked: one held for a row that has not joined stays there.
+	// Only where the person still is: moved on to another folder while it was made, they stay there, and it is
+	// held for its own (PS-15; X-34) - putting it in front would take the window back.
+	const stillThere = !activeFolder.activeFolder || uriIdentity.extUri.isEqual(activeFolder.activeFolder.uri, folder);
+	if (options?.reveal && stillThere) {
+		folderTerminals.reveal(instance, { join: false }).then(undefined, onUnexpectedError);
 	}
 
 	// Its process is started once the terminal is set up, and on Windows its id comes with the process's
@@ -217,17 +331,20 @@ CommandsRegistry.registerCommand('_facade.terminal.processes', (accessor, ...arg
 	return accessor.get(IFacadeRunsService).processes(workspace, ids ?? undefined);
 });
 
-// `(run)`: ends the run's own process, as closing its tab ends it, and answers once it is gone: true;
-// false while it is not, a few seconds on - or while the window cannot tell yet where it is.
+// `(run, signal?)`: ends the run's own process, as closing its tab ends it - with the hang-up, or the
+// `signal` a stop that outlived its time escalates to - and answers once it is gone: how it ended, its exit code
+// where the window saw one; false while it is not, a few seconds on - or while the window cannot tell yet where it is.
 CommandsRegistry.registerCommand('_facade.terminal.stop', async (accessor, ...args) => {
-	const [run] = args;
+	const [run, signal] = args;
 	assertType(isFacadeRun(run), 'IFacadeRun');
+	// An argument the extension host gives as undefined comes as null
+	assertType(isUndefinedOrNull(signal) || signal === 'SIGHUP' || signal === 'SIGTERM' || signal === 'SIGKILL', 'SIGHUP | SIGTERM | SIGKILL');
 	const runs = accessor.get(IFacadeRunsService);
 
 	const [where] = runs.processes(run.workspace, [run.id]);
 	const instance = runs.terminalOf(run);
 	if (!instance) {
-		return where.state === 'gone';
+		return where.state === 'gone' ? { ...(where.end?.exitCode !== undefined ? { exitCode: where.end.exitCode } : {}) } : false;
 	}
 
 	// ⚠️ Not closed outright where it can be helped: the terminal's process manager lets go of the process
@@ -236,30 +353,71 @@ CommandsRegistry.registerCommand('_facade.terminal.stop', async (accessor, ...ar
 	// with every process attached to it.
 	if (isWindows) {
 		instance.dispose(TerminalExitReason.Extension);
-		return true;
+		return {};
 	}
 	const store = new DisposableStore();
 	try {
-		const gone = Promise.race([Event.toPromise(instance.onExit, store), Event.toPromise(instance.onDisposed, store)]);
-		await instance.sendSignal('SIGHUP');
-		return await raceTimeout(gone.then(() => true), STOP_TIMEOUT_MS) ?? false;
+		// How it exited goes with the answer: a CLI that exits as it is stopped is recorded with its code (N-19)
+		const gone = Promise.race([Event.toPromise(instance.onExit, store).then(exit => typeof exit === 'number' ? exit : undefined), Event.toPromise(instance.onDisposed, store).then(() => instance.exitCode)]);
+		await instance.sendSignal(signal ?? 'SIGHUP');
+		return await raceTimeout(gone.then(exitCode => ({ ...(exitCode !== undefined ? { exitCode } : {}) })), STOP_TIMEOUT_MS) ?? false;
 	} finally {
 		store.dispose();
 	}
 });
 
-// `(run, text)`: types `text`, as it is, into the terminal the run's own process runs in, and answers once
-// VS Code has passed it on: true; false when its process runs in none.
+/** How long the person's typing is held back at most, should the end of Facade's line never come. */
+const TYPE_HOLD_MAX_MS = 30_000;
+/** The person's typing held back in each run's terminal while Facade types a line there, by run (X-43). */
+const typingHolds = new Map<string, IDisposable>();
+
+// `(run, text, line?)`: types `text`, as it is, into the terminal the run's own process runs in, and answers
+// once VS Code has passed it on: true; false when its process runs in none. `line`: `begin` - what the person
+// is typing there and has not sent is waited for until they send or clear it, and their typing is held back
+// from here - or `end`, after which what they typed meanwhile follows: so that a line typed in parts reaches
+// the CLI whole, nothing of theirs in it (PS-14; X-43, N-84).
 CommandsRegistry.registerCommand('_facade.terminal.type', async (accessor, ...args) => {
-	const [run, text] = args;
+	const [run, text, line] = args;
 	assertType(isFacadeRun(run), 'IFacadeRun');
 	assertType(isString(text), 'string');
+	assertType(line === undefined || line === 'begin' || line === 'end', `'begin' | 'end'`);
 
+	const key = `${run.workspace}#${run.id}`;
+	const release = () => {
+		typingHolds.get(key)?.dispose();
+		typingHolds.delete(key);
+	};
 	const instance = accessor.get(IFacadeRunsService).terminalOf(run);
 	if (!instance) {
+		release();
 		return false;
 	}
-	await instance.sendText(text, false);
+	if (line === 'begin') {
+		// Their text is theirs, however long they take: typed after it, the line's Enter would send it with
+		// Facade's (N-84). A terminal closed, or whose process ended, has nobody to wait for.
+		while (instance.hasUnsentInput && !instance.isDisposed && instance.exitCode === undefined) {
+			await timeout(100);
+		}
+		release();
+		if (instance.isDisposed || instance.exitCode !== undefined) {
+			return false;
+		}
+		const held = instance.holdInput();
+		const backstop = disposableTimeout(release, TYPE_HOLD_MAX_MS);
+		typingHolds.set(key, toDisposable(() => {
+			backstop.dispose();
+			held.dispose();
+		}));
+	}
+	try {
+		if (text) {
+			await instance.sendText(text, false);
+		}
+	} finally {
+		if (line === 'end') {
+			release();
+		}
+	}
 	return true;
 });
 
@@ -286,13 +444,18 @@ CommandsRegistry.registerCommand('_facade.terminal.environment', async (accessor
 	const configurationResolverService = accessor.get(IConfigurationResolverService);
 	const environmentVariableService = accessor.get(IEnvironmentVariableService);
 	const workspaceFolder = getWorkspaceForTerminal(folder, accessor.get(IWorkspaceContextService), accessor.get(IActiveFolderService));
-	const envFromConfig = accessor.get(IConfigurationService).getValue<ITerminalEnvironment | undefined>(`terminal.integrated.env.${isWindows ? 'windows' : isMacintosh ? 'osx' : 'linux'}`);
+	const configurationService = accessor.get(IConfigurationService);
+	const envFromConfig = configurationService.getValue<ITerminalEnvironment | undefined>(`terminal.integrated.env.${isWindows ? 'windows' : isMacintosh ? 'osx' : 'linux'}`);
 	const version = accessor.get(IProductService).version;
 	const detectLocale = accessor.get(ITerminalConfigurationService).config.detectLocale;
 
-	const baseEnv = await profileResolverService.getEnvironment(undefined);
+	// The base an agent's terminal gets (`_facade.terminal.create`): the resolved shell environment where
+	// terminals inherit it, as `TerminalProcessManager._resolveEnvironment` chooses.
+	const backend = await instanceService.getBackend();
+	const shellEnv = await backend?.getShellEnvironment();
+	const baseEnv = inheritsShellEnvironment(configurationService) && shellEnv ? shellEnv : await profileResolverService.getEnvironment(undefined);
 	const envForResolver = { ...baseEnv };
-	mergeEnvironments(envForResolver, await (await instanceService.getBackend())?.getShellEnvironment());
+	mergeEnvironments(envForResolver, shellEnv);
 	const variableResolver = createVariableResolver(workspaceFolder, envForResolver, configurationResolverService);
 	const env = await createTerminalEnvironment({ cwd: folder }, envFromConfig, variableResolver, version, detectLocale, baseEnv);
 	await environmentVariableService.mergedCollection.applyToProcessEnvironment(env, { workspaceFolder }, variableResolver);

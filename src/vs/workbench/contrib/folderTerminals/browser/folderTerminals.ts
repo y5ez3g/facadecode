@@ -62,8 +62,12 @@ export interface IFolderTerminalsService {
 	 * another folder is brought back by moving the window onto that folder first, as a click on its row
 	 * does. `false` when it does not come back - the move refused, the window moved on again first, or
 	 * it could not be shown - and for a terminal that has closed.
+	 *
+	 * With `join: false`, one held for a row that has not joined the workspace stays held, answering
+	 * `false`: going there would put the row's folder in the workspace - a single folder window becomes a
+	 * workspace, and its extension host restarts - which only the person's own pick of it does.
 	 */
-	reveal(instance: ITerminalInstance): Promise<boolean>;
+	reveal(instance: ITerminalInstance, options?: { readonly join?: boolean }): Promise<boolean>;
 
 	/**
 	 * Opens a terminal for `folder` without disturbing the window: it does not move the window, come in
@@ -92,8 +96,8 @@ export class FolderTerminalsService implements IFolderTerminalsService {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).folderOf(instance);
 	}
 
-	reveal(instance: ITerminalInstance): Promise<boolean> {
-		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).reveal(instance);
+	reveal(instance: ITerminalInstance, options?: { readonly join?: boolean }): Promise<boolean> {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).reveal(instance, options);
 	}
 
 	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance> {
@@ -456,13 +460,17 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	}
 
 	/** {@link IFolderTerminalsService.reveal}. */
-	async reveal(instance: ITerminalInstance): Promise<boolean> {
+	async reveal(instance: ITerminalInstance, options?: { readonly join?: boolean }): Promise<boolean> {
 		// One that has closed has nowhere to be put in front, and the terminal service no longer knows it
 		if (instance.isDisposed) {
 			return false;
 		}
 
 		const key = this._keyParkedFor(instance);
+		// Held for a row that has not joined: it stays so, unless joining it is the person's pick
+		if (key !== undefined && key !== WINDOW && options?.join === false && !this._folderFor(key)) {
+			return false;
+		}
 		if (key !== undefined && !await this._bringBack(key, instance)) {
 			return false;
 		}

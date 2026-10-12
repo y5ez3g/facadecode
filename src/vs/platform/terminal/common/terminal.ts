@@ -215,6 +215,34 @@ export interface IReconnectionProperties {
 	data?: unknown;
 }
 
+/**
+ * Facade Code: the owner a terminal made for an agent's run is marked with, in its `reconnectionProperties`: the
+ * field upstream built for an owner to mark its terminals, as tasks mark theirs. The pty host keeps the mark
+ * with the process, so a reload, a window that crashed and was reopened, and a move within the window find it
+ * there, whatever the terminal's title.
+ */
+export const FACADE_RUN_OWNER = 'facade.run';
+
+/**
+ * Facade Code: the code a terminal's process ended with, from what node-pty says of its end - its code, and the
+ * signal that ended it, if one did. An agent's CLI ended by a signal ends with 128 and the signal's number, as a
+ * shell says it: node-pty says 0 beside the signal, which read as a clean exit - a CLI killed while the window
+ * was away recorded as one that exited with 0 (N-58). Other terminals keep upstream's code.
+ */
+export function processExitCode(end: { readonly exitCode: number; readonly signal?: number }, shellLaunchConfig: IShellLaunchConfig): number {
+	return end.signal && shellLaunchConfig.reconnectionProperties?.ownerId === FACADE_RUN_OWNER ? 128 + end.signal : end.exitCode;
+}
+
+/**
+ * Facade Code: whether a window may attach `process`, a persistent process: an agent's run's not while another window
+ * has it - its tab there answers that it does - as a window opening a workspace's old file would attach it, that
+ * file's last layout and editors naming it still: two windows drove one agent, and either could end it (N-68). The
+ * window attaching does not answer for it yet. Any other process as upstream.
+ */
+export async function mayAttachProcess(process: { readonly shellLaunchConfig: IShellLaunchConfig; isOrphaned(): Promise<boolean> }): Promise<boolean> {
+	return process.shellLaunchConfig.reconnectionProperties?.ownerId !== FACADE_RUN_OWNER || await process.isOrphaned();
+}
+
 export type TerminalType = 'Task' | 'Local' | undefined;
 
 export enum TitleEventSource {
@@ -306,6 +334,17 @@ export interface ITerminalLaunchResult {
 /**
  * A service that communicates with a pty host.
 */
+/** Facade Code: which persistent processes `listProcesses` lists. */
+export interface IListProcessesOptions {
+	/** Those a frontend is connected to as well as the orphaned ones, each with `isOrphan`. */
+	readonly attached?: boolean;
+	/**
+	 * Facade Code: instead, the persistent processes with reconnection properties that exited lately, each with
+	 * `exitCode` - a window away as one did, reloading, learns how it ended (N-14).
+	 */
+	readonly exited?: boolean;
+}
+
 export interface IPtyService {
 	readonly _serviceBrand: undefined;
 
@@ -335,9 +374,10 @@ export interface IPtyService {
 	shutdownAll(): Promise<void>;
 
 	/**
-	 * Lists all orphaned processes, ie. those without a connected frontend.
+	 * Lists all orphaned processes, ie. those without a connected frontend - or, with `attached`, every
+	 * persistent process, each saying whether it is an orphan.
 	 */
-	listProcesses(): Promise<IProcessDetails[]>;
+	listProcesses(options?: IListProcessesOptions): Promise<IProcessDetails[]>;
 	getPerformanceMarks(): Promise<performance.PerformanceMark[]>;
 	/**
 	 * Measures and returns the latency of the current and all other processes to the pty host.
@@ -1166,7 +1206,7 @@ export interface ITerminalBackend extends ITerminalBackendPtyServiceContribution
 
 	attachToProcess(id: number): Promise<ITerminalChildProcess | undefined>;
 	attachToRevivedProcess(id: number): Promise<ITerminalChildProcess | undefined>;
-	listProcesses(): Promise<IProcessDetails[]>;
+	listProcesses(options?: IListProcessesOptions): Promise<IProcessDetails[]>;
 	getLatency(): Promise<IPtyHostLatencyMeasurement[]>;
 	getDefaultSystemShell(osOverride?: OperatingSystem): Promise<string>;
 	getProfiles(profiles: unknown, defaultProfile: unknown, includeDetectedProfiles?: boolean): Promise<ITerminalProfile[]>;

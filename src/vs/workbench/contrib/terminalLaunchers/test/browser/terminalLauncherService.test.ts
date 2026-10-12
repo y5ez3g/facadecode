@@ -5,7 +5,9 @@
 
 import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
+import { Codicon } from '../../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
@@ -15,12 +17,14 @@ import { TestInstantiationService } from '../../../../../platform/instantiation/
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
 import { IStorageService, StorageScope, StorageTarget, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
 import { IShellLaunchConfig, TerminalExitReason, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
-import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../../platform/workspace/common/workspaceTrust.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
 import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { ICreateTerminalOptions, ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
+import { IFacadeRunsService } from '../../../facadeCommands/browser/facadeRuns.js';
+import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
 import { AGENT_NAMES_STORAGE_KEY, TerminalLauncherService } from '../../browser/terminalLauncherService.js';
 import { AGENT_TERMINAL_ICON, AGENT_TITLE_TEMPLATE } from '../../common/terminalLaunchers.js';
 
@@ -96,8 +100,9 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 	 * The launcher service over `terminals`, its settings `configuration`, the commands it runs kept in `ran`;
 	 * `trust` is whether the workspace is trusted, and what the person answers VS Code's question with.
 	 */
-	function launcherService(terminals: TestTerminalService, storage: TestStorageService, configuration: TestConfigurationService, ran: string[] = [], trust: { readonly trusted: boolean; readonly answer?: boolean } = { trusted: true }): TerminalLauncherService {
+	function launcherService(terminals: TestTerminalService, storage: TestStorageService, configuration: TestConfigurationService, ran: string[] = [], trust: { readonly trusted: boolean; readonly answer?: boolean } = { trusted: true }, runs: Partial<IFacadeRunsService> = { live: undefined, onDidChangeLive: Event.None }): TerminalLauncherService {
 		const instantiationService = disposables.add(new TestInstantiationService());
+		instantiationService.stub(IFacadeRunsService, runs);
 		instantiationService.stub(ITerminalService, terminals);
 		instantiationService.stub(IStorageService, storage);
 		instantiationService.stub(ILifecycleService, { when: async () => { } });
@@ -138,6 +143,63 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		});
 	});
 
+	test('the folder on screen as the person chooses goes with the start: one they go to while it is under way - VS Code\'s trust question included - does not take the agent there (PS-15)', async () => {
+		const a = URI.file('/work/a');
+		const b = URI.file('/work/b');
+		const activeFolder: { activeFolder: IWorkspaceFolder | undefined } = { activeFolder: upcastPartial<IWorkspaceFolder>({ uri: a }) };
+		const ran: string[] = [];
+		const instantiationService = disposables.add(new TestInstantiationService());
+		instantiationService.stub(IFacadeRunsService, { live: undefined, onDidChangeLive: Event.None });
+		instantiationService.stub(ITerminalService, new TestTerminalService());
+		instantiationService.stub(IStorageService, disposables.add(new TestStorageService()));
+		instantiationService.stub(ILifecycleService, { when: async () => { } });
+		instantiationService.stub(IConfigurationService, new TestConfigurationService());
+		instantiationService.stub(ILogService, new NullLogService());
+		instantiationService.stub(IActiveFolderService, activeFolder);
+		instantiationService.stub(IWorkspaceContextService, {});
+		instantiationService.stub(IWorkspaceTrustManagementService, { isWorkspaceTrusted: () => false });
+		instantiationService.stub(IWorkspaceTrustRequestService, {
+			requestWorkspaceTrust: async () => {
+				// The person goes to B while VS Code asks
+				activeFolder.activeFolder = upcastPartial<IWorkspaceFolder>({ uri: b });
+				return true;
+			}
+		});
+		instantiationService.stub(ICommandService, {
+			executeCommand: async (id: string, ...args: unknown[]) => {
+				const [options] = args as [{ cli: string; folder?: URI }];
+				ran.push(`${id} ${options.cli} in ${options.folder?.path}`);
+				// ... and is on B by the time the extension would ask
+				activeFolder.activeFolder = upcastPartial<IWorkspaceFolder>({ uri: b });
+				return undefined;
+			}
+		});
+		const service = disposables.add(instantiationService.createInstance(TerminalLauncherService));
+		await service.open({ id: 'claude', label: 'Claude Code', command: 'claude' });
+
+		assert.deepStrictEqual(ran, ['facade.agents.startAgent claude in /work/a']);
+	});
+
+	test('the agents counted and listed are those the agents\' extension says are live, by the run each terminal is marked with: one with a shell\'s icon included, one that ended and keeps its tab or an ordinary terminal given the robot not; one still making its worktree counted, with no terminal yet; before the extension has said, the runs whose processes run (X-51; UI-09)', () => {
+		const terminals = new TestTerminalService();
+		const run = (id: number, options: { readonly exitCode?: number; readonly icon?: TerminalIcon } = {}) => upcastPartial<ITerminalInstance>({ reconnectionProperties: facadeRunProperties({ workspace: 'record', id }), exitCode: options.exitCode, isDisposed: false, icon: options.icon, shellLaunchConfig: {} });
+		const shellIcon = run(1, { icon: Codicon.terminal });
+		const ended = run(2, { exitCode: 0 });
+		const ordinary = upcastPartial<ITerminalInstance>({ icon: AGENT_TERMINAL_ICON, exitCode: undefined, isDisposed: false, shellLaunchConfig: {} });
+		terminals.instances = [shellIcon, ended, ordinary];
+		const changed = disposables.add(new Emitter<void>());
+		const runs = { live: undefined as { workspace: string; ids: readonly number[] } | undefined, onDidChangeLive: changed.event };
+		const service = launcherService(terminals, disposables.add(new TestStorageService()), new TestConfigurationService(), [], { trusted: true }, runs);
+		const before = { count: service.activeAgentCount, listed: service.agentTerminals };
+		runs.live = { workspace: 'record', ids: [1, 3] };
+		changed.fire();
+
+		assert.deepStrictEqual({ before, after: { count: service.activeAgentCount, listed: service.agentTerminals } }, {
+			before: { count: 1, listed: [shellIcon] },
+			after: { count: 2, listed: [shellIcon] }
+		});
+	});
+
 	test('Configure Agents opens VS Code\'s settings at the agents\' own, the same search every time', async () => {
 		const ran: string[] = [];
 		const service = launcherService(new TestTerminalService(), disposables.add(new TestStorageService()), new TestConfigurationService(), ran);
@@ -145,6 +207,36 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		await service.configure();
 
 		assert.deepStrictEqual(ran, ['workbench.action.openSettings ["@ext:vscode.facade-agents"]', 'workbench.action.openSettings ["@ext:vscode.facade-agents"]']);
+	});
+
+	test('an agent\'s name is kept as its terminal starts, not with the window\'s next save, and one a floating window brings back last keeps its own: after a crash a moment on, the Codex child\'s tab read only its folder (N-49; WIN-13)', async () => {
+		const storage = disposables.add(new TestStorageService());
+		storage.store(AGENT_NAMES_STORAGE_KEY, JSON.stringify({ floating: { name: '@floatme #a3' } }), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		const terminals = new TestTerminalService();
+		const runsRestored = new DeferredPromise<void>();
+		launcherService(terminals, storage, new TestConfigurationService(), [], { trusted: true }, { live: undefined, onDidChangeLive: Event.None, whenRestored: runsRestored.p });
+
+		const child = new TestTerminal('child', { name: '@livechild #a2', icon: AGENT_TERMINAL_ICON, titleTemplate: '${sequence}${separator}@livechild #a2' });
+		terminals.made.fire(child.asInstance());
+		const keptAtOnce = JSON.parse(storage.get(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE) ?? '{}');
+
+		// The panel's terminals are back and the window is past its phases; the floating window's comes after
+		terminals.instances = [child.asInstance()];
+		terminals.connected.complete();
+		await timeout(0);
+		const floating = reconnecting('floating');
+		terminals.made.fire(floating.asInstance());
+		terminals.instances = [child, floating].map(terminal => terminal.asInstance());
+		runsRestored.complete();
+		await timeout(0);
+		storage.testEmitWillSaveState(WillSaveStateReason.NONE);
+
+		const both = { floating: { name: '@floatme #a3' }, child: { name: '@livechild #a2', titleTemplate: '${sequence}${separator}@livechild #a2' } };
+		assert.deepStrictEqual({ keptAtOnce, floating: floating.shellLaunchConfig.name, kept: JSON.parse(storage.get(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE) ?? '{}') }, {
+			keptAtOnce: both,
+			floating: '@floatme #a3',
+			kept: both
+		});
 	});
 
 	test('an agent\'s terminal keeps the name it was started with through the window closing, whoever started it, and loses it once it ends or does not come back', async () => {

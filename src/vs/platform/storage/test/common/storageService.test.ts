@@ -4,9 +4,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { deepStrictEqual, ok, strictEqual } from 'assert';
+import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { URI } from '../../../../base/common/uri.js';
+import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
+import { mock } from '../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
-import { InMemoryStorageService, IStorageService, IStorageTargetChangeEvent, IStorageValueChangeEvent, StorageScope, StorageTarget } from '../../common/storage.js';
+import { IEnvironmentService } from '../../../environment/common/environment.js';
+import { IRemoteService } from '../../../ipc/common/services.js';
+import { toUserDataProfile } from '../../../userDataProfile/common/userDataProfile.js';
+import { InMemoryStorageService, IStorageService, IStorageTargetChangeEvent, IStorageValueChangeEvent, StorageScope, StorageTarget, TARGET_KEY } from '../../common/storage.js';
+import { ISerializableUpdateRequest } from '../../common/storageIpc.js';
+import { RemoteStorageService } from '../../common/storageService.js';
 
 export function createSuite<T extends IStorageService>(params: { setup: () => Promise<T>; teardown: (service: T) => Promise<void> }): void {
 
@@ -298,4 +307,75 @@ suite('StorageService (in-memory)', function () {
 	});
 
 	ensureNoDisposablesAreLeakedInTestSuite();
+});
+
+/**
+ * The main process's storage channel, its databases in memory: one per workspace, profile and the application.
+ */
+class TestStorageChannel implements IChannel {
+
+	constructor(readonly databases: Map<string, Map<string, string>>) { }
+
+	async call<T>(command: string, request: ISerializableUpdateRequest): Promise<T> {
+		const database = this.databaseOf(request);
+		if (command === 'getItems') {
+			return [...database] as T;
+		}
+		if (command === 'updateItems') {
+			for (const [key, value] of request.insert ?? []) {
+				database.set(key, value);
+			}
+			for (const key of request.delete ?? []) {
+				database.delete(key);
+			}
+		}
+		return undefined as T;
+	}
+
+	listen<T>(): Event<T> {
+		return Event.None;
+	}
+
+	private databaseOf(request: ISerializableUpdateRequest): Map<string, string> {
+		const id = request.workspace?.id ?? request.profile?.id ?? (request.applicationShared ? 'shared' : 'application');
+		let database = this.databases.get(id);
+		if (!database) {
+			database = new Map();
+			this.databases.set(id, database);
+		}
+		return database;
+	}
+}
+
+suite('StorageService - a window entering a workspace keeps its data (Facade Code)', () => {
+
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('Save Workspace As onto a workspace with storage of an earlier time: that workspace holds what the window held, and the window hears of no change from outside - one had the editor area take the earlier layout, closing an agent\'s terminal (N-61, N-62)', async () => {
+		const channel = new TestStorageChannel(new Map([['w2b', new Map([['workbench.parts.editor', 'an earlier layout'], ['only.earlier', 'stale']])]]));
+		const profile = toUserDataProfile('profile', 'Profile', URI.file('/profile'), URI.file('/cache'));
+		const remoteService: IRemoteService = { _serviceBrand: undefined, getChannel: () => channel, registerChannel: () => { } };
+		const storageService = disposables.add(new RemoteStorageService({ id: 'w2' }, { defaultProfile: profile, currentProfile: profile }, remoteService, new class extends mock<IEnvironmentService>() { }));
+		await storageService.initialize();
+		storageService.store('workbench.parts.editor', 'the window layout', StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		storageService.store('same', 'kept', StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		const fromOutside: string[] = [];
+		const listening = disposables.add(new DisposableStore());
+		listening.add(storageService.onDidChangeValue(StorageScope.WORKSPACE, undefined, listening)(e => {
+			if (e.external) {
+				fromOutside.push(e.key);
+			}
+		}));
+
+		await storageService.switch({ id: 'w2b', configPath: URI.file('/w2b.code-workspace') }, true);
+		await storageService.close();
+
+		deepStrictEqual({
+			w2b: Object.fromEntries([...channel.databases.get('w2b')!].filter(([key]) => key !== TARGET_KEY)),
+			fromOutside
+		}, {
+			w2b: { 'workbench.parts.editor': 'the window layout', 'same': 'kept' },
+			fromOutside: []
+		});
+	});
 });

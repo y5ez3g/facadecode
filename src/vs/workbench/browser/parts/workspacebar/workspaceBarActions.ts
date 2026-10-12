@@ -35,6 +35,7 @@ import { workbenchConfigurationNodeBase } from '../../../common/configuration.js
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { InEditorZenModeContext } from '../../../common/contextkeys.js';
 import { TitleBarLeftMenu } from '../titlebar/titlebarLeftToolbar.js';
+import { REMOVE_FOLDER_ASKED_COMMAND_ID } from '../../actions/workspaceCommands.js';
 
 /** The toolbar at the right end of the bar's header. */
 export const WorkspaceBarTitleMenu = new MenuId('WorkspaceBarTitle');
@@ -353,7 +354,7 @@ class CustomizeFolderAction extends Action2 {
  */
 class RemoveFolderAction extends Action2 {
 
-	static readonly ID = 'facade.workspaceBar.removeFolder';
+	static readonly ID = REMOVE_FOLDER_ASKED_COMMAND_ID;
 
 	constructor() {
 		super({

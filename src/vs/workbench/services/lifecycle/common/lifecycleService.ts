@@ -35,6 +35,10 @@ export abstract class AbstractLifecycleService extends Disposable implements ILi
 	private _startupKind: StartupKind;
 	get startupKind(): StartupKind { return this._startupKind; }
 
+	// Facade Code: kept as it was read (`ILifecycleService.lastShutdownReason`)
+	private _lastShutdownReason: ShutdownReason | undefined;
+	get lastShutdownReason(): ShutdownReason | undefined { return this._lastShutdownReason; }
+
 	private _phase = LifecyclePhase.Starting;
 	get phase(): LifecyclePhase { return this._phase; }
 
@@ -74,6 +78,7 @@ export abstract class AbstractLifecycleService extends Disposable implements ILi
 		// Retrieve and reset last shutdown reason
 		const lastShutdownReason = this.storageService.getNumber(AbstractLifecycleService.LAST_SHUTDOWN_REASON_KEY, StorageScope.WORKSPACE);
 		this.storageService.remove(AbstractLifecycleService.LAST_SHUTDOWN_REASON_KEY, StorageScope.WORKSPACE);
+		this._lastShutdownReason = lastShutdownReason;
 
 		// Convert into startup kind
 		let startupKind: StartupKind | undefined = undefined;

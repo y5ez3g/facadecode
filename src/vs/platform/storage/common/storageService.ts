@@ -202,6 +202,14 @@ export class RemoteStorageService extends AbstractStorageService {
 		this.workspaceStorage = this.createWorkspaceStorage(toWorkspace);
 		await this.workspaceStorage.init();
 
+		// Facade Code: the window goes on as the workspace it entered - Save Workspace As, a folder window that became
+		// a workspace - with what it holds now. What that workspace's storage held from an earlier time, applied over
+		// the window, had the editor area take its old layout: closing the editors it did not have, an agent's
+		// terminal among them, and opening others on whatever terminals their old ids named now (N-61, N-62).
+		if (preserveData) {
+			await replaceStorageItems(this.workspaceStorage, oldItems);
+		}
+
 		// Handle data switch and eventing
 		this.switchData(oldItems, this.workspaceStorage, StorageScope.WORKSPACE);
 	}
@@ -213,4 +221,15 @@ export class RemoteStorageService extends AbstractStorageService {
 
 		return this.workspaceStorageId === scope.id;
 	}
+}
+
+/**
+ * Facade Code: makes what `storage` holds what `items` holds - the storage of a workspace a window enters taking
+ * the data the window had, as `switch(to, preserveData)` asks: its own keys gone, the window's set.
+ */
+async function replaceStorageItems(storage: IStorage, items: Map<string, string>): Promise<void> {
+	await Promise.all([
+		...[...storage.items.keys()].filter(key => !items.has(key)).map(key => storage.delete(key)),
+		...[...items].filter(([key, value]) => storage.get(key) !== value).map(([key, value]) => storage.set(key, value))
+	]);
 }

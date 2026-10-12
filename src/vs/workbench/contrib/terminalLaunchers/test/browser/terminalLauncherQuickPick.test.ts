@@ -17,14 +17,22 @@ import { ITerminalInstance } from '../../../terminal/browser/terminal.js';
 import { agentPicks, IAgentPlace, IPlaceStep, placeOfFolder } from '../../browser/terminalLauncherQuickPick.js';
 import { agentIcon } from '../../common/terminalLaunchers.js';
 
-/** An agent's terminal, as much of one as the picker reads: when it was made, its title, its agent's name, where it is, and its tab's glyph. */
+/**
+ * An agent's terminal, as much of one as the picker reads: when it was made, the title its CLI gave it - none
+ * yet where empty - its agent's name, where it is, and its tab's glyph. Its tab's title is made as an agent's is:
+ * the CLI's title, then the agent's name.
+ */
 class TestAgent extends mock<ITerminalInstance>() {
 
 	override readonly shellLaunchConfig: IShellLaunchConfig;
+	override readonly sequence: string | undefined;
+	override readonly title: string;
 
-	constructor(override readonly instanceId: number, override readonly title: string, name: string, override readonly target = TerminalLocation.Editor, override readonly icon?: TerminalIcon) {
+	constructor(override readonly instanceId: number, cliTitle: string, name: string, override readonly target = TerminalLocation.Editor, override readonly icon?: TerminalIcon) {
 		super();
 		this.shellLaunchConfig = { name };
+		this.sequence = cliTitle || undefined;
+		this.title = cliTitle ? `${cliTitle} - ${name}` : name;
 	}
 }
 
@@ -55,10 +63,10 @@ suite('Agent picker - every agent open, in one list', () => {
 
 		const picks = agentPicks([cart, panel, fixing, starting, codex, tests], agent => places.get(agent)!);
 
-		// Every row says which agent it is, one whose tab says nothing else included
+		// Every row says which agent it is, once: after its CLI's title, or alone where its CLI has given none (N-22)
 		assert.deepStrictEqual(picks.map(pick => pick.label), [
 			'$(rocket~folderred) FacadeCode $(chevron-right) $(robot) Codex \u00b7 Codex',
-			'$(rocket~folderred) FacadeCode $(chevron-right) $(robot) Antigravity \u00b7 Antigravity',
+			'$(rocket~folderred) FacadeCode $(chevron-right) $(robot) Antigravity',
 			'$(rocket~folderred) FacadeCode $(chevron-right) $(workspace-bar-worktree~folderblue) feature-16 $(chevron-right) $(robot) Fixing drag and drop \u00b7 Claude Code',
 			'$(rocket~folderred) FacadeCode $(chevron-right) $(workspace-bar-worktree~folderblue) feature-16 $(chevron-right) $(robot) Writing tests \u00b7 Codex',
 			'$(folder) My shop $(chevron-right) $(robot) Refactoring the cart \u00b7 Claude Code',

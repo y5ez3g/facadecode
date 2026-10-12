@@ -33,6 +33,12 @@ export const SET_ROOT_FOLDER_COMMAND_ID = 'setRootFolder';
 
 export const PICK_WORKSPACE_FOLDER_COMMAND_ID = '_workbench.pickWorkspaceFolder';
 
+/**
+ * Facade Code: the workspace bar's Remove Folder, `(folder?)` - it asks first, naming the folder and the agents
+ * it stops - which every way of taking a folder out of the workspace goes through (WORKSPACE.md, section 3.8; N-65).
+ */
+export const REMOVE_FOLDER_ASKED_COMMAND_ID = 'facade.workspaceBar.removeFolder';
+
 // Command registration
 
 CommandsRegistry.registerCommand({

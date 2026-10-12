@@ -101,7 +101,7 @@ suite('Terminal launchers - what to look for', () => {
 		], [true, true, false, false, false, false, true, true]);
 	});
 
-	test('an agent is drawn with the logo of the program its command starts', () => {
+	test('a built-in agent is drawn with the logo of the program its command starts; every custom agent with the robot, whatever program it runs (X-60)', () => {
 		assert.deepStrictEqual([
 			agentIcon('claude').id,
 			agentIcon('codex --yolo').id,
@@ -111,7 +111,9 @@ suite('Terminal launchers - what to look for', () => {
 			agentIcon('"C:\\Program Files\\Claude\\Claude.EXE" --resume').id,	// a path, an extension, any case
 			agentIcon('/usr/local/bin/codex').id,
 			agentIcon('my-agent --fast').id,	// not one of ours: the robot
-			agentIcon('').id					// only a shell: the robot
+			agentIcon('').id,					// only a shell: the robot
+			agentIcon('/Users/me/.local/bin/claude', true).id,	// a custom agent running the real claude: the robot
+			agentIcon('codex', true).id
 		], [
 			'agent-claude',
 			'agent-codex',
@@ -120,6 +122,8 @@ suite('Terminal launchers - what to look for', () => {
 			'agent-grok',
 			'agent-claude',
 			'agent-codex',
+			AGENT_TERMINAL_ICON.id,
+			AGENT_TERMINAL_ICON.id,
 			AGENT_TERMINAL_ICON.id,
 			AGENT_TERMINAL_ICON.id
 		]);
@@ -191,6 +195,21 @@ suite('Terminal launchers - an agent across a reload', () => {
 			['unknown', false, undefined, undefined],
 			['repainted', false, undefined, undefined],
 			['started', false, undefined, undefined],
+		]);
+	});
+
+	test('a reconnecting agent terminal gets back its name and title template, its title as the pty host kept it - its CLI\'s own, the label made from it again once (N-03)', () => {
+		const names = new Map([['codex', { name: '@codex #a3', titleTemplate: AGENT_TITLE_TEMPLATE }], ['plain', { name: '@main · Claude Code' }]]);
+		const reconnecting = (nonce: string, title: string): IShellLaunchConfig => ({
+			attachPersistentProcess: { id: 1, pid: 1, title, titleSource: TitleEventSource.Sequence, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: nonce }
+		});
+		const configs = [reconnecting('codex', 'Fix it'), reconnecting('plain', 'Fix it')];
+
+		configs.forEach(config => restoreAgentLaunch(config, names));
+
+		assert.deepStrictEqual(configs.map(config => [config.name, config.titleTemplate, config.attachPersistentProcess?.title]), [
+			['@codex #a3', AGENT_TITLE_TEMPLATE, 'Fix it'],
+			['@main · Claude Code', undefined, 'Fix it'],
 		]);
 	});
 });

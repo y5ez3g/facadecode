@@ -15,7 +15,7 @@ import { URI } from '../../../base/common/uri.js';
 import { localize } from '../../../nls.js';
 import { ILogService, LogLevel } from '../../log/common/log.js';
 import { IProductService } from '../../product/common/productService.js';
-import { FlowControlConstants, IShellLaunchConfig, ITerminalChildProcess, ITerminalLaunchError, IProcessProperty, IProcessPropertyMap, ProcessPropertyType, TerminalShellType, IProcessReadyEvent, ITerminalProcessOptions, PosixShellType, IProcessReadyWindowsPty, GeneralShellType, ITerminalLaunchResult } from '../common/terminal.js';
+import { FlowControlConstants, IShellLaunchConfig, ITerminalChildProcess, processExitCode, ITerminalLaunchError, IProcessProperty, IProcessPropertyMap, ProcessPropertyType, TerminalShellType, IProcessReadyEvent, ITerminalProcessOptions, PosixShellType, IProcessReadyWindowsPty, GeneralShellType, ITerminalLaunchResult } from '../common/terminal.js';
 import { ChildProcessMonitor } from './childProcessMonitor.js';
 import { getShellIntegrationInjection, IShellIntegrationConfigInjection, sanitizeEnvForLogging } from './terminalEnvironment.js';
 import { WindowsShellHelper } from './windowsShellHelper.js';
@@ -339,7 +339,8 @@ export class TerminalProcess extends Disposable implements ITerminalChildProcess
 			this._childProcessMonitor?.handleOutput();
 		}));
 		this._register(ptyProcess.onExit(e => {
-			this._exitCode = e.exitCode;
+			// Facade Code: an agent's CLI killed by a signal is not said to have exited cleanly (N-58)
+			this._exitCode = processExitCode(e, this.shellLaunchConfig);
 			this._queueProcessExit();
 		}));
 		// node-pty >= 1.2.0-beta.11 defers conptyNative.connect() on Windows, so

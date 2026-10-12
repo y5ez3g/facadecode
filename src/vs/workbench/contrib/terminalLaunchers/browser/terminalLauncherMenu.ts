@@ -119,7 +119,7 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 		// With the agent's logo, the icon its terminal tab will carry: the button's dropdown draws it
 		// (`AgentMenuActionViewItem`), and the title bar's overflow, a context menu, leaves it out
 		store.add(MenuRegistry.appendMenuItem(AGENT_MENU, {
-			command: { id, title: launcher.label, icon: agentIcon(launcher.command) },
+			command: { id, title: launcher.label, icon: agentIcon(launcher.command, launcher.custom) },
 			group: AGENT_MENU_GROUP,
 			order,
 			when

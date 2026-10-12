@@ -9,7 +9,7 @@ import { IWorkspaceContextService, WorkbenchState, IWorkspaceFolder, hasWorkspac
 import { IWorkspaceEditingService } from '../../services/workspaces/common/workspaceEditing.js';
 import { IEditorService } from '../../services/editor/common/editorService.js';
 import { ICommandService } from '../../../platform/commands/common/commands.js';
-import { ADD_ROOT_FOLDER_COMMAND_ID, ADD_ROOT_FOLDER_LABEL, PICK_WORKSPACE_FOLDER_COMMAND_ID, SET_ROOT_FOLDER_COMMAND_ID } from './workspaceCommands.js';
+import { ADD_ROOT_FOLDER_COMMAND_ID, ADD_ROOT_FOLDER_LABEL, PICK_WORKSPACE_FOLDER_COMMAND_ID, REMOVE_FOLDER_ASKED_COMMAND_ID, SET_ROOT_FOLDER_COMMAND_ID } from './workspaceCommands.js';
 import { IFileDialogService } from '../../../platform/dialogs/common/dialogs.js';
 import { MenuRegistry, MenuId, Action2, registerAction2 } from '../../../platform/actions/common/actions.js';
 import { EmptyWorkspaceSupportContext, EnterMultiRootWorkspaceSupportContext, IsSessionsWindowContext, OpenFolderWorkspaceSupportContext, WorkbenchStateContext, WorkspaceFolderCountContext } from '../../common/contextkeys.js';
@@ -247,11 +247,11 @@ export class RemoveRootFolderAction extends Action2 {
 
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		const commandService = accessor.get(ICommandService);
-		const workspaceEditingService = accessor.get(IWorkspaceEditingService);
 
 		const folder = await commandService.executeCommand<IWorkspaceFolder>(PICK_WORKSPACE_FOLDER_COMMAND_ID);
 		if (folder) {
-			await workspaceEditingService.removeFolders([folder.uri]);
+			// Facade Code: as the workspace bar's Remove Folder, asked first - it stops the folder's agents (N-65)
+			await commandService.executeCommand(REMOVE_FOLDER_ASKED_COMMAND_ID, folder.uri);
 		}
 	}
 }

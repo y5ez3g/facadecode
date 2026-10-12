@@ -15,6 +15,9 @@ import { InstantiationType, registerSingleton } from '../../../../platform/insta
 import { Emitter, Event, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
+import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { ILabelService } from '../../../../platform/label/common/label.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -131,6 +134,9 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@ILogService private readonly logService: ILogService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkspaceBarCustomizationService customizationService: IWorkspaceBarCustomizationService,
+		@IFileService private readonly fileService: IFileService,
+		@INotificationService private readonly notificationService: INotificationService,
+		@ILabelService private readonly labelService: ILabelService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -298,6 +304,16 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	}
 
 	async show(uri: URI): Promise<void> {
+		// Facade Code: a folder gone from disk that the workspace does not have - a worktree removed outside the
+		// window, whose row git's files have not been read again for yet - is not taken in: its terminals would
+		// fail to start there. The rows are read again, and the person told (N-29).
+		if (!await this.model.resolve(uri) && !await this.fileService.exists(uri)) {
+			this.logService.warn(`[workspaceBar] ${uri.toString(true)} is gone from disk: not taken into the workspace`);
+			this.notificationService.info(localize('workspaceBar.folderGone', "{0} is no longer on the disk, so the window does not go there.", this.labelService.getUriLabel(uri)));
+			await this.git.refresh();
+			return;
+		}
+
 		// ⚠️ Through the model, not straight to the workspace: it is what knows that `/tmp/x` and
 		// `/private/tmp/x` are one folder, so a folder opened twice under two spellings is one row
 		// rather than two. `add` skips what is already there, which makes this the same call whether

@@ -7,9 +7,10 @@ import { Codicon } from '../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { isObject, isString } from '../../../../base/common/types.js';
 import { localize } from '../../../../nls.js';
-import { IShellLaunchConfig, TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
+import { IReconnectionProperties, IShellLaunchConfig, TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
-import { StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
+import { ILifecycleService, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 /** The glyph of an agent without a logo of its own (`agentIcon`). */
 export const AGENT_TERMINAL_ICON = Codicon.robot;
@@ -32,15 +33,17 @@ const AGENT_ICONS: ReadonlyMap<string, ThemeIcon> = new Map([
 ]);
 
 /**
- * The icon an agent's terminal is drawn with: its logo when it runs one of the built-in agents, the
- * robot otherwise - and for a command that is only a shell.
+ * The icon an agent's terminal is drawn with: a built-in agent's logo, by the command it runs; the robot
+ * for every custom agent, whatever program it runs - and for a command that is only a shell.
  *
- * By the program the command starts rather than by the agent's id, so a row somebody adds to the list
- * that runs `claude` is drawn as Claude, and a renamed built-in keeps its mark. The name is read as the
- * last segment of a path, without an extension: `C:\tools\claude.cmd` is `claude`.
+ * ⚠️ A custom agent is never drawn as a built-in, even one that runs `claude`: the logo says Facade's own
+ * integration of that CLI - its tools, YOLO and trust - which a custom agent's launch does not have
+ * (AGENT-LAUNCHER.md, L3: "every custom agent uses the standard robot icon, whatever program it runs";
+ * X-60). A built-in's command is read as the last segment of a path, without an extension:
+ * `C:\tools\claude.cmd` is `claude`.
  */
-export function agentIcon(command: string): ThemeIcon {
-	const name = programOf(command);
+export function agentIcon(command: string, custom = false): ThemeIcon {
+	const name = custom ? undefined : programOf(command);
 	return (name && AGENT_ICONS.get(name)) || AGENT_TERMINAL_ICON;
 }
 
@@ -72,13 +75,21 @@ export function isAgentTerminalIcon(icon: TerminalIcon | undefined): boolean {
 }
 
 /**
- * Whether a terminal being brought back as the window starts is an agent's that is gone: the agent
- * did not outlive the app, and only a reload finds it still running. Brought back anyway, its tab
- * would be a fresh shell under the old output, looking like the agent - so it is left out, as
- * upstream leaves out a task's terminal (`TerminalService._recreateTerminalGroup`).
+ * Whether a terminal being brought back as the window starts is an agent's that is gone: the window's
+ * last shutdown - closed, quit, left for another workspace - ended its agents, and only a reload finds
+ * them still running. Brought back anyway, its tab would be its CLI run again, or a fresh shell under the
+ * old output - so it is left out, as upstream leaves out a task's terminal
+ * (`TerminalService._recreateTerminalGroup`). An agent's terminal is one marked as an agent's run
+ * (`isFacadeRunTerminal`), as every agent Facade starts is - from the agent menu or through `start_agent`,
+ * the agent framework on or off - whatever its icon: not one only drawn as an agent's, an ordinary
+ * terminal the person gave the robot, whose shell comes back as any other's (X-51, N-78).
+ *
+ * ⚠️ Not after a crash: its window did not shut down - no reason recorded - and its Reopen is a new window
+ * whose agents run on in the pty host. They come back in their places, the panel's, the editor area's
+ * and floating windows', not taken back afterwards all in one editor group (N-49).
  */
-export function isAgentGoneAtStartup(icon: TerminalIcon | undefined, startupKind: StartupKind): boolean {
-	return startupKind !== StartupKind.ReloadedWindow && isAgentTerminalIcon(icon);
+export function isAgentGoneAtStartup(terminal: { readonly reconnectionProperties?: IReconnectionProperties }, lifecycle: Pick<ILifecycleService, 'startupKind' | 'lastShutdownReason'>): boolean {
+	return lifecycle.startupKind !== StartupKind.ReloadedWindow && lifecycle.lastShutdownReason !== undefined && isFacadeRunTerminal(terminal);
 }
 
 /**
@@ -156,7 +167,7 @@ export function readAgentNames(value: string | undefined): Map<string, IAgentNam
 export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names: ReadonlyMap<string, IAgentName>): boolean {
 	const reconnecting = shellLaunchConfig.attachPersistentProcess;
 	const kept = reconnecting && isAgentTerminalIcon(reconnecting.icon) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
-	if (!kept) {
+	if (!reconnecting || !kept) {
 		return false;
 	}
 

@@ -46,6 +46,24 @@ import { IAccessibilityService } from '../../../../platform/accessibility/common
 import { BugIndicatingError } from '../../../../base/common/errors.js';
 import type { MaybePromise } from '../../../../base/common/async.js';
 import { isString } from '../../../../base/common/types.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+
+/**
+ * Facade Code: what an agent's terminal says when it could not attach to its process: another window has it - a
+ * window opening a workspace's old file, its last layout or editors naming it, never attaches it (N-68) - or it ended
+ * while the window was away. No shell is started in its place, under the agent's last output (N-15).
+ */
+async function agentNotAttached(backend: ITerminalBackend, id: number): Promise<string> {
+	let elsewhere = false;
+	try {
+		elsewhere = (await backend.listProcesses({ attached: true })).some(each => each.id === id && !each.isOrphan);
+	} catch {
+		// Not known to be anywhere: ended
+	}
+	return elsewhere
+		? localize('facade.agentElsewhere', "This agent runs in another window: use its tab there.")
+		: localize('facade.agentProcessGone', "This agent's process ended while the window was away.");
+}
 
 const enum ProcessConstants {
 	/**
@@ -292,6 +310,10 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 					if (result) {
 						newProcess = result;
 					} else {
+						// Facade Code: an agent's run gets no shell in its place - its process ended, or is another window's (N-15, N-68)
+						if (isFacadeRunTerminal(shellLaunchConfig.attachPersistentProcess)) {
+							return { message: await agentNotAttached(backend, shellLaunchConfig.attachPersistentProcess.id) };
+						}
 						// Warn and just create a new terminal if attach failed for some reason
 						this._logService.warn(`Attach to process failed for terminal`, shellLaunchConfig.attachPersistentProcess);
 						shellLaunchConfig.attachPersistentProcess = undefined;
@@ -341,6 +363,10 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 					if (result) {
 						newProcess = result;
 					} else {
+						// Facade Code: an agent's run gets no shell in its place - its process ended, or is another window's (N-15, N-68)
+						if (isFacadeRunTerminal(shellLaunchConfig.attachPersistentProcess)) {
+							return { message: await agentNotAttached(backend, shellLaunchConfig.attachPersistentProcess.id) };
+						}
 						// Warn and just create a new terminal if attach failed for some reason
 						this._logService.warn(`Attach to process failed for terminal`, shellLaunchConfig.attachPersistentProcess);
 						shellLaunchConfig.attachPersistentProcess = undefined;
@@ -559,7 +585,8 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 			this._ptyResponsiveListener?.dispose();
 			this._ptyResponsiveListener = undefined;
 			if (this._shellLaunchConfig) {
-				if (this._shellLaunchConfig.isFeatureTerminal && !this.reconnectionProperties) {
+				// Facade Code: nor an agent's run, whose CLI a relaunch would run again (`isFacadeRunTerminal`): it ends
+				if ((this._shellLaunchConfig.isFeatureTerminal && !this.reconnectionProperties) || isFacadeRunTerminal(this)) {
 					// Indicate the process is exited (and gone forever) only for feature terminals
 					// so they can react to the exit, this is particularly important for tasks so
 					// that it knows that the process is not still active. Note that this is not

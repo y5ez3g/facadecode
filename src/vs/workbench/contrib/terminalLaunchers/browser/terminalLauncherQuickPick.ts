@@ -97,13 +97,16 @@ function titleOf(agent: ITerminalInstance): string {
 
 /**
  * An agent's row, read as a path the way the bar is read: each row on the way to it, then the agent's
- * tab - the glyph its tab has and the tab's title - and after a dot which agent it is, on every row
- * alike, one whose title is only the agent's name included.
+ * tab - the glyph its tab has and the title its CLI gave it - and after a dot which agent it is, on every
+ * row alike: the agent alone where its CLI has given no title.
  */
 function toPick(agent: ITerminalInstance, steps: readonly IPlaceStep[]): IAgentPick {
 	const title = titleOf(agent);
 	const name = agent.shellLaunchConfig.name;
-	const tab = name ? localize('agentPicker.titleAndAgent', "{0} \u00b7 {1}", escapeIcons(title), escapeIcons(name)) : escapeIcons(title);
+	// The CLI's own title, then the agent - not the tab's title, which ends with the agent already (N-22); the
+	// agent alone while its CLI has set none
+	const cliTitle = agent.sequence?.trim();
+	const tab = name ? (cliTitle ? localize('agentPicker.titleAndAgent', "{0} \u00b7 {1}", escapeIcons(cliTitle), escapeIcons(name)) : escapeIcons(name)) : escapeIcons(title);
 	// The tab's own glyph, so the row shows the mark the tab does; the robot for one that has none
 	const glyph = ThemeIcon.isThemeIcon(agent.icon) ? agent.icon : AGENT_TERMINAL_ICON;
 
@@ -111,7 +114,7 @@ function toPick(agent: ITerminalInstance, steps: readonly IPlaceStep[]): IAgentP
 		instance: agent,
 		label: [...steps.map(drawStep), `$(${glyph.id}) ${tab}`].join(` $(${Codicon.chevronRight.id}) `),
 		// In words: the glyphs and chevrons are drawn, and read out they would be their names
-		ariaLabel: [...steps.map(step => step.name), title, name].filter(part => !!part).join(', '),
+		ariaLabel: [...steps.map(step => step.name), ...name ? [cliTitle, name] : [title]].filter(part => !!part).join(', '),
 		buttons: [closeButton]
 	};
 }
