@@ -588,7 +588,7 @@ function patchWin32DependenciesTask(destinationFolderName: string) {
 			await rcedit(fullPath, {
 				'file-version': baseVersion,
 				'version-string': {
-					'CompanyName': productContents.nameLong,
+					'CompanyName': productContents.publisher,
 					'FileDescription': productContents.nameLong,
 					'FileVersion': packageJsonContents.version,
 					'InternalName': basename,

@@ -18,6 +18,9 @@ import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
 import { buildHelpMessage, buildStdinMessage, buildVersionMessage, NATIVE_CLI_COMMANDS, OPTIONS } from '../../platform/environment/node/argv.js';
 import { addArg, parseCLIProcessArgv } from '../../platform/environment/node/argvHelper.js';
 import { combineUriFlags } from './cliArgs.js';
+import { areAIFeaturesOff, withoutAIOptions } from './cliAI.js';
+import { releaseVersionLabel } from '../../platform/product/common/releaseVersion.js';
+import { getUserDataPath } from '../../platform/environment/node/userDataPath.js';
 import { getStdinFilePath, hasStdinWithoutTty, readFromStdin, stdinDataListener } from '../../platform/environment/node/stdin.js';
 import { createWaitMarkerFileSync } from '../../platform/environment/node/wait.js';
 import product from '../../platform/product/common/product.js';
@@ -89,21 +92,30 @@ export async function main(argv: string[]): Promise<void> {
 		}
 	}
 
+	// Facade Code: upstream's AI is off unless the person turned it on (IDENTITY.md I11). Its `chat` and `--agents`
+	// are left out of the help then, and used anyway, they say so rather than open what is hidden.
+	const aiFeaturesOff = areAIFeaturesOff(readUserSettings(args));
+	if (aiFeaturesOff && (args.chat || args.agents)) {
+		console.error(`AI features are off ("chat.disableAIFeatures" in your settings). Set it to false to use ${args.chat ? `'${product.applicationName} chat'` : '--agents'}.`);
+		return;
+	}
+
 	// Help (general)
 	if (args.help) {
 		const executable = `${product.applicationName}${isWindows ? '.exe' : ''}`;
-		console.log(buildHelpMessage(product.nameLong, executable, product.version, OPTIONS));
+		console.log(buildHelpMessage(product.nameLong, executable, releaseVersionLabel(product), aiFeaturesOff ? withoutAIOptions(OPTIONS) : OPTIONS));
 	}
 
 	// Help (chat)
 	else if (args.chat?.help) {
 		const executable = `${product.applicationName}${isWindows ? '.exe' : ''}`;
-		console.log(buildHelpMessage(product.nameLong, executable, product.version, OPTIONS.chat.options, { isChat: true }));
+		console.log(buildHelpMessage(product.nameLong, executable, releaseVersionLabel(product), OPTIONS.chat.options, { isChat: true }));
 	}
 
 	// Version Info
 	else if (args.version) {
-		console.log(buildVersionMessage(product.version, product.commit));
+		// Facade Code: the release version, the engine's beside it (IDENTITY.md I7)
+		console.log(buildVersionMessage(releaseVersionLabel(product), product.commit));
 	}
 
 	// Shell integration
@@ -585,6 +597,18 @@ function getAppRoot() {
 	return dirname(FileAccess.asFileUri('').fsPath);
 }
 
+/**
+ * Facade Code: the person's settings file, as the window it would open reads it; undefined when there is none
+ * yet, or it cannot be read.
+ */
+function readUserSettings(args: NativeParsedArgs): string | undefined {
+	try {
+		return readFileSync(join(getUserDataPath(args, product.nameShort), 'User', 'settings.json'), 'utf8');
+	} catch {
+		return undefined;
+	}
+}
+
 function eventuallyExit(code: number): void {
 	setTimeout(() => process.exit(code), 0);
 }
@@ -595,3 +619,4 @@ main(process.argv)
 		console.error(err.message || err.stack || err);
 		eventuallyExit(1);
 	});
+

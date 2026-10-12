@@ -1,14 +1,19 @@
-<!-- BEGIN MICROSOFT SECURITY.MD V1.0.0 BLOCK -->
+# Security
 
-## Security
+Facade Code is developed in the open at
+[github.com/y5ez3g/facadecode](https://github.com/y5ez3g/facadecode).
 
-Microsoft takes the security of our software products and services seriously, which
-includes all source code repositories in our GitHub organizations.
+## Reporting a vulnerability
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+**Please do not report security vulnerabilities through public issues.**
 
-For security reporting information, locations, contact information, and policies,
-please review the latest guidance for Microsoft repositories at
-[https://aka.ms/SECURITY.md](https://aka.ms/SECURITY.md).
+Report them privately, through the repository's
+[private vulnerability reporting](https://github.com/y5ez3g/facadecode/security/advisories/new):
+the Security tab, then "Report a vulnerability". Please say:
 
-<!-- END MICROSOFT SECURITY.MD BLOCK -->
+- what is affected, and what an attacker could do with it;
+- how to reproduce it, as short as you can make it;
+- the version you saw it in, from Help > About.
+
+You will get an answer there, and the fix and the advisory are published together once a
+release carries the fix.

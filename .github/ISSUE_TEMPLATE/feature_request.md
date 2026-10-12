@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: An idea for Facade Code
 title: ''
 labels: ''
 assignees: ''
@@ -8,7 +8,6 @@ assignees: ''
 ---
 
 <!-- ⚠️⚠️ Do Not Delete This! feature_request_template ⚠️⚠️ -->
-<!-- Please read our Rules of Conduct: https://opensource.microsoft.com/codeofconduct/ -->
-<!-- Please search existing issues to avoid creating duplicates. -->
+<!-- 🔎 Search existing issues first: https://github.com/y5ez3g/facadecode/issues -->
 
-<!-- Describe the feature you'd like. -->
+<!-- What you would like Facade Code to do, and what you are trying to get done with it. -->

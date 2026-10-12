@@ -78,7 +78,7 @@ import { SaveStrategy, StateService } from '../../platform/state/node/stateServi
 import { FileUserDataProvider } from '../../platform/userData/common/fileUserDataProvider.js';
 import { addUNCHostToAllowlist, getUNCHost } from '../../base/node/unc.js';
 import { ThemeMainService } from '../../platform/theme/electron-main/themeMainServiceImpl.js';
-import { LINUX_SYSTEM_POLICY_FILE_PATH } from '../../base/common/policy.js';
+import { linuxSystemPolicyFilePath } from '../../base/common/policy.js';
 
 /**
  * The main VS Code entry point.
@@ -226,7 +226,7 @@ class CodeMain {
 		} else if (isMacintosh && policyProductName) {
 			policyServices.push(disposables.add(new NativePolicyService(logService, policyProductName)));
 		} else if (isLinux) {
-			policyServices.push(disposables.add(new FilePolicyService(URI.file(LINUX_SYSTEM_POLICY_FILE_PATH), fileService, logService)));
+			policyServices.push(disposables.add(new FilePolicyService(URI.file(linuxSystemPolicyFilePath(productService.applicationName)), fileService, logService)));
 		} else if (environmentMainService.policyFile) {
 			policyServices.push(disposables.add(new FilePolicyService(environmentMainService.policyFile, fileService, logService)));
 		}

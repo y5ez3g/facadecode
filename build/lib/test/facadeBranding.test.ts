@@ -53,7 +53,7 @@ suite('Facade branding - the installer', () => {
 			microsoft
 		}, {
 			found: [],
-			publisher: '{#NameLong}',
+			publisher: '{#Publisher}',
 			microsoft: ['VersionInfoCopyright']		// the licence line, and only that
 		});
 	});
@@ -81,9 +81,9 @@ suite('Facade branding - the installer', () => {
 		const server = read('build/gulpfile.reh.ts');
 
 		assert.deepStrictEqual([
-			electron.includes('companyName: product.nameLong,'),
-			desktop.includes(`'CompanyName': product.nameLong,`),
-			server.includes(`'CompanyName': productContents.nameLong,`),
+			electron.includes('companyName: product.publisher,'),
+			desktop.includes(`'CompanyName': product.publisher,`),
+			server.includes(`'CompanyName': productContents.publisher,`),
 			// the licence is a different question from the publisher, and both names belong on it
 			[electron, desktop, server].every(s => /Microsoft Corporation and \$\{product(Contents)?\.nameLong\} contributors/.test(s))
 		], [true, true, true, true]);
@@ -115,6 +115,19 @@ suite('Facade branding - the installer', () => {
 		assert.deepStrictEqual(
 			urls.map(k => [k, typeof product[k] === 'string' && !/github\.com\/microsoft|visualstudio\.com/.test(product[k])]),
 			urls.map(k => [k, true]));
+	});
+
+	test('ID-16 Explorer\'s context menu is offered on Windows 10 only: Windows 11 takes its entries from an AppX, which this product does not build', () => {
+		const iss = read('build/win32/code.iss');
+		const task = (name: string) => iss.split(/\r?\n/).find(l => l.startsWith(`Name: "${name}";`)) ?? '';
+		const product = JSON.parse(read('product.json'));
+
+		assert.deepStrictEqual({
+			files: task('addcontextmenufiles').includes('OnlyBelowVersion: 10.0.22000'),
+			folders: task('addcontextmenufolders').includes('OnlyBelowVersion: 10.0.22000'),
+			// `gulpfile.vscode.win32.ts` builds the AppX for these two qualities only
+			appx: ['stable', 'insider'].includes(product.quality)
+		}, { files: true, folders: true, appx: false });
 	});
 });
 
@@ -230,6 +243,124 @@ suite('Facade branding - the Linux packages', () => {
 			noEmptyLineInsideBody: true,
 			maintainerHasAnAddress: true
 		});
+	});
+});
+
+suite('Facade branding - the ids the operating system keeps', () => {
+
+	const product = JSON.parse(read('product.json'));
+
+	/**
+	 * Code - OSS's own ids, as upstream's `product.json` carries them. A fork that keeps any of them is the
+	 * same application to the operating system: installing one upgrades, overwrites or removes the other.
+	 */
+	const CODE_OSS: Record<string, string> = {
+		win32x64AppId: '{{D77B7E06-80BA-4137-BCF4-654B95CCEBC5}',
+		win32arm64AppId: '{{D1ACE434-89C5-48D1-88D3-E2991DF85475}',
+		win32x64UserAppId: '{{CC6B787D-37A0-49E8-AE24-8559A032BE0C}',
+		win32arm64UserAppId: '{{3AEBF0C8-F733-4AD4-BADE-FDB816D53D7B}',
+		darwinProfileUUID: '47827DD9-4734-49A0-AF80-7E19B11495CC',
+		darwinProfilePayloadUUID: 'CF808BE7-53F3-46C6-A7E2-7EDB98A5E959',
+	};
+
+	test('ID-01 the names, ids and links are IDENTITY.md\'s, and no id the operating system keeps is Code - OSS\'s', () => {
+		const pick = (keys: string[]) => Object.fromEntries(keys.map(key => [key, product[key]]));
+
+		assert.deepStrictEqual({
+			names: pick(['nameShort', 'nameLong', 'applicationName', 'urlProtocol', 'serverApplicationName', 'tunnelApplicationName', 'linuxIconName', 'dataFolderName', 'sharedDataFolderName', 'serverDataFolderName']),
+			ids: pick(['darwinBundleIdentifier', 'win32AppUserModelId', 'win32MutexName', 'win32TunnelServiceMutex', 'win32TunnelMutex', 'win32RegValueName', 'win32DirName', 'win32ShellNameShort']),
+			fresh: Object.keys(CODE_OSS).filter(key => typeof product[key] === 'string' && product[key].length > 0 && product[key] !== CODE_OSS[key]),
+			distinct: new Set(Object.keys(CODE_OSS).map(key => product[key])).size,
+			links: pick(['productHomeUrl', 'licenseUrl', 'serverLicenseUrl', 'reportIssueUrl', 'packageMaintainer', 'publisher']),
+			voice: product.voiceWsUrl
+		}, {
+			names: {
+				nameShort: 'Facade Code', nameLong: 'Facade Code', applicationName: 'facade', urlProtocol: 'facade', serverApplicationName: 'facade-server',
+				tunnelApplicationName: 'facade-tunnel', linuxIconName: 'facade', dataFolderName: '.facade', sharedDataFolderName: '.facade-shared', serverDataFolderName: '.facade-server'
+			},
+			ids: {
+				darwinBundleIdentifier: 'com.facadecode.FacadeCode', win32AppUserModelId: 'FacadeCode.FacadeCode', win32MutexName: 'facadecode', win32TunnelServiceMutex: 'facadecode-tunnelservice',
+				win32TunnelMutex: 'facadecode-tunnel', win32RegValueName: 'FacadeCode', win32DirName: 'Facade Code', win32ShellNameShort: 'F&acade Code'
+			},
+			fresh: Object.keys(CODE_OSS),
+			distinct: Object.keys(CODE_OSS).length,
+			links: {
+				productHomeUrl: 'https://facadecode.com/',
+				licenseUrl: 'https://github.com/y5ez3g/facadecode/blob/main/LICENSE.txt',
+				serverLicenseUrl: 'https://github.com/y5ez3g/facadecode/blob/main/LICENSE.txt',
+				reportIssueUrl: 'https://github.com/y5ez3g/facadecode/issues/new',
+				packageMaintainer: 'Yuanzhe Zhang <y5ez3g@gmail.com>',
+				publisher: 'Yuanzhe Zhang'
+			},
+			voice: undefined
+		});
+	});
+
+	test('ID-14 the Debian package neither adds nor removes anything of Microsoft\'s apt repository or signing key', () => {
+		// What VS Code's own package does, and a package beside it must not: removing this one would take VS
+		// Code's updates with it (IDENTITY.md I8)
+		const microsoft = /packages\.microsoft\.com|microsoft\.gpg|vscode\.sources|vscode\.list|add-microsoft-repo/;
+		const scripts = ['postinst', 'postrm', 'prerm'];
+
+		assert.deepStrictEqual({
+			scripts: scripts.map(script => [script, microsoft.test(read(`resources/linux/debian/${script}.template`))]),
+			asks: fs.existsSync(path.join(root, 'resources/linux/debian/templates.template')) || read('build/gulpfile.vscode.linux.ts').includes('templates.template')
+		}, {
+			scripts: scripts.map(script => [script, false]),
+			asks: false
+		});
+	});
+});
+
+suite('Facade branding - the Linux policy file', () => {
+
+	test('ID-17 the policy is read from the product\'s own file, named after it, and not VS Code\'s', () => {
+		const policy = read('src/vs/base/common/policy.ts');
+		const readers = ['src/vs/code/electron-main/main.ts', 'src/vs/code/node/cliProcessMain.ts'].map(read);
+
+		assert.deepStrictEqual({
+			path: policy.includes('return `/etc/${applicationName}/policy.json`;'),
+			// As a string the code reads, not the comment that says why it is not upstream's
+			vscodes: [policy, ...readers].some(text => /['"`]\/etc\/vscode\//.test(text)),
+			readers: readers.map(text => text.includes('linuxSystemPolicyFilePath(productService.applicationName)')),
+			applicationName: JSON.parse(read('product.json')).applicationName
+		}, { path: true, vscodes: false, readers: [true, true], applicationName: 'facade' });
+	});
+});
+
+suite('Facade branding - the repository', () => {
+
+	test('ID-20 its SECURITY.md, README.md and issue templates are Facade\'s, point to its repository, and name no Microsoft contact', () => {
+		const files = ['SECURITY.md', 'README.md', '.github/ISSUE_TEMPLATE/bug_report.md', '.github/ISSUE_TEMPLATE/feature_request.md', '.github/ISSUE_TEMPLATE/config.yml'];
+		// VS Code the project may be named - it is what this builds on; Microsoft's channels may not be offered as this one's
+		const microsoftContact = /aka\.ms|opensource\.microsoft\.com|code\.visualstudio\.com|microsoft\/vscode\/issues|vscode-discussions|stackoverflow\.com/i;
+
+		assert.deepStrictEqual({
+			contacts: files.filter(file => microsoftContact.test(read(file))),
+			pointHome: files.filter(file => read(file).includes('github.com/y5ez3g/facadecode')),
+			copilot: fs.existsSync(path.join(root, '.github/ISSUE_TEMPLATE/copilot_bug_report.md'))
+		}, { contacts: [], pointHome: files, copilot: false });
+	});
+});
+
+suite('Facade branding - sign-in and AI', () => {
+
+	test('ID-15 Microsoft sign-in is not shipped', () => {
+		const excluded = /const excludedExtensions = \[([^\]]*)\]/.exec(read('build/lib/extensions.ts'))?.[1] ?? '';
+
+		assert.ok(excluded.includes(`'microsoft-authentication'`), excluded);
+	});
+
+	test('ID-06 AI features are off in a fresh profile: the setting that hides them defaults to on', () => {
+		const contribution = read('src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts');
+		const at = contribution.indexOf('[ChatAIDisabledSettingId]: {');
+		// the setting's schema, up to the next setting's key
+		const schema = at === -1 ? '' : contribution.slice(at, contribution.indexOf('\n\t\t[', at));
+
+		assert.deepStrictEqual({
+			id: read('src/vs/platform/chat/common/chatSettings.ts').includes(`export const ChatAIDisabledSettingId = 'chat.disableAIFeatures';`),
+			default: /^\s*default: true,\s*$/m.test(schema)
+		}, { id: true, default: true });
 	});
 });
 

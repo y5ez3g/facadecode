@@ -9,13 +9,15 @@ import { localize } from '../../../nls.js';
 import { IOSProperties } from '../../native/common/native.js';
 import { IProductService } from '../../product/common/productService.js';
 import { process } from '../../../base/parts/sandbox/electron-browser/globals.js';
+import { releaseVersionLabel } from '../../product/common/releaseVersion.js';
 
 function formatCopilotVersion(version: string | undefined): string {
 	return version?.replace('-canary', '').replace(/\.unsigned$/, '') || 'Unknown';
 }
 
 export function createNativeAboutDialogDetails(productService: IProductService, osProps: IOSProperties): { title: string; details: string; detailsToCopy: string } {
-	let version = productService.version;
+	// Facade Code: the release version, the engine's beside it (IDENTITY.md I7)
+	let version = releaseVersionLabel(productService);
 	if (productService.target) {
 		version = `${version} (${productService.target} setup)`;
 	} else if (productService.darwinUniversalAssetId) {
