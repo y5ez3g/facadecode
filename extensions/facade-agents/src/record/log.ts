@@ -89,6 +89,14 @@ export class AgentLog {
 		this.write(`${logTime(end.time)}  ended    ${describe(agent)}  ${end.kind}${by === undefined ? '' : ` by ${by}`}: ${end.reason}`);
 	}
 
+	/**
+	 * Input into an agent's terminal, at `time` (AGENT-DEBUGGING.md, D9): who is about to type or press what where -
+	 * before anything goes in - and then what went in, or that it is not known. `what` is one line: its text quoted.
+	 */
+	input(time: number, what: string): void {
+		this.write(`${logTime(time)}  input    ${what}`);
+	}
+
 	private write(line: string): void {
 		try {
 			fs.appendFileSync(this.file, `${line}\n`, { mode: 0o600 });

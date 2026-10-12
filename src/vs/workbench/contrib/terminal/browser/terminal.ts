@@ -1240,18 +1240,6 @@ export interface ITerminalInstance extends IBaseTerminalInstance {
 	sendText(text: string, shouldExecute: boolean, bracketedPasteMode?: boolean): Promise<void>;
 
 	/**
-	 * Facade Code: whether the person typed into it since they last pressed Enter - or cleared what they
-	 * typed with Ctrl+C or Ctrl+U: a line of theirs not sent yet, which a line typed for them would join.
-	 */
-	readonly hasUnsentInput: boolean;
-
-	/**
-	 * Facade Code: holds back what the person types into it - kept, in order, and sent once the last hold is
-	 * disposed - so that a line typed into it meanwhile with {@link sendText} reaches it whole (X-43).
-	 */
-	holdInput(): IDisposable;
-
-	/**
 	 * Sends a signal to the terminal instance's process.
 	 *
 	 * @param signal The signal to send (e.g., 'SIGTERM', 'SIGINT', 'SIGKILL').

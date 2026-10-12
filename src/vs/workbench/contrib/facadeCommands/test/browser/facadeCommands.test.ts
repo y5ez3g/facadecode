@@ -4,10 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { IAction } from '../../../../../base/common/actions.js';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { errorHandler, setUnexpectedErrorHandler } from '../../../../../base/common/errors.js';
 import { Emitter } from '../../../../../base/common/event.js';
-import { IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { IProcessEnvironment, isMacintosh, isWindows } from '../../../../../base/common/platform.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -18,6 +18,7 @@ import { CommandsRegistry } from '../../../../../platform/commands/common/comman
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { INotification, INotificationHandle, INotificationService, NotificationPriority } from '../../../../../platform/notification/common/notification.js';
 import { IProductService } from '../../../../../platform/product/common/productService.js';
 import { IMergedEnvironmentVariableCollection } from '../../../../../platform/terminal/common/environmentVariable.js';
 import { IShellLaunchConfig, ITerminalBackend } from '../../../../../platform/terminal/common/terminal.js';
@@ -26,13 +27,16 @@ import { IActiveFolderService } from '../../../../services/activeFolder/common/a
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { extUri } from '../../../../../base/common/resources.js';
 import { IConfigurationResolverService } from '../../../../services/configurationResolver/common/configurationResolver.js';
+import { IHostService } from '../../../../services/host/browser/host.js';
 import { ILifecycleService, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
-import { ITerminalConfigurationService, ITerminalInstance, ITerminalInstanceService } from '../../../terminal/browser/terminal.js';
+import { ITerminalConfigurationService, ITerminalContribution, ITerminalInstance, ITerminalInstanceService } from '../../../terminal/browser/terminal.js';
 import { IEnvironmentVariableService } from '../../../terminal/common/environmentVariable.js';
 import { ITerminalConfiguration, ITerminalProfileResolverService } from '../../../terminal/common/terminal.js';
 import { IMadeWorktree, IWorktreeService } from '../../../worktrees/browser/worktrees.js';
+import { FacadeAgentTerminal, IAgentKeysOptions, IAgentTerminalOptions, IAgentTypeOptions } from '../../browser/facadeAgentTerminal.js';
 import '../../browser/facadeCommands.contribution.js';
+import { FacadeNotifications } from '../../browser/facadeNotifications.js';
 import { FacadeRunProcess, IFacadeRunsService } from '../../browser/facadeRuns.js';
 import { facadeRunOf, facadeRunProperties, IFacadeRun } from '../../common/facadeRun.js';
 
@@ -56,8 +60,14 @@ class TestTerminal {
 
 	isDisposed = false;
 	exitCode: number | undefined;
+	/** Whether it has the person's focus. */
+	hasFocus = false;
+	/** Its Facade contribution, as a test makes it. */
+	agent: ITerminalContribution | undefined;
 
 	constructor(readonly title: string | undefined) { }
+
+	getContribution<T extends ITerminalContribution>(id: string): T | null { return (id === FacadeAgentTerminal.ID ? this.agent ?? null : null) as T | null; }
 
 	get processId(): number | undefined { return this._processId; }
 
@@ -91,14 +101,6 @@ class TestTerminal {
 
 	async sendText(text: string, shouldExecute: boolean): Promise<void> {
 		this.done.push(`type ${JSON.stringify(text)}${shouldExecute ? ' and run it' : ''}`);
-	}
-
-	/** Whether the person typed into it and has not sent it yet. */
-	hasUnsentInput = false;
-
-	holdInput(): IDisposable {
-		this.done.push('hold');
-		return toDisposable(() => this.done.push('release'));
 	}
 
 	dispose(): void {
@@ -147,6 +149,28 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		} finally {
 			setUnexpectedErrorHandler(originalHandler);
 		}
+	}
+
+	/** The Facade contribution of the terminal titled `title`, its calls kept in `steps`. */
+	function agentTerminal(title: string | undefined, exited = false): FacadeAgentTerminal {
+		return upcastPartial<FacadeAgentTerminal>({
+			isAgent: true,
+			exited,
+			register: (options: IAgentTerminalOptions) => steps.push(`register ${title} as ${options.run.workspace}#${options.run.id}, its final screen in ${options.finalScreen.path}`),
+			read: async (lines: number) => {
+				steps.push(`read ${lines} of ${title}`);
+				return { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined };
+			},
+			type: async (text: string, options: IAgentTypeOptions) => {
+				steps.push(`type ${JSON.stringify(text)} into ${title} ${JSON.stringify(options)}`);
+				return { outcome: 'applied', pasted: true, entered: true };
+			},
+			keys: async (keys: readonly string[], options: IAgentKeysOptions) => {
+				steps.push(`press ${keys.join(' ')} in ${title} ${JSON.stringify(options)}`);
+				return { outcome: 'applied', keysSent: keys.length };
+			},
+			inputState: () => ({ pending: true, lastKey: 7, busy: true })
+		});
 	}
 
 	/** What a terminal was opened with: its working directory said as the kind it was given as, its icon by its id, and the run it is marked with. */
@@ -201,6 +225,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				steps.push(`open for ${folder.path}: ${config.name}`);
 				launched.push(config);
 				const terminal = new TestTerminal(config.name);
+				terminal.agent = agentTerminal(config.name);
 				afterOpening(terminal);
 				return terminal.asInstance();
 			}
@@ -494,68 +519,6 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		});
 	}));
 
-	test('text is typed into a run\'s terminal as it is, and answered once it is passed on; into none where its process runs in none', async () => {
-		const lead = new TestTerminal('@lead #1 · Antigravity');
-		runs.set('a1b2#1', { terminal: lead, process: { state: 'present' } });
-
-		const typed = [
-			await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, '[facade] Your task is in /runs/1.task.md'),
-			await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, '\r'),
-			await run('_facade.terminal.type', { workspace: 'a1b2', id: 2 }, 'nobody'),
-		];
-		const notText = await failureOf('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, 42);
-
-		assert.deepStrictEqual({ typed, notText, done: lead.done }, {
-			typed: [true, true, false],
-			notText: 'Unexpected type, expected \'string\'',
-			done: ['type "[facade] Your task is in /runs/1.task.md"', 'type "\\r"'],
-		});
-	});
-
-	test('a line typed in parts - the notice, then its Enter - waits for what the person is typing and has not sent, and holds their typing back from its begin to its end, released whatever becomes of it (PS-14; X-43)', async () => {
-		const lead = new TestTerminal('@lead #1 · Antigravity');
-		runs.set('a1b2#1', { terminal: lead, process: { state: 'present' } });
-		lead.hasUnsentInput = true;
-		setTimeout(() => {
-			lead.done.push('the person sends their line');
-			lead.hasUnsentInput = false;
-		}, 150);
-		await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, '[facade] Your task is in /runs/1.task.md', 'begin');
-		await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, '\r', 'end');
-		await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, 'cut short', 'begin');
-		runs.delete('a1b2#1');
-		const gone = await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, '', 'end');
-
-		assert.deepStrictEqual({ done: lead.done, gone }, {
-			done: ['the person sends their line', 'hold', 'type "[facade] Your task is in /runs/1.task.md"', 'type "\\r"', 'release', 'hold', 'type "cut short"', 'release'],
-			gone: false
-		});
-	});
-
-	test('a line waits for what the person is typing as long as it stays unsent - it never goes after their text, which its Enter would send - and gives up only when their terminal closes (N-84; PS-14)', () => runWithFakedTimers({ useFakeTimers: true, maxTaskCount: 10_000 }, async () => {
-		const lead = new TestTerminal('@lead #1 · Antigravity');
-		runs.set('a1b2#1', { terminal: lead, process: { state: 'present' } });
-		lead.hasUnsentInput = true;
-		setTimeout(() => {
-			lead.done.push('the person sends their line, a minute on');
-			lead.hasUnsentInput = false;
-		}, 60_000);
-		await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, '[facade] Your task is in /runs/1.task.md', 'begin');
-		await run('_facade.terminal.type', { workspace: 'a1b2', id: 1 }, '\r', 'end');
-		// Typing on, never sending: its terminal closed meanwhile
-		const other = new TestTerminal('@other #2 · Antigravity');
-		runs.set('a1b2#2', { terminal: other, process: { state: 'present' } });
-		other.hasUnsentInput = true;
-		setTimeout(() => other.close(129), 300_000);
-		const closed = await run('_facade.terminal.type', { workspace: 'a1b2', id: 2 }, '[facade] Your task is in /runs/2.task.md', 'begin');
-
-		assert.deepStrictEqual({ lead: lead.done, other: other.done, closed }, {
-			lead: ['the person sends their line, a minute on', 'hold', 'type "[facade] Your task is in /runs/1.task.md"', 'type "\\r"', 'release'],
-			other: [],
-			closed: false
-		});
-	}));
-
 	test('the environment a terminal opened in a folder gets is the window\'s resolved shell environment where terminals inherit it - the PATH a login shell sets, not the one the Dock gave the window - with the person\'s setting over it, its variables resolved, and what extensions add', async () => {
 		const platformKey = isWindows ? 'windows' : isMacintosh ? 'osx' : 'linux';
 		const lab: IWorkspaceFolder = upcastPartial<IWorkspaceFolder>({ uri: URI.file('/lab'), name: 'lab', index: 0 });
@@ -658,4 +621,173 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 
 		assert.deepStrictEqual({ atFirst, back }, { atFirst: false, back: true });
 	});
+	/** The notification service, as far as Facade's notifications use it: each one shown, and whether it closed. */
+	function notifications(): { readonly shown: { readonly notification: INotification; readonly handle: INotificationHandle; closed: boolean }[] } {
+		const shown: { readonly notification: INotification; readonly handle: INotificationHandle; closed: boolean }[] = [];
+		instantiationService.stub(INotificationService, {
+			notify: (notification: INotification) => {
+				const onDidClose = store.add(new Emitter<void>());
+				const entry = {
+					notification,
+					closed: false,
+					handle: upcastPartial<INotificationHandle>({
+						onDidClose: onDidClose.event,
+						close: () => {
+							entry.closed = true;
+							onDidClose.fire();
+						}
+					})
+				};
+				shown.push(entry);
+				return entry.handle;
+			}
+		});
+		store.add(instantiationService.createInstance(FacadeNotifications));
+		return { shown };
+	}
+
+	/** Presses a notification's button, as the person does: its action runs, and the notification closes. */
+	function press(entry: { readonly notification: INotification; readonly handle: INotificationHandle }, label: string): void {
+		entry.notification.actions?.primary?.find((action: IAction) => action.label === label)?.run();
+		entry.handle.close();
+	}
+
+	test('a notification Facade keeps by its key is shown, and the next with that key takes its place as a new one, so that it is shown as the first was; the call answers with the button pressed, or nothing once it closed (AGENT-MESSAGES.md, M11)', async () => {
+		instantiationService.stub(IHostService, { hasFocus: true });
+		const { shown } = notifications();
+		const first = run('_facade.notification.show', 'message:3', '@lint #a3 has something for you: one.', ['Show']);
+		const second = run('_facade.notification.show', 'message:3', '@lint #a3 has something for you: two.', ['Show', 'Later']);
+		const other = run('_facade.notification.show', 'message:4', '@docs #a4 has something for you: done.', ['Show']);
+		press(shown[1], 'Later');
+		shown[2].handle.close();
+
+		assert.deepStrictEqual({
+			answers: [await first, await second, await other],
+			shown: shown.map(({ notification, closed }) => ({ message: notification.message, buttons: notification.actions?.primary?.map(action => action.label), source: notification.source, closed }))
+		}, {
+			answers: [undefined, 'Later', undefined],
+			shown: [
+				{ message: '@lint #a3 has something for you: one.', buttons: ['Show'], source: 'Facade Agents', closed: true },
+				{ message: '@lint #a3 has something for you: two.', buttons: ['Show', 'Later'], source: 'Facade Agents', closed: true },
+				{ message: '@docs #a4 has something for you: done.', buttons: ['Show'], source: 'Facade Agents', closed: true }
+			]
+		});
+	});
+
+	test('a notification from an agent whose terminal has the person\'s focus, the window\'s too, goes quietly into the notification center (M9)', async () => {
+		const { shown } = notifications();
+		const lint = new TestTerminal('@lint #a3');
+		lint.hasFocus = true;
+		runs.set('a1b2#3', { terminal: lint, process: { state: 'present' } });
+		instantiationService.stub(IHostService, { hasFocus: true });
+		void run('_facade.notification.show', 'message:3', 'One.', ['Show'], { workspace: 'a1b2', id: 3 });
+		lint.hasFocus = false;
+		void run('_facade.notification.show', 'message:3', 'Two.', ['Show'], { workspace: 'a1b2', id: 3 });
+		lint.hasFocus = true;
+		instantiationService.stub(IHostService, { hasFocus: false });
+		void run('_facade.notification.show', 'message:3', 'Three.', ['Show'], { workspace: 'a1b2', id: 3 });
+		instantiationService.stub(IHostService, { hasFocus: true });
+		void run('_facade.notification.show', 'message:5', 'Elsewhere.', ['Show'], { workspace: 'a1b2', id: 5 });
+
+		assert.deepStrictEqual(shown.map(({ notification }) => `${notification.message} ${notification.priority === NotificationPriority.SILENT ? 'quiet' : 'aloud'}`), ['One. quiet', 'Two. aloud', 'Three. aloud', 'Elsewhere. aloud']);
+	});
+
+	test('a notification is refused a key, a message, buttons or a run of the wrong kind, and none is shown', async () => {
+		const { shown } = notifications();
+		const failures = [
+			await failureOf('_facade.notification.show', 42, 'text', []),
+			await failureOf('_facade.notification.show', 'key', undefined, []),
+			await failureOf('_facade.notification.show', 'key', 'text', ['Show', 2]),
+			await failureOf('_facade.notification.show', 'key', 'text', ['Show'], 41)
+		];
+
+		assert.deepStrictEqual({ failures, shown: shown.length }, {
+			failures: ['Unexpected type, expected \'string\'', 'Unexpected type, expected \'string\'', 'Unexpected type, expected \'string[]\'', 'Unexpected type, expected \'IFacadeRun\''],
+			shown: 0
+		});
+	});
+
+	test('a terminal opened for an agent\'s run is registered as its terminal, its final screen going to its file (AGENT-DEBUGGING.md, D6)', async () => {
+		await run('_facade.terminal.create', URI.file('/lab'), { name: '@lint #a3', executable: 'codex', agent: 'codex', run: { workspace: 'a1b2', id: 3 }, finalScreen: URI.file('/rec/screens/a3.json') });
+		await run('_facade.terminal.create', URI.file('/lab'), { name: 'a shell' });
+		const failure = await failureOf('_facade.terminal.create', URI.file('/lab'), { finalScreen: '/rec/screens/a3.json' });
+
+		assert.deepStrictEqual({ failure, steps }, {
+			failure: 'Unexpected type, expected \'IFacadeTerminalOptions\'',
+			steps: ['open for /lab: @lint #a3', 'register @lint #a3 as a1b2#3', 'register @lint #a3 as a1b2#3, its final screen in /rec/screens/a3.json', 'open for /lab: a shell'],
+		});
+	});
+
+	test('the terminal a run\'s own process runs in is read, typed into, pressed keys in, registered and asked what holds Facade\'s input back, by its run; none where it runs in none (D2-D5, D8)', async () => {
+		const lint = new TestTerminal('@lint #a3');
+		lint.agent = agentTerminal('@lint #a3');
+		const gone = new TestTerminal('@gone #a5');
+		gone.agent = agentTerminal('@gone #a5', true);
+		runs.set('a1b2#3', { terminal: lint, process: { state: 'present' } });
+		runs.set('a1b2#5', { terminal: gone, process: { state: 'present' } });
+		const three = { workspace: 'a1b2', id: 3 };
+		const none = { workspace: 'a1b2', id: 9 };
+
+		const answers = {
+			read: await run('_facade.terminal.read', three, 20),
+			readEnded: await run('_facade.terminal.read', { workspace: 'a1b2', id: 5 }, 50),
+			readNone: await run('_facade.terminal.read', none, 5),
+			typed: await run('_facade.terminal.type', three, 'yes', { enter: true, enterDelayMs: 250.4, queueTimeoutMs: 120000 }),
+			typedNone: await run('_facade.terminal.type', none, 'yes', { enter: true }),
+			pressed: await run('_facade.terminal.keys', three, ['Down', 'Enter', 'y'], { queueTimeoutMs: null }),
+			pressedNone: await run('_facade.terminal.keys', none, ['Enter'], {}),
+			registered: await run('_facade.terminal.register', three, URI.file('/rec/screens/a3.json')),
+			registeredNone: await run('_facade.terminal.register', none, URI.file('/rec/screens/a9.json')),
+			input: await run('_facade.terminal.input', three),
+			inputNone: await run('_facade.terminal.input', none),
+		};
+		const failures = [
+			await failureOf('_facade.terminal.read', three, 0),
+			await failureOf('_facade.terminal.read', three, 2001),
+			await failureOf('_facade.terminal.read', 4242, 5),
+			await failureOf('_facade.terminal.type', three, 42, {}),
+			await failureOf('_facade.terminal.type', three, 'yes', { enterDelayMs: -1 }),
+			await failureOf('_facade.terminal.keys', three, [], {}),
+			await failureOf('_facade.terminal.keys', three, ['F1'], {}),
+			await failureOf('_facade.terminal.keys', three, ['Enter'], { queueTimeoutMs: Number.POSITIVE_INFINITY }),
+			await failureOf('_facade.terminal.register', three, '/rec/screens/a3.json'),
+			await failureOf('_facade.terminal.input', '4242'),
+		];
+
+		assert.deepStrictEqual({ answers, failures, steps }, {
+			answers: {
+				read: { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined, exited: false },
+				readEnded: { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined, exited: true },
+				readNone: undefined,
+				typed: { outcome: 'applied', pasted: true, entered: true },
+				typedNone: undefined,
+				pressed: { outcome: 'applied', keysSent: 3 },
+				pressedNone: undefined,
+				registered: true,
+				registeredNone: false,
+				input: { pending: true, lastKey: 7, busy: true },
+				inputNone: undefined,
+			},
+			failures: [
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'IFacadeRun\'',
+				'Unexpected type, expected \'string\'',
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'string[]\'',
+				'Unexpected type, expected \'string[]\'',
+				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'URI\'',
+				'Unexpected type, expected \'IFacadeRun\'',
+			],
+			steps: [
+				'read 20 of @lint #a3',
+				'read 50 of @gone #a5',
+				'type "yes" into @lint #a3 {"enter":true,"enterDelayMs":250,"queueTimeoutMs":120000}',
+				'press Down Enter y in @lint #a3 {}',
+				'register @lint #a3 as a1b2#3, its final screen in /rec/screens/a3.json',
+			],
+		});
+	});
+
 });

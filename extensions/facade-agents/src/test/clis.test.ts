@@ -60,7 +60,7 @@ function outcome(call: () => unknown): string {
  */
 function inputFor(cli: AgentCli, overrides: Partial<LaunchInput> = {}): LaunchInput {
 	const unattended = overrides.unattended ?? false;
-	return { folder: '/lab', repository: '/lab', messagesDir: '/record/messages', yolo: true, model: 'model-x', effort: 'high', connection: CONNECTION, skills: [SKILL], runDir: '/runs', slug: '7', ...overrides, unattended, config: launchFor(overrides.config ?? cli.defaults, unattended) };
+	return { folder: '/lab', repository: '/lab', messagesDir: '/record/messages', screensDir: '/record/screens', yolo: true, model: 'model-x', effort: 'high', connection: CONNECTION, skills: [SKILL], runDir: '/runs', slug: '7', ...overrides, unattended, config: launchFor(overrides.config ?? cli.defaults, unattended) };
 }
 
 /** The folder `/lab` as Codex keys its trust in it: its path, its drive in lower case on Windows. */
@@ -92,7 +92,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				'--plugin-dir', path.join('/runs', '7.plugin'),
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--disallowedTools', 'AskUserQuestion',
-				'--add-dir', '/record/messages',
+				'--add-dir', '/record/messages', '/record/screens',
 				'--dangerously-skip-permissions',
 				'--model', 'opus',
 				'--effort', 'xhigh',
@@ -123,7 +123,7 @@ suite('CLIs: each launch, argument by argument', () => {
 					'--mcp-config', path.join('/runs', '7.mcp.json'),
 					'--plugin-dir', path.join('/runs', '7.plugin'),
 					'--settings', path.join('/runs', '7.settings.json'),
-					'--add-dir', '/record/messages',
+					'--add-dir', '/record/messages', '/record/screens',
 					'--dangerously-skip-permissions'
 				],
 				env: {},
@@ -315,7 +315,7 @@ suite('CLIs: each launch, argument by argument', () => {
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task, persons: { args: persons.args, env: persons.env } }, {
 			executable: '/bin/agy.exe',
-			args: ['-i', 'Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer.', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
+			args: ['-i', 'Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
 			env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
 			cwd: '/lab',
 			files: [],
@@ -325,7 +325,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				'.agents/plugins/facade/skills/facade/SKILL.md': SKILL_MD
 			},
 			task: 'terminal',
-			persons: { args: ['-i', 'Reply with the single word ready, and nothing else.', '--mode', 'accept-edits', '--dangerously-skip-permissions'], env: {} }
+			persons: { args: ['-i', 'Reply with the single word ready, and nothing else.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions'], env: {} }
 		});
 	});
 });
@@ -353,7 +353,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 				'--plugin-dir', path.join('/runs', '7.plugin'),
 				'--settings', path.join('/runs', '7.settings.json'),
 				'--disallowedTools', 'AskUserQuestion',
-				'--add-dir', '/record/messages',
+				'--add-dir', '/record/messages', '/record/screens',
 				'--permission-mode', 'bypassPermissions',
 				'--model', 'opus',
 				'--add-dir', '/shared/opus',
@@ -432,7 +432,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 
 	test('a `${name}` a launch has no value for - whatever is written between the braces - refuses the launch, naming the setting and the values there are', () => {
 		const refused = (launch: unknown) => outcome(() => claudeCli.launch(inputFor(claudeCli, { config: readCliConfig(claudeCli, name => name === 'launch' ? launch : undefined) }), '/bin/claude'));
-		const values = 'it has ${folder}, ${repository}, ${home}, ${messagesDir}, ${model}, ${effort}, ${executable}, ${shimFile}, ${pipe}, ${recordDir}, ${tokenFile}, ${waitMs}, ${mcpConfig}, ${settingsFile}, ${pluginDir}.';
+		const values = 'it has ${folder}, ${repository}, ${home}, ${messagesDir}, ${screensDir}, ${model}, ${effort}, ${executable}, ${shimFile}, ${pipe}, ${recordDir}, ${tokenFile}, ${waitMs}, ${mcpConfig}, ${settingsFile}, ${pluginDir}.';
 
 		assert.deepStrictEqual([refused({ arguments: { extra: ['--add-dir', '${hostname}'] } }), refused({ arguments: { model: ['--model', '${model_name}'] } })], [
 			`facade.agents.claude.launch.arguments.extra has \${hostname}, for which Facade has no value: ${values}`,
@@ -505,7 +505,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			timeout: [START_TIMEOUT_MS / 1000, MAX_TIME_S, ['advanced']],
 			waits: [START_TIMEOUT_MS, START_TIMEOUT_MS],
 			custom: [{}, 'machine'],
-			commands: ['facade.agents.startAgent', 'facade.agents.showLog', 'facade.agents.showLaunch'],
+			commands: ['facade.agents.startAgent', 'facade.agents.openChatRoom', 'facade.agents.deleteChatRooms', 'facade.agents.showLog', 'facade.agents.showLaunch'],
 			category: 'Agents',
 			seen: knownClis().map(({ setting, task, defaults: { launch } }) => ({
 				names: [`${setting}.enabled`, `${setting}.path`, `${setting}.launch`],

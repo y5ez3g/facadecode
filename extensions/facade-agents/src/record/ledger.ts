@@ -19,11 +19,13 @@ export const LEDGER_FILE = 'ledger.jsonl';
 const LOCK_FILE = 'ledger.lock';
 /**
  * The version of the ledger's events: 5 since an agent has its YOLO, its tree's root, its sandbox and its
- * task's message. Lines of version 4, from before, are read too: their agents ran at full access.
+ * task's message; 6 since agents send messages, a task among them (AGENT-MESSAGES.md, M11). Lines of
+ * versions 4 and 5, from before, are read too: those of 4 had their agents at full access, and a task of 5
+ * was in a file of its own, its number given no more.
  */
-const VERSION = 5;
+const VERSION = 6;
 /** The versions a ledger's lines may have, the one written last. */
-const READ_VERSIONS: ReadonlySet<unknown> = new Set([4, VERSION]);
+const READ_VERSIONS: ReadonlySet<unknown> = new Set([4, 5, VERSION]);
 /** How often the window that has the ledger open touches its lock. */
 const HEARTBEAT_MS = 30_000;
 /** A lock untouched for this long belongs to no window, even if the process it names runs: its id may be reused. */
@@ -219,12 +221,18 @@ export class Ledger {
 	append(body: LedgerEventBody): LedgerEvent {
 		this.assertOpen();
 		const event: LedgerEvent = { ...body, seq: this.state.seq + 1, time: (this.options.now ?? Date.now)() };
+		const line = JSON.stringify({ v: VERSION, ...event });
+		// Only a line the ledger reads back is written: one the next load refused would stop the workspace's agents
+		const back = eventOf(JSON.parse(line));
+		if (!back || !fitsState(this.state, back)) {
+			throw new Error(`Facade did not record ${body.type}: its ledger could not read it back.`);
+		}
 		if (this.fd === undefined) {
 			this.fd = fs.openSync(path.join(this.dir, LEDGER_FILE), 'a', 0o600);
 		}
 		const size = fs.fstatSync(this.fd).size;
 		try {
-			fs.writeFileSync(this.fd, `${JSON.stringify({ v: VERSION, ...event })}\n`);
+			fs.writeFileSync(this.fd, `${line}\n`);
 			fs.fsyncSync(this.fd);
 		} catch (err) {
 			try {

@@ -14,6 +14,7 @@ import { Injections } from '../core/injections';
 import { SetupOutcome } from '../core/ports';
 import { Caller, End, PERSON } from '../record/events';
 import { writeIdentity } from '../record/identity';
+import { screensDir } from '../record/screens';
 import { settled, sleep, until, useFakeClock } from './clock';
 import { argCli, callerOf, endFakeProcess, fakeWorld, isFakeProcessRunning, startFakeProcess, worktreeFolder } from './fakes';
 import { outcomeOf, tempDir } from './util';
@@ -28,9 +29,15 @@ function timeless<T extends { readonly startTime: number }>(facts: T): T {
 	return { ...facts, startTime: 0 };
 }
 
-/** The notice an agent's CLI is given of its task: `opening`, then where its task's message is. */
-function notice(world: World, opening: string, message: number): string {
-	return `${opening} Your task is message #m${message}, in ${world.table.messageFileOf(message)}: read that file, then do what it says.`;
+/** An agent's first line, as the fake setup writes it: `opening` - who it is, who created it - then its task's number (M7). */
+function notice(opening: string, message: number): string {
+	return `${opening} Your task is #m${message}.`;
+}
+
+/** The text of message `id`, as the record keeps it. */
+function textOf(world: World, id: number): string | undefined {
+	const message = world.table.state.mail.messages.get(id);
+	return message && world.table.messages.textOf(message);
 }
 
 /** How an agent ended, as the tests write it: its kind, who stopped it, and why. */
@@ -95,7 +102,7 @@ suite('Core: starting an agent, step by step', () => {
 			agents: agents(world),
 			told: world.person.told
 		}, {
-			facts: { id: 1, name: 'arg', root: 1, cli: 'arg', custom: false, ignored: [], yolo: true, sandbox: 'off', integration: true, connected: false, worktree: 'main', folder: lab, state: 'starting', phase: 'connecting', startTime: 0, task: 'none' },
+			facts: { id: 1, name: 'arg', root: 1, cli: 'arg', custom: false, ignored: [], yolo: true, sandbox: 'off', integration: true, connected: false, worktree: 'main', folder: lab, state: 'starting', phase: 'connecting', startTime: 0 },
 			starting: ['#a1 @arg by @human starting'],
 			launched: [{
 				id: 1,
@@ -105,7 +112,9 @@ suite('Core: starting an agent, step by step', () => {
 				args: ['--config', config, '--yolo'],
 				env: { ARG_QUIET: '1' },
 				cwd: lab,
-				reveal: true
+				reveal: true,
+				// Where the window keeps its final screen as its terminal ends (D6)
+				finalScreen: path.join(temp.dir, 'workspace', 'screens', 'a1.json')
 			}],
 			config: { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', path.join(runs, '1.token')], env: { ELECTRON_RUN_AS_NODE: '1' } },
 			token: { id: 1, name: 'arg' },
@@ -114,13 +123,22 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
+	test('the folders its launch lets a CLI read - of the messages and of the agents\' screens - are there before it starts, none written yet: a CLI drops one that is not, as Claude Code 2.1.296 its --add-dir, and would ask before reading a message\'s or a screen\'s file there later (M4, D6)', async () => {
+		const there = (dir: string) => fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory() ?? false;
+		const seen: boolean[][] = [];
+		world.terminals.beforeLaunch = () => seen.push([world.table.messages.folder, screensDir(world.table.dir)].map(there));
+		await world.facade.startForPerson('arg', lab);
+
+		assert.deepStrictEqual(seen, [[true, true]]);
+	});
+
 	test('a script acting as the person starts an agent as an agent does, with its task: kept as a message of its own, whose notice - who it is, and where the message is - is its CLI\'s argument; it does not come in front', async () => {
 		const started = await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Tidy the docs.', folder: lab });
 		const launch = world.terminals.launched[0];
 
-		assert.deepStrictEqual({ started: timeless(started), notice: launch.args.at(-1), message: fs.readFileSync(world.table.messageFileOf(1), 'utf8'), reveal: launch.reveal }, {
-			started: { status: 'started', id: 1, name: 'main', root: 1, cli: 'arg', custom: false, model: 'large', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'main', folder: lab, state: 'running', startTime: 0, taskMessage: 1, task: 'argument', newWorktree: false },
-			notice: notice(world, '[facade] You are @main #a1, Arg Code, started by @human.', 1),
+		assert.deepStrictEqual({ started: timeless(started), notice: launch.args.at(-1), message: textOf(world, 1), reveal: launch.reveal }, {
+			started: { status: 'started', id: 1, name: 'main', root: 1, cli: 'arg', custom: false, model: 'large', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'main', folder: lab, state: 'running', startTime: 0, taskMessage: 1, newWorktree: false },
+			notice: notice('[facade] You are @main #a1, created by @human.', 1),
 			message: 'Tidy the docs.',
 			reveal: false
 		});
@@ -132,9 +150,9 @@ suite('Core: starting an agent, step by step', () => {
 		const launch = world.terminals.launched[1];
 
 		assert.deepStrictEqual({ started: timeless(started), name: launch.name, task: launch.args[launch.args.length - 1], cwd: launch.cwd, reveal: launch.reveal, agents: agents(world), told: world.person.told }, {
-			started: { status: 'started', id: 2, name: 'tests', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'main', folder: lab, state: 'running', startTime: 0, taskMessage: 2, task: 'argument', newWorktree: false },
+			started: { status: 'started', id: 2, name: 'tests', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'main', folder: lab, state: 'running', startTime: 0, taskMessage: 2, newWorktree: false },
 			name: '@tests #a2',
-			task: notice(world, '[facade] You are @tests #a2, Arg Code, started by @main.', 2),
+			task: notice('[facade] You are @tests #a2, created by @main #a1.', 2),
 			cwd: lab,
 			reveal: false,
 			agents: ['#a1 @main by @human running', '#a2 @tests by #a1 running'],
@@ -161,7 +179,7 @@ suite('Core: starting an agent, step by step', () => {
 			trust: fs.readFileSync(file, 'utf8'),
 			logged: world.logs.filter(line => line.includes(': Arg Code trust'))
 		}, {
-			started: { status: 'started', id: 2, name: 'clamp', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'clamp', folder, state: 'running', startTime: 0, taskMessage: 2, task: 'argument', newWorktree: true },
+			started: { status: 'started', id: 2, name: 'clamp', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'clamp', folder, state: 'running', startTime: 0, taskMessage: 2, newWorktree: true },
 			steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${folder}`],
 			made: { name: 'clamp', folder, repository: lab, commit: 'a'.repeat(40), madeBy: 1 },
 			// The rest of the file as it was, and its layout.
@@ -232,7 +250,7 @@ suite('Core: starting an agent, step by step', () => {
 		const places: string[] = [];
 		for (const folder of [notes, api, spike, 'main', 'docs']) {
 			const started = await world.startUp(lead, { name: 'child', cli: 'arg', model: 'small', effort: 'high', folder });
-			places.push(`${started.worktree} at ${started.folder}, task ${started.task}`);
+			places.push(`${started.worktree} at ${started.folder}, task ${started.taskMessage === undefined ? 'none' : `#m${started.taskMessage}`}`);
 		}
 		const detachedByBranch = await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg', model: 'small', effort: 'high', folder: 'spike' }));
 
@@ -302,7 +320,7 @@ suite('Core: starting an agent, step by step', () => {
 		await world.startUp(PERSON, { name: 'notes', cli: 'arg', model: 'small', effort: 'high', task: 'Take notes.', folder: notes });
 
 		assert.deepStrictEqual({ started: timeless(started), inRepository, argTrust: trustIn(home), toldArgs: world.terminals.launched[1].args }, {
-			started: { status: 'started', id: 1, name: 'docs', root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'docs', folder: worktreeFolder(lab, 'docs'), state: 'running', startTime: 0, taskMessage: 1, task: 'argument', newWorktree: false },
+			started: { status: 'started', id: 1, name: 'docs', root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'docs', folder: worktreeFolder(lab, 'docs'), state: 'running', startTime: 0, taskMessage: 1, newWorktree: false },
 			inRepository: { trusted: [lab] },
 			argTrust: { trusted: [lab, notes] },
 			toldArgs: ['--model', 'deep', '--effort', 'high', '--trust-folder']
@@ -419,22 +437,16 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('the notice of a task is typed as one line, the person\'s typing held back from its start to its Enter; stopped in between, the hold ends with no Enter typed (PS-14; X-43)', async () => {
+	test('the first line of a CLI told of its task in its terminal is typed by its doorbell as one operation - its text, then Enter after its launch\'s pause - in the terminal\'s turn, behind the person\'s typing there (AGENT-MESSAGES.md, M7; AGENT-DEBUGGING.md, D3)', async () => {
 		world.settings.told = { launch: { enterDelay: 2_000 } };
-		world.terminals.stubborn = true;
-		const starting = outcomeOf(world.facade.startAgent(PERSON, { name: 'main', cli: 'told', model: 'deep', effort: 'high', task: 'Plan.', folder: lab }));
-		await until(() => world.terminals.launched.length === 1);
-		world.hello(1);
-		await until(() => world.terminals.lines.length === 1);
-		const stopping = outcomeOf(world.facade.stopAgent(PERSON, '#a1'));
-		await sleep(3_000);
-		const lines = [...world.terminals.lines];
-		const typed = world.terminals.typed.map(each => each.replace(/: ".*"$/, ': "…"'));
-		world.terminals.stubborn = false;
-		await settled(stopping);
-		await settled(starting);
+		const started = await world.startUp(PERSON, { name: 'main', cli: 'told', model: 'deep', effort: 'high', task: 'Plan.', folder: lab });
+		await sleep(2_000);
 
-		assert.deepStrictEqual({ lines, typed }, { lines: ['@main #a1: begin', '@main #a1: end'], typed: ['@main #a1: "…"'] });
+		assert.deepStrictEqual({ status: started.status, typed: world.terminals.typed, texts: world.terminals.texts }, {
+			status: 'started',
+			typed: [`@main #a1: type ${JSON.stringify(notice('[facade] You are @main #a1, created by @human.', 1))}, Enter after 2000 ms`],
+			texts: [{ id: 1, text: notice('[facade] You are @main #a1, created by @human.', 1), enter: true }]
+		});
 	});
 
 	test('with YOLO off, a start whose exemption the person took away - a deny rule of theirs, or the group of Facade\'s launch that carries it changed - says so in its result and the log, never that it works; with YOLO on, nothing (L4, rule 4; X-38; YO-09)', async () => {
@@ -479,22 +491,23 @@ suite('Core: starting an agent, step by step', () => {
 		assert.deepStrictEqual({ typed, state }, { typed: [], state: 'stopping' });
 	});
 
-	test('a CLI told of its task in its terminal whose terminal goes as its notice is about to be typed - its CLI ending, the window telling of it after - fails its start with how it ended, never answering that it stays starting (N-80; C4-09)', async () => {
-		world.settings.told = { launch: { taskDelay: 2_000 } };
+	test('a CLI told of its task in its terminal whose terminal goes before its first line is typed - its CLI ending, the window telling of it after - is typed nothing, and ends as its CLI did; its start answered once it connected, its task a message it never fetched (M7; N-80; C4-09)', async () => {
+		world.settings.told = { launch: { taskDelay: 3_000 } };
 		const starting = outcomeOf(world.facade.startAgent(PERSON, { name: 'main', cli: 'told', model: 'deep', effort: 'high', task: 'Plan.', folder: lab }));
 		await until(() => world.terminals.launched.length === 1);
 		world.hello(1);
-		await sleep(1_000);
-		// Gone from the window before its notice is typed; the window tells of its end only after the typing failed
-		world.terminals.lose('@main #a1');
-		await sleep(1_500);
-		world.terminals.endLost('@main #a1', { byThePerson: false, exitCode: 0 });
 		const outcome = await starting;
+		await sleep(1_000);
+		// Gone from the window before its first line is typed; the window tells of its end only after the typing failed
+		world.terminals.lose('@main #a1');
+		await sleep(2_500);
+		world.terminals.endLost('@main #a1', { byThePerson: false, exitCode: 0 });
 
-		assert.deepStrictEqual({ outcome, agents: agents(world), typed: world.terminals.typed }, {
-			outcome: 'FAILED: Told Code did not start as @main #a1: its CLI ended with exit code 0',
-			agents: ['#a1 @main by @human failed: its CLI ended with exit code 0'],
-			typed: []
+		assert.deepStrictEqual({ outcome, agents: agents(world), typed: world.terminals.typed, task: world.table.state.mail.entries.get(1)?.state }, {
+			outcome: 'fulfilled',
+			agents: ['#a1 @main by @human exited: its CLI ended with exit code 0'],
+			typed: [],
+			task: 'returned'
 		});
 	});
 
@@ -522,8 +535,8 @@ suite('Core: starting an agent, step by step', () => {
 
 		assert.deepStrictEqual(last, [
 			'at its prompt',
-			'[facade] You are @idle #a2, Arg Code, started by @arg.',
-			notice(world, '[facade] You are @busy #a3, Arg Code, started by @arg.', 1)
+			'[facade] You are @idle #a2, created by @arg #a1.',
+			notice('[facade] You are @busy #a3, created by @arg #a1.', 1)
 		]);
 	});
 
@@ -534,7 +547,7 @@ suite('Core: starting an agent, step by step', () => {
 		assert.deepStrictEqual({ history: history(world).map(line => line.split(world.table.dir).join('…')), token: fs.readFileSync(world.table.logFile, 'utf8').includes(token) }, {
 			history: [
 				`started  @main #a1  arg large high  YOLO on  by @human  in ${lab}`,
-				'launched @main #a1  …/bin/arg.exe --config …/runs/1.config.json --no-ask --yolo --model large --effort high -- "[facade] You are @main #a1, Arg Code, started by @human. Your task is message #m1, in …/messages/1.md: read that file, then do what it says."  environment ARG_QUIET=1  …/runs/1.config.json {"command":"/facade/facade","args":["/facade/shim.js","mcp","--pipe","pipe","--token-file","…/runs/1.token"],"env":{"ELECTRON_RUN_AS_NODE":"1"}}',
+				'launched @main #a1  …/bin/arg.exe --config …/runs/1.config.json --no-ask --yolo --model large --effort high -- "[facade] You are @main #a1, created by @human. Your task is #m1."  environment ARG_QUIET=1  …/runs/1.config.json {"command":"/facade/facade","args":["/facade/shim.js","mcp","--pipe","pipe","--token-file","…/runs/1.token"],"env":{"ELECTRON_RUN_AS_NODE":"1"}}',
 				'connected @main #a1',
 				'running  @main #a1'
 			],
@@ -542,40 +555,40 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('a CLI told of its task in its terminal is typed its notice - its opening, and where its task\'s message is - once its MCP server said hello, and Enter after its pause - each delay as its launch had it, the settings changed since or not; start_agent answers after that', async () => {
+	test('a CLI told of its task in its terminal has its first line - who it is, who created it, and its task\'s number - typed by its doorbell once its MCP server said hello and its task delay is over, Enter after its pause, each delay as its launch had it, the settings changed since or not; start_agent answers once it connected, its task unread till it fetches it (M7)', async () => {
 		const starting = world.facade.startAgent(PERSON, { name: 'main', cli: 'told', model: 'deep', effort: 'high', task: 'Plan the release.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
 		const beforeHello = [...world.terminals.typed];
 		world.settings.told = { launch: { taskDelay: 60_000, enterDelay: 60_000 } };
 		world.hello(1);
-		await until(() => world.terminals.typed.length > 0);
-		const beforeEnter = [...world.terminals.typed];
 		const started = await settled(starting);
-		const line = `@main #a1: ${JSON.stringify(notice(world, '[facade] You are @main #a1, Told Code, started by @human.', 1))}`;
+		const answered = [...world.terminals.typed];
+		await until(() => world.terminals.typed.length > 0, 5_000);
+		const line = `@main #a1: type ${JSON.stringify(notice('[facade] You are @main #a1, created by @human.', 1))}, Enter after 400 ms`;
 		const launch = world.terminals.launched[0];
 
 		assert.deepStrictEqual({
 			beforeHello,
-			beforeEnter,
+			answered,
 			typed: world.terminals.typed,
-			task: fs.readFileSync(world.table.messageFileOf(1), 'utf8'),
+			task: textOf(world, 1),
 			plan: JSON.parse(fs.readFileSync(world.table.launchFileOf(1), 'utf8')),
 			args: launch.args,
 			// The token's file, never the token: every process the agent starts inherits its environment
 			agent: { pipe: launch.env.FACADE_AGENTS_PIPE, tokenIsAFile: path.isAbsolute(launch.env.FACADE_AGENTS_TOKEN ?? ''), token: world.table.authenticate(fs.readFileSync(launch.env.FACADE_AGENTS_TOKEN ?? '', 'utf8').trim()) },
-			delivered: world.agent(1).task,
-			id: started.id
+			delivered: { state: world.table.state.mail.entries.get(1)?.state, rings: world.table.state.mail.entries.get(1)?.rings },
+			started: { id: started.id, status: started.status, taskMessage: started.taskMessage }
 		}, {
 			beforeHello: [],
-			beforeEnter: [line],
-			typed: [line, `@main #a1: ${JSON.stringify('\r')}`],
+			answered: [],
+			typed: [line],
 			task: 'Plan the release.',
 			// Without Facade's own variables, which carry its token.
 			plan: { program: launch.executable, args: launch.args, cwd: lab, environment: {}, enterDelay: 400, taskDelay: 0 },
 			args: ['--model', 'deep', '--effort', 'high', '--trust-folder'],
 			agent: { pipe: 'pipe', tokenIsAFile: true, token: { id: 1, name: 'main' } },
-			delivered: 'typed',
-			id: 1
+			delivered: { state: 'unread', rings: 1 },
+			started: { id: 1, status: 'started', taskMessage: 1 }
 		});
 	});
 
@@ -690,19 +703,20 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('a task of any length is kept whole as a message of its own; the CLI\'s argument is only the notice that says where it is: a task is never cut short, and never on a command line', async () => {
+	test('a task of any length is kept whole as a message - past what a ledger line holds, in a file of its own; the CLI\'s argument is only its first line, which names it, and counts as its first doorbell: a task is never cut short, and never on a command line (M7)', async () => {
 		const task = `${'Clamp every width. '.repeat(7_000)}Done.`;
 		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task, folder: lab });
 		const { args } = world.terminals.launched[0];
 
-		assert.deepStrictEqual({ argument: args[args.length - 1], whole: fs.readFileSync(world.table.messageFileOf(1), 'utf8') === task, delivered: world.agent(1).task }, {
-			argument: notice(world, '[facade] You are @main #a1, Arg Code, started by @human.', 1),
+		assert.deepStrictEqual({ argument: args[args.length - 1], whole: textOf(world, 1) === task, inFile: world.table.state.mail.messages.get(1)?.file, rings: world.table.state.mail.entries.get(1)?.rings }, {
+			argument: notice('[facade] You are @main #a1, created by @human.', 1),
 			whole: true,
-			delivered: 'argument'
+			inFile: 'm1.txt',
+			rings: 1
 		});
 	});
 
-	test('on Windows, a CLI started through cmd.exe never has its task on its command line, where cmd.exe could read it as commands: its argument is the notice that says where the task\'s message is', async function () {
+	test('on Windows, a CLI started through cmd.exe never has its task on its command line, where cmd.exe could read it as commands: its argument is its first line, which names the task\'s message', async function () {
 		if (process.platform !== 'win32') {
 			this.skip();
 		}
@@ -713,11 +727,11 @@ suite('Core: starting an agent, step by step', () => {
 		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task, folder: lab });
 		const { executable, args } = world.terminals.launched[0];
 
-		assert.deepStrictEqual({ executable, argument: args[args.length - 1], file: fs.readFileSync(world.table.messageFileOf(1), 'utf8'), delivered: world.agent(1).task }, {
+		assert.deepStrictEqual({ executable, argument: args[args.length - 1], kept: textOf(world, 1), rings: world.table.state.mail.entries.get(1)?.rings }, {
 			executable: shim,
-			argument: notice(world, '[facade] You are @main #a1, Arg Code, started by @human.', 1),
-			file: task,
-			delivered: 'argument'
+			argument: notice('[facade] You are @main #a1, created by @human.', 1),
+			kept: task,
+			rings: 1
 		});
 	});
 });
@@ -1159,7 +1173,7 @@ suite('Core: after a reload', () => {
 		});
 	});
 
-	test('one running but not yet told of its task - the window went between its hello and the line - is told once the window is back, with the delays its launch had', async () => {
+	test('one running whose first line was not typed yet - the window went between its hello and its doorbell - has it typed by its doorbell once the window is back, with the delays its launch had: the same task, never another (M7, M10)', async () => {
 		const starting = world.facade.startAgent(PERSON, { name: 'main', cli: 'told', model: 'deep', effort: 'high', task: 'Plan.', folder: lab });
 		await until(() => world.terminals.launched.length === 1);
 		world.hello(1);
@@ -1167,13 +1181,10 @@ suite('Core: after a reload', () => {
 		after.settings.told = { launch: { enterDelay: 60_000 } };
 		await outcomeOf(starting);
 		await after.facade.recover(true);
-		await sleep(1_000);
-		assert.deepStrictEqual({ typed: after.terminals.typed, task: after.agent(1).task, agents: agents(after) }, {
-			typed: [
-				`@main #a1: ${JSON.stringify(notice(after, '[facade] You are @main #a1, Told Code, started by @human.', 1))}`,
-				`@main #a1: ${JSON.stringify('\r')}`
-			],
-			task: 'typed',
+		await sleep(2_000);
+		assert.deepStrictEqual({ typed: after.terminals.typed, task: { state: after.table.state.mail.entries.get(1)?.state, rings: after.table.state.mail.entries.get(1)?.rings, last: after.table.state.mail.lastMessage }, agents: agents(after) }, {
+			typed: [`@main #a1: type ${JSON.stringify(notice('[facade] You are @main #a1, created by @human.', 1))}, Enter after 400 ms`],
+			task: { state: 'unread', rings: 1, last: 1 },
 			agents: ['#a1 @main by @human running']
 		});
 	});
@@ -2504,7 +2515,7 @@ suite('Core: custom agents', () => {
 		}, {
 			personArgs: ['--mcp', path.join(runs, '1.mcp.json'), '--auto'],
 			server: ['/facade/shim.js', 'mcp', '--pipe', 'pipe', '--token-file', path.join(runs, '1.token')],
-			child: { ignored: ['model', 'effort'], model: 'big', effort: 'high', args: ['--mcp', path.join(runs, '2.mcp.json'), '--auto', '--prompt', notice(world, '[facade] You are @reviewer #a2, review, started by @review.', 1)] },
+			child: { ignored: ['model', 'effort'], model: 'big', effort: 'high', args: ['--mcp', path.join(runs, '2.mcp.json'), '--auto', '--prompt', notice('[facade] You are @reviewer #a2, created by @review #a1.', 1)] },
 			refused: 'REFUSED: plain cannot be given a task: its launch in facade.agents.custom.plain.launch has no connect group, so it cannot read Facade\'s messages. Start it without a task, or ask the person to fill that in.',
 			plain: { status: 'started', integration: false, state: 'running', args: [] },
 			startable: [
@@ -2799,7 +2810,7 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		world.git.copyFailures = ['x.secret'];
 		world.git.hookFailure = 'the hook says no';
 		const started = await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Go.', name: 'typed', newWorktree: true });
-		const notice = world.terminals.launched.at(-1)?.args.find(arg => arg.includes('Your task is message')) ?? '';
+		const notice = world.terminals.launched.at(-1)?.args.find(arg => arg.includes('Your task is #m')) ?? '';
 
 		assert.deepStrictEqual({ failed, launchedAfterFailure, made: world.table.madeWorktree(clamp)?.name, notes: started.notes, noticeSays: /setup was sent without shell integration: whether it finished is not known/.test(notice) }, {
 			failed: `FAILED: Arg Code did not start as @clamp #a2: its worktree's setup failed - \`npm ci\` exited with code 7: npm ERR! missing script. The worktree clamp was made for it, at ${clamp}, and stays, with its branch: start an agent there by its folder, or delete it.`,

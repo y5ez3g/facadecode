@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as l10n from '@vscode/l10n';
 import * as vscode from 'vscode';
 import { messageOf, stackOf } from './base/errors';
+import { ScreenDocuments } from './host/screenDocuments';
 import { agentsLogOf, AgentsService } from './host/service';
 import { registerShowLaunch } from './host/showLaunch';
 
@@ -15,9 +16,10 @@ let stopAgents: (() => Promise<void>) | undefined;
 
 /**
  * Facade's agents: vendors' agent CLIs and the person's own in their own UIs, in the folders and worktrees
- * of this window, starting, listing and ending each other through Facade's MCP server. The agent
- * framework's switch, `facade.orchestration.enabled`, takes away only what agents do to agents: off, the
- * person's agents start, run and end as ever, without Facade's tools (AGENT-LAUNCHER.md, L1).
+ * of this window, starting, listing and ending each other, messaging each other and the person, and looking
+ * into each other's terminals through Facade's MCP server. The agent framework's switch,
+ * `facade.orchestration.enabled`, takes away only what agents do to agents: off, the person's agents start,
+ * run and end as ever, without Facade's tools (AGENT-LAUNCHER.md, L1).
  */
 export function activate(context: vscode.ExtensionContext): void {
 	// What the layers under the host tell the person goes through @vscode/l10n: in the window's language.
@@ -25,6 +27,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		l10n.config({ contents: vscode.l10n.bundle });
 	}
 	const log = vscode.window.createOutputChannel(vscode.l10n.t("Facade Agents"), { log: true });
+	// The agents' last screens open with the agent framework off too: a notice's Show still goes to one (D6)
+	const screens = ScreenDocuments.register();
+	context.subscriptions.push(screens.registration);
 	let service: AgentsService | undefined;
 	/** The service while it starts: the extension host can go meanwhile, as a folder window becomes a workspace. */
 	let creating: AgentsService | undefined;
@@ -37,7 +42,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			none = 'noFolder';
 			return;
 		}
-		const created = creating = new AgentsService(log, context.workspaceState);
+		const created = creating = new AgentsService(log, context.workspaceState, screens.documents);
 		try {
 			await created.start();
 			// Deactivated while it started: what it took since - the ledger's lock, the pipe - goes at once.
@@ -84,8 +89,21 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 			return service.startAgentCommand(args);
 		}),
+		vscode.commands.registerCommand('facade.agents.openChatRoom', () => withService(running => running.openChatRoomCommand())),
+		vscode.commands.registerCommand('facade.agents.deleteChatRooms', () => withService(running => running.deleteChatRoomsCommand())),
 		{ dispose: () => void stopAgents?.() }
 	);
+	/** Runs a command of the service's once it has started, or tells the person why there is none. */
+	async function withService(command: (running: AgentsService) => Promise<void>): Promise<void> {
+		await ready;
+		if (!service) {
+			void (none === 'failed'
+				? vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why."))
+				: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to have agents in it.")));
+			return;
+		}
+		await command(service);
+	}
 	// Once, by `deactivate` - which the extension host waits for, a while - or else with the subscriptions.
 	// ⚠️ The log goes last: the service writes to it until its ledger is closed, which waits for the calls
 	// under way.

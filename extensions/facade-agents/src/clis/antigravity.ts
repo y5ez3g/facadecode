@@ -31,9 +31,12 @@ export const antigravityCli: AgentCli = {
 		launch: {
 			arguments: {
 				// Its first conversation, during which it connects its MCP servers; that conversation goes on
-				// without them, and the next one has them. The notice of its task, typed once Facade's server
-				// said hello, waits behind this one and is that next conversation.
+				// without them, and the next one has them. Its first line, typed by its doorbell once Facade's
+				// server said hello, waits behind this one and is that next conversation (AGENT-MESSAGES.md, M7).
 				warmUp: ['-i', 'Reply with the single word ready, and nothing else.'],
+				// The files of its messages and of agents' screens, outside its folder: else it asks whether to read
+				// one there, and the next doorbell's Enter would answer for the person. One folder an option.
+				messages: ['--add-dir', '${messagesDir}', '--add-dir', '${screensDir}'],
 				yoloOn: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 				yoloOff: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 				// A model's base name, as `gemini-3.8-flash`, which `--effort` picks a variant of. One it does not
@@ -74,7 +77,7 @@ export const antigravityCli: AgentCli = {
 		const { connection } = input;
 		return {
 			executable,
-			// The notice of its task is typed into its terminal, never given as an argument.
+			// Its first line is typed into its terminal by its doorbell, never given as an argument (M7).
 			args: launchArgs(antigravityCli.setting + '.launch', input.config, launchValues(input), launchUses(input, false)),
 			env: input.config.launch.environment,
 			cwd: input.folder,

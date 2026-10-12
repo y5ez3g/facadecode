@@ -6,17 +6,21 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as l10n from '@vscode/l10n';
-import { DeferredPromise, timeout } from '../base/async';
+import { DeferredPromise } from '../base/async';
 import { clauseOf, messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { AgentCli, Connection, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec, launchFor, sandboxOf } from '../clis/cli';
 import { launchTarget, unsafeForCmd } from '../clis/executable';
 import { trustTarget } from '../clis/trust';
 import { AgentTable, agentName, StartedAgent } from '../record/agents';
-import { Agent, agentRef, Caller, describe, Ignored, isLive, messageRef, PERSON, StartPhase } from '../record/events';
+import { Agent, Caller, describe, Ignored, isLive, PERSON, StartPhase } from '../record/events';
+import { Message } from '../record/messages';
+import { screensDir } from '../record/screens';
+import { LaunchDelays } from './doorbell';
 import { FacadeError } from './errors';
 import { InjectionGit, Injections, InjectionUser } from './injections';
 import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
+import { excerptText, ScreenRead } from './screens';
 
 /**
  * How long Facade waits where the person sets nothing else: two minutes, for a new agent to come up,
@@ -72,7 +76,8 @@ export interface Run {
 
 /**
  * The plan of an agent's launch, which its run's `launch.json` holds: what its terminal runs, and the
- * delays its task notice is typed with, from the settings as they were when its start was accepted.
+ * delays of what is typed into it - its first line, its doorbells - from the settings as they were when its
+ * start was accepted.
  */
 interface LaunchPlan {
 	readonly program: string;
@@ -82,11 +87,6 @@ interface LaunchPlan {
 	readonly environment: { readonly [name: string]: string };
 	readonly enterDelay: number;
 	readonly taskDelay: number;
-}
-
-/** The notice of an agent's task: who it is, and where its task's message is (AGENT-LAUNCHER.md, L9). */
-function taskNotice(opening: string, message: number, file: string): string {
-	return `${opening} Your task is message ${messageRef(message)}, in ${file}: read that file, then do what it says.`;
 }
 
 /**
@@ -105,6 +105,10 @@ export interface Launched {
 	readonly why?: string;
 	/** What its preparation came to that its caller is told: its setup's outcome, what could not be copied, a failed hook. */
 	readonly notes: readonly string[];
+	/** The number of its task, a message from its caller, which it fetches itself (AGENT-MESSAGES.md, M7). */
+	readonly task?: number;
+	/** Where its start is not confirmed: the last lines of its screen, as they were then (AGENT-ORCHESTRATION.md, O3). */
+	readonly screen?: ScreenRead;
 }
 
 /** How the folder of a start is prepared before its CLI: its worktree made and set up. */
@@ -140,16 +144,29 @@ export interface LaunchContext {
 	readonly timing?: () => Timing;
 	/** Ends an agent whose launch failed before it had a process: recorded as failed, its terminal closed. */
 	fail(agent: Agent, reason: string): Promise<void>;
+	/** Records the task the caller gives a new agent: a message to it, sent right after it was recorded (M7). */
+	sendTask(caller: Caller, agent: Agent, task: string): Message;
+	/** Records that an agent's first line, given as its launch argument, rang for its task (M7). */
+	firstRing(agent: Agent, task: number): void;
+	/** An agent started: its doorbell, its task and its messages are its mailbox's to watch from now. */
+	running(agent: Agent): void;
+	/** The file the window writes an agent's final screen to as its terminal ends (AGENT-DEBUGGING.md, D6). */
+	finalScreenOf(agent: Agent): string;
+	/**
+	 * The last lines of an agent's screen, for why its start is not confirmed or failed: of its terminal while it
+	 * is open; with `ended`, of its final screen, waited for a moment. Undefined where there are none.
+	 */
+	excerptOf(agent: Agent, ended?: boolean): Promise<ScreenRead | undefined>;
 	log(message: string): void;
 }
 
 /** An agent on its way up, a start waiting for it. */
 interface Startup {
 	/**
-	 * Settles once the agent has started - its MCP server said hello, and it was told of its task where it is
-	 * told in its terminal - or, with why, once its start is not confirmed; rejects once it ended.
+	 * Settles once the agent has started - its MCP server said hello - or, with why and its screen then, once its
+	 * start is not confirmed; rejects once it ended.
 	 */
-	readonly up: DeferredPromise<{ readonly why?: string }>;
+	readonly up: DeferredPromise<{ readonly why?: string; readonly screen?: ScreenRead }>;
 	/** Answers the start as not confirmed once its time is over; cleared by its MCP server's hello. */
 	timer: ReturnType<typeof setTimeout> | undefined;
 	/**
@@ -160,12 +177,12 @@ interface Startup {
 }
 
 /**
- * Launches agents: each recorded, its CLI started in its terminal, and waited for until it has started -
- * its MCP server said hello and, for a CLI told of its task in its terminal, the line telling it was typed;
- * for a launch without the agent framework's integration, its process running - for the time the person
- * gives it. A start not confirmed by then answers so, the agent left starting; the person is told of one of
- * theirs, once, and its later start needs no word. After a reload, an agent found starting is let start,
- * and one not yet told of its task is told.
+ * Launches agents: each recorded, its task sent to it as a message (AGENT-MESSAGES.md, M7), its CLI started in
+ * its terminal with its first line - which names its task - and waited for until it has started: its MCP server
+ * said hello; for a launch without the agent framework's integration, its process running - for the time the
+ * person gives it. A CLI told of its task in its terminal has its first line typed by its doorbell once it has
+ * started. A start not confirmed by then answers so, the agent left starting; the person is told of one of
+ * theirs, once, and its later start needs no word. After a reload, an agent found starting is let start.
  */
 export class Launcher implements Disposable {
 
@@ -173,11 +190,9 @@ export class Launcher implements Disposable {
 	private readonly startups = new Map<number, Startup>();
 	/** The launches under way, by number: each settles once its terminal is open, or it gave up. */
 	private readonly opening = new Map<number, Promise<void>>();
-	/** The agents whose task notice is being typed into their terminals, by number: once each. */
-	private readonly typing = new Set<number>();
 	/** What each start's preparation came to that its caller is told, by number. */
 	private readonly notes = new Map<number, readonly string[]>();
-	/** What each agent is told of its preparation with its task, by number. */
+	/** What each agent is told of its preparation with its first line, by number. */
 	private readonly startNotes = new Map<number, string>();
 	private disposed = false;
 
@@ -201,8 +216,8 @@ export class Launcher implements Disposable {
 	 */
 	check(installed: InstalledCli, run: Omit<Run, 'name' | 'worktree'>, env: Environment): readonly Injected[] {
 		const { setup, table } = this.context;
-		// Its notice as a stand-in's: Facade's own words, and names cmd.exe takes as they are.
-		const opening = setup.opening({ id: 1, name: 'check', cliName: installed.cli.displayName }, PERSON);
+		// Its first line as a stand-in's: Facade's own words, and names cmd.exe takes as they are.
+		const firstLine = setup.firstLine({ id: 1, name: 'check' }, PERSON, run.task !== undefined ? 1 : undefined);
 		let conflict: string | undefined;
 		let injected: readonly Injected[];
 		try {
@@ -210,10 +225,11 @@ export class Launcher implements Disposable {
 				folder: run.folder,
 				repository: run.repository,
 				...(run.home !== undefined ? { home: run.home } : {}),
-				messagesDir: table.messagesDir,
+				messagesDir: table.messages.folder,
+				screensDir: screensDir(table.dir),
 				yolo: run.yolo,
 				unattended: run.unattended,
-				...(run.task !== undefined ? { task: taskNotice(opening, 1, path.join(table.dir, 'messages', '1.md')) } : opensAlone(installed.cli, run.unattended) ? { task: opening } : {}),
+				...(run.task !== undefined || opensAlone(installed.cli, run.unattended) ? { task: firstLine } : {}),
 				...applied(run),
 				// What goes into the folder as the launch will put it: a server the same for every agent, and the skills.
 				...(run.integration ? { connection: installed.cli.sharedServer ? { mcp: setup.sharedMcpServer(), values: {} } : setup.connection(path.join(table.runsDir, 'check.token')) } : {}),
@@ -279,7 +295,6 @@ export class Launcher implements Disposable {
 		const { table } = this.context;
 		const { cli } = installed;
 		this.stillOpen();
-		const notice = run.task === undefined ? undefined : cli.task === 'terminal' ? 'typed' : 'argument';
 		const started = table.start({
 			name: run.name,
 			creator: caller.id,
@@ -296,10 +311,21 @@ export class Launcher implements Disposable {
 			worktree: run.worktree,
 			...(run.outsideGit ? { outsideGit: true } : {}),
 			folder: run.folder,
-			...(run.task !== undefined && notice ? { task: { text: run.task, notice } } : {}),
 			phase: options.prepare ? 'creating_worktree' : 'launching_cli'
 		});
 		const { agent } = started;
+		// Its task is a message from its caller, recorded now, before its CLI is launched (O9; M7): the task's
+		// text never goes on a command line, its first line naming it
+		let task: Message | undefined;
+		if (run.task !== undefined) {
+			try {
+				task = this.context.sendTask(caller, agent, run.task);
+			} catch (err) {
+				await this.context.fail(agent, `its task could not be recorded: ${messageOf(err)}`);
+				throw this.failureOf(err, cli, agent);
+			}
+		}
+		const taskOf = task ? { task: task.id } : {};
 		if (run.notes?.length) {
 			this.notes.set(agent.id, run.notes);
 			run.notes.forEach(note => this.context.log(`${describe(agent)}: ${note}`));
@@ -308,13 +334,13 @@ export class Launcher implements Disposable {
 		const startup = this.watch(agent, run.integration, options.acceptedAt);
 		// Prepared and opened on its own: the caller hears whichever comes first - its time over, unconfirmed in
 		// whatever phase it is, its start failing, or its terminal open.
-		const opening = this.prepareAndOpen(caller, installed, run, started, notice, options);
+		const opening = this.prepareAndOpen(caller, installed, run, started, task, options);
 		opening.catch(() => undefined);
-		const first = await Promise.race([opening.then(() => 'opened' as const), startup.up.p.then(up => up, err => { throw err; })]).catch(err => {
-			throw this.failureOf(err, cli, agent);
+		const first = await Promise.race([opening.then(() => 'opened' as const), startup.up.p.then(up => up, err => { throw err; })]).catch(async err => {
+			throw await this.failureWithScreen(err, cli, agent);
 		});
 		if (first !== 'opened') {
-			return { agent: table.get(agent.id) ?? agent, status: first.why === undefined ? 'started' : 'unconfirmed', ...(first.why !== undefined ? { why: first.why } : {}), notes: this.notes.get(agent.id) ?? [] };
+			return this.launchedOf(agent, first, taskOf);
 		}
 		// A launch without Facade's integration has started once its process runs.
 		if (!run.integration) {
@@ -324,20 +350,32 @@ export class Launcher implements Disposable {
 			// Its process may have ended as its terminal opened: the person's start says so, as it would have said a failure before.
 			const now = table.get(agent.id) ?? agent;
 			if (now.end) {
-				throw this.failureOf(didNotStart(cli, agent, now.end.reason), cli, agent);
+				throw await this.failureWithScreen(didNotStart(cli, agent, now.end.reason), cli, agent);
 			}
 			// From here on, the person is told how it goes: nobody waits for this start's answer.
 			startup.answered = false;
-			return { agent: now, status: 'started', notes: this.notes.get(agent.id) ?? [] };
+			return { agent: now, status: 'started', notes: this.notes.get(agent.id) ?? [], ...taskOf };
 		}
 		options.progress?.(`Waiting for @${agent.name} to start.`);
-		let up: { readonly why?: string };
+		let up: { readonly why?: string; readonly screen?: ScreenRead };
 		try {
 			up = await startup.up.p;
 		} catch (err) {
-			throw this.failureOf(err, cli, agent);
+			throw await this.failureWithScreen(err, cli, agent);
 		}
-		return { agent: table.get(agent.id) ?? agent, status: up.why === undefined ? 'started' : 'unconfirmed', ...(up.why !== undefined ? { why: up.why } : {}), notes: this.notes.get(agent.id) ?? [] };
+		return this.launchedOf(agent, up, taskOf);
+	}
+
+	/** How a launch came out, as its caller is answered: started, or not confirmed, with why and its screen then. */
+	private launchedOf(agent: Agent, up: { readonly why?: string; readonly screen?: ScreenRead }, task: { readonly task?: number }): Launched {
+		return {
+			agent: this.context.table.get(agent.id) ?? agent,
+			status: up.why === undefined ? 'started' : 'unconfirmed',
+			...(up.why !== undefined ? { why: up.why } : {}),
+			...(up.screen ? { screen: up.screen } : {}),
+			notes: this.notes.get(agent.id) ?? [],
+			...task
+		};
 	}
 
 	/**
@@ -345,7 +383,7 @@ export class Launcher implements Disposable {
 	 * its CLI started there. Settles once its terminal runs; rejects, the agent ended as failed, where it
 	 * could not be - or where it was stopped meanwhile, ended by its stop.
 	 */
-	private async prepareAndOpen(caller: Caller, installed: InstalledCli, run: Run, started: StartedAgent, notice: 'typed' | 'argument' | undefined, options: LaunchOptions): Promise<void> {
+	private async prepareAndOpen(caller: Caller, installed: InstalledCli, run: Run, started: StartedAgent, task: Message | undefined, options: LaunchOptions): Promise<void> {
 		const { table, ports, setup } = this.context;
 		const { cli } = installed;
 		const { agent } = started;
@@ -368,17 +406,18 @@ export class Launcher implements Disposable {
 			const opened = new DeferredPromise<void>();
 			this.opening.set(agent.id, opened.p);
 			try {
-				const creator = caller.id === undefined ? undefined : table.get(caller.id);
-				const opening = this.openingOf(agent, cli, creator);
 				const connection: Connection | undefined = !run.integration ? undefined : cli.sharedServer ? { mcp: setup.sharedMcpServer(), values: {} } : setup.connection(started.tokenFile);
+				// A CLI told of its task in its terminal has its first line typed by its doorbell (M7)
+				const argument = cli.task !== 'argument' ? undefined : task ? this.firstLineOf(agent, caller, task.id) : opensAlone(cli, run.unattended) ? this.firstLineOf(agent, caller, undefined) : undefined;
 				const { spec, args, throughCmd } = this.launchOf(installed, {
 					folder,
 					repository: run.repository,
 					...(run.home !== undefined ? { home: run.home } : {}),
-					messagesDir: table.messagesDir,
+					messagesDir: table.messages.folder,
+					screensDir: screensDir(table.dir),
 					yolo: run.yolo,
 					unattended: run.unattended,
-					...(notice === 'argument' && agent.taskMessage !== undefined ? { task: taskNotice(opening, agent.taskMessage, table.messageFileOf(agent.taskMessage)) } : notice === undefined && opensAlone(cli, run.unattended) ? { task: opening } : {}),
+					...(argument !== undefined ? { task: argument } : {}),
 					...applied(run),
 					...(connection ? { connection } : {}),
 					skills: run.integration ? setup.skills() : [],
@@ -391,6 +430,11 @@ export class Launcher implements Disposable {
 					fs.mkdirSync(path.dirname(file.path), { recursive: true });
 					fs.writeFileSync(file.path, file.content, { mode: 0o600 });
 				}
+				// The folders its launch lets it read, there before it starts: a CLI drops one that is not - Claude Code
+				// 2.1.296 its --add-dir - and would ask before reading a message's or a screen's file there later (M4, D6)
+				for (const dir of [table.messages.folder, screensDir(table.dir)]) {
+					fs.mkdirSync(dir, { recursive: true });
+				}
 				const user = { workspace: table.dir, id: agent.id };
 				await this.inject(folder, spec.injected, cli.displayName, user);
 				this.stillOpen();
@@ -402,7 +446,16 @@ export class Launcher implements Disposable {
 				// The person's history says what it runs: its command line and the settings it is given (UI-14)
 				table.launching(agent.id, { program: spec.executable, args, environment: spec.env, files: spec.files.filter(file => args.some(arg => arg.includes(file.path))) });
 				options.progress?.(`Starting ${label}.`);
-				const { processId } = await ports.terminals.launch({ id: agent.id, name: label, command: cli.custom ? spec.executable : cli.command, ...(cli.custom ? { custom: true } : {}), executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined && !options.wait });
+				const { processId } = await ports.terminals.launch({ id: agent.id, name: label, command: cli.custom ? spec.executable : cli.command, ...(cli.custom ? { custom: true } : {}), executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined && !options.wait, finalScreen: this.context.finalScreenOf(agent) });
+				// Its first line, its launch argument, rang for its task: a doorbell does not name the task again (M7)
+				if (task && argument !== undefined) {
+					try {
+						this.context.firstRing(agent, task.id);
+					} catch (err) {
+						// Its doorbell types its first line again: a line twice is no harm
+						this.context.log(`That ${label} was given its first line could not be recorded: ${messageOf(err)}`);
+					}
+				}
 				if (processId !== undefined) {
 					table.launched(agent.id, processId);
 					if (spec.injected.length) {
@@ -440,6 +493,22 @@ export class Launcher implements Disposable {
 			: failure;
 	}
 
+	/**
+	 * `failureOf`, with the last lines its CLI showed where its start failed with a terminal - of its final screen,
+	 * the terminal closed - and the file the whole of that screen is in: what the CLI said is often the reason
+	 * (O3; AGENT-DEBUGGING.md, D6).
+	 */
+	private async failureWithScreen(err: unknown, cli: AgentCli, agent: Agent): Promise<FacadeError> {
+		const failure = this.failureOf(err, cli, agent);
+		if (failure.code !== 'FAILED' || failure.outcome?.agent !== agent.id || this.context.table.get(agent.id)?.processId === undefined) {
+			return failure;
+		}
+		const excerpt = await this.context.excerptOf(agent, true);
+		return excerpt
+			? new FacadeError(failure.code, `${failure.message}\n${excerptText(agent.id, excerpt.text)}`, { ...failure.outcome, ...(excerpt.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) })
+			: failure;
+	}
+
 	/** Throws where `agent` is no longer starting: stopped meanwhile, its start goes no further. */
 	private assertStarting(agent: Agent): void {
 		if (this.context.table.get(agent.id)?.state !== 'starting') {
@@ -447,41 +516,42 @@ export class Launcher implements Disposable {
 		}
 	}
 
-	/** The words an agent's notice opens with: who it is, and - where its setup's completion is not known - that. */
-	private openingOf(agent: Agent, cli: AgentCli, creator: Agent | undefined): string {
-		const opening = this.context.setup.opening({ id: agent.id, name: agent.name, cliName: cli.displayName }, creator ?? PERSON);
-		const note = this.startNotes.get(agent.id);
-		return note ? `${opening} ${note}` : opening;
+	/**
+	 * An agent's first line (M7): who it is, who created it, what it is told of its preparation - where its setup's
+	 * completion is not known - and its task's number; without a task, its opening alone (L9).
+	 */
+	private firstLineOf(agent: Agent, caller: Caller, task: number | undefined): string {
+		const creator = caller.id === undefined ? PERSON : this.context.table.get(caller.id) ?? caller;
+		return this.context.setup.firstLine({ id: agent.id, name: agent.name }, creator, task, this.startNotes.get(agent.id));
 	}
 
-	/** A starting agent's MCP server said hello: it is connected, and is told of its task where it is told in its terminal. */
+	/** What an agent is told of its preparation with its first line: that its setup's completion is not known; none where it is told nothing. */
+	startNoteOf(id: number): string | undefined {
+		return this.startNotes.get(id);
+	}
+
+	/** A starting agent's MCP server said hello: it is connected, and has started. */
 	hello(agent: Agent): void {
 		if (this.disposed || agent.state !== 'starting') {
 			return;
 		}
 		this.context.table.connected(agent.id);
 		this.context.log(`${describe(agent)} is connected: its MCP server said hello.`);
-		const startup = this.startups.get(agent.id);
-		if (startup) {
-			clearTimeout(startup.timer);
-			startup.timer = undefined;
-		}
-		this.bringUp(agent);
+		this.isUp(agent);
 	}
 
 	/**
-	 * After a reload: an agent whose MCP server said hello is brought up - told its task, where that was
-	 * not typed yet. One whose server has not said hello starts once it does; one launched without Facade's
-	 * integration is running already.
+	 * After a reload: an agent whose MCP server said hello has started. One whose server has not said hello
+	 * starts once it does; one launched without Facade's integration is running already.
 	 */
 	resume(agent: Agent): void {
 		if (!this.isRunning(agent)) {
 			return;
 		}
-		if (!agent.integration) {
-			this.isUp(agent);
-		} else if (agent.connected) {
-			this.bringUp(agent);
+		if (!agent.integration || agent.connected) {
+			if (agent.state === 'starting') {
+				this.isUp(agent);
+			}
 		} else if (agent.state === 'starting' && !this.startups.has(agent.id)) {
 			// Its start's wait went with the window before: timed again, for what is left of it since the agent
 			// started, so that a start that does not come up is said to be unconfirmed - to the person, for their
@@ -537,10 +607,10 @@ export class Launcher implements Disposable {
 	private watch(agent: Agent, integration: boolean, since = Date.now()): Startup {
 		const ms = this.timing().startTimeoutMs;
 		const startup: Startup = {
-			up: new DeferredPromise<{ readonly why?: string }>(),
+			up: new DeferredPromise<{ readonly why?: string; readonly screen?: ScreenRead }>(),
 			timer: setTimeout(() => {
 				startup.timer = undefined;
-				this.unconfirmed(agent, notStartedWhy(this.context.table.get(agent.id)?.phase, integration, ms));
+				void this.unconfirmed(agent, notStartedWhy(this.context.table.get(agent.id)?.phase, integration, ms));
 			}, Math.max(ms - (Date.now() - since), 0)),
 			answered: true
 		};
@@ -550,8 +620,11 @@ export class Launcher implements Disposable {
 		return startup;
 	}
 
-	/** The start waiting for `agent` answers that it is not confirmed, saying why; the agent stays starting. */
-	private unconfirmed(agent: Agent, why: string): void {
+	/**
+	 * The start waiting for `agent` answers that it is not confirmed, saying why, with the last lines of its screen
+	 * where it has one (O3); the agent stays starting.
+	 */
+	private async unconfirmed(agent: Agent, why: string): Promise<void> {
 		const startup = this.startups.get(agent.id);
 		if (!startup) {
 			return;
@@ -562,77 +635,15 @@ export class Launcher implements Disposable {
 		if (!startup.answered && this.isRunning(agent)) {
 			// One nonmodal notice for the person's own: its terminal stays theirs to use (AGENT-LAUNCHER.md, L5).
 			this.context.ports.person.tell(l10n.t("{0} is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.", describe(agent)), agent.id, 'warning');
+			startup.up.complete({ why });
+			return;
 		}
-		startup.up.complete({ why });
+		// Read for the caller that waits: what its CLI shows is often why
+		const screen = this.context.table.get(agent.id)?.processId !== undefined ? await this.context.excerptOf(agent) : undefined;
+		startup.up.complete({ why, ...(screen ? { screen } : {}) });
 	}
 
-	/**
-	 * Tells a connected agent of its task where it is told in its terminal, once; then it is up. A notice
-	 * whose typing was cut short is not typed again: it may have reached the CLI, whole or in part.
-	 */
-	private bringUp(agent: Agent): void {
-		if (agent.task !== 'pending') {
-			this.isUp(agent);
-		} else if (!this.typing.has(agent.id)) {
-			this.typing.add(agent.id);
-			this.background(`Telling ${describe(agent)} of its task`, this.typeTask(agent).finally(() => this.typing.delete(agent.id)));
-		}
-	}
-
-	/**
-	 * Types the notice of an agent's task - its opening, and where its task's message is - into its terminal,
-	 * its task delay after its MCP server's hello, and presses Enter after its enter delay, each as its launch
-	 * had it. One that cannot be told stays starting, and its start answers why.
-	 */
-	private async typeTask(agent: Agent): Promise<void> {
-		const { table, ports } = this.context;
-		try {
-			const cli = this.cliOf(agent.cli);
-			if (agent.taskMessage === undefined) {
-				throw new Error('it has no task message');
-			}
-			// A list cleared keeps the creator of every agent that has not ended.
-			const creator = agent.creator === undefined ? PERSON : table.get(agent.creator);
-			if (!creator) {
-				throw new Error(`its creator ${agentRef(agent.creator ?? 0)} is not in the list`);
-			}
-			const opening = this.context.setup.opening({ id: agent.id, name: agent.name, cliName: cli?.displayName ?? agent.cli }, creator);
-			const note = this.startNotes.get(agent.id);
-			const line = taskNotice(note ? `${opening} ${note}` : opening, agent.taskMessage, table.messageFileOf(agent.taskMessage));
-			// Its delays as its start had them, whatever the settings say now.
-			const { taskDelay, enterDelay } = delaysOf(table.launchFileOf(agent.id));
-			await timeout(taskDelay);
-			if (!this.isRunning(agent)) {
-				return;
-			}
-			table.taskTyping(agent.id);
-			// One line, the person's typing held back from its start to its Enter, so that none of theirs is in it (X-43)
-			if (!await ports.terminals.type(agent.id, line, 'begin')) {
-				// Its terminal is gone: its end, which the window tells of, answers the start that waits for it - its
-				// time otherwise. Not that it stays starting, which it would never be again (N-80)
-				ports.terminals.type(agent.id, '', 'end').then(undefined, () => undefined);
-				return;
-			}
-			await timeout(enterDelay);
-			if (!this.isRunning(agent)) {
-				await ports.terminals.type(agent.id, '', 'end');
-				return;
-			}
-			await ports.terminals.type(agent.id, '\r', 'end');
-			if (!this.isRunning(agent)) {
-				return;
-			}
-			table.taskTyped(agent.id);
-			this.context.log(`${describe(agent)} was told of its task, message ${messageRef(agent.taskMessage)}.`);
-			this.isUp(agent);
-		} catch (err) {
-			// The person's typing is held back no more, however far the line came
-			ports.terminals.type(agent.id, '', 'end').then(undefined, () => undefined);
-			this.unconfirmed(agent, `the notice of its task could not be typed into its terminal: ${messageOf(err)}`);
-		}
-	}
-
-	/** An agent has started: the start that waits for it answers. */
+	/** An agent has started: the start that waits for it answers, and its mailbox watches it from now (M5). */
 	private isUp(agent: Agent): void {
 		this.context.table.running(agent.id);
 		const startup = this.startups.get(agent.id);
@@ -641,11 +652,10 @@ export class Launcher implements Disposable {
 			clearTimeout(startup.timer);
 			startup.up.complete({});
 		}
-	}
-
-	/** A CLI by its id: a built-in, or a custom agent's name. */
-	private cliOf(id: string): AgentCli | undefined {
-		return this.context.clis.known.find(each => each.id === id) ?? this.context.clis.custom().find(each => each.cli.id === id)?.cli;
+		const now = this.context.table.get(agent.id);
+		if (now?.state === 'running') {
+			this.context.running(now);
+		}
 	}
 
 	/** How long the core waits, as the person sets it now. */
@@ -679,10 +689,6 @@ export class Launcher implements Disposable {
 		const [exclude, tracked] = await Promise.all([git.excludeOf(folder), git.tracks(folder, paths)]);
 		const untracked = exclude ? await git.untrackedAnywhere(folder, paths) : new Set<string>();
 		return { exclude, tracked, untracked };
-	}
-
-	private background(what: string, work: Promise<unknown>): void {
-		inBackground(what, work, message => this.context.log(message));
 	}
 
 	/** After each of its waits: a window that closed meanwhile does nothing more, and says so. */
@@ -729,8 +735,8 @@ function applied(run: Pick<Run, 'model' | 'effort' | 'ignored'>): { readonly mod
 	};
 }
 
-/** The delays a launch's task notice is typed with, as its run's `launch.json` holds them; throws where it cannot be read. */
-function delaysOf(file: string): Pick<LaunchPlan, 'enterDelay' | 'taskDelay'> {
+/** The delays of what is typed into an agent's terminal, as its run's `launch.json` holds them; throws where it cannot be read. */
+export function delaysOf(file: string): LaunchDelays {
 	const plan: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
 	if (!isJsonObject(plan) || typeof plan.enterDelay !== 'number' || typeof plan.taskDelay !== 'number') {
 		throw new Error(`${file} holds no plan of a launch`);

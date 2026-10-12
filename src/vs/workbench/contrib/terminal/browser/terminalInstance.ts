@@ -139,19 +139,6 @@ const agentCliTitlePatterns: ReadonlyMap<GeneralShellType, RegExp> = new Map([
 	[GeneralShellType.Gemini, /\bgemini\b/i],
 ]);
 
-/**
- * Facade Code: an escape sequence the terminal sends its program that types no text (`hasUnsentInput`): a key's - a
- * cursor key's, Alt with a key, Escape alone - a paste's brackets, and the terminal's own answers to what its
- * program asked: a report (the cursor's place, its attributes, a focus change, the mouse, and the old mouse report's
- * three bytes) and a string (a colour asked for: OSC, DCS, APC, PM, SOS - to its end, or the end of what came).
- */
-const TERMINAL_SEQUENCE = /\x1b(?:\[M[\s\S]{3}|\[[0-9:;<=>?]*[ -\/]*[@-~]|[\]P_^X][\s\S]*?(?:\x07|\x1b\\|$)|O[\s\S]|[\s\S])?/y;
-
-/** Facade Code: `text` less its last word and the spaces after it, as Ctrl+W and Option+Backspace erase it. */
-function withoutLastWord(text: string): string {
-	return text.replace(/\S*\s*$/, '');
-}
-
 export class TerminalInstance extends Disposable implements ITerminalInstance {
 	private static _lastKnownCanvasDimensions: ICanvasDimensions | undefined;
 	private static _lastKnownGridDimensions: IGridDimensions | undefined;
@@ -687,72 +674,7 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		return this._contributions.get(id) as T | null;
 	}
 
-	/** Facade Code: what the person typed while it is held back (`holdInput`), and how many hold it. */
-	private _heldInput: string[] | undefined;
-	private _inputHolds = 0;
-	/** What the person typed since their last Enter, Ctrl+C or Ctrl+U, less what they erased. */
-	private _unsentText = '';
-
-	get hasUnsentInput(): boolean {
-		return this._unsentText.length > 0;
-	}
-
-	holdInput(): IDisposable {
-		this._heldInput ??= [];
-		this._inputHolds++;
-		let released = false;
-		return toDisposable(() => {
-			if (released) {
-				return;
-			}
-			released = true;
-			if (--this._inputHolds === 0) {
-				const held = this._heldInput ?? [];
-				this._heldInput = undefined;
-				// Closed meanwhile: nothing to send it to
-				if (this.isDisposed) {
-					return;
-				}
-				for (const data of held) {
-					this._handleOnData(data);
-				}
-			}
-		});
-	}
-
 	private async _handleOnData(data: string): Promise<void> {
-		// Facade Code: held back while Facade types a line of its own (`holdInput`; X-43)
-		if (this._heldInput) {
-			this._heldInput.push(data);
-			return;
-		}
-		// What the person typed and has not sent: since their last Enter, Ctrl+C or Ctrl+U, less what they erased
-		// by character or by word. A key's sequence, and the terminal's own answers to its program, type nothing:
-		// Facade's lines wait only for text that is there (N-84)
-		let unsent = this._unsentText;
-		for (let index = 0; index < data.length;) {
-			if (data[index] === '\x1b') {
-				if (data[index + 1] === '\x7f' || data[index + 1] === '\b') {
-					unsent = withoutLastWord(unsent);
-					index += 2;
-					continue;
-				}
-				TERMINAL_SEQUENCE.lastIndex = index;
-				index += TERMINAL_SEQUENCE.exec(data)?.[0].length ?? 1;
-				continue;
-			}
-			const character = data[index++];
-			if (character === '\r' || character === '\n' || character === '\x03' || character === '\x15') {
-				unsent = '';
-			} else if (character === '\x7f' || character === '\b') {
-				unsent = unsent.slice(0, -1);
-			} else if (character === '\x17') {
-				unsent = withoutLastWord(unsent);
-			} else if (character >= ' ') {
-				unsent += character;
-			}
-		}
-		this._unsentText = unsent;
 		await this._processManager.write(data);
 		this._onDidInputData.fire(data);
 	}

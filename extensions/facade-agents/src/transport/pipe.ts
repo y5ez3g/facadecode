@@ -79,14 +79,24 @@ function ensurePrivateFolder(pipe: string): void {
 	}
 }
 
+/** Told once, after a call's result: whether the window wrote it to the caller's end of the pipe. */
+export type ResultListener = (written: boolean) => void;
+
+/** How long a call's result may take to go onto the pipe: then its connection is dropped, and the result counts as not written. */
+const RESULT_WRITE_TIMEOUT_MS = 30_000;
+
 /** How the window answers on the pipe. */
 export interface PipeHandlers<C> {
 	/** The caller a token belongs to, or undefined to refuse it. */
 	authenticate(token: string): C | undefined;
 	/** What the caller's MCP server offers, as the window says hello to it - the server saying which process it is. */
 	hello(caller: C, server: { readonly pid?: number }): unknown;
-	/** Runs a tool; `progress` sends the caller word of how it goes - with the run it made, once it has made one. */
-	call(caller: C, tool: string, args: unknown, progress: Progress): Promise<unknown>;
+	/**
+	 * Runs a tool; `progress` sends the caller word of how it goes - with the run it made, once it has made one.
+	 * Each listener given to `whenWritten` is told once whether the call's result went onto the pipe: not when the
+	 * call failed, or the caller had gone (AGENT-MESSAGES.md, M11).
+	 */
+	call(caller: C, tool: string, args: unknown, progress: Progress, whenWritten: (listener: ResultListener) => void): Promise<unknown>;
 	/** Writes what went wrong on the pipe that no caller is told of in full: a request the window failed on, a connection it could not take. */
 	log?(message: string): void;
 }
@@ -236,20 +246,42 @@ export class PipeServer<C> {
 		res.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ code: codeOf(err) ?? 'INTERNAL', message: messageOf(err) }));
 	}
 
-	/** Runs a call to its end, even once its caller has gone: what it started goes on, as the tools say. */
+	/**
+	 * Runs a call to its end, even once its caller has gone: what it started goes on, as the tools say. The
+	 * listeners of its result hear once whether the pipe took it; a failure is no result.
+	 */
 	private async onCall(caller: C, tool: string, args: unknown, res: http.ServerResponse): Promise<void> {
 		res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
 		// Sent at once: the caller's word that the call was taken, and runs
 		res.flushHeaders();
-		const write = (line: CallLine) => {
-			if (!res.writableEnded && !res.destroyed) {
-				res.write(`${JSON.stringify(line)}\n`);
+		const listeners: ResultListener[] = [];
+		let writing: ReturnType<typeof setTimeout> | undefined;
+		const settle = (written: boolean) => {
+			clearTimeout(writing);
+			for (const listener of listeners.splice(0)) {
+				try {
+					listener(written);
+				} catch (err) {
+					this.handlers.log?.(`A listener to a call's result on the pipe failed: ${stackOf(err)}`);
+				}
 			}
 		};
+		// A write onto a connection that broke may never call back: the response closing is the last word
+		res.once('close', () => settle(false));
+		const write = (line: CallLine, done?: ResultListener) => {
+			if (res.writableEnded || res.destroyed) {
+				done?.(false);
+				return;
+			}
+			res.write(`${JSON.stringify(line)}\n`, err => done?.(!err));
+		};
 		try {
-			const result = await this.handlers.call(caller, tool, args, (message, agent) => write({ type: 'progress', message, ...(agent !== undefined ? { agent } : {}) }));
-			write({ type: 'result', result });
+			const result = await this.handlers.call(caller, tool, args, (message, agent) => write({ type: 'progress', message, ...(agent !== undefined ? { agent } : {}) }), listener => listeners.push(listener));
+			// A caller that stops reading holds its result up, and what waits on it: its connection goes in time
+			writing = setTimeout(() => res.destroy(), RESULT_WRITE_TIMEOUT_MS);
+			write({ type: 'result', result }, settle);
 		} catch (err) {
+			settle(false);
 			write({ type: 'error', code: codeOf(err) ?? 'INTERNAL', message: messageOf(err) });
 		}
 		res.end();

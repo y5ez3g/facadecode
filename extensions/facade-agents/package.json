@@ -30,10 +30,33 @@
 		"test": "node ../../node_modules/mocha/bin/mocha --ui tdd --timeout 30000 \"out/test/**/*.test.js\""
 	},
 	"contributes": {
+		"languages": [
+			{
+				"id": "facade-screen",
+				"aliases": [
+					"Facade Screen"
+				]
+			}
+		],
+		"configurationDefaults": {
+			"[facade-screen]": {
+				"editor.colorDecorators": false
+			}
+		},
 		"commands": [
 			{
 				"command": "facade.agents.startAgent",
 				"title": "%command.startAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.agents.openChatRoom",
+				"title": "%command.openChatRoom%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.agents.deleteChatRooms",
+				"title": "%command.deleteChatRooms%",
 				"category": "%command.category%"
 			},
 			{
@@ -163,7 +186,8 @@
 										},
 										"default": [
 											"--add-dir",
-											"${messagesDir}"
+											"${messagesDir}",
+											"${screensDir}"
 										]
 									},
 									"yoloOn": {
@@ -256,7 +280,8 @@
 									],
 									"messages": [
 										"--add-dir",
-										"${messagesDir}"
+										"${messagesDir}",
+										"${screensDir}"
 									],
 									"yoloOn": [
 										"--dangerously-skip-permissions"
@@ -1092,7 +1117,13 @@
 										],
 										"items": {
 											"type": "string"
-										}
+										},
+										"default": [
+											"--add-dir",
+											"${messagesDir}",
+											"--add-dir",
+											"${screensDir}"
+										]
 									},
 									"yoloOn": {
 										"type": [
@@ -1163,6 +1194,12 @@
 									"warmUp": [
 										"-i",
 										"Reply with the single word ready, and nothing else."
+									],
+									"messages": [
+										"--add-dir",
+										"${messagesDir}",
+										"--add-dir",
+										"${screensDir}"
 									],
 									"yoloOn": [
 										"--mode",

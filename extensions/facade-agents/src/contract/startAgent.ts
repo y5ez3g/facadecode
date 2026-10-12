@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Facade, Started } from '../core/facade';
+import { excerptText } from '../core/screens';
 import { describe } from '../record/events';
 import { Args } from './args';
 import { factsText } from './listAgents';
@@ -33,7 +34,7 @@ export const startAgentTool: ContractTool = {
 	definition: {
 		name: 'start_agent',
 		title: 'Start an agent',
-		description: 'Starts an agent called name in its own terminal: a CLI, on the model and effort you give or else its own, with a task if you give one - the task is kept as a message, and the agent is told where it is. It works in your folder; in another folder of this window, by its absolute path; in a worktree of your repository, by the branch checked out in it; or, with new_worktree, in a new worktree of that folder\'s repository, on a new branch called name - starting at your commit in your own repository, so commit what it needs first, and at the main checkout\'s in another. Its YOLO is yours. It answers once the agent has started, with its number, as #a7; if it has not within the timeout, it answers that its start is not confirmed, and why: it stays starting, and list_agents and stop_agent take it. A start can take a minute: do not call start_agent again just to wait. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts.',
+		description: 'Starts an agent called name in its own terminal: a CLI, on the model and effort you give or else its own, with a task if you give one - the task is a message from you, as #m12, which the agent fetches itself. It works in your folder; in another folder of this window, by its absolute path; in a worktree of your repository, by the branch checked out in it; or, with new_worktree, in a new worktree of that folder\'s repository, on a new branch called name - starting at your commit in your own repository, so commit what it needs first, and at the main checkout\'s in another. Its YOLO is yours. It answers once the agent has started - its CLI connected to Facade - with its number, as #a7, and its task\'s; started is not that it has fetched its task, which list_agents shows. If it has not started within the timeout, it answers that its start is not confirmed, why, and the last lines of its screen: it stays starting, and list_agents, read_screen and stop_agent take it. A start can take a minute: do not call start_agent again just to wait. Facade gives the model and the effort to the CLI as they are, and no CLI checks them as it starts.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -41,7 +42,7 @@ export const startAgentTool: ContractTool = {
 				cli: { type: 'string', description: 'The CLI, by its id, or a custom agent, by its name.' },
 				model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it. Omitted: the CLI\'s own default.' },
 				effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. Omitted: the CLI\'s own default.' },
-				task: { type: 'string', description: 'Its task. Omitted: none, and it waits at its CLI\'s own prompt.' },
+				task: { type: 'string', description: 'Its task: Facade sends it to the agent as a message from you, which the agent fetches with read_messages. Omitted: none, and it waits at its CLI\'s own prompt for a message.' },
 				folder: { type: 'string', description: 'Where it works: a folder of this window, by its absolute path, or a worktree of your repository, by the branch checked out in it. Omitted: your folder.' },
 				new_worktree: { type: 'boolean', description: 'true: a new worktree of that folder\'s repository, on a new branch called name.' }
 			},
@@ -86,10 +87,13 @@ export const startAgentTool: ContractTool = {
 		const ignored = ignoredText(facade, started);
 		const where = started.newWorktree ? `the new worktree ${started.worktree} (a new branch)` : `the worktree ${started.worktree}`;
 		const notes = started.notes?.length ? ` ${started.notes.join(' ')}` : '';
+		// Started is not fetched: the agent fetches its task itself (M7)
+		const fetched = started.taskMessage === undefined ? '' : ' It fetches its task itself: list_agents shows when it has.';
+		const screen = started.screen ? `\n${excerptText(started.id, started.screen.text)}` : '';
 		return {
 			text: started.status === 'started'
-				? `Started ${describe(started)} in ${where}: ${factsText(facade, started)}.${ignored}${notes}`
-				: `${describe(started)} is not confirmed to have started: ${started.why}. It stays starting - ${factsText(facade, started)} - and may start yet: look at it with list_agents, or stop it with stop_agent; do not start it again.${ignored}${notes}`,
+				? `Started ${describe(started)} in ${where}: ${factsText(facade, started)}.${fetched}${ignored}${notes}`
+				: `${describe(started)} is not confirmed to have started: ${started.why}. It stays starting - ${factsText(facade, started)} - and may start yet: look at it with list_agents or read_screen, or stop it with stop_agent; do not start it again.${fetched}${ignored}${notes}${screen}`,
 			data: started
 		};
 	}

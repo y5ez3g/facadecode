@@ -303,6 +303,76 @@ suite('Transport: the pipe', () => {
 		}
 	});
 
+	test('a call\'s result is said to be written once the pipe takes it - not when its caller left first, nor when it failed; a listener that fails is logged, and the rest are told (AGENT-MESSAGES.md, M11)', async () => {
+		const release = new DeferredPromise<void>();
+		const told: string[] = [];
+		const logged: string[] = [];
+		let arrived = false;
+		const server = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
+			authenticate: () => 'someone',
+			hello: caller => ({ caller }),
+			call: async (_caller, tool, _args, _progress, whenWritten) => {
+				if (tool === 'throwing') {
+					whenWritten(() => { throw new Error('the listener broke'); });
+				}
+				whenWritten(written => told.push(`${tool}: ${written}`));
+				if (tool === 'slow') {
+					arrived = true;
+					await release.p;
+				}
+				if (tool === 'fail') {
+					throw new Error('it broke');
+				}
+				return tool;
+			},
+			log: message => logged.push(message.split('\n')[0])
+		});
+		try {
+			const client = new PipeClient(server.path, 'good');
+			const quick = await client.call('quick', {}, () => { });
+			await waitFor(() => told.length === 1);
+			const controller = new AbortController();
+			const slow = outcomeOf(client.call('slow', {}, () => { }, controller.signal));
+			await waitFor(() => arrived);
+			controller.abort();
+			const cancelled = await slow;
+			release.complete();
+			await waitFor(() => told.length === 2);
+			const failed = await outcomeOf(client.call('fail', {}, () => { }));
+			const throwing = await client.call('throwing', {}, () => { });
+			await waitFor(() => told.length === 4);
+
+			assert.deepStrictEqual({ quick, cancelled, failed, throwing, told, logged }, {
+				quick: 'quick',
+				cancelled: 'CANCELLED: Cancelled',
+				failed: 'FAILED: it broke',
+				throwing: 'throwing',
+				told: ['quick: true', 'slow: false', 'fail: false', 'throwing: true'],
+				logged: ['A listener to a call\'s result on the pipe failed: Error: the listener broke']
+			});
+		} finally {
+			server.dispose();
+		}
+	});
+
+	test('a result written as its connection is cut is said not written, once the response closes - its write never calls back (M11)', async () => {
+		const told: boolean[] = [];
+		const server: PipeServer<string> = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
+			authenticate: () => 'someone',
+			hello: caller => ({ caller }),
+			call: async (_caller, tool, _args, _progress, whenWritten) => {
+				whenWritten(written => told.push(written));
+				// The window goes as the call ends: every connection is cut before its result is written
+				server.dispose();
+				return tool;
+			}
+		});
+		const outcome = await outcomeOf(new PipeClient(server.path, 'good').call('late', {}, () => { }));
+		await waitFor(() => told.length > 0);
+
+		assert.deepStrictEqual({ outcome: outcome.split(':')[0], told }, { outcome: 'NOT_CONNECTED', told: [false] });
+	});
+
 	test('a call made as the window goes, where the call before it connected, never reached the window: it did not run, and is told so, as when nothing listens', async () => {
 		const server = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
 			authenticate: () => 'someone',

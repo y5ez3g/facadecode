@@ -31,9 +31,67 @@ export interface TerminalLaunch {
 	 * watch it. An agent's child opens without disturbing the window.
 	 */
 	readonly reveal: boolean;
+	/** The file the window writes its final screen to as it ends (AGENT-DEBUGGING.md, D6). */
+	readonly finalScreen: string;
 }
 
-/** How an agent's terminal ended. */
+/** A terminal's screen as the window read it: its bottom lines, as it draws them (AGENT-DEBUGGING.md, D2). */
+export interface TerminalScreen {
+	/** Top to bottom: inverse-video text marked `[[...]]`, dim text `{{...}}`. */
+	readonly lines: readonly string[];
+	/** The normal buffer with its scrollback, or a full-screen program's alternate buffer. */
+	readonly buffer: 'normal' | 'alternate';
+	/** Whether the buffer holds lines above those read. */
+	readonly older: boolean;
+	/** Whether the terminal let go of lines above all those it holds: its scrollback is full. */
+	readonly trimmed: boolean;
+	/** When it was read, in milliseconds since 1970. */
+	readonly capturedAt: number;
+	/** When the terminal last showed new output, where the window knows it. */
+	readonly lastOutput?: number;
+	/** Whether its process has ended, the terminal kept open. */
+	readonly exited: boolean;
+}
+
+/** What input into a terminal did: what went in, and why the rest did not (AGENT-DEBUGGING.md, D4, D5). */
+export interface InputEffect {
+	/** `applied`: all of it; `partial`: a first part, the terminal ending before the rest; `not_applied`: nothing. */
+	readonly outcome: 'applied' | 'partial' | 'not_applied';
+	/** Why not all of it went in: the terminal ended, or the input waited behind the person's typing past its time. */
+	readonly reason?: 'ended' | 'timeout';
+	/** For text: whether it was pasted. */
+	readonly pasted?: boolean;
+	/** For text: whether Enter followed. */
+	readonly entered?: boolean;
+	/** For keys: how many went in, from the first. */
+	readonly keysSent?: number;
+}
+
+/** How a line is typed into a terminal: with Enter after it or not, and how long it may wait for its turn. */
+export interface TypeOptions {
+	readonly enter: boolean;
+	/** How long after the paste Enter is pressed: the time the CLI needs to take the paste in. */
+	readonly enterDelayMs: number;
+	/** How long it may wait for its turn; none to wait as long as the person's typing holds it. */
+	readonly queueTimeoutMs?: number;
+}
+
+/** How keys are pressed in a terminal: how long they may wait for their turn. */
+export interface KeysOptions {
+	/** How long they may wait for their turn; none to wait as long as the person's typing holds them. */
+	readonly queueTimeoutMs?: number;
+}
+
+/** What holds Facade's input into a terminal back, as the window saw the person's keys there: never its screen (D3). */
+export interface PersonInput {
+	/** Whether they typed since they last pressed Enter or Ctrl+C there. */
+	readonly pending: boolean;
+	/** When they last typed there. */
+	readonly lastKey?: number;
+	/** Whether Facade's own input goes in there now, or waits its turn: a doorbell waits until none does. */
+	readonly busy?: boolean;
+}
+
 /**
  * How an agent's process is ended: the hang-up closing its tab sends, then - one that outlives its stop's
  * time - termination, then a kill it cannot ignore (X-22).
@@ -71,11 +129,31 @@ export interface Terminals {
 	/** Ends the agent's process, as closing its tab ends it, and answers how it ended; rejects while it has not ended yet. */
 	stop(id: number, signal?: StopSignal): Promise<{ readonly exitCode?: number }>;
 	/**
-	 * Types `text` into the agent's terminal as it is, keys and all; false when its process runs in none.
-	 * `line`: `begin` - the person's unsent typing there waited for a while, and what they type held back from
-	 * here - or `end`, after which it follows: a line typed in parts reaches the CLI whole (X-43).
+	 * The bottom `lines` lines of the screen of the agent's terminal, read without changing anything of it;
+	 * undefined where its process runs in none, or the terminal has no screen yet. A terminal the window is
+	 * still giving back after a reload is waited for.
 	 */
-	type(id: number, text: string, line?: 'begin' | 'end'): Promise<boolean>;
+	read(id: number, lines: number): Promise<TerminalScreen | undefined>;
+	/**
+	 * Types `text` into the agent's terminal as one paste and, with `options.enter`, presses Enter after it: in
+	 * the terminal's turn, after what Facade typed there before, and once the person's typing there lets it
+	 * (AGENT-DEBUGGING.md, D3). Undefined where its process runs in none. Rejects where what went in is not known.
+	 */
+	type(id: number, text: string, options: TypeOptions): Promise<InputEffect | undefined>;
+	/**
+	 * Presses `keys` - as `keyOf` names them - in the agent's terminal, in order, as it sends them for keys the
+	 * person presses; in its turn as `type` types. Undefined where its process runs in none. Rejects where what
+	 * went in is not known.
+	 */
+	keys(id: number, keys: readonly string[], options: KeysOptions): Promise<InputEffect | undefined>;
+	/** What holds Facade's input into the agent's terminal back; undefined where the window cannot tell, or its process runs in none. */
+	input(id: number): Promise<PersonInput | undefined>;
+	/**
+	 * Tells the window where the final screen of the agent's terminal goes, `finalScreen`: for a terminal the
+	 * window gave back after a reload, which keeps nothing of how it was opened. False where its process runs in
+	 * none, or the window keeps no final screens.
+	 */
+	register(id: number, finalScreen: string): Promise<boolean>;
 	/** Puts the agent's terminal in front, going to its folder first; false where it runs in none. */
 	reveal(id: number): Promise<boolean>;
 	/**
@@ -238,6 +316,29 @@ export interface Workspace {
 /** How much a notice matters to the person: news; something that did not go as it should, which may want them; a failure. */
 export type Severity = 'information' | 'warning' | 'error';
 
+/** A notification Facade keeps up by its key: another with the same key takes its place (AGENT-MESSAGES.md, M11). */
+export interface Notification {
+	readonly key: string;
+	readonly text: string;
+	/** Its buttons' labels. */
+	readonly buttons: readonly string[];
+	/**
+	 * The agent it is from: while its terminal has the person's focus, the notification goes quietly into the
+	 * notification center rather than over what they read (M9).
+	 */
+	readonly quietIn?: number;
+}
+
+/** An agent that ended, as a notice about it shows it. */
+export interface EndedAgent {
+	readonly id: number;
+	readonly name: string;
+	/** Its final screen's file, kept as its terminal ended. */
+	readonly finalScreen: string;
+	/** How it ended, for the person to read where no final screen was kept. */
+	readonly ending: string;
+}
+
 /** What Facade tells the person at the keyboard: its texts are written through `@vscode/l10n`, in their language. */
 export interface Person {
 	/**
@@ -245,6 +346,15 @@ export interface Person {
 	 * Going to it shows the terminal of `agent`, the agent it is about.
 	 */
 	tell(text: string, agent: number | undefined, severity: Severity): void;
+	/**
+	 * Shows a notification, or updates the one up with its key in place, as Do Not Disturb has it. Answers with
+	 * the label of the button pressed; undefined once it closed, or another took its place.
+	 */
+	notify(notification: Notification): Promise<string | undefined>;
+	/** Opens a chat room in an editor, at a message of it. */
+	openRoom(file: string, message: number): Promise<void>;
+	/** Shows an agent that ended: its terminal while that is still open, else its last screen, read-only; where none was kept, how it ended (D6). */
+	showEnded(agent: EndedAgent): Promise<void>;
 }
 
 /**
@@ -287,8 +397,16 @@ export interface CliCatalog {
 
 /** How long the core waits, as the person sets it: read again at each use. */
 export interface Timing {
-	/** How long a new agent has to come up, and a process to end once stopped: the person's timeout. */
+	/**
+	 * How long a new agent has to come up, a process to end once stopped, a call typing or pressing keys in a
+	 * terminal to get its turn, and a task or messages to be fetched before Facade tells of it: the person's timeout.
+	 */
 	readonly startTimeoutMs: number;
+	/**
+	 * How long the final screen of an agent that just ended is waited for, the window writing it as the
+	 * terminal goes: two seconds where left out.
+	 */
+	readonly finalScreenWaitMs?: number;
 }
 
 /** What every agent is given at its launch, and how it reaches the window. */
@@ -301,6 +419,9 @@ export interface AgentSetup {
 	agentEnv(tokenFile: string): { readonly [name: string]: string };
 	/** The skills every agent is handed, made for the CLIs this machine has then. */
 	skills(): readonly Skill[];
-	/** What a new agent's task notice says before where its task is: who it is, and who started it. */
-	opening(agent: { readonly id: number; readonly name: string; readonly cliName: string }, creator: Caller): string;
+	/**
+	 * An agent's first line (AGENT-MESSAGES.md, M7): who it is, who created it, `note` - what it is told of its
+	 * preparation - and the number of its task, which it fetches itself; without a task, its opening alone (L9).
+	 */
+	firstLine(agent: { readonly id: number; readonly name: string }, creator: Caller, task: number | undefined, note?: string): string;
 }

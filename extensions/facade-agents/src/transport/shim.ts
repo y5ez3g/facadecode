@@ -26,8 +26,8 @@ const INITIALIZE_WAIT_MS = 10_000;
 /**
  * How long past its wait a call the window accepted may go without a word from it before it is taken as cut
  * off: the window answers by then, unconfirmed or pending where it must, so a few seconds more mean it is
- * frozen or gone. The caller is answered within its wait and 5 s (AGENT-TEST-PLAN.md, TR-17): the margin
- * leaves a second of that for the answer to reach it.
+ * frozen or gone. The caller is answered within its wait and 5 s: the margin leaves a second of that for the
+ * answer to reach it.
  */
 const SILENCE_MARGIN_MS = 4_000;
 
@@ -268,7 +268,9 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 					return { text: `Facade could not read the call to ${name}, so it did not run. ${messageOf(err)}`, isError: true, data: { code: 'INVALID' } };
 				}
 				if (code === 'NOT_CONNECTED') {
-					return { text: `Facade's window went away during ${name} (${messageOf(err)}), as it does while it reloads, so ${name} may have run${madeText()}. Look with list_agents before you call it again.`, isError: true, data: { code: 'UNAVAILABLE', outcome: 'unknown', ...madeData() } };
+					// Never run again by itself: what went in is not known (AGENT-DEBUGGING.md, D5; AGENT-MESSAGES.md, M11)
+					const look = name === 'type_text' || name === 'press_keys' ? 'Read its screen with read_screen before you type or press anything again.' : name === 'send_message' ? 'Do not send it again unless you find it was not sent.' : 'Look with list_agents before you call it again.';
+					return { text: `Facade's window went away during ${name} (${messageOf(err)}), as it does while it reloads, so ${name} may have run${madeText()}. ${look}`, isError: true, data: { code: 'UNAVAILABLE', outcome: 'unknown', ...madeData() } };
 				}
 				return { text: `${name} failed in Facade's window: ${messageOf(err)}`, isError: true, data: { code: 'FAILED' } };
 			} finally {

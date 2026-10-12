@@ -25,7 +25,7 @@ export interface CustomAgent {
  * So it gets YOLO, trust, Facade's tools, a model, an effort or a task only as far as the person said how.
  * In its arguments, `${mcpConfig}` stands for a file of its run that names Facade's MCP server in the
  * `mcpServers` form many CLIs read; the values every launch has - `${folder}`, `${repository}`, `${home}`,
- * `${messagesDir}`, `${model}`, `${effort}`, `${task}` and the connection's - as for a built-in. Where its name is not one an agent can have, `nameProblem` says why, and it is
+ * `${messagesDir}`, `${screensDir}`, `${model}`, `${effort}`, `${task}` and the connection's - as for a built-in. Where its name is not one an agent can have, `nameProblem` says why, and it is
  * not started.
  */
 export function customAgentOf(name: string, value: unknown, nameProblem: string | undefined): CustomAgent {

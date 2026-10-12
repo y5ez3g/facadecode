@@ -292,69 +292,6 @@ suite('Workbench - TerminalInstance', () => {
 			strictEqual(terminalInstanceService.createProcessCount, 0);
 		});
 
-		test('Facade Code: what the person types while input is held back reaches the process after the last hold, in order; what they typed and did not send is known until Enter, Ctrl+C or Ctrl+U (X-43)', async () => {
-			// A process that is ready: what is typed reaches it, and only then is it input
-			const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => new ReadyTestTerminalChildProcess(false))));
-			await instance.processReady;
-			const reached: string[] = [];
-			store.add(instance.onDidInputData(data => reached.push(data)));
-			const type = async (data: string) => {
-				instance.xterm!.raw.input(data, true);
-				await timeout(0);
-			};
-			await type('ab');
-			const unsent = [instance.hasUnsentInput];
-			await type('\r');
-			unsent.push(instance.hasUnsentInput);
-			const first = instance.holdInput();
-			const second = instance.holdInput();
-			await type('c');
-			await type('d');
-			first.dispose();
-			first.dispose();
-			const whileHeld = [...reached];
-			second.dispose();
-			await timeout(0);
-			await type('e\x15');
-			unsent.push(instance.hasUnsentInput);
-
-			deepStrictEqual({ unsent, whileHeld, reached }, { unsent: [true, false, false], whileHeld: ['ab', '\r'], reached: ['ab', '\r', 'c', 'd', 'e\x15'] });
-		});
-
-		test('Facade Code: what the person has not sent is text they typed - a cursor key, Escape, a paste\'s brackets and the terminal\'s own answers to its program add none, and what they erase, by character or by word, is taken off (N-84)', async () => {
-			const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => new ReadyTestTerminalChildProcess(false))));
-			await instance.processReady;
-			const type = async (data: string) => {
-				instance.xterm!.raw.input(data, true);
-				await timeout(0);
-				return instance.hasUnsentInput;
-			};
-
-			deepStrictEqual([
-				await type('\x1b[A'),
-				await type('\x1b'),
-				// The terminal's answers: a colour its program asked for, its attributes, the cursor's place, a
-				// focus change, the mouse - in today's form and the old one's three bytes
-				await type('\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\'),
-				await type('\x1b]10;rgb:cccc/cccc/cccc\x07'),
-				await type('\x1b[?1;2c'),
-				await type('\x1b[12;1R'),
-				await type('\x1b[I'),
-				await type('\x1b[<0;10;5M'),
-				await type('\x1b[M !!'),
-				await type('ab'),
-				await type('\x7f\x7f'),
-				await type('\x1b[200~x\x1b[201~'),
-				await type('\r'),
-				// A word typed and erased as a word: Ctrl+W, Option+Backspace
-				await type('one two'),
-				await type('\x17'),
-				await type('\x1b\x7f'),
-				await type('x'),
-				await type('\x15')
-			], [false, false, false, false, false, false, false, false, false, true, false, true, false, true, true, false, true, false]);
-		});
-
 		test('should not create a process with an unexpected cwd in an empty workspace', async () => {
 			const terminalInstanceService = store.add(new TestTerminalInstanceService());
 			const instance = await createTerminalInstance(terminalInstanceService, new Workspace('empty'));

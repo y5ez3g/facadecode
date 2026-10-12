@@ -6,10 +6,11 @@
 import * as vscode from 'vscode';
 import { timeout } from '../base/async';
 import { messageOf } from '../base/errors';
-import { isJsonObject } from '../base/json';
+import { isJsonObject, isStringArray } from '../base/json';
 import { disposeAll } from '../base/lifecycle';
 import { Environment } from '../clis/cli';
-import { Disposable, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalsInside } from '../core/ports';
+import { FacadeError } from '../core/errors';
+import { Disposable, InputEffect, KeysOptions, PersonInput, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TerminalsInside, TypeOptions } from '../core/ports';
 
 /** How long Facade's workbench is waited for at most to have its terminals back: its pty host may not answer. */
 const RESTORE_TIMEOUT_MS = 60_000;
@@ -18,6 +19,8 @@ const UNKNOWN_WAIT_MS = 10_000;
 const UNKNOWN_POLL_MS = 250;
 /** How often the watched agents' processes are looked at, for one that ended while its terminal stays open to show how. */
 const ENDS_POLL_MS = 5_000;
+/** Why a window cannot read agents' screens or type there: in English, as Facade's errors say it to the agent. */
+const WITHOUT_WORKBENCH = 'This window cannot read agents\' screens or type into their terminals: it runs without Facade\'s workbench.';
 
 /** What the window knows of an agent's process, as `_facade.terminal.processes` answers. */
 type RunProcess =
@@ -75,7 +78,8 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 			agent: request.command,
 			custom: request.custom,
 			reveal: request.reveal,
-			run: this.runOf(request.id)
+			run: this.runOf(request.id),
+			finalScreen: vscode.Uri.file(request.finalScreen)
 		});
 		// Closed already: its process could not start.
 		if (opened.closed) {
@@ -143,8 +147,48 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		return typeof gone.exitCode === 'number' ? { exitCode: gone.exitCode } : {};
 	}
 
-	async type(id: number, text: string, line?: 'begin' | 'end'): Promise<boolean> {
-		return vscode.commands.executeCommand<boolean>('_facade.terminal.type', this.runOf(id), text, ...(line ? [line] : []));
+	async read(id: number, lines: number): Promise<TerminalScreen | undefined> {
+		if (!await hasCommand('_facade.terminal.read')) {
+			throw new FacadeError('UNAVAILABLE', WITHOUT_WORKBENCH);
+		}
+		// A terminal the window is still giving back after a reload is waited for (D2)
+		await this.restored;
+		return screenOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.read', this.runOf(id), lines));
+	}
+
+	async type(id: number, text: string, options: TypeOptions): Promise<InputEffect | undefined> {
+		if (!await hasCommand('_facade.terminal.type')) {
+			throw new FacadeError('UNAVAILABLE', WITHOUT_WORKBENCH, { outcome: 'not_applied' });
+		}
+		await this.restored;
+		return effectOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.type', this.runOf(id), text, { enter: options.enter, enterDelayMs: options.enterDelayMs, queueTimeoutMs: options.queueTimeoutMs ?? null }));
+	}
+
+	async keys(id: number, keys: readonly string[], options: KeysOptions): Promise<InputEffect | undefined> {
+		if (!await hasCommand('_facade.terminal.keys')) {
+			throw new FacadeError('UNAVAILABLE', WITHOUT_WORKBENCH, { outcome: 'not_applied' });
+		}
+		await this.restored;
+		return effectOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.keys', this.runOf(id), keys, { queueTimeoutMs: options.queueTimeoutMs ?? null }));
+	}
+
+	/** What holds Facade's input into the agent's terminal back, as Facade's workbench saw the person's keys there; undefined where it cannot tell. */
+	async input(id: number): Promise<PersonInput | undefined> {
+		if (!await hasCommand('_facade.terminal.input')) {
+			return undefined;
+		}
+		const input = await vscode.commands.executeCommand<unknown>('_facade.terminal.input', this.runOf(id));
+		if (!isJsonObject(input) || typeof input.pending !== 'boolean') {
+			return undefined;
+		}
+		return { pending: input.pending, ...(typeof input.lastKey === 'number' ? { lastKey: input.lastKey } : {}), ...(input.busy === true ? { busy: true } : {}) };
+	}
+
+	async register(id: number, finalScreen: string): Promise<boolean> {
+		if (!await hasCommand('_facade.terminal.register')) {
+			return false;
+		}
+		return await vscode.commands.executeCommand<unknown>('_facade.terminal.register', this.runOf(id), vscode.Uri.file(finalScreen)) === true;
 	}
 
 	/** Puts the agent's terminal in front through its folder's row, which the window goes to. False when its process runs in none, or it could not be put in front. */
@@ -170,7 +214,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 	}
 
 	/** The run of the agent numbered `id`: its terminal's, as the workbench knows it. */
-	private runOf(id: number): { readonly workspace: string; readonly id: number } {
+	runOf(id: number): { readonly workspace: string; readonly id: number } {
 		return { workspace: this.workspace, id };
 	}
 
@@ -233,6 +277,56 @@ export async function terminalEnvironment(folder: string): Promise<Environment> 
 		throw new Error('The window did not say what environment its terminals get.');
 	}
 	return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+/** The commands of Facade's workbench found in the window: once there, they stay. */
+const commandsFound = new Set<string>();
+
+/** Whether the window has the command `id`: Facade's own are there only in Facade's workbench. */
+async function hasCommand(id: string): Promise<boolean> {
+	if (!commandsFound.has(id) && (await vscode.commands.getCommands()).includes(id)) {
+		commandsFound.add(id);
+	}
+	return commandsFound.has(id);
+}
+
+/** The screen the workbench answered `_facade.terminal.read` with; undefined for none, or an answer that is not one. */
+function screenOf(value: unknown): TerminalScreen | undefined {
+	if (!isJsonObject(value) || !isStringArray(value.lines) || (value.buffer !== 'normal' && value.buffer !== 'alternate') || typeof value.capturedAt !== 'number') {
+		return undefined;
+	}
+	return {
+		lines: value.lines,
+		buffer: value.buffer,
+		older: value.older === true,
+		trimmed: value.trimmed === true,
+		capturedAt: value.capturedAt,
+		...(typeof value.lastOutput === 'number' ? { lastOutput: value.lastOutput } : {}),
+		exited: value.exited === true
+	};
+}
+
+/**
+ * What went in, as the workbench answered an input: undefined where it found no such terminal. An answer
+ * that says nothing of what went in leaves it unknown: an error, never "nothing went in" (D9).
+ */
+function effectOf(value: unknown): InputEffect | undefined {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	if (!isJsonObject(value) || (value.outcome !== 'applied' && value.outcome !== 'partial' && value.outcome !== 'not_applied')
+		|| (value.reason !== undefined && value.reason !== 'ended' && value.reason !== 'timeout')
+		|| (value.pasted !== undefined && typeof value.pasted !== 'boolean') || (value.entered !== undefined && typeof value.entered !== 'boolean')
+		|| (value.keysSent !== undefined && (typeof value.keysSent !== 'number' || !Number.isInteger(value.keysSent) || value.keysSent < 0))) {
+		throw new Error(`the window answered with ${JSON.stringify(value)}, which does not say what went in`);
+	}
+	return {
+		outcome: value.outcome,
+		...(value.reason !== undefined ? { reason: value.reason } : {}),
+		...(value.pasted !== undefined ? { pasted: value.pasted } : {}),
+		...(value.entered !== undefined ? { entered: value.entered } : {}),
+		...(value.keysSent !== undefined ? { keysSent: value.keysSent } : {})
+	};
 }
 
 /** Why a launch failed whose terminal closed as it started; in English, as Facade's own errors say it to the parent. */

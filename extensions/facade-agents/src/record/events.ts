@@ -5,16 +5,12 @@
 
 import { isEqualPath } from '../base/files';
 import { JsonObject } from '../base/json';
-
-/** The person's name, `@human`: the creator of the first agents. The person has no number. */
-const HUMAN = 'human';
-/** Facade's own name, which no agent takes: its MCP server is called so, and what it says to an agent starts `[facade]`. */
-const FACADE = 'facade';
+import { applyMessages, clearMailboxes, createMessagesState, FACADE, fitsMessages, HUMAN, messageBodyOf, MessageEventBody, MessagesState } from './messages';
 /** The first number an agent gets; numbers then count up and are never given twice within a workspace. */
 const FIRST_ID = 1;
 /** Names an agent cannot take: the person's, Facade's, and words a model reads as someone else. */
 export const RESERVED_NAMES: ReadonlySet<string> = new Set([HUMAN, 'you', 'me', FACADE, 'all', 'everyone', 'init', 'kernel']);
-/** The letter of an agent's number, as Facade writes it: `#a7`. Each kind of number has its own, as M2's messages will, `#m7`. */
+/** The letter of an agent's number, as Facade writes it: `#a7`. Each kind of number has its own, as a message's, `#m7`. */
 const AGENT_LETTER = 'a';
 /** A number as a tool is given it, with its kind's letter or without: `#a7`, `#m7`, `#7`. */
 const NUMBER_REFERENCE = /^#(?<letter>[a-z])?(?<id>\d+)$/i;
@@ -35,20 +31,15 @@ export function isAgentName(name: string): boolean {
 }
 
 /**
- * `starting` from its launch until it has started - its MCP server said hello, and it has its task: given
- * on its command line, typed into its terminal, or none - `running` from then on, `stopping` once Facade
- * set out to stop it, until its process ended, and `ended` once its process ended.
+ * `starting` from its launch until it has started - its MCP server said hello, or, launched without Facade's
+ * integration, its process runs - `running` from then on, `stopping` once Facade set out to stop it, until its
+ * process ended, and `ended` once its process ended. Its task is a message, which it fetches itself
+ * (AGENT-MESSAGES.md, M7): that it has started says nothing of its task.
  */
 export type AgentState = 'starting' | 'running' | 'stopping' | 'ended';
 
 /** How an agent ended: its CLI ended by itself, it was stopped, it did not start, or nothing saw it end. */
 export type EndKind = 'exited' | 'stopped' | 'failed' | 'lost';
-
-/**
- * How an agent's task reached it: it was given none; as an argument; it is still to be typed into its
- * terminal; it was typed there; or Facade began to type it and cannot know how far it got.
- */
-export type TaskDelivery = 'none' | 'argument' | 'pending' | 'typed' | 'unknown';
 
 /**
  * Where a start is, once it is accepted (AGENT-ORCHESTRATION.md, O4): its worktree being made, its
@@ -116,9 +107,6 @@ export interface Agent {
 	 * started, where it got to; none once it started, and none before phases were recorded.
 	 */
 	phase?: StartPhase;
-	/** The number of its task's message, `#m12`; none without a task. */
-	readonly taskMessage?: number;
-	task: TaskDelivery;
 	/** Whether its MCP server said hello to Facade. */
 	connected: boolean;
 	/** Its CLI's process, once its terminal runs it. */
@@ -130,6 +118,8 @@ export interface Agent {
 	stopping?: { readonly by?: StoppedBy; readonly reason: string };
 	end?: End;
 	readonly startTime: number;
+	/** When it started: its MCP server said hello, or - without Facade's integration - its process ran. */
+	runningTime?: number;
 }
 
 /** An agent that has not ended. */
@@ -170,22 +160,28 @@ export type LedgerEventBody =
 		readonly worktree: string;
 		readonly outsideGit?: true;
 		readonly folder: string;
-		readonly taskMessage?: number;
-		/** How the notice of its task reaches it: none, as an argument, or to be typed into its terminal. */
-		readonly task: 'none' | 'argument' | 'pending';
 		readonly tokenHash: string;
+		/** A ledger of version 5's: the number of its task's message, then kept in a file of its own. */
+		readonly taskMessage?: number;
 		/** Where its start begins: making its worktree, or launching its CLI; none in a ledger from before phases. */
 		readonly phase?: StartPhase;
 	}
 	/** Its start moved on: to the phase it is in now, and - its worktree made - the folder it was made in. */
 	| { readonly type: 'agent.phase'; readonly id: number; readonly phase: StartPhase; readonly folder?: string }
 	| { readonly type: 'agent.launched'; readonly id: number; readonly processId: number }
-	| { readonly type: 'agent.connected' | 'task.typing' | 'task.typed' | 'agent.running'; readonly id: number }
+	| { readonly type: 'agent.connected' | 'agent.running'; readonly id: number }
+	/**
+	 * A ledger of version 5: the notice of a task kept in a file of its own being typed into the agent's terminal,
+	 * and typed. Nothing now: a task is a message (AGENT-MESSAGES.md, M7).
+	 */
+	| { readonly type: 'task.typing' | 'task.typed'; readonly id: number }
 	| { readonly type: 'agent.stopping'; readonly id: number; readonly by?: StoppedBy; readonly reason: string }
 	| { readonly type: 'agent.ended'; readonly id: number; readonly kind: EndKind; readonly by?: StoppedBy; readonly reason: string; readonly exitCode?: number }
 	| { readonly type: 'worktree.made' } & MadeWorktree
 	| { readonly type: 'worktree.gone'; readonly folder: string }
-	| { readonly type: 'list.cleared' };
+	/** A start of the window that is not a reload: the agents that ended leave the list, and their mailboxes are emptied. */
+	| { readonly type: 'list.cleared' }
+	| MessageEventBody;
 
 /** An event as the ledger keeps it: numbered, with the time it happened. */
 export type LedgerEvent = LedgerEventBody & { readonly seq: number; readonly time: number };
@@ -244,27 +240,47 @@ export function parseAgentReference(text: string): AgentReference {
 	return { kind: 'name', name: trimmed.replace(/^@/, '').toLowerCase() };
 }
 
+/**
+ * Who an agent was, kept after it left the list: its name, its tree's root and its worktree, by which the chat
+ * rooms name the messages of the agents that ended before the window last started (AGENT-MESSAGES.md, M9).
+ */
+export interface AgentIdentity {
+	readonly id: number;
+	readonly name: string;
+	readonly root: number;
+	readonly worktree: string;
+}
+
+/** Whether `text` names the person, as a tool may: `@human`, or `human`. */
+export function namesThePerson(text: string): boolean {
+	const reference = parseAgentReference(text);
+	return reference.kind === 'name' && reference.name === HUMAN;
+}
+
 /** What a workspace's ledger says now. */
 export interface WorkspaceState {
 	seq: number;
 	/** The highest number given so far. */
 	lastId: number;
-	/** The highest message number given so far, `#m12`: a task's message, until AGENT-MESSAGES.md adds the rest. */
-	lastMessageId: number;
-	/** Every agent the workspace has had, by number. */
+	/** The agents of the list, by number: every agent since the window last started, and those the ones running name. */
 	readonly agents: Map<number, Agent>;
+	/** Every agent the workspace's ledger started, by number: those that left the list too. */
+	readonly identities: Map<number, AgentIdentity>;
 	/** The numbers of the agents that have not exited, by the hashes of their tokens. */
 	readonly tokens: Map<string, number>;
 	/** The worktrees Facade made, by folder. */
 	readonly worktrees: Map<string, MadeWorktree>;
+	/** The messages, and the mailboxes (AGENT-MESSAGES.md). */
+	readonly mail: MessagesState;
 }
 
-/** The state of a workspace with no ledger yet: no agent, the next number the first. */
+/** The state of a workspace with no ledger yet: no agent and no message, the next numbers the first. */
 export function createState(): WorkspaceState {
-	return { seq: 0, lastId: FIRST_ID - 1, lastMessageId: 0, agents: new Map(), tokens: new Map(), worktrees: new Map() };
+	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), identities: new Map(), tokens: new Map(), worktrees: new Map(), mail: createMessagesState() };
 }
 
 const END_KINDS: ReadonlySet<string> = new Set<EndKind>(['exited', 'stopped', 'failed', 'lost']);
+/** How a line of version 5 says the notice of an agent's task reached it. */
 const STARTING_TASKS: ReadonlySet<string> = new Set(['none', 'argument', 'pending']);
 const SANDBOX_STATES: ReadonlySet<string> = new Set<SandboxState>(['on', 'off', 'unavailable', 'unknown']);
 const START_PHASES: ReadonlySet<string> = new Set<StartPhase>(['creating_worktree', 'running_setup', 'launching_cli', 'connecting']);
@@ -306,6 +322,8 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'agent.started': {
 			// A line of version 4 has neither YOLO nor sandbox, its agents at full access, and model and effort always.
+			// One of version 5 says how the notice of its task reached it, and the number of its task's message, kept
+			// in a file of its own: the number is given no more, and the rest is nothing now (AGENT-MESSAGES.md, M7).
 			const { id, name, creator, root, cli, custom, model, effort, ignored, unattended, worktree, outsideGit, folder, taskMessage, task, tokenHash, phase } = value;
 			const yolo = value.yolo ?? (value.v === 4 ? true : undefined);
 			const sandbox = value.sandbox ?? (value.v === 4 ? 'unknown' : undefined);
@@ -314,15 +332,16 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 				|| (custom !== undefined && typeof custom !== 'boolean') || (model !== undefined && !isText(model)) || (effort !== undefined && !isText(effort))
 				|| (ignored !== undefined && !(Array.isArray(ignored) && ignored.every(each => typeof each === 'string' && IGNORABLE.has(each))))
 				|| typeof yolo !== 'boolean' || (unattended !== undefined && unattended !== true) || typeof sandbox !== 'string' || !SANDBOX_STATES.has(sandbox) || typeof integration !== 'boolean'
-				|| typeof worktree !== 'string' || (outsideGit !== undefined && outsideGit !== true) || !isText(folder) || (taskMessage !== undefined && !isId(taskMessage)) || typeof task !== 'string' || !STARTING_TASKS.has(task)
+				|| typeof worktree !== 'string' || (outsideGit !== undefined && outsideGit !== true) || !isText(folder) || (taskMessage !== undefined && !isId(taskMessage)) || (task !== undefined && (typeof task !== 'string' || !STARTING_TASKS.has(task)))
 				|| typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (phase !== undefined && (typeof phase !== 'string' || !START_PHASES.has(phase)))) {
 				return undefined;
 			}
 			return {
 				type: 'agent.started', id, name, ...(creator !== undefined ? { creator } : {}), ...(root !== undefined ? { root } : {}), cli, ...(custom ? { custom } : {}),
 				...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(Array.isArray(ignored) && ignored.length ? { ignored: ignored as Ignored[] } : {}),
-				yolo, ...(unattended ? { unattended } : {}), sandbox: sandbox as SandboxState, integration, worktree, ...(outsideGit ? { outsideGit } : {}), folder, ...(taskMessage !== undefined ? { taskMessage } : {}), task: task as 'none' | 'argument' | 'pending', tokenHash,
-				...(phase !== undefined ? { phase: phase as StartPhase } : {})
+				yolo, ...(unattended ? { unattended } : {}), sandbox: sandbox as SandboxState, integration, worktree, ...(outsideGit ? { outsideGit } : {}), folder, tokenHash,
+				...(phase !== undefined ? { phase: phase as StartPhase } : {}),
+				...(taskMessage !== undefined ? { taskMessage } : {})
 			};
 		}
 		case 'agent.phase': {
@@ -365,7 +384,7 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 		case 'list.cleared':
 			return { type: 'list.cleared' };
 	}
-	return undefined;
+	return messageBodyOf(value);
 }
 
 /**
@@ -395,6 +414,8 @@ export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 		case 'worktree.gone':
 		case 'list.cleared':
 			return true;
+		default:
+			return fitsMessages(state.agents, state.mail, event);
 	}
 }
 
@@ -422,15 +443,17 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				worktree: event.worktree,
 				...(event.outsideGit ? { outsideGit: event.outsideGit } : {}),
 				folder: event.folder,
-				...(event.taskMessage !== undefined ? { taskMessage: event.taskMessage } : {}),
-				task: event.task,
 				connected: false,
 				state: 'starting',
 				...(event.phase !== undefined ? { phase: event.phase } : {}),
 				startTime: event.time
 			});
 			state.lastId = Math.max(state.lastId, event.id);
-			state.lastMessageId = Math.max(state.lastMessageId, event.taskMessage ?? 0);
+			state.identities.set(event.id, { id: event.id, name: event.name, root, worktree: event.worktree || event.folder });
+			// A task's message of a ledger of version 5: its number is given no more
+			if (event.taskMessage !== undefined) {
+				state.mail.lastMessage = Math.max(state.mail.lastMessage, event.taskMessage);
+			}
 			state.tokens.set(event.tokenHash, event.id);
 			break;
 		}
@@ -462,25 +485,15 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			}
 			break;
 		}
-		case 'task.typing': {
-			const agent = state.agents.get(event.id);
-			if (agent?.task === 'pending') {
-				agent.task = 'unknown';
-			}
+		case 'task.typing':
+		case 'task.typed':
 			break;
-		}
-		case 'task.typed': {
-			const agent = state.agents.get(event.id);
-			if (agent?.task === 'pending' || agent?.task === 'unknown') {
-				agent.task = 'typed';
-			}
-			break;
-		}
 		case 'agent.running': {
 			const agent = state.agents.get(event.id);
 			if (agent?.state === 'starting') {
 				agent.state = 'running';
 				agent.phase = undefined;
+				agent.runningTime = event.time;
 			}
 			break;
 		}
@@ -520,6 +533,8 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			break;
 		}
 		case 'list.cleared': {
+			// The mailboxes of the agents that ended are emptied: their messages are in the chat rooms only (M10)
+			clearMailboxes(state.mail, id => isLive(state.agents.get(id)));
 			// The agents that ended leave the list, but for those that name the ones it keeps: each one's whole
 			// chain of creators, up to its root - not its creator alone, whose own would be a bare number (X-26).
 			const named = new Set<number>();
@@ -536,6 +551,8 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			}
 			break;
 		}
+		default:
+			applyMessages(state.mail, event, event.time);
 	}
 }
 

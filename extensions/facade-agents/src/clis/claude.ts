@@ -101,8 +101,9 @@ export const claudeCli: AgentCli = {
 				connect: ['--mcp-config', '${mcpConfig}', '--plugin-dir', '${pluginDir}'],
 				// Its settings for the launch: its sandbox and the warning about skipped permissions, by the agent's YOLO.
 				quiet: ['--settings', '${settingsFile}'],
-				// Its task's message is outside its folder, where it would ask before reading it with YOLO off.
-				messages: ['--add-dir', '${messagesDir}'],
+				// The files of its messages and of agents' screens are outside its folder, where it would ask before
+				// reading them with YOLO off. The option takes one or more folders: what follows it is another option.
+				messages: ['--add-dir', '${messagesDir}', '${screensDir}'],
 				yoloOn: ['--dangerously-skip-permissions'],
 				// Its edits in its folder unasked, every tool of Facade's server by the server's name; anything else
 				// asks the person, a command run outside its sandbox included (N-70)

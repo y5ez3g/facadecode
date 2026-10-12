@@ -7,11 +7,12 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
-import { isEqualPath, replaceFile } from '../base/files';
+import { isEqualPath, readLastNumber, replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
 import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LedgerEventBody, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, StartPhase, StoppedBy, WorkspaceState } from './events';
 import { ClosedBy, LastClose, Ledger, LEDGER_FILE, LedgerOptions } from './ledger';
 import { AgentLog, LoggedLaunch } from './log';
+import { LAST_MESSAGE_FILES, MessageRecord } from './messages';
 
 /** The person's token, in the workspace's folder: scripts that hold it act as the person. */
 const YOU_TOKEN_FILE = 'you.token';
@@ -22,11 +23,7 @@ const YOU_TOKEN_FILE = 'you.token';
 const LAST_ID_FILE = 'last-id';
 /** What `last-id` was called before agents had numbers, the person none: read where there is no `last-id`. */
 const LAST_PID_FILE = 'last-pid';
-/** The highest message number the workspace gave, beside its ledger, as `last-id` is for agents. */
-const LAST_MESSAGE_ID_FILE = 'last-message-id';
 const RUNS_DIR = 'runs';
-/** Where messages are kept, one file each: `<number>.md`. Until AGENT-MESSAGES.md, a task's is the only kind. */
-const MESSAGES_DIR = 'messages';
 /** A file of an agent's run: `<number>.<anything>`. */
 const RUN_FILE = /^(?<id>\d+)\./;
 
@@ -76,11 +73,6 @@ export interface NewAgent {
 	/** Its folder is in no Git repository (N-05). */
 	readonly outsideGit?: boolean;
 	readonly folder: string;
-	/**
-	 * Its task: kept as a message of its own (`messageFileOf`), whose notice reaches it as its argument or
-	 * typed into its terminal; none where it has no task.
-	 */
-	readonly task?: { readonly text: string; readonly notice: 'argument' | 'typed' };
 	/** Where its start begins: making its worktree, or launching its CLI. */
 	readonly phase?: StartPhase;
 }
@@ -103,10 +95,10 @@ export class AgentTable {
 	private personToken = '';
 	/** The highest number given, as `last-id` says it: a ledger begun anew counts on from it. */
 	private lastId = 0;
-	/** The highest message number given, as `last-message-id` says it. */
-	private lastMessageId = 0;
 	/** The person's history: each start and each end. */
 	private readonly log: AgentLog;
+	/** The workspace's messages, which its ledger records too (AGENT-MESSAGES.md). */
+	readonly messages: MessageRecord;
 
 	/** Hears each change of the record as it is written: an agent starting, moving on, or ending. */
 	onDidChange(listener: () => void): { dispose(): void } {
@@ -115,16 +107,17 @@ export class AgentTable {
 
 	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) {
 		this.log = AgentLog.of(options.dir);
+		this.messages = new MessageRecord(options.dir, ledger);
 	}
 
 	/** Opens a workspace's ledger, making it the first time. */
 	static open(options: AgentTableOptions): AgentTable {
 		const ledger = Ledger.open(options.dir, options);
-		const table = new AgentTable(options, ledger);
+		let table: AgentTable;
 		try {
+			table = new AgentTable(options, ledger);
 			table.personToken = readOrCreateToken(path.join(options.dir, YOU_TOKEN_FILE));
-			table.lastId = readLastId(path.join(options.dir, LAST_ID_FILE)) || readLastId(path.join(options.dir, LAST_PID_FILE));
-			table.lastMessageId = readLastId(path.join(options.dir, LAST_MESSAGE_ID_FILE));
+			table.lastId = readLastNumber(path.join(options.dir, LAST_ID_FILE)) || readLastNumber(path.join(options.dir, LAST_PID_FILE));
 		} catch (err) {
 			ledger.close('facade');
 			throw err;
@@ -152,7 +145,7 @@ export class AgentTable {
 		return this.options.dir;
 	}
 
-	/** Where each agent's token, task and launch files go. */
+	/** Where each agent's token and launch files go. */
 	get runsDir(): string {
 		return path.join(this.options.dir, RUNS_DIR);
 	}
@@ -209,24 +202,15 @@ export class AgentTable {
 		return agents.filter((agent): agent is LiveAgent => isLive(agent) && agent.name === name);
 	}
 
-	/** Where the workspace's messages are: tasks, until AGENT-MESSAGES.md. */
-	get messagesDir(): string {
-		return path.join(this.options.dir, MESSAGES_DIR);
-	}
-
-	/** The file message `id` is in. */
-	messageFileOf(id: number): string {
-		return path.join(this.messagesDir, `${id}.md`);
-	}
-
 	/** The file the plan of the launch of the agent `id` is in: what its terminal runs, and its delays. */
 	launchFileOf(id: number): string {
 		return path.join(this.runsDir, `${id}.launch.json`);
 	}
 
 	/**
-	 * Records a new agent under the next number, and writes its token and its task. Nothing is written
-	 * once the ledger is closed or another window's: the number may be one that window gave.
+	 * Records a new agent under the next number, and writes its token. Nothing is written once the ledger is
+	 * closed or another window's: the number may be one that window gave. Its task is a message, sent once it
+	 * is recorded (AGENT-MESSAGES.md, M7).
 	 */
 	start(agent: NewAgent): StartedAgent {
 		const name = agentName(agent.name);
@@ -239,14 +223,6 @@ export class AgentTable {
 		const tokenFile = path.join(this.runsDir, `${id}.token`);
 		fs.mkdirSync(this.runsDir, { recursive: true });
 		fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-		let taskMessage: number | undefined;
-		if (agent.task) {
-			taskMessage = Math.max(this.state.lastMessageId, this.lastMessageId) + 1;
-			replaceFile(path.join(this.options.dir, LAST_MESSAGE_ID_FILE), String(taskMessage));
-			this.lastMessageId = taskMessage;
-			fs.mkdirSync(path.join(this.options.dir, MESSAGES_DIR), { recursive: true });
-			fs.writeFileSync(this.messageFileOf(taskMessage), agent.task.text, { mode: 0o600 });
-		}
 		const creator = agent.creator === undefined ? undefined : this.state.agents.get(agent.creator);
 		const event: LedgerEventBody = {
 			type: 'agent.started',
@@ -266,19 +242,14 @@ export class AgentTable {
 			worktree: agent.worktree || path.basename(agent.folder) || agent.folder,
 			...(agent.outsideGit ? { outsideGit: true as const } : {}),
 			folder: agent.folder,
-			...(taskMessage !== undefined ? { taskMessage } : {}),
-			task: agent.task === undefined ? 'none' : agent.task.notice === 'typed' ? 'pending' : 'argument',
 			tokenHash: hashToken(token),
 			...(agent.phase !== undefined ? { phase: agent.phase } : {})
 		};
 		try {
 			this.ledger.append(event);
 		} catch (err) {
-			// Not recorded: its token and task go too, rather than lie about for a number nobody has (X-75)
+			// Not recorded: its token goes too, rather than lie about for a number nobody has (X-75)
 			fs.rmSync(tokenFile, { force: true });
-			if (taskMessage !== undefined) {
-				fs.rmSync(this.messageFileOf(taskMessage), { force: true });
-			}
 			throw err;
 		}
 		const started = this.state.agents.get(id);
@@ -287,6 +258,11 @@ export class AgentTable {
 		}
 		this.log.started(started, this.whoIs(started.creator));
 		return { agent: started, token, tokenFile };
+	}
+
+	/** Writes into the person's history what goes into an agent's terminal, and what went in (AGENT-DEBUGGING.md, D9). */
+	auditInput(what: string): void {
+		this.log.input(Date.now(), what);
 	}
 
 	/** Records that a starting agent's start moved on: to `phase`, its worktree made in `folder` where one was. */
@@ -329,22 +305,6 @@ export class AgentTable {
 		}
 	}
 
-	/** Records that the line telling an agent of its task file is about to be typed into its terminal: from here on, how far it got is not known. */
-	taskTyping(id: number): void {
-		const agent = this.state.agents.get(id);
-		if (isLive(agent) && agent.task === 'pending') {
-			this.ledger.append({ type: 'task.typing', id });
-		}
-	}
-
-	/** Records that the line telling an agent of its task file was typed into its terminal, and Enter after it. */
-	taskTyped(id: number): void {
-		const agent = this.state.agents.get(id);
-		if (isLive(agent) && (agent.task === 'pending' || agent.task === 'unknown')) {
-			this.ledger.append({ type: 'task.typed', id });
-		}
-	}
-
 	/** Records that Facade set out to stop an agent - by whom, and why - until its process has ended. */
 	stopping(id: number, reason: string, by?: StoppedBy): void {
 		const agent = this.state.agents.get(id);
@@ -370,7 +330,10 @@ export class AgentTable {
 		return agent?.end;
 	}
 
-	/** Begins a new list: the agents that ended leave it, but for the creators of agents that have not. */
+	/**
+	 * Begins a new list, as a window starts that is not a reload: the agents that ended leave it, but for the
+	 * creators of agents that have not, and their mailboxes are emptied; numbers go on.
+	 */
 	clearList(): void {
 		this.ledger.append({ type: 'list.cleared' });
 	}
@@ -438,50 +401,60 @@ function readOrCreateToken(file: string): string {
 	return token;
 }
 
-/** The highest number `file` says the workspace gave; 0 when it says none, or nothing a number can be. */
+/** The highest numbers a record gave: of its agents, and of its messages. */
+export interface NumberedUpTo {
+	readonly agents: number;
+	readonly messages: number;
+}
+
 /**
- * The highest agent number the record in `dir` gave: by its `last-id` - or `last-pid` - or its ledger, where
- * that says more; 0 for none.
+ * The highest numbers the record in `dir` gave: of its agents, by its `last-id` - or `last-pid` - or its
+ * ledger, where that says more; of its messages, by its `last-message` - or the file of the build before
+ * messages - or its ledger. 0 for none.
  */
-export function numberedUpTo(dir: string): number {
-	let highest = Math.max(readLastId(path.join(dir, LAST_ID_FILE)), readLastId(path.join(dir, LAST_PID_FILE)));
+export function numberedUpTo(dir: string): NumberedUpTo {
+	let agents = Math.max(readLastNumber(path.join(dir, LAST_ID_FILE)), readLastNumber(path.join(dir, LAST_PID_FILE)));
+	let messages = Math.max(...LAST_MESSAGE_FILES.map(file => readLastNumber(path.join(dir, file))));
 	let text = '';
 	try {
 		text = fs.readFileSync(path.join(dir, LEDGER_FILE), 'utf8');
 	} catch {
 		// No ledger: the files say it all
 	}
+	const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value);
 	for (const line of text.split('\n')) {
 		try {
 			const event: unknown = JSON.parse(line);
-			if (isJsonObject(event) && typeof event.type === 'string' && event.type.startsWith('agent.') && typeof event.id === 'number' && Number.isInteger(event.id)) {
-				highest = Math.max(highest, event.id);
+			if (!isJsonObject(event) || typeof event.type !== 'string') {
+				continue;
+			}
+			if (event.type.startsWith('agent.') && isNumber(event.id)) {
+				agents = Math.max(agents, event.id);
+			}
+			if (event.type === 'message.sent' && isNumber(event.id)) {
+				messages = Math.max(messages, event.id);
+			}
+			if (event.type === 'agent.started' && isNumber(event.taskMessage)) {
+				messages = Math.max(messages, event.taskMessage);
 			}
 		} catch {
 			// A line cut short, or none: nothing to count
 		}
 	}
-	return highest;
+	return { agents, messages };
 }
 
-/** Has the record in `dir` count on from `reached`: no number up to it is given again (AGENT-LAUNCHER.md, L2; X-49). */
-export function countOnFrom(dir: string, reached: number): void {
-	if (reached > readLastId(path.join(dir, LAST_ID_FILE))) {
+/**
+ * Has the record in `dir` count on from `reached`: no number up to it is given again - of an agent
+ * (AGENT-LAUNCHER.md, L2; X-49), nor of a message (AGENT-MESSAGES.md, M10).
+ */
+export function countOnFrom(dir: string, reached: NumberedUpTo): void {
+	if (reached.agents > readLastNumber(path.join(dir, LAST_ID_FILE))) {
 		fs.mkdirSync(dir, { recursive: true });
-		replaceFile(path.join(dir, LAST_ID_FILE), String(reached));
+		replaceFile(path.join(dir, LAST_ID_FILE), String(reached.agents));
 	}
-}
-
-function readLastId(file: string): number {
-	let text: string;
-	try {
-		text = fs.readFileSync(file, 'utf8');
-	} catch (err) {
-		if (codeOf(err) === 'ENOENT') {
-			return 0;
-		}
-		throw err;
+	if (reached.messages > readLastNumber(path.join(dir, LAST_MESSAGE_FILES[0]))) {
+		fs.mkdirSync(dir, { recursive: true });
+		replaceFile(path.join(dir, LAST_MESSAGE_FILES[0]), String(reached.messages));
 	}
-	const id = Number(text.trim());
-	return Number.isInteger(id) && id > 0 ? id : 0;
 }

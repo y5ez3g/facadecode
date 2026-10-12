@@ -233,13 +233,15 @@ export interface LaunchInput {
 	readonly repository: string;
 	/** The home folder, as the environment its terminal starts with has it - as its trust has it (X-58); Facade's own where none is given. */
 	readonly home?: string;
-	/** Where the workspace's messages are, the agent's task among them. */
+	/** Where the files of the workspace's messages are: long messages, and fetches too long for a result (M11). */
 	readonly messagesDir: string;
+	/** Where the agents' screens are kept: final screens, and reads too long for a result (AGENT-DEBUGGING.md, D6). */
+	readonly screensDir: string;
 	/** Its YOLO: with its launch's `yoloOn` arguments, or its `yoloOff`. */
 	readonly yolo: boolean;
 	/** Whether nobody may be watching it: started through `start_agent` (L4). Its `config` is that starter's launch (`launchFor`). */
 	readonly unattended: boolean;
-	/** The notice of its task - who it is, and where its task's message is - for a CLI given it as an argument. */
+	/** Its first line - who it is, and the number of its task (AGENT-MESSAGES.md, M7) - for a CLI given it as an argument. */
 	readonly task?: string;
 	/** The model and how hard it thinks, as the CLI takes them, where it was given them: Facade passes them on as they are. */
 	readonly model?: string;
@@ -366,8 +368,8 @@ export interface InstalledCli {
 
 /**
  * The values every launch has for its `${name}`s (AGENT-LAUNCHER.md, L9): its folder, its repository's main
- * checkout, the home folder, where its messages are, the model, effort and task notice it was given, and
- * its connection's. A CLI adds the files of its own launch, and forms of these its arguments need.
+ * checkout, the home folder, where its messages' and screens' files are, the model, effort and first line it was
+ * given, and its connection's. A CLI adds the files of its own launch, and forms of these its arguments need.
  */
 export function launchValues(input: LaunchInput): { [name: string]: string } {
 	return {
@@ -375,6 +377,7 @@ export function launchValues(input: LaunchInput): { [name: string]: string } {
 		repository: input.repository,
 		home: input.home ?? os.homedir(),
 		messagesDir: input.messagesDir,
+		screensDir: input.screensDir,
 		...input.model !== undefined ? { model: input.model } : {},
 		...input.effort !== undefined ? { effort: input.effort } : {},
 		...input.task !== undefined ? { task: input.task } : {},

@@ -4,10 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { coalesce } from '../../../../base/common/arrays.js';
-import { disposableTimeout, raceTimeout, timeout } from '../../../../base/common/async.js';
+import { raceTimeout } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
-import { DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { IProcessEnvironment, isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { assertType, isBoolean, isNumber, isObject, isString, isUndefined, isUndefinedOrNull } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -28,7 +28,13 @@ import { ITerminalProfileResolverService } from '../../terminal/common/terminal.
 import { createTerminalEnvironment, createVariableResolver, getWorkspaceForTerminal, mergeEnvironments } from '../../terminal/common/terminalEnvironment.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IOwnedWorktreeFile, IRemoveWorktreeOptions, IWorktreeService } from '../../worktrees/browser/worktrees.js';
+import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { facadeRunOf, facadeRunProperties, IFacadeRun, isFacadeRun } from '../common/facadeRun.js';
+import { isAgentKey } from './facadeAgentKeys.js';
+import { MOST_SCREEN_LINES } from './facadeAgentScreen.js';
+import { FacadeAgentTerminal, IAgentInputEffect, IAgentInputState, IAgentScreenRead } from './facadeAgentTerminal.js';
+import { FacadeNotifications } from './facadeNotifications.js';
 import { IFacadeRunsService } from './facadeRuns.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
@@ -66,6 +72,14 @@ interface IFacadeTerminalOptions {
 
 	/** The agent's run it is made for, which it is marked with: the process it starts is that run's own (`IFacadeRunsService`). */
 	readonly run?: IFacadeRun;
+	/** The file the run's final screen is written to as its terminal ends (`FacadeAgentTerminal.register`). */
+	readonly finalScreen?: URI;
+}
+
+/** What `_facade.terminal.read` answers with: the bottom lines of an agent's terminal's screen, and what they are. */
+interface IFacadeTerminalScreen extends IAgentScreenRead {
+	/** Whether its process has ended, its terminal kept open. */
+	readonly exited: boolean;
 }
 
 /** What `_facade.terminal.create` answers with: the terminal once its process is ready, or a few seconds on. */
@@ -111,7 +125,7 @@ function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTermin
 		return false;
 	}
 
-	const { name, executable, args, env, cwd, agent, reveal, run } = candidate as Record<string, unknown>;
+	const { name, executable, args, env, cwd, agent, reveal, run, finalScreen } = candidate as Record<string, unknown>;
 	return (isUndefined(name) || isString(name))
 		&& (isUndefined(executable) || isString(executable))
 		&& (isUndefined(args) || (Array.isArray(args) && args.every(isString)))
@@ -119,7 +133,19 @@ function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTermin
 		&& (isUndefined(cwd) || isString(cwd) || URI.isUri(cwd))
 		&& (isUndefined(agent) || isString(agent))
 		&& (isUndefined(reveal) || isBoolean(reveal))
-		&& (isUndefined(run) || isFacadeRun(run));
+		&& (isUndefined(run) || isFacadeRun(run))
+		&& (isUndefined(finalScreen) || URI.isUri(finalScreen));
+}
+
+/** Whether `candidate` is a number of milliseconds a call can wait: none, or a finite number from 0. */
+function isWait(candidate: unknown): candidate is number | null | undefined {
+	return isUndefinedOrNull(candidate) || (isNumber(candidate) && Number.isFinite(candidate) && candidate >= 0);
+}
+
+/** The terminal of a run's own process, as an agent's terminal reads, types and keeps its screens; none where it runs in none. */
+function agentTerminalOf(accessor: ServicesAccessor, run: IFacadeRun): FacadeAgentTerminal | undefined {
+	const instance = accessor.get(IFacadeRunsService).terminalOf(run);
+	return instance && FacadeAgentTerminal.get(instance) || undefined;
 }
 
 /** Whether a terminal's process starts from the window's resolved shell environment (`terminal.integrated.inheritEnv`). */
@@ -293,6 +319,10 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 	});
 	if (options?.run) {
 		runs.register(instance, options.run);
+		// Where its final screen goes as it ends (AGENT-DEBUGGING.md, D6)
+		if (options.finalScreen) {
+			FacadeAgentTerminal.get(instance)?.register({ run: options.run, finalScreen: options.finalScreen });
+		}
 	}
 
 	// The terminal made, the command answers with it from here on, whatever becomes of it: a failure would
@@ -366,60 +396,70 @@ CommandsRegistry.registerCommand('_facade.terminal.stop', async (accessor, ...ar
 	}
 });
 
-/** How long the person's typing is held back at most, should the end of Facade's line never come. */
-const TYPE_HOLD_MAX_MS = 30_000;
-/** The person's typing held back in each run's terminal while Facade types a line there, by run (X-43). */
-const typingHolds = new Map<string, IDisposable>();
+// `(run, finalScreen)`: tells the terminal the run's own process runs in where its final screen goes as it ends
+// (`FacadeAgentTerminal.register`): for a terminal the window gave back after a reload, which keeps nothing of how it
+// was opened. Answers whether there is such a terminal.
+CommandsRegistry.registerCommand('_facade.terminal.register', (accessor, ...args) => {
+	const [run, finalScreen] = args;
+	assertType(isFacadeRun(run), 'IFacadeRun');
+	assertType(URI.isUri(finalScreen), 'URI');
+	const terminal = agentTerminalOf(accessor, run);
+	terminal?.register({ run, finalScreen });
+	return !!terminal;
+});
 
-// `(run, text, line?)`: types `text`, as it is, into the terminal the run's own process runs in, and answers
-// once VS Code has passed it on: true; false when its process runs in none. `line`: `begin` - what the person
-// is typing there and has not sent is waited for until they send or clear it, and their typing is held back
-// from here - or `end`, after which what they typed meanwhile follows: so that a line typed in parts reaches
-// the CLI whole, nothing of theirs in it (PS-14; X-43, N-84).
-CommandsRegistry.registerCommand('_facade.terminal.type', async (accessor, ...args) => {
-	const [run, text, line] = args;
+// `(run, lines)`: the bottom `lines` lines of the screen of the terminal the run's own process runs in, as it draws
+// them, and whether its process has ended (`IFacadeTerminalScreen`). Reading changes nothing of it: not its focus,
+// scroll, size, nor where the window is. None where it runs in none, or the terminal has no screen yet (D2).
+CommandsRegistry.registerCommand('_facade.terminal.read', async (accessor, ...args): Promise<IFacadeTerminalScreen | undefined> => {
+	const [run, lines] = args;
+	assertType(isFacadeRun(run), 'IFacadeRun');
+	assertType(isNumber(lines) && Number.isInteger(lines) && lines >= 1 && lines <= MOST_SCREEN_LINES, 'number');
+	const terminal = agentTerminalOf(accessor, run);
+	const screen = await terminal?.read(lines);
+	return terminal && screen && { ...screen, exited: terminal.exited };
+});
+
+// `(run, text, options)`: pastes `text` into the terminal the run's own process runs in, with Enter
+// `options.enterDelayMs` milliseconds later where `options.enter`, once its turn comes - behind Facade's own input
+// there, and the person's typing - `options.queueTimeoutMs` milliseconds at most (`FacadeAgentTerminal.type`; D3, D4).
+// Answers with what went in (`IAgentInputEffect`); none where it runs in none.
+CommandsRegistry.registerCommand('_facade.terminal.type', async (accessor, ...args): Promise<IAgentInputEffect | undefined> => {
+	const [run, text, options] = args;
 	assertType(isFacadeRun(run), 'IFacadeRun');
 	assertType(isString(text), 'string');
-	assertType(line === undefined || line === 'begin' || line === 'end', `'begin' | 'end'`);
-
-	const key = `${run.workspace}#${run.id}`;
-	const release = () => {
-		typingHolds.get(key)?.dispose();
-		typingHolds.delete(key);
-	};
-	const instance = accessor.get(IFacadeRunsService).terminalOf(run);
-	if (!instance) {
-		release();
-		return false;
-	}
-	if (line === 'begin') {
-		// Their text is theirs, however long they take: typed after it, the line's Enter would send it with
-		// Facade's (N-84). A terminal closed, or whose process ended, has nobody to wait for.
-		while (instance.hasUnsentInput && !instance.isDisposed && instance.exitCode === undefined) {
-			await timeout(100);
-		}
-		release();
-		if (instance.isDisposed || instance.exitCode !== undefined) {
-			return false;
-		}
-		const held = instance.holdInput();
-		const backstop = disposableTimeout(release, TYPE_HOLD_MAX_MS);
-		typingHolds.set(key, toDisposable(() => {
-			backstop.dispose();
-			held.dispose();
-		}));
-	}
-	try {
-		if (text) {
-			await instance.sendText(text, false);
-		}
-	} finally {
-		if (line === 'end') {
-			release();
-		}
-	}
-	return true;
+	assertType(isObject(options), 'object');
+	const { enter, enterDelayMs, queueTimeoutMs } = options as Record<string, unknown>;
+	assertType(isUndefinedOrNull(enter) || isBoolean(enter), 'boolean');
+	assertType(isWait(enterDelayMs) && isWait(queueTimeoutMs), 'number');
+	return agentTerminalOf(accessor, run)?.type(text, { enter: enter === true, enterDelayMs: Math.round(enterDelayMs ?? 0), queueTimeoutMs: queueTimeoutMs ?? undefined });
 });
+
+// `(run, keys, options)`: presses `keys` in the terminal the run's own process runs in, each as the terminal sends
+// it for a key the person presses (`isAgentKey` says which it takes), in its turn as `_facade.terminal.type` types,
+// `options.queueTimeoutMs` milliseconds at most (`FacadeAgentTerminal.keys`; D5). Answers with what went in
+// (`IAgentInputEffect`); none where it runs in none.
+CommandsRegistry.registerCommand('_facade.terminal.keys', async (accessor, ...args): Promise<IAgentInputEffect | undefined> => {
+	const [run, keys, options] = args;
+	assertType(isFacadeRun(run), 'IFacadeRun');
+	assertType(Array.isArray(keys) && keys.length > 0 && keys.every(key => isString(key) && isAgentKey(key)), 'string[]');
+	assertType(isObject(options), 'object');
+	const { queueTimeoutMs } = options as Record<string, unknown>;
+	assertType(isWait(queueTimeoutMs), 'number');
+	return agentTerminalOf(accessor, run)?.keys(keys, { queueTimeoutMs: queueTimeoutMs ?? undefined });
+});
+
+// `(run)`: what holds Facade's input into the terminal the run's own process runs in back now: what the person typed
+// there since they last pressed Enter or Ctrl+C, and when they last typed; and whether Facade's own input goes in
+// there or waits its turn (`IAgentInputState`; D3). None where it runs in none.
+CommandsRegistry.registerCommand('_facade.terminal.input', (accessor, ...args): IAgentInputState | undefined => {
+	const [run] = args;
+	assertType(isFacadeRun(run), 'IFacadeRun');
+	return agentTerminalOf(accessor, run)?.inputState();
+});
+
+// Before the extension host starts, which asks once whether the window keeps Facade's notifications
+registerWorkbenchContribution2(FacadeNotifications.ID, FacadeNotifications, WorkbenchPhase.BlockStartup);
 
 // `(run)`: puts the terminal the run's own process runs in in front, moving the window onto the folder it
 // is held for when that is another's, as a click on its row would (`IFolderTerminalsService.reveal`).
