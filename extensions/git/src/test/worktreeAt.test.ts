@@ -224,6 +224,19 @@ suite('worktreeAt', () => {
 		});
 	});
 
+	test('a worktree deleted as git makes it - the person deleting it while its post-checkout hook runs - is not made again by the copy of what .worktreeinclude names: nothing goes into a folder that is no worktree (N-66)', async () => {
+		write(path.join(main, '.worktreeinclude'), '.env\nsecrets/\n');
+		const hook = path.join(main, '.git', 'hooks', 'post-checkout');
+		// The hook runs in the new worktree, which goes under it
+		write(hook, '#!/bin/sh\nrm -rf "$PWD"\n');
+		chmodSync(hook, 0o755);
+		const worktree = path.join(dir, 'worktrees', 'deleted');
+
+		const result = await createWorktreeAt(git, main, worktree, 'deleted');
+
+		assert.deepStrictEqual({ kind: result.kind, folder: existsSync(worktree) }, { kind: 'created', folder: false });
+	});
+
 	test('a create that fails leaves alone a branch that was there before it', async () => {
 		// Not checked out anywhere, and merged: `branch -d` would take it.
 		run(main, 'branch', 'kept');
@@ -273,6 +286,34 @@ suite('worktreeAt', () => {
 			force: { kind: 'removed' },
 			folder: false,
 			branch: 'dirty',
+		});
+	});
+
+	test('what a deletion left of a worktree - a folder git no longer lists - is deleted as a leftover; a worktree git still lists, or a leftover with a repository in it, is not', async () => {
+		const left = path.join(dir, 'worktrees', 'left');
+		await createWorktreeAt(git, main, left, 'left');
+		run(main, 'worktree', 'remove', '--force', left);
+		// What git could not delete, as a file made immutable would leave
+		write(path.join(left, 'src', 'index.js'), 'kept\n');
+		const listed = path.join(dir, 'worktrees', 'listed');
+		await createWorktreeAt(git, main, listed, 'listed');
+		const nested = path.join(dir, 'worktrees', 'nested');
+		await createWorktreeAt(git, main, nested, 'nested');
+		run(main, 'worktree', 'remove', '--force', nested);
+		mkdirSync(path.join(nested, 'inner'), { recursive: true });
+		run(path.join(nested, 'inner'), 'init', '-q');
+
+		const results = {
+			left: await deleteWorktreeAt(git, main, left, 'leftover'),
+			listed: (await deleteWorktreeAt(git, main, listed, 'leftover')).kind,
+			nested: (await deleteWorktreeAt(git, main, nested, 'leftover')).kind,
+		};
+
+		assert.deepStrictEqual({ results, left: existsSync(left), listed: existsSync(listed), nested: existsSync(nested) }, {
+			results: { left: { kind: 'removed' }, listed: 'error', nested: 'error' },
+			left: false,
+			listed: true,
+			nested: true,
 		});
 	});
 

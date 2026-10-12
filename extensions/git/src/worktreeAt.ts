@@ -67,7 +67,11 @@ export type WorktreeBaseAtResult =
 	| { readonly kind: 'unborn'; readonly files: number; readonly identity: boolean }
 	| IWorktreeAtError;
 
-export type DeleteWorktreeMode = 'check' | 'remove' | 'force';
+/**
+ * `check`, `remove` and `force` act on a worktree; `leftover` on what a deletion left of one: a folder git no
+ * longer lists, whose files could not all be deleted then.
+ */
+export type DeleteWorktreeMode = 'check' | 'remove' | 'force' | 'leftover';
 
 /**
  * `checked` is what `check` returns: the files whose changes removing the worktree would lose, and whether it
@@ -456,18 +460,38 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 
 /**
  * Removes a worktree, or with `check`, lists the files with changes that removing it would lose.
- * `remove` and `force` run `git worktree remove`, without and with `--force`.
+ * `remove` and `force` run `git worktree remove`, without and with `--force`. `leftover` deletes what a
+ * deletion git finished left behind - only where git lists no worktree there and no repository or worktree
+ * is in it, so that it never takes one that is still git's.
  */
 export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, mode: DeleteWorktreeMode): Promise<DeleteWorktreeAtResult> {
 	const refused = validateArguments([root, worktreePath]);
 	if (refused) {
 		return refused;
 	}
-	if (mode !== 'check' && mode !== 'remove' && mode !== 'force') {
+	if (mode !== 'check' && mode !== 'remove' && mode !== 'force' && mode !== 'leftover') {
 		return invalidArgument(`Not a mode: ${String(mode)}`);
 	}
 
 	const present = await exists(worktreePath);
+
+	if (mode === 'leftover') {
+		if (!present) {
+			return { kind: 'removed' };
+		}
+		if (await isListed(git, root, worktreePath) !== false) {
+			return toError(new Error(`${worktreePath} is a worktree git still lists, or git cannot say: it is not deleted as what a deletion left.`));
+		}
+		if (await holdsGit(worktreePath)) {
+			return toError(new Error(`${worktreePath} has a repository or a worktree in it: it is not deleted as what a deletion left.`));
+		}
+		try {
+			await fs.rm(await fs.realpath(worktreePath), REMOVE_OPTIONS);
+			return { kind: 'removed' };
+		} catch (err) {
+			return toError(err);
+		}
+	}
 
 	if (mode === 'check') {
 		if (!present) {
@@ -531,6 +555,16 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 	}
 
 	return { kind: 'removed' };
+}
+
+/** Whether `folder`, or a folder in it - links not followed - has a `.git`: a repository, or a worktree. */
+async function holdsGit(folder: string): Promise<boolean> {
+	for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
+		if (entry.name === '.git' || (entry.isDirectory() && await holdsGit(path.join(folder, entry.name)))) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -680,13 +714,24 @@ function matchRules(rules: readonly IIncludeRule[], file: string, isDirectory: b
 	return included;
 }
 
+/** Whether the worktree at `worktreePath` is there: its folder, with the `.git` file git gave it. */
+async function isWorktreeThere(worktreePath: string): Promise<boolean> {
+	try {
+		await fs.lstat(path.join(worktreePath, '.git'));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Copies into the new worktree what the repository ignores and `.worktreeinclude` names (WORKTREE.md
  * section 8). Returns what failed to copy.
  *
  * The candidates are `git ls-files --others --ignored --exclude-standard --directory`, where a wholly
  * ignored directory is one entry, so a pattern does not reach into `node_modules`. Nothing is copied
- * over a file that is there already, and nothing through a link.
+ * over a file that is there already, and nothing through a link - nor into a folder that is no worktree
+ * any more, deleted while git made it: copying would make it again, holding the copies (N-66).
  */
 async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath: string): Promise<readonly string[]> {
 	let content: string;
@@ -714,6 +759,9 @@ async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath
 
 		const source = path.join(root, relative);
 		const target = path.join(worktreePath, relative);
+		if (!await isWorktreeThere(worktreePath)) {
+			break;
+		}
 		try {
 			if ((await fs.lstat(source)).isSymbolicLink()) {
 				continue;
