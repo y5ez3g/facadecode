@@ -19,6 +19,7 @@ import { IProductService } from '../../../../platform/product/common/productServ
 import { defaultButtonStyles, defaultCheckboxStyles, defaultInputBoxStyles, defaultDialogStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { asCssVariable, asCssVariableWithDefault, buttonBorder, foreground, toolbarHoverBackground } from '../../../../platform/theme/common/colorRegistry.js';
 import { FACADE_DIALOG_BORDER, FACADE_DIALOG_CONTROL_BORDER } from './facadeDialogColors.js';
+import { releaseVersionLabel } from '../../../../platform/product/common/releaseVersion.js';
 
 const defaultDialogAllowableCommands = new Set([
 	'workbench.action.quit',
@@ -103,7 +104,8 @@ export function createBrowserAboutDialogDetails(productService: IProductService)
 	const detailString = (useAgo: boolean): string => {
 		return localize('aboutDetail',
 			"Version: {0}\nCommit: {1}\nDate: {2}\nBrowser: {3}",
-			productService.version || 'Unknown',
+			// Facade Code: the release version, the engine's beside it (IDENTITY.md I7)
+			productService.version ? releaseVersionLabel(productService) : 'Unknown',
 			productService.commit || 'Unknown',
 			productService.date ? `${productService.date}${useAgo ? ' (' + fromNow(new Date(productService.date), true) + ')' : ''}` : 'Unknown',
 			navigator.userAgent

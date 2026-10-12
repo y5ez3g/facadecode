@@ -29,6 +29,7 @@ import { defaultInputBoxStyles, defaultSelectBoxStyles } from '../../../../../pl
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IBrowserViewModel } from '../../common/browserView.js';
 import { BrowserEditor, BrowserEditorContribution, BrowserWidgetLocation, IBrowserEditorWidget, IContainerLayout, IContainerLayoutOverride, BROWSER_EDITOR_ACTIVE, BrowserActionCategory, BrowserActionGroup } from '../browserEditor.js';
+import product from '../../../../../platform/product/common/product.js';
 
 const CONTEXT_BROWSER_EMULATION_TOOLBAR_VISIBLE = new RawContextKey<boolean>(
 	'browserEmulationToolbarVisible',
@@ -871,7 +872,7 @@ class SetBrowserUserAgentAction extends Action2 {
 		}
 		const quickInputService = accessor.get(IQuickInputService);
 		const value = await quickInputService.input({
-			prompt: localize('browser.userAgent.prompt', "User agent string (leave empty for VS Code default)"),
+			prompt: localize('browser.userAgent.prompt', "User agent string (leave empty for {0} default)", product.nameLong),
 			value: support.userAgent ?? '',
 		});
 		if (value === undefined) {

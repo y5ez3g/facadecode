@@ -15,6 +15,7 @@ import * as Tasks from './tasks.js';
 import { ExtensionIdentifier } from '../../../../platform/extensions/common/extensions.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
+import product from '../../../../platform/product/common/product.js';
 
 
 const taskDefinitionSchema: IJSONSchema = {
@@ -27,7 +28,7 @@ const taskDefinitionSchema: IJSONSchema = {
 		},
 		required: {
 			type: 'array',
-			markdownDescription: nls.localize('TaskDefinition.required', 'The names of the properties from the `properties` object that must be provided for a task of this type to be considered a match. Used by VS Code to associate a `tasks.json` entry with a registered task provider.'),
+			markdownDescription: nls.localize('TaskDefinition.required', 'The names of the properties from the `properties` object that must be provided for a task of this type to be considered a match. Used by {0} to associate a `tasks.json` entry with a registered task provider.', product.nameLong),
 			items: {
 				type: 'string'
 			}

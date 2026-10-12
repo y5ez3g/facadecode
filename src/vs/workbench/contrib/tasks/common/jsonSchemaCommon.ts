@@ -7,6 +7,7 @@ import * as nls from '../../../../nls.js';
 import { IJSONSchema } from '../../../../base/common/jsonSchema.js';
 
 import { Schemas } from './problemMatcher.js';
+import product from '../../../../platform/product/common/product.js';
 
 const schema: IJSONSchema = {
 	definitions: {
@@ -191,7 +192,7 @@ const schema: IJSONSchema = {
 				},
 				promptOnClose: {
 					type: 'boolean',
-					description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when VS Code closes with a running task.'),
+					description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when {0} closes with a running task.', product.nameLong),
 					default: false
 				},
 				isBuildCommand: {
@@ -245,7 +246,7 @@ const schema: IJSONSchema = {
 				},
 				promptOnClose: {
 					type: 'boolean',
-					description: nls.localize('JsonSchema.promptOnClose', 'Whether the user is prompted when VS Code closes with a running background task.'),
+					description: nls.localize('JsonSchema.promptOnClose', 'Whether the user is prompted when {0} closes with a running background task.', product.nameLong),
 					default: false
 				},
 				echoCommand: {

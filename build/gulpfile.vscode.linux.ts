@@ -17,6 +17,8 @@ import { recommendedDeps as rpmRecommendedDependencies } from './linux/rpm/dep-l
 import * as path from 'path';
 import * as cp from 'child_process';
 import { promisify } from 'util';
+import { releaseVersion } from './lib/facade/releaseVersion.ts';
+import { checkVersionFields, debianVersionFields } from './lib/facade/versionCheck.ts';
 
 const exec = promisify(cp.exec);
 const root = path.dirname(import.meta.dirname);
@@ -103,7 +105,8 @@ function prepareDebPackage(arch: string) {
 				const that = this;
 				brandingReplacements(gulp.src('resources/linux/debian/control.template', { base: '.' }))
 					.pipe(replace('@@NAME@@', product.applicationName))
-					.pipe(replace('@@VERSION@@', packageJson.version + '-' + linuxPackageRevision))
+					// Facade Code: the release version, which apt shows and upgrades by (IDENTITY.md I7)
+					.pipe(replace('@@VERSION@@', releaseVersion(product) + '-' + linuxPackageRevision))
 					.pipe(replace('@@ARCHITECTURE@@', debArch))
 					.pipe(replace('@@DEPENDS@@', dependencies.join(', ')))
 					.pipe(replace('@@RECOMMENDS@@', debianRecommendedDependencies.join(', ')))
@@ -125,14 +128,18 @@ function prepareDebPackage(arch: string) {
 			.pipe(replace('@@ARCHITECTURE@@', debArch))
 			.pipe(rename('DEBIAN/postinst'));
 
-		const templates = gulp.src('resources/linux/debian/templates.template', { base: '.' })
-			.pipe(replace('@@NAME@@', product.applicationName))
-			.pipe(rename('DEBIAN/templates'));
-
-		const all = es.merge(control, templates, postinst, postrm, prerm, desktops, appdata, workspaceMime, icon, bash_completion, zsh_completion, code);
+		// Facade Code: no debconf `templates` - its one question was whether to add Microsoft's apt
+		// repository, which this package neither adds nor removes (IDENTITY.md I8)
+		const all = es.merge(control, postinst, postrm, prerm, desktops, appdata, workspaceMime, icon, bash_completion, zsh_completion, code);
 
 		return all.pipe(vfs.dest(destination));
 	};
+}
+
+/** Facade Code: the version `DEBIAN/control` gives dpkg, read back against IDENTITY.md I7's table before the package is made. */
+function checkDebReleaseVersion(arch: string): task.PromiseTask {
+	const debArch = getDebPackageArch(arch);
+	return async () => checkVersionFields(debianVersionFields(path.join('.build/linux/deb', debArch, `${product.applicationName}-${debArch}`, 'DEBIAN', 'control'), releaseVersion(product)));
 }
 
 function buildDebPackage(arch: string) {
@@ -306,7 +313,7 @@ BUILD_TARGETS.forEach(({ arch }) => {
 	const debArch = getDebPackageArch(arch);
 	const prepareDebTask = task.define(`vscode-linux-${arch}-prepare-deb`, task.series(rimraf(`.build/linux/deb/${debArch}`), prepareDebPackage(arch)));
 	task.task(prepareDebTask);
-	const buildDebTask = task.define(`vscode-linux-${arch}-build-deb`, buildDebPackage(arch));
+	const buildDebTask = task.define(`vscode-linux-${arch}-build-deb`, task.series(checkDebReleaseVersion(arch), buildDebPackage(arch)));
 	task.task(buildDebTask);
 
 	const rpmArch = getRpmPackageArch(arch);

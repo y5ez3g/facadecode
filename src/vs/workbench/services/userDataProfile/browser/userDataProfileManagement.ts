@@ -23,6 +23,7 @@ import { IWorkbenchEnvironmentService } from '../../environment/common/environme
 import { IExtensionService } from '../../extensions/common/extensions.js';
 import { IHostService } from '../../host/browser/host.js';
 import { DidChangeUserDataProfileEvent, IProfileTemplateInfo, IUserDataProfileManagementService, IUserDataProfileService } from '../common/userDataProfile.js';
+import product from '../../../../platform/product/common/product.js';
 
 export class UserDataProfileManagementService extends Disposable implements IUserDataProfileManagementService {
 	readonly _serviceBrand: undefined;
@@ -197,7 +198,7 @@ export class UserDataProfileManagementService extends Disposable implements IUse
 		if (shouldRestartExtensionHosts) {
 			if (isRemoteWindow) {
 				const { confirmed } = await this.dialogService.confirm({
-					message: reloadMessage ?? localize('reload message', "Switching a profile requires reloading VS Code."),
+					message: reloadMessage ?? localize('reload message', "Switching a profile requires reloading {0}.", product.nameLong),
 					primaryButton: localize('reload button', "&&Reload"),
 				});
 				if (confirmed) {

@@ -53,6 +53,17 @@ suite('Dialog', () => {
 		);
 	});
 
+	test('ID-02 About says which Facade Code this is, with the VS Code it is built on beside it', () => {
+		const productService: IProductService = { _serviceBrand: undefined, ...product, nameLong: 'Facade Code', facadeVersion: '0.1.0', version: '1.138.0' };
+		const { title, details, detailsToCopy } = createNativeAboutDialogDetails(productService, osProperties);
+		const versionLine = (value: string) => value.split('\n').find(line => line.startsWith('Version: '));
+
+		assert.deepStrictEqual(
+			{ title, details: versionLine(details), detailsToCopy: versionLine(detailsToCopy) },
+			{ title: 'Facade Code', details: 'Version: 0.1.0 (based on VS Code 1.138.0)', detailsToCopy: 'Version: 0.1.0 (based on VS Code 1.138.0)' }
+		);
+	});
+
 	test('preserves stable Copilot versions', () => {
 		assert.deepStrictEqual(
 			getCopilotVersionLines('1.0.84', '0.1.23'),

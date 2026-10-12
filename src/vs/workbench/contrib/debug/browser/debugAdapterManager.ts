@@ -34,6 +34,7 @@ import { launchSchemaId } from '../../../services/configuration/common/configura
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
+import product from '../../../../platform/product/common/product.js';
 
 const jsonRegistry = Registry.as<IJSONContributionRegistry>(JSONExtensions.JSONContribution);
 
@@ -175,7 +176,7 @@ export class AdapterManager extends Disposable implements IAdapterManager {
 					},
 					'debugServer': {
 						type: 'number',
-						description: nls.localize('debugServer', "For debug extension development only: if a port is specified VS Code tries to connect to a debug adapter running in server mode"),
+						description: nls.localize('debugServer', "For debug extension development only: if a port is specified {0} tries to connect to a debug adapter running in server mode", product.nameLong),
 						default: 4711
 					},
 					'preLaunchTask': {

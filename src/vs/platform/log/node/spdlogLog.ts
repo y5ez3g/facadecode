@@ -6,6 +6,8 @@
 import type * as spdlog from '@vscode/spdlog';
 import { ByteSize } from '../../files/common/files.js';
 import { AbstractMessageLogger, ILogger, LogLevel } from '../common/log.js';
+import product from '../../product/common/product.js';
+import { logHeader } from '../../product/common/releaseVersion.js';
 
 enum SpdLogLevel {
 	Trace,
@@ -93,6 +95,12 @@ export class SpdLogLogger extends AbstractMessageLogger implements ILogger {
 		const logger = await createSpdLogLogger(name, filepath, filesize, filecount, donotUseFormatters);
 		if (logger) {
 			this._logger = logger;
+			// Facade Code: which build wrote the log, first and whatever the level (IDENTITY.md I7); not into
+			// output that is not a log
+			if (!donotUseFormatters) {
+				setLogLevel(this._logger, LogLevel.Info);
+				log(this._logger, LogLevel.Info, logHeader(product));
+			}
 			setLogLevel(this._logger, this.getLevel());
 			for (const { level, message } of this.buffer) {
 				log(this._logger, level, message);

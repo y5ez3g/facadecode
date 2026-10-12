@@ -323,6 +323,9 @@ const excludedExtensions = [
 	'vscode-test-resolver',
 	'ms-vscode.node-debug',
 	'ms-vscode.node-debug2',
+	// Facade Code: Microsoft sign-in signs in as VS Code's app, and nothing in Facade needs a Microsoft account
+	// (IDENTITY.md I9)
+	'microsoft-authentication',
 ];
 
 const marketplaceWebExtensionsExclude = new Set([

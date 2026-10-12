@@ -32,6 +32,7 @@ import { IIssueFormService, IssueReporterData, IssueReporterExtensionData, Issue
 import { normalizeGitHubUrl } from '../common/issueReporterUtil.js';
 import { IssueReporterModel, IssueReporterData as IssueReporterModelData } from './issueReporterModel.js';
 import { IAuthenticationService } from '../../../services/authentication/common/authentication.js';
+import { releaseVersionLabel } from '../../../../platform/product/common/releaseVersion.js';
 
 const MAX_URL_LENGTH = 7500;
 
@@ -100,7 +101,7 @@ export class BaseIssueReporterService extends Disposable {
 			...data,
 			issueType: data.issueType || IssueType.Bug,
 			versionInfo: {
-				vscodeVersion: `${product.nameShort} ${!!product.darwinUniversalAssetId ? `${product.version} (Universal)` : product.version} (${product.commit || 'Commit unknown'}, ${product.date || 'Date unknown'})`,
+				vscodeVersion: `${product.nameShort} ${!!product.darwinUniversalAssetId ? `${releaseVersionLabel(product)} (Universal)` : releaseVersionLabel(product)} (${product.commit || 'Commit unknown'}, ${product.date || 'Date unknown'})`,
 				os: `${this.os.type} ${this.os.arch} ${this.os.release}${isLinuxSnap ? ' snap' : ''}`
 			},
 			extensionsDisabled: !!this.disableExtensions,
@@ -1157,7 +1158,7 @@ export class BaseIssueReporterService extends Disposable {
 		if (selectedExtension && this.nonGitHubIssueUrl) {
 			hide(titleTextArea);
 			hide(descriptionTextArea);
-			reset(descriptionTitle, localize('handlesIssuesElsewhere', "This extension handles issues outside of VS Code"));
+			reset(descriptionTitle, localize('handlesIssuesElsewhere', "This extension handles issues outside of {0}", this.product.nameLong));
 			reset(descriptionSubtitle, localize('elsewhereDescription', "The '{0}' extension prefers to use an external issue reporter. To be taken to that issue reporting experience, click the button below.", selectedExtension.displayName));
 			this.publicGithubButton.label = localize('openIssueReporter', "Open External Issue Reporter");
 			return;

@@ -9,13 +9,14 @@ import { gulp } from './lib/gulp/facade.ts';
 import * as path from 'path';
 import rcedit from 'rcedit';
 import vfs from 'vinyl-fs';
-import pkg from '../package.json' with { type: 'json' };
 import product from '../product.json' with { type: 'json' };
 import { getVersion } from './lib/getVersion.ts';
 import * as task from './lib/gulp/task.ts';
 import * as util from './lib/util.ts';
 
 import { createRequire } from 'module';
+import { releaseVersion } from './lib/facade/releaseVersion.ts';
+import { checkVersionFields, executableVersionFields } from './lib/facade/versionCheck.ts';
 const require = createRequire(import.meta.url);
 
 const repoPath = path.dirname(import.meta.dirname);
@@ -58,6 +59,11 @@ function packageInnoSetup(iss: string, options: { definitions?: Record<string, u
 		});
 }
 
+/** Facade Code: the installer's own version fields read back against IDENTITY.md I7's table. */
+function checkWin32SetupReleaseVersion(arch: string, target: string): task.PromiseTask {
+	return async () => checkVersionFields(executableVersionFields(path.join(setupDir(arch, target), `${product.applicationName}-setup.exe`), releaseVersion(product)));
+}
+
 function buildWin32Setup(arch: string, target: string): task.CallbackTask {
 	if (target !== 'system' && target !== 'user') {
 		throw new Error('Invalid setup target');
@@ -85,9 +91,12 @@ function buildWin32Setup(arch: string, target: string): task.CallbackTask {
 			NameLong: product.nameLong,
 			NameShort: product.nameShort,
 			PublisherUrl: product.productHomeUrl,
+			// The legal publisher, who the signing certificate names (IDENTITY.md I6) - not the product
+			Publisher: product.publisher,
 			DirName: product.win32DirName,
-			Version: pkg.version,
-			RawVersion: pkg.version.replace(/-\w+$/, ''),
+			// Facade Code: the release version, which Apps & features shows (IDENTITY.md I7)
+			Version: releaseVersion(product),
+			RawVersion: releaseVersion(product),
 			Commit: commit,
 			NameVersion: product.win32NameVersion + (target === 'user' ? ' (User)' : ''),
 			ExeBasename: product.nameShort,
@@ -132,7 +141,7 @@ function buildWin32Setup(arch: string, target: string): task.CallbackTask {
 
 function defineWin32SetupTasks(arch: string, target: string) {
 	const cleanTask = util.rimraf(setupDir(arch, target));
-	task.task(task.define(`vscode-win32-${arch}-${target}-setup`, task.series(cleanTask, buildWin32Setup(arch, target))));
+	task.task(task.define(`vscode-win32-${arch}-${target}-setup`, task.series(cleanTask, buildWin32Setup(arch, target), checkWin32SetupReleaseVersion(arch, target))));
 }
 
 defineWin32SetupTasks('x64', 'system');

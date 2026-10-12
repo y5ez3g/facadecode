@@ -42,6 +42,7 @@ import { RawContextKey } from '../../../../platform/contextkey/common/contextkey
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { isMacintosh } from '../../../../base/common/platform.js';
+import { releaseVersionLabel } from '../../../../platform/product/common/releaseVersion.js';
 
 /** Context key that's `true` whenever any IssueReporter editor is open in any group, even when not focused. */
 export const IssueReporterOpenContext = new RawContextKey<boolean>('issueReporterOpen', false);
@@ -448,7 +449,7 @@ export class IssueReporterEditorPane extends EditorPane {
 
 		try {
 			// Version info
-			const vscodeVersion = `${product.nameShort} ${!!product.darwinUniversalAssetId ? `${product.version} (Universal)` : product.version} (${product.commit || 'Commit unknown'}, ${product.date || 'Date unknown'})`;
+			const vscodeVersion = `${product.nameShort} ${!!product.darwinUniversalAssetId ? `${releaseVersionLabel(product)} (Universal)` : releaseVersionLabel(product)} (${product.commit || 'Commit unknown'}, ${product.date || 'Date unknown'})`;
 			const systemInfo = await this.processService.getSystemInfo();
 			this.wizard.updateModel({
 				versionInfo: { vscodeVersion, os: systemInfo.os },
