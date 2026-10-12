@@ -5,6 +5,7 @@
 
 import { escape } from '../../../../base/common/strings.js';
 import { localize } from '../../../../nls.js';
+import product from '../../../../platform/product/common/product.js';
 
 const sendSystemInfoLabel = escape(localize('sendSystemInfo', "Include my system information"));
 const sendProcessInfoLabel = escape(localize('sendProcessInfo', "Include my currently running processes"));
@@ -12,7 +13,7 @@ const sendWorkspaceInfoLabel = escape(localize('sendWorkspaceInfo', "Include my 
 const sendExtensionsLabel = escape(localize('sendExtensions', "Include my enabled extensions"));
 const sendExperimentsLabel = escape(localize('sendExperiments', "Include A/B experiment info"));
 const sendExtensionData = escape(localize('sendExtensionData', "Include additional extension info"));
-const acknowledgementsLabel = escape(localize('acknowledgements', "I acknowledge that my VS Code version is not updated and this issue may be closed."));
+const acknowledgementsLabel = escape(localize('acknowledgements', "I acknowledge that my {0} version is not updated and this issue may be closed.", product.nameLong));
 const reviewGuidanceLabel = localize( // intentionally not escaped because of its embedded tags
 	{
 		key: 'reviewGuidanceLabel',

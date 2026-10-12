@@ -19,6 +19,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { IEditorPane } from '../../../common/editor.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import product from '../../../../platform/product/common/product.js';
 
 export class KeyboardLayoutPickerContribution extends Disposable implements IWorkbenchContribution {
 
@@ -93,8 +94,8 @@ interface IUnknownLayout {
 }
 
 const DEFAULT_CONTENT: string = [
-	`// ${nls.localize('displayLanguage', 'Defines the keyboard layout used in VS Code in the browser environment.')}`,
-	`// ${nls.localize('doc', 'Open VS Code and run "Developer: Inspect Key Mappings (JSON)" from Command Palette.')}`,
+	`// ${nls.localize('displayLanguage', 'Defines the keyboard layout used in {0} in the browser environment.', product.nameLong)}`,
+	`// ${nls.localize('doc', 'Open {0} and run "Developer: Inspect Key Mappings (JSON)" from Command Palette.', product.nameLong)}`,
 	``,
 	`// Once you have the keyboard layout info, please paste it below.`,
 	'\n'

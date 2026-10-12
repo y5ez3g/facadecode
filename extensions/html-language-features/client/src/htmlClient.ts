@@ -7,7 +7,7 @@
 import {
 	languages, ExtensionContext, Position, TextDocument, Range, CompletionItem, CompletionItemKind, SnippetString, workspace, extensions,
 	Disposable, FormattingOptions, CancellationToken, ProviderResult, TextEdit, CompletionContext, CompletionList, SemanticTokensLegend,
-	DocumentSemanticTokensProvider, DocumentRangeSemanticTokensProvider, SemanticTokens, window, commands, l10n,
+	DocumentSemanticTokensProvider, DocumentRangeSemanticTokensProvider, SemanticTokens, window, commands, l10n, env,
 	LogOutputChannel
 } from 'vscode';
 import {
@@ -107,7 +107,7 @@ export async function startClient(context: ExtensionContext, newLanguageClient: 
 					context.globalState.update(promptForLinkedEditingKey, false);
 					activeEditorListener.dispose();
 					const configure = l10n.t('Configure');
-					const res = await window.showInformationMessage(l10n.t('VS Code now has built-in support for auto-renaming tags. Do you want to enable it?'), configure);
+					const res = await window.showInformationMessage(l10n.t('{0} now has built-in support for auto-renaming tags. Do you want to enable it?', env.appName), configure);
 					if (res === configure) {
 						commands.executeCommand('workbench.action.openSettings', SettingIds.linkedEditing);
 					}

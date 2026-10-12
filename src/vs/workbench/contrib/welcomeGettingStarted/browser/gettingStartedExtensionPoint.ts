@@ -6,6 +6,7 @@
 import { localize } from '../../../../nls.js';
 import { IWalkthrough } from '../../../../platform/extensions/common/extensions.js';
 import { ExtensionsRegistry } from '../../../services/extensions/common/extensionsRegistry.js';
+import product from '../../../../platform/product/common/product.js';
 
 const titleTranslated = localize('title', "Title");
 
@@ -159,7 +160,7 @@ export const walkthroughsExtensionPoint = ExtensionsRegistry.registerExtensionPo
 									defaultSnippets: [
 										{
 											label: 'onCommand',
-											description: localize('walkthroughs.steps.completionEvents.onCommand', 'Check off step when a given command is executed anywhere in VS Code.'),
+											description: localize('walkthroughs.steps.completionEvents.onCommand', 'Check off step when a given command is executed anywhere in {0}.', product.nameLong),
 											body: 'onCommand:${1:commandId}'
 										},
 										{

@@ -10,6 +10,7 @@ import { IAccessibleViewImplementation } from '../../../../platform/accessibilit
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { KEYBINDING_CONTEXT_WEBVIEW_FIND_WIDGET_FOCUSED } from './webview.js';
 import { AccessibilityVerbositySettingId } from '../../accessibility/browser/accessibilityConfiguration.js';
+import product from '../../../../platform/product/common/product.js';
 
 export class WebviewFindAccessibilityHelp implements IAccessibleViewImplementation {
 	readonly priority = 105;
@@ -81,7 +82,7 @@ class WebviewFindAccessibilityHelpProvider extends Disposable implements IAccess
 
 		// Important About Webviews
 		content.push(localize('webview.importantHeader', "Important About Webviews:"));
-		content.push(localize('webview.importantDesc', "Some webviews intercept keyboard input before VS Code's Find can use it. If Enter or Shift+Enter do not navigate matches, the webview may be handling those keys. Try clicking or tabbing into the webview content first to ensure the webview has focus, then reopen Find and try navigation again."));
+		content.push(localize('webview.importantDesc', "Some webviews intercept keyboard input before {0}'s Find can use it. If Enter or Shift+Enter do not navigate matches, the webview may be handling those keys. Try clicking or tabbing into the webview content first to ensure the webview has focus, then reopen Find and try navigation again.", product.nameLong));
 		content.push('');
 
 		// Settings

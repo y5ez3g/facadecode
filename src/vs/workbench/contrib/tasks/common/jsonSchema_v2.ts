@@ -14,6 +14,7 @@ import { TaskDefinitionRegistry } from './taskDefinitionRegistry.js';
 import * as ConfigurationResolverUtils from '../../../services/configurationResolver/common/configurationResolverUtils.js';
 import { inputsSchema } from '../../../services/configurationResolver/common/configurationResolverSchema.js';
 import { getAllCodicons } from '../../../../base/common/codicons.js';
+import product from '../../../../platform/product/common/product.js';
 
 function fixReferences(literal: Record<string, unknown> | unknown[]) {
 	if (Array.isArray(literal)) {
@@ -437,7 +438,7 @@ const taskConfiguration: IJSONSchema = {
 		},
 		promptOnClose: {
 			type: 'boolean',
-			description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when VS Code closes with a running task.'),
+			description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when {0} closes with a running task.', product.nameLong),
 			default: false
 		},
 		presentation: Objects.deepClone(presentation),

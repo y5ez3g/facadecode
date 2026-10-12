@@ -52,6 +52,7 @@ import { IAccessibilitySignalService } from '../../../../platform/accessibilityS
 import { IChatService } from '../../chat/common/chatService/chatService.js';
 import { IChatAgentService } from '../../chat/common/participants/chatAgents.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import product from '../../../../platform/product/common/product.js';
 
 interface IWorkspaceFolderConfigurationResult {
 	workspaceFolder: IWorkspaceFolder;
@@ -223,7 +224,7 @@ export class TaskService extends AbstractTaskService {
 						return false; // no veto
 					} else if (code && code === TerminateResponseCode.ProcessNotFound) {
 						return this._dialogService.confirm({
-							message: nls.localize('TaskSystem.noProcess', 'The launched task doesn\'t exist anymore. If the task spawned background processes exiting VS Code might result in orphaned processes. To avoid this start the last background process with a wait flag.'),
+							message: nls.localize('TaskSystem.noProcess', 'The launched task doesn\'t exist anymore. If the task spawned background processes exiting {0} might result in orphaned processes. To avoid this start the last background process with a wait flag.', product.nameLong),
 							primaryButton: nls.localize({ key: 'TaskSystem.exitAnyways', comment: ['&& denotes a mnemonic'] }, "&&Exit Anyways"),
 							type: 'info'
 						}).then(res => !res.confirmed);

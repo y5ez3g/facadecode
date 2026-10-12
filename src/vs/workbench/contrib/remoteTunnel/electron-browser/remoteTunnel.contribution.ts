@@ -36,6 +36,7 @@ import { IExtensionService } from '../../../services/extensions/common/extension
 import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { IOutputService } from '../../../services/output/common/output.js';
 import { IPreferencesService } from '../../../services/preferences/common/preferences.js';
+import product from '../../../../platform/product/common/product.js';
 
 export const REMOTE_TUNNEL_CATEGORY = localize2('remoteTunnel.category', 'Remote Tunnels');
 
@@ -653,7 +654,7 @@ export class RemoteTunnelWorkbenchContribution extends Disposable implements IWo
 						} else {
 							notificationService.notify({
 								severity: Severity.Info,
-								message: localize('progress.turnOn.final.noLink', "Remote Tunnel Access is enabled for {0}. You can [configure](command:{1}) or [turn off](command:{2}) this access via the VS Code Accounts menu.", connectionInfo.tunnelName, RemoteTunnelCommandIds.configure, RemoteTunnelCommandIds.turnOff),
+								message: localize('progress.turnOn.final.noLink', "Remote Tunnel Access is enabled for {0}. You can [configure](command:{1}) or [turn off](command:{2}) this access via the {3} Accounts menu.", connectionInfo.tunnelName, RemoteTunnelCommandIds.configure, RemoteTunnelCommandIds.turnOff, product.nameLong),
 							});
 						}
 					}

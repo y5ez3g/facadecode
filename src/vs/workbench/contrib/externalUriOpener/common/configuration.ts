@@ -9,6 +9,7 @@ import * as nls from '../../../../nls.js';
 import { IJSONSchema } from '../../../../base/common/jsonSchema.js';
 import { defaultExternalUriOpenerId } from '../../../../platform/opener/common/opener.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
+import product from '../../../../platform/product/common/product.js';
 
 export { defaultExternalUriOpenerId };
 
@@ -56,7 +57,7 @@ export const externalUriOpenersConfigurationNode: IConfigurationNode = {
 						type: 'string',
 						markdownDescription: nls.localize('externalUriOpeners.uri', "Map URI pattern to an opener id.\nExample patterns: \n{0}", exampleUriPatterns),
 						enum: [defaultExternalUriOpenerId],
-						enumDescriptions: [nls.localize('externalUriOpeners.defaultId', "Open using VS Code's standard opener.")],
+						enumDescriptions: [nls.localize('externalUriOpeners.defaultId', "Open using {0}'s standard opener.", product.nameLong)],
 					},
 					externalUriOpenerIdSchemaAddition
 				]

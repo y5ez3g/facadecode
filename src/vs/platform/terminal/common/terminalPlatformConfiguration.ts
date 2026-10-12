@@ -11,6 +11,7 @@ import { ConfigurationScope, Extensions, IConfigurationNode, IConfigurationRegis
 import { Registry } from '../../registry/common/platform.js';
 import { IExtensionTerminalProfile, ITerminalProfile, TerminalSettingId } from './terminal.js';
 import { createProfileSchemaEnums } from './terminalProfiles.js';
+import product from '../../product/common/product.js';
 
 export const terminalColorSchema: IJSONSchema = {
 	type: ['string', 'null'],
@@ -394,7 +395,7 @@ const terminalPlatformConfiguration: IConfigurationNode = {
 		},
 		[TerminalSettingId.InheritEnv]: {
 			scope: ConfigurationScope.APPLICATION,
-			description: localize('terminal.integrated.inheritEnv', "Whether new shells should inherit their environment from VS Code, which may source a login shell to ensure $PATH and other development variables are initialized. This has no effect on Windows."),
+			description: localize('terminal.integrated.inheritEnv', "Whether new shells should inherit their environment from {0}, which may source a login shell to ensure $PATH and other development variables are initialized. This has no effect on Windows.", product.nameLong),
 			type: 'boolean',
 			default: true
 		},

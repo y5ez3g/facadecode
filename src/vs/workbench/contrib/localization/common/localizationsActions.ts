@@ -11,6 +11,7 @@ import { ServicesAccessor } from '../../../../platform/instantiation/common/inst
 import { ILanguagePackItem, ILanguagePackService } from '../../../../platform/languagePacks/common/languagePacks.js';
 import { ILocaleService } from '../../../services/localization/common/locale.js';
 import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';
+import product from '../../../../platform/product/common/product.js';
 
 export class ConfigureDisplayLanguageAction extends Action2 {
 	public static readonly ID = 'workbench.action.configureLocale';
@@ -23,7 +24,7 @@ export class ConfigureDisplayLanguageAction extends Action2 {
 				id: MenuId.CommandPalette
 			},
 			metadata: {
-				description: localize2('configureLocaleDescription', "Changes the locale of VS Code based on installed language packs. Common languages include French, Chinese, Spanish, Japanese, German, Korean, and more.")
+				description: localize2('configureLocaleDescription', "Changes the locale of {0} based on installed language packs. Common languages include French, Chinese, Spanish, Japanese, German, Korean, and more.", product.nameLong)
 			}
 		});
 	}
