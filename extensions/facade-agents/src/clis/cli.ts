@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as os from 'os';
-import { JsonObject } from '../base/json';
+import { JsonObject, mergedObject } from '../base/json';
 
 /** Environment variables, as `process.env` holds them. */
 export type Environment = { readonly [name: string]: string | undefined };
@@ -62,6 +62,19 @@ export type TrustConfig =
 	| { readonly arguments: readonly string[]; readonly file?: undefined; readonly merge?: undefined }
 	| { readonly arguments?: undefined; readonly file: string; readonly merge: JsonObject };
 
+/**
+ * What an agent started through `start_agent` - by another agent, or by the person's scripts, where nobody may be
+ * watching - runs with in place of parts of its launch (AGENT-LAUNCHER.md, L4): each of its groups of arguments in
+ * place of the launch's group of that name, an empty one taking it out; its variables over the launch's, one set to
+ * null taking the launch's out; and its settings over the launch's, key by key, the same way. An agent the person
+ * starts from the UI runs with the launch as it is.
+ */
+export interface UnattendedLaunch {
+	readonly arguments: { readonly [Group in ArgGroup]?: readonly string[] };
+	readonly environment: { readonly [name: string]: string | null };
+	readonly settings?: JsonObject;
+}
+
 /** How Facade starts a CLI, part by part: the setting `facade.agents.<cli>.launch`, or a custom agent's `launch`. */
 export interface LaunchConfig {
 	readonly arguments: { readonly [Group in ArgGroup]?: readonly string[] };
@@ -75,6 +88,31 @@ export interface LaunchConfig {
 	readonly enterDelay: number;
 	/** Milliseconds after its MCP server's hello before a CLI told of its task in its terminal is typed the line that names it. */
 	readonly taskDelay: number;
+	/** What an agent started through `start_agent` runs with in place of parts of this launch; none: the same launch. */
+	readonly unattended?: UnattendedLaunch;
+}
+
+/**
+ * The launch an agent runs with: `config`'s own for one the person started from the UI; for one started through
+ * `start_agent` - `unattended` - with its unattended part in place (L4). Either has no unattended part of its own.
+ */
+export function launchFor(config: CliConfig, unattended: boolean): CliConfig {
+	const { unattended: overlay, ...launch } = config.launch;
+	if (!unattended || !overlay) {
+		return { ...config, launch };
+	}
+	const environment: { [name: string]: string } = { ...launch.environment };
+	for (const [name, value] of Object.entries(overlay.environment)) {
+		// On Windows a variable's name is the same in any case
+		const key = process.platform === 'win32' ? Object.keys(environment).find(each => each.toUpperCase() === name.toUpperCase()) ?? name : name;
+		if (value === null) {
+			delete environment[key];
+		} else {
+			environment[key] = value;
+		}
+	}
+	const settings = overlay.settings ? mergedObject(launch.settings ?? {}, overlay.settings) : launch.settings;
+	return { ...config, launch: { ...launch, arguments: { ...launch.arguments, ...overlay.arguments }, environment, ...(settings ? { settings } : {}) } };
 }
 
 /**
@@ -120,6 +158,19 @@ export interface LaunchUses {
 	readonly task: boolean;
 	/** Whether a trust given as arguments goes in. */
 	readonly trust: boolean;
+}
+
+/**
+ * The sandbox a launch of `cli`, as `config` has it, leaves it with: its maintained one, unless the file that
+ * carries it is passed by no group the launch applies - then off, as the CLI runs, never on (X-07).
+ */
+export function sandboxOf(cli: AgentCli, config: CliConfig, uses: LaunchUses): Sandbox {
+	const sandbox = uses.yolo ? cli.sandbox.yoloOn : cli.sandbox.yoloOff;
+	if (sandbox !== 'on' || cli.sandboxIn === undefined) {
+		return sandbox;
+	}
+	const file = `\${${cli.sandboxIn}}`;
+	return ARG_GROUPS.some(group => appliesTo(group, uses) && (config.launch.arguments[group] ?? []).some(arg => arg.includes(file))) ? 'on' : 'off';
 }
 
 /** Whether `group` applies to a launch `uses` describes: an empty group adds nothing either way. */
@@ -180,10 +231,14 @@ export interface LaunchInput {
 	readonly folder: string;
 	/** The main checkout of the folder's repository; the folder itself outside any. */
 	readonly repository: string;
+	/** The home folder, as the environment its terminal starts with has it - as its trust has it (X-58); Facade's own where none is given. */
+	readonly home?: string;
 	/** Where the workspace's messages are, the agent's task among them. */
 	readonly messagesDir: string;
 	/** Its YOLO: with its launch's `yoloOn` arguments, or its `yoloOff`. */
 	readonly yolo: boolean;
+	/** Whether nobody may be watching it: started through `start_agent` (L4). Its `config` is that starter's launch (`launchFor`). */
+	readonly unattended: boolean;
 	/** The notice of its task - who it is, and where its task's message is - for a CLI given it as an argument. */
 	readonly task?: string;
 	/** The model and how hard it thinks, as the CLI takes them, where it was given them: Facade passes them on as they are. */
@@ -250,8 +305,25 @@ export interface AgentCli {
 	 * person's home folder as its environment `env` says it.
 	 */
 	trustValues?(place: { readonly folder: string; readonly repository: string }, env: Environment): { readonly [name: string]: string };
+	/**
+	 * What of the person's own configuration of it a launch with `args` in `folder` would mix Facade's content
+	 * into - an entry of theirs under the name Facade's takes: a sentence naming the file and the entry, or
+	 * undefined (AGENT-ORCHESTRATION.md: an unrelated conflicting entry produces a named configuration error).
+	 */
+	conflict?(args: readonly string[], folder: string, env: Environment): string | undefined;
+	/**
+	 * Where a setting of the person's own refuses Facade's tools with YOLO off - a deny rule of theirs, which
+	 * wins over Facade's allow - for a launch in `folder` as `config` has it: which, in words; undefined for none
+	 * (L4, rule 4; N-45: refused, not asked for).
+	 */
+	exemptionOverride?(config: CliConfig, env: Environment, folder: string): string | undefined;
 	/** Its MCP server comes from a file in its folder that every agent there reads: the server finds the agent from its environment. */
 	readonly sharedServer?: boolean;
+	/**
+	 * Its models carry their effort in their names - `gemini-3.8-flash-low`: given with a model, an effort is not
+	 * used, the model's is (N-64).
+	 */
+	readonly modelCarriesEffort?: boolean;
 	/**
 	 * How it gets the notice of its task: `argument`, on its command line; `terminal`, typed into its
 	 * terminal once its MCP server said hello, for a CLI whose first conversation has no MCP tools; `none`
@@ -261,11 +333,23 @@ export interface AgentCli {
 	/** Its sandbox with each YOLO, as its maintained launch leaves it. */
 	readonly sandbox: { readonly yoloOn: Sandbox; readonly yoloOff: Sandbox };
 	/**
+	 * The `${name}` of the file its sandbox goes in, where one carries it: the sandbox is on only where a group
+	 * the launch applies passes that file - the person's launch may leave it out (X-07).
+	 */
+	readonly sandboxIn?: string;
+	/**
 	 * With YOLO off, how Facade's tools go unasked: `precise`, its launch lets Facade's server through alone;
 	 * `all`, it has no way to, and lets every tool through, its sandbox still on (AGENT-LAUNCHER.md, L4);
 	 * `unknown` for a custom agent.
 	 */
 	readonly exemption: 'precise' | 'all' | 'unknown';
+	/**
+	 * Its tools that would leave its terminal waiting for someone to pick an answer: `removed`, by its launch's
+	 * `questions` group; `none`, it has none; `kept`, its launch cannot take them away, and its instructions tell
+	 * it to ask in words - a limitation its launch record says (AGENT-LAUNCHER.md, L4; N-55); `unknown` for a
+	 * custom agent.
+	 */
+	readonly questionTool: 'removed' | 'none' | 'kept' | 'unknown';
 	/** Whether it is the person's own, from `facade.agents.custom`. */
 	readonly custom?: boolean;
 	/** The version of it the last acceptance run started agents with, as Show Agent Launch shows it; none before one has. */
@@ -289,13 +373,25 @@ export function launchValues(input: LaunchInput): { [name: string]: string } {
 	return {
 		folder: input.folder,
 		repository: input.repository,
-		home: os.homedir(),
+		home: input.home ?? os.homedir(),
 		messagesDir: input.messagesDir,
 		...input.model !== undefined ? { model: input.model } : {},
 		...input.effort !== undefined ? { effort: input.effort } : {},
 		...input.task !== undefined ? { task: input.task } : {},
 		...input.connection?.values
 	};
+}
+
+/**
+ * The groups of a built-in's launch that let Facade's server through with YOLO off - its yoloOff, and its
+ * connect, where Codex's server setting is - that the person changed from Facade's own, for an agent the person
+ * starts or, `unattended`, one started through `start_agent`: theirs to say, no working exemption of Facade's (L4,
+ * rule 4; X-38). None for a custom agent, all of whose launch is theirs.
+ */
+export function exemptionGroupsChanged(cli: AgentCli, config: CliConfig, unattended: boolean): ('yoloOff' | 'connect')[] {
+	const theirs = launchFor(config, unattended).launch.arguments;
+	const facades = launchFor(cli.defaults, unattended).launch.arguments;
+	return cli.custom ? [] : (['yoloOff', 'connect'] as const).filter(group => JSON.stringify(theirs[group] ?? []) !== JSON.stringify(facades[group] ?? []));
 }
 
 /** The groups of a launch for `input` that apply: those of its integration and YOLO, and of what it was given - a task only where `task` is. */

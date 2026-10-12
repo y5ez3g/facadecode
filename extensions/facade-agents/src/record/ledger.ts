@@ -11,11 +11,11 @@ import { codeOf } from '../base/errors';
 import { HELD_OPEN_CODES } from '../base/files';
 import { isJsonObject } from '../base/json';
 import { removeLockIfUnchanged } from '../base/lock';
-import { isProcessRunning } from '../base/system';
+import { isProcessRunning, isSameProgram } from '../base/system';
 import { applyEvent, createState, eventOf, fitsState, LedgerEvent, LedgerEventBody, WorkspaceState } from './events';
 
 /** The ledger's file, in the workspace's folder. */
-const LEDGER_FILE = 'ledger.jsonl';
+export const LEDGER_FILE = 'ledger.jsonl';
 const LOCK_FILE = 'ledger.lock';
 /**
  * The version of the ledger's events: 5 since an agent has its YOLO, its tree's root, its sandbox and its
@@ -147,6 +147,8 @@ export interface LedgerOptions {
 	 * window that is not a reload, with no process of its agents present. Where left out, it never is.
 	 */
 	readonly mayMoveAside?: () => boolean;
+	/** Hears that a ledger Facade could not read was moved aside, why, and where it is kept: the person is told (L12; N-31). */
+	readonly onMovedAside?: (why: string, keptAs: string) => void;
 }
 
 /**
@@ -157,6 +159,9 @@ export interface LedgerOptions {
  * keeps it from opening while its agents may run, and is moved aside once none can (`mayMoveAside`).
  */
 export class Ledger {
+
+	/** Who hears of each event as it is written. */
+	private readonly listeners = new Set<(event: LedgerEvent) => void>();
 
 	private fd: number | undefined;
 	private closed = false;
@@ -181,7 +186,7 @@ export class Ledger {
 			thisWindow: found.session !== undefined && found.session === options.session
 		};
 		try {
-			const ledger = new Ledger(dir, load(dir, options.mayMoveAside), mark, options, lastClose);
+			const ledger = new Ledger(dir, load(dir, options.mayMoveAside, options.onMovedAside), mark, options, lastClose);
 			ledger.scheduleHeartbeat();
 			return ledger;
 		} catch (err) {
@@ -232,7 +237,20 @@ export class Ledger {
 			throw err;
 		}
 		applyEvent(this.state, event);
+		for (const listener of [...this.listeners]) {
+			try {
+				listener(event);
+			} catch {
+				// One who listens is not the ledger's to answer for
+			}
+		}
 		return event;
+	}
+
+	/** Hears each event once it is written and applied. */
+	onDidAppend(listener: (event: LedgerEvent) => void): { dispose(): void } {
+		this.listeners.add(listener);
+		return { dispose: () => this.listeners.delete(listener) };
 	}
 
 	/**
@@ -289,11 +307,11 @@ export class Ledger {
  * aside, a new list beginning, where `mayMoveAside` says it may be; else it is left as it is, and loading
  * throws `LedgerUnreadableError`.
  */
-function load(dir: string, mayMoveAside: (() => boolean) | undefined): WorkspaceState {
+function load(dir: string, mayMoveAside: (() => boolean) | undefined, onMovedAside?: (why: string, keptAs: string) => void): WorkspaceState {
 	const file = path.join(dir, LEDGER_FILE);
-	let content: string;
+	let bytes: Buffer;
 	try {
-		content = fs.readFileSync(file, 'utf8');
+		bytes = fs.readFileSync(file);
 	} catch (err) {
 		if (codeOf(err) === 'ENOENT') {
 			return createState();
@@ -304,9 +322,12 @@ function load(dir: string, mayMoveAside: (() => boolean) | undefined): Workspace
 		if (!mayMoveAside?.()) {
 			throw new LedgerUnreadableError(file, why);
 		}
-		fs.renameSync(file, path.join(dir, `${aside}.${Date.now()}.jsonl`));
+		const keptAs = path.join(dir, `${aside}.${Date.now()}.jsonl`);
+		fs.renameSync(file, keptAs);
+		onMovedAside?.(why, keptAs);
 		return createState();
 	};
+	const content = bytes.toString('utf8');
 	const lines = content.split('\n');
 	// What follows the last line break was cut short by a crash.
 	const complete = lines.slice(0, -1);
@@ -332,7 +353,8 @@ function load(dir: string, mayMoveAside: (() => boolean) | undefined): Workspace
 		applyEvent(state, event);
 	}
 	if (lines[lines.length - 1] !== '') {
-		fs.truncateSync(file, Buffer.byteLength(complete.map(line => `${line}\n`).join('')));
+		// At the last line break of what is on disk: counted in its bytes, not in text decoded from them (X-13)
+		fs.truncateSync(file, bytes.lastIndexOf(0x0a) + 1);
 	}
 	return state;
 }
@@ -416,7 +438,7 @@ function acquireLock(dir: string, mark: string, isRunning: (pid: number) => bool
 		}
 		found = content;
 		const holder = holderOf(content);
-		if (holder !== undefined && holder !== process.pid && isRunning(holder) && isTouchedWithin(file, HELD_MS)) {
+		if (holder !== undefined && holder !== process.pid && isHolding(file, holder, isRunning)) {
 			throw new LedgerLockedError(holder, touchedAt(file));
 		}
 		const closed = closedLockOf(content);
@@ -511,8 +533,37 @@ export function isLedgerHeld(dir: string, isRunning: (pid: number) => boolean = 
 	const file = path.join(dir, LOCK_FILE);
 	const holder = holderOf(content);
 	return holder !== undefined
-		? isRunning(holder) && isTouchedWithin(file, HELD_MS)
+		? isHolding(file, holder, isRunning)
 		: isClosed(content) && isTouchedWithin(file, RELOAD_MS);
+}
+
+/**
+ * Who closed the ledger in `dir` as its window went - quit, closed, or reloaded - where no window has it
+ * now: the owner and window load its lock names. Undefined for one a window holds or closed a moment ago,
+ * one Facade let go of while its window stayed, and one a window left as it ended without closing it.
+ */
+export function closedByItsWindow(dir: string, isRunning: (pid: number) => boolean = isProcessRunning): { readonly owner?: string; readonly session?: string } | undefined {
+	if (isLedgerHeld(dir, isRunning)) {
+		return undefined;
+	}
+	let content: string | undefined;
+	try {
+		content = readLock(dir);
+	} catch {
+		return undefined;
+	}
+	const closed = content === undefined ? undefined : closedLockOf(content);
+	return closed?.by === 'window' ? { ...(closed.owner !== undefined ? { owner: closed.owner } : {}), ...(closed.session !== undefined ? { session: closed.session } : {}) } : undefined;
+}
+
+/**
+ * Whether the window whose process `holder` wrote the lock `file` still has it: its process runs, and
+ * touched the lock lately - or, untouched for long, still is Facade's program. A window that stands still
+ * keeps its ledger: nothing takes it over by the time alone (AGENT-LAUNCHER.md, L12). Only a process id
+ * that another program has by now, its lock untouched, is no window's.
+ */
+function isHolding(file: string, holder: number, isRunning: (pid: number) => boolean): boolean {
+	return isRunning(holder) && (isTouchedWithin(file, HELD_MS) || isSameProgram(holder) === true);
 }
 
 /**
@@ -532,7 +583,7 @@ export function lockStateOf(dir: string, isRunning: (pid: number) => boolean = i
 	}
 	const holder = holderOf(content);
 	if (holder !== undefined) {
-		return { held: isRunning(holder) && isTouchedWithin(path.join(dir, LOCK_FILE), HELD_MS) };
+		return { held: isHolding(path.join(dir, LOCK_FILE), holder, isRunning) };
 	}
 	const session = closedLockOf(content)?.session;
 	return { held: false, ...(session !== undefined ? { closedIn: session } : {}) };

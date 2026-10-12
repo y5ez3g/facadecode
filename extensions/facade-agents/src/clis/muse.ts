@@ -12,7 +12,9 @@ import { AgentCli, launchArgs, launchUses, launchValues, skillMarkdown } from '.
  * to let Facade's server alone through unasked, so it asks for nothing (AGENT-LAUNCHER.md, L4). It reads
  * MCP servers and skills from its folder - `.mcp.json` and `.agents/skills/` - once the folder is trusted,
  * which `--trust-workspace` does for the launch alone. Its server finds the agent through `${VAR}`
- * references to its environment. The notice of its task is its argument.
+ * references to its environment. The notice of its task is its argument - through `start_agent`, its opening
+ * alone where it has no task, which tells it to ask in words: no setting takes its question tool away, and its
+ * model is not given its server's instructions (L4; N-71). Through `start_agent` its update is off.
  */
 export const museCli: AgentCli = {
 	id: 'muse',
@@ -27,30 +29,41 @@ export const museCli: AgentCli = {
 				yoloOn: ['--disable-approval', '--disable-sandbox'],
 				yoloOff: ['--disable-approval'],
 				model: ['--model', '${model}'],
-				effort: ['--reasoning-effort', '${effort}'],
+				// For the run alone: its `--reasoning-effort` it keeps in the person's settings, their own from then on
+				// (N-75). The efforts their settings keep for each model would win over this one, and go for the run.
+				effort: ['-c', 'reasoning_effort=${effortJson}', '-c', 'model_reasoning_efforts={}'],
 				// After the end of the options, so that a notice starting with a dash is not read as one.
 				task: ['--', '${task}']
 			},
-			// One version for the agent's whole run: its launcher would otherwise update it as it starts it.
-			environment: { MUSE_NO_AUTO_UPDATE: '1' },
+			environment: {},
 			// For the launch alone: it stores nothing.
 			trust: { arguments: ['--trust-workspace'] },
 			// It takes a fast burst of keys for a paste, and an Enter that comes with them for a new line.
 			enterDelay: 900,
-			taskDelay: 2000
+			taskDelay: 2000,
+			unattended: {
+				arguments: {},
+				// One version for the agent's whole run: its launcher would otherwise update it as it starts it.
+				environment: { MUSE_NO_AUTO_UPDATE: '1' }
+			}
 		}
 	},
 	sharedServer: true,
 	task: 'argument',
 	sandbox: { yoloOn: 'off', yoloOff: 'on' },
 	exemption: 'all',
+	// Its settings turn off only artifact, web_fetch and web_search (YO-07)
+	questionTool: 'kept',
 	launch(input, executable) {
 		const { connection } = input;
-		// Expanded from the agent's own environment when its MCP server starts.
-		const servers = connection && { facade: { command: connection.mcp.command, args: connection.mcp.args, env: { ...connection.mcp.env, FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS}' } } };
+		// Expanded from the agent's own environment when its MCP server starts - empty where it is not set: a
+		// Muse run by hand in the folder refuses a variable with no value, and turns off every server of the
+		// person's with it (O9: no Facade tools and no startup noise; N-42). Empty, the server is not Facade's.
+		const servers = connection && { facade: { command: connection.mcp.command, args: connection.mcp.args, env: { ...connection.mcp.env, FACADE_AGENTS_RECORD: '${FACADE_AGENTS_RECORD:-}', FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE:-}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN:-}', FACADE_AGENTS_WAIT_MS: '${FACADE_AGENTS_WAIT_MS:-}' } } };
 		return {
 			executable,
-			args: launchArgs(museCli.setting + '.launch', input.config, launchValues(input), launchUses(input)),
+			// Its `-c` values are JSON
+			args: launchArgs(museCli.setting + '.launch', input.config, { ...launchValues(input), ...input.effort !== undefined ? { effortJson: JSON.stringify(input.effort) } : {} }, launchUses(input)),
 			env: input.config.launch.environment,
 			cwd: input.folder,
 			files: [],

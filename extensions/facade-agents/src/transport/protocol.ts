@@ -39,7 +39,8 @@ export interface Hello {
 
 /** A line of the window's answer to `/call`: progress while the call runs, then its result or why it failed. */
 export type CallLine =
-	| { readonly type: 'progress'; readonly message: string }
+	/** `agent`: the run the call made, once it has made one - for a caller whose call is cut after, to name it. */
+	| { readonly type: 'progress'; readonly message: string; readonly agent?: number }
 	| { readonly type: 'result'; readonly result: unknown }
 	| { readonly type: 'error'; readonly code: string; readonly message: string };
 
@@ -84,6 +85,9 @@ export function splitLines(text: string): { readonly lines: readonly string[]; r
 	return { lines: lines.map(line => line.endsWith('\r') ? line.slice(0, -1) : line), rest };
 }
 
+/** Word of how a call goes: a message, with the run the call made once it has made one. */
+export type Progress = (message: string, agent?: number) => void;
+
 /** A line of the window's answer to `/call`, checked; undefined when it is not one. */
 export function callLineOf(line: string): CallLine | undefined {
 	let value: unknown;
@@ -95,9 +99,9 @@ export function callLineOf(line: string): CallLine | undefined {
 	if (!isJsonObject(value)) {
 		return undefined;
 	}
-	const { type, message, result, code } = value;
+	const { type, message, result, code, agent } = value;
 	if (type === 'progress' && typeof message === 'string') {
-		return { type, message };
+		return { type, message, ...(typeof agent === 'number' && Number.isInteger(agent) && agent > 0 ? { agent } : {}) };
 	}
 	if (type === 'result') {
 		return { type, result };

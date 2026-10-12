@@ -3,19 +3,18 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'fs';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
-import { AgentCli, CliConfig, Environment } from '../clis/cli';
-import { claudeCli } from '../clis/claude';
+import { AgentCli, CliConfig, Environment, InstalledCli } from '../clis/cli';
+import { claudeCli, claudeDenyOf } from '../clis/claude';
 import { whyNotInstalled } from '../clis/config';
+import { CUSTOM_AGENTS_SETTING } from '../clis/custom';
 import { DescribedCli, launchDocument } from '../clis/describe';
-import { homeOf, launchTarget } from '../clis/executable';
+import { launchTarget } from '../clis/executable';
 import { knownClis, locateCli } from '../clis/registry';
 import { trustTarget } from '../clis/trust';
-import { HostGit } from './git';
+import { repositoryAt } from './git';
 import { configFor, customAgents, frameworkOn, yolo } from './settings';
 import { folderOnScreen } from './startAgent';
 import { terminalEnvironment } from './terminals';
@@ -23,16 +22,20 @@ import { terminalEnvironment } from './terminals';
 /** Where the document Agents: Show Agent Launch shows lives: read-only, as a provider's documents are. */
 const LAUNCH = vscode.Uri.from({ scheme: 'facade-agents', path: '/agent-launch.jsonc' });
 
+/** What would refuse a start of an agent in a folder as things are: the window's core's own checks, where it has one. */
+export type LaunchProblems = (installed: InstalledCli, folder: string) => Promise<readonly string[]>;
+
 /**
  * Agents: Show Agent Launch: a read-only document of what Facade starts each agent with now, for an agent
  * in the folder on screen - built-ins and custom agents alike - which follows the person's settings as they
- * change them, and is read again each time the person asks for it: a CLI installed meanwhile shows.
+ * change them, and is read again each time the person asks for it: a CLI installed meanwhile shows. What
+ * would refuse a start comes from `problemsOf`.
  */
-export function registerShowLaunch(): vscode.Disposable {
+export function registerShowLaunch(problemsOf: LaunchProblems): vscode.Disposable {
 	const changed = new vscode.EventEmitter<vscode.Uri>();
 	const provider: vscode.TextDocumentContentProvider = {
 		onDidChange: changed.event,
-		provideTextDocumentContent: () => shownNow()
+		provideTextDocumentContent: () => shownNow(problemsOf)
 	};
 	return vscode.Disposable.from(
 		changed,
@@ -56,11 +59,11 @@ export function registerShowLaunch(): vscode.Disposable {
  * a terminal there finds it and the trust it would be given there; in a window without a folder, as the
  * window's own environment finds it.
  */
-async function shownNow(): Promise<string> {
+async function shownNow(problemsOf: LaunchProblems): Promise<string> {
 	const folders = (vscode.workspace.workspaceFolders ?? []).filter(each => each.uri.scheme === 'file').map(each => each.uri.fsPath);
 	const folder = await folderOnScreen() ?? folders.at(0);
 	const terminal: Environment = folder === undefined ? process.env : await terminalEnvironment(folder);
-	const repository = folder === undefined ? undefined : (await new HostGit().repositoryOf(folder))?.main ?? folder;
+	const repository = folder === undefined ? undefined : (await repositoryAt(folder))?.main ?? folder;
 	let shownYolo: boolean | { readonly wrong: string };
 	try {
 		shownYolo = yolo();
@@ -68,56 +71,45 @@ async function shownNow(): Promise<string> {
 		shownYolo = { wrong: messageOf(err) };
 	}
 	const place = folder === undefined || repository === undefined ? undefined : { folder, repository };
+	// A custom agent's own launch by its name, which may have a dot in it: not a path of settings (X-38)
+	const custom = vscode.workspace.getConfiguration().get<unknown>(CUSTOM_AGENTS_SETTING);
+	const customLaunch = (name: string) => {
+		const entry = isJsonObject(custom) ? custom[name] : undefined;
+		return isJsonObject(entry) ? entry.launch : undefined;
+	};
 	return launchDocument({
 		folder,
 		yolo: shownYolo,
 		framework: frameworkOn(),
-		clis: [
-			...knownClis().map(cli => describedCli(cli, configFor(cli), vscode.workspace.getConfiguration(cli.setting).get('launch'), folder, place, terminal)),
-			...customAgents().map(({ cli, config }) => describedCli(cli, config, vscode.workspace.getConfiguration(cli.setting).get('launch'), folder, place, terminal))
-		]
+		clis: await Promise.all([
+			...knownClis().map(cli => describedCli(cli, configFor(cli), vscode.workspace.getConfiguration(cli.setting).get('launch'), folder, place, terminal, problemsOf)),
+			...customAgents().map(({ cli, config }) => describedCli(cli, config, customLaunch(cli.id), folder, place, terminal, problemsOf))
+		])
 	});
 }
 
 /** An agent as the person has Facade start it now, for an agent in `place`, whose terminal has the environment `terminal`. */
-function describedCli(cli: AgentCli, config: CliConfig, yours: unknown, folder: string | undefined, place: { readonly folder: string; readonly repository: string } | undefined, terminal: Environment): DescribedCli {
+async function describedCli(cli: AgentCli, config: CliConfig, yours: unknown, folder: string | undefined, place: { readonly folder: string; readonly repository: string } | undefined, terminal: Environment, problemsOf: LaunchProblems): Promise<DescribedCli> {
 	const env = { ...terminal, ...config.launch.environment };
-	const found = locateCli(cli, config, env);
-	const overridden = cli === claudeCli ? claudeDeny(env, folder) : undefined;
+	const found = locateCli(cli, config, env, folder);
+	const overridden = cli === claudeCli ? claudeDeny(config, env, folder) : undefined;
+	// What would refuse its start there, as a start finds it: only for one there is, in a folder (L9)
+	const problems = found && folder !== undefined ? await problemsOf(found, folder) : [];
 	return {
 		cli,
 		config,
 		yours,
 		program: found ? { target: launchTarget(found.executable, process.platform, env) } : { missing: whyNotInstalled(cli, config, folder === undefined ? undefined : 'the PATH a terminal there has') },
 		trust: trustShown(cli, config, place, env),
-		...(overridden !== undefined ? { overridden } : {})
+		...(overridden !== undefined ? { overridden } : {}),
+		...(problems.length ? { problems } : {})
 	};
 }
 
-/**
- * Where the person's own Claude Code settings deny Facade's tools - a deny rule wins over Facade's
- * `--allowedTools` - which file and which rule: with YOLO off, Claude Code asks for them all the same
- * (AGENT-LAUNCHER.md, L4).
- */
-function claudeDeny(env: Environment, folder: string | undefined): string | undefined {
-	const files = [
-		path.join(env.CLAUDE_CONFIG_DIR || path.join(homeOf(env), '.claude'), 'settings.json'),
-		...folder === undefined ? [] : [path.join(folder, '.claude', 'settings.json'), path.join(folder, '.claude', 'settings.local.json')]
-	];
-	for (const file of files) {
-		let settings: unknown;
-		try {
-			settings = JSON.parse(fs.readFileSync(file, 'utf8'));
-		} catch {
-			continue;
-		}
-		const deny = isJsonObject(settings) && isJsonObject(settings.permissions) ? settings.permissions.deny : undefined;
-		const rule = Array.isArray(deny) ? deny.find(each => typeof each === 'string' && /^mcp__facade(?:__|$)/.test(each)) : undefined;
-		if (typeof rule === 'string') {
-			return vscode.l10n.t("{0} denies {1}, which wins over Facade's allow: with YOLO off, Claude Code asks before Facade's tools", file, rule);
-		}
-	}
-	return undefined;
+/** Where Claude Code's settings deny Facade's tools, as the document says it (L4, rule 4). */
+function claudeDeny(config: CliConfig, env: Environment, folder: string | undefined): string | undefined {
+	const deny = claudeDenyOf(config, env, folder);
+	return deny && vscode.l10n.t("{0} denies {1}, which wins over Facade's allow: with YOLO off, Claude Code refuses Facade's tools", deny.where, deny.rule);
 }
 
 /** The trust `cli` would be given for an agent in `place`, and where; as its launch writes it, without one. */

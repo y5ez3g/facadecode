@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { Facade, Started } from '../core/facade';
 import { describe } from '../record/events';
 import { Args } from './args';
 import { factsText } from './listAgents';
@@ -15,6 +16,19 @@ const PARAMS = ['name', 'cli', 'model?', 'effort?', 'task?', 'folder?', 'new_wor
  * or a new worktree. It answers with the agent's number once it has started, or that its start is not
  * confirmed.
  */
+/**
+ * What of the model and effort a start was given its CLI was not given, and why: its launch has no group for
+ * it, so its own applies; or - an effort given with a model whose name carries one - the model's applies (N-64).
+ */
+function ignoredText(facade: Facade, started: Started): string {
+	const byModel = started.ignored.includes('effort') && started.model !== undefined && !started.ignored.includes('model') && facade.modelCarriesEffort(started.cli);
+	const noGroup = started.ignored.filter(what => !(what === 'effort' && byModel));
+	return [
+		...noGroup.length ? [` The ${noGroup.join(' and ')} you gave ${noGroup.length === 1 ? 'was' : 'were'} not used: ${started.cli}'s launch has no group for ${noGroup.length === 1 ? 'it' : 'them'}, so its own applies.`] : [],
+		...byModel ? [` The effort you gave was not used: ${facade.cliName(started.cli)}'s models carry their effort, so ${started.model}'s applies. Name a model that carries the effort you want, or give the effort without a model.`] : []
+	].join('');
+}
+
 export const startAgentTool: ContractTool = {
 	definition: {
 		name: 'start_agent',
@@ -44,7 +58,8 @@ export const startAgentTool: ContractTool = {
 				...this.definition.inputSchema,
 				properties: {
 					...this.definition.inputSchema.properties,
-					cli: { type: 'string', enum: startable.map(each => each.id), description: `The CLI, or a custom agent: ${startable.map(each => each.custom ? `${each.id} (custom)` : `${each.id} (${each.displayName})`).join(', ') || 'none on this machine'}.` }
+					// No enum: a CLI installed or a custom agent added after this was read is startable all the same (X-39)
+					cli: { type: 'string', description: `The CLI, or a custom agent: ${startable.map(each => each.custom ? `${each.id} (custom)` : `${each.id} (${each.displayName})`).join(', ') || 'none on this machine'} - as they were when you started; list_agents lists them as they are now.` }
 				}
 			}
 		};
@@ -55,7 +70,8 @@ export const startAgentTool: ContractTool = {
 		const cli = args.text('cli');
 		const model = args.optionalText('model');
 		const effort = args.optionalText('effort');
-		const task = args.optionalText('task');
+		// As it was written: kept, and read, exactly (X-56)
+		const task = args.optionalWords('task');
 		const folder = args.optionalText('folder');
 		const newWorktree = args.boolean('new_worktree');
 		const started = await facade.startAgent(caller, {
@@ -67,12 +83,13 @@ export const startAgentTool: ContractTool = {
 			...(folder !== undefined ? { folder } : {}),
 			...(newWorktree !== undefined ? { newWorktree } : {})
 		}, progress);
-		const ignored = started.ignored.length ? ` The ${started.ignored.join(' and ')} you gave ${started.ignored.length === 1 ? 'was' : 'were'} not used: ${started.cli}'s launch has no group for ${started.ignored.length === 1 ? 'it' : 'them'}, so its own applies.` : '';
+		const ignored = ignoredText(facade, started);
 		const where = started.newWorktree ? `the new worktree ${started.worktree} (a new branch)` : `the worktree ${started.worktree}`;
+		const notes = started.notes?.length ? ` ${started.notes.join(' ')}` : '';
 		return {
 			text: started.status === 'started'
-				? `Started ${describe(started)} in ${where}: ${factsText(facade, started)}.${ignored}`
-				: `${describe(started)} is not confirmed to have started: ${started.why}. It stays starting - ${factsText(facade, started)} - and may start yet: look at it with list_agents, or stop it with stop_agent; do not start it again.${ignored}`,
+				? `Started ${describe(started)} in ${where}: ${factsText(facade, started)}.${ignored}${notes}`
+				: `${describe(started)} is not confirmed to have started: ${started.why}. It stays starting - ${factsText(facade, started)} - and may start yet: look at it with list_agents, or stop it with stop_agent; do not start it again.${ignored}${notes}`,
 			data: started
 		};
 	}

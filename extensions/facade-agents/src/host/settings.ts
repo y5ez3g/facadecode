@@ -4,14 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { AgentCli, CliConfig } from '../clis/cli';
-import { readCliConfig, secondsSetting } from '../clis/config';
+import { readCliConfig, readSeconds } from '../clis/config';
 import { CUSTOM_AGENTS_SETTING, CustomAgent, customAgentOf } from '../clis/custom';
 import { knownClis } from '../clis/registry';
-import { START_TIMEOUT_MS } from '../core/launch';
-import { agentName } from '../record/agents';
+import { customAgentNameProblem, START_TIMEOUT_MS } from '../core/launch';
 
 /** The agent framework's switch (AGENT-LAUNCHER.md, L7). */
 export const FRAMEWORK_SETTING = 'facade.orchestration.enabled';
@@ -32,19 +30,7 @@ export function customAgents(): readonly CustomAgent[] {
 		return [];
 	}
 	const builtIns = new Set(knownClis().map(cli => cli.id));
-	return Object.entries(value).map(([name, entry]) => customAgentOf(name, entry, nameProblem(name, builtIns)));
-}
-
-/** Why `name` cannot be a custom agent's: not an agent's name, or a built-in's id, by which agents start a built-in. */
-function nameProblem(name: string, builtIns: ReadonlySet<string>): string | undefined {
-	if (builtIns.has(name)) {
-		return `${name} is a built-in's id, by which agents start it: give the custom agent another name`;
-	}
-	try {
-		return agentName(name) === name ? undefined : `"${name}" is not a name as an agent's is`;
-	} catch (err) {
-		return messageOf(err);
-	}
+	return Object.entries(value).map(([name, entry]) => customAgentOf(name, entry, customAgentNameProblem(name, builtIns)));
 }
 
 /**
@@ -53,7 +39,7 @@ function nameProblem(name: string, builtIns: ReadonlySet<string>): string | unde
  * reload - and a window that reloads for the pipe its running agents call.
  */
 export function timeoutMs(): number {
-	return secondsSetting(vscode.workspace.getConfiguration('facade.agents').get('timeout'), START_TIMEOUT_MS);
+	return readSeconds('facade.agents.timeout', vscode.workspace.getConfiguration('facade.agents').get<unknown>('timeout'), START_TIMEOUT_MS).ms;
 }
 
 /**
@@ -69,7 +55,25 @@ export function yolo(): boolean {
 	return value ?? true;
 }
 
-/** Whether the agent framework is on: `facade.orchestration.enabled`, on by default. */
+/** Whether the agent framework is on: `facade.orchestration.enabled`, on by default - and where it holds neither true nor false. */
 export function frameworkOn(): boolean {
 	return vscode.workspace.getConfiguration().get<unknown>(FRAMEWORK_SETTING) !== false;
+}
+
+/**
+ * What is wrong in the person's settings that hold for every agent - the agent framework's switch, the
+ * timeout - and what Facade uses instead, each naming the setting: never a value taken without saying so
+ * (AGENT-LAUNCHER.md, L5; X-59).
+ */
+export function settingsProblems(): string[] {
+	const problems: string[] = [];
+	const framework = vscode.workspace.getConfiguration().get<unknown>(FRAMEWORK_SETTING);
+	if (framework !== undefined && typeof framework !== 'boolean') {
+		problems.push(`${FRAMEWORK_SETTING} is ${JSON.stringify(framework)}, which is neither true nor false: on, its default, is used`);
+	}
+	const timeout = readSeconds('facade.agents.timeout', vscode.workspace.getConfiguration('facade.agents').get<unknown>('timeout'), START_TIMEOUT_MS);
+	if (timeout.wrong) {
+		problems.push(timeout.wrong);
+	}
+	return problems;
 }

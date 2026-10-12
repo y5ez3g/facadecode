@@ -7,7 +7,7 @@ import { messageOf } from '../base/errors';
 import { FacadeError } from '../core/errors';
 import { Facade } from '../core/facade';
 import { Caller } from '../record/events';
-import { Hello, McpTool, ToolResult } from '../transport/protocol';
+import { Hello, McpTool, Progress, ToolResult } from '../transport/protocol';
 import { listAgentsTool } from './listAgents';
 import { instructionsFor } from './prompts';
 import { startAgentTool } from './startAgent';
@@ -33,7 +33,7 @@ export interface ContractTool {
 	/** Its definition as the model is shown it, where that depends on what this machine has. */
 	describe?(facade: Facade): Tool;
 	/** Runs it; `progress` tells the caller's client how a long call goes. */
-	call(facade: Facade, caller: Caller, args: unknown, progress: (message: string) => void): Promise<ToolResult>;
+	call(facade: Facade, caller: Caller, args: unknown, progress: Progress): Promise<ToolResult>;
 }
 
 const TOOLS: readonly ContractTool[] = [startAgentTool, listAgentsTool, stopAgentTool];
@@ -48,9 +48,9 @@ export class Contract {
 
 	constructor(private readonly facade: Facade) { }
 
-	/** Answers a new MCP server's hello; for an agent, its hello is also the news that it is running. */
-	hello(caller: Caller): Hello {
-		this.facade.connected(caller);
+	/** Answers a new MCP server's hello; for an agent, its hello is also the news that it is running, and which process its server is. */
+	hello(caller: Caller, server: { readonly pid?: number } = {}): Hello {
+		this.facade.connected(caller, server.pid);
 		return { name: caller.name, tools: TOOLS.map(tool => tool.describe?.(this.facade) ?? tool.definition), instructions: instructionsFor(this.facade, caller) };
 	}
 
@@ -58,10 +58,12 @@ export class Contract {
 	 * Runs one tool for one caller. Whatever happens, the answer is a result the model reads. While the agent
 	 * framework is off, every call answers at once that it is (AGENT-ORCHESTRATION.md, O7).
 	 */
-	async call(caller: Caller, name: string, args: unknown, progress: (message: string) => void): Promise<ToolResult> {
+	async call(caller: Caller, name: string, args: unknown, progress: Progress): Promise<ToolResult> {
 		if (!this.facade.frameworkOn()) {
 			return { text: 'Facade\'s tools are off: the person turned the agent framework off (facade.orchestration.enabled). Nothing was done; the agents running run on.', isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
 		}
+		// What this machine has now, as a terminal finds it: a CLI the person installed, or took away, since
+		await this.facade.refreshClis();
 		try {
 			const tool = TOOLS.find(each => each.definition.name === name);
 			if (!tool) {

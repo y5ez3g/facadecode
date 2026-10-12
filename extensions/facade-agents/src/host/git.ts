@@ -3,11 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { isEqualPath } from '../base/files';
-import { Git, ListedWorktree, Repository, WorktreeChanges } from '../core/ports';
-import { changedFilesIn, excludeIn, hasBranchIn, repositoryIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreesIn } from './gitCli';
+import { canonicalFolder, isInsideFolder } from '../base/files';
+import { Git, ListedWorktree, MadeWorktreeFolder, Repository, SetupOutcome, WorktreeChanges, WorktreeDeletion } from '../core/ports';
+import { changedFilesIn, excludeIn, fileAtIn, hasBranchIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreesIn } from './gitCli';
 
 /**
  * The core's Git port: git's own records, read with the git the git extension uses - the one the
@@ -16,8 +17,11 @@ import { changedFilesIn, excludeIn, hasBranchIn, repositoryIn, trackedIn, untrac
  */
 export class HostGit implements Git {
 
+	/** `workspace` is the id of the record the agents are in: their runs are known by it. */
+	constructor(private readonly workspace: string) { }
+
 	async repositoryOf(folder: string): Promise<Repository | undefined> {
-		return repositoryIn(await gitPath(), folder);
+		return repositoryAt(folder);
 	}
 
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
@@ -32,21 +36,44 @@ export class HostGit implements Git {
 		return whyNotBranchNameIn(await gitPath(), main, branch);
 	}
 
-	async makeWorktree(main: string, branch: string, startPoint: string): Promise<string> {
-		const worktree = await vscode.commands.executeCommand<vscode.Uri>('_facade.worktree.create', vscode.Uri.file(main), branch, startPoint, false);
-		return worktree.fsPath;
+	plannedWorktreeFolder(main: string, branch: string): string {
+		return path.join(os.homedir(), '.facade', 'worktrees', path.basename(main), worktreeFolderName(branch));
+	}
+
+	async makeWorktree(main: string, branch: string, startPoint: string): Promise<MadeWorktreeFolder> {
+		const made = await vscode.commands.executeCommand<{ readonly worktree: vscode.Uri; readonly copyFailures: readonly string[]; readonly hookFailure?: string }>('_facade.worktree.create', vscode.Uri.file(main), branch, startPoint, false);
+		return { folder: made.worktree.fsPath, copyFailures: made.copyFailures, ...(made.hookFailure ? { hookFailure: made.hookFailure } : {}) };
+	}
+
+	async setupOutcome(folder: string): Promise<SetupOutcome> {
+		return await vscode.commands.executeCommand<SetupOutcome>('_facade.worktree.setupOutcome', vscode.Uri.file(folder)) ?? { kind: 'none' };
+	}
+
+	stopSetup(folder: string): void {
+		void vscode.commands.executeCommand('_facade.worktree.stopSetup', vscode.Uri.file(folder)).then(undefined, () => undefined);
 	}
 
 	async changesIn(folder: string): Promise<WorktreeChanges> {
-		const files = await changedFilesIn(await gitPath(), folder);
-		const unsaved = vscode.workspace.textDocuments
-			.filter(document => document.isDirty && document.uri.scheme === 'file' && isInside(document.uri.fsPath, folder))
-			.map(document => path.relative(folder, document.uri.fsPath).split(path.sep).join('/'));
-		return { files, unsaved };
+		const git = await gitPath();
+		const [files, submodules] = await Promise.all([changedFilesIn(git, folder), submodulesIn(git, folder)]);
+		// Editors and notebooks alike, by either spelling of the folder - as it was given, and its real path - and
+		// of each file: one opened through a link to the folder is in it by its real path alone (X-71; SP-25)
+		const real = canonicalFolder(folder);
+		const unsaved = [...vscode.workspace.textDocuments, ...vscode.workspace.notebookDocuments]
+			.filter(document => document.isDirty && document.uri.scheme === 'file')
+			.map(document => document.uri.fsPath)
+			.flatMap(file => [file, canonicalFolder(file)].flatMap(each => [folder, real].filter(at => isInsideFolder(each, at)).map(at => path.relative(at, each).split(path.sep).join('/'))).slice(0, 1));
+		return { files, unsaved, submodules };
 	}
 
-	async deleteWorktree(folder: string, options: { readonly discardChanges: boolean; readonly ownFiles: readonly string[] }): Promise<void> {
-		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder), { discardChanges: options.discardChanges, ownFiles: options.ownFiles });
+	async deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void> {
+		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder), {
+			discardChanges: options.discardChanges,
+			ownFiles: options.ownFiles,
+			main: vscode.Uri.file(options.main),
+			runs: options.agents.map(id => ({ workspace: this.workspace, id })),
+			...(options.leftover ? { leftover: true } : {})
+		});
 	}
 
 	async excludeOf(folder: string): Promise<{ readonly file: string; readonly root: string } | undefined> {
@@ -57,15 +84,23 @@ export class HostGit implements Git {
 		return trackedIn(await gitPath(), folder, files, commit);
 	}
 
+	async leftoverWorkIn(main: string, branch: string, folder: string): Promise<readonly string[]> {
+		return leftoverWorkIn(await gitPath(), main, branch, folder);
+	}
+
+	async fileAt(main: string, commit: string, file: string): Promise<string | undefined> {
+		return fileAtIn(await gitPath(), main, commit, file);
+	}
+
 	async untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>> {
 		return untrackedIn(await gitPath(), folder, files);
 	}
 }
 
-/** Whether `file` is inside `folder`. */
-function isInside(file: string, folder: string): boolean {
-	const relative = path.relative(folder, file);
-	return !isEqualPath(file, folder) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+
+/** The repository `folder` is in, by the git the git extension uses; undefined for a folder in none. */
+export async function repositoryAt(folder: string): Promise<Repository | undefined> {
+	return repositoryIn(await gitPath(), folder);
 }
 
 /** The git the git extension uses: the one the person set, or the one on PATH. */
@@ -77,4 +112,12 @@ async function gitPath(): Promise<string> {
 	} catch {
 		return 'git';
 	}
+}
+
+/**
+ * The name of a worktree's folder for `branch`: `/` and every character Windows forbids in a file name
+ * replaced by `-`, on every OS (WORKTREE.md, WT-2.2), as the window names it.
+ */
+function worktreeFolderName(branch: string): string {
+	return branch.trim().replace(/[\\/<>:"|?*]/g, '-');
 }

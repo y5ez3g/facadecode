@@ -50,6 +50,12 @@ export type EndKind = 'exited' | 'stopped' | 'failed' | 'lost';
  */
 export type TaskDelivery = 'none' | 'argument' | 'pending' | 'typed' | 'unknown';
 
+/**
+ * Where a start is, once it is accepted (AGENT-ORCHESTRATION.md, O4): its worktree being made, its
+ * worktree's setup running, its CLI being launched, or its CLI running and its MCP server not connected yet.
+ */
+export type StartPhase = 'creating_worktree' | 'running_setup' | 'launching_cli' | 'connecting';
+
 /** Who stopped an agent: another agent, by its number, or the person. */
 export type StoppedBy = number | 'human';
 
@@ -90,13 +96,26 @@ export interface Agent {
 	readonly ignored: readonly Ignored[];
 	/** Its YOLO, as it started: never changes. */
 	readonly yolo: boolean;
+	/**
+	 * Whether it was started through `start_agent` - by an agent, or the person's scripts - where nobody may be
+	 * watching it, not by the person from the window (AGENT-LAUNCHER.md, L4); none in a ledger from before.
+	 */
+	readonly unattended?: true;
 	/** Its sandbox, as its launch left it. */
 	readonly sandbox: SandboxState;
 	/** Whether it was launched with the agent framework's integration: Facade's server, skills and files. */
 	readonly integration: boolean;
 	/** The name of its worktree: its branch, or the folder's own name outside a repository. */
 	readonly worktree: string;
-	readonly folder: string;
+	/** Whether it runs in a folder of no Git repository: it has no worktree or branch, `worktree` being the folder's name (N-05). */
+	readonly outsideGit?: true;
+	/** Where it runs: for a new worktree, the folder planned for it until the worktree is made - then where it was made. */
+	folder: string;
+	/**
+	 * Where its start is, while it is starting (AGENT-ORCHESTRATION.md, O4) - and, stopped or ended before it
+	 * started, where it got to; none once it started, and none before phases were recorded.
+	 */
+	phase?: StartPhase;
 	/** The number of its task's message, `#m12`; none without a task. */
 	readonly taskMessage?: number;
 	task: TaskDelivery;
@@ -104,6 +123,8 @@ export interface Agent {
 	connected: boolean;
 	/** Its CLI's process, once its terminal runs it. */
 	processId?: number;
+	/** When its CLI's process was launched: by which it is told from another that got its id since. */
+	launchTime?: number;
 	state: AgentState;
 	/** Who set out to stop it, and why, while it is stopping. */
 	stopping?: { readonly by?: StoppedBy; readonly reason: string };
@@ -143,15 +164,21 @@ export type LedgerEventBody =
 		readonly effort?: string;
 		readonly ignored?: readonly Ignored[];
 		readonly yolo: boolean;
+		readonly unattended?: true;
 		readonly sandbox: SandboxState;
 		readonly integration: boolean;
 		readonly worktree: string;
+		readonly outsideGit?: true;
 		readonly folder: string;
 		readonly taskMessage?: number;
 		/** How the notice of its task reaches it: none, as an argument, or to be typed into its terminal. */
 		readonly task: 'none' | 'argument' | 'pending';
 		readonly tokenHash: string;
+		/** Where its start begins: making its worktree, or launching its CLI; none in a ledger from before phases. */
+		readonly phase?: StartPhase;
 	}
+	/** Its start moved on: to the phase it is in now, and - its worktree made - the folder it was made in. */
+	| { readonly type: 'agent.phase'; readonly id: number; readonly phase: StartPhase; readonly folder?: string }
 	| { readonly type: 'agent.launched'; readonly id: number; readonly processId: number }
 	| { readonly type: 'agent.connected' | 'task.typing' | 'task.typed' | 'agent.running'; readonly id: number }
 	| { readonly type: 'agent.stopping'; readonly id: number; readonly by?: StoppedBy; readonly reason: string }
@@ -240,6 +267,7 @@ export function createState(): WorkspaceState {
 const END_KINDS: ReadonlySet<string> = new Set<EndKind>(['exited', 'stopped', 'failed', 'lost']);
 const STARTING_TASKS: ReadonlySet<string> = new Set(['none', 'argument', 'pending']);
 const SANDBOX_STATES: ReadonlySet<string> = new Set<SandboxState>(['on', 'off', 'unavailable', 'unknown']);
+const START_PHASES: ReadonlySet<string> = new Set<StartPhase>(['creating_worktree', 'running_setup', 'launching_cli', 'connecting']);
 const IGNORABLE: ReadonlySet<string> = new Set<Ignored>(['model', 'effort']);
 
 function isEndKind(value: unknown): value is EndKind {
@@ -278,23 +306,30 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 	switch (value.type) {
 		case 'agent.started': {
 			// A line of version 4 has neither YOLO nor sandbox, its agents at full access, and model and effort always.
-			const { id, name, creator, root, cli, custom, model, effort, ignored, worktree, folder, taskMessage, task, tokenHash } = value;
+			const { id, name, creator, root, cli, custom, model, effort, ignored, unattended, worktree, outsideGit, folder, taskMessage, task, tokenHash, phase } = value;
 			const yolo = value.yolo ?? (value.v === 4 ? true : undefined);
 			const sandbox = value.sandbox ?? (value.v === 4 ? 'unknown' : undefined);
 			const integration = value.integration ?? (value.v === 4 ? true : undefined);
 			if (!isId(id) || typeof name !== 'string' || !isAgentName(name) || (creator !== undefined && !isId(creator)) || (root !== undefined && !isId(root)) || !isText(cli)
 				|| (custom !== undefined && typeof custom !== 'boolean') || (model !== undefined && !isText(model)) || (effort !== undefined && !isText(effort))
 				|| (ignored !== undefined && !(Array.isArray(ignored) && ignored.every(each => typeof each === 'string' && IGNORABLE.has(each))))
-				|| typeof yolo !== 'boolean' || typeof sandbox !== 'string' || !SANDBOX_STATES.has(sandbox) || typeof integration !== 'boolean'
-				|| !isText(worktree) || !isText(folder) || (taskMessage !== undefined && !isId(taskMessage)) || typeof task !== 'string' || !STARTING_TASKS.has(task)
-				|| typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash)) {
+				|| typeof yolo !== 'boolean' || (unattended !== undefined && unattended !== true) || typeof sandbox !== 'string' || !SANDBOX_STATES.has(sandbox) || typeof integration !== 'boolean'
+				|| typeof worktree !== 'string' || (outsideGit !== undefined && outsideGit !== true) || !isText(folder) || (taskMessage !== undefined && !isId(taskMessage)) || typeof task !== 'string' || !STARTING_TASKS.has(task)
+				|| typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (phase !== undefined && (typeof phase !== 'string' || !START_PHASES.has(phase)))) {
 				return undefined;
 			}
 			return {
 				type: 'agent.started', id, name, ...(creator !== undefined ? { creator } : {}), ...(root !== undefined ? { root } : {}), cli, ...(custom ? { custom } : {}),
 				...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(Array.isArray(ignored) && ignored.length ? { ignored: ignored as Ignored[] } : {}),
-				yolo, sandbox: sandbox as SandboxState, integration, worktree, folder, ...(taskMessage !== undefined ? { taskMessage } : {}), task: task as 'none' | 'argument' | 'pending', tokenHash
+				yolo, ...(unattended ? { unattended } : {}), sandbox: sandbox as SandboxState, integration, worktree, ...(outsideGit ? { outsideGit } : {}), folder, ...(taskMessage !== undefined ? { taskMessage } : {}), task: task as 'none' | 'argument' | 'pending', tokenHash,
+				...(phase !== undefined ? { phase: phase as StartPhase } : {})
 			};
+		}
+		case 'agent.phase': {
+			const { id, phase, folder } = value;
+			return isId(id) && typeof phase === 'string' && START_PHASES.has(phase) && (folder === undefined || isText(folder))
+				? { type: 'agent.phase', id, phase: phase as StartPhase, ...(folder !== undefined ? { folder } : {}) }
+				: undefined;
 		}
 		case 'agent.launched': {
 			const { id, processId } = value;
@@ -349,10 +384,12 @@ export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 		case 'task.typing':
 		case 'task.typed':
 		case 'agent.running':
+		case 'agent.phase':
 			return state.agents.has(event.id);
 		case 'agent.stopping':
 		case 'agent.ended':
-			return state.agents.has(event.id) && known(event.by === HUMAN ? undefined : event.by);
+			// Who stopped it is a number given before - the list may have dropped that agent since (X-13)
+			return state.agents.has(event.id) && (event.by === undefined || event.by === HUMAN || event.by <= state.lastId);
 		case 'worktree.made':
 			return known(event.madeBy);
 		case 'worktree.gone':
@@ -379,14 +416,17 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				...(event.effort !== undefined ? { effort: event.effort } : {}),
 				ignored: event.ignored ?? [],
 				yolo: event.yolo,
+				...(event.unattended ? { unattended: event.unattended } : {}),
 				sandbox: event.sandbox,
 				integration: event.integration,
 				worktree: event.worktree,
+				...(event.outsideGit ? { outsideGit: event.outsideGit } : {}),
 				folder: event.folder,
 				...(event.taskMessage !== undefined ? { taskMessage: event.taskMessage } : {}),
 				task: event.task,
 				connected: false,
 				state: 'starting',
+				...(event.phase !== undefined ? { phase: event.phase } : {}),
 				startTime: event.time
 			});
 			state.lastId = Math.max(state.lastId, event.id);
@@ -398,6 +438,20 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			const agent = state.agents.get(event.id);
 			if (isLive(agent)) {
 				agent.processId = event.processId;
+				agent.launchTime = event.time;
+				if (agent.state === 'starting') {
+					agent.phase = 'connecting';
+				}
+			}
+			break;
+		}
+		case 'agent.phase': {
+			const agent = state.agents.get(event.id);
+			if (agent?.state === 'starting') {
+				agent.phase = event.phase;
+				if (event.folder !== undefined) {
+					agent.folder = event.folder;
+				}
 			}
 			break;
 		}
@@ -426,6 +480,7 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			const agent = state.agents.get(event.id);
 			if (agent?.state === 'starting') {
 				agent.state = 'running';
+				agent.phase = undefined;
 			}
 			break;
 		}
@@ -465,10 +520,17 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			break;
 		}
 		case 'list.cleared': {
-			// The agents that ended leave the list, but for the creators and roots of those it keeps: they name them.
-			const creators = new Set([...state.agents.values()].filter(isLive).flatMap(agent => [agent.creator, agent.root]));
+			// The agents that ended leave the list, but for those that name the ones it keeps: each one's whole
+			// chain of creators, up to its root - not its creator alone, whose own would be a bare number (X-26).
+			const named = new Set<number>();
+			for (const agent of [...state.agents.values()].filter(isLive)) {
+				named.add(agent.root);
+				for (let id = agent.creator; id !== undefined && !named.has(id); id = state.agents.get(id)?.creator) {
+					named.add(id);
+				}
+			}
 			for (const agent of [...state.agents.values()]) {
-				if (!isLive(agent) && !creators.has(agent.id)) {
+				if (!isLive(agent) && !named.has(agent.id)) {
 					state.agents.delete(agent.id);
 				}
 			}

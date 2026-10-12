@@ -8,6 +8,17 @@ import { agentRef, Caller, describe, PERSON } from '../record/events';
 
 const TOOLS = 'Your tools: start_agent starts an agent, in any folder of this window or a new worktree, and answers with its number once it has started; list_agents lists you, the agent that started you and the agents you started - with all, every agent you reach - and the CLIs you can start; stop_agent stops an agent you reach, and can delete its worktree.';
 
+/** What a call that got no answer means: said where every caller reads it, its server's instructions (N-21). */
+const UNANSWERED = 'A call that got no answer - cut off, its server gone - may have happened all the same: look with list_agents before calling again.';
+
+/**
+ * That an agent started through `start_agent` asks in words, never with a pick: nobody may be watching it (L4). Said
+ * where every such agent reads it - its server's instructions and its task notice - not in the skill alone, which a
+ * CLI may never load. A pick waiting in its terminal would take what Facade types there as its answer: Muse Code's and
+ * Antigravity's question tools are picks (N-44). The person's own agent keeps its question tool: theirs to answer.
+ */
+const NO_PICKS = 'Ask in words, in your own terminal - never with a tool that waits for someone to pick an answer: Facade types messages into your terminal, and a pick waiting there would take them as its answer.';
+
 /** An agent of a CLI, by the CLI's name, with its article: `a Coder agent`, `an Editor agent`. */
 function anAgentOf(cliName: string): string {
 	return `${/^[aeiou]/i.test(cliName) ? 'an' : 'a'} ${cliName} agent`;
@@ -20,16 +31,18 @@ function anAgentOf(cliName: string): string {
 export function instructionsFor(facade: Facade, caller: Caller): string {
 	const agent = facade.agentOf(caller);
 	if (!agent) {
-		return ['You act as the person, @human, in Facade Code, and reach every agent of this window.', TOOLS].join('\n');
+		return ['You act as the person, @human, in Facade Code, and reach every agent of this window.', TOOLS, UNANSWERED].join('\n');
 	}
 	const starter = agent.creator === undefined ? undefined : facade.agent(agent.creator);
 	return [
 		`You are ${describe(agent)}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, started by ${starter ? describe(starter) : agent.creator !== undefined ? agentRef(agent.creator) : describe(PERSON)}; your tree is ${agentRef(agent.root)}'s.`,
-		`You run in ${agent.folder}: the worktree ${agent.worktree}. You are in that folder already: run commands there without cd.`,
+		`You run in ${agent.folder}${agent.outsideGit ? ', a folder in no Git repository' : `: the worktree ${agent.worktree}`}. You are in that folder already: run commands there without cd.`,
 		agent.yolo
 			? 'Your YOLO is on: you reach every agent of this window, and the agents you start have YOLO on.'
 			: 'Your YOLO is off: you reach your own tree only, and the agents you start have YOLO off too. Facade\'s tools never need anyone\'s approval.',
-		TOOLS
+		TOOLS,
+		UNANSWERED,
+		...agent.unattended ? [NO_PICKS] : []
 	].join('\n');
 }
 
@@ -38,7 +51,7 @@ export function instructionsFor(facade: Facade, caller: Caller): string {
  * whose model may not see its MCP server's instructions.
  */
 export function openingFor(agent: { readonly id: number; readonly name: string; readonly cliName: string }, creator: Caller): string {
-	return `[facade] You are ${describe(agent)}, ${anAgentOf(agent.cliName)} in Facade Code, started by ${describe(creator)}.`;
+	return `[facade] You are ${describe(agent)}, ${anAgentOf(agent.cliName)} in Facade Code, started by ${describe(creator)}. Ask in words, never with a tool that waits for someone to pick an answer.`;
 }
 
 /**
@@ -88,8 +101,11 @@ export function facadeSkill(): { readonly name: string; readonly description: st
 			'## Working together',
 			'',
 			'- Agents editing at the same time work in worktrees of their own.',
-			'- Read a tool\'s answer before you call it again: a start, a stop or a deletion may have happened.',
-			'- Do not use tools that wait for someone to pick an answer: ask in words, in your own terminal.',
+			'- Read a tool\'s answer before you call it again: a start, a stop or a deletion may have happened. A call that',
+			'  got no answer - cut off, its server gone - may have happened all the same: look with `list_agents` first.',
+			'- Started by another agent, or by a script, nobody may be watching your terminal: do not use tools that wait for',
+			'  someone to pick an answer - ask in words, in your own terminal. The person\'s own agent, which they started from',
+			'  the window, may put a question up for them.',
 			'- Whether a running agent works or is done, its terminal and its worktree show: the files there,',
 			'  `git status` and `git log`. Facade tells you only what it knows for certain.',
 			'',

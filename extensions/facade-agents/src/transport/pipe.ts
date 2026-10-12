@@ -10,30 +10,83 @@ import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf, stackOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
-import { CallLine, callLineOf, splitLines } from './protocol';
+import { CallLine, callLineOf, Progress, splitLines } from './protocol';
 
 /** The most a request's body may hold: a call's arguments are at most 1 MB. */
 const MAX_BODY_BYTES = 1024 * 1024;
 /** How long a request may take to send its headers; its call may take as long as it needs. */
 const HEADERS_TIMEOUT_MS = 60_000;
 
-/** The path of the pipe with `id`: a named pipe on Windows, a Unix socket elsewhere. */
-export function pipePath(id: string): string {
+/**
+ * How long the window has to take a call - to have read it whole and said it runs it - from when the caller
+ * sent it. One it reads later it does not run: its caller has stopped waiting, and was told that it did not
+ * run. A window that does not read its pipe - stopped in a debugger, its event loop held - is then a window
+ * that is away, whose calls are tried again, not one that took them and went silent (N-43).
+ */
+const CALL_ACCEPT_MS = 750;
+
+/** What the caller waits beyond `CALL_ACCEPT_MS` for the window's word that it took a call, before it takes the call as not taken. */
+const CALL_ACCEPT_MARGIN_MS = 250;
+
+/** The header that carries when, by the caller's clock - the machine's - a call has to have been taken. */
+const ACCEPT_BY_HEADER = 'x-facade-accept-by';
+
+/** The longest a Unix socket's path can be, in bytes: `sun_path` holds 104 on macOS and 108 on Linux, its end included. */
+const SOCKET_PATH_MAX = process.platform === 'darwin' ? 103 : 107;
+
+/** What binding adds to a pipe's path for a moment: `.` and the process's id (`PipeServer.listen`). */
+const BINDING_SUFFIX_MAX = 11;
+
+/**
+ * The path of the pipe with `id`: a named pipe on Windows, a Unix socket elsewhere - in the temporary folder, or,
+ * where that folder's path is too long for a socket's, in a folder of the person's own under `/tmp` (C-TR-08; X-70).
+ * Throws naming the limit where neither fits.
+ */
+export function pipePath(id: string, tmpdir: string = os.tmpdir()): string {
 	if (process.platform === 'win32') {
 		return `\\\\.\\pipe\\facade-agents-${id}`;
 	}
-	const dir = process.platform !== 'darwin' && process.env.XDG_RUNTIME_DIR ? process.env.XDG_RUNTIME_DIR : os.tmpdir();
-	return path.join(dir, `facade-agents-${id}.sock`);
+	const name = `facade-agents-${id}.sock`;
+	const fits = (candidate: string) => Buffer.byteLength(candidate) + BINDING_SUFFIX_MAX <= SOCKET_PATH_MAX;
+	const dir = process.platform !== 'darwin' && process.env.XDG_RUNTIME_DIR ? process.env.XDG_RUNTIME_DIR : tmpdir;
+	const preferred = path.join(dir, name);
+	if (fits(preferred)) {
+		return preferred;
+	}
+	const fallback = path.join(SHORT_PIPE_ROOT, `facade-${os.userInfo().uid}`, name);
+	if (!fits(fallback)) {
+		throw new Error(`Facade cannot listen: the temporary folder ${dir} is too long for a socket's path, which holds at most ${SOCKET_PATH_MAX} bytes here, and so is ${path.dirname(fallback)}.`);
+	}
+	return fallback;
+}
+
+/** Where a pipe goes whose temporary folder is too long: short on every Unix. */
+const SHORT_PIPE_ROOT = '/tmp';
+
+/**
+ * Makes sure the folder of a pipe under `/tmp` is the person's own and nobody else's, making it if need be: anyone
+ * can write in `/tmp`, and a folder someone else made there could hand them Facade's socket.
+ */
+function ensurePrivateFolder(pipe: string): void {
+	const dir = path.dirname(pipe);
+	if (path.dirname(dir) !== SHORT_PIPE_ROOT) {
+		return;
+	}
+	fs.mkdirSync(dir, { mode: 0o700, recursive: true });
+	const stat = fs.lstatSync(dir);
+	if (!stat.isDirectory() || stat.uid !== os.userInfo().uid || (stat.mode & 0o077) !== 0) {
+		throw new Error(`Facade cannot listen: ${dir} is not a folder of this user's alone.`);
+	}
 }
 
 /** How the window answers on the pipe. */
 export interface PipeHandlers<C> {
 	/** The caller a token belongs to, or undefined to refuse it. */
 	authenticate(token: string): C | undefined;
-	/** What the caller's MCP server offers, as the window says hello to it. */
-	hello(caller: C): unknown;
-	/** Runs a tool; `progress` sends the caller word of how it goes. */
-	call(caller: C, tool: string, args: unknown, progress: (message: string) => void): Promise<unknown>;
+	/** What the caller's MCP server offers, as the window says hello to it - the server saying which process it is. */
+	hello(caller: C, server: { readonly pid?: number }): unknown;
+	/** Runs a tool; `progress` sends the caller word of how it goes - with the run it made, once it has made one. */
+	call(caller: C, tool: string, args: unknown, progress: Progress): Promise<unknown>;
 	/** Writes what went wrong on the pipe that no caller is told of in full: a request the window failed on, a connection it could not take. */
 	log?(message: string): void;
 }
@@ -50,6 +103,8 @@ export class PipeServer<C> {
 
 	private readonly server: http.Server;
 	private readonly sockets = new Set<net.Socket>();
+	/** The socket file's inode once it is in place: only that file is this server's to remove. */
+	private inode: number | undefined;
 
 	private constructor(readonly path: string, private readonly handlers: PipeHandlers<C>) {
 		this.server = http.createServer((req, res) => this.onRequest(req, res));
@@ -64,16 +119,20 @@ export class PipeServer<C> {
 
 	/**
 	 * Listens on `pipe`. Elsewhere than Windows it is a socket file, which replaces one a window that
-	 * ended left there, and which only its user can open.
+	 * ended left there, and which only its user can open. ⚠️ It is bound under a name of its own and then
+	 * moved to `pipe`: a server that closes removes the file it was bound to, and so would remove the socket
+	 * another server - the next extension host of the window - has put at `pipe` meanwhile.
 	 */
 	static async listen<C>(pipe: string, handlers: PipeHandlers<C>): Promise<PipeServer<C>> {
+		const bound = process.platform === 'win32' ? pipe : `${pipe}.${process.pid}`;
 		if (process.platform !== 'win32') {
-			fs.rmSync(pipe, { force: true });
+			ensurePrivateFolder(pipe);
+			fs.rmSync(bound, { force: true });
 		}
 		const server = new PipeServer(pipe, handlers);
 		await new Promise<void>((resolve, reject) => {
 			server.server.once('error', reject);
-			server.server.listen(pipe, () => {
+			server.server.listen(bound, () => {
 				server.server.off('error', reject);
 				resolve();
 			});
@@ -82,7 +141,9 @@ export class PipeServer<C> {
 		server.server.on('error', err => handlers.log?.(`The pipe ${pipe} could not take a connection: ${stackOf(err)}`));
 		if (process.platform !== 'win32') {
 			try {
-				fs.chmodSync(pipe, 0o600);
+				fs.chmodSync(bound, 0o600);
+				fs.renameSync(bound, pipe);
+				server.inode = fs.statSync(pipe).ino;
 			} catch (err) {
 				server.dispose();
 				throw err;
@@ -92,6 +153,7 @@ export class PipeServer<C> {
 	}
 
 	private onRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+		const acceptBy = Number(req.headers[ACCEPT_BY_HEADER]);
 		const caller = this.callerOf(req, res);
 		if (caller === undefined) {
 			req.resume();
@@ -129,7 +191,8 @@ export class PipeServer<C> {
 			if (req.url === '/hello') {
 				let hello: string;
 				try {
-					hello = JSON.stringify(this.handlers.hello(caller));
+					const pid = typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0 ? body.pid : undefined;
+					hello = JSON.stringify(this.handlers.hello(caller, pid !== undefined ? { pid } : {}));
 				} catch (err) {
 					this.answerFailure(res, 'saying hello', err);
 					return;
@@ -138,6 +201,12 @@ export class PipeServer<C> {
 				return;
 			}
 			if (req.url === '/call' && typeof body.tool === 'string') {
+				// Read after its caller stopped waiting for it - this window held, and the call left in its pipe: not
+				// run, as its caller was told; it is sent again, or said not to have run (N-43)
+				if (Number.isFinite(acceptBy) && Date.now() > acceptBy) {
+					res.writeHead(408).end();
+					return;
+				}
 				void this.onCall(caller, body.tool, body.args, res);
 				return;
 			}
@@ -170,13 +239,15 @@ export class PipeServer<C> {
 	/** Runs a call to its end, even once its caller has gone: what it started goes on, as the tools say. */
 	private async onCall(caller: C, tool: string, args: unknown, res: http.ServerResponse): Promise<void> {
 		res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+		// Sent at once: the caller's word that the call was taken, and runs
+		res.flushHeaders();
 		const write = (line: CallLine) => {
 			if (!res.writableEnded && !res.destroyed) {
 				res.write(`${JSON.stringify(line)}\n`);
 			}
 		};
 		try {
-			const result = await this.handlers.call(caller, tool, args, message => write({ type: 'progress', message }));
+			const result = await this.handlers.call(caller, tool, args, (message, agent) => write({ type: 'progress', message, ...(agent !== undefined ? { agent } : {}) }));
 			write({ type: 'result', result });
 		} catch (err) {
 			write({ type: 'error', code: codeOf(err) ?? 'INTERNAL', message: messageOf(err) });
@@ -190,21 +261,28 @@ export class PipeServer<C> {
 		for (const socket of this.sockets) {
 			socket.destroy();
 		}
-		if (process.platform !== 'win32') {
-			fs.rmSync(this.path, { force: true });
+		if (process.platform !== 'win32' && this.inode !== undefined) {
+			try {
+				if (fs.statSync(this.path).ino === this.inode) {
+					fs.rmSync(this.path, { force: true });
+				}
+			} catch {
+				// gone already
+			}
 		}
 	}
 }
 
 /**
  * Why a request on the pipe failed: `UNAUTHORIZED`; `UNREACHABLE` when it never reached the window, as
- * while the window reloads, so it did not run; `NOT_CONNECTED` when the connection broke after it did,
+ * while the window reloads, or the window did not take it in time, so it did not run; `NOT_CONNECTED` when the connection broke after it did,
  * so it may have run; `CANCELLED`; `TOO_LARGE` or `REJECTED` when the window would not take it; `FAILED`
- * when the window failed to answer, or answered with what cannot be read; or the code of the window's
- * own failure of a call.
+ * when the window failed to answer, answered with what cannot be read, or failed the call itself - the
+ * code of its own failure kept apart, `windowCode`: whatever it is, it is never taken for one of these, and a
+ * call the window failed is never sent again for it (C-TR-07; X-70).
  */
 export class PipeClientError extends Error {
-	constructor(message: string, readonly code: string) {
+	constructor(message: string, readonly code: string, readonly windowCode?: string) {
 		super(message);
 		this.name = 'PipeClientError';
 	}
@@ -227,6 +305,9 @@ function failureCodeOf(req: http.ClientRequest): () => string {
 function refusalOf(status: number | undefined, body: string, request: 'connection' | 'call'): PipeClientError {
 	if (status === 500) {
 		return new PipeClientError(windowFailureOf(body) ?? `Facade failed to answer the ${request} (500).`, 'FAILED');
+	}
+	if (status === 408) {
+		return new PipeClientError(`Facade's window did not take the ${request} in time, so it did not run.`, 'UNREACHABLE');
 	}
 	const code = status === 401 ? 'UNAUTHORIZED' : status === 413 ? 'TOO_LARGE' : 'REJECTED';
 	return new PipeClientError(`Facade refused the ${request} (${status}).`, code);
@@ -274,12 +355,17 @@ export class PipeClient {
 			});
 			const failureCode = failureCodeOf(req);
 			req.on('error', err => reject(signal?.aborted ? new PipeClientError('Facade did not say hello in time.', failureCode()) : new PipeClientError(err.message, failureCode())));
-			req.end('{}');
+			// Which process it is: the window knows from it whether the agent's server still runs (O6)
+			req.end(JSON.stringify({ pid: process.pid }));
 		});
 	}
 
-	/** Runs a tool; `onProgress` gets the window's progress messages. Aborting `signal` cancels the call. */
-	call(tool: string, args: unknown, onProgress: (message: string) => void, signal?: AbortSignal): Promise<unknown> {
+	/**
+	 * Runs a tool; `onProgress` gets the window's progress messages. Aborting `signal` cancels the call. One
+	 * the window does not take in time - `CALL_ACCEPT_MS` - fails `UNREACHABLE`: the window does not run it
+	 * once it reads it, and it can be sent again (N-43).
+	 */
+	call(tool: string, args: unknown, onProgress: Progress, signal?: AbortSignal): Promise<unknown> {
 		return new Promise((resolve, reject) => {
 			if (signal?.aborted) {
 				reject(new PipeClientError('Cancelled', 'CANCELLED'));
@@ -295,15 +381,21 @@ export class PipeClient {
 			const settle = (action: () => void) => {
 				if (!settled) {
 					settled = true;
+					clearTimeout(notTaken);
 					signal?.removeEventListener('abort', cancel);
 					action();
 				}
 			};
+			const notTaken = setTimeout(() => {
+				req.destroy();
+				settle(() => reject(new PipeClientError(`Facade's window did not take the call within ${(CALL_ACCEPT_MS + CALL_ACCEPT_MARGIN_MS) / 1000} s, so it did not run.`, 'UNREACHABLE')));
+			}, CALL_ACCEPT_MS + CALL_ACCEPT_MARGIN_MS);
 			const cancel = () => {
 				req.destroy();
 				settle(() => reject(new PipeClientError('Cancelled', 'CANCELLED')));
 			};
-			const req = http.request({ socketPath: this.pipe, path: '/call', method: 'POST', agent: false, headers: this.headers() }, res => {
+			const req = http.request({ socketPath: this.pipe, path: '/call', method: 'POST', agent: false, headers: { ...this.headers(), [ACCEPT_BY_HEADER]: String(Date.now() + CALL_ACCEPT_MS) } }, res => {
+				clearTimeout(notTaken);
 				if (res.statusCode !== 200) {
 					const chunks: Buffer[] = [];
 					res.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -326,11 +418,11 @@ export class PipeClient {
 							return;
 						}
 						if (line.type === 'progress') {
-							onProgress(line.message);
+							onProgress(line.message, line.agent);
 						} else if (line.type === 'result') {
 							settle(() => resolve(line.result));
 						} else {
-							settle(() => reject(new PipeClientError(line.message, line.code)));
+							settle(() => reject(new PipeClientError(line.message, 'FAILED', line.code)));
 						}
 					}
 				});

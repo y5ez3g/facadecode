@@ -10,6 +10,9 @@ import { messageOf, stackOf } from './base/errors';
 import { agentsLogOf, AgentsService } from './host/service';
 import { registerShowLaunch } from './host/showLaunch';
 
+/** Stops Facade's agents as the extension stops; settles once the workspace's ledger is closed. */
+let stopAgents: (() => Promise<void>) | undefined;
+
 /**
  * Facade's agents: vendors' agent CLIs and the person's own in their own UIs, in the folders and worktrees
  * of this window, starting, listing and ending each other through Facade's MCP server. The agent
@@ -22,8 +25,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		l10n.config({ contents: vscode.l10n.bundle });
 	}
 	const log = vscode.window.createOutputChannel(vscode.l10n.t("Facade Agents"), { log: true });
-	context.subscriptions.push(log, vscode.commands.registerCommand('facade.agents.showLog', () => showAgentsLog(context.workspaceState)), registerShowLaunch());
-
 	let service: AgentsService | undefined;
 	/** The service while it starts: the extension host can go meanwhile, as a folder window becomes a workspace. */
 	let creating: AgentsService | undefined;
@@ -56,35 +57,52 @@ export function activate(context: vscode.ExtensionContext): void {
 	};
 	// Settles once the service has started, or could not: it rejects nothing.
 	const ready = start();
+	// The record this window has, as its service knows it - which follows the window through its folder
+	// becoming a workspace - and else the one this workspace's storage names (X-67)
+	context.subscriptions.push(vscode.commands.registerCommand('facade.agents.showLog', () => showAgentsLog(service?.agentsLog ?? creating?.agentsLog ?? agentsLogOf(context.workspaceState))), registerShowLaunch(async (installed, folder) => {
+		// What would refuse a start, as the window's core checks it once it has started
+		await ready;
+		return await service?.launchProblems(installed, folder) ?? [];
+	}));
 	context.subscriptions.push(
+		// `(folder)`: the person is deleting that worktree in the window - Facade's word first on its agents still starting (N-34)
+		vscode.commands.registerCommand('_facade.agents.worktreeDeleting', async (folder?: unknown) => {
+			if (folder instanceof vscode.Uri && folder.scheme === 'file') {
+				await service?.worktreeDeleting(folder.fsPath);
+			}
+		}),
 		vscode.commands.registerCommand('facade.agents.startAgent', async (args?: unknown) => {
 			// The first start can come as the extension comes up - the person trusted the workspace from the
 			// agent menu, which activated it - and waits for it rather than asking them to try again.
 			await ready;
 			if (!service) {
-				void vscode.window.showInformationMessage(none === 'failed'
-					? vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why.")
-					: vscode.l10n.t("Open a folder on this machine to start an agent in it."));
+				// A failure as one (UI-17); a folder to open, as news
+				void (none === 'failed'
+					? vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why."))
+					: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to start an agent in it.")));
 				return undefined;
 			}
 			return service.startAgentCommand(args);
 		}),
-		{
-			dispose: () => {
-				deactivated = true;
-				service?.dispose();
-				creating?.dispose();
-			}
-		}
+		{ dispose: () => void stopAgents?.() }
 	);
+	// Once, by `deactivate` - which the extension host waits for, a while - or else with the subscriptions.
+	// ⚠️ The log goes last: the service writes to it until its ledger is closed, which waits for the calls
+	// under way.
+	let stopping: Promise<void> | undefined;
+	stopAgents = () => stopping ??= (async () => {
+		deactivated = true;
+		creating?.dispose();
+		await service?.dispose();
+		log.dispose();
+	})();
 }
 
 /**
  * Facade: Show Agents Log: opens the person's history of this workspace's agents, each start and each
  * end, whether Facade runs now or not.
  */
-async function showAgentsLog(workspaceState: vscode.Memento): Promise<void> {
-	const file = agentsLogOf(workspaceState);
+async function showAgentsLog(file: string | undefined): Promise<void> {
 	if (!file || !fs.existsSync(file)) {
 		void vscode.window.showInformationMessage(vscode.l10n.t("No agent has started in this workspace yet."));
 		return;
@@ -92,5 +110,10 @@ async function showAgentsLog(workspaceState: vscode.Memento): Promise<void> {
 	await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
 }
 
-/** Nothing to do: what `activate` started goes with the extension's subscriptions. */
-export function deactivate(): void { }
+/**
+ * Stops Facade's agents: settles once the workspace's ledger is closed, after the calls under way recorded
+ * what they did - which the extension host waits for, a few seconds at most.
+ */
+export function deactivate(): Promise<void> | undefined {
+	return stopAgents?.();
+}

@@ -29,7 +29,9 @@ class GitError extends Error {
  * status's - it rejects with git's own words when the command fails.
  */
 function runGit(git: string, args: readonly string[], trim = true): Promise<string> {
-	return new Promise((resolve, reject) => execFile(git, [...args], { windowsHide: true, timeout: GIT_TIMEOUT_MS }, (err, stdout, stderr) => {
+	// Every command of Facade's reads, so none takes a lock that is optional: the index's, which `status`
+	// takes to refresh it, would make the person's own git command fail meanwhile (X-69)
+	return new Promise((resolve, reject) => execFile(git, [...args], { windowsHide: true, timeout: GIT_TIMEOUT_MS, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }, (err, stdout, stderr) => {
 		if (err) {
 			reject(new GitError(String(stderr).trim() || err.message, typeof err.code === 'number' && !err.killed ? err.code : undefined));
 		} else {
@@ -190,6 +192,61 @@ export async function trackedIn(git: string, folder: string, files: readonly str
 	return new Set(files.filter(file => listed.includes(posix(file))));
 }
 
+/** How many files a leftover's are checked against its branch: past that, none is taken as the branch's. */
+const LEFTOVER_CHECKED = 200;
+
+/**
+ * The files what a deletion left of the worktree of `branch` at `folder` holds that the branch - of the
+ * repository whose main checkout is `main` - does not hold as they are, relative to `folder` with forward
+ * slashes: work, as its deletion would lose it. A link, and every file of a leftover too big to look at, is
+ * counted as work; so is everything, where the branch is gone or git cannot read it.
+ */
+export async function leftoverWorkIn(git: string, main: string, branch: string, folder: string): Promise<readonly string[]> {
+	const files: { readonly path: string; readonly link: boolean }[] = [];
+	const walk = (dir: string) => {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				walk(full);
+			} else {
+				files.push({ path: path.relative(folder, full).split(path.sep).join('/'), link: entry.isSymbolicLink() });
+			}
+		}
+	};
+	walk(folder);
+	if (files.length > LEFTOVER_CHECKED) {
+		return files.map(file => file.path);
+	}
+	const committed = new Map<string, string>();
+	try {
+		// `<mode> <type> <id>\t<path>\0` for each
+		for (const entry of (await runGit(git, ['-C', main, 'ls-tree', '-r', '-z', '--full-tree', `refs/heads/${branch}`], false)).split('\0').filter(Boolean)) {
+			const [meta, file] = [entry.slice(0, entry.indexOf('\t')), entry.slice(entry.indexOf('\t') + 1)];
+			committed.set(file, meta.split(' ')[2]);
+		}
+	} catch {
+		return files.map(file => file.path);
+	}
+	const work: string[] = [];
+	for (const file of files) {
+		// As the branch would have it checked out there: its attributes' filters by its path
+		const id = file.link ? undefined : await runGit(git, ['-C', main, 'hash-object', `--path=${file.path}`, '--', path.join(folder, file.path)]).catch(() => undefined);
+		if (id === undefined || committed.get(file.path) !== id) {
+			work.push(file.path);
+		}
+	}
+	return work;
+}
+
+/** What `file`, a path from the repository's root, holds at `commit` of the repository of `folder`; undefined where the commit has no such file. */
+export async function fileAtIn(git: string, folder: string, commit: string, file: string): Promise<string | undefined> {
+	const posix = file.split(path.sep).join('/');
+	if (!(await trackedIn(git, folder, [posix], commit)).has(posix)) {
+		return undefined;
+	}
+	return runGit(git, ['-C', folder, 'cat-file', 'blob', `${commit}:${posix}`], false);
+}
+
 /**
  * Which of `files`, paths relative to `folder`, some worktree of its repository has - at the same place
  * from that worktree's root - as a file git neither tracks nor ignores. A worktree whose folder is gone,
@@ -239,10 +296,47 @@ export async function untrackedIn(git: string, folder: string, files: readonly s
 export async function whyNotBranchNameIn(git: string, main: string, branch: string): Promise<string | undefined> {
 	try {
 		await runGit(git, ['-C', main, 'check-ref-format', '--branch', branch]);
-		return undefined;
-	} catch {
-		return `git does not take ${JSON.stringify(branch)} for a branch's name`;
+	} catch (err) {
+		// git's no is its exit code; anything else - its time over, git missing - is no answer, and says so (X-57)
+		if (err instanceof GitError && err.exitCode !== undefined) {
+			return `git does not take ${JSON.stringify(branch)} for a branch's name`;
+		}
+		throw err;
 	}
+	// A branch is a file, and the branches under its name a folder of the same name: `a` and `a/b` cannot both be
+	const branches = (await runGit(git, ['-C', main, 'for-each-ref', '--format=%(refname)', 'refs/heads/'])).split('\n').filter(Boolean).map(ref => ref.slice('refs/heads/'.length));
+	const clash = branches.find(each => branch.startsWith(`${each}/`) || each.startsWith(`${branch}/`));
+	return clash === undefined ? undefined : `the branch ${clash} is there already, and git cannot have a branch and others under its name both`;
+}
+
+/**
+ * The submodules of the worktree `folder`, as git's own test before it removes one finds them: those checked
+ * out, by path; else - none checked out - those whose repositories its git directory keeps, by name. Deleting
+ * it takes them with it, with any of their commits not pushed.
+ */
+export async function submodulesIn(git: string, folder: string): Promise<readonly string[]> {
+	let declared = '';
+	try {
+		declared = await runGit(git, ['-C', folder, 'config', '--file', '.gitmodules', '--null', '--get-regexp', '^submodule\\..*\\.path$'], false);
+	} catch {
+		// No .gitmodules, or no submodule in it
+	}
+	// `submodule.<name>.path\n<path>\0` for each
+	const submodules = declared.split('\0').filter(entry => entry.length > 0).map(entry => {
+		const key = entry.slice(0, entry.indexOf('\n'));
+		return { name: key.slice('submodule.'.length, -'.path'.length), path: entry.slice(entry.indexOf('\n') + 1) };
+	});
+	const checkedOut = submodules.filter(submodule => fs.existsSync(path.join(folder, submodule.path, '.git'))).map(submodule => submodule.path);
+	if (checkedOut.length) {
+		return checkedOut;
+	}
+	const modules = path.resolve(folder, await runGit(git, ['-C', folder, 'rev-parse', '--git-path', 'modules']));
+	if (!fs.existsSync(modules)) {
+		return [];
+	}
+	// A name may hold slashes, its repository kept as folders within folders; one no longer declared, by what is there
+	const kept = submodules.filter(submodule => fs.existsSync(path.join(modules, submodule.name))).map(submodule => submodule.name);
+	return kept.length ? kept : fs.readdirSync(modules);
 }
 
 /**

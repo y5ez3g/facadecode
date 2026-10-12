@@ -8,6 +8,7 @@ import * as path from 'path';
 import { sleepSync } from './async';
 import { codeOf } from './errors';
 import { isJsonObject, JsonObject } from './json';
+import { JsonNode, JsonObjectNode, nodeValue, parseJsonc } from './jsonc';
 
 /** The byte order mark a text file may start with. */
 const BYTE_ORDER_MARK = 0xfeff;
@@ -20,11 +21,19 @@ const CHANGED_ATTEMPTS = 3;
 
 /** Whether the file system names one file or folder by both paths: case is ignored on Windows and macOS. */
 export function isEqualPath(a: string, b: string): boolean {
-	const normalize = (value: string) => {
-		const resolved = path.resolve(value);
-		return process.platform === 'win32' || process.platform === 'darwin' ? resolved.toLowerCase() : resolved;
-	};
-	return normalize(a) === normalize(b);
+	return normalized(a) === normalized(b);
+}
+
+/** Whether `inner` is below the folder `outer`, not `outer` itself: case is ignored on Windows and macOS. */
+export function isInsideFolder(inner: string, outer: string): boolean {
+	const relative = path.relative(normalized(outer), normalized(inner));
+	return !!relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+/** A path as the file system compares it: absolute, and in lower case where case is ignored. */
+function normalized(value: string): string {
+	const resolved = path.resolve(value);
+	return process.platform === 'win32' || process.platform === 'darwin' ? resolved.toLowerCase() : resolved;
 }
 
 /** A folder's real path, links resolved and in its real case; the absolute path given when the folder does not exist. */
@@ -79,11 +88,12 @@ function isUnchanged(file: string, stamp: FileStamp | 'missing'): boolean {
  * Replaces the content of `file` in one step: the content is written whole and flushed to a sibling
  * file, which is then renamed over it, so a reader sees either the old content or the new one. A link is
  * followed - what it points to is replaced, and it stays a link. The file keeps its permissions; a new one
- * is readable by the user only. Nothing is left beside it when replacing fails. With `unchangedSince`, a
+ * has `newFileMode` - readable by the user only unless given - less what the umask takes away. Nothing is left beside it when replacing fails. With `unchangedSince`, a
  * file another program writes too is replaced only while it is still as it was read - or still not
- * there - and else `FileChangedError` is thrown.
+ * there - and else `FileChangedError` is thrown. Content given as bytes is written as they are: a file put back
+ * as it was is put back byte for byte, whatever its encoding (X-62).
  */
-export function replaceFile(file: string, content: string, unchangedSince?: FileStamp | 'missing'): void {
+export function replaceFile(file: string, content: string | Uint8Array, unchangedSince?: FileStamp | 'missing', newFileMode = 0o600): void {
 	let target = file;
 	try {
 		target = fs.realpathSync.native(file);
@@ -92,7 +102,7 @@ export function replaceFile(file: string, content: string, unchangedSince?: File
 	}
 	const folder = path.dirname(target);
 	fs.mkdirSync(folder, { recursive: true });
-	let mode = 0o600;
+	let mode = newFileMode;
 	try {
 		mode = fs.statSync(target).mode & 0o777;
 	} catch {
@@ -159,13 +169,19 @@ export function jsonLayoutOf(text: string): JsonLayout {
 	};
 }
 
-/** A JSON file as read: missing, an object with its layout and stamp, or anything else, which is left alone. */
+/**
+ * A JSON file as read: missing, an object - with its text, where each of its parts is in it, its layout and
+ * stamp - or anything else, which is left alone.
+ */
 export type JsonFile =
 	| { readonly kind: 'missing' }
-	| { readonly kind: 'object'; readonly value: JsonObject; readonly layout: JsonLayout; readonly stamp: FileStamp }
+	| { readonly kind: 'object'; readonly value: JsonObject; readonly text: string; readonly tree: JsonObjectNode; readonly layout: JsonLayout; readonly stamp: FileStamp }
 	| { readonly kind: 'other' };
 
-/** Reads a JSON file that should hold an object, such as a settings file; one written while it is read is read again. */
+/**
+ * Reads a JSON file that should hold an object, such as a settings file - comments and trailing commas
+ * allowed, as such files have them (X-48); one written while it is read is read again.
+ */
 export function readJsonFile(file: string): JsonFile {
 	for (let attempt = 1; ; attempt++) {
 		let text: string;
@@ -184,13 +200,14 @@ export function readJsonFile(file: string): JsonFile {
 			}
 			return { kind: 'other' };
 		}
-		let value: unknown;
+		let tree: JsonNode;
 		try {
-			value = parseJson(text);
+			tree = parseJsonc(text);
 		} catch {
 			return { kind: 'other' };
 		}
-		return isJsonObject(value) ? { kind: 'object', value, layout: jsonLayoutOf(text), stamp: before } : { kind: 'other' };
+		const value = nodeValue(tree);
+		return tree.kind === 'object' && isJsonObject(value) ? { kind: 'object', value, text, tree, layout: jsonLayoutOf(text), stamp: before } : { kind: 'other' };
 	}
 }
 
@@ -212,11 +229,12 @@ export function writeJsonFile(file: string, value: JsonObject, layout: JsonLayou
 
 /**
  * Reads a JSON file another program writes too - a CLI's own settings - and writes back what `update`
- * makes of it, if anything, laid out as it was. Should that program write the file meanwhile, it is read
- * again and `update` asked again, so that what the program wrote is kept; a file that goes on changing
- * throws `FileChangedError`. `update` answers what to say, and the value to write, if any.
+ * makes of it, if anything: a value, laid out as the file was, or the file's text as edited. Should that
+ * program write the file meanwhile, it is read again and `update` asked again, so that what the program
+ * wrote is kept; a file that goes on changing throws `FileChangedError`. `update` answers what to say, and
+ * what to write, if anything.
  */
-export function updateJsonFile<T>(file: string, update: (read: JsonFile) => { readonly outcome: T; readonly write?: JsonObject }): T {
+export function updateJsonFile<T>(file: string, update: (read: JsonFile) => { readonly outcome: T; readonly write?: JsonObject | string }): T {
 	for (let attempt = 1; ; attempt++) {
 		const read = readJsonFile(file);
 		const { outcome, write } = update(read);
@@ -224,7 +242,11 @@ export function updateJsonFile<T>(file: string, update: (read: JsonFile) => { re
 			return outcome;
 		}
 		try {
-			writeJsonFile(file, write, read.kind === 'object' ? read.layout : undefined, read.kind === 'object' ? read.stamp : 'missing');
+			if (typeof write === 'string') {
+				replaceFile(file, write, read.kind === 'object' ? read.stamp : 'missing');
+			} else {
+				writeJsonFile(file, write, read.kind === 'object' ? read.layout : undefined, read.kind === 'object' ? read.stamp : 'missing');
+			}
 			return outcome;
 		} catch (err) {
 			if (!(err instanceof FileChangedError) || attempt >= CHANGED_ATTEMPTS) {

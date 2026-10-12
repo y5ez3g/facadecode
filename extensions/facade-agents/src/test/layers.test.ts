@@ -66,3 +66,32 @@ suite('Layers: what each file may import', () => {
 		assert.deepStrictEqual(wrong, []);
 	});
 });
+
+/** The arguments of each call of `name` in `text`, as written: up to its closing parenthesis. */
+function callsOf(text: string, name: string): string[] {
+	const calls: string[] = [];
+	for (let at = text.indexOf(`${name}(`); at !== -1; at = text.indexOf(`${name}(`, at + 1)) {
+		let depth = 0;
+		let end = at + name.length;
+		for (; end < text.length; end++) {
+			if (text[end] === '(') {
+				depth++;
+			} else if (text[end] === ')' && --depth === 0) {
+				break;
+			}
+		}
+		calls.push(text.slice(at + name.length + 1, end));
+	}
+	return calls;
+}
+
+suite('Notices: how much each matters', () => {
+
+	test('a notification that says something failed, or cannot be done, shows as a warning or an error - never as information (UI-17; N-73)', () => {
+		const failure = /could not|cannot|failed|did not start/i;
+		const asNews = sourcesIn(SRC).filter(file => layerOf(file) !== 'test').flatMap(file =>
+			callsOf(fs.readFileSync(file, 'utf8'), 'showInformationMessage').filter(args => failure.test(args)).map(args => `${path.relative(SRC, file)}: ${args.replace(/\s+/g, ' ').slice(0, 100)}`));
+
+		assert.deepStrictEqual(asNews, []);
+	});
+});

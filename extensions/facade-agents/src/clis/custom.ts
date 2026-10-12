@@ -56,6 +56,7 @@ export function customAgentOf(name: string, value: unknown, nameProblem: string 
 		task: 'argument',
 		sandbox: { yoloOn: 'unknown', yoloOff: 'unknown' },
 		exemption: 'unknown',
+		questionTool: 'unknown',
 		custom: true,
 		launch: () => {
 			throw new Error('not a launch');

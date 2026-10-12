@@ -7,8 +7,9 @@ import * as vscode from 'vscode';
 import { timeout } from '../base/async';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
+import { disposeAll } from '../base/lifecycle';
 import { Environment } from '../clis/cli';
-import { Disposable, TerminalEnd, TerminalLaunch, Terminals } from '../core/ports';
+import { Disposable, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalsInside } from '../core/ports';
 
 /** How long Facade's workbench is waited for at most to have its terminals back: its pty host may not answer. */
 const RESTORE_TIMEOUT_MS = 60_000;
@@ -20,7 +21,8 @@ const ENDS_POLL_MS = 5_000;
 
 /** What the window knows of an agent's process, as `_facade.terminal.processes` answers. */
 type RunProcess =
-	| { readonly id: number; readonly state: 'present' | 'unknown' }
+	| { readonly id: number; readonly state: 'present'; readonly processId?: number }
+	| { readonly id: number; readonly state: 'unknown' }
 	| { readonly id: number; readonly state: 'gone'; readonly end?: TerminalEnd };
 
 /** Whether `candidate` is a `RunProcess`: the workbench's answer, each field checked. */
@@ -28,8 +30,8 @@ function isRunProcess(candidate: unknown): candidate is RunProcess {
 	if (!isJsonObject(candidate) || typeof candidate.id !== 'number') {
 		return false;
 	}
-	const { state, end } = candidate;
-	return state === 'present' || state === 'unknown' || (state === 'gone' && (end === undefined || (isJsonObject(end) && typeof end.byThePerson === 'boolean' && (end.exitCode === undefined || typeof end.exitCode === 'number'))));
+	const { state, end, processId } = candidate;
+	return (state === 'present' && (processId === undefined || (typeof processId === 'number' && Number.isInteger(processId) && processId > 0))) || state === 'unknown' || (state === 'gone' && (end === undefined || (isJsonObject(end) && typeof end.byThePerson === 'boolean' && (end.exitCode === undefined || typeof end.exitCode === 'number') && (end.reason === undefined || end.reason === 'worktreeDeleted'))));
 }
 
 /**
@@ -71,6 +73,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 			env: request.env,
 			cwd: request.cwd,
 			agent: request.command,
+			custom: request.custom,
 			reveal: request.reveal,
 			run: this.runOf(request.id)
 		});
@@ -81,6 +84,11 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		this.watched.add(request.id);
 		return typeof opened.processId === 'number' && opened.processId > 0 ? { processId: opened.processId } : {};
 	}
+
+	/** How the processes `isAlive` found gone had ended, where the window saw it. */
+	private readonly seenEnds = new Map<number, TerminalEnd>();
+	/** The processes `isAlive` found running, where the window knows them. */
+	private readonly seenProcesses = new Map<number, number>();
 
 	onDidEnd(listener: (id: number, end: TerminalEnd) => void): Disposable {
 		this.listeners.add(listener);
@@ -100,18 +108,43 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		}
 		if (known.state === 'present') {
 			this.watched.add(id);
+			if (known.processId !== undefined) {
+				this.seenProcesses.set(id, known.processId);
+			}
+		}
+		if (known.state === 'gone' && known.end) {
+			this.seenEnds.set(id, known.end);
 		}
 		return known.state === 'present';
 	}
 
-	async stop(id: number): Promise<void> {
-		if (!await vscode.commands.executeCommand<boolean>('_facade.terminal.stop', this.runOf(id))) {
-			throw new Error('its process has not ended yet');
+	/** Whether the window has agent `id`'s terminal now, its process running: no waiting on one it cannot tell of. */
+	async hasTerminal(id: number): Promise<boolean> {
+		try {
+			return (await this.processOf(id)).state === 'present';
+		} catch {
+			return false;
 		}
 	}
 
-	async type(id: number, text: string): Promise<boolean> {
-		return vscode.commands.executeCommand<boolean>('_facade.terminal.type', this.runOf(id), text);
+	endOf(id: number): TerminalEnd | undefined {
+		return this.seenEnds.get(id);
+	}
+
+	processIdOf(id: number): number | undefined {
+		return this.seenProcesses.get(id);
+	}
+
+	async stop(id: number, signal?: StopSignal): Promise<{ readonly exitCode?: number }> {
+		const gone = await vscode.commands.executeCommand<false | { readonly exitCode?: number }>('_facade.terminal.stop', this.runOf(id), signal);
+		if (!gone) {
+			throw new Error('its process has not ended yet');
+		}
+		return typeof gone.exitCode === 'number' ? { exitCode: gone.exitCode } : {};
+	}
+
+	async type(id: number, text: string, line?: 'begin' | 'end'): Promise<boolean> {
+		return vscode.commands.executeCommand<boolean>('_facade.terminal.type', this.runOf(id), text, ...(line ? [line] : []));
 	}
 
 	/** Puts the agent's terminal in front through its folder's row, which the window goes to. False when its process runs in none, or it could not be put in front. */
@@ -122,9 +155,18 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 	dispose(): void {
 		clearInterval(this.poll);
 		this.listeners.clear();
-		for (const disposable of this.disposables) {
-			disposable.dispose();
-		}
+		disposeAll(this.disposables, err => this.log(`Stopping Facade agents: ${messageOf(err)}`));
+	}
+
+	async inside(folder: string): Promise<TerminalsInside> {
+		const uri = vscode.Uri.file(folder);
+		const [answer, titles] = await Promise.all([
+			vscode.commands.executeCommand<unknown>('_facade.terminal.inside', uri),
+			vscode.commands.executeCommand<unknown>('_facade.terminal.elsewhere', uri)
+		]);
+		const runs = (Array.isArray(answer) ? answer : []).filter((run): run is { readonly workspace: string; readonly id: number } => typeof run?.workspace === 'string' && typeof run?.id === 'number');
+		const elsewhere = (Array.isArray(titles) ? titles : []).filter((title): title is string => typeof title === 'string');
+		return { agents: runs.filter(run => run.workspace === this.workspace).map(run => run.id), others: runs.filter(run => run.workspace !== this.workspace).length, elsewhere };
 	}
 
 	/** The run of the agent numbered `id`: its terminal's, as the workbench knows it. */

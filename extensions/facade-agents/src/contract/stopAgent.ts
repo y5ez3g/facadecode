@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { clauseOf } from '../base/errors';
 import { describe } from '../record/events';
 import { Args } from './args';
 import { endText } from './listAgents';
@@ -12,6 +13,15 @@ import type { ContractTool } from './tools';
  * `stop_agent` (AGENT-ORCHESTRATION.md, O5): stops one agent the caller reaches, by its number or its
  * name, and with `delete_worktree` the other agents in its worktree and then the worktree.
  */
+/**
+ * Why a worktree was not deleted, as one sentence. A reason of Facade's is put in one, naming the folder; the
+ * window's refusal is a sentence that names it already, in the person's words - wrapped again it read "…
+ * was not deleted: ~/… was not deleted: …..", the second full stop the wrapper's (N-52).
+ */
+function notDeleted(folder: string, why: string): string {
+	return / was not deleted: /.test(why) ? `${clauseOf(why)}.` : `${folder} was not deleted: ${clauseOf(why)}.`;
+}
+
 export const stopAgentTool: ContractTool = {
 	definition: {
 		name: 'stop_agent',
@@ -37,10 +47,11 @@ export const stopAgentTool: ContractTool = {
 		const ended = stopped.alreadyEnded && stopped.agent.end ? `${describe(stopped.agent)} had ended already (${endText(facade, stopped.agent.end)}).` : '';
 		const others = stopped.stopped.length ? `Stopped ${stopped.stopped.map(each => describe(each)).join(', ')}: ${stopped.stopped.length === 1 ? 'its terminal closed' : 'their terminals closed'}.` : '';
 		const worktree = stopped.worktree === undefined
-			? (stopped.alreadyEnded ? '' : ' Its worktree stays as it is.')
+			// An agent in no Git repository has a folder, not a worktree (N-57)
+			? (stopped.alreadyEnded ? '' : stopped.agent.outsideGit ? ' Its folder stays as it is.' : ' Its worktree stays as it is.')
 			: stopped.worktree.deleted
 				? ` ${stopped.worktree.folder} was deleted; its branch stays.`
-				: ` ${stopped.worktree.folder} was not deleted: ${stopped.worktree.why}.`;
+				: ` ${notDeleted(stopped.worktree.folder, stopped.worktree.why ?? '')}`;
 		return { text: `${ended}${ended && others ? ' ' : ''}${others}${worktree}`.trim(), data: stopped };
 	}
 };

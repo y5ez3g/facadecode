@@ -16,13 +16,15 @@ export interface OfferedAgent {
 
 /**
  * Agents: Start Agent... asks only which agent (AGENT-LAUNCHER.md, L3): the agent menu, and a script, give
- * it as `{ cli, custom? }` - `custom` for the person's custom agent of that name. Answers with its id, and
- * whether it is a custom agent; undefined where the person chose none.
+ * it as `{ cli, custom?, folder? }` - `custom` for the person's custom agent of that name, `folder` the one on
+ * screen as the person chose it, which the menu sends with the choice (PS-15). Answers with its id, whether it
+ * is a custom agent and that folder; undefined where the person chose none.
  */
-export async function pickAgent(rawArgs: unknown, offered: readonly OfferedAgent[]): Promise<{ readonly id: string; readonly custom: boolean } | undefined> {
+export async function pickAgent(rawArgs: unknown, offered: readonly OfferedAgent[]): Promise<{ readonly id: string; readonly custom: boolean; readonly folder?: string } | undefined> {
 	const args = isJsonObject(rawArgs) ? rawArgs : {};
 	if (typeof args.cli === 'string' && args.cli.trim()) {
-		return { id: args.cli.trim(), custom: args.custom === true };
+		const folder = args.folder instanceof vscode.Uri && args.folder.scheme === 'file' ? args.folder.fsPath : undefined;
+		return { id: args.cli.trim(), custom: args.custom === true, ...(folder !== undefined ? { folder } : {}) };
 	}
 	if (!offered.length) {
 		const configure = vscode.l10n.t("Configure Agents");

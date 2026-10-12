@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'fs';
+import { codeOf, messageOf } from '../base/errors';
 import { replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
 
@@ -20,14 +21,20 @@ export interface StateStore {
 export class JsonFileState implements StateStore {
 
 	private readonly values: { [key: string]: unknown };
+	/** Why the file, there, could not be read - its values lost, the pipe's id with them (C-REC-19); undefined where it was read, or is not there. */
+	readonly unreadable: string | undefined;
 
 	constructor(private readonly file: string) {
 		let read: unknown;
+		let why: string | undefined;
 		try {
 			read = JSON.parse(fs.readFileSync(file, 'utf8'));
-		} catch {
-			// Missing or unreadable: start anew.
+			why = isJsonObject(read) ? undefined : 'it holds no JSON object';
+		} catch (err) {
+			// Missing: a new window's. Unreadable: started anew all the same, and said.
+			why = codeOf(err) === 'ENOENT' ? undefined : messageOf(err);
 		}
+		this.unreadable = why;
 		this.values = isJsonObject(read) ? { ...read } : {};
 	}
 

@@ -12,6 +12,7 @@ import { DeferredPromise, sleepSync, timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
 import { canonicalFolder, FileChangedError, formatJson, isEqualPath, JsonFile, jsonLayoutOf, parseJson, readJsonFile, replaceFile, updateJsonFile, writeJsonFile } from '../base/files';
 import { isJsonObject, isStringArray } from '../base/json';
+import { disposeAll } from '../base/lifecycle';
 import { removeLockIfUnchanged, withFileLock } from '../base/lock';
 import { isProcessRunning } from '../base/system';
 import { cutNextWriteShort, outcomeOf, replaceFsFunction, tempDir } from './util';
@@ -19,6 +20,17 @@ import { cutNextWriteShort, outcomeOf, replaceFsFunction, tempDir } from './util
 const BOM = String.fromCharCode(0xfeff);
 
 suite('Base: errors, JSON values, processes and promises', () => {
+
+	test('disposing a list disposes each, in order: one that throws is said, and the rest are disposed all the same - a deactivation stopped at the first left the window\'s subscriptions and the record open (C4)', () => {
+		const seen: string[] = [];
+		disposeAll([
+			{ dispose: () => seen.push('first') },
+			{ dispose: () => { throw new Error('it broke'); } },
+			{ dispose: () => seen.push('last') }
+		], err => seen.push(`said: ${messageOf(err)}`));
+
+		assert.deepStrictEqual(seen, ['first', 'said: it broke', 'last']);
+	});
 
 	test('what was thrown is read whatever it is: an Error, a Node error by its code, or a value thrown as it is', () => {
 		const coded = Object.assign(new Error('gone'), { code: 'ENOENT' });

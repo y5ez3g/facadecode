@@ -32,11 +32,12 @@ function asked(value: string | undefined, ignored: boolean, what: string): strin
  */
 export function factsText(facade: Facade, facts: AgentFacts): string {
 	return [
+		...facts.phase ? [`phase ${facts.phase}`] : [],
 		`${facade.cliName(facts.cli)}${facts.custom ? ' (custom)' : ''}`,
 		asked(facts.model, facts.ignored.includes('model'), 'model'),
 		asked(facts.effort, facts.ignored.includes('effort'), 'effort'),
 		`YOLO ${facts.yolo ? 'on' : 'off'}, ${sandboxText(facts.sandbox)}`,
-		!facts.integration ? 'no Facade tools' : facts.connected ? 'connected' : 'not connected yet',
+		...facts.state === 'ended' ? [] : [!facts.integration ? 'no Facade tools' : facts.connected ? 'connected' : facts.state === 'starting' ? 'not connected yet' : 'not connected: its MCP server is gone'],
 		`in ${facts.folder}`,
 		facts.taskMessage !== undefined ? `task ${messageRef(facts.taskMessage)} (${facts.task})` : 'no task'
 	].join(', ');
@@ -45,7 +46,7 @@ export function factsText(facade: Facade, facts: AgentFacts): string {
 /** One line of `list_agents`, as the model reads it; `self` is the caller's number, none for the person. */
 function line(facade: Facade, row: AgentFacts, self: number | undefined): string {
 	const state = row.end ? `ended at ${timeOfDay(row.end.time)} (${endText(facade, row.end)}${row.end.exitCode !== undefined ? `, exit code ${row.end.exitCode}` : ''})` : row.state;
-	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  by ${facade.whoIs(row.creator)}  tree ${agentRef(row.root)}  ${state}  worktree ${row.worktree}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}`;
+	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  by ${facade.whoIs(row.creator)}  tree ${agentRef(row.root)}  ${state}  ${row.outsideGit ? `folder ${row.folder} (in no Git repository)` : `worktree ${row.worktree}`}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}`;
 }
 
 /** The line a list opens with: how many agents, and how many in each state - `3 agents: 1 starting, 2 running`. */
@@ -93,7 +94,14 @@ export const listAgentsTool: ContractTool = {
 				...listed.agents.map(row => line(facade, row, caller.id)),
 				`CLIs you can start: ${listed.clis.length ? listed.clis.map(cliLine).join('; ') : 'none on this machine'}.`
 			].join('\n'),
-			data: { ...listed, all }
+			// Who asks and what it reaches, and how many in each state: as data, as the text says them (O6)
+			data: {
+				caller: caller.id === undefined ? { name: 'human' } : { id: caller.id, name: caller.name },
+				reach: caller.id === undefined || listed.yolo ? 'window' : 'tree',
+				counts: Object.fromEntries(STATES.map(state => [state, listed.agents.filter(row => row.state === state).length])),
+				...listed,
+				all
+			}
 		};
 	}
 };

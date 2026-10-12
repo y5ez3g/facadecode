@@ -14,7 +14,7 @@ import { PassThrough } from 'stream';
 import { DeferredPromise } from '../base/async';
 import { PipeEndpoint } from '../transport/endpoint';
 import { McpStdioServer } from '../transport/mcpServer';
-import { PipeClient, PipeHandlers, PipeServer, pipePath } from '../transport/pipe';
+import { PipeClient, PipeClientError, PipeHandlers, PipeServer, pipePath } from '../transport/pipe';
 import { helloOf, toolResultOf } from '../transport/protocol';
 import { StdioMcpClient } from './mcpClient';
 import { outcomeOf, sleep, tempDir, waitFor } from './util';
@@ -86,7 +86,7 @@ suite('Transport: MCP over stdio', () => {
 		mcp.send({ jsonrpc: '2.0', id: 6, method: 'server/discover' });
 
 		assert.deepStrictEqual([await mcp.response(1), await mcp.response(2), await mcp.response(3), await mcp.response(4), await mcp.response(5), await mcp.response(6)], [
-			{ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'facade', version: '0.0.1' }, instructions: 'Be brief.' } },
+			{ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'facade', version: '0.0.1' }, instructions: 'Be brief.' } },
 			{ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'slow', title: 'Slow', description: 'Waits.', inputSchema: { type: 'object' } }, { name: 'boom', description: 'Fails.', inputSchema: { type: 'object' } }] } },
 			{ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'done' }], structuredContent: { ok: true } } },
 			{ jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', text: 'it broke' }], isError: true } },
@@ -288,6 +288,21 @@ suite('Transport: the pipe', () => {
 		}
 	});
 
+	test('a server that closes leaves alone the socket another server has put at its pipe meanwhile, as the next extension host of the window does', async () => {
+		const pipe = pipePath(`test-${crypto.randomBytes(4).toString('hex')}`);
+		const handlers = (name: string) => ({ authenticate: () => 'someone', hello: () => ({ name }), call: async () => name });
+		const before = await PipeServer.listen<string>(pipe, handlers('before'));
+		const after = await PipeServer.listen<string>(pipe, handlers('after'));
+		before.dispose();
+		try {
+			const answered = await new PipeClient(pipe, 'good').call('which', {}, () => { });
+
+			assert.deepStrictEqual({ answered, socket: fs.existsSync(pipe) }, { answered: 'after', socket: true });
+		} finally {
+			after.dispose();
+		}
+	});
+
 	test('a call made as the window goes, where the call before it connected, never reached the window: it did not run, and is told so, as when nothing listens', async () => {
 		const server = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
 			authenticate: () => 'someone',
@@ -302,7 +317,7 @@ suite('Transport: the pipe', () => {
 		assert.deepStrictEqual({ before, after: after.split(':')[0] }, { before: 'quick', after: 'UNREACHABLE' });
 	});
 
-	test('refuses an unknown token, says hello, streams progress, passes a failure on with its code, and says when nothing listens', async () => {
+	test('refuses an unknown token, says hello, streams progress, passes a failure on - FAILED, with the window\'s own code beside it, which is never taken for the pipe\'s, an UNREACHABLE of its own included (C-TR-07; X-70) - and says when nothing listens', async () => {
 		const server = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
 			authenticate: token => token === 'good' ? 'someone' : undefined,
 			hello: caller => ({ caller }),
@@ -312,6 +327,9 @@ suite('Transport: the pipe', () => {
 				}
 				if (tool === 'plain') {
 					throw new Error('it broke, with no code');
+				}
+				if (tool === 'unreachable') {
+					throw Object.assign(new Error('it could not reach something of its own'), { code: 'UNREACHABLE' });
 				}
 				progress('halfway');
 				return { caller, tool, args };
@@ -324,16 +342,18 @@ suite('Transport: the pipe', () => {
 			const result = await good.call('echo', { a: 1 }, message => progress.push(message));
 			const failed = await outcomeOf(good.call('fail', {}, () => { }));
 			const plain = await outcomeOf(good.call('plain', {}, () => { }));
+			const windowCodes = await Promise.all(['fail', 'plain', 'unreachable'].map(tool => good.call(tool, {}, () => { }).then(() => 'answered', (err: PipeClientError) => `${err.code} ${err.windowCode}`)));
 			const refused = await outcomeOf(new PipeClient(server.path, 'bad').hello());
 			const refusedCall = await outcomeOf(new PipeClient(server.path, 'bad').call('echo', {}, () => { }));
 			const nobody = await outcomeOf(new PipeClient(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), 'good').call('echo', {}, () => { }));
 
-			assert.deepStrictEqual({ hello, result, progress, failed, plain, refused, refusedCall, nobody: nobody.split(':')[0] }, {
+			assert.deepStrictEqual({ hello, result, progress, failed, plain, windowCodes, refused, refusedCall, nobody: nobody.split(':')[0] }, {
 				hello: { caller: 'someone' },
 				result: { caller: 'someone', tool: 'echo', args: { a: 1 } },
 				progress: ['halfway'],
 				failed: 'FAILED: it broke',
-				plain: 'INTERNAL: it broke, with no code',
+				plain: 'FAILED: it broke, with no code',
+				windowCodes: ['FAILED FAILED', 'FAILED INTERNAL', 'FAILED UNREACHABLE'],
 				refused: 'UNAUTHORIZED: Facade refused the connection (401).',
 				refusedCall: 'UNAUTHORIZED: Facade refused the call (401).',
 				nobody: 'UNREACHABLE'
@@ -535,6 +555,24 @@ suite('Transport: the pipe', () => {
 		}
 	});
 
+	test('a temporary folder too long for a socket\'s path - 104 bytes on macOS - puts the pipe in a folder of the person\'s own under /tmp, made private, where a window listens and is reached (C-TR-08; X-70)', async function () {
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		const long = path.join(os.tmpdir(), `fe-${'x'.repeat(90)}`);
+		const id = `test-${crypto.randomBytes(4).toString('hex')}`;
+		const pipe = pipePath(id, long);
+		const server = await PipeServer.listen<string>(pipe, { authenticate: token => token === 'good' ? 'caller' : undefined, hello: () => ({}), call: async () => 'answered' });
+		try {
+			const folder = fs.statSync(path.dirname(pipe));
+			const answer = await new PipeClient(pipe, 'good').call('echo', {}, () => { });
+
+			assert.deepStrictEqual({ pipe, folderMode: folder.mode & 0o777, answer }, { pipe: path.join('/tmp', `facade-${os.userInfo().uid}`, `facade-agents-${id}.sock`), folderMode: 0o700, answer: 'answered' });
+		} finally {
+			server.dispose();
+		}
+	});
+
 	test('elsewhere than Windows the pipe is a socket only its user can open, which replaces a file a window that ended left, and goes with the window', async function () {
 		if (process.platform === 'win32') {
 			this.skip();
@@ -625,6 +663,10 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		call: async (caller, tool, args, progress) => {
 			if (tool === 'hang') {
 				hanging++;
+				// A start that recorded its run, then waits: the window says which run it made
+				if ((args as { made?: number }).made !== undefined) {
+					progress('recorded', (args as { made: number }).made);
+				}
 				return new Promise(() => { });
 			}
 			const given = args as { text?: string; fail?: string };
@@ -679,18 +721,18 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		const init = await main.initialize();
 		const said = await main.call('echo', { text: 'hello' });
 
-		assert.deepStrictEqual({ instructions: init.instructions, tools: await main.tools(), said: said.text, progress: main.progress, launch: endpoint.mcpServer('/runs/7.token', 45_000), shared: endpoint.sharedMcpServer(), agent: endpoint.agentEnv('t0ken', 45_000) }, {
+		assert.deepStrictEqual({ instructions: init.instructions, tools: await main.tools(), said: said.text, progress: main.progress, launch: endpoint.mcpServer('/runs/7.token', 45_000), shared: endpoint.sharedMcpServer(), agent: endpoint.agentEnv('/runs/7.token', 45_000) }, {
 			instructions: 'You are @main.',
 			tools: ['echo', 'hang'],
 			said: '@main said hello to echo',
 			progress: ['echoing'],
 			launch: {
 				command: process.execPath,
-				args: [path.join(__dirname, '..', 'transport', 'shim.js'), 'mcp', '--pipe', pipe, '--token-file', '/runs/7.token'],
+				args: [path.join(__dirname, '..', 'transport', 'shim.js'), 'mcp', '--record', temp.dir, '--pipe', pipe, '--token-file', '/runs/7.token'],
 				env: { ELECTRON_RUN_AS_NODE: '1', FACADE_AGENTS_WAIT_MS: '45000' }
 			},
 			shared: { command: process.execPath, args: [path.join(__dirname, '..', 'transport', 'shim.js'), 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } },
-			agent: { FACADE_AGENTS_PIPE: pipe, FACADE_AGENTS_TOKEN: 't0ken', FACADE_AGENTS_WAIT_MS: '45000' }
+			agent: { FACADE_AGENTS_RECORD: temp.dir, FACADE_AGENTS_PIPE: pipe, FACADE_AGENTS_TOKEN: '/runs/7.token', FACADE_AGENTS_WAIT_MS: '45000' }
 		});
 	});
 
@@ -717,7 +759,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		assert.deepStrictEqual([refused.isError, refused.data?.code, refused.text], [true, 'REFUSED', 'Facade no longer accepts @main: it was stopped, or exited. Stop working.']);
 	});
 
-	test('a call made while the window\'s end is away waits for it and runs once it is back; one cut off halfway says so, and is not made again', async () => {
+	test('a call made while the window\'s end is away waits for it and runs once it is back; one cut off halfway says so, and is not made again - naming the run it made, where the window had said', async () => {
 		const main = agent('main');
 		await main.initialize();
 		endpoint.dispose();
@@ -730,13 +772,24 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		endpoint.dispose();
 		const cut = await cutOff;
 		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
+		// One cut after the window said which run it made names that run
+		const cutAfter = main.call('hang', { made: 7 });
+		await waitFor(() => hanging === 2 && main.progress.includes('recorded'));
+		endpoint.dispose();
+		const named = await cutAfter;
+		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
 
-		assert.deepStrictEqual({ back: back.text, waiting: main.progress.includes('Waiting for Facade\'s window to come back.'), cut: cut.isError && cut.text.replace(/\(.*?\)/, '(...)'), code: cut.data?.code, hanging }, {
+		assert.deepStrictEqual({ back: back.text, waiting: main.progress.includes('Waiting for Facade\'s window to come back.'), cut: cut.isError && cut.text.replace(/\(.*?\)/, '(...)'), code: cut.data?.code, outcome: cut.data?.outcome, named: { text: named.text.replace(/\(.*?\)/, '(...)'), data: named.data }, hanging }, {
 			back: '@main said anyone? to echo',
 			waiting: true,
-			cut: 'Facade\'s window went away during hang (...), as it does while it reloads, so hang may have run. Find out whether it did before you call it again.',
+			cut: 'Facade\'s window went away during hang (...), as it does while it reloads, so hang may have run. Look with list_agents before you call it again.',
 			code: 'UNAVAILABLE',
-			hanging: 1
+			outcome: 'unknown',
+			named: {
+				text: 'Facade\'s window went away during hang (...), as it does while it reloads, so hang may have run - it made the run #a7. Look with list_agents before you call it again.',
+				data: { code: 'UNAVAILABLE', outcome: 'unknown', agent: 7 }
+			},
+			hanging: 2
 		});
 	});
 
@@ -770,23 +823,139 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		assert.deepStrictEqual({ agent: fromAgent.text, script: fromScript.data?.code, gone: /did not come back/.test(fromScript.text) }, { agent: '@slugify said anyone? to echo', script: 'UNAVAILABLE', gone: true });
 	});
 
-	test('with no window, the MCP server offers facade_status, which says why; so does one whose variables its CLI did not expand, or whose token file cannot be read', async () => {
+	/** An agent's MCP server as its launch starts it, with `env` over its environment. */
+	function agentWith(name: string, env: NodeJS.ProcessEnv): StdioMcpClient {
+		const token = crypto.randomBytes(8).toString('hex');
+		tokens.set(token, name);
+		const tokenFile = path.join(temp.dir, `${name}.token`);
+		fs.writeFileSync(tokenFile, token);
+		const client = StdioMcpClient.start(endpoint.mcpServer(tokenFile, 60_000).args.slice(2), env);
+		clients.push(client);
+		return client;
+	}
+
+	test('an agent\'s MCP server finds the window where its record says it listens now: a window that came back on another pipe is reached', async () => {
+		const main = agent('main');
+		await main.initialize();
+		endpoint.dispose();
+		endpoint = await PipeEndpoint.start(pipePath(`moved-${crypto.randomBytes(6).toString('hex')}`), temp.dir, echo);
+		const after = await main.call('echo', { text: 'moved' });
+
+		assert.deepStrictEqual({ after: after.text, pipeMoved: windowRecord()?.pipe !== pipe }, { after: '@main said moved to echo', pipeMoved: true });
+	});
+
+	test('one outage is waited for once: the calls that follow are told at once that the window did not come back, and the first after it is back runs', async () => {
+		const main = agentWith('main', { FACADE_AGENTS_WAIT_MS: '700' });
+		await main.initialize();
+		endpoint.dispose();
+		const first = Date.now();
+		const one = await main.call('echo', { text: 'one' });
+		const firstMs = Date.now() - first;
+		const second = Date.now();
+		const two = await main.call('echo', { text: 'two' });
+		const secondMs = Date.now() - second;
+		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
+		const three = await main.call('echo', { text: 'three' });
+
+		assert.deepStrictEqual({
+			one: one.data?.code, waitedFirst: firstMs >= 600, two: two.data?.code, atOnceAfter: secondMs < 400, three: three.text
+		}, { one: 'UNAVAILABLE', waitedFirst: true, two: 'UNAVAILABLE', atOnceAfter: true, three: '@main said three to echo' });
+	});
+
+	test('a call the window took and then never answers - a window frozen or killed without a word - ends after its silence, saying it may have run', async () => {
+		const main = agentWith('main', { FACADE_AGENTS_SILENCE_MS: '500' });
+		await main.initialize();
+		const cut = await main.call('hang', {});
+
+		assert.deepStrictEqual({ code: cut.data?.code, outcome: cut.data?.outcome, mayHaveRun: /may have run/.test(cut.text), hanging }, { code: 'UNAVAILABLE', outcome: 'unknown', mayHaveRun: true, hanging: 1 });
+	});
+
+	test('a window that does not read its pipe - its extension host stopped in a debugger - takes no call: one is tried each second up to the agent\'s wait, then said not to have run, and the next said so at once; the window, back, runs none of the calls it reads too late (N-43)', async () => {
+		const main = agentWith('main', { FACADE_AGENTS_WAIT_MS: '1500' });
+		await main.initialize();
+		// This process is the window's end: held, what the agent's server sends it waits in the pipe, unread
+		const hold = (ms: number) => {
+			const until = Date.now() + ms;
+			while (Date.now() < until) {
+				// held
+			}
+		};
+		const first = Date.now();
+		const one = main.call('echo', { text: 'one' });
+		hold(3_000);
+		const notRun = await one;
+		const firstMs = Date.now() - first;
+		const second = Date.now();
+		const two = main.call('echo', { text: 'two' });
+		hold(1_200);
+		const atOnce = await two;
+		const secondMs = Date.now() - second;
+		const back = await main.call('echo', { text: 'three' });
+
+		assert.deepStrictEqual({
+			// The quoted reason without its own full stop: "(… did not run.)." read twice (N-52)
+			one: [notRun.data?.code, notRun.data?.outcome, /did not run/.test(notRun.text), /\.\)/.test(notRun.text)],
+			heldThrough: firstMs < 4_000,
+			two: [atOnce.data?.code, /did not run/.test(atOnce.text)],
+			atOnce: secondMs < 2_000,
+			back: back.text,
+			echoed
+		}, {
+			one: ['UNAVAILABLE', undefined, true, false],
+			heldThrough: true,
+			two: ['UNAVAILABLE', true],
+			atOnce: true,
+			back: '@main said three to echo',
+			echoed: ['three']
+		});
+	});
+
+	test('a window that was not there as the agent\'s MCP server started is announced once it comes: its tools are listed anew', async () => {
+		endpoint.dispose();
+		const late = agentWith('late', { FACADE_AGENTS_WAIT_MS: '300' });
+		await late.initialize();
+		const before = await late.tools();
+		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
+		const status = await late.call('facade_status');
+		const after = await late.tools();
+
+		assert.deepStrictEqual({ before, status: status.isError, changed: late.notifications.includes('notifications/tools/list_changed'), after }, {
+			before: ['facade_status'], status: false, changed: true, after: ['echo', 'hang']
+		});
+	});
+
+	test('with the window away and its record saying the agent framework is off, a call is told so at once', async () => {
+		const main = agentWith('main', { FACADE_AGENTS_WAIT_MS: '5000' });
+		await main.initialize();
+		endpoint.setEnabled(false);
+		const stale = fs.readFileSync(path.join(temp.dir, 'window.json'), 'utf8');
+		endpoint.dispose();
+		// A window that crashed leaves its record
+		fs.writeFileSync(path.join(temp.dir, 'window.json'), stale);
+		const started = Date.now();
+		const off = await main.call('echo', { text: 'x' });
+
+		assert.deepStrictEqual({ reason: off.data?.reason, atOnce: Date.now() - started < 1000, record: JSON.parse(stale).enabled }, { reason: 'framework_disabled', atOnce: true, record: false });
+	});
+
+	test('with no window, an agent\'s MCP server offers facade_status, which says why - as does one whose token file cannot be read; one started without a pipe and a token - run by hand where Facade\'s configuration is, by a CLI that did not expand its variables, or by one that expanded them empty (Muse\'s `${name:-}`; N-42) - offers no tool at all', async () => {
 		const orphan = StdioMcpClient.start([]);
-		const unexpanded = StdioMcpClient.start(['--agent'], { FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN}' });
+		const unexpanded = StdioMcpClient.start(['--agent'], { FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE:-}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN:-}' });
+		const empty = StdioMcpClient.start(['--agent'], { FACADE_AGENTS_RECORD: '', FACADE_AGENTS_PIPE: '', FACADE_AGENTS_TOKEN: '', FACADE_AGENTS_WAIT_MS: '' });
 		const gone = path.join(temp.dir, 'gone.token');
 		const tokenless = StdioMcpClient.start(['--pipe', pipe, '--token-file', gone]);
-		clients.push(orphan, unexpanded, tokenless);
-		await Promise.all([orphan.initialize(), unexpanded.initialize(), tokenless.initialize()]);
-		const status = await orphan.call('facade_status');
-		const unexpandedStatus = await unexpanded.call('facade_status');
+		const away = StdioMcpClient.start(['--pipe', pipePath(`nobody-${crypto.randomBytes(6).toString('hex')}`), '--token-file', gone], { FACADE_AGENTS_WAIT_MS: '300' });
+		clients.push(orphan, unexpanded, empty, tokenless, away);
+		await Promise.all([orphan.initialize(), unexpanded.initialize(), empty.initialize(), tokenless.initialize(), away.initialize()]);
 		const tokenlessStatus = await tokenless.call('facade_status');
 
 		assert.deepStrictEqual({
-			tools: await orphan.tools(),
-			isError: status.isError,
-			code: status.data?.code,
-			why: [/without a pipe and a token/.test(status.text), /without a pipe and a token/.test(unexpandedStatus.text), tokenlessStatus.text.includes(`the token file ${gone} cannot be read`)]
-		}, { tools: ['facade_status'], isError: true, code: 'UNAVAILABLE', why: [true, true, true] });
+			byHand: [await orphan.tools(), await unexpanded.tools(), await empty.tools()],
+			agent: await tokenless.tools(),
+			isError: tokenlessStatus.isError,
+			code: tokenlessStatus.data?.code,
+			why: tokenlessStatus.text.includes(`the token file ${gone} cannot be read`)
+		}, { byHand: [[], [], []], agent: ['facade_status'], isError: true, code: 'UNAVAILABLE', why: true });
 	});
 
 	test('a window that fails to say hello is not taken for a window that is there: a script is told why, at once', async () => {
@@ -849,6 +1018,36 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 				tools: ['facade_status'],
 				status: true
 			});
+		} finally {
+			server.close();
+		}
+	});
+
+	test('a window that fails a call with a code of its own that the pipe uses too - UNREACHABLE - is taken at its word that it failed: the call is sent once, never again as one that did not reach it (C-TR-07; X-70)', async () => {
+		const fake = pipePath(`test-${crypto.randomBytes(6).toString('hex')}`);
+		let calls = 0;
+		const server = http.createServer((req, res) => {
+			req.resume();
+			req.on('end', () => {
+				if (req.url === '/hello') {
+					res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ name: 'main', tools: [{ name: 'echo', description: 'Says what it was given.', inputSchema: { type: 'object' } }], instructions: '' }));
+				} else {
+					calls++;
+					res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }).end('{"type":"error","code":"UNREACHABLE","message":"it could not reach something of its own"}\n');
+				}
+			});
+		});
+		await new Promise<void>(resolve => server.listen(fake, resolve));
+		try {
+			const tokenFile = path.join(temp.dir, 'main.token');
+			fs.writeFileSync(tokenFile, 'any');
+			const main = StdioMcpClient.start(['--pipe', fake, '--token-file', tokenFile]);
+			clients.push(main);
+			await main.initialize();
+			const failed = await main.call('echo');
+			await sleep(1_500);
+
+			assert.deepStrictEqual({ calls, failed: [failed.data?.code, failed.text] }, { calls: 1, failed: ['FAILED', 'echo failed in Facade\'s window: it could not reach something of its own'] });
 		} finally {
 			server.close();
 		}

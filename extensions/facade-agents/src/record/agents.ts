@@ -8,9 +8,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { isEqualPath, replaceFile } from '../base/files';
-import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, StoppedBy, WorkspaceState } from './events';
-import { ClosedBy, LastClose, Ledger, LedgerOptions } from './ledger';
-import { AgentLog } from './log';
+import { isJsonObject } from '../base/json';
+import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LedgerEventBody, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, StartPhase, StoppedBy, WorkspaceState } from './events';
+import { ClosedBy, LastClose, Ledger, LEDGER_FILE, LedgerOptions } from './ledger';
+import { AgentLog, LoggedLaunch } from './log';
 
 /** The person's token, in the workspace's folder: scripts that hold it act as the person. */
 const YOU_TOKEN_FILE = 'you.token';
@@ -67,15 +68,21 @@ export interface NewAgent {
 	/** What it was asked for that its launch has no group for. */
 	readonly ignored: readonly Ignored[];
 	readonly yolo: boolean;
+	/** Started through `start_agent`, where nobody may be watching it (L4). */
+	readonly unattended?: boolean;
 	readonly sandbox: SandboxState;
 	readonly integration: boolean;
 	readonly worktree: string;
+	/** Its folder is in no Git repository (N-05). */
+	readonly outsideGit?: boolean;
 	readonly folder: string;
 	/**
 	 * Its task: kept as a message of its own (`messageFileOf`), whose notice reaches it as its argument or
 	 * typed into its terminal; none where it has no task.
 	 */
 	readonly task?: { readonly text: string; readonly notice: 'argument' | 'typed' };
+	/** Where its start begins: making its worktree, or launching its CLI. */
+	readonly phase?: StartPhase;
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -100,6 +107,11 @@ export class AgentTable {
 	private lastMessageId = 0;
 	/** The person's history: each start and each end. */
 	private readonly log: AgentLog;
+
+	/** Hears each change of the record as it is written: an agent starting, moving on, or ending. */
+	onDidChange(listener: () => void): { dispose(): void } {
+		return this.ledger.onDidAppend(() => listener());
+	}
 
 	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) {
 		this.log = AgentLog.of(options.dir);
@@ -236,7 +248,7 @@ export class AgentTable {
 			fs.writeFileSync(this.messageFileOf(taskMessage), agent.task.text, { mode: 0o600 });
 		}
 		const creator = agent.creator === undefined ? undefined : this.state.agents.get(agent.creator);
-		this.ledger.append({
+		const event: LedgerEventBody = {
 			type: 'agent.started',
 			id,
 			name,
@@ -247,20 +259,49 @@ export class AgentTable {
 			...(agent.effort !== undefined ? { effort: agent.effort } : {}),
 			...(agent.ignored.length ? { ignored: agent.ignored } : {}),
 			yolo: agent.yolo,
+			...(agent.unattended ? { unattended: true as const } : {}),
 			sandbox: agent.sandbox,
 			integration: agent.integration,
-			worktree: agent.worktree,
+			// Never empty: a ledger before this build read an empty one as no event (X-13)
+			worktree: agent.worktree || path.basename(agent.folder) || agent.folder,
+			...(agent.outsideGit ? { outsideGit: true as const } : {}),
 			folder: agent.folder,
 			...(taskMessage !== undefined ? { taskMessage } : {}),
 			task: agent.task === undefined ? 'none' : agent.task.notice === 'typed' ? 'pending' : 'argument',
-			tokenHash: hashToken(token)
-		});
+			tokenHash: hashToken(token),
+			...(agent.phase !== undefined ? { phase: agent.phase } : {})
+		};
+		try {
+			this.ledger.append(event);
+		} catch (err) {
+			// Not recorded: its token and task go too, rather than lie about for a number nobody has (X-75)
+			fs.rmSync(tokenFile, { force: true });
+			if (taskMessage !== undefined) {
+				fs.rmSync(this.messageFileOf(taskMessage), { force: true });
+			}
+			throw err;
+		}
 		const started = this.state.agents.get(id);
 		if (!started) {
 			throw new Error(`The ledger did not record ${agentRef(id)}.`);
 		}
 		this.log.started(started, this.whoIs(started.creator));
 		return { agent: started, token, tokenFile };
+	}
+
+	/** Records that a starting agent's start moved on: to `phase`, its worktree made in `folder` where one was. */
+	phase(id: number, phase: StartPhase, folder?: string): void {
+		if (this.state.agents.get(id)?.state === 'starting') {
+			this.ledger.append({ type: 'agent.phase', id, phase, ...(folder !== undefined ? { folder } : {}) });
+		}
+	}
+
+	/** Writes into the person's history what agent `id`'s terminal is to run, as its launch has it (UI-14). */
+	launching(id: number, launch: LoggedLaunch): void {
+		const agent = this.state.agents.get(id);
+		if (agent) {
+			this.log.launched(agent, launch, Date.now());
+		}
 	}
 
 	/** Records the process of an agent's CLI, once its terminal runs it. */
@@ -275,13 +316,16 @@ export class AgentTable {
 		const agent = this.state.agents.get(id);
 		if (isLive(agent) && !agent.connected) {
 			this.ledger.append({ type: 'agent.connected', id });
+			this.log.connected(agent, Date.now());
 		}
 	}
 
 	/** Records that a starting agent has started, and runs. */
 	running(id: number): void {
-		if (this.state.agents.get(id)?.state === 'starting') {
+		const agent = this.state.agents.get(id);
+		if (agent?.state === 'starting') {
 			this.ledger.append({ type: 'agent.running', id });
+			this.log.running(agent, Date.now());
 		}
 	}
 
@@ -395,6 +439,39 @@ function readOrCreateToken(file: string): string {
 }
 
 /** The highest number `file` says the workspace gave; 0 when it says none, or nothing a number can be. */
+/**
+ * The highest agent number the record in `dir` gave: by its `last-id` - or `last-pid` - or its ledger, where
+ * that says more; 0 for none.
+ */
+export function numberedUpTo(dir: string): number {
+	let highest = Math.max(readLastId(path.join(dir, LAST_ID_FILE)), readLastId(path.join(dir, LAST_PID_FILE)));
+	let text = '';
+	try {
+		text = fs.readFileSync(path.join(dir, LEDGER_FILE), 'utf8');
+	} catch {
+		// No ledger: the files say it all
+	}
+	for (const line of text.split('\n')) {
+		try {
+			const event: unknown = JSON.parse(line);
+			if (isJsonObject(event) && typeof event.type === 'string' && event.type.startsWith('agent.') && typeof event.id === 'number' && Number.isInteger(event.id)) {
+				highest = Math.max(highest, event.id);
+			}
+		} catch {
+			// A line cut short, or none: nothing to count
+		}
+	}
+	return highest;
+}
+
+/** Has the record in `dir` count on from `reached`: no number up to it is given again (AGENT-LAUNCHER.md, L2; X-49). */
+export function countOnFrom(dir: string, reached: number): void {
+	if (reached > readLastId(path.join(dir, LAST_ID_FILE))) {
+		fs.mkdirSync(dir, { recursive: true });
+		replaceFile(path.join(dir, LAST_ID_FILE), String(reached));
+	}
+}
+
 function readLastId(file: string): number {
 	let text: string;
 	try {

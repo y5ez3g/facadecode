@@ -10,7 +10,8 @@ import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
 import { customAgentOf } from '../clis/custom';
 import { Facade, StartRequest, Started } from '../core/facade';
-import { Disposable, Git, ListedWorktree, Person, Repository, TerminalEnd, TerminalLaunch, Terminals, WorktreeChanges } from '../core/ports';
+import { customAgentNameProblem } from '../core/launch';
+import { Disposable, Git, ListedWorktree, MadeWorktreeFolder, Person, Repository, SetupOutcome, Severity, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalsInside, WorktreeChanges, WorktreeDeletion } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy } from '../record/ledger';
@@ -25,6 +26,18 @@ import { settled, until } from './clock';
 /** The processes the fake terminals of every world run, by their ids: above any id a system gives. */
 const FAKE_PROCESSES = new Set<number>();
 let lastFakeProcess = 5_000_000;
+
+/** Ends a fake terminal's process, as a signal it cannot ignore would - or the pty host ending it, unseen by the window. */
+export function endFakeProcess(pid: number): void {
+	FAKE_PROCESSES.delete(pid);
+}
+
+/** A process of the test's own, running until `endFakeProcess` ends it: an agent's MCP server, say. */
+export function startFakeProcess(): number {
+	const pid = ++lastFakeProcess;
+	FAKE_PROCESSES.add(pid);
+	return pid;
+}
 
 /** Whether a process runs: one of a fake terminal's while it does, else as the operating system says. */
 export function isFakeProcessRunning(pid: number): boolean {
@@ -42,6 +55,8 @@ export class FakeTerminals implements Terminals {
 	readonly running = new Set<string>();
 	/** What was typed into each terminal, piece by piece, and which were closed, by their titles. */
 	readonly typed: string[] = [];
+	/** Where a line typed in parts began and ended, the person's typing held back between, by the terminals' titles. */
+	readonly lines: string[] = [];
 	/** The next launch fails with this. */
 	failNext: string | undefined;
 	/** While set, a stop leaves the process running, as one that will not end. */
@@ -63,34 +78,87 @@ export class FakeTerminals implements Terminals {
 		await this.hold;
 		this.launched.push(launch);
 		this.running.add(launch.name);
-		const processId = ++lastFakeProcess;
-		FAKE_PROCESSES.add(processId);
+		const processId = startFakeProcess();
 		this.processes.set(launch.id, processId);
 		return this.noProcessIds ? {} : { processId };
 	}
 
 	async isAlive(id: number): Promise<boolean> {
-		if (this.untold.has(id)) {
-			throw new Error('the window cannot tell whether its process runs');
+		this.asking++;
+		this.mostAsking = Math.max(this.mostAsking, this.asking);
+		try {
+			await this.answering;
+			if (this.untold.has(id)) {
+				throw new Error('the window cannot tell whether its process runs');
+			}
+			return this.titleOf(id) !== undefined;
+		} finally {
+			this.asking--;
 		}
-		return this.titleOf(id) !== undefined;
 	}
+
+	/** The process of agent `id`'s terminal, as the window had it when `isAlive` found it running; none for one not running. */
+	processIdOf(id: number): number | undefined {
+		return this.titleOf(id) === undefined ? undefined : this.processes.get(id);
+	}
+
+	/** While set, the window answers whether a process runs once it settles. */
+	answering: Promise<void> | undefined;
+	/** How many asked whether their process runs at once, now and at most. */
+	private asking = 0;
+	mostAsking = 0;
+
+	/** How the processes that ended while no extension host watched ended, as the window saw it: set by a test. */
+	readonly seenEnds = new Map<number, TerminalEnd>();
+
+	endOf(id: number): TerminalEnd | undefined {
+		return this.seenEnds.get(id);
+	}
+
+	/** Whether letting go of a listener throws, as a subscription of a window going may. */
+	disposeThrows = false;
 
 	onDidEnd(listener: (id: number, end: TerminalEnd) => void): Disposable {
 		this.listeners.add(listener);
-		return { dispose: () => this.listeners.delete(listener) };
+		return {
+			dispose: () => {
+				if (this.disposeThrows) {
+					throw new Error('the window is gone');
+				}
+				this.listeners.delete(listener);
+			}
+		};
 	}
 
 	/** As the window ends an agent's process for the extension: it tells of the end as of any other. */
-	async stop(id: number): Promise<void> {
+	/** The signals each stop sent, in order: `#a<id> <signal>`. */
+	readonly signals: string[] = [];
+
+	/** The exit code each agent's process ends with when stopped, by its number: none unless a test says. */
+	readonly exitCodes = new Map<number, number>();
+
+	async stop(id: number, signal: StopSignal = 'SIGHUP'): Promise<{ readonly exitCode?: number }> {
 		const title = this.titleOf(id);
-		if (title !== undefined) {
-			if (this.stubborn) {
-				throw new Error('its process has not ended yet');
-			}
-			this.typed.push(`${title}: [closed]`);
-			this.end(title);
+		this.signals.push(`#a${id} ${signal}`);
+		if (title === undefined) {
+			return {};
 		}
+		// A stubborn process ignores the hang-up and termination; a kill it cannot ignore
+		if (this.stubborn && signal !== 'SIGKILL') {
+			throw new Error('its process has not ended yet');
+		}
+		this.typed.push(`${title}: [closed]`);
+		const exitCode = this.exitCodes.get(id);
+		this.end(title, { byThePerson: false, ...(exitCode !== undefined ? { exitCode } : {}) });
+		return exitCode !== undefined ? { exitCode } : {};
+	}
+
+	/** The agents working inside each folder by their terminals' cwd, beyond those started there: this record's, how many of another's, and other windows' by their titles. */
+	readonly working = new Map<string, Partial<TerminalsInside>>();
+
+	async inside(folder: string): Promise<TerminalsInside> {
+		const working = this.working.get(folder);
+		return { agents: working?.agents ?? [], others: working?.others ?? 0, elsewhere: working?.elsewhere ?? [] };
 	}
 
 	async reveal(id: number): Promise<boolean> {
@@ -98,22 +166,49 @@ export class FakeTerminals implements Terminals {
 		return this.titleOf(id) !== undefined;
 	}
 
-	async type(id: number, text: string): Promise<boolean> {
+	async type(id: number, text: string, line?: 'begin' | 'end'): Promise<boolean> {
 		const title = this.titleOf(id);
+		if (line) {
+			this.lines.push(`${title ?? `#a${id}`}: ${line}`);
+		}
 		if (title === undefined) {
 			return false;
 		}
-		this.typed.push(`${title}: ${JSON.stringify(text)}`);
+		if (text) {
+			this.typed.push(`${title}: ${JSON.stringify(text)}`);
+		}
 		return true;
 	}
 
-	/** As when a terminal closes, or its process exits: the terminal of that title. */
-	end(title: string, end: TerminalEnd = { byThePerson: false }): void {
+	/** As when the window loses the terminal of that title - a reload that did not bring it back - its process running on. */
+	lose(title: string): void {
+		this.running.delete(title);
+	}
+
+	/**
+	 * As when a terminal closes, or its process exits: the terminal of that title. `processRunsOn`: its process
+	 * outlives the terminal, as a CLI that ignores the hang-up does.
+	 */
+	end(title: string, end: TerminalEnd = { byThePerson: false }, processRunsOn = false): void {
 		if (this.running.delete(title)) {
-			FAKE_PROCESSES.delete(this.processes.get(idOf(title)) ?? 0);
+			if (!processRunsOn) {
+				FAKE_PROCESSES.delete(this.processes.get(idOf(title)) ?? 0);
+			}
 			for (const listener of [...this.listeners]) {
 				listener(idOf(title), end);
 			}
+		}
+	}
+
+	/**
+	 * As when a terminal the window had lost already - its typing failing - is said to have ended only now: its
+	 * process gone, and the window telling of its end after (C4-09).
+	 */
+	endLost(title: string, end: TerminalEnd = { byThePerson: false }): void {
+		this.running.delete(title);
+		FAKE_PROCESSES.delete(this.processes.get(idOf(title)) ?? 0);
+		for (const listener of [...this.listeners]) {
+			listener(idOf(title), end);
 		}
 	}
 
@@ -142,10 +237,21 @@ export class FakeGit implements Git {
 	readonly untrackedFiles = new Set<string>();
 	/** While set, listing a repository's worktrees waits for it. */
 	hold: Promise<void> | undefined;
+	/** While set, a worktree being made is answered for once it settles: git has made it by then. */
+	making: Promise<void> | undefined;
+	/** While set, a worktree to make waits for it before git is asked: in the window's queue, its branch not made yet. */
+	queued: Promise<void> | undefined;
+	/** What could not be copied into a worktree made, and how a hook failed, as the window answers. */
+	copyFailures: readonly string[] = [];
+	hookFailure: string | undefined;
+	/** How the setup of a worktree made comes out, once it settles: none to run unless a test says. */
+	setup: SetupOutcome | Promise<SetupOutcome> = { kind: 'none' };
 	/** What deleting a worktree would lose, by its folder: nothing unless a test says. */
 	readonly changes = new Map<string, WorktreeChanges>();
 	/** While set, deleting a worktree fails with this. */
 	failDelete: string | undefined;
+	/** Whether a deletion that fails gets as far as git forgetting the worktree, its folder left: a file it cannot delete. */
+	failAfterForgetting = false;
 	private readonly worktrees = new Map<string, ListedWorktree[]>();
 	/** The branches of each repository that no worktree has checked out, by its main checkout. */
 	private readonly otherBranches = new Map<string, Set<string>>();
@@ -160,6 +266,10 @@ export class FakeGit implements Git {
 	constructor(repositories: { readonly [main: string]: readonly string[] }, private readonly gitDir: string, private readonly unborn: readonly string[] = [], readonly head = 'a'.repeat(40)) {
 		for (const [main, branches] of Object.entries(repositories)) {
 			this.worktrees.set(main, [{ name: 'main', branch: 'main', folder: main }, ...branches.map(branch => ({ name: branch, branch, folder: worktreeFolder(main, branch) }))]);
+			// On the disk, as git would have them
+			for (const branch of branches) {
+				fs.mkdirSync(worktreeFolder(main, branch), { recursive: true });
+			}
 		}
 	}
 
@@ -203,19 +313,34 @@ export class FakeGit implements Git {
 	}
 
 	async changesIn(folder: string): Promise<WorktreeChanges> {
-		return this.changes.get(folder) ?? { files: [], unsaved: [] };
+		return this.changes.get(folder) ?? { files: [], unsaved: [], submodules: [] };
 	}
 
-	async deleteWorktree(folder: string, options: { readonly discardChanges: boolean; readonly ownFiles: readonly string[] }): Promise<void> {
-		if (this.failDelete) {
-			throw new Error(this.failDelete);
+	/** What each deletion was told, by the worktree's folder. */
+	readonly deletions = new Map<string, WorktreeDeletion>();
+
+	async deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void> {
+		this.deletions.set(folder, options);
+		if (options.leftover) {
+			if (this.failDelete) {
+				throw new Error(this.failDelete);
+			}
+			this.steps.push(`delete what is left of ${folder}`);
+			fs.rmSync(folder, { recursive: true, force: true });
+			return;
 		}
 		const found = this.worktreeAt(folder);
+		if (this.failDelete) {
+			if (this.failAfterForgetting && found) {
+				this.worktrees.set(found.main, (this.worktrees.get(found.main) ?? []).filter(each => each.folder !== found.worktree.folder));
+			}
+			throw new Error(this.failDelete);
+		}
 		if (!found || found.main === found.worktree.folder) {
 			throw new Error(`${folder} is no worktree to delete`);
 		}
 		// As the window looks as it deletes it: changes git would lose refuse it unless discarded.
-		const lost = (this.changes.get(folder)?.files ?? []).filter(file => !options.ownFiles.includes(file));
+		const lost = (this.changes.get(folder)?.files ?? []).filter(file => !options.ownFiles.some(owned => owned.path === file));
 		if (lost.length && !options.discardChanges) {
 			throw new Error(`${folder} has changes that deleting it would lose: ${lost.join(', ')}`);
 		}
@@ -224,17 +349,36 @@ export class FakeGit implements Git {
 		fs.rmSync(folder, { recursive: true, force: true });
 	}
 
-	async makeWorktree(main: string, branch: string, startPoint: string): Promise<string> {
+	plannedWorktreeFolder(main: string, branch: string): string {
+		return worktreeFolder(main, branch);
+	}
+
+	async makeWorktree(main: string, branch: string, startPoint: string): Promise<MadeWorktreeFolder> {
+		await this.queued;
 		const worktrees = this.worktrees.get(main) ?? [];
 		if (await this.hasBranch(main, branch)) {
 			throw new Error(`A branch named ${branch} already exists. Choose another name.`);
 		}
 		this.steps.push(`make ${branch} from ${startPoint.slice(0, 7)} in ${main}`);
-		const folder = worktreeFolder(main, branch);
+		// A path that is taken gets -1, -2 and so on, as the window has it (WORKTREE.md, WT-2.3)
+		let folder = worktreeFolder(main, branch);
+		for (let suffix = 1; fs.existsSync(folder); suffix++) {
+			folder = `${worktreeFolder(main, branch)}-${suffix}`;
+		}
 		fs.mkdirSync(folder, { recursive: true });
 		worktrees.push({ name: branch, branch, folder });
 		this.worktrees.set(main, worktrees);
-		return folder;
+		await this.making;
+		return { folder, copyFailures: this.copyFailures, ...(this.hookFailure ? { hookFailure: this.hookFailure } : {}) };
+	}
+
+	async setupOutcome(folder: string): Promise<SetupOutcome> {
+		this.steps.push(`set up ${folder}`);
+		return await this.setup;
+	}
+
+	stopSetup(folder: string): void {
+		this.steps.push(`stop setup ${folder}`);
 	}
 
 	async excludeOf(folder: string): Promise<{ readonly file: string; readonly root: string } | undefined> {
@@ -243,6 +387,22 @@ export class FakeGit implements Git {
 	}
 
 	/** With `commit`, the files tracked in `folder`, the main checkout, stand for the commit's. */
+	/** What a commit's files hold, by `<commit>:<path>` from the repository's root - or by the path alone, every commit alike. */
+	readonly committed = new Map<string, string>();
+
+	/** What each leftover holds that its branch does not, by its folder: nothing unless a test says. */
+	readonly leftoverWork = new Map<string, readonly string[]>();
+
+	async leftoverWorkIn(_main: string, branch: string, folder: string): Promise<readonly string[]> {
+		this.steps.push(`look at what is left of ${branch} in ${folder}`);
+		return this.leftoverWork.get(folder) ?? [];
+	}
+
+	async fileAt(main: string, commit: string, file: string): Promise<string | undefined> {
+		this.steps.push(`read ${file} at ${commit.slice(0, 7)} in ${main}`);
+		return this.committed.get(`${commit}:${file}`) ?? this.committed.get(file);
+	}
+
 	async tracks(folder: string, files: readonly string[], commit?: string): Promise<ReadonlySet<string>> {
 		if (commit !== undefined) {
 			this.steps.push(`ls-tree ${commit.slice(0, 7)} in ${folder}`);
@@ -284,8 +444,8 @@ export class FakePerson implements Person {
 
 	readonly told: string[] = [];
 
-	tell(text: string, agent: number | undefined): void {
-		this.told.push(`${text}${agent !== undefined ? ` (#a${agent}'s terminal)` : ''}`);
+	tell(text: string, agent: number | undefined, severity: Severity): void {
+		this.told.push(`${severity}: ${text}${agent !== undefined ? ` (#a${agent}'s terminal)` : ''}`);
 	}
 }
 
@@ -314,17 +474,27 @@ export function argCli(home: string): AgentCli {
 			path: '',
 			enabled: true,
 			launch: {
-				arguments: { connect: ['--config', '${config}'], questions: ['--no-ask'], yoloOn: ['--yolo'], yoloOff: ['--sandbox', '--allow', 'facade'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
+				arguments: { connect: ['--config', '${config}'], yoloOn: ['--yolo'], yoloOff: ['--sandbox', '--allow', 'facade'], model: ['--model', '${model}'], effort: ['--effort', '${effort}'], task: ['--', '${task}'] },
 				environment: { ARG_QUIET: '1' },
 				trust: { file: '${argHome}/trust.json', merge: { trusted: ['${repository}'] } },
 				enterDelay: 300,
-				taskDelay: 0
+				taskDelay: 0,
+				// Where nobody may be watching: its question tool taken away (AGENT-LAUNCHER.md, L4)
+				unattended: { arguments: { questions: ['--no-ask'] }, environment: {} }
 			}
 		},
 		trustValues: ({ repository }, env) => ({ argHome: env.ARG_HOME ?? home, repository }),
+		// The person's own setting that takes its exemption away: a deny rule, where its environment names one
+		exemptionOverride: (_config, env) => env.ARG_DENY ? `${env.ARG_DENY} denies mcp__facade` : undefined,
+		// The person's own configuration of it: a server named facade in `own.conf` of its home, which its `--config` would merge into
+		conflict: (args, _folder, env) => {
+			const own = path.join(env.ARG_HOME ?? home, 'own.conf');
+			return args.includes('--config') && fs.existsSync(own) ? `${own} has a server of its own named facade.` : undefined;
+		},
 		task: 'argument',
 		sandbox: { yoloOn: 'off', yoloOff: 'on' },
 		exemption: 'precise',
+		questionTool: 'removed',
 		launch: (input, executable) => {
 			const config = path.join(input.runDir, `${input.slug}.config.json`);
 			return {
@@ -373,6 +543,7 @@ export function toldCli(): AgentCli {
 		task: 'terminal',
 		sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' },
 		exemption: 'all',
+		questionTool: 'kept',
 		launch: (input, executable) => {
 			const { connection } = input;
 			return {
@@ -435,6 +606,10 @@ export interface WorldOptions {
 	readonly owner?: string;
 	/** The load of the window it opens in: a new one for each world unless set. */
 	readonly session?: string;
+	/** Told Code's models carry their effort in their names, as Antigravity's do (N-64). */
+	readonly toldModelCarriesEffort?: boolean;
+	/** Arg Code keeps its question tool, as Muse Code does: no launch takes it away (N-71). */
+	readonly argKeepsQuestions?: boolean;
 }
 
 /** How many worlds were made: each one a new load of the window. */
@@ -458,7 +633,8 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const switches: { yolo: unknown; framework: boolean } = { yolo: true, framework: true };
 	/** The person's custom agents, `facade.agents.custom`, as a test sets them: by name, in order. */
 	const custom: { [name: string]: unknown } = {};
-	const known: readonly AgentCli[] = [argCli(path.join(dir, 'arg-home')), toldCli()];
+	const arg = argCli(path.join(dir, 'arg-home'));
+	const known: readonly AgentCli[] = [options.argKeepsQuestions ? { ...arg, questionTool: 'kept' } : arg, options.toldModelCarriesEffort ? { ...toldCli(), modelCarriesEffort: true } : toldCli()];
 	const sectionOf = (cli: AgentCli) => cli.setting.replace(/^facade\.agents\./, '');
 	const configFor = (cli: AgentCli) => readCliConfig(cli, name => settings[sectionOf(cli)]?.[name]);
 	const executableOf = (cli: AgentCli) => cli.custom ? path.join(dir, 'bin', `${cli.command}.exe`) : path.join(dir, 'bin', `${cli.id}.exe`);
@@ -466,13 +642,21 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const installed = () => known.filter(cli => onMachine(cli) && configFor(cli).enabled).map(cli => ({ cli, config: configFor(cli), executable: executableOf(cli) }));
 	/** What the core wrote to its log, in order. */
 	const logs: string[] = [];
+	const processFolders = new Map<number, readonly string[]>();
+	const processStarts = new Map<number, number>();
+	const killed: string[] = [];
+	const refreshes = { count: 0 };
+	const ignoringTermination = new Set<number>();
 	const facade = new Facade({
 		table,
 		ports: { terminals, git, workspace: { folders: () => [...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder }, person },
 		clis: {
 			known,
-			custom: () => Object.entries(custom).map(([name, value]) => customAgentOf(name, value, known.some(cli => cli.id === name) ? `${name} is a built-in's id` : undefined)),
+			custom: () => Object.entries(custom).map(([name, value]) => customAgentOf(name, value, customAgentNameProblem(name, new Set(known.map(cli => cli.id))))),
 			installed,
+			refresh: async () => {
+				refreshes.count++;
+			},
 			locate: (cli, config, env) => {
 				const found = options.locate ? options.locate(cli.id, env) : onMachine(cli) ? executableOf(cli) : undefined;
 				return found ? { cli, config, executable: found } : undefined;
@@ -493,14 +677,22 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 				values: { executable: '/facade/facade', shimFile: '/facade/shim.js', pipe: 'pipe', recordDir: dir, tokenFile, waitMs: '120000' }
 			}),
 			sharedMcpServer: () => ({ command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
-			agentEnv: token => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: token }),
+			agentEnv: tokenFile => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: tokenFile }),
 			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: options.skill ?? '# Working in Facade Code' }],
 			opening: (agent, parent) => `[facade] You are @${agent.name} #a${agent.id}, ${agent.cliName}, started by @${parent.name}.`
 		},
 		timing: () => timing,
 		log: message => logs.push(message),
 		injected: options.injected ?? path.join(dir, 'injected.json'),
-		isRunning: isFakeProcessRunning
+		isRunning: isFakeProcessRunning,
+		workingFolders: async roots => new Map(roots.map(root => [root, processFolders.get(root) ?? []])),
+		processStartedAt: pid => processStarts.get(pid),
+		killProcess: (pid, signal) => {
+			killed.push(`${pid} ${signal}`);
+			if (signal === 'SIGKILL' || !ignoringTermination.has(pid)) {
+				endFakeProcess(pid);
+			}
+		}
 	});
 	return {
 		table,
@@ -509,6 +701,16 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		git,
 		person,
 		logs,
+		/** The folders the processes under each agent's process work in, by its process's id: where a CLI went with cd. */
+		processFolders,
+		/** When each process started, by its id, where a test says: none, as on Windows, unless set. */
+		processStarts,
+		/** The signals sent to processes by their ids: `<pid> <signal>`. */
+		killed,
+		/** How many times the CLIs this machine has were looked for again. */
+		refreshes,
+		/** The processes, by their ids, that a termination does not end: only a kill. */
+		ignoringTermination,
 		settings,
 		/** How long the core waits, as the person set it: a test changes it as it goes. */
 		timing,

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { canonicalFolder } from '../base/files';
+import * as path from 'path';
 import { AgentCli, launchArgs, launchUses, launchValues, skillMarkdown } from './cli';
 
 /** Where Facade's plugin goes in a folder: Antigravity finds plugins under `.agents/plugins/`. */
@@ -11,10 +11,11 @@ const PLUGIN_DIR = '.agents/plugins/facade';
 
 /**
  * Antigravity's CLI in its own UI. YOLO on: every command without asking, edits accepted. YOLO off: it
- * has no way to let Facade's server alone through unasked, so it asks for nothing (AGENT-LAUNCHER.md, L4);
- * it has no sandbox of its own. It reads MCP servers only from its global configuration or a plugin, so
+ * has no way to let Facade's server alone through unasked, so it asks for nothing either - edits accepted
+ * too (AGENT-LAUNCHER.md, L4, rule 3; X-42); it has no sandbox of its own. It reads MCP servers only from its global configuration or a plugin, so
  * Facade's server and skills go into the folder as a plugin, which every agent there shares: the server
- * finds the agent from its environment. Its background update is turned off for the launch. Wherever an
+ * finds the agent from its environment. Through `start_agent` its background update is turned off for the launch, and its
+ * warm-up tells it to ask in words (AGENT-LAUNCHER.md, L4; N-71). Wherever an
  * agent starts, the person's trust in its folder goes into the `trustedWorkspaces` of its settings, as
  * Antigravity writes it when they answer its question. With the agent framework on it always has its
  * warm-up turn, with no task too: its MCP servers connect only after its first turn.
@@ -34,26 +35,41 @@ export const antigravityCli: AgentCli = {
 				// said hello, waits behind this one and is that next conversation.
 				warmUp: ['-i', 'Reply with the single word ready, and nothing else.'],
 				yoloOn: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
-				yoloOff: ['--dangerously-skip-permissions'],
+				yoloOff: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 				// A model's base name, as `gemini-3.8-flash`, which `--effort` picks a variant of. One it does not
 				// have it puts aside for its own default, and its effort with it, without a word.
 				model: ['--model', '${model}'],
 				effort: ['--effort', '${effort}']
 			},
-			// Only the literal true turns its background update off.
-			environment: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+			environment: {},
 			// It trusts exact folders, so each worktree needs an entry of its own.
 			trust: { file: '${home}/.gemini/antigravity-cli/settings.json', merge: { trustedWorkspaces: ['${folder}'] } },
 			// It takes a fast burst of keys for a paste.
 			enterDelay: 400,
-			taskDelay: 2000
+			taskDelay: 2000,
+			unattended: {
+				arguments: {
+					// Its first conversation tells it what it must not do while nobody may be watching: no tool of its
+					// takes its question tool away, and its model may not be given its server's instructions (L4; N-71)
+					warmUp: ['-i', 'Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer.']
+				},
+				// Only the literal true turns its background update off.
+				environment: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' }
+			}
 		}
 	},
-	trustValues: ({ folder }) => ({ folder: canonicalFolder(folder) }),
+	// The folder as its agent starts in it, not its real path: Antigravity takes its workspace from its working
+	// directory as the terminal names it (PWD) - a folder opened through a link is the link to it - and trusts exact
+	// folders (N-85)
+	trustValues: ({ folder }) => ({ folder: path.resolve(folder) }),
 	sharedServer: true,
+	// Its --model gemini-3.8-flash-high runs High whatever --effort says; --effort alone sets it (AS-13)
+	modelCarriesEffort: true,
 	task: 'terminal',
 	sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' },
 	exemption: 'all',
+	// No setting or argument of its takes its question tool away (YO-07)
+	questionTool: 'kept',
 	launch(input, executable) {
 		const { connection } = input;
 		return {

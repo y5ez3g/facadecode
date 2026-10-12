@@ -3,8 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { isJsonObject, isStringArray, JsonObject } from '../base/json';
-import { AgentCli, ARG_GROUPS, ArgGroup, CliConfig, LaunchConfig, TrustConfig } from './cli';
+import { isJsonObject, isStringArray, JsonObject, mergedObject } from '../base/json';
+import { AgentCli, ARG_GROUPS, ArgGroup, CliConfig, LaunchConfig, TrustConfig, UnattendedLaunch } from './cli';
 
 /** The longest a launch waits before typing a CLI its task, or between a line and its Enter: a minute. */
 export const MAX_DELAY_MS = 60_000;
@@ -12,11 +12,18 @@ export const MAX_DELAY_MS = 60_000;
 export const MAX_TIME_S = 3_600;
 
 /**
- * A time the person set, in whole seconds, as milliseconds: kept between one second and
- * {@link MAX_TIME_S}, and `fallbackMs` where the setting holds no number.
+ * A time the person set as `setting`, in whole seconds from one to {@link MAX_TIME_S}, as milliseconds; where
+ * they set none, `fallbackMs`. Any other value is not made into one - not rounded, not brought into range -
+ * but `fallbackMs` is used, and `wrong` says so, naming the setting (AGENT-LAUNCHER.md, L5; X-59).
  */
-export function secondsSetting(value: unknown, fallbackMs: number): number {
-	return typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(Math.round(value), 1), MAX_TIME_S) * 1000 : fallbackMs;
+export function readSeconds(setting: string, value: unknown, fallbackMs: number): { readonly ms: number; readonly wrong?: string } {
+	if (value === undefined) {
+		return { ms: fallbackMs };
+	}
+	if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_TIME_S) {
+		return { ms: value * 1000 };
+	}
+	return { ms: fallbackMs, wrong: `${setting} is ${shown(value)}, which is no whole number of seconds from 1 to ${MAX_TIME_S}: ${fallbackMs / 1000} s, its default, is used` };
 }
 
 /**
@@ -36,6 +43,9 @@ export function readCliConfig(cli: AgentCli, read: (name: string) => unknown): C
 	const path = read('path');
 	if (path !== undefined && typeof path !== 'string') {
 		wrong.push(`${section}.path is ${shown(path)}, which is no text`);
+	} else if (typeof path === 'string' && path !== '' && !path.trim()) {
+		// Not PATH's in its place: a path set is the file it names (X-59)
+		wrong.push(`${section}.path is ${shown(path)}, only spaces, which name no file: give the file, or leave it empty for the ${cli.command} PATH finds`);
 	}
 	const launch = read('launch');
 	if (launch !== undefined && !isJsonObject(launch)) {
@@ -78,11 +88,12 @@ export function shown(value: unknown): string {
 /**
  * `cli`'s launch as the person changed its defaults with `set`, the setting `setting`: a part they set
  * replaces the default's, an object - the environment, Claude Code's settings - key by key, and null takes
- * one out. What is wrong goes into `wrong`, the default's part shown in its place.
+ * one out; its unattended part the same way, part by part (`unattendedOf`). What is wrong goes into `wrong`,
+ * the default's part shown in its place.
  */
 export function launchOf(cli: AgentCli, set: JsonObject, setting: string, wrong: string[]): LaunchConfig {
 	const defaults = cli.defaults.launch;
-	const parts = ['arguments', 'environment', 'trust', ...defaults.settings ? ['settings'] : [], 'enterDelay', 'taskDelay'];
+	const parts = ['arguments', 'environment', 'trust', ...defaults.settings ? ['settings'] : [], 'enterDelay', 'taskDelay', 'unattended'];
 	for (const key of Object.keys(set)) {
 		if (!parts.includes(key)) {
 			wrong.push(`${setting} has ${key}, which ${cli.displayName}'s launch does not have: it has ${parts.join(', ')}`);
@@ -98,8 +109,68 @@ export function launchOf(cli: AgentCli, set: JsonObject, setting: string, wrong:
 		...(trust ? { trust } : {}),
 		...(defaults.settings ? { settings: settingsOf(defaults.settings, set.settings, `${setting}.settings`, wrong) } : {}),
 		enterDelay: delayOf(defaults.enterDelay, set.enterDelay, `${setting}.enterDelay`, wrong),
-		taskDelay: delayOf(defaults.taskDelay, set.taskDelay, `${setting}.taskDelay`, wrong)
+		taskDelay: delayOf(defaults.taskDelay, set.taskDelay, `${setting}.taskDelay`, wrong),
+		...(defaults.unattended || set.unattended !== undefined ? { unattended: unattendedOf(cli, set.unattended, `${setting}.unattended`, wrong) } : {})
 	};
+}
+
+/**
+ * The launch's unattended part, for an agent started through `start_agent` (L4): Facade's with the person's `set`
+ * over it - a group of arguments they set theirs, one set to null empty, which takes the launch's group out; a
+ * variable, or a setting, they set theirs, one set to null kept so, which takes the launch's out.
+ */
+function unattendedOf(cli: AgentCli, set: unknown, setting: string, wrong: string[]): UnattendedLaunch {
+	const defaults = cli.defaults.launch.unattended;
+	if (set !== undefined && !isJsonObject(set)) {
+		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+	}
+	const own = isJsonObject(set) ? set : {};
+	const parts = ['arguments', 'environment', ...cli.defaults.launch.settings ? ['settings'] : []];
+	for (const key of Object.keys(own)) {
+		if (!parts.includes(key)) {
+			wrong.push(`${setting} has ${key}, which its unattended launch does not have: it has ${parts.join(', ')}`);
+		}
+	}
+	const known = argumentGroupsOf(cli);
+	const groups: { [Group in ArgGroup]?: readonly string[] } = { ...defaults?.arguments };
+	for (const [group, value] of Object.entries(objectOf(own.arguments, `${setting}.arguments`, wrong))) {
+		if (!(known as readonly string[]).includes(group)) {
+			wrong.push(`${setting}.arguments has ${group}, which is no group of ${cli.displayName}'s arguments: it has ${known.join(', ')}`);
+		} else if (value === null || isStringArray(value)) {
+			groups[group as ArgGroup] = value ?? [];
+		} else {
+			wrong.push(`${setting}.arguments.${group} is ${shown(value)}, which is neither a list of text nor null`);
+		}
+	}
+	const environment: { [name: string]: string | null } = { ...defaults?.environment };
+	for (const [name, value] of Object.entries(objectOf(own.environment, `${setting}.environment`, wrong))) {
+		if (value === null || typeof value === 'string') {
+			environment[variableKey(environment, name)] = value;
+		} else {
+			wrong.push(`${setting}.environment.${name} is ${shown(value)}, which is neither text nor null`);
+		}
+	}
+	const settings = isJsonObject(own.settings) ? overlaid(defaults?.settings ?? {}, own.settings) : defaults?.settings;
+	objectOf(own.settings, `${setting}.settings`, wrong);
+	return { arguments: groups, environment, ...(settings ? { settings } : {}) };
+}
+
+/** `value`, a part of the person's that is an object, where they set one: none where they did not, and where it is no object - said in `wrong`. */
+function objectOf(value: unknown, setting: string, wrong: string[]): JsonObject {
+	if (value !== undefined && !isJsonObject(value)) {
+		wrong.push(`${setting} is ${shown(value)}, which is no object`);
+	}
+	return isJsonObject(value) ? value : {};
+}
+
+/** `defaults` with `set` over it, key by key down through objects, a null kept: it takes the launch's key out (`launchFor`). */
+function overlaid(defaults: JsonObject, set: JsonObject): JsonObject {
+	const merged: { [key: string]: unknown } = { ...defaults };
+	for (const [key, value] of Object.entries(set)) {
+		const byDefault = merged[key];
+		merged[key] = isJsonObject(value) && isJsonObject(byDefault) ? overlaid(byDefault, value) : value;
+	}
+	return merged;
 }
 
 /** The groups of arguments: each one the person set to a list of strings theirs, one set to null none; the rest the defaults'. */
@@ -138,17 +209,21 @@ function variablesOf(defaults: { readonly [name: string]: string }, set: unknown
 		wrong.push(`${setting} is ${shown(set)}, which is no object`);
 	}
 	const variables: { [name: string]: string } = { ...defaults };
-	const keyOf = (name: string) => process.platform === 'win32' ? Object.keys(variables).find(key => key.toUpperCase() === name.toUpperCase()) ?? name : name;
 	for (const [name, value] of Object.entries(isJsonObject(set) ? set : {})) {
 		if (value === null) {
-			delete variables[keyOf(name)];
+			delete variables[variableKey(variables, name)];
 		} else if (typeof value === 'string') {
-			variables[keyOf(name)] = value;
+			variables[variableKey(variables, name)] = value;
 		} else {
 			wrong.push(`${setting}.${name} is ${shown(value)}, which is neither text nor null`);
 		}
 	}
 	return variables;
+}
+
+/** The name `variables` has for the variable `name`: on Windows, which takes a name in any case, theirs whatever its case. */
+function variableKey(variables: { readonly [name: string]: unknown }, name: string): string {
+	return process.platform === 'win32' ? Object.keys(variables).find(key => key.toUpperCase() === name.toUpperCase()) ?? name : name;
 }
 
 /**
@@ -204,27 +279,6 @@ function settingsOf(defaults: JsonObject, set: unknown, setting: string, wrong: 
 		wrong.push(`${setting} is ${shown(set)}, which is no object`);
 	}
 	return mergedObject(defaults, set);
-}
-
-/**
- * `defaults` with `set` over it, key by key down through objects: a key set to null taken out, any other
- * value replacing the default's. An object of the person's where the default has none is gone through
- * too, so that no null of theirs reaches the CLI as a value.
- */
-export function mergedObject(defaults: JsonObject, set: unknown): JsonObject {
-	if (!isJsonObject(set)) {
-		return defaults;
-	}
-	const merged: { [key: string]: unknown } = { ...defaults };
-	for (const [key, value] of Object.entries(set)) {
-		const byDefault = merged[key];
-		if (value === null) {
-			delete merged[key];
-		} else {
-			merged[key] = isJsonObject(value) ? mergedObject(isJsonObject(byDefault) ? byDefault : {}, value) : value;
-		}
-	}
-	return merged;
 }
 
 /** A delay the person set, in whole milliseconds from 0 to {@link MAX_DELAY_MS}; the default's where they set none. */

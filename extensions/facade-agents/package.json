@@ -151,11 +151,7 @@
 										],
 										"items": {
 											"type": "string"
-										},
-										"default": [
-											"--disallowedTools",
-											"AskUserQuestion"
-										]
+										}
 									},
 									"messages": {
 										"type": [
@@ -191,6 +187,8 @@
 											"type": "string"
 										},
 										"default": [
+											"--permission-mode",
+											"acceptEdits",
 											"--allowedTools",
 											"mcp__facade"
 										]
@@ -256,10 +254,6 @@
 										"--settings",
 										"${settingsFile}"
 									],
-									"questions": [
-										"--disallowedTools",
-										"AskUserQuestion"
-									],
 									"messages": [
 										"--add-dir",
 										"${messagesDir}"
@@ -268,6 +262,8 @@
 										"--dangerously-skip-permissions"
 									],
 									"yoloOff": [
+										"--permission-mode",
+										"acceptEdits",
 										"--allowedTools",
 										"mcp__facade"
 									],
@@ -294,14 +290,7 @@
 										"null"
 									]
 								},
-								"default": {
-									"CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false",
-									"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
-									"CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "0",
-									"DISABLE_AUTOUPDATER": "1",
-									"CLAUDE_CODE_AUTO_CONNECT_IDE": "false",
-									"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL": "1"
-								},
+								"default": {},
 								"markdownDescription": "%config.launch.environment%"
 							},
 							"trust": {
@@ -339,9 +328,9 @@
 							"settings": {
 								"type": "object",
 								"default": {
-									"skipDangerousModePermissionPrompt": true,
-									"spinnerTipsEnabled": false,
-									"emojiCompletionEnabled": false
+									"disabledMcpjsonServers": [
+										"facade"
+									]
 								},
 								"markdownDescription": "%config.claude.launch.settings%"
 							},
@@ -358,6 +347,196 @@
 								"maximum": 60000,
 								"default": 2000,
 								"markdownDescription": "%config.launch.taskDelay%"
+							},
+							"unattended": {
+								"type": "object",
+								"properties": {
+									"arguments": {
+										"type": "object",
+										"properties": {
+											"warmUp": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"connect": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"quiet": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"questions": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												},
+												"default": [
+													"--disallowedTools",
+													"AskUserQuestion"
+												]
+											},
+											"messages": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOn": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOff": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												},
+												"default": [
+													"--permission-mode",
+													"dontAsk",
+													"--allowedTools",
+													"mcp__facade",
+													"Edit(./**)"
+												]
+											},
+											"model": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"effort": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"extra": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"task": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											}
+										},
+										"additionalProperties": false,
+										"default": {
+											"questions": [
+												"--disallowedTools",
+												"AskUserQuestion"
+											],
+											"yoloOff": [
+												"--permission-mode",
+												"dontAsk",
+												"--allowedTools",
+												"mcp__facade",
+												"Edit(./**)"
+											]
+										},
+										"markdownDescription": "%config.launch.unattended.arguments%"
+									},
+									"environment": {
+										"type": "object",
+										"additionalProperties": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
+										"default": {
+											"CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false",
+											"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+											"CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "0",
+											"DISABLE_AUTOUPDATER": "1",
+											"CLAUDE_CODE_AUTO_CONNECT_IDE": "false",
+											"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL": "1"
+										},
+										"markdownDescription": "%config.launch.unattended.environment%"
+									},
+									"settings": {
+										"type": "object",
+										"default": {
+											"spinnerTipsEnabled": false,
+											"emojiCompletionEnabled": false
+										},
+										"markdownDescription": "%config.launch.unattended.settings%"
+									}
+								},
+								"additionalProperties": false,
+								"default": {
+									"arguments": {
+										"questions": [
+											"--disallowedTools",
+											"AskUserQuestion"
+										],
+										"yoloOff": [
+											"--permission-mode",
+											"dontAsk",
+											"--allowedTools",
+											"mcp__facade",
+											"Edit(./**)"
+										]
+									},
+									"environment": {
+										"CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false",
+										"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+										"CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "0",
+										"DISABLE_AUTOUPDATER": "1",
+										"CLAUDE_CODE_AUTO_CONNECT_IDE": "false",
+										"CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL": "1"
+									},
+									"settings": {
+										"spinnerTipsEnabled": false,
+										"emojiCompletionEnabled": false
+									}
+								},
+								"markdownDescription": "%config.launch.unattended%"
 							}
 						},
 						"additionalProperties": false,
@@ -438,15 +617,7 @@
 										],
 										"items": {
 											"type": "string"
-										},
-										"default": [
-											"-c",
-											"check_for_update_on_startup=false",
-											"-c",
-											"tui.show_tooltips=false",
-											"-c",
-											"notice.hide_rate_limit_model_nudge=true"
-										]
+										}
 									},
 									"questions": {
 										"type": [
@@ -475,8 +646,7 @@
 											"type": "string"
 										},
 										"default": [
-											"--dangerously-bypass-approvals-and-sandbox",
-											"--dangerously-bypass-hook-trust"
+											"--dangerously-bypass-approvals-and-sandbox"
 										]
 									},
 									"yoloOff": {
@@ -562,17 +732,8 @@
 										"mcp_servers.facade.default_tools_approval_mode=\"approve\"",
 										"--no-daemon"
 									],
-									"quiet": [
-										"-c",
-										"check_for_update_on_startup=false",
-										"-c",
-										"tui.show_tooltips=false",
-										"-c",
-										"notice.hide_rate_limit_model_nudge=true"
-									],
 									"yoloOn": [
-										"--dangerously-bypass-approvals-and-sandbox",
-										"--dangerously-bypass-hook-trust"
+										"--dangerously-bypass-approvals-and-sandbox"
 									],
 									"yoloOff": [
 										"--sandbox",
@@ -655,6 +816,197 @@
 								"maximum": 60000,
 								"default": 2000,
 								"markdownDescription": "%config.launch.taskDelay%"
+							},
+							"unattended": {
+								"type": "object",
+								"properties": {
+									"arguments": {
+										"type": "object",
+										"properties": {
+											"warmUp": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"connect": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"quiet": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												},
+												"default": [
+													"-c",
+													"check_for_update_on_startup=false",
+													"-c",
+													"tui.show_tooltips=false",
+													"-c",
+													"notice.hide_rate_limit_model_nudge=true"
+												]
+											},
+											"questions": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"messages": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOn": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												},
+												"default": [
+													"--dangerously-bypass-approvals-and-sandbox",
+													"--dangerously-bypass-hook-trust"
+												]
+											},
+											"yoloOff": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												},
+												"default": [
+													"--sandbox",
+													"workspace-write",
+													"--ask-for-approval",
+													"never",
+													"-c",
+													"features.hooks=false"
+												]
+											},
+											"model": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"effort": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"extra": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"task": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											}
+										},
+										"additionalProperties": false,
+										"default": {
+											"quiet": [
+												"-c",
+												"check_for_update_on_startup=false",
+												"-c",
+												"tui.show_tooltips=false",
+												"-c",
+												"notice.hide_rate_limit_model_nudge=true"
+											],
+											"yoloOn": [
+												"--dangerously-bypass-approvals-and-sandbox",
+												"--dangerously-bypass-hook-trust"
+											],
+											"yoloOff": [
+												"--sandbox",
+												"workspace-write",
+												"--ask-for-approval",
+												"never",
+												"-c",
+												"features.hooks=false"
+											]
+										},
+										"markdownDescription": "%config.launch.unattended.arguments%"
+									},
+									"environment": {
+										"type": "object",
+										"additionalProperties": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
+										"default": {},
+										"markdownDescription": "%config.launch.unattended.environment%"
+									}
+								},
+								"additionalProperties": false,
+								"default": {
+									"arguments": {
+										"quiet": [
+											"-c",
+											"check_for_update_on_startup=false",
+											"-c",
+											"tui.show_tooltips=false",
+											"-c",
+											"notice.hide_rate_limit_model_nudge=true"
+										],
+										"yoloOn": [
+											"--dangerously-bypass-approvals-and-sandbox",
+											"--dangerously-bypass-hook-trust"
+										],
+										"yoloOff": [
+											"--sandbox",
+											"workspace-write",
+											"--ask-for-approval",
+											"never",
+											"-c",
+											"features.hooks=false"
+										]
+									},
+									"environment": {}
+								},
+								"markdownDescription": "%config.launch.unattended%"
 							}
 						},
 						"additionalProperties": false,
@@ -765,6 +1117,8 @@
 											"type": "string"
 										},
 										"default": [
+											"--mode",
+											"accept-edits",
 											"--dangerously-skip-permissions"
 										]
 									},
@@ -816,6 +1170,8 @@
 										"--dangerously-skip-permissions"
 									],
 									"yoloOff": [
+										"--mode",
+										"accept-edits",
 										"--dangerously-skip-permissions"
 									],
 									"model": [
@@ -837,9 +1193,7 @@
 										"null"
 									]
 								},
-								"default": {
-									"AGY_CLI_DISABLE_AUTO_UPDATE": "true"
-								},
+								"default": {},
 								"markdownDescription": "%config.launch.environment%"
 							},
 							"trust": {
@@ -885,6 +1239,144 @@
 								"maximum": 60000,
 								"default": 2000,
 								"markdownDescription": "%config.launch.taskDelay%"
+							},
+							"unattended": {
+								"type": "object",
+								"properties": {
+									"arguments": {
+										"type": "object",
+										"properties": {
+											"warmUp": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												},
+												"default": [
+													"-i",
+													"Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer."
+												]
+											},
+											"connect": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"quiet": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"questions": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"messages": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOn": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOff": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"model": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"effort": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"extra": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											}
+										},
+										"additionalProperties": false,
+										"default": {
+											"warmUp": [
+												"-i",
+												"Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer."
+											]
+										},
+										"markdownDescription": "%config.launch.unattended.arguments%"
+									},
+									"environment": {
+										"type": "object",
+										"additionalProperties": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
+										"default": {
+											"AGY_CLI_DISABLE_AUTO_UPDATE": "true"
+										},
+										"markdownDescription": "%config.launch.unattended.environment%"
+									}
+								},
+								"additionalProperties": false,
+								"default": {
+									"arguments": {
+										"warmUp": [
+											"-i",
+											"Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer."
+										]
+									},
+									"environment": {
+										"AGY_CLI_DISABLE_AUTO_UPDATE": "true"
+									}
+								},
+								"markdownDescription": "%config.launch.unattended%"
 							}
 						},
 						"additionalProperties": false,
@@ -1015,8 +1507,10 @@
 											"type": "string"
 										},
 										"default": [
-											"--reasoning-effort",
-											"${effort}"
+											"-c",
+											"reasoning_effort=${effortJson}",
+											"-c",
+											"model_reasoning_efforts={}"
 										]
 									},
 									"extra": {
@@ -1056,8 +1550,10 @@
 										"${model}"
 									],
 									"effort": [
-										"--reasoning-effort",
-										"${effort}"
+										"-c",
+										"reasoning_effort=${effortJson}",
+										"-c",
+										"model_reasoning_efforts={}"
 									],
 									"task": [
 										"--",
@@ -1074,9 +1570,7 @@
 										"null"
 									]
 								},
-								"default": {
-									"MUSE_NO_AUTO_UPDATE": "1"
-								},
+								"default": {},
 								"markdownDescription": "%config.launch.environment%"
 							},
 							"trust": {
@@ -1127,6 +1621,139 @@
 								"maximum": 60000,
 								"default": 2000,
 								"markdownDescription": "%config.launch.taskDelay%"
+							},
+							"unattended": {
+								"type": "object",
+								"properties": {
+									"arguments": {
+										"type": "object",
+										"properties": {
+											"warmUp": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"connect": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"quiet": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"questions": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"messages": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOn": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOff": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"model": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"effort": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"extra": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"task": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											}
+										},
+										"additionalProperties": false,
+										"default": {},
+										"markdownDescription": "%config.launch.unattended.arguments%"
+									},
+									"environment": {
+										"type": "object",
+										"additionalProperties": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
+										"default": {
+											"MUSE_NO_AUTO_UPDATE": "1"
+										},
+										"markdownDescription": "%config.launch.unattended.environment%"
+									}
+								},
+								"additionalProperties": false,
+								"default": {
+									"arguments": {},
+									"environment": {
+										"MUSE_NO_AUTO_UPDATE": "1"
+									}
+								},
+								"markdownDescription": "%config.launch.unattended%"
 							}
 						},
 						"additionalProperties": false,
@@ -1315,6 +1942,129 @@
 											"minimum": 0,
 											"maximum": 60000,
 											"markdownDescription": "%config.launch.taskDelay%"
+										},
+										"unattended": {
+											"type": "object",
+											"properties": {
+												"arguments": {
+													"type": "object",
+													"properties": {
+														"warmUp": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"connect": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"quiet": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"questions": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"messages": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"yoloOn": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"yoloOff": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"model": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"effort": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"extra": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														},
+														"task": {
+															"type": [
+																"array",
+																"null"
+															],
+															"items": {
+																"type": "string"
+															}
+														}
+													},
+													"additionalProperties": false,
+													"markdownDescription": "%config.launch.unattended.arguments%"
+												},
+												"environment": {
+													"type": "object",
+													"additionalProperties": {
+														"type": [
+															"string",
+															"null"
+														]
+													},
+													"markdownDescription": "%config.launch.unattended.environment%"
+												}
+											},
+											"additionalProperties": false,
+											"markdownDescription": "%config.launch.unattended%"
 										}
 									},
 									"additionalProperties": false,

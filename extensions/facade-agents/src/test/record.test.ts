@@ -4,14 +4,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { spawn } from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
-import { agentName, AgentTable, nameOfWorktree, NewAgent } from '../record/agents';
+import { agentName, AgentTable, countOnFrom, nameOfWorktree, NewAgent, numberedUpTo } from '../record/agents';
 import { agentRef, describe, LedgerEventBody, parseAgentReference, PERSON } from '../record/events';
 import { isLedgerHeld, Ledger, LedgerLockedError, lockStateOf, lockWait } from '../record/ledger';
-import { identityOf, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
+import { earlierRecordOf, identityOf, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { AGENTS_LOG } from '../record/log';
 import { injectedFile, workspacesRoot } from '../record/paths';
 import { cutNextWriteShort, fsError, replaceFsFunction, sleep, tempDir, waitFor } from './util';
@@ -72,6 +74,26 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		temp.remove();
 	});
 
+	test('an agent\'s token is revoked as its run ends: the record maps it to nothing - not only refused, its agent having ended - and a reopening reads it so; a token the record still knew would name whatever it was given to (M9; REC-02)', () => {
+		const { agent, token } = table.start(newAgent('main'));
+		const before = table.state.tokens.size;
+		table.end(agent.id, 'exited', 'its CLI ended');
+		const after = { tokens: table.state.tokens.size, caller: table.authenticate(token) };
+		table.dispose();
+		table = AgentTable.open({ dir: temp.dir });
+
+		assert.deepStrictEqual({ before, after, reopened: table.state.tokens.size }, { before: 1, after: { tokens: 0, caller: undefined }, reopened: 0 });
+	});
+
+	test('an agent already stopping is not recorded stopping again: one stopping in the ledger, with the first stop\'s reason - a second stop joins the first (M11; SP-04)', () => {
+		const { agent } = table.start(newAgent('main'));
+		table.stopping(agent.id, 'with stop_agent', 'human');
+		table.stopping(agent.id, 'its tab was closed', 'human');
+		const stoppings = fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(event => event.type === 'agent.stopping').length;
+
+		assert.deepStrictEqual({ stoppings, reason: table.get(agent.id)?.stopping?.reason }, { stoppings: 1, reason: 'with stop_agent' });
+	});
+
 	test('an agent gets the next number, never one given before: numbers count up from 1, across a reopening too', () => {
 		const first = table.start(newAgent('main'));
 		table.end(first.agent.id, 'exited', 'its CLI ended');
@@ -81,6 +103,35 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		const third = table.start(newAgent('main'));
 
 		assert.deepStrictEqual([first.agent.id, second.agent.id, third.agent.id], [1, 2, 3]);
+	});
+
+	test('a new record of a workspace an earlier build kept a record of - by the path its storage kept, else by its first folder - counts on from the highest number that one gave, by its last-id or its ledger: none is given again (L2; X-49; REC-08)', () => {
+		const root = path.join(temp.dir, 'workspaces');
+		const folder = path.join(temp.dir, 'Lab Folder');
+		fs.mkdirSync(folder);
+		const real = fs.realpathSync.native(folder);
+		const key = process.platform === 'darwin' || process.platform === 'win32' ? real.toLowerCase() : real;
+		const byFolder = path.join(root, `Lab_Folder-${crypto.createHash('sha256').update(key).digest('hex').slice(0, 12)}`);
+		const kept = path.join(root, 'moved-0123456789ab');
+		const ours = recordDirOf(root, '0b6a9f5e-1c1d-4e8b-9a77-2f1f0f6a7e10');
+		fs.mkdirSync(byFolder, { recursive: true });
+		fs.writeFileSync(path.join(byFolder, LEDGER), [1, 2, 5].map(id => JSON.stringify({ v: 3, seq: id, time: 1, type: 'agent.started', id, name: `old${id}` })).join('\n') + '\n');
+		fs.writeFileSync(path.join(byFolder, LAST_ID), '4');
+		fs.mkdirSync(kept);
+		fs.writeFileSync(path.join(kept, LAST_ID), '7');
+		fs.mkdirSync(ours, { recursive: true });
+		fs.writeFileSync(path.join(ours, 'identity.json'), JSON.stringify({ workspace: 'file:///elsewhere' }));
+		const found = { byFolder: earlierRecordOf(root, undefined, folder), kept: earlierRecordOf(root, kept, folder), ours: earlierRecordOf(root, ours, path.join(temp.dir, 'nowhere')), outside: earlierRecordOf(root, temp.dir, path.join(temp.dir, 'nowhere')) };
+		const fresh = path.join(root, 'new');
+		countOnFrom(fresh, numberedUpTo(byFolder));
+		table.dispose();
+		table = AgentTable.open({ dir: fresh });
+
+		assert.deepStrictEqual({ found, reached: [numberedUpTo(byFolder), numberedUpTo(kept), numberedUpTo(ours)], next: table.start(newAgent('main')).agent.id }, {
+			found: { byFolder, kept, ours: undefined, outside: undefined },
+			reached: [5, 7, 0],
+			next: 6
+		});
 	});
 
 	test('numbers count on from the highest ever given, which last-id keeps: past a ledger begun anew - the old one moved aside - and past a number its ledger never recorded', () => {
@@ -367,6 +418,45 @@ suite('Record: the ledger on disk', () => {
 		table.dispose();
 	});
 
+	test('ordinary paths leave a ledger that reads back (X-13): a stop by a sibling the list has dropped since - ended, and cleared by a fresh start - and an empty worktree name, which is never written either', () => {
+		let table = AgentTable.open({ dir: temp.dir });
+		const lead = table.start(newAgent('lead'));
+		const b1 = table.start(newAgent('b1', lead.agent.id));
+		const b2 = table.start(newAgent('b2', lead.agent.id));
+		table.stopping(b1.agent.id, 'with stop_agent', b2.agent.id);
+		table.end(b2.agent.id, 'exited', 'its CLI ended with exit code 0');
+		table.clearList();
+		table.end(b1.agent.id, 'stopped', 'with stop_agent', { by: b2.agent.id });
+		const unnamed = table.start(newAgent('unnamed', undefined, ''));
+		table.dispose();
+		const file = path.join(temp.dir, LEDGER);
+		const written = JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n').pop() ?? '{}').worktree;
+		// As an earlier build wrote one
+		fs.appendFileSync(file, `${JSON.stringify({ v: 5, seq: table.state.seq + 1, time: 1, type: 'agent.started', id: 99, name: 'old', cli: 'arg', yolo: true, sandbox: 'off', integration: true, worktree: '', folder: '/lab', task: 'none', tokenHash: 'ab'.repeat(32) })}\n`);
+
+		table = AgentTable.open({ dir: temp.dir });
+		const read = { b1: table.get(b1.agent.id)?.end?.by, unnamed: table.get(unnamed.agent.id)?.worktree, old: table.get(99)?.worktree };
+		table.dispose();
+
+		assert.deepStrictEqual({ written, read }, { written: 'lab', read: { b1: b2.agent.id, unnamed: 'lab', old: '' } });
+	});
+
+	test('a last line cut short is cut back at the last line break on disk, counted in bytes: a byte that does not decode before it moves nothing (X-13)', () => {
+		const table = AgentTable.open({ dir: temp.dir });
+		const main = table.start(newAgent('main'));
+		const seq = table.state.seq;
+		table.dispose();
+		const file = path.join(temp.dir, LEDGER);
+		const ended = Buffer.concat([Buffer.from(`{"v":5,"seq":${seq + 1},"time":1,"type":"agent.ended","id":${main.agent.id},"kind":"exited","reason":"a `), Buffer.from([0xff]), Buffer.from(' byte"}\n')]);
+		fs.appendFileSync(file, ended);
+		const whole = fs.readFileSync(file).length;
+		fs.appendFileSync(file, '{"v":5,"seq":');
+
+		AgentTable.open({ dir: temp.dir }).dispose();
+
+		assert.deepStrictEqual({ length: fs.readFileSync(file).length, last: fs.readFileSync(file).at(-1) }, { length: whole, last: 0x0a });
+	});
+
 	test('a last line cut short by a crash is dropped, and the file is repaired', () => {
 		let table = AgentTable.open({ dir: temp.dir });
 		const main = table.start(newAgent('main'));
@@ -559,7 +649,7 @@ suite('Record: the ledger on disk', () => {
 		});
 	});
 
-	test('a ledger with a line it cannot read is kept beside, as it is, once none of its agents can run, and a new list begins', () => {
+	test('a ledger with a line it cannot read is kept beside, as it is, once none of its agents can run, and a new list begins - said, with why and where it is kept (L12; N-31)', () => {
 		const table = AgentTable.open({ dir: temp.dir });
 		table.start(newAgent('main'));
 		table.dispose();
@@ -567,15 +657,16 @@ suite('Record: the ledger on disk', () => {
 		fs.appendFileSync(file, '{"v":4,"seq":7}\n{"v":4,"seq":8}\n');
 		const broken = fs.readFileSync(file, 'utf8');
 
-		const reopened = AgentTable.open({ dir: temp.dir, mayMoveAside: () => true });
+		const told: string[] = [];
+		const reopened = AgentTable.open({ dir: temp.dir, mayMoveAside: () => true, onMovedAside: (why, keptAs) => told.push(`${why.replace(file, 'LEDGER')} - ${path.basename(keptAs).replace(/\d+/, 'TIME')}`) });
 		const fresh = { agents: reopened.state.agents.size, id: reopened.start(newAgent('main')).agent.id };
 		reopened.dispose();
 		const kept = fs.readdirSync(temp.dir).filter(name => /^ledger\.unreadable\.\d+\.jsonl$/.test(name));
 
-		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === broken }, { fresh: { agents: 0, id: 2 }, kept: 1, same: true });
+		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === broken, told }, { fresh: { agents: 0, id: 2 }, kept: 1, same: true, told: ['Line 2 of LEDGER is not an event Facade can read - ledger.unreadable.TIME.jsonl'] });
 	});
 
-	test('a new list drops the agents that ended before it, but for the creators and the tree roots of the agents it keeps, and stays so through a reopening: numbers go on', () => {
+	test('a new list drops the agents that ended before it, but for the chains of creators and the tree roots of the agents it keeps, and stays so through a reopening: numbers go on', () => {
 		let table = AgentTable.open({ dir: temp.dir });
 		const lead = table.start(newAgent('lead')).agent;
 		const child = table.start(newAgent('child', lead.id)).agent;
@@ -594,6 +685,37 @@ suite('Record: the ledger on disk', () => {
 			again: [1, 2, 4],
 			creators: ['@lead #a1', '@child #a2'],
 			next: 5
+		});
+		table.dispose();
+	});
+
+	test('whoever listens hears of each change of the record as it is written - a start, an end - until they stop listening (X-51)', () => {
+		const table = AgentTable.open({ dir: temp.dir });
+		let heard = 0;
+		const listening = table.onDidChange(() => heard++);
+		const main = table.start(newAgent('main')).agent;
+		table.end(main.id, 'exited', 'its CLI ended');
+		listening.dispose();
+		table.start(newAgent('next'));
+		table.dispose();
+
+		assert.deepStrictEqual(heard, 2);
+	});
+
+	test('a new list keeps the whole chain of creators of an agent it keeps, up to its root: r -> c -> g -> gg, all but gg ended, each still named by its creator (X-26; C-REC-08)', () => {
+		const table = AgentTable.open({ dir: temp.dir });
+		const r = table.start(newAgent('r')).agent;
+		const c = table.start(newAgent('c', r.id)).agent;
+		const g = table.start(newAgent('g', c.id)).agent;
+		const gg = table.start(newAgent('gg', g.id)).agent;
+		for (const each of [r, c, g]) {
+			table.end(each.id, 'exited', 'its CLI ended');
+		}
+		table.clearList();
+
+		assert.deepStrictEqual({ listed: [...table.state.agents.keys()], creators: [c, g, gg].map(each => table.whoIs(table.get(each.id)?.creator)) }, {
+			listed: [1, 2, 3, 4],
+			creators: ['@r #a1', '@c #a2', '@g #a3']
 		});
 		table.dispose();
 	});
@@ -691,6 +813,27 @@ suite('Record: the ledger on disk', () => {
 		ledger.close();
 
 		assert.deepStrictEqual({ heldBefore, taken, heldNow }, { heldBefore: false, taken: true, heldNow: true });
+	});
+
+	test('a lock whose process runs Facade\'s own program stays that window\'s however long it is untouched - a window that stands still keeps its ledger; nothing takes it over by the time alone', () => {
+		const lock = path.join(temp.dir, LOCK);
+		// A process of this very program, standing still
+		const still = spawn(process.execPath, ['-e', 'setTimeout(() => { }, 60_000)'], { stdio: 'ignore' });
+		try {
+			fs.writeFileSync(lock, `${still.pid} 0123456789ab`);
+			const longAgo = new Date(Date.now() - 5 * 60_000);
+			fs.utimesSync(lock, longAgo, longAgo);
+
+			const refused = outcome(() => Ledger.open(temp.dir));
+
+			assert.deepStrictEqual({ refused, held: isLedgerHeld(temp.dir), lock: fs.readFileSync(lock, 'utf8') }, {
+				refused: `Another Facade window (process ${still.pid}) has this workspace's agents.`,
+				held: true,
+				lock: `${still.pid} 0123456789ab`
+			});
+		} finally {
+			still.kill();
+		}
 	});
 
 	test('a ledger says how the window that had it before let go of it - as the window went: it quit, closed or reloaded; or as Facade let go of its agents, the window staying - and which window that was: this workspace\'s or another\'s, this very window or another load of it; nothing the first time, nor after a crash, its lock left behind', () => {
@@ -843,8 +986,9 @@ suite('Record: the ledger on disk', () => {
 		const lock = path.join(temp.dir, LOCK);
 		const longAgo = new Date(Date.now() - 5 * 60_000);
 		fs.utimesSync(lock, longAgo, longAgo);
-		const before = isLedgerHeld(temp.dir, () => true);
-		const touched = await waitFor(() => isLedgerHeld(temp.dir, () => true), 1000).then(() => true, () => false);
+		const touchedLately = () => fs.statSync(lock).mtimeMs > Date.now() - 60_000;
+		const before = touchedLately();
+		const touched = await waitFor(touchedLately, 1000).then(() => true, () => false);
 		ledger.close();
 
 		assert.deepStrictEqual({ before, touched }, { before: false, touched: true });
@@ -949,6 +1093,27 @@ suite('Record: where a workspace\'s record is', () => {
 			same: again.dir === first.dir,
 			names: identityOf(first.dir)
 		}, { id: true, dir: true, isNew: [true, false], same: true, names: 'file:///lab' });
+	});
+
+	test('a workspace file opened by another case of its path, where the file system ignores case, has its record still; a record whose identity cannot be read is no other workspace\'s to replace: that is an error naming the file, and no record is made (C-REC-17; C-REC-18; REC-13)', () => {
+		const root = path.join(temp.dir, 'workspaces');
+		const w2 = recordFor(root, undefined, 'file:///Users/me/W2.code-workspace', () => false);
+		const lowered = recordFor(root, w2.id, 'file:///Users/me/w2.code-workspace', () => false);
+		fs.writeFileSync(path.join(w2.dir, 'identity.json'), '{"workspace": ');
+		const before = fs.readdirSync(root).length;
+		let unreadable: string;
+		try {
+			recordFor(root, w2.id, 'file:///Users/me/W2.code-workspace', () => false);
+			unreadable = 'a record';
+		} catch (err) {
+			unreadable = messageOf(err);
+		}
+
+		assert.deepStrictEqual({ same: lowered.dir === w2.dir, unreadable, records: fs.readdirSync(root).length - before }, {
+			same: process.platform === 'darwin' || process.platform === 'win32',
+			unreadable: `${path.join(w2.dir, 'identity.json')} cannot be read, so Facade cannot tell whose record ${w2.dir} is: put the file right - it names the workspace, as {"workspace": "<its URI>"} - or move the record aside, and reload the window.`,
+			records: 0
+		});
 	});
 
 	test('a record that names another workspace goes with this very window, as its folder window became a workspace or it was saved under another name; any other workspace with the same id - the old file after Save As, the folder opened on its own again - gets a record of its own, as one with an id that is no id does', () => {
