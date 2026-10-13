@@ -147,20 +147,14 @@ location when retained, or says the saved history was deleted. A renderer recove
 that retains a live agent also retains that agent's current mailbox.
 
 Each result opens with counts and contains the message number, sender, recipient,
-time, reply reference, text length, delivery state at selection and a retrieval mark:
+time, reply reference, text length and delivery state at selection.
 
 A recipient's own unread messages become delivered after this result is written
 successfully. The state printed inside that result is the pre-delivery snapshot.
 
-| Mark | Meaning for this caller |
-| --- | --- |
-| new | It has not previously been issued in a result to this caller |
-| given before | It was issued before, with the prior issue time |
-| returned | It could not be delivered before its recipient ended |
-
-Given before does not prove the caller acted on it. After lost output or context
-compaction, inspect the task's actual state rather than blindly restarting or
-ignoring it.
+Repeated reads retain the same message number and content. The agent is responsible
+for tracking what it has handled and recovering its own context. Facade keeps
+delivery state, not a separate read history for each caller.
 
 When the selected texts total at most 8,000 characters, return them inline.
 Otherwise return one immutable UTF-8 snapshot file containing all selected messages,
@@ -313,18 +307,20 @@ prompt can later receive a doorbell. Antigravity's necessary warm-up still appli
 Default startup guidance is the same for every CLI:
 
 1. Resolve ordinary implementation choices within the task.
-2. If clarification is needed, send the creator a message and continue independent
-   work where possible.
+2. A child needing clarification sends its creator a message and continues
+   independent work where possible.
 3. The creator answers from its context or escalates to its own creator.
-4. A decision that genuinely needs the person is asked by the agent working directly
-   with them, as plain text in that agent's terminal.
-5. With no available creator in the chain, a child may ask @human directly.
+4. A UI-started agent asks the person through its normal CLI interaction, including
+   its question tools.
+5. A root started through start_agent asks @human by message. With no available
+   creator in the chain, a child may also ask @human directly.
 
-All agents suppress blocking question tools as L4 specifies. Do not ask the person
-to visit a child and click AskUserQuestion options. If a vendor tool cannot be
-disabled and still opens a question, its creator can inspect and answer it using
-read_screen, type_text and press_keys. A root stuck in such a UI is visible in the
-person's own conversation; normal questions must still use plain text.
+Only agents started through start_agent, including the person's scripts as @human,
+apply L4's supported blocking-question suppressions. UI-started agents keep their
+normal question tools. Do not ask the person to visit a child and click
+AskUserQuestion options. If a vendor tool cannot be disabled and still opens a
+question, its creator can inspect and answer it using read_screen, type_text and
+press_keys. Missing information follows the escalation path above.
 
 These defaults are instructions and launch configuration. send_message retains
 the ability to contact @human. A tech-lead skill can define stricter team procedure,
@@ -388,7 +384,7 @@ all or explicit ids reads the retained human mailbox.
 
 ## M10. Reload, shutdown and framework switch
 
-A reload preserves messages, retrieval/delivery facts and ring timing. Results
+A reload preserves messages, delivery facts and ring timing. Results
 not confirmed written remain unread and may be returned again with the same ids.
 
 A renderer crash with surviving agents behaves like a reload. After ordinary
@@ -423,10 +419,9 @@ agent end -> settle unread mail -> return/lifecycle messages
 A message record contains id, sender, recipient, text or payload-file reference,
 length, time, optional reply/task marker and optional Facade notice kind.
 Its delivery record contains unread/delivered/returned and the relevant times.
-Track prior issue times to label repeated reads, including reads by another caller.
 
 Use the workspace ledger and monotonically increasing last-message counter.
-Relevant events are message.sent, message.given, message.delivered,
+Relevant events are message.sent, message.delivered,
 message.returned, mailbox.rang and the saved-history deletion watermark.
 Use the existing versioned-record mechanism; the presence of this document does
 not require another incompatible ledger version.
@@ -455,10 +450,10 @@ No automatic send retry is permitted after an ambiguous response.
 Sequence of a fetch:
 
 1. Serialize access to that recipient's fetch operation.
-2. Select and mark messages; write a long-result snapshot if required.
-3. Record the issue before returning it.
-4. Have the pipe report whether its result write completed or the connection failed.
-5. Record delivery only for the recipient's own messages on successful write;
+2. Select messages and snapshot their delivery state; write a long-result file
+   if required.
+3. Have the pipe report whether its result write completed or the connection failed.
+4. Record delivery only for the recipient's own messages on successful write;
    otherwise retain unread state. Release the fetch operation in either case.
 
 A failed or timed-out pipe write must not hold the mailbox lock indefinitely.
@@ -504,10 +499,10 @@ well as visible behavior; successful send alone is not an end-to-end pass.
 | MS-03 | Starting, disconnected, unintegrated, stopping and ended recipients | Accept only recoverably deliverable targets; clear capability/state errors | U,I |
 | MS-04 | Both YOLO modes across two trees | Sending/reading scope holds; asymmetric reply limitation reported; @human reachable | U,I |
 | MS-05 | reply_to valid/invalid; wrong id kind; unknown argument; empty text | Whole-request validation with actionable errors | U,I |
-| MS-06 | Unread fetch, ids fetch and all after context reset | Correct selection/order/marks; another reader does not deliver the recipient's mail | U,I,V |
+| MS-06 | Unread fetch, ids fetch and all | Correct selection, order and delivery states; another reader does not deliver the recipient's mail | U,I,V |
 | MS-07 | 8,000-character boundary, 20,000-character task and many small messages | Correct inline/file path; full content accessible without approval in both modes | U,V |
-| MS-08 | Concurrent fetches and arrivals during a fetch | No unmarked overlap; later arrivals remain for the next fetch | U,I |
-| MS-09 | Disconnect before result write, after write and while reading a file | Correct documented delivery boundary and repeat marks; no false execution claim | I,V |
+| MS-08 | Concurrent fetches and arrivals during a fetch | Unread fetches serialize through delivery; later arrivals remain for the next fetch | U,I |
+| MS-09 | Disconnect before result write, after write and while reading a file | Documented delivery boundary; retries retain message ids; no false execution claim | I,V |
 | MS-10 | Three arrivals in two seconds; multiple unread senders | One coalesced doorbell using the current unread set | U,I,V |
 | MS-11 | Mailbox drained, then reply within the same minute | Fresh two-second schedule; no inherited one-minute delay | U,I,V |
 | MS-12 | Unread retries and new arrivals during backoff | 1/2/4/8/15-minute schedule and new-message bound; no per-message flood | U,I |
@@ -526,7 +521,7 @@ well as visible behavior; successful send alone is not an end-to-end pass.
 | MS-25 | Cross-tree history, quit/reload, history deletion and later messages | Correct copies and lifetimes; no deleted export resurrection; live mailbox retained | U,I,H |
 | MS-26 | Framework off during unread mail and recipient exit, then on | No new ring starts while off; correct retained mail/returns afterwards | I,V |
 | MS-27 | Send reply lost or storage fails during multi-send | No hidden retry; known ids/partial outcome reported | I |
-| MS-28 | Compacted context and a duplicate notice | Agent retrieves retained task/context and continues appropriate work | V |
+| MS-28 | Fetch a retained task again by id or all:true | Same message number and content; no new task allocated | U,I |
 
 Use fake recipients and a controllable clock for mailbox order, warning coalescing,
 timers and reload. A small deterministic failure suite is sufficient; randomized
@@ -534,9 +529,11 @@ fault scheduling may supplement it but is not required to replace the live cases
 
 ## M13. End-to-end communication gate
 
-Run every ordered built-in sender/recipient pair on a supported test OS, covering
-idle reception and reception during work. On other supported operating systems,
-cover each CLI in both roles plus platform-specific input/file access behavior.
+On a supported test OS, verify each built-in can send and fetch messages and receive
+doorbells both while idle and during work. Include representative mixed-vendor
+communication in the journey below, reusing O13's runs under L14's coverage policy.
+On other supported operating systems, cover each CLI in both roles plus
+platform-specific input/file access behavior.
 
 The primary journey is a root delegating to two children, receiving a question,
 answering it, receiving both results and summarizing to the person. Type a human

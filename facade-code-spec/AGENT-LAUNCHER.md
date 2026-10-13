@@ -46,7 +46,8 @@ The product follows these principles:
 
 - Starting a configured agent is immediate and asks no launch questionnaire.
 - Background agent activity does not move the person's focus, selected tab or
-  selected folder. A person's explicit navigation does.
+  selected folder, except for cleanup and view fallback when deleting a worktree
+  under O5. A person's explicit navigation does.
 - Routine cooperation proceeds automatically. The person normally stays in the
   terminal of the agent they are directing.
 - Facade provides capabilities and clear results. Project workflow, staffing,
@@ -74,9 +75,11 @@ sequence and prefix, such as `#m42`.
 
 Names contain 1–40 lowercase ASCII letters, digits, dots, underscores or hyphens,
 starting with a letter or digit. Reserved names are `human`, `you`, `me`,
-`facade`, `all`, `everyone`, `init` and `kernel`. Human-created built-ins are
-named `claude`, `codex`, `muse` or `agy`; custom agents use their configured name.
-Names may repeat. Reference resolution is specified in O2.
+`facade`, `all`, `everyone`, `init` and `kernel`. Built-ins started from the UI
+default to `claude`, `codex`, `muse` or `agy`; custom agents use their configured
+name. Runs started through `start_agent`, including the person's scripts as
+`@human`, use the supplied `name`. Names may repeat. Reference resolution is
+specified in O2.
 
 A **window** is a VS Code window with its workspace. A run belongs to the window
 that started it. A **worktree** in these specifications means an additional Git
@@ -140,58 +143,65 @@ A YOLO-on caller can therefore reach an agent in a YOLO-off tree.
 A human-created agent snapshots the setting at launch. A child inherits its
 creator's mode, regardless of later changes to the setting. A reload preserves it.
 
-Who started an agent is the second switch beside YOLO. An agent the person starts from the UI - the agent
-menu, Start Agent - is theirs: its CLI runs as it usually does. It may ask them for approval, put a question up
-and update itself; Facade adds only what it needs to work - its server, the trust step, the messages folder and
-the agent's instructions. An agent started through `start_agent` - by another agent, or by the person's scripts
-as `@human` - runs where nobody may be watching: nothing in it may wait for an answer.
+The launch entry point also controls interaction. An agent started from the UI -
+the agent menu or Start Agent - keeps its normal CLI questions, updates and,
+subject to YOLO, approval prompts. Facade adds its integration and instructions.
+An agent started through `start_agent` - by another agent or by the person's
+scripts as `@human` - runs unattended. Use the CLI's supported settings to avoid
+waiting for an answer.
 
-| | Started by the person | Started through `start_agent` |
+| | Started from the UI | Started through `start_agent` |
 | --- | --- | --- |
 | YOLO on | Approvals off; sandbox off | Approvals off; sandbox off |
-| YOLO off | Sandbox on; Facade's tools exempt from approval where the CLI can exempt them; anything else, leaving the sandbox included, asks the person as the CLI does | Sandbox on; Facade's tools exempt; anything else that would ask is refused unasked: nothing waits, and nothing leaves the sandbox |
+| YOLO off | Supported sandbox on; Facade's tools exempt where possible; other approvals use the CLI's normal interaction | Supported sandbox on; Facade's tools exempt where possible; configure other approval requests to be denied without prompting where supported |
 
-1. Where the CLI cannot exempt Facade's tools alone, YOLO off turns all of its tool approvals off and keeps its
-   supported sandbox on: automatic collaboration takes priority.
-2. A sandbox that offers the agent a way out of it - a command run outside it - is closed for an agent started
-   through `start_agent`; for one the person started, using it asks the person.
-3. A project's own hooks or settings that the CLI would stop to have reviewed: for an agent the person started,
-   the CLI asks as it usually does. Through `start_agent` with YOLO on, Facade passes the CLI's switch that
-   trusts them for this run; with YOLO off, hooks nobody has reviewed neither run nor wait - the CLI's switch that
-   runs none this time where it has one, else the start is refused, saying the project's hooks are not trusted
-   yet and how to trust them.
-4. An explicit conflicting override of the person's must be visible in Show Agent Launch and the launch's
-   diagnostics; it is never reported as a working exemption.
+YOLO off applies the restrictions the CLI and operating system support, with
+availability taking priority. Missing controls for sandboxing, approvals, hooks
+or questions do not prevent launch. Report the effective behavior and limitations;
+Facade does not guarantee complete containment or a prompt-free CLI.
+
+1. Where the CLI cannot exempt Facade's tools alone, use its all-tool approvals-off
+   setting when available and keep its supported sandbox on.
+2. With YOLO off, disable commands outside the sandbox for `start_agent` runs
+   where the CLI supports that restriction. UI-started runs use the CLI's normal
+   approval behavior for those commands.
+3. If project hooks or settings require review, UI-started runs keep the CLI's
+   normal prompt. For `start_agent`, use the CLI's per-run trust switch with YOLO
+   on; with YOLO off, use its switch to disable unreviewed hooks/settings where
+   available. Otherwise continue with the CLI's available behavior and report the
+   limitation.
+4. An explicit conflicting override must be visible in Show Agent Launch and the
+   launch diagnostics; it is never reported as a working exemption.
 
 A CLI without a native sandbox does not acquire one from Facade. Show Agent Launch
 and agent metadata must identify the effective sandbox as on, off or unavailable.
 Do not silently turn a supported sandbox off to implement YOLO off. Platform
 capabilities and the supported launch configuration must be verified in L14.
 
-An agent started through `start_agent` is launched with blocking question tools disabled wherever the CLI
-provides a launch setting for them - Claude Code's `AskUserQuestion` and equivalent tools that leave a terminal
-waiting for someone to select an answer. Its launch also turns off, through the CLI's own configuration, what
-would interrupt it or wait: update prompts and self-update, surveys, onboarding, tips and input-box helpers.
-An agent the person started keeps all of these as the CLI has them: its questions are theirs to answer. This
-uses launch configuration, not a vendor-specific message driver.
+An agent started through `start_agent` is launched with blocking question tools
+disabled wherever the CLI provides a launch setting for them - Claude Code's
+`AskUserQuestion` and equivalent tools that wait for someone to select an answer.
+Apply available launch settings to disable update prompts and self-update,
+surveys, onboarding, tips and input-box helpers. An agent started from the UI
+keeps these as the CLI has them: its questions are the person's to answer.
+This uses launch configuration, not a vendor-specific message driver.
 
-Where a CLI cannot remove a question tool, the startup instructions of an agent started through `start_agent`
-explicitly tell it to ask through Facade messages instead. A CLI-specific limitation is
-documented in its verified launch record. An unexpected prompt is handled through
-the debug tools; the normal recovery is not a notification asking the person to
-visit a child terminal and click an answer.
+Where a CLI cannot remove a question tool, the startup instructions of a
+`start_agent` run explicitly tell it to ask through Facade messages instead.
+A CLI-specific limitation is documented in its verified launch record. An
+unexpected prompt is handled through the debug tools; the normal recovery is
+not a notification asking the person to visit a child terminal and click an answer.
 
 Children ask their creator by message. Unresolved decisions move up the creator
-chain to the agent working with the person. That agent prints a plain-language
-question and, when needed, sends `@human` a notification; the person replies by
-typing normally in its terminal. If no creator in the chain remains, the child
-may contact `@human` directly. This default communication guidance does not remove
-any agent's ability to send to `@human`; team-specific policy belongs in skills.
+chain. A UI-started agent asks the person through its normal CLI interaction.
+A root started through `start_agent` asks `@human` by message, as may a child with
+no available creator in its chain. This default communication guidance does not
+remove any agent's ability to send to `@human`; team-specific policy belongs in
+skills.
 
 Facade tools themselves display no confirmation dialogs. Messaging remains
 automatic with either YOLO mode, including terminal doorbells. Debugging does not
-add a separate approval gate. L4 is not a promise that an arbitrary CLI can never
-display an authentication or permission prompt.
+add a separate approval gate.
 
 ## L5. Launch outcomes and visible failures
 
@@ -352,18 +362,19 @@ override remains empty when defaults change in a future release.
 | `settings` | Per-launch settings, recursively merged; primarily for Claude Code |
 | `taskDelay` | Delay before the first typed task notification after connection, integer 0–60000 ms |
 | `enterDelay` | Delay between a paste and Enter, integer 0–60000 ms |
-| `unattended` | What an agent started through `start_agent` runs with in place of parts of the launch (L4): its own `arguments` groups, each replacing the launch's group of the same name (an empty or null one leaves that group out), and `environment` and `settings` merged over the launch's (null removes the launch's key too). The person's own agents run with the launch alone |
+| `unattended` | What an agent started through `start_agent` runs with in place of parts of the launch (L4): its own `arguments` groups, each replacing the launch's group of the same name (an empty or null one leaves that group out), and `environment` and `settings` merged over the launch's (null removes the launch's key too). UI-started agents run with the launch alone |
 
 A group of the launch that the person changes does not reach an agent started through
 `start_agent` where the unattended part has a group of that name: they change it there
-too. A change meant for the person's own agents never makes an unattended one wait.
+too. This keeps the unattended group's supported prompt suppressions separate from
+changes to the UI launch.
 
 The questions group, and what keeps updates, surveys, tips and input-box helpers from
 a run, are part of the unattended part of each built-in's launch: they apply to agents
 started through `start_agent` only (L4). An agent started that way with no task, of a
 CLI whose question tool no launch removes and that takes its notice as an argument, is
-given its opening line alone as that argument - who it is, and to ask in words;
-Antigravity's warm-up says the same. The messages group grants
+given its opening line alone as that argument - who it is, and to ask through
+Facade messages; Antigravity's warm-up says the same. The messages group grants
 access to message and snapshot files when necessary, including with a sandbox.
 warmUp, connect and messages apply only with the framework enabled. Exactly one of
 yoloOn/yoloOff applies. model and effort apply only when supplied; task contains
@@ -425,8 +436,9 @@ installs or updates a CLI as a side effect of starting one.
 
 ## L11. Trust and integration files
 
-In a VS Code trusted workspace, preconfigure the CLI's folder trust so it does not
-repeat the same startup question. Prefer per-launch arguments or run files.
+In a VS Code trusted workspace, preconfigure the CLI's folder trust where supported
+so it does not repeat the same startup question. Prefer per-launch arguments or
+run files.
 Where a CLI only persists trust in its user configuration, merge that entry using
 the CLI's file conventions. Show Agent Launch explains the persistent effect.
 A custom trust override is applied as configured.
@@ -438,8 +450,9 @@ Do not promise that one root entry covers all worktrees unless measured.
 
 Use the CLI's compatible lock where available and preserve unrelated values.
 Malformed user configuration must not be overwritten. Report the specific problem
-and keep the existing file intact; a launch that cannot prepare its required trust
-is a clear launch failure rather than an invisible wait for a startup question.
+and keep the existing file intact. Failure to apply a supported, configured trust
+step is a clear launch preparation failure. A missing vendor control follows L4's
+best-effort policy and does not prevent launch.
 
 Project MCP and skill files are owned by O10. Their ownership and cleanup use the
 same policy for human and agent launches.
@@ -522,11 +535,17 @@ keys. The release evidence must contain:
 - Screenshots for human interaction, plus terminal/log/ledger evidence for behavior.
 - Explicit failed, skipped and unsupported cases with reasons.
 
+Reuse runs and evidence across the four documents' acceptance journeys. Verify
+each CLI's capabilities and representative mixed-vendor cooperation; exhaustive
+vendor pairing is not required. Add pair-specific regressions for observed failures.
+
 For each supported desktop OS, run the live cases on every built-in advertised on
 that OS. A supported built-in's failure is not a skip. An unavailable vendor/OS
 combination must be documented and not advertised there. Use real authenticated
 CLIs and models in disposable repositories; never infer cross-CLI success from one
-vendor. These suites run on demand because live runs consume quota.
+vendor. A missing restriction allowed under L4 is an accepted limitation, not a
+failed launch or a reason to mark the CLI unsupported. These suites run on demand
+because live runs consume quota.
 
 Use the repository's existing build and test commands. Prefer targeted tests.
 Run the relevant layering/hygiene/style checks when implementation changes affect
@@ -543,13 +562,13 @@ H = human-visible verification. Each row defines an observable outcome.
 | LA-02 | Disabled built-in; missing custom executable; empty catalog | Disabled agent unavailable to both human and tool; clear custom error and empty state | I,H |
 | LA-03 | Start each CLI in main checkout, worktree, detached worktree, second repository and non-Git folder | Correct cwd, unique id, logo and focused terminal; no launch questionnaire | V,H |
 | LA-04 | No folder, remote window, untrusted workspace; grant and deny trust | Explicit supported flow; denial/rejection creates no run or side effects | I,H |
-| LA-05 | Two runs with the same name; CLI title changes; user renames a tab | Stable distinct numbers; title updates preserve agent identity | I,V,H |
+| LA-05 | UI launch names; named start_agent call as @human; duplicate names; CLI title changes; user renames a tab | UI defaults and supplied tool names follow L2; stable distinct numbers; title updates preserve agent identity | I,V,H |
 | LA-06 | Agents across folders, including an unjoined worktree | Accurate count, row markers and live Quick Pick; navigation reveals the right run | I,H |
 | LA-07 | Invalid launch field, placeholder, path or delay | Named configuration error before acceptance; no silent fallback | U,I |
 | LA-08 | Change settings while agents run | Existing launch unchanged; next launch uses new snapshot | I,V |
-| LA-09 | YOLO on/off for each supported CLI/OS | Effective sandbox and approvals match L4; metadata reports limitations honestly | V |
-| LA-10 | Precise MCP exemption available/unavailable | Facade tools run unasked; fallback removes approvals without disabling a supported sandbox | U,V |
-| LA-11 | Question, update and trust interruptions | Supported suppressions applied to root and child; ordinary task needs no button click | V,H |
+| LA-09 | YOLO on/off for each supported CLI/OS, including unavailable restrictions | Supported restrictions applied; limitations reported; a missing control does not prevent launch | V |
+| LA-10 | Precise MCP exemption and all-tools fallback available/unavailable | Available exemption/fallback applied without disabling a supported sandbox; missing controls follow L4 | U,V |
+| LA-11 | Question, update and trust interruptions in UI and start_agent launches, including @human scripts | UI keeps normal interaction subject to YOLO; tool-started runs apply supported suppressions; unsupported controls are reported without refusing launch | V,H |
 | LA-12 | Missing login, invalid model, unknown flag, delayed connection | Correct distinction between launch failure and live-but-unconfirmed; useful Show/result | V,H |
 | LA-13 | Agent exits, user closes/cancels close, agent interrupts, worktree is removed | Correct outcome and actor; only the intended notification; final screen accessible | I,V,H |
 | LA-14 | Reload with persistence on/off, including background/editor/floating terminals | Reconnect the same processes when supported; otherwise record their ends | I,V,H |
@@ -573,12 +592,14 @@ For each built-in as the human's root agent:
 2. Have it launch a child in a new worktree, send a correction, receive a report,
    inspect a deliberately blocked child and continue it with debug tools.
 3. While that happens, type in the root terminal and navigate to another folder.
-4. Verify that automatic work does not move the view, human input follows the
-   ten-second rule, and decisions return through the root's conversation.
+4. Verify that automatic work preserves the view except for O5's deletion cleanup
+   and fallback, human input follows the ten-second rule, and decisions return
+   through the root's normal conversation.
 5. Reload during the collaboration, complete the task, stop the child and remove
-   its worktree using the specified tools.
+   its worktree using the specified tools. When that worktree is selected, verify
+   the folder fallback in O5.
 6. Check that UI, processes, messages, final screens and record agree.
 
-Also run the mixed-vendor and failure journeys in M12 and D11. Every blocking
-failure found in these journeys must be fixed and its targeted regression rerun
-before the feature is described as accepted.
+Also run the mixed-vendor and failure journeys in M13 and D11. Implementation
+defects that block these journeys must be fixed and their targeted regressions
+rerun before acceptance; report L4's allowed vendor limitations as L14 requires.

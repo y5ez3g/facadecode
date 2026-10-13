@@ -3,7 +3,8 @@
 An agent can start, find and stop other agents in the same Facade Code window.
 It can place a child in an existing checkout or create a worktree for it. These
 operations use the same terminal and worktree services as the person's actions,
-without moving the person's view or opening confirmation dialogs.
+without opening confirmation dialogs. Background operations preserve the person's
+view except for cleanup and view fallback when deleting a worktree under O5.
 
 This specification owns the three management tools and the shared contract used
 by all eight tools. [AGENT-LAUNCHER.md](AGENT-LAUNCHER.md) owns identity, launch
@@ -31,8 +32,9 @@ All eight Facade tools follow L4's approval policy. No tool opens a confirmation
 dialog. Calls that cannot proceed explain the reason and the next available step.
 
 Starting or manipulating an agent in the background must not activate a terminal,
-select a folder, move an editor or add a folder to the workspace. A newly created
-worktree appears in the workspace bar; selecting it is the person's decision.
+select a folder, move an editor or add a folder to the workspace, except for O5's
+deletion cleanup and view fallback. A newly created worktree appears in the
+workspace bar; selecting it is the person's decision.
 
 Creator relationships describe provenance and supply a default communication path.
 They do not impose a staffing algorithm, automatically reparent orphans, or require
@@ -196,6 +198,11 @@ With deletion:
 4. Release Facade's injected files, then remove the worktree, retaining its branch.
 5. Return every stopped agent and whether the folder was deleted.
 
+A worktree may be deleted while selected or included in the workspace, subject to
+the same preflight above. If deletion removes the person's current worktree view,
+switch to its owning folder's view. If that folder no longer exists, switch to
+the previous folder. Otherwise keep the current folder selection.
+
 Changes consisting solely of Facade's recorded configuration additions are not user
 work. A file that was already dirty or has additional edits still is. Detect the
 simple unchanged-owned-content case; ambiguous edits remain visible changes.
@@ -259,7 +266,9 @@ Technical guidance must explain:
 - Facade-created children are separate CLI terminals, distinct from a CLI's internal
   subagents.
 - send_message/read_messages are the normal communication path.
-- Blocking question tools should not be used; ask the creator by message.
+- Runs started through `start_agent`, including `@human` scripts, ask through
+  messages and apply L4's supported question-tool suppressions. UI-started agents
+  keep their normal CLI questions; M8 defines the escalation path.
 - Tasks and ordinary messages may be retrieved again with the same number.
 - Worktrees start at a commit; uncommitted changes are not copied.
 - Facade-owned project configuration is temporary and should not be committed.
@@ -461,6 +470,7 @@ two agent trees and a configurable fake CLI.
 | OR-24 | Interrupted injection/cleanup; reload; framework off | Recovery preserves live ownership and later edits; no silent overwrite | U,I |
 | OR-25 | Disabled framework, invalid/revoked token, pipe outage and reconnect | Prompt correct error; no unauthorized mutation or replay | I,V |
 | OR-26 | Parent ends before child, or caller disappears during start | Child ownership remains; accepted work has one recorded outcome | I,V |
+| OR-27 | Delete the selected worktree, including one added to the workspace; owning folder present/absent | Ordinary O5 preflight applies; view returns to the owning folder, or the previous folder if it is gone | I,H |
 
 Use fakes and a controllable clock for ordering, timeouts and cancellation.
 Test ordinary overlap points; exhaustive scheduling of every possible filesystem
@@ -468,11 +478,12 @@ race is not a release requirement.
 
 ## O13. End-to-end orchestration gate
 
-For every built-in as creator, start at least one child of every supported built-in,
-giving all ordered vendor pairs on a supported test OS. Verify the child's identity,
+On a supported test OS, cover each built-in at least once as a creator and as a
+child, using representative mixed-vendor combinations. Verify the child's identity,
 task, folder and mode, then send a correction, obtain a report and stop it.
-Other supported operating systems must cover each CLI at least once in both roles
-and repeat the platform-specific launch/worktree cases.
+Reuse these runs for the communication and debugging journeys. Other supported
+operating systems must cover each CLI at least once in both roles and repeat the
+platform-specific launch/worktree cases. L14 defines the shared coverage policy.
 
 Run one three-generation tree, one collaboration across two repositories, and one
 child repaired after an unconfirmed start. Repeat the tree-scope cases with YOLO
