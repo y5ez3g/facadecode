@@ -29,6 +29,7 @@ import { createEditorPart, registerTestFileEditor, registerTestResourceEditor, T
 import { TestContextService, TestFileService, TestMarkerService } from '../../../../test/common/workbenchTestServices.js';
 import { TextFileEditorTracker } from '../../browser/editors/textFileEditorTracker.js';
 import { FILE_EDITOR_INPUT_ID } from '../../common/files.js';
+import { IPutAwayEditorsService } from '../../../../services/putAwayEditors/common/putAwayEditors.js';
 
 suite('Files - TextFileEditorTracker', () => {
 
@@ -50,7 +51,7 @@ suite('Files - TextFileEditorTracker', () => {
 		disposables.clear();
 	});
 
-	async function createTracker(autoSaveEnabled = false): Promise<{ accessor: TestServiceAccessor; cleanup: () => Promise<void> }> {
+	async function createTracker(autoSaveEnabled = false): Promise<{ accessor: TestServiceAccessor; putAway: IPutAwayEditorsService; cleanup: () => Promise<void> }> {
 		const instantiationService = workbenchInstantiationService(undefined, disposables);
 
 		const configurationService = new TestConfigurationService();
@@ -92,7 +93,7 @@ suite('Files - TextFileEditorTracker', () => {
 			part.dispose();
 		};
 
-		return { accessor, cleanup };
+		return { accessor, putAway: instantiationService.get(IPutAwayEditorsService), cleanup };
 	}
 
 	test('file change event updates model', async function () {
@@ -171,6 +172,21 @@ suite('Files - TextFileEditorTracker', () => {
 
 		await cleanup();
 	}
+
+	test('WS-17 a dirty text file put away with a folder the window is not on does not open as editor', async function () {
+		const { accessor, putAway, cleanup } = await createTracker();
+		const resource = toResource.call(this, '/path/index.txt');
+		putAway.set(toResource.call(this, '/elsewhere'), [resource]);
+
+		const model = await accessor.textFileService.files.resolve(resource) as IResolvedTextFileEditorModel;
+		disposables.add(model);
+		model.textEditorModel.setValue('Super Good');
+		await timeout(50);
+
+		assert.ok(!accessor.editorService.isOpened({ resource, typeId: FILE_EDITOR_INPUT_ID, editorId: DEFAULT_EDITOR_ASSOCIATION.id }));
+		await model.revert();
+		await cleanup();
+	});
 
 	test('dirty untitled text file model opens as editor', function () {
 		return testUntitledEditor(false);

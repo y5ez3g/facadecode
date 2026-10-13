@@ -193,6 +193,8 @@ import { IWorkingCopyFileService, WorkingCopyFileService } from '../../services/
 import { IWorkingCopyService, WorkingCopyService } from '../../services/workingCopy/common/workingCopyService.js';
 import { TestActiveFolderService, TestChatEntitlementService, TestContextService, TestExtensionService, TestFileService, TestHistoryService, TestLifecycleService, TestLoggerService, TestMarkerService, TestProductService, TestStorageService, TestTextResourcePropertiesService, TestWorkspaceTrustManagementService, TestWorkspaceTrustRequestService } from '../common/workbenchTestServices.js';
 import { DefaultAccountService } from '../../services/accounts/browser/defaultAccount.js';
+import { IPutAwayEditorsService } from '../../services/putAwayEditors/common/putAwayEditors.js';
+import { PutAwayEditorsService } from '../../services/putAwayEditors/browser/putAwayEditorsService.js';
 
 // Backcompat export
 export { TestFileService, TestLifecycleService };
@@ -334,6 +336,7 @@ export function workbenchInstantiationService(
 	const fileService = overrides?.fileService ? overrides.fileService(instantiationService) : disposables.add(new TestFileService());
 	instantiationService.stub(IFileService, fileService);
 	instantiationService.stub(IUriIdentityService, disposables.add(new UriIdentityService(fileService)));
+	instantiationService.stub(IPutAwayEditorsService, disposables.add(instantiationService.createInstance(PutAwayEditorsService)));
 	const markerService = new TestMarkerService();
 	instantiationService.stub(IMarkerService, markerService);
 	instantiationService.stub(IFilesConfigurationService, disposables.add(instantiationService.createInstance(TestFilesConfigurationService)));

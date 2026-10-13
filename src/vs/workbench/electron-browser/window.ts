@@ -23,6 +23,7 @@ import { IResourceEditorInput } from '../../platform/editor/common/editor.js';
 import { ipcRenderer, process } from '../../base/parts/sandbox/electron-browser/globals.js';
 import { IWorkspaceEditingService } from '../services/workspaces/common/workspaceEditing.js';
 import { IWorkspaceBarService } from '../browser/parts/workspacebar/workspaceBarService.js';
+import { IHeldEditorsService } from '../services/heldEditors/common/heldEditors.js';
 import { IMenuService, MenuId, IMenu, MenuItemAction, MenuRegistry } from '../../platform/actions/common/actions.js';
 import { ICommandAction } from '../../platform/action/common/action.js';
 import { getFlatActionBarActions } from '../../platform/actions/browser/menuEntryActionViewItem.js';
@@ -109,6 +110,7 @@ export class NativeWindow extends BaseWindow {
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
+		@IHeldEditorsService private readonly heldEditorsService: IHeldEditorsService,
 		@IFileService private readonly fileService: IFileService,
 		@IMenuService private readonly menuService: IMenuService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
@@ -1076,6 +1078,12 @@ export class NativeWindow extends BaseWindow {
 		if (inputs.length) {
 			const openedEditorPanes = await this.openResources(inputs, diffMode, mergeMode);
 
+			// Facade Code: a diff or merge from the command line stays through folder switches until closed (WORKSPACE.md W6.2)
+			if ((diffMode || mergeMode) && !request.filesToWait && openedEditorPanes.length) {
+				const resources = coalesce(inputs.map(input => input.resource));
+				this.heldEditorsService.hold(resources, this.instantiationService.invokeFunction(accessor => whenEditorClosed(accessor, resources)));
+			}
+
 			if (request.filesToWait) {
 
 				// In wait mode, listen to changes to the editors and wait until the files
@@ -1109,7 +1117,11 @@ export class NativeWindow extends BaseWindow {
 	private async trackClosedWaitFiles(waitMarkerFile: URI, resourcesToWaitFor: URI[]): Promise<void> {
 
 		// Wait for the resources to be closed in the text editor...
-		await this.instantiationService.invokeFunction(accessor => whenEditorClosed(accessor, resourcesToWaitFor));
+		const closed = this.instantiationService.invokeFunction(accessor => whenEditorClosed(accessor, resourcesToWaitFor));
+
+		// Facade Code: held on screen until then, so a folder switch cannot close them (WORKSPACE.md W6.2)
+		this.heldEditorsService.hold(resourcesToWaitFor, closed);
+		await closed;
 
 		// ...before deleting the wait marker file
 		await this.fileService.del(waitMarkerFile);

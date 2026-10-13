@@ -12,6 +12,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { WorkingCopyBackupTracker } from '../common/workingCopyBackupTracker.js';
 import { IWorkingCopyEditorService } from '../common/workingCopyEditorService.js';
 import { IEditorService } from '../../editor/common/editorService.js';
+import { IPutAwayEditorsService } from '../../putAwayEditors/common/putAwayEditors.js';
 
 export class BrowserWorkingCopyBackupTracker extends WorkingCopyBackupTracker implements IWorkbenchContribution {
 
@@ -25,8 +26,9 @@ export class BrowserWorkingCopyBackupTracker extends WorkingCopyBackupTracker im
 		@ILogService logService: ILogService,
 		@IWorkingCopyEditorService workingCopyEditorService: IWorkingCopyEditorService,
 		@IEditorService editorService: IEditorService,
+		@IPutAwayEditorsService putAwayEditorsService: IPutAwayEditorsService,
 	) {
-		super(workingCopyBackupService, workingCopyService, logService, lifecycleService, filesConfigurationService, workingCopyEditorService, editorService);
+		super(workingCopyBackupService, workingCopyService, logService, lifecycleService, filesConfigurationService, workingCopyEditorService, editorService, putAwayEditorsService);
 	}
 
 	protected onFinalBeforeShutdown(reason: ShutdownReason): boolean {

@@ -89,6 +89,8 @@ import './services/history/browser/historyService.js';
 import './services/activeFolder/browser/activeFolderService.js';
 import './services/folderScope/browser/folderScopeService.js';
 import './services/folderScope/browser/folderScope.contribution.js';
+import './services/heldEditors/browser/heldEditorsService.js';
+import './services/putAwayEditors/browser/putAwayEditorsService.js';
 import './services/activity/browser/activityService.js';
 import './services/keybinding/browser/keybindingService.js';
 import './services/untitled/common/untitledTextEditorService.js';

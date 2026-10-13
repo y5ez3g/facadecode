@@ -110,6 +110,7 @@ import '../workbench/services/terminal/common/embedderTerminalService.js';
 import '../workbench/services/workingCopy/common/workingCopyService.js';
 import '../workbench/services/workingCopy/common/workingCopyFileService.js';
 import '../workbench/services/workingCopy/common/workingCopyEditorService.js';
+import '../workbench/services/putAwayEditors/browser/putAwayEditorsService.js';
 import '../workbench/services/filesConfiguration/common/filesConfigurationService.js';
 import '../workbench/services/views/browser/viewDescriptorService.js';
 import '../workbench/services/views/browser/viewsService.js';

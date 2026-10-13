@@ -148,6 +148,12 @@ export interface ICloseAllEditorsOptions {
 	readonly excludeSticky?: boolean;
 	readonly excludeConfirming?: boolean;
 	readonly force?: boolean;
+
+	/** Facade Code: editors to leave open, as `excludeConfirming` leaves those that would ask. */
+	readonly exclude?: (editor: EditorInput) => boolean;
+
+	/** Facade Code: editors to close without asking, their working copies left alive (WORKSPACE.md W6.2). */
+	readonly putAway?: (editor: EditorInput) => boolean;
 }
 
 export interface IEditorReplacement {
@@ -622,6 +628,12 @@ export interface IEditorWorkingSet {
 
 export interface IEditorWorkingSetOptions {
 	readonly preserveFocus?: boolean;
+
+	/** Facade Code: editors that stay open while the working set is applied. */
+	readonly exclude?: (editor: EditorInput) => boolean;
+
+	/** Facade Code: unsaved editors to put away with the set being left, their working copies left alive (WORKSPACE.md W6.2). */
+	readonly putAway?: (editor: EditorInput) => boolean;
 }
 
 export interface IEditorGroupContextKeyProvider<T extends ContextKeyValue> {
@@ -1023,7 +1035,7 @@ export interface IEditorGroup {
 	 *
 	 * @returns a promise if confirmation is needed when all editors are closed.
 	 */
-	closeAllEditors(options: { excludeConfirming: true; force?: boolean }): boolean;
+	closeAllEditors(options: { excludeConfirming: true; force?: boolean; exclude?: (editor: EditorInput) => boolean; putAway?: (editor: EditorInput) => boolean }): boolean;
 	closeAllEditors(options?: ICloseAllEditorsOptions): Promise<boolean>;
 
 	/**

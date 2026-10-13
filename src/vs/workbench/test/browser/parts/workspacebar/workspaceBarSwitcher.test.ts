@@ -23,9 +23,12 @@ import { WorkspaceBarModel } from '../../../../browser/parts/workspacebar/worksp
 import { WorkspaceBarSwitcher } from '../../../../browser/parts/workspacebar/workspaceBarSwitcher.js';
 import { ActiveFolderService } from '../../../../services/activeFolder/browser/activeFolderService.js';
 import { IEditorGroupsService, IEditorWorkingSet, IEditorWorkingSetOptions } from '../../../../services/editor/common/editorGroupsService.js';
+import { IHeldEditorsService } from '../../../../services/heldEditors/common/heldEditors.js';
 import { IWorkbenchLayoutService, Parts } from '../../../../services/layout/browser/layoutService.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
+import { PutAwayEditorsService } from '../../../../services/putAwayEditors/browser/putAwayEditorsService.js';
+import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
 import { ITextModelService } from '../../../../../editor/common/services/resolverService.js';
 
 /**
@@ -174,7 +177,8 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		const activeFolderService = store.add(new ActiveFolderService(workspace, storageService, uriIdentityService, historyService));
 
 		const groups = new TestEditorGroups();
-		const editors = store.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, logService, { getEditors: () => [] } as unknown as IEditorService, uriIdentityService, { createModelReference: async () => ({ object: {}, dispose: () => { } }) } as unknown as ITextModelService));
+		const putAway = store.add(new PutAwayEditorsService(storageService, uriIdentityService));
+		const editors = store.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, logService, { isHeld: () => false } as unknown as IHeldEditorsService, putAway, { getEditors: () => [] } as unknown as IEditorService, { isDirty: () => false } as unknown as IWorkingCopyService, uriIdentityService, { createModelReference: async () => ({ object: {}, dispose: () => { } }) } as unknown as ITextModelService));
 
 		// ⚠️ The switcher only asks the model to re-read what is reachable, so nothing here edits the
 		// workspace; an editing service that is never called is the honest stand-in.

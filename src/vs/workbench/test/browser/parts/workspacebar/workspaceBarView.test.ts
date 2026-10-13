@@ -32,8 +32,10 @@ import { moveRow, orderWorktrees, rowsOfFolders } from '../../../../browser/part
 import { WorkspaceBarModel } from '../../../../browser/parts/workspacebar/workspaceBarModel.js';
 import { WorkspaceBarSwitcher } from '../../../../browser/parts/workspacebar/workspaceBarSwitcher.js';
 import { carriesMark, isOnWorktreeOf, WorkspaceBarIdentityProvider, workspaceBarRows, WorkspaceBarRow, WorkspaceBarView } from '../../../../browser/parts/workspacebar/workspaceBarView.js';
-import { TestStorageService } from '../../../common/workbenchTestServices.js';
+import { TestStorageService, TestWorkingCopy } from '../../../common/workbenchTestServices.js';
 import { workbenchInstantiationService } from '../../workbenchTestServices.js';
+import { IPutAwayEditorsService } from '../../../../services/putAwayEditors/common/putAwayEditors.js';
+import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
 
 suite('Workspace bar - the rows it draws', () => {
 
@@ -366,6 +368,7 @@ suite('Workspace bar - the view', () => {
 		return {
 			asked,
 			barView,
+			instantiationService,
 			// As a keybinding sees it: in the list's own context.
 			rowKind: () => contextKeyService.getContext(container.querySelector<HTMLElement>('.monaco-list')).getValue(WorkspaceBarRowKindContext.key),
 			rows: () => [...container.querySelectorAll<HTMLElement>('.monaco-list-row')]
@@ -411,6 +414,18 @@ suite('Workspace bar - the view', () => {
 		});
 
 		assert.deepStrictEqual(bar.rows(), ['lab, folder cannot be read', 'notes, folder does not exist on disk']);
+	});
+
+	test('WS-17 a folder holding unsaved editors out of sight looks and reads as any other: no mark at its row\'s end, nothing more read out', () => {
+		const bar = view([lab, notes], [], lab.uri);
+		const draft = store.add(new TestWorkingCopy(URI.file('/lab/draft.ts'), true));
+		store.add(bar.instantiationService.get(IWorkingCopyService).registerWorkingCopy(draft));
+		bar.instantiationService.get(IPutAwayEditorsService).set(notes.uri, [draft.resource]);
+
+		assert.deepStrictEqual({ marks: [bar.has('.workspacebar-unsaved', 1), bar.has('.codicon-circle-filled', 1)], aria: bar.rows() }, {
+			marks: [false, false],
+			aria: ['lab', 'notes']
+		});
 	});
 
 	test('WS-35 collapsed, every row keeps its icon in its colour: the one chosen for it, else the folder icon, and a worktree its dot', () => {

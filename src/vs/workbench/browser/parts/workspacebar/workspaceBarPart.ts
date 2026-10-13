@@ -256,7 +256,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	 * folder and comes back the colour it was.
 	 */
 	private pruneEditors(): void {
-		this.editors?.prune(new Set(this.model.folders.map(folder => this.model.key(folder.uri))));
+		void this.editors?.prune(this.model.folders.map(folder => folder.uri));
 	}
 
 	override updateStyles(): void {

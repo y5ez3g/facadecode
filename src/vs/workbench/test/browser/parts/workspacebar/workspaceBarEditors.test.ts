@@ -9,11 +9,14 @@ import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService, IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { WorkspaceBarEditors } from '../../../../browser/parts/workspacebar/workspaceBarEditors.js';
 import { IEditorGroupsService, IEditorWorkingSet, IEditorWorkingSetOptions } from '../../../../services/editor/common/editorGroupsService.js';
+import { IHeldEditorsService } from '../../../../services/heldEditors/common/heldEditors.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
+import { PutAwayEditorsService } from '../../../../services/putAwayEditors/browser/putAwayEditorsService.js';
+import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { ITextModelService } from '../../../../../editor/common/services/resolverService.js';
 import { TextResourceEditorInput } from '../../../../common/editor/textResourceEditorInput.js';
@@ -83,11 +86,25 @@ suite('Workspace bar - folder editors', () => {
 		return { held, released, service };
 	}
 
-	function editorsFor(groups: TestEditorGroups, storageService: IStorageService, open: EditorInput[] = [], textModelService: ITextModelService = models().service): WorkspaceBarEditors {
+	function editorsFor(groups: TestEditorGroups, storageService: IStorageService, held: Pick<IHeldEditorsService, 'isHeld'> = { isHeld: () => false }, open: EditorInput[] = [], textModelService: ITextModelService = models().service): WorkspaceBarEditors {
 		const uriIdentityService = disposables.add(new UriIdentityService(disposables.add(new FileService(new NullLogService()))));
+		const putAway = disposables.add(new PutAwayEditorsService(storageService, uriIdentityService));
 		const editorService = { getEditors: () => open.map(editor => ({ editor, groupId: 1 })) } as unknown as IEditorService;
-		return disposables.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, new NullLogService(), editorService, uriIdentityService, textModelService));
+		const workingCopyService = { isDirty: () => false } as unknown as IWorkingCopyService;
+		return disposables.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, new NullLogService(), held as IHeldEditorsService, putAway, editorService, workingCopyService, uriIdentityService, textModelService));
 	}
+
+	test('WS-50 putting up the editors of a folder leaves the ones a program waits on where they are', async () => {
+		const groups = new TestEditorGroups();
+		const held = {} as EditorInput;
+		const other = {} as EditorInput;
+		const editors = editorsFor(groups, storage(), { isHeld: editor => editor === held });
+
+		await editors.restore(URI.parse('file:///b'));
+
+		const exclude = groups.options[0]?.exclude;
+		assert.deepStrictEqual({ held: exclude?.(held), other: exclude?.(other) }, { held: true, other: false });
+	});
 
 	test('WS-52 putting a folder\'s editors up is done once each group\'s editor has its contents, so the focus has somewhere to go', async () => {
 		const groups = new TestEditorGroups();
@@ -112,7 +129,7 @@ suite('Workspace bar - folder editors', () => {
 		const b = URI.parse('file:///w/b');
 
 		const back = models();
-		const comesBack = editorsFor(new TestEditorGroups(), storage(), [text], back.service);
+		const comesBack = editorsFor(new TestEditorGroups(), storage(), undefined, [text], back.service);
 		comesBack.capture(a);
 		await comesBack.restore(b);
 		await timeout(0);
@@ -122,11 +139,11 @@ suite('Workspace bar - folder editors', () => {
 		await timeout(0);
 
 		const gone = models();
-		const leaves = editorsFor(new TestEditorGroups(), storage(), [text], gone.service);
+		const leaves = editorsFor(new TestEditorGroups(), storage(), undefined, [text], gone.service);
 		leaves.capture(a);
 		await leaves.restore(b);
 		await timeout(0);
-		leaves.prune(new Set(['file:///w/b']));
+		await leaves.prune([b]);
 
 		assert.deepStrictEqual({ away, back: back.released, gone: gone.released }, {
 			away: { held: ['/w/a/x.ts'], released: [] },
@@ -200,7 +217,7 @@ suite('Workspace bar - folder editors', () => {
 		editors.capture(URI.parse('file:///a'));
 		editors.capture(URI.parse('file:///b'));
 
-		editors.prune(new Set(['file:///b']));
+		editors.prune([URI.parse('file:///b')]);
 
 		assert.deepStrictEqual(groups.names, ['file:///b']);
 	});
@@ -214,7 +231,7 @@ suite('Workspace bar - folder editors', () => {
 		editors.capture(URI.parse('file:///b'));
 		editors.capture(URI.parse('file:///c'));
 
-		editors.prune(new Set(['file:///b']));
+		editors.prune([URI.parse('file:///b')]);
 
 		assert.deepStrictEqual(groups.names, ['file:///b']);
 	});
@@ -223,7 +240,7 @@ suite('Workspace bar - folder editors', () => {
 		const shared = storage();
 		const groups = new TestEditorGroups();
 		editorsFor(groups, shared).capture(URI.parse('file:///a'));
-		editorsFor(groups, shared).prune(new Set());
+		editorsFor(groups, shared).prune([]);
 
 		const later = editorsFor(groups, shared);
 		later.restore(URI.parse('file:///a'));
@@ -234,7 +251,7 @@ suite('Workspace bar - folder editors', () => {
 	test('a folder nobody opened has nothing to prune', () => {
 		const groups = new TestEditorGroups();
 
-		editorsFor(groups, storage()).prune(new Set(['file:///never']));
+		editorsFor(groups, storage()).prune([URI.parse('file:///never')]);
 
 		assert.deepStrictEqual(groups.names, []);
 	});
@@ -245,7 +262,7 @@ suite('Workspace bar - folder editors', () => {
 		editors.capture(URI.parse('file:///a'));
 		editors.capture(URI.parse('file:///b'));
 
-		editors.prune(new Set(['file:///a', 'file:///b']));
+		editors.prune([URI.parse('file:///a'), URI.parse('file:///b')]);
 
 		assert.deepStrictEqual(groups.names, ['file:///a', 'file:///b']);
 	});

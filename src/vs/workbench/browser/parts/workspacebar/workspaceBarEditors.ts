@@ -8,12 +8,17 @@ import { ResourceMap } from '../../../../base/common/map.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { EditorsOrder } from '../../../common/editor.js';
+import { EditorExtensions, EditorsOrder, IEditorFactoryRegistry } from '../../../common/editor.js';
+import { EditorInput } from '../../../common/editor/editorInput.js';
 import { AbstractTextResourceEditorInput } from '../../../common/editor/textResourceEditorInput.js';
 import { IEditorGroup, IEditorGroupsService, IEditorWorkingSet } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IHeldEditorsService } from '../../../services/heldEditors/common/heldEditors.js';
+import { IPutAwayEditorsService } from '../../../services/putAwayEditors/common/putAwayEditors.js';
+import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
 import { folderKey } from './workspaceBar.js';
 import { raceTimeout } from '../../../../base/common/async.js';
 import { IEditorGroupView } from '../editor/editor.js';
@@ -29,10 +34,16 @@ function whenRestored(group: IEditorGroup): Promise<void> | undefined {
 /** How long a switch waits for its editors to resolve. */
 const EDITORS_RESOLVED_TIMEOUT = 3000;
 
-/** Each folder's editors as an editor working set, as `contrib/scm/browser/workingSet.ts` keeps one per branch. */
+/**
+ * Each folder's editors as an editor working set, as `contrib/scm/browser/workingSet.ts` keeps one per branch.
+ * Unsaved text editors are put away with their folder and come back with it (WORKSPACE.md W6.2).
+ */
 export class WorkspaceBarEditors extends Disposable {
 
 	private readonly sets = new Map<string, IEditorWorkingSet>();
+
+	/** The folder being left and its unsaved editors, put away once the next folder's editors are up. */
+	private leaving: { readonly folder: URI; readonly unsaved: readonly URI[] } | undefined;
 
 	/** References that keep the text files of folders out of sight loaded (WORKSPACE.md W13). */
 	private readonly resident = new Map<string, DisposableStore>();
@@ -41,7 +52,10 @@ export class WorkspaceBarEditors extends Disposable {
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
 		@IStorageService private readonly storageService: IStorageService,
 		@ILogService private readonly logService: ILogService,
+		@IHeldEditorsService private readonly heldEditorsService: IHeldEditorsService,
+		@IPutAwayEditorsService private readonly putAwayEditorsService: IPutAwayEditorsService,
 		@IEditorService private readonly editorService: IEditorService,
+		@IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@ITextModelService private readonly textModelService: ITextModelService,
 	) {
@@ -69,12 +83,17 @@ export class WorkspaceBarEditors extends Disposable {
 		this.sets.set(key, this.editorGroupsService.saveWorkingSet(key));
 		this.save();
 
+		const unsaved = new ResourceMap<URI>(uri => this.key(uri));
 		const open = new ResourceMap<URI>(uri => this.key(uri));
 		for (const { editor } of this.editorService.getEditors(EditorsOrder.SEQUENTIAL)) {
+			if (editor.resource && editor.isDirty() && this.canPutAway(editor)) {
+				unsaved.set(editor.resource, editor.resource);
+			}
 			if (editor.resource && editor instanceof AbstractTextResourceEditorInput) {
 				open.set(editor.resource, editor.resource);
 			}
 		}
+		this.leaving = { folder, unsaved: [...unsaved.values()] };
 
 		// Referenced while the editors still hold the models, so none is disposed in between
 		this.resident.get(key)?.dispose();
@@ -92,15 +111,32 @@ export class WorkspaceBarEditors extends Disposable {
 	}
 
 	/**
-	 * Puts back `folder`'s editors, or clears them for a folder never seen; called after the active folder
-	 * changes. Rejects, leaving the screen as it was, when the editor part declines.
+	 * Puts back `folder`'s editors, and puts away the unsaved ones of the folder just captured; called after
+	 * the active folder changes. Rejects, leaving the screen as it was, when the editor part declines.
 	 */
 	async restore(folder: URI): Promise<void> {
 		const key = this.key(folder);
 		const set = this.sets.get(key);
 
-		const applied = await this.editorGroupsService.applyWorkingSet(set ?? 'empty', { preserveFocus: true });
+		// Only a captured folder's editors are put away: one that left the workspace keeps them on screen (W9.6)
+		const leaving = this.leaving;
+		this.leaving = undefined;
+
+		// Before they are closed, or `TextFileEditorTracker` opens them again here
+		if (leaving) {
+			this.putAwayEditorsService.set(leaving.folder, leaving.unsaved);
+		}
+
+		// An editor a program waits on stays: closing it would tell `git commit` its message is written (W6.2)
+		const applied = await this.editorGroupsService.applyWorkingSet(set ?? 'empty', {
+			preserveFocus: true,
+			exclude: editor => this.heldEditorsService.isHeld(editor),
+			putAway: editor => !!leaving && this.canPutAway(editor)
+		});
 		if (!applied) {
+			if (leaving) {
+				this.putAwayEditorsService.set(leaving.folder, []);
+			}
 			this.logService.warn(`[workspaceBar] the editor part declined the editors of ${key}`);
 			// Shown after the switcher's "Some editors could not be restored for this folder."
 			throw new Error(localize('workspaceBar.editorsNotClosed', "The open editors could not be closed."));
@@ -109,22 +145,17 @@ export class WorkspaceBarEditors extends Disposable {
 		// Focus given to a text editor before it has its model is lost, so wait for the active editors, bounded
 		await raceTimeout(Promise.all(this.editorGroupsService.groups.map(whenRestored)), EDITORS_RESOLVED_TIMEOUT);
 
+		this.putAwayEditorsService.set(folder, []);
 		this.resident.get(key)?.dispose();
 		this.resident.delete(key);
 	}
 
 	/**
-	 * Drops the editors of every folder that is no longer in the workspace.
-	 *
-	 * ⚠️ Not only the ones taken out through the bar. A folder can leave because someone edited the
-	 * `.code-workspace` file or because an extension called `updateWorkspaceFolders`, and a set kept
-	 * for a folder that is not there is a set nothing will ever ask for again - it would sit in
-	 * storage, and in the editor part, for the life of the workspace.
-	 *
-	 * ⚠️ The working set too, not just our reference to it: the editor part keeps every set it is
-	 * handed until it is told otherwise.
+	 * Drops the editor sets of folders no longer in the workspace, however they left. Unsaved editors put
+	 * away by a folder that left are opened again here (W9.6).
 	 */
-	prune(keys: ReadonlySet<string>): void {
+	async prune(members: readonly URI[]): Promise<void> {
+		const keys = new Set(members.map(member => this.key(member)));
 		let dropped = false;
 
 		for (const [key, set] of [...this.sets]) {
@@ -147,6 +178,27 @@ export class WorkspaceBarEditors extends Disposable {
 		if (dropped) {
 			this.save();
 		}
+
+		const bringBack: URI[] = [];
+		for (const folder of this.putAwayEditorsService.folders()) {
+			if (keys.has(this.key(folder))) {
+				continue;
+			}
+
+			bringBack.push(...this.putAwayEditorsService.get(folder).filter(resource => this.workingCopyService.isDirty(resource)));
+			this.putAwayEditorsService.set(folder, []);
+		}
+
+		if (bringBack.length) {
+			await this.editorService.openEditors(bringBack.map(resource => ({ resource, options: { pinned: true, preserveFocus: true, inactive: true } })));
+		}
+	}
+
+	/** Whether `editor` can be put away: a text or untitled editor its working set can bring back (W6.2). */
+	private canPutAway(editor: EditorInput): boolean {
+		return editor instanceof AbstractTextResourceEditorInput
+			&& !this.heldEditorsService.isHeld(editor)
+			&& !!Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).getEditorSerializer(editor)?.canSerialize(editor);
 	}
 
 	private key(uri: URI): string {

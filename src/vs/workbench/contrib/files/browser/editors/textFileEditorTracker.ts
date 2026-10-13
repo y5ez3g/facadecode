@@ -19,6 +19,7 @@ import { Schemas } from '../../../../../base/common/network.js';
 import { UntitledTextEditorInput } from '../../../../services/untitled/common/untitledTextEditorInput.js';
 import { IWorkingCopyEditorService } from '../../../../services/workingCopy/common/workingCopyEditorService.js';
 import { DEFAULT_EDITOR_ASSOCIATION } from '../../../../common/editor.js';
+import { IPutAwayEditorsService } from '../../../../services/putAwayEditors/common/putAwayEditors.js';
 
 export class TextFileEditorTracker extends Disposable implements IWorkbenchContribution {
 
@@ -31,7 +32,8 @@ export class TextFileEditorTracker extends Disposable implements IWorkbenchContr
 		@IHostService private readonly hostService: IHostService,
 		@ICodeEditorService private readonly codeEditorService: ICodeEditorService,
 		@IFilesConfigurationService private readonly filesConfigurationService: IFilesConfigurationService,
-		@IWorkingCopyEditorService private readonly workingCopyEditorService: IWorkingCopyEditorService
+		@IWorkingCopyEditorService private readonly workingCopyEditorService: IWorkingCopyEditorService,
+		@IPutAwayEditorsService private readonly putAwayEditorsService: IPutAwayEditorsService
 	) {
 		super();
 
@@ -85,6 +87,11 @@ export class TextFileEditorTracker extends Disposable implements IWorkbenchContr
 			const model = fileModel ?? this.textFileService.untitled.get(resource);
 			if (model && this.workingCopyEditorService.findEditor(model)) {
 				return false; // model must not be opened already as file (slower check via working copy)
+			}
+
+			// Facade Code: a put-away editor comes back with its folder, not into the one on screen (WORKSPACE.md W6.2)
+			if (this.putAwayEditorsService.isPutAway(resource)) {
+				return false;
 			}
 
 			return true;

@@ -52,6 +52,8 @@ import { RemoveRootFolderAction } from '../../../browser/actions/workspaceAction
 import { OpenEditorsView } from './views/openEditorsView.js';
 import { ExplorerView } from './views/explorerView.js';
 import { IListService } from '../../../../platform/list/browser/listService.js';
+import { IPutAwayEditorsService } from '../../../services/putAwayEditors/common/putAwayEditors.js';
+import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
 
 export const openWindowCommand = (accessor: ServicesAccessor, toOpen: IWindowOpenable[], options?: IOpenWindowOptions) => {
 	if (Array.isArray(toOpen)) {
@@ -528,8 +530,19 @@ KeybindingsRegistry.registerCommandAndKeybindingRule({
 	mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyS },
 	win: { primary: KeyChord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyCode.KeyS) },
 	id: SAVE_ALL_COMMAND_ID,
-	handler: accessor => {
-		return saveDirtyEditorsOfGroups(accessor, accessor.get(IEditorGroupsService).getGroups(GroupsOrder.MOST_RECENTLY_ACTIVE), { reason: SaveReason.EXPLICIT });
+	handler: async accessor => {
+		const putAwayEditorsService = accessor.get(IPutAwayEditorsService);
+		const workingCopyService = accessor.get(IWorkingCopyService);
+
+		await saveDirtyEditorsOfGroups(accessor, accessor.get(IEditorGroupsService).getGroups(GroupsOrder.MOST_RECENTLY_ACTIVE), { reason: SaveReason.EXPLICIT });
+
+		// Facade Code: then the editors put away with other folders, one at a time as an untitled one asks where to go (W6.2)
+		const putAway = new Set(putAwayEditorsService.folders().flatMap(folder => putAwayEditorsService.get(folder)).flatMap(resource => workingCopyService.getAll(resource) ?? []));
+		for (const workingCopy of putAway) {
+			if (workingCopy.isDirty()) {
+				await workingCopy.save({ reason: SaveReason.EXPLICIT });
+			}
+		}
 	}
 });
 
