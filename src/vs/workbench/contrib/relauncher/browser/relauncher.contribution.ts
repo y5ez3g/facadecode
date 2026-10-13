@@ -266,6 +266,9 @@ class ChangeObserver<T> {
 	}
 }
 
+/** Facade Code: no restart when the first folder changes, which bar edits often do; `rootPath` stays stale until reload (WORKSPACE.md W4). */
+const RESTART_ON_FIRST_FOLDER_CHANGE: boolean = false;
+
 export class WorkspaceChangeExtHostRelauncher extends Disposable implements IWorkbenchContribution {
 
 	private firstFolderResource?: URI;
@@ -342,7 +345,9 @@ export class WorkspaceChangeExtHostRelauncher extends Disposable implements IWor
 		if (!isEqual(this.firstFolderResource, newFirstFolderResource)) {
 			this.firstFolderResource = newFirstFolderResource;
 
-			this.extensionHostRestarter.schedule(); // buffer calls to extension host restart
+			if (RESTART_ON_FIRST_FOLDER_CHANGE) {
+				this.extensionHostRestarter.schedule(); // buffer calls to extension host restart
+			}
 		}
 	}
 }
