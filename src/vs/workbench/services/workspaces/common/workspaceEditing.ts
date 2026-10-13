@@ -56,6 +56,12 @@ export interface IWorkspaceEditingService {
 	reorderFolders(reorder: FolderReorder, donotNotifyError?: boolean): Promise<void>;
 
 	/**
+	 * Facade Code: sets or, with `undefined`, removes the `name` of one folder in the workspace file.
+	 * When `donotNotifyError` is `true`, error will be bubbled up otherwise, the service handles the error with proper message and action
+	 */
+	renameFolder(folder: URI, name: string | undefined, donotNotifyError?: boolean): Promise<void>;
+
+	/**
 	 * Remove folders from the existing workspace
 	 * When `donotNotifyError` is `true`, error will be bubbled up otherwise, the service handles the error with proper message and action
 	 */

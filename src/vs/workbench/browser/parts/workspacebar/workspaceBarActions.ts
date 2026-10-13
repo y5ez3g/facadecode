@@ -6,7 +6,7 @@
 import './media/workspacebardialog.css';
 import './media/workspacebartoggle.css';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { basename } from '../../../../base/common/resources.js';
+import { basename, basenameOrAuthority } from '../../../../base/common/resources.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
@@ -20,10 +20,11 @@ import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uri
 import { folderKey, orderWorktrees } from './workspaceBar.js';
 import { findWorktree } from './workspaceBarGit.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
-import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
+import { explicitNameOf, IFolderCustomization, IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from './workspaceBarCustomize.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
@@ -291,19 +292,37 @@ class CustomizeFolderAction extends Action2 {
 		const workspaceBarDialogService = accessor.get(IWorkspaceBarDialogService);
 		const contextService = accessor.get(IWorkspaceContextService);
 		const uriIdentityService = accessor.get(IUriIdentityService);
+		const workspaceEditingService = accessor.get(IWorkspaceEditingService);
 
 		const target = uri ?? workspaceBarService.folderForCommand();
 		if (!target) {
 			return;
 		}
 
-		// A worktree first: once visited it is also a workspace folder, but it is named by its branch.
+		const memberAt = (at: URI) => contextService.getWorkspace().folders.find(candidate => uriIdentityService.extUri.isEqual(candidate.uri, at));
+
+		// A listed folder's name goes in `folders[].name`; colour, icon and an unlisted row's name stay in the profile (W9.7)
+		const current = (at: URI, folder: IWorkspaceFolder | undefined): IFolderCustomization => {
+			const kept = customizationService.get(at);
+			return { ...kept, name: (folder && explicitNameOf(folder)) || kept?.name };
+		};
+		const save = async (at: URI, folder: IWorkspaceFolder | undefined, answer: IFolderCustomization) => {
+			if (folder && contextService.getWorkbenchState() === WorkbenchState.WORKSPACE) {
+				customizationService.set(at, { color: answer.color, icon: answer.icon });
+				await workspaceEditingService.renameFolder(folder.uri, answer.name);
+			} else {
+				customizationService.set(at, answer);
+			}
+		};
+
+		// A worktree first: once visited it is also a workspace folder, but unnamed it is called by its branch.
 		const repository = workspaceBarService.repositoryFor(target);
 		const worktree = findWorktree(repository, target, uriIdentityService.extUri);
 		if (worktree) {
-			const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: worktree.label, worktree: true }, customizationService.get(worktree.uri));
+			const folder = memberAt(worktree.uri);
+			const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: worktree.label, worktree: true }, current(worktree.uri, folder));
 			if (answer) {
-				customizationService.set(worktree.uri, answer);
+				await save(worktree.uri, folder, answer);
 			}
 			return;
 		}
@@ -311,17 +330,17 @@ class CustomizeFolderAction extends Action2 {
 		// The row's own folder - never one it is inside of, which is a row of its own. A repository whose
 		// own checkout is not in the workspace, only worktrees of it, has a row all the same, named for
 		// its folder on disk.
-		const folder = contextService.getWorkspace().folders.find(candidate => uriIdentityService.extUri.isEqual(candidate.uri, target));
-		const row = folder ? { uri: folder.uri, name: folder.name }
+		const folder = memberAt(target);
+		const row = folder ? { uri: folder.uri, name: basenameOrAuthority(folder.uri) }
 			: repository && uriIdentityService.extUri.isEqual(repository.main, target) ? { uri: repository.main, name: basename(repository.main) }
 				: undefined;
 		if (!row) {
 			return;
 		}
 
-		const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: row.name, worktree: false }, customizationService.get(row.uri));
+		const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: row.name, worktree: false }, current(row.uri, folder));
 		if (answer) {
-			customizationService.set(row.uri, answer);
+			await save(row.uri, folder, answer);
 		}
 	}
 }

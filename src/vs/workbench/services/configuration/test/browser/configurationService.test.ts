@@ -811,6 +811,21 @@ suite('WorkspaceContextService - Workspace Editing', () => {
 		});
 	}));
 
+	test('WS-34 a rename gives one entry its name and keeps every path as written; undefined takes it away; a folder not in the workspace changes nothing', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		const [a, b] = testObject.getWorkspace().folders.map(folder => folder.uri);
+		const [rawA, rawB] = testObject.getWorkspace().folders.map(folder => folder.raw);
+
+		await testObject.renameFolder(a, '  Prod  ');
+		const named = testObject.getWorkspace().folders.map(folder => ({ raw: folder.raw, name: folder.name }));
+		await testObject.renameFolder(joinPath(ROOT, 'elsewhere'), 'Nope');
+		await testObject.renameFolder(a, undefined);
+
+		assert.deepStrictEqual({ named, after: testObject.getWorkspace().folders.map(folder => folder.raw) }, {
+			named: [{ raw: { ...rawA, name: 'Prod' }, name: 'Prod' }, { raw: rawB, name: basename(b) }],
+			after: [rawA, rawB],
+		});
+	}));
+
 	test('a reorder that throws changes nothing, and is reported as unexpected rather than as the workspace file\'s failure', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
 		const before = testObject.getWorkspace().folders.map(folder => basename(folder.uri));
 		const reported: string[] = [];

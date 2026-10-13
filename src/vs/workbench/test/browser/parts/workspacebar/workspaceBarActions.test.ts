@@ -10,7 +10,8 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { CommandsRegistry } from '../../../../../platform/commands/common/commands.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
@@ -66,7 +67,11 @@ suite('Workspace bar - Customize', () => {
 		});
 		instantiationService.stub(IWorkspaceContextService, {
 			getWorkspace: () => ({ id: 'test', folders }),
+			getWorkbenchState: () => WorkbenchState.WORKSPACE,
 			getWorkspaceFolder: uri => folders.find(folder => extUri.isEqualOrParent(uri, folder.uri)) ?? null
+		});
+		instantiationService.stub(IWorkspaceEditingService, {
+			renameFolder: async (uri: URI, name: string | undefined) => { said.push(`rename ${uri.path} ${name}`); }
 		});
 		instantiationService.stub(IUriIdentityService, { extUri });
 
@@ -74,15 +79,15 @@ suite('Workspace bar - Customize', () => {
 		return said;
 	}
 
-	test('a repository\'s row whose checkout is not in the workspace customizes that row, not the folder it is inside of', async () => {
+	test('WS-34 a repository\'s row whose checkout is not in the workspace customizes that row, not the folder it is inside of; a folder in the list is named in the workspace file', async () => {
 		assert.deepStrictEqual({
 			repository: await customize(lab.main),
 			folder: await customize(home.uri),
 			worktree: await customize(w2.uri),
 		}, {
 			repository: ['ask lab', 'keep /home/lab {"name":"Named"}'],
-			folder: ['ask home', 'keep /home {"name":"Named"}'],
-			worktree: ['ask feature/w2, a worktree', 'keep /wt/w2 {"name":"Named"}'],
+			folder: ['ask home', 'keep /home {}', 'rename /home Named'],
+			worktree: ['ask feature/w2, a worktree', 'keep /wt/w2 {}', 'rename /wt/w2 Named'],
 		});
 	});
 });
