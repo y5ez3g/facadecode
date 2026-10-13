@@ -21,6 +21,8 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+import { IHostService } from '../../../services/host/browser/host.js';
+import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Part } from '../../part.js';
 import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
 import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
@@ -134,6 +136,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkspaceBarCustomizationService customizationService: IWorkspaceBarCustomizationService,
 		@INotificationService private readonly notificationService: INotificationService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IHostService private readonly hostService: IHostService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -312,6 +316,12 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 	/** `show`, for a folder that `addedBefore` were put in the workspace on the way to. */
 	private async doShow(uri: URI, addedBefore: readonly URI[]): Promise<ShowResult> {
+		// An empty window opens on its first folder, as stock, rather than becoming an untitled workspace (W4)
+		if (this.contextService.getWorkbenchState() === WorkbenchState.EMPTY) {
+			await this.hostService.openWindow([{ folderUri: uri }], { forceReuseWindow: true });
+			return { kind: 'shown' };
+		}
+
 		// ⚠️ Through the model, not straight to the workspace: it is what knows that `/tmp/x` and
 		// `/private/tmp/x` are one folder, so a folder opened twice under two spellings is one row
 		// rather than two. `add` skips what is already there, which makes this the same call whether

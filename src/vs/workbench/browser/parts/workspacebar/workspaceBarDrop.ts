@@ -323,12 +323,8 @@ export class WorkspaceBarDropTarget extends Disposable implements IWorkbenchCont
 		}
 
 		if (folders.length) {
-			// ⚠️ `add`, not `addAndShow`: this handler only ever sees what landed **on the bar**,
-			// and the bar is the list. Dropping a folder there is filling the list - often several
-			// at once - and being walked to the last of them is a switch nobody asked for. A folder
-			// dropped anywhere else in the window reaches `ResourcesDropHandler`, which does mean
-			// "show me this" and calls `addAndShow`.
-			await this.workspaceBarService.add(folders);
+			// As the bar's `+` and a drop on the editor area: one edit, then one move onto the last (WORKSPACE.md W9.13)
+			await this.workspaceBarService.addAndShow(folders);
 		}
 
 		if (editors.length) {

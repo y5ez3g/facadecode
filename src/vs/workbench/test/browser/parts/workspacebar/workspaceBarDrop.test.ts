@@ -212,16 +212,13 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 			return { target, added, shown };
 		}
 
-		test(`⭐ a folder dropped on the bar joins the list without moving the window`, async () => {
-			// ⚠️ `addAndShow` here is the whole feature undone: somebody dropping four folders onto
-			// the list gets walked to the fourth. The bar is where you collect; the window is where you
-			// say "show me this". Written down at the seam, and drifted back once already.
+		test(`WS-07 ⭐ folders dropped on the bar are added and the window moves onto the last, as through +`, async () => {
 			const { target, added, shown } = bar();
 
 			await target.apply(dropped('/w/api', '/w/web'));
 
-			assert.deepStrictEqual(added, [['/w/api', '/w/web']], 'the folders did not join the list');
-			assert.deepStrictEqual(shown, [], 'dropping on the bar moved the window');
+			assert.deepStrictEqual(shown, [['/w/api', '/w/web']], 'the folders were not added and shown in one request');
+			assert.deepStrictEqual(added, [], 'the drop only added the folders');
 		});
 	});
 

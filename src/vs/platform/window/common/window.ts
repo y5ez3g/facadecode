@@ -81,6 +81,9 @@ export interface IOpenWindowOptions extends IBaseOpenWindowsOptions {
 export interface IAddRemoveFoldersRequest {
 	readonly foldersToAdd: UriComponents[];
 	readonly foldersToRemove: UriComponents[];
+
+	/** Facade Code: whether the window also moves onto the added folders, as for `facade <folder>` but not `--add` (WORKSPACE.md W5). */
+	readonly show?: boolean;
 }
 
 interface IOpenedWindow {

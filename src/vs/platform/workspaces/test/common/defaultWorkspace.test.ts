@@ -4,14 +4,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { isWindows } from '../../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
-import { DEFAULT_WORKSPACE_CONTENT, DEFAULT_WORKSPACE_FILE_NAME, defaultWorkspaceUri } from '../../common/defaultWorkspace.js';
+import { FileService } from '../../../files/common/fileService.js';
+import { InMemoryFileSystemProvider } from '../../../files/common/inMemoryFilesystemProvider.js';
+import { NullLogService } from '../../../log/common/log.js';
+import { DEFAULT_WORKSPACE_CONTENT, DEFAULT_WORKSPACE_FILE_NAME, defaultWorkspaceUri, ensureDefaultWorkspace } from '../../common/defaultWorkspace.js';
 
 suite('The default workspace', () => {
 
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const userDataPath = isWindows ? 'C:\\Users\\someone\\AppData\\Roaming\\Code' : '/home/someone/.config/Code';
 
@@ -44,5 +48,53 @@ suite('The default workspace', () => {
 		const parsed = JSON.parse(DEFAULT_WORKSPACE_CONTENT);
 
 		assert.deepStrictEqual(parsed.folders, []);
+	});
+
+	/** Where the user data directory is on `disk()`: without a drive letter, whose root `mkdirp` takes for granted. */
+	const onDisk = '/someone/Facade Code';
+
+	/** A disk of its own, and the warnings logged against it. */
+	function disk() {
+		const fileService = disposables.add(new FileService(new NullLogService()));
+		disposables.add(fileService.registerProvider(Schemas.file, disposables.add(new InMemoryFileSystemProvider())));
+		const warnings: string[] = [];
+		const logService = new class extends NullLogService {
+			override warn(message: string) { warnings.push(message); }
+		};
+		const read = async () => (await fileService.readFile(defaultWorkspaceUri(onDisk))).value.toString();
+		return { fileService, logService, warnings, read };
+	}
+
+	test('WS-02 one that is missing is written, holding no folders, and is the one opened', async () => {
+		const { fileService, logService, warnings, read } = disk();
+
+		const opened = await ensureDefaultWorkspace(fileService, logService, onDisk);
+
+		assert.deepStrictEqual({ opened: opened?.toString(), content: await read(), warnings }, {
+			opened: defaultWorkspaceUri(onDisk).toString(), content: DEFAULT_WORKSPACE_CONTENT, warnings: []
+		});
+	});
+
+	test('WS-02 one that is there is opened as it is', async () => {
+		const { fileService, logService, read } = disk();
+		const content = '{ "folders": [{ "path": "api" }] }';
+		await fileService.writeFile(defaultWorkspaceUri(onDisk), VSBuffer.fromString(content));
+
+		const opened = await ensureDefaultWorkspace(fileService, logService, onDisk);
+
+		assert.deepStrictEqual({ opened: opened?.toString(), content: await read() }, { opened: defaultWorkspaceUri(onDisk).toString(), content });
+	});
+
+	test('WS-02 a directory in its place is not opened - it would open as a folder - and why is logged; the directory is left alone', async () => {
+		const { fileService, logService, warnings } = disk();
+		await fileService.createFolder(defaultWorkspaceUri(onDisk));
+
+		const opened = await ensureDefaultWorkspace(fileService, logService, onDisk);
+
+		assert.deepStrictEqual({
+			opened,
+			stillADirectory: (await fileService.stat(defaultWorkspaceUri(onDisk))).isDirectory,
+			why: warnings.map(warning => warning.includes(defaultWorkspaceUri(onDisk).fsPath) && warning.includes('is a directory'))
+		}, { opened: undefined, stillADirectory: true, why: [true] });
 	});
 });

@@ -106,6 +106,10 @@ export interface IOpenConfiguration extends IBaseOpenConfiguration {
 	readonly mergeMode?: boolean;
 	addMode?: boolean;
 	removeMode?: boolean;
+	/** Facade Code: the folders added are shown as well - `facade <folder>` joining the open window, not `--add`. */
+	showAdded?: boolean;
+	/** Facade Code: the folders go into the default workspace, opened for them (`landsInDefaultWorkspace`). */
+	intoDefaultWorkspace?: boolean;
 	readonly gotoLineMode?: boolean;
 	readonly initialStartup?: boolean;
 	readonly noRecentEntry?: boolean;
