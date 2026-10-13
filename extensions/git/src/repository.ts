@@ -2014,7 +2014,8 @@ export class Repository implements Disposable {
 		}
 	}
 
-	private async _getWorktreeIncludePaths(): Promise<Set<string>> {
+	// Facade Code: not private - the workspace bar's `_git.createWorktreeAt` copies the same files
+	async _getWorktreeIncludePaths(): Promise<Set<string>> {
 		const config = workspace.getConfiguration('git', Uri.file(this.root));
 		const worktreeIncludeFiles = config.get<string[]>('worktreeIncludeFiles', []);
 

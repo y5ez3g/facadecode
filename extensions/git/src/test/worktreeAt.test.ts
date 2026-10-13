@@ -120,6 +120,29 @@ suite('worktreeAt', () => {
 		});
 	});
 
+	test('copies what `git.worktreeIncludeFiles` names as well - files and folders, as VS Code\'s own Create Worktree copies them - beside what .worktreeinclude names, through no link, and says why it could not (AGENT-ORCHESTRATION.md, O4; VC-09)', async () => {
+		const outside = path.join(dir, 'outside');
+		write(path.join(outside, 'private.txt'), 'private\n');
+		symlinkSync(outside, path.join(main, '.cache'), 'junction');
+		write(path.join(main, '.worktreeinclude'), '.env\n');
+		const worktree = path.join(dir, 'worktrees', 'main', 'setting');
+		// As the repository finds them for the setting: the ignored files and folders it names, by their paths
+		const named = async () => ['app.local.json', 'secrets', '.env', '.cache'].map(file => path.join(main, file));
+
+		const result = await createWorktreeAt(git, main, worktree, 'setting', undefined, named);
+		const failed = await createWorktreeAt(git, main, path.join(dir, 'worktrees', 'main', 'failed'), 'failed', undefined, async () => { throw new Error('no file search'); });
+
+		assert.deepStrictEqual({
+			result,
+			failed,
+			files: Object.fromEntries(['.env', 'app.local.json', 'secrets/key.txt', '.cache', 'node_modules/dep/index.js'].map(file => [file, existsSync(path.join(worktree, file))]))
+		}, {
+			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
+			failed: { kind: 'created', copyFailures: ['git.worktreeIncludeFiles: no file search'], hookFailure: undefined },
+			files: { '.env': true, 'app.local.json': true, 'secrets/key.txt': true, '.cache': false, 'node_modules/dep/index.js': false }
+		});
+	});
+
 	test('creates the worktree at a given commit, and refuses a start point that is not a full commit id', async () => {
 		const first = run(main, 'rev-parse', 'HEAD');
 		write(path.join(main, 'later.txt'), 'later\n');
@@ -235,6 +258,35 @@ suite('worktreeAt', () => {
 		const result = await createWorktreeAt(git, main, worktree, 'deleted');
 
 		assert.deepStrictEqual({ kind: result.kind, folder: existsSync(worktree) }, { kind: 'created', folder: false });
+	});
+
+	test('a create that fails takes the branch it made with it however few branches have its commit - a child\'s, at its parent worktree\'s HEAD; one it cannot take back, moved since or with git unable to say its worktree is gone, is kept and said, by name (AGENT-ORCHESTRATION.md, O4; OR-07)', async () => {
+		// A commit the main checkout's HEAD does not have, as a parent worktree's: `branch -d` refuses a branch at it
+		run(main, 'checkout', '-q', '-b', 'parent');
+		write(path.join(main, 'parent.txt'), 'parent\n');
+		run(main, 'add', 'parent.txt');
+		run(main, '-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '-m', 'parent');
+		const parent = run(main, 'rev-parse', 'HEAD');
+		run(main, 'checkout', '-q', 'main');
+		// A folder already at the path: git makes the branch, then refuses the path
+		const taken = path.join(dir, 'worktrees', 'taken');
+		write(path.join(taken, 'keep.txt'), 'keep\n');
+		// Git that will not take a branch back, and git that cannot list its worktrees
+		const unmoved: IWorktreeGit = { exec: (cwd, args, options) => args[0] === 'update-ref' ? Promise.reject(Object.assign(new Error('failed'), { stderr: 'fatal: cannot lock ref', exitCode: 128 })) : git.exec(cwd, args, options) };
+		const unlisted: IWorktreeGit = { exec: (cwd, args, options) => args[0] === 'worktree' && args[1] === 'list' ? Promise.reject(new Error('failed')) : git.exec(cwd, args, options) };
+
+		const failed = await createWorktreeAt(git, main, taken, 'child', parent);
+		const moved = await createWorktreeAt(unmoved, main, taken, 'moved', parent);
+		const unknown = await createWorktreeAt(unlisted, main, taken, 'unknown', parent);
+		const branches = run(main, 'branch', '--list', '--format=%(refname:short)', 'child', 'moved', 'unknown').split('\n').filter(Boolean);
+
+		assert.deepStrictEqual({
+			kept: [failed, moved, unknown].map(result => result.kind === 'error' ? result.branchKept : result.kind),
+			branches,
+		}, {
+			kept: [undefined, 'moved', 'unknown'],
+			branches: ['moved', 'unknown'],
+		});
 	});
 
 	test('a create that fails leaves alone a branch that was there before it', async () => {
@@ -384,6 +436,77 @@ suite('worktreeAt', () => {
 			result: 'error',
 			folder: true,
 			listed: true,
+		});
+	});
+
+	test('a locked worktree - which git deletes not even by force - is said at the check, before anything is closed or moved for it, with why it was locked; its folder gone with its disk too (AGENT-ORCHESTRATION.md, O5; OR-11)', async () => {
+		const external = path.join(dir, 'worktrees', 'external');
+		const locked = path.join(dir, 'worktrees', 'locked');
+		const free = path.join(dir, 'worktrees', 'free');
+		await createWorktreeAt(git, main, external, 'external');
+		await createWorktreeAt(git, main, locked, 'locked');
+		await createWorktreeAt(git, main, free, 'free');
+		run(main, 'worktree', 'lock', '--reason', 'on an external disk', external);
+		run(main, 'worktree', 'lock', locked);
+		// Its disk taken away: the folder is gone, the lock is not
+		rmSync(external, { recursive: true, force: true });
+
+		const checks = await Promise.all([external, locked, free].map(worktree => deleteWorktreeAt(git, main, worktree, 'check')));
+		const forced = await deleteWorktreeAt(git, main, locked, 'force');
+
+		assert.deepStrictEqual({ checks, forced: forced.kind, kept: existsSync(path.join(locked, 'tracked.txt')) }, {
+			checks: [
+				{ kind: 'error', code: 'WorktreeLocked', message: 'on an external disk' },
+				{ kind: 'error', code: 'WorktreeLocked', message: '' },
+				{ kind: 'checked', files: [], submodules: false },
+			],
+			forced: 'error',
+			kept: true,
+		});
+	});
+
+	test('a deletion git let go of that could not delete all that was left says it went part way - no worktree is left, but what a deletion left; one git refused, nothing deleted, does not (OR-11)', async function () {
+		// A folder whose files may not be deleted: Windows lets its owner delete them all the same, and root deletes them
+		// whatever the folder's permissions say
+		if (process.platform === 'win32' || process.getuid?.() === 0) {
+			this.skip();
+		}
+		const stuck = path.join(dir, 'worktrees', 'stuck');
+		const refused = path.join(dir, 'worktrees', 'refused');
+		await createWorktreeAt(git, main, stuck, 'stuck');
+		await createWorktreeAt(git, main, refused, 'refused');
+		const keeping = path.join(stuck, 'keeping');
+		// Git deletes the files and its record, and fails on the folder a shell still has open; what is left in it then cannot be deleted
+		const letGo: IWorktreeGit = {
+			exec: async (cwd, args, options) => {
+				const answer = await git.exec(cwd, args, options);
+				if (args[0] === 'worktree' && args[1] === 'remove') {
+					write(path.join(keeping, 'left.txt'), 'left\n');
+					chmodSync(keeping, 0o500);
+					throw Object.assign(new Error('failed'), { stderr: `error: failed to delete '${stuck}': Permission denied` });
+				}
+				return answer;
+			}
+		};
+		const refusing: IWorktreeGit = {
+			exec: (cwd, args, options) => args[0] === 'worktree' && args[1] === 'remove'
+				? Promise.reject(Object.assign(new Error('failed'), { stderr: 'fatal: cannot remove a locked working tree', exitCode: 128 }))
+				: git.exec(cwd, args, options)
+		};
+
+		const results: { readonly partial: boolean | undefined; readonly folder: boolean }[] = [];
+		try {
+			for (const [withGit, worktree] of [[letGo, stuck], [refusing, refused]] as const) {
+				const result = await deleteWorktreeAt(withGit, main, worktree, 'remove');
+				results.push({ partial: result.kind === 'error' ? result.partial : undefined, folder: existsSync(worktree) });
+			}
+		} finally {
+			chmodSync(keeping, 0o700);
+		}
+
+		assert.deepStrictEqual({ results, listed: run(main, 'worktree', 'list').split('\n').length }, {
+			results: [{ partial: true, folder: true }, { partial: undefined, folder: true }],
+			listed: 2,
 		});
 	});
 

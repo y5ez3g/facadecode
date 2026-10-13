@@ -26,14 +26,18 @@ export interface IWorktreeGit {
 
 type GitErrorCode = typeof GitErrorCodes[keyof typeof GitErrorCodes];
 
-/** Failures git has no code for. The workbench says each in its own words. */
+/**
+ * Failures git has no code for. The workbench says each in its own words. `WorktreeLocked`'s message is why
+ * the worktree was locked, empty where no reason was given.
+ */
 type WorktreeAtErrorCode =
 	| 'InvalidArgument'
 	| 'InheritedGitEnvironment'
 	| 'UnreadableGitDirectory'
 	| 'InitialBranch'
 	| 'UnbornBranch'
-	| 'NoIdentity';
+	| 'NoIdentity'
+	| 'WorktreeLocked';
 
 /** A failure, in git's words, with a code when one is known. */
 interface IWorktreeAtError {
@@ -45,10 +49,11 @@ interface IWorktreeAtError {
 /**
  * `created`: what `.worktreeinclude` named that could not be copied, and git's words when its
  * post-checkout hook failed - which fails the command, though the worktree was made and git keeps it.
+ * A failure says `branchKept` where the branch `-b` made is left, which could not be taken back.
  */
 export type CreateWorktreeAtResult =
 	| { readonly kind: 'created'; readonly copyFailures: readonly string[]; readonly hookFailure: string | undefined }
-	| IWorktreeAtError;
+	| IWorktreeAtError & { readonly branchKept?: string };
 
 /** `inspect` reports whether a worktree can be made from a folder; `initialize` makes it so. */
 export type WorktreeBaseMode = 'inspect' | 'initialize';
@@ -76,12 +81,13 @@ export type DeleteWorktreeMode = 'check' | 'remove' | 'force' | 'leftover';
 /**
  * `checked` is what `check` returns: the files whose changes removing the worktree would lose, and whether it
  * has submodules checked out - which git removes only by force, with their git directories and any
- * commits in them that were not pushed.
+ * commits in them that were not pushed. A failure says `partial` where the deletion went part way: git let go
+ * of the worktree, and what is left of its folder is no worktree but what a deletion left, which `leftover` finishes.
  */
 export type DeleteWorktreeAtResult =
 	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean }
 	| { readonly kind: 'removed' }
-	| IWorktreeAtError;
+	| IWorktreeAtError & { readonly partial?: boolean };
 
 /**
  * These commands return failures rather than throw: the command centre turns a thrown error into
@@ -392,15 +398,18 @@ async function hasCommits(git: IWorktreeGit, root: string): Promise<boolean> {
 }
 
 /**
- * `git worktree add -b <branch> <worktreePath> <startPoint>` in `root`, then `.worktreeinclude`.
- * The start point is `HEAD` unless a commit is given, as Facade's agents do for a child's worktree,
- * which starts at its parent worktree's HEAD (WORKTREE.md, WT-5.11).
+ * `git worktree add -b <branch> <worktreePath> <startPoint>` in `root`, then `.worktreeinclude` - and
+ * what `included` names: the paths in `root` that VS Code's `git.worktreeIncludeFiles` names, as the
+ * repository finds them for its own Create Worktree, so that a worktree gets the same files whichever
+ * way it is made (AGENT-ORCHESTRATION.md, O4). The start point is `HEAD` unless a commit is given, as
+ * Facade's agents do for a child's worktree, which starts at its parent worktree's HEAD (WORKTREE.md,
+ * WT-5.11).
  *
  * With `GIT_LFS_SKIP_SMUDGE=1`, so an LFS object that is missing does not fail the whole checkout
  * (WORKTREE.md section 2), then `git lfs checkout` to put back the objects that are here - it
  * downloads nothing.
  */
-export async function createWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, branch: string, startPoint?: string): Promise<CreateWorktreeAtResult> {
+export async function createWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, branch: string, startPoint?: string, included?: () => Promise<Iterable<string>>): Promise<CreateWorktreeAtResult> {
 	const refused = validateArguments([root, worktreePath]);
 	if (refused) {
 		return refused;
@@ -420,6 +429,15 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 	} catch (err) {
 		return toError(err);
 	}
+	// The commit the branch is made at, which it points at still unless something moved it since
+	let start = startPoint;
+	if (start === undefined) {
+		try {
+			start = (await git.exec(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).stdout.trim() || undefined;
+		} catch {
+			// No commit at HEAD: git makes no branch at it either.
+		}
+	}
 
 	let hookFailure: string | undefined;
 	try {
@@ -427,17 +445,26 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 	} catch (err) {
 		// A failed checkout takes the half-made worktree away with it; only the post-checkout hook runs
 		// after git has kept it. Listed now, it was made, and the hook's failure is said as a warning.
-		if (await isListed(git, root, worktreePath) === true) {
+		const listed = await isListed(git, root, worktreePath);
+		if (listed === true) {
 			hookFailure = toError(err).message;
 		} else {
+			// The branch the failed checkout left is taken back where it is as `-b` made it, and no worktree has it -
+			// by `update-ref` with that commit: `branch -d` refuses one whose commits no other branch has, as a child's
+			// at its parent worktree's HEAD. Moved since, or with git unable to say, it is kept, and said (O4; OR-07).
+			let branchKept: string | undefined;
 			try {
 				if (!existed && await hasBranch(git, root, branch)) {
-					await git.exec(root, ['branch', '-d', '--', branch]);
+					branchKept = branch;
+					if (listed === false && start !== undefined) {
+						await git.exec(root, ['update-ref', '-d', `refs/heads/${branch}`, start]);
+						branchKept = undefined;
+					}
 				}
 			} catch {
-				// Checked out after all, not merged, or git cannot say: kept, and the failure above is the one reported.
+				// Not taken back: kept, and the failure above is the one reported, with it.
 			}
-			return toError(err);
+			return { ...toError(err), ...(branchKept !== undefined ? { branchKept } : {}) };
 		}
 	}
 
@@ -453,6 +480,14 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 	} catch (err) {
 		// The worktree is usable; a failed copy is reported, not fatal.
 		copyFailures = [`.worktreeinclude: ${toError(err).message}`];
+	}
+
+	if (included) {
+		try {
+			copyFailures = [...copyFailures, ...await copyIntoWorktree(root, worktreePath, inRepository(root, await included()))];
+		} catch (err) {
+			copyFailures = [...copyFailures, `git.worktreeIncludeFiles: ${toError(err).message}`];
+		}
 	}
 
 	return { kind: 'created', copyFailures, hookFailure };
@@ -489,11 +524,17 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 			await fs.rm(await fs.realpath(worktreePath), REMOVE_OPTIONS);
 			return { kind: 'removed' };
 		} catch (err) {
-			return toError(err);
+			return { ...toError(err), partial: true };
 		}
 	}
 
 	if (mode === 'check') {
+		// Git deletes no locked worktree, by force or not: said here, before anything is closed or moved for it -
+		// one whose folder went with the disk it is on too, as a lock is often for (OR-11)
+		const listing = await listedAs(git, root, worktreePath);
+		if (listing?.listed && listing.locked !== undefined) {
+			return { kind: 'error', code: 'WorktreeLocked', message: listing.locked };
+		}
 		if (!present) {
 			return { kind: 'checked', files: [], submodules: false };
 		}
@@ -550,7 +591,8 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 		try {
 			await fs.rm(directory, REMOVE_OPTIONS);
 		} catch (err) {
-			return toError(err);
+			// Git let go of it: what is left is no worktree, but what a deletion left
+			return { ...toError(err), partial: true };
 		}
 	}
 
@@ -572,6 +614,14 @@ async function holdsGit(folder: string): Promise<boolean> {
  * whether a directory may be deleted, so "not sure" is neither answer.
  */
 async function isListed(git: IWorktreeGit, root: string, worktreePath: string): Promise<boolean | undefined> {
+	return (await listedAs(git, root, worktreePath))?.listed;
+}
+
+/**
+ * Whether `git worktree list --porcelain` names `worktreePath`, and where it does, why it is locked where it is - empty
+ * for no reason given; undefined where git cannot say.
+ */
+async function listedAs(git: IWorktreeGit, root: string, worktreePath: string): Promise<{ readonly listed: false } | { readonly listed: true; readonly locked?: string } | undefined> {
 	let stdout: string;
 	try {
 		({ stdout } = await git.exec(root, ['worktree', 'list', '--porcelain']));
@@ -579,9 +629,22 @@ async function isListed(git: IWorktreeGit, root: string, worktreePath: string): 
 		return undefined;
 	}
 
-	const listed = stdout.split(/\r?\n/).filter(line => line.startsWith('worktree ')).map(line => line.slice('worktree '.length));
-	const [wanted, ...candidates] = await Promise.all([worktreePath, ...listed].map(comparablePath));
-	return candidates.includes(wanted);
+	// A worktree's lines follow its `worktree <path>`: `locked`, or `locked <reason>`, among them
+	const listed: { path: string; locked?: string }[] = [];
+	for (const line of stdout.split(/\r?\n/)) {
+		if (line.startsWith('worktree ')) {
+			listed.push({ path: line.slice('worktree '.length) });
+		} else if (listed.length && (line === 'locked' || line.startsWith('locked '))) {
+			listed[listed.length - 1].locked = line.slice('locked '.length);
+		}
+	}
+	const [wanted, ...candidates] = await Promise.all([worktreePath, ...listed.map(each => each.path)].map(comparablePath));
+	const index = candidates.indexOf(wanted);
+	if (index === -1) {
+		return { listed: false };
+	}
+	const found = listed[index];
+	return { listed: true, ...(found.locked !== undefined ? { locked: found.locked } : {}) };
 }
 
 /**
@@ -729,9 +792,8 @@ async function isWorktreeThere(worktreePath: string): Promise<boolean> {
  * section 8). Returns what failed to copy.
  *
  * The candidates are `git ls-files --others --ignored --exclude-standard --directory`, where a wholly
- * ignored directory is one entry, so a pattern does not reach into `node_modules`. Nothing is copied
- * over a file that is there already, and nothing through a link - nor into a folder that is no worktree
- * any more, deleted while git made it: copying would make it again, holding the copies (N-66).
+ * ignored directory is one entry, so a pattern does not reach into `node_modules`; copied as
+ * `copyIntoWorktree` copies.
  */
 async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath: string): Promise<readonly string[]> {
 	let content: string;
@@ -749,26 +811,51 @@ async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath
 	const { stdout } = await git.exec(root, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']);
 	const candidates = stdout.split('\0').filter(entry => entry.length > 0);
 
-	const failures: string[] = [];
+	const included: string[] = [];
 	for (const candidate of candidates) {
 		const isDirectory = candidate.endsWith('/');
 		const relative = isDirectory ? candidate.slice(0, -1) : candidate;
-		if (!isWorktreeIncluded(rules, relative, isDirectory)) {
-			continue;
+		if (isWorktreeIncluded(rules, relative, isDirectory)) {
+			included.push(relative);
 		}
+	}
 
+	return copyIntoWorktree(root, worktreePath, included);
+}
+
+/** `paths`, absolute, relative to `root` with `/`: those in it alone. */
+function inRepository(root: string, paths: Iterable<string>): string[] {
+	const relatives: string[] = [];
+	for (const each of paths) {
+		const relative = path.relative(root, each);
+		if (relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+			relatives.push(relative.split(path.sep).join('/'));
+		}
+	}
+	return relatives;
+}
+
+/**
+ * Copies `files` - each relative to `root` with `/`, a file or a folder with what is in it - into the new worktree:
+ * over nothing that is there already, and nothing through a link - nor into a folder that is no worktree any more,
+ * deleted while git made it: copying would make it again, holding the copies (N-66). Returns what failed to copy.
+ */
+async function copyIntoWorktree(root: string, worktreePath: string, files: readonly string[]): Promise<readonly string[]> {
+	const failures: string[] = [];
+	for (const relative of files) {
 		const source = path.join(root, relative);
 		const target = path.join(worktreePath, relative);
 		if (!await isWorktreeThere(worktreePath)) {
 			break;
 		}
 		try {
-			if ((await fs.lstat(source)).isSymbolicLink()) {
+			const stat = await fs.lstat(source);
+			if (stat.isSymbolicLink()) {
 				continue;
 			}
 
 			await fs.mkdir(path.dirname(target), { recursive: true });
-			if (isDirectory) {
+			if (stat.isDirectory()) {
 				await fs.cp(source, target, { recursive: true, force: false, errorOnExist: false, filter: async from => !(await fs.lstat(from)).isSymbolicLink() });
 			} else {
 				await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
