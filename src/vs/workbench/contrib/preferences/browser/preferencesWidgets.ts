@@ -371,7 +371,10 @@ export class SettingsTargetsWidget extends Widget {
 		this.workspaceSettings.enabled = this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY;
 		this.folderSettings.action.enabled = this.contextService.getWorkbenchState() === WorkbenchState.WORKSPACE && this.contextService.getWorkspace().folders.length > 0;
 
-		this.workspaceSettings.tooltip = localize('workspaceSettings', "Workspace");
+		// Facade Code: the window shows one folder at a time, and these are every folder's (WORKSPACE.md W7)
+		this.workspaceSettings.tooltip = this.contextService.getWorkbenchState() === WorkbenchState.WORKSPACE
+			? localize('workspaceSettingsAllFolders', "Workspace: Applies to all folders in this window.")
+			: localize('workspaceSettings', "Workspace");
 	}
 }
 

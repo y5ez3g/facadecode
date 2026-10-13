@@ -29,6 +29,7 @@ import { GroupsOrder, IEditorGroup, IEditorGroupsService } from '../../../servic
 import { EditorGroupColumn } from '../../../services/editor/common/editorGroupColumn.js';
 import { AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
+import { refreshTerminalSoleFolders, setTerminalSoleFolder } from '../common/terminalSoleFolder.js';
 
 /**
  * Controls whether a terminal in the editor area belongs to the folder it was opened in. Off, it belongs
@@ -386,6 +387,16 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			if (e.affectsConfiguration(FOLLOW_FOLDER) && this._isEnabled()) {
 				this._putBack();
 			}
+			// Either way the editor area's terminals became folders' own or the window's: named or not, below
+			if (e.affectsConfiguration(FOLLOW_FOLDER)) {
+				refreshTerminalSoleFolders();
+			}
+		}));
+
+		// A folder's editor-area terminal is only seen on that folder, so its label leaves the folder out (WORKSPACE.md W7)
+		this._register(setTerminalSoleFolder(terminal => {
+			const instance = this._terminalService.instances.find(candidate => candidate === terminal);
+			return instance?.target === TerminalLocation.Editor ? this.folderOf(instance) : undefined;
 		}));
 
 		// Kept while the window is closed: a reload, or a restart of the app, brings the terminals back

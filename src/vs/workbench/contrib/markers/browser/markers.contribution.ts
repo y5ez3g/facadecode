@@ -22,8 +22,9 @@ import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js'
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { Disposable, IDisposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment, IStatusbarEntry } from '../../../services/statusbar/browser/statusbar.js';
-import { IMarkerService, MarkerSeverity, MarkerStatistics } from '../../../../platform/markers/common/markers.js';
-import { FolderScope, IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
+import { IMarkerService, MarkerStatistics } from '../../../../platform/markers/common/markers.js';
+import { IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
+import { scopedMarkerStatistics } from './markersScope.js';
 import { ViewContainer, IViewContainersRegistry, Extensions as ViewContainerExtensions, ViewContainerLocation, IViewsRegistry, WindowEnablement } from '../../../common/views.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { getVisbileViewContextKey, FocusedViewContext } from '../../../common/contextkeys.js';
@@ -569,36 +570,6 @@ registerAction2(class extends Action2 {
 		}
 	}
 });
-
-/**
- * How many problems the window is showing.
- *
- * ⚠️ Counted rather than taken from `getStatistics()`, which the marker service maintains over every
- * marker it holds. A window on one folder has to answer about that folder, and the service has no
- * idea there is such a thing - which is right, because every extension reads it too. Widened, the
- * maintained answer is exactly the right one, so it is used and nothing is counted.
- */
-function scopedMarkerStatistics(markerService: IMarkerService, folderScopeService: IFolderScopeService): MarkerStatistics {
-	if (folderScopeService.scope === FolderScope.Workspace) {
-		return markerService.getStatistics();
-	}
-
-	const statistics: MarkerStatistics = { errors: 0, warnings: 0, infos: 0, unknowns: 0 };
-	for (const marker of markerService.read()) {
-		if (!folderScopeService.covers(marker.resource)) {
-			continue;
-		}
-
-		switch (marker.severity) {
-			case MarkerSeverity.Error: statistics.errors++; break;
-			case MarkerSeverity.Warning: statistics.warnings++; break;
-			case MarkerSeverity.Info: statistics.infos++; break;
-			default: statistics.unknowns++; break;
-		}
-	}
-
-	return statistics;
-}
 
 class MarkersStatusBarContributions extends Disposable implements IWorkbenchContribution {
 
