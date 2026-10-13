@@ -5,6 +5,7 @@
 
 import './media/workspacebardialog.css';
 import './media/workspacebartoggle.css';
+import { coalesce, distinct } from '../../../../base/common/arrays.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -109,7 +110,8 @@ export const DELETE_WORKTREE_COMMAND = 'facade.workspaceBar.deleteWorktree';
 export const WORKSPACE_BAR_CATEGORY = localize2('workspaceBar.category', "Workspace");
 
 /**
- * Whether taking a folder off the list asks first.
+ * Whether taking a folder off the list asks first where that stops something - agents, or processes in its
+ * terminals (D30).
  *
  * ⚠️ A setting and nothing else. There is no "do not ask me again" in the dialog: the question is
  * one line and it is asked about something that cannot be undone from inside the dialog, so the box
@@ -137,7 +139,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		[CONFIRM_REMOVE_FOLDER]: {
 			type: 'boolean',
-			description: localize('workspaceBar.confirmRemoveFolder', "Controls whether the workspace asks for confirmation before taking a folder off the list. The folder itself is never deleted."),
+			description: localize('workspaceBar.confirmRemoveFolder', "Controls whether the workspace asks for confirmation before taking a folder off the list when that stops agents or terminates processes running in its terminals. The folder itself is never deleted."),
 			default: true
 		},
 		[SHOW_WORKTREES]: {
@@ -367,9 +369,10 @@ class RemoveFolderAction extends Action2 {
 		});
 	}
 
-	/** `uri` comes from the context menu. From the command palette there is none, and the row the
-	 * list has focus on is what was meant. */
-	override async run(accessor: ServicesAccessor, uri?: URI): Promise<void> {
+	/** `uri` comes from the context menu - or several, the Explorer's selection, asked about once and taken out in
+	 * one edit, as VS Code's own Remove Folder from Workspace takes them (VC-02). From the command palette there is
+	 * none, and the row the list has focus on is what was meant. Asked only where it stops something (D30). */
+	override async run(accessor: ServicesAccessor, uri?: URI | readonly URI[]): Promise<void> {
 		// ⚠️ All of them before the first `await`: a `ServicesAccessor` is only good for the
 		// synchronous part of a run, and this one has a dialog in the middle of it.
 		const workspaceBarService = accessor.get(IWorkspaceBarService);
@@ -379,17 +382,23 @@ class RemoveFolderAction extends Action2 {
 		const configurationService = accessor.get(IConfigurationService);
 		const uriIdentityService = accessor.get(IUriIdentityService);
 
-		const folder = uri ?? workspaceBarService.folderForCommand();
-		if (!folder) {
+		const isEqual = (a: URI, b: URI) => uriIdentityService.extUri.isEqual(a, b);
+		const key = (folder: URI) => uriIdentityService.extUri.getComparisonKey(folder);
+		const chosen = distinct(URI.isUri(uri) ? [uri] : uri ?? coalesce([workspaceBarService.folderForCommand()]), key);
+		if (chosen.length === 0) {
 			return;
 		}
 
-		const isEqual = (a: URI, b: URI) => uriIdentityService.extUri.isEqual(a, b);
-		const repository = workspaceBarService.repositoryFor(folder);
-		const leaving = foldersToRemove(folder, repository, isEqual);
-		const agents = agentsStoppedBy(repository, leaving, agentsService, isEqual);
+		// Each row with what it takes with it, once: a worktree that goes with its repository's row is not taken twice
+		const repositories = chosen.map(folder => workspaceBarService.repositoryFor(folder));
+		const leaving = distinct(chosen.flatMap((folder, index) => foldersToRemove(folder, repositories[index], isEqual)), key);
+		const { agents, processes } = whatRemovingStops(repositories, leaving, agentsService, isEqual);
+		const associated = leaving.filter(each => !chosen.some(folder => isEqual(folder, each))).length;
 
-		if (configurationService.getValue<boolean>(CONFIRM_REMOVE_FOLDER) === false) {
+		// Asked only where it stops something - an agent, or a process VS Code would ask about before terminating it - as
+		// VS Code asks before closing a terminal that runs one (D30). Else it is a bookmark leaving a list: the files stay on
+		// disk, and an editor with unsaved changes stays open, as the next folder's editors come up.
+		if (configurationService.getValue<boolean>(CONFIRM_REMOVE_FOLDER) === false || (agents === 0 && !processes)) {
 			return workspaceBarService.remove(leaving);
 		}
 
@@ -400,28 +409,40 @@ class RemoveFolderAction extends Action2 {
 		// renderer to split it mid-word. The sentence is escaped because a translator writes it; the
 		// path is not, because it goes inside a code span - see `asCodeSpan`.
 		const detail = new MarkdownString();
-		detail.appendMarkdown(`${asCodeSpan(labelService.getUriLabel(folder))}\n\n`);
-		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from the workspace, and the editors kept open for it. Files on disk will not be deleted.")));
-		if (leaving.length > 1) {
+		if (chosen.length === 1) {
+			detail.appendMarkdown(`${asCodeSpan(labelService.getUriLabel(chosen[0]))}\n\n`);
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from the workspace, and the editors kept open for it. Files on disk will not be deleted.")));
+		} else {
+			detail.appendMarkdown(`${chosen.map(folder => `- ${asCodeSpan(labelService.getUriLabel(folder))}`).join('\n')}\n\n`);
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFoldersDetail', "Removes these folders from the workspace, and the editors kept open for them. Files on disk will not be deleted.")));
+		}
+		if (associated > 0) {
 			detail.appendMarkdown('\n\n');
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(leaving.length === 2
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(associated === 1
 				? localize('workspaceBar.removeFolderWorktree', "The associated worktree will also be removed from the workspace, but remains on disk.")
-				: localize('workspaceBar.removeFolderWorktrees', "The {0} associated worktrees will also be removed from the workspace, but remain on disk.", leaving.length - 1)));
+				: localize('workspaceBar.removeFolderWorktrees', "The {0} associated worktrees will also be removed from the workspace, but remain on disk.", associated)));
 		}
 		if (agents > 0) {
 			detail.appendMarkdown('\n\n');
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(agents === 1
-				? localize('workspaceBar.removeFolderAgent', "An agent is working in it, and will be stopped.")
-				: localize('workspaceBar.removeFolderAgents', "{0} agents are working in it, and will be stopped.", agents)));
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(chosen.length === 1
+				? (agents === 1
+					? localize('workspaceBar.removeFolderAgent', "An agent is working in it, and will be stopped.")
+					: localize('workspaceBar.removeFolderAgents', "{0} agents are working in it, and will be stopped.", agents))
+				: (agents === 1
+					? localize('workspaceBar.removeFoldersAgent', "An agent is working in them, and will be stopped.")
+					: localize('workspaceBar.removeFoldersAgents', "{0} agents are working in them, and will be stopped.", agents))));
+		}
+		if (processes) {
+			detail.appendMarkdown('\n\n');
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(chosen.length === 1
+				? localize('workspaceBar.removeFolderProcesses', "Processes are running in its terminals, and will be terminated.")
+				: localize('workspaceBar.removeFoldersProcesses', "Processes are running in their terminals, and will be terminated.")));
 		}
 
 		const { confirmed } = await dialogService.confirm({
-			// ⚠️ No severity glyph while nothing here is destroyed - the folder is left where it is - as a
-			// warning triangle over a reversible act is a claim the dialog cannot back up. `none` is the
-			// type for it, and it announces the same as `question` does, which is nothing. The agents it
-			// stops are not given back: then it is a warning.
-			type: agents > 0 ? 'warning' : 'none',
-			message: localize('workspaceBar.removeFolderMessage', "Remove Folder?"),
+			// A warning: asked only where it stops something - agents, processes - that nothing gives back
+			type: 'warning',
+			message: chosen.length === 1 ? localize('workspaceBar.removeFolderMessage', "Remove Folder?") : localize('workspaceBar.removeFoldersMessage', "Remove {0} Folders?", chosen.length),
 			detail,
 			// Just the verb: the question above it already named the thing, and a button that repeats
 			// its own dialog is a button asking to be read twice.
@@ -444,16 +465,27 @@ class RemoveFolderAction extends Action2 {
 }
 
 /**
- * How many agents `Remove Folder` stops: those working in the folders it takes out of the workspace
- * (`foldersToRemove`) and, when they are the last of `repository`'s, those under the rows that go with
- * it - its worktrees' that never joined the workspace, and its checkout's when that did not either.
+ * What `Remove Folder` stops, in the folders it takes out of the workspace (`foldersToRemove`) and, for each of
+ * `repositories` whose last folders they are, in the rows that go with it - its worktrees' that never joined the
+ * workspace, and its checkout's when that did not either: how many agents, each counted once, and whether it
+ * terminates a process in their terminals that VS Code would ask about before terminating it (D30).
  */
-export function agentsStoppedBy(repository: IWorkspaceBarRepository | undefined, leaving: readonly URI[], agentsService: Pick<IWorkspaceBarAgentsService, 'agentsIn'>, isEqual: (a: URI, b: URI) => boolean): number {
-	const repositoryLeaves = !!repository && repository.members.every(member => leaving.some(uri => isEqual(uri, member.uri)));
-	const rows = repository && repositoryLeaves
-		? [...repository.worktrees.filter(worktree => !worktree.folder).map(worktree => worktree.uri), ...(repository.folder ? [] : [repository.main])]
-		: [];
-	return [...leaving, ...rows].reduce((count, uri) => count + agentsService.agentsIn(uri).length, 0);
+export function whatRemovingStops(repositories: readonly (IWorkspaceBarRepository | undefined)[], leaving: readonly URI[], agentsService: Pick<IWorkspaceBarAgentsService, 'agentsIn' | 'terminatesProcessesIn'>, isEqual: (a: URI, b: URI) => boolean): { readonly agents: number; readonly processes: boolean } {
+	const stopped: URI[] = [...leaving];
+	for (const repository of repositories) {
+		if (!repository || !repository.members.every(member => leaving.some(uri => isEqual(uri, member.uri)))) {
+			continue;
+		}
+		for (const row of [...repository.worktrees.filter(worktree => !worktree.folder).map(worktree => worktree.uri), ...(repository.folder ? [] : [repository.main])]) {
+			if (!stopped.some(uri => isEqual(uri, row))) {
+				stopped.push(row);
+			}
+		}
+	}
+	return {
+		agents: stopped.reduce((count, uri) => count + agentsService.agentsIn(uri).length, 0),
+		processes: stopped.some(uri => agentsService.terminatesProcessesIn(uri))
+	};
 }
 
 /**

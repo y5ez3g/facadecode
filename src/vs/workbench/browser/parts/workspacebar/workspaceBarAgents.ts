@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -19,10 +19,12 @@ export interface IFolderAgents {
 }
 
 /**
- * What runs in each folder of the bar, so that its row can show it (WORKTREE.md WT-1.15).
+ * What runs in each folder of the bar, so that its row can show it (WORKTREE.md WT-1.15) - and, as a folder
+ * is about to be removed, whether that terminates a process in its terminals (D30).
  *
- * ⚠️ Told, not asked. The bar lives in `vs/workbench/browser`, below the terminals, and cannot reach
- * them; the agent launchers reach both, so they say what runs where and the bar draws it.
+ * ⚠️ The bar lives in `vs/workbench/browser`, below the terminals, and cannot reach them; the agent
+ * launchers reach both. Its agents are told: the launchers say what runs where, and the bar draws it.
+ * Its processes are asked, through the check the launchers register ({@link registerProcessCheck}).
  */
 export interface IWorkspaceBarAgentsService {
 	readonly _serviceBrand: undefined;
@@ -35,6 +37,20 @@ export interface IWorkspaceBarAgentsService {
 
 	/** Says what runs in every folder, replacing what was said before: a folder left out runs none. */
 	set(agents: readonly IFolderAgents[]): void;
+
+	/**
+	 * Whether taking `folder` out of the workspace terminates a process in one of its terminals that is no agent's, which
+	 * VS Code would ask about before terminating it - "Do you want to terminate running processes?" - as the terminals
+	 * answer: `false` until they have said how to know.
+	 */
+	terminatesProcessesIn(folder: URI): boolean;
+
+	/**
+	 * Says how to know {@link terminatesProcessesIn}, until the returned disposable is disposed. ⚠️ Asked, not told: a
+	 * terminal's processes come and go without anything a row draws changing, and matter only when someone is about
+	 * to remove a folder.
+	 */
+	registerProcessCheck(check: (folder: URI) => boolean): IDisposable;
 }
 
 export const IWorkspaceBarAgentsService = createDecorator<IWorkspaceBarAgentsService>('workspaceBarAgentsService');
@@ -47,6 +63,8 @@ export class WorkspaceBarAgentsService extends Disposable implements IWorkspaceB
 	readonly onDidChange = this._onDidChange.event;
 
 	private agents = new Map<string, readonly ThemeIcon[]>();
+
+	private processCheck: ((folder: URI) => boolean) | undefined;
 
 	constructor(@IUriIdentityService private readonly uriIdentityService: IUriIdentityService) {
 		super();
@@ -69,6 +87,19 @@ export class WorkspaceBarAgentsService extends Disposable implements IWorkspaceB
 			this.agents = next;
 			this._onDidChange.fire();
 		}
+	}
+
+	terminatesProcessesIn(folder: URI): boolean {
+		return this.processCheck?.(folder) ?? false;
+	}
+
+	registerProcessCheck(check: (folder: URI) => boolean): IDisposable {
+		this.processCheck = check;
+		return toDisposable(() => {
+			if (this.processCheck === check) {
+				this.processCheck = undefined;
+			}
+		});
 	}
 }
 

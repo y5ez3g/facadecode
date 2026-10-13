@@ -605,13 +605,9 @@ CommandsRegistry.registerCommand({
 			return commandService.executeCommand(RemoveRootFolderAction.ID);
 		}
 
-		// Facade Code: each as the workspace bar's Remove Folder, asked first - it stops the folder's agents (N-65)
+		// Facade Code: through the workspace bar's Remove Folder, all of them in one go (N-65; D30)
 		const commandService = accessor.get(ICommandService);
-		return (async () => {
-			for (const resource of resources) {
-				await commandService.executeCommand(REMOVE_FOLDER_ASKED_COMMAND_ID, resource);
-			}
-		})();
+		return commandService.executeCommand(REMOVE_FOLDER_ASKED_COMMAND_ID, resources);
 	}
 });
 

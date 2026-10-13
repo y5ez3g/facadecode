@@ -250,7 +250,7 @@ export class RemoveRootFolderAction extends Action2 {
 
 		const folder = await commandService.executeCommand<IWorkspaceFolder>(PICK_WORKSPACE_FOLDER_COMMAND_ID);
 		if (folder) {
-			// Facade Code: as the workspace bar's Remove Folder, asked first - it stops the folder's agents (N-65)
+			// Facade Code: through the workspace bar's Remove Folder (N-65; D30)
 			await commandService.executeCommand(REMOVE_FOLDER_ASKED_COMMAND_ID, folder.uri);
 		}
 	}

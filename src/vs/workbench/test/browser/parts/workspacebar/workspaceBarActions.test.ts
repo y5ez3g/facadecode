@@ -16,7 +16,7 @@ import { TestInstantiationService } from '../../../../../platform/instantiation/
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
-import { agentsStoppedBy, foldersToRemove } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
+import { CONFIRM_REMOVE_FOLDER, foldersToRemove, whatRemovingStops } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
@@ -58,7 +58,7 @@ suite('Workspace bar - removing a folder', () => {
 	/** The agents running in each folder, by its path: one robot for each. */
 	const agentsIn = (counts: Map<string, number>) => (uri: URI) => Array.from({ length: counts.get(uri.path) ?? 0 }, () => ThemeIcon.fromId('robot'));
 
-	test('what it stops: the agents in every folder it takes out and, with the last of a repository\'s, those under the rows that go with it', () => {
+	test('what it stops: the agents in every folder it takes out and, with the last of a repository\'s, those under the rows that go with it - and whether a process it terminates there is one VS Code would ask about (D30)', () => {
 		// `api`, whose checkout never joined the workspace - only its worktree `fix` did - and whose worktree `login` did not either
 		const fix = member('/wt/fix');
 		const api: IWorkspaceBarRepository = {
@@ -72,8 +72,12 @@ suite('Workspace bar - removing a folder', () => {
 				{ uri: URI.file('/wt/login'), branch: 'login', label: 'login', exists: true, folder: undefined },
 			]
 		};
-		const agentsService = { agentsIn: agentsIn(new Map([['/lab', 1], ['/wt/w2', 2], ['/wt/w10', 4], ['/notes', 8], ['/wt/fix', 16], ['/wt/login', 32], ['/api', 64]])) };
-		const stopped = (path: string, of: IWorkspaceBarRepository | undefined) => agentsStoppedBy(of, foldersToRemove(URI.file(path), of, isEqual), agentsService, isEqual);
+		const agentsService = {
+			agentsIn: agentsIn(new Map([['/lab', 1], ['/wt/w2', 2], ['/wt/w10', 4], ['/notes', 8], ['/wt/fix', 16], ['/wt/login', 32], ['/api', 64]])),
+			// In rows that go with a repository alone: its worktree that never joined the workspace, its checkout that never did either
+			terminatesProcessesIn: (uri: URI) => uri.path === '/wt/w10' || uri.path === '/api'
+		};
+		const stopped = (path: string, of: IWorkspaceBarRepository | undefined) => whatRemovingStops([of], foldersToRemove(URI.file(path), of, isEqual), agentsService, isEqual);
 
 		assert.deepStrictEqual({
 			'repository row': stopped('/lab', repository),
@@ -81,24 +85,29 @@ suite('Workspace bar - removing a folder', () => {
 			'a worktree, the repository staying': stopped('/wt/w2', repository),
 			'a repository\'s last folder, a worktree': stopped('/wt/fix', api),
 		}, {
-			'repository row': 7,
-			'plain folder': 8,
-			'a worktree, the repository staying': 2,
-			'a repository\'s last folder, a worktree': 112,
+			'repository row': { agents: 7, processes: true },
+			'plain folder': { agents: 8, processes: false },
+			'a worktree, the repository staying': { agents: 2, processes: false },
+			'a repository\'s last folder, a worktree': { agents: 112, processes: true },
 		});
 	});
 
-	/** What Remove Folder on the row of `target` asked, with `agents` running by folder, once confirmed: the glyph, the last paragraph, and what it took out. */
-	async function removeFolder(target: URI, agents: Map<string, number>): Promise<{ type: string | undefined; said: string; removed: string[] }> {
+	/**
+	 * What Remove Folder on the rows of `targets` - one, or several as the Explorer's selection gives them - asked, with
+	 * `agents` running by folder and a process VS Code would ask about before terminating it in each of `processes`,
+	 * once confirmed: the glyph, the question and what the dialog says - or that it asked nothing - and each edit that
+	 * took folders out of the workspace.
+	 */
+	async function removeFolder(targets: URI | URI[], agents: Map<string, number>, processes: readonly string[] = [], settings: Record<string, unknown> = {}): Promise<{ asked: string; message?: string; detail?: string[]; removed: string[][] }> {
 		let asked: IConfirmation | undefined;
-		const removed: string[] = [];
+		const removed: string[][] = [];
 		const instantiationService = store.add(new TestInstantiationService());
 		instantiationService.stub(IWorkspaceBarService, {
 			folderForCommand: () => undefined,
 			repositoryFor: uri => repository.members.some(folder => isEqual(folder.uri, uri)) || isEqual(repository.main, uri) ? repository : undefined,
-			remove: async uris => { removed.push(...uris.map(uri => uri.path)); }
+			remove: async uris => { removed.push(uris.map(uri => uri.path)); }
 		});
-		instantiationService.stub(IWorkspaceBarAgentsService, { agentsIn: agentsIn(agents) });
+		instantiationService.stub(IWorkspaceBarAgentsService, { agentsIn: agentsIn(agents), terminatesProcessesIn: uri => processes.includes(uri.path) });
 		instantiationService.stub(IDialogService, {
 			confirm: async confirmation => {
 				asked = confirmation;
@@ -106,23 +115,49 @@ suite('Workspace bar - removing a folder', () => {
 			}
 		});
 		instantiationService.stub(ILabelService, { getUriLabel: uri => uri.path });
-		instantiationService.stub(IConfigurationService, new TestConfigurationService());
+		instantiationService.stub(IConfigurationService, new TestConfigurationService(settings));
 		instantiationService.stub(IUriIdentityService, { extUri });
 
-		await instantiationService.invokeFunction(accessor => CommandsRegistry.getCommand('facade.workspaceBar.removeFolder')!.handler(accessor, target));
-		const detail = typeof asked?.detail === 'string' ? asked.detail : asked?.detail?.value ?? '';
-		return { type: asked?.type === undefined ? undefined : String(asked.type), said: detail.split('\n\n').pop()!, removed };
+		await instantiationService.invokeFunction(accessor => CommandsRegistry.getCommand('facade.workspaceBar.removeFolder')!.handler(accessor, targets));
+		if (!asked) {
+			return { asked: 'nothing', removed };
+		}
+		const detail = typeof asked.detail === 'string' ? asked.detail : asked.detail?.value ?? '';
+		return { asked: String(asked.type), message: asked.message, detail: detail.split('\n\n'), removed };
 	}
 
-	test('it says how many agents it stops, and warns; a folder that runs none is removed as before', async () => {
+	test('several folders at once - the Explorer\'s selection - are asked about once, each named, and taken out of the workspace in one edit: what their rows take with them, and the agents they stop, counted once (VC-02)', async () => {
+		// The repository's checkout, one of its worktrees - which goes with it already - and another folder
+		assert.deepStrictEqual(await removeFolder([URI.file('/lab'), URI.file('/wt/w2'), URI.file('/notes')], new Map([['/lab', 1], ['/wt/w10', 2], ['/notes', 4]])), {
+			asked: 'warning',
+			message: 'Remove 3 Folders?',
+			detail: [
+				'- `/lab`\n- `/wt/w2`\n- `/notes`',
+				'Removes these folders from the workspace, and the editors kept open for them. Files on disk will not be deleted.',
+				'The associated worktree will also be removed from the workspace, but remains on disk.',
+				'7 agents are working in them, and will be stopped.',
+			],
+			removed: [['/lab', '/link-lab', '/wt/w2', '/notes']],
+		});
+	});
+
+	test('it asks only where it stops something - an agent, or a process VS Code would ask about before terminating it - says which, and warns; a folder that runs nothing is removed unasked, and nothing is asked with asking turned off (D30)', async () => {
+		// What the dialog says first: the folder, and what removing it does
+		const removes = (folder: string) => [`\`${folder}\``, 'Removes this folder from the workspace, and the editors kept open for it. Files on disk will not be deleted.'];
 		assert.deepStrictEqual({
 			'repository row': await removeFolder(URI.file('/lab'), new Map([['/lab', 1], ['/wt/w10', 2]])),
 			'one agent': await removeFolder(URI.file('/notes'), new Map([['/notes', 1]])),
-			'none': await removeFolder(URI.file('/notes'), new Map([['/lab', 1]])),
+			'a process': await removeFolder(URI.file('/notes'), new Map(), ['/notes']),
+			'an agent and a process': await removeFolder(URI.file('/notes'), new Map([['/notes', 1]]), ['/notes']),
+			'nothing running there': await removeFolder(URI.file('/notes'), new Map([['/lab', 1]]), ['/lab']),
+			'asking turned off': await removeFolder(URI.file('/notes'), new Map([['/notes', 1]]), ['/notes'], { [CONFIRM_REMOVE_FOLDER]: false }),
 		}, {
-			'repository row': { type: 'warning', said: '3 agents are working in it, and will be stopped.', removed: ['/lab', '/link-lab', '/wt/w2'] },
-			'one agent': { type: 'warning', said: 'An agent is working in it, and will be stopped.', removed: ['/notes'] },
-			'none': { type: 'none', said: 'Removes this folder from the workspace, and the editors kept open for it. Files on disk will not be deleted.', removed: ['/notes'] },
+			'repository row': { asked: 'warning', message: 'Remove Folder?', detail: [...removes('/lab'), 'The 2 associated worktrees will also be removed from the workspace, but remain on disk.', '3 agents are working in it, and will be stopped.'], removed: [['/lab', '/link-lab', '/wt/w2']] },
+			'one agent': { asked: 'warning', message: 'Remove Folder?', detail: [...removes('/notes'), 'An agent is working in it, and will be stopped.'], removed: [['/notes']] },
+			'a process': { asked: 'warning', message: 'Remove Folder?', detail: [...removes('/notes'), 'Processes are running in its terminals, and will be terminated.'], removed: [['/notes']] },
+			'an agent and a process': { asked: 'warning', message: 'Remove Folder?', detail: [...removes('/notes'), 'An agent is working in it, and will be stopped.', 'Processes are running in its terminals, and will be terminated.'], removed: [['/notes']] },
+			'nothing running there': { asked: 'nothing', removed: [['/notes']] },
+			'asking turned off': { asked: 'nothing', removed: [['/notes']] },
 		});
 	});
 });

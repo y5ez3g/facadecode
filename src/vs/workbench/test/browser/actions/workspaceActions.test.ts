@@ -33,13 +33,13 @@ suite('Workspace actions - Remove Folder from Workspace...', () => {
 
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('the folder picked goes as the workspace bar\'s Remove Folder takes one - asked first, naming the agents it stops - never removed unasked; none picked, nothing happens (Facade Code, N-65)', async () => {
+	test('the folder picked goes through the workspace bar\'s Remove Folder - which asks first where that stops agents or processes - never removed by the palette on its own; none picked, nothing happens (Facade Code, N-65; D30)', async () => {
 		const commands = new TestCommandService();
 		commands.picked = new WorkspaceFolder({ uri: URI.file('/lab'), index: 0, name: 'lab' });
 		const instantiationService = store.add(new TestInstantiationService());
 		instantiationService.stub(ICommandService, commands);
 		instantiationService.stub(IWorkspaceEditingService, {
-			removeFolders: async uris => { commands.ran.push(`removed unasked: ${uris.map(uri => uri.path).join(', ')}`); }
+			removeFolders: async uris => { commands.ran.push(`removed directly: ${uris.map(uri => uri.path).join(', ')}`); }
 		});
 		const action = new RemoveRootFolderAction();
 

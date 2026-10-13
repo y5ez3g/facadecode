@@ -13,6 +13,8 @@ import { IListService } from '../../../../../platform/list/browser/listService.j
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspace, IWorkspaceContextService, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { REMOVE_FOLDER_ASKED_COMMAND_ID } from '../../../../browser/actions/workspaceCommands.js';
+import { EditorResourceAccessor } from '../../../../common/editor.js';
+import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IEditorGroup, IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
@@ -25,29 +27,36 @@ suite('Files - Remove Folder from Workspace, in the Explorer', () => {
 
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('a folder of the workspace goes as the workspace bar\'s Remove Folder takes one - asked first, naming the agents it stops - never removed unasked; what is no folder of the workspace is left alone (Facade Code, N-65)', async () => {
+	test('the folders of the workspace it is run on go through the workspace bar\'s Remove Folder - all in one go, asked about once where it asks - never removed by the Explorer on its own; what is no folder of the workspace is left alone (Facade Code, N-65; VC-02; D30)', async () => {
 		const ran: string[] = [];
 		const instantiationService = store.add(new TestInstantiationService());
 		instantiationService.stub(ICommandService, {
 			executeCommand: async (id: string, ...args: unknown[]) => {
-				ran.push(`${id} ${URI.isUri(args[0]) ? args[0].path : ''}`);
+				const [folders] = args;
+				ran.push(`${id} ${Array.isArray(folders) ? folders.map(folder => URI.isUri(folder) ? folder.path : String(folder)).join(', ') : URI.isUri(folders) ? folders.path : ''}`);
 				return undefined;
 			}
 		});
 		instantiationService.stub(IWorkspaceEditingService, {
-			removeFolders: async uris => { ran.push(`removed unasked: ${uris.map(uri => uri.path).join(', ')}`); }
+			removeFolders: async uris => { ran.push(`removed directly: ${uris.map(uri => uri.path).join(', ')}`); }
 		});
-		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ folders: [new WorkspaceFolder({ uri: URI.file('/lab'), index: 0, name: 'lab' })] }) });
+		const folder = (path: string, index: number) => new WorkspaceFolder({ uri: URI.file(path), index, name: path });
+		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ folders: [folder('/lab', 0), folder('/notes', 1)] }) });
 		instantiationService.stub(IUriIdentityService, { extUri });
 		instantiationService.stub(IListService, { lastFocusedList: undefined });
 		instantiationService.stub(IEditorService, {});
-		instantiationService.stub(IEditorGroupsService, { activeGroup: upcastPartial<IEditorGroup>({ selectedEditors: [] }) });
+		// Several selected, as a multi-selection gives them
+		let selected: EditorInput[] = [];
+		instantiationService.stub(IEditorGroupsService, { activeGroup: upcastPartial<IEditorGroup>({ get selectedEditors() { return [...selected]; } }) });
 		instantiationService.stub(IExplorerService, {});
 
 		const handler = CommandsRegistry.getCommand(REMOVE_ROOT_FOLDER_COMMAND_ID)!.handler;
 		await instantiationService.invokeFunction(accessor => handler(accessor, URI.file('/lab')));
+		selected = ['/lab', '/notes', '/lab/src'].map(path => upcastPartial<EditorInput>({ resource: URI.file(path), matches: other => EditorResourceAccessor.getOriginalUri(other)?.path === path }));
+		await instantiationService.invokeFunction(accessor => handler(accessor, URI.file('/lab')));
+		selected = [];
 		await instantiationService.invokeFunction(accessor => handler(accessor, URI.file('/lab/src')));
 
-		assert.deepStrictEqual(ran, [`${REMOVE_FOLDER_ASKED_COMMAND_ID} /lab`, 'workbench.action.removeRootFolder ']);
+		assert.deepStrictEqual(ran, [`${REMOVE_FOLDER_ASKED_COMMAND_ID} /lab`, `${REMOVE_FOLDER_ASKED_COMMAND_ID} /lab, /notes`, 'workbench.action.removeRootFolder ']);
 	});
 });

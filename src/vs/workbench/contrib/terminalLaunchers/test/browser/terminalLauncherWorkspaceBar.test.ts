@@ -6,13 +6,14 @@
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
+import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
-import { TerminalIcon } from '../../../../../platform/terminal/common/terminal.js';
+import { TerminalIcon, TerminalLocation, TerminalSettingId } from '../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService, IWorkspaceFoldersChangeEvent } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
@@ -44,7 +45,7 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 		store.add(new TerminalLauncherWorkspaceBar(
 			upcastPartial<ITerminalLauncherService>({ onDidChangeAgentTerminals: agentsChanged.event, get agentTerminals() { return agents; } }),
 			upcastPartial<IFolderTerminalsService>({ folderOf: agent => { const path = folders.get(agent); return path ? URI.file(path) : undefined; } }),
-			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder, icons }) => `${folder.path}: ${icons.map(icon => icon.id).join(' ')}`)); } }),
+			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder, icons }) => `${folder.path}: ${icons.map(icon => icon.id).join(' ')}`)); }, registerProcessCheck: () => Disposable.None }),
 			upcastPartial<IWorkspaceBarService>({ onDidRestoreEditors: editorsRestored.event }),
 			upcastPartial<IActiveFolderService>({ onDidChangeActiveFolder: activeFolderChanged.event }),
 			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: foldersChanged.event }),
@@ -88,7 +89,7 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 		store.add(new TerminalLauncherWorkspaceBar(
 			upcastPartial<ITerminalLauncherService>({ onDidChangeAgentTerminals: Event.None, agentTerminals: [agent] }),
 			upcastPartial<IFolderTerminalsService>({ folderOf: () => folder }),
-			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder }) => folder.path)); } }),
+			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder }) => folder.path)); }, registerProcessCheck: () => Disposable.None }),
 			upcastPartial<IWorkspaceBarService>({ onDidRestoreEditors: Event.None }),
 			upcastPartial<IActiveFolderService>({ onDidChangeActiveFolder: Event.None }),
 			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: Event.None }),
@@ -101,6 +102,44 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 		await timeout(1);
 
 		assert.deepStrictEqual(told, [['/lab'], []]);
+	});
+
+	test('what removing a folder terminates besides its agents, asked when someone is about to: a process in one of its terminals that VS Code would ask about before terminating it, as terminal.integrated.confirmOnKill says for where that terminal is (D30)', async () => {
+		const configuration = new TestConfigurationService();
+		const terminal = (target: TerminalLocation, hasChildProcesses: boolean) => upcastPartial<ITerminalInstance>({ target, hasChildProcesses });
+		// An agent's CLI running a command of its own: its agent is said already, as stopped
+		const agent = terminal(TerminalLocation.Editor, true);
+		const terminals = new Map<string, ITerminalInstance[]>([
+			['/lab', [terminal(TerminalLocation.Editor, false), agent]],
+			['/editor', [terminal(TerminalLocation.Editor, true)]],
+			['/panel', [terminal(TerminalLocation.Panel, true)]],
+		]);
+		let check: ((folder: URI) => boolean) | undefined;
+		store.add(new TerminalLauncherWorkspaceBar(
+			upcastPartial<ITerminalLauncherService>({ onDidChangeAgentTerminals: Event.None, agentTerminals: [agent] }),
+			upcastPartial<IFolderTerminalsService>({ folderOf: () => undefined, terminalsOf: folder => terminals.get(folder.path) ?? [] }),
+			upcastPartial<IWorkspaceBarAgentsService>({ set: () => { }, registerProcessCheck: given => { check = given; return Disposable.None; } }),
+			upcastPartial<IWorkspaceBarService>({ onDidRestoreEditors: Event.None }),
+			upcastPartial<IActiveFolderService>({ onDidChangeActiveFolder: Event.None }),
+			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: Event.None }),
+			configuration
+		));
+
+		const answers = async (confirmOnKill: string) => {
+			await configuration.setUserConfiguration(TerminalSettingId.ConfirmOnKill, confirmOnKill);
+			return ['/lab', '/editor', '/panel', '/notes'].filter(path => check?.(URI.file(path)));
+		};
+		assert.deepStrictEqual({
+			editor: await answers('editor'),
+			panel: await answers('panel'),
+			always: await answers('always'),
+			never: await answers('never'),
+		}, {
+			editor: ['/editor'],
+			panel: ['/panel'],
+			always: ['/editor', '/panel'],
+			never: [],
+		});
 	});
 
 	test('each folder\'s agents in the order they were started, a custom icon as the robot, and one in the panel on no row', () => {

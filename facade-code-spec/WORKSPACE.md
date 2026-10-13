@@ -236,10 +236,15 @@ reorder         Move Folder Up / Down (Alt+Up / Alt+Down). `reorderFolders`, que
                 other workspace edit, with each entry's stored form kept byte for byte. No drag.
                 Moving a folder through the first position restarts the extension host - upstream's
                 relauncher watches folders[0] for the deprecated `workspace.rootPath`
-remove          confirmed with the path named; "do not ask again" is
-                `facade.workspaceBar.confirmRemoveFolder`, written only when the answer was yes.
-                Every way in asks the same - the bar's row, Workspaces: Remove Folder from
-                Workspace... and the Explorer's Remove Folder from Workspace - as each stops the
+remove          asked first only where it stops something: an agent, or a process in one of the
+                folder's terminals that VS Code would ask about before terminating it
+                (`hasChildProcesses`, and `terminal.integrated.confirmOnKill` for where that
+                terminal is). The question names the path, says how many agents it stops and that
+                the processes will be terminated; anything else is removed unasked, an unsaved
+                editor staying open. A setting, not a "do not ask again":
+                `facade.workspaceBar.confirmRemoveFolder` off never asks. Every way in behaves the
+                same - the bar's row, Workspaces: Remove Folder from Workspace... and the
+                Explorer's Remove Folder from Workspace, one folder or several - as each stops the
                 folder's agents and closes the editors kept for it
                 The window moves to the row that took the index; the folder's editors go with it,
                 its name and colour stay (they are the folder's, kept per profile)
