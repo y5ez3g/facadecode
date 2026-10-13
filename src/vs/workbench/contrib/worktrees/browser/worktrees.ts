@@ -943,8 +943,7 @@ export class WorktreeService implements IWorktreeService {
 				? localize({ key: 'worktrees.deleteDiscardButton', comment: ['&& denotes a mnemonic'] }, "&&Delete and Discard Changes")
 				: localize({ key: 'worktrees.deleteButton', comment: ['&& denotes a mnemonic'] }, "&&Delete"),
 			custom: {
-				classes: ['facade-dialog', 'workspacebar-confirm'],
-				disableCloseButton: true
+				classes: ['facade-dialog', 'workspacebar-confirm']
 			}
 		});
 

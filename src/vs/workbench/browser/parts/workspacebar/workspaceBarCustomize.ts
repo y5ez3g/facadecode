@@ -20,9 +20,10 @@ import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+import { defaultInputBoxStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
-import { createWorkbenchDialogOptions, facadeDialogInputBoxStyles } from '../dialogs/dialog.js';
+import { createWorkbenchDialogOptions } from '../dialogs/dialog.js';
 import { FOLDER_COLORS, FOLDER_ICONS, FolderColor, FolderIcon, IFolderCustomization } from './workspaceBarCustomization.js';
 
 interface IDialogServices {
@@ -221,7 +222,7 @@ async function showRowDialog(
 					append(container, $('.workspacebar-customize-label', undefined, localize('workspaceBar.branch', "Branch")));
 
 					branchBox = disposables.add(new InputBox(append(container, $('.workspacebar-customize-input')), services.contextViewService, {
-						inputBoxStyles: facadeDialogInputBoxStyles,
+						inputBoxStyles: defaultInputBoxStyles,
 						placeholder: localize('workspaceBar.branchPlaceholder', "Branch name"),
 						ariaLabel: localize('workspaceBar.branchAria', "Branch for the new worktree")
 					}));
@@ -259,7 +260,7 @@ async function showRowDialog(
 				append(container, $('.workspacebar-customize-label', undefined, localize('workspaceBar.displayName', "Display Name")));
 
 				const nameBox = disposables.add(new InputBox(append(container, $('.workspacebar-customize-input')), services.contextViewService, {
-					inputBoxStyles: facadeDialogInputBoxStyles,
+					inputBoxStyles: defaultInputBoxStyles,
 					// ⚠️ The folder's real name, greyed, so the field shows what leaving it blank gets you
 					// without spending a line on it. The line under it is still there for a screen reader,
 					// which does not read a placeholder as an answer.

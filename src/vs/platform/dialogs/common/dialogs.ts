@@ -297,8 +297,6 @@ export interface ICustomDialogOptions {
 	readonly icon?: ThemeIcon;
 	/** Hides the close button and stops `Escape` from dismissing the dialog. */
 	readonly disableCloseAction?: boolean;
-	/** Hides the close button only. `Escape` still dismisses the dialog. */
-	readonly disableCloseButton?: boolean;
 
 	/**
 	 * Aligns the dialog's icon, message, and buttons vertically (full-width
