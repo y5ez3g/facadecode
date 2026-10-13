@@ -14,6 +14,7 @@ import { registerTerminalLauncherActions } from './terminalLauncherActions.js';
 import './terminalLauncherService.js';
 import { TerminalLauncherMenu } from './terminalLauncherMenu.js';
 import { TerminalLauncherWorkspaceBar } from './terminalLauncherWorkspaceBar.js';
+import { RunningWorkShutdownQuestion } from './terminalLauncherShutdown.js';
 
 registerTerminalLauncherActions();
 
@@ -23,6 +24,7 @@ registerWorkbenchContribution2(TerminalLauncherMenu.ID, TerminalLauncherMenu, Wo
 
 // With the folder terminals they ask, which start `AfterRestored`
 registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.AfterRestored);
+registerWorkbenchContribution2(RunningWorkShutdownQuestion.ID, RunningWorkShutdownQuestion, WorkbenchPhase.AfterRestored);
 
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,

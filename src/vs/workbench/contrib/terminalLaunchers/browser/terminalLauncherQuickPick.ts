@@ -9,14 +9,11 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { escapeIcons } from '../../../../base/common/iconLabels.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IExtUri } from '../../../../base/common/resources.js';
-import Severity from '../../../../base/common/severity.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IQuickInputButton, IQuickInputService, IQuickPick, IQuickPickItem, ItemActivation } from '../../../../platform/quickinput/common/quickInput.js';
-import { TerminalExitReason, TerminalLocation, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
+import { TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { FolderColor, folderGlyphFor, folderRowNameFor, glyphInFolderColor, IWorkspaceBarCustomizationService, worktreeIcon, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
@@ -26,7 +23,6 @@ import { IActiveFolderService } from '../../../services/activeFolder/common/acti
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
-import { ConfirmOnKill } from '../../terminal/common/terminal.js';
 import { AGENT_TERMINAL_ICON } from '../common/terminalLaunchers.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
@@ -148,8 +144,6 @@ export class TerminalLauncherQuickPick extends Disposable {
 		@IEditorService private readonly _editorService: IEditorService,
 		@IWorkspaceContextService private readonly _contextService: IWorkspaceContextService,
 		@IActiveFolderService activeFolderService: IActiveFolderService,
-		@IConfigurationService private readonly _configurationService: IConfigurationService,
-		@IDialogService private readonly _dialogService: IDialogService,
 		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService
 	) {
 		super();
@@ -258,34 +252,19 @@ export class TerminalLauncherQuickPick extends Disposable {
 		};
 	}
 
-	/**
-	 * Ends an agent's terminal, asking first where closing its tab would: while something runs in it
-	 * and `terminal.integrated.confirmOnKill` covers where it is. Its row goes with it.
-	 */
+	/** Ends an agent's terminal as VS Code ends any terminal, so VS Code asks its own question while something runs. */
 	private async _close(instance: ITerminalInstance): Promise<void> {
-		if (instance.hasChildProcesses && this._confirmsOnKill(instance)) {
-			// Or the picker closes when the dialog takes the focus, taking the list away mid-question
-			this._quickPick.ignoreFocusOut = true;
-			try {
-				const { confirmed } = await this._dialogService.confirm({
-					type: Severity.Warning,
-					message: localize('agentPicker.confirmClose', "Do you want to terminate running processes?"),
-					detail: localize('agentPicker.confirmCloseDetail', "Closing {0} will terminate the running processes in it.", titleOf(instance)),
-					primaryButton: localize({ key: 'agentPicker.confirmCloseButton', comment: ['&& denotes a mnemonic'] }, "&&Terminate")
-				});
-				if (!confirmed) {
-					return;
-				}
-			} finally {
-				this._quickPick.ignoreFocusOut = false;
+		// Or the picker closes when a question takes the focus, taking the list away mid-question
+		this._quickPick.ignoreFocusOut = true;
+		try {
+			const editors = this._editorService.findEditors(instance.resource);
+			if (editors.length) {
+				await this._editorService.closeEditors(editors);
+			} else {
+				await this._terminalService.safeDisposeTerminal(instance);
 			}
+		} finally {
+			this._quickPick.ignoreFocusOut = false;
 		}
-
-		instance.dispose(TerminalExitReason.User);
-	}
-
-	private _confirmsOnKill(instance: ITerminalInstance): boolean {
-		const confirmOnKill = this._configurationService.getValue<ConfirmOnKill>(TerminalSettingId.ConfirmOnKill);
-		return confirmOnKill === 'always' || confirmOnKill === (instance.target === TerminalLocation.Editor ? 'editor' : 'panel');
 	}
 }

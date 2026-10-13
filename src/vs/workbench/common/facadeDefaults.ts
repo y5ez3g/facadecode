@@ -42,6 +42,9 @@ export const FACADE_CONFIGURATION_DEFAULTS: Readonly<Record<string, string>> = O
 	 */
 	'workbench.secondarySideBar.defaultVisibility': 'hidden',
 
+	// Ask before closing stops a running agent or terminal, in any folder (WORKSPACE.md W11)
+	'terminal.integrated.confirmOnExit': 'hasChildProcesses',
+
 	// A clone joins this window without a question: nothing in the window is replaced (WORKSPACE.md W5)
 	'git.openAfterClone': 'always'
 });
