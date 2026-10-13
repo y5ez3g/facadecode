@@ -3,7 +3,9 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { Terminal as RawXtermTerminal } from '@xterm/xterm';
 import assert from 'assert';
+import { importAMDNodeModule } from '../../../../../amdX.js';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
@@ -53,11 +55,13 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { IWorkingCopy } from '../../../../services/workingCopy/common/workingCopy.js';
 import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
+import { BackgroundFolderChangesService, IBackgroundFolderChangesService } from '../../../../services/backgroundFolderChanges/common/backgroundFolderChanges.js';
 import { IFilesConfigurationService } from '../../../../services/filesConfiguration/common/filesConfigurationService.js';
 import { IFacadeRunsService } from '../../../facadeCommands/browser/facadeRuns.js';
 import { facadeRunProperties, IFacadeRun } from '../../../facadeCommands/common/facadeRun.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../../terminal/browser/terminal.js';
+import type { XtermTerminal } from '../../../terminal/browser/xterm/xtermTerminal.js';
 import { DeleteWorktreeAction, freeWorktreeName, freeWorktreeUri, IRemoveWorktreeOptions, NewWorktreeAction, readSetupCommands, worktreeFolderName, WorktreeService } from '../../browser/worktrees.js';
 
 suite('Worktrees - names, paths and setup', () => {
@@ -171,11 +175,24 @@ suite('Worktrees - making and deleting one', () => {
 	let opened: URI[];
 	/** The window's folders, `folders[]`. */
 	let workspaceFolders: URI[];
+	/** The folders on disk the service asks about: the repository's own. */
+	let onDisk: Set<string>;
+	/** The folder the window was on before the active one, `IActiveFolderService.previousFolder`. */
+	let previousFolder: URI | undefined;
 	/** What the runs service was told of terminals the person's deletion closes, and why. */
 	let closing: string[];
+	let backgroundFolderChanges: BackgroundFolderChangesService;
 	let instantiationService: TestInstantiationService;
+	/** xterm, which a setup terminal's screen is. */
+	let TerminalCtor: typeof RawXtermTerminal;
 
-	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean; readonly run?: IFacadeRun; readonly exitCode?: number }): ITerminalInstance {
+	suiteSetup(async () => {
+		TerminalCtor = (await importAMDNodeModule<typeof import('@xterm/xterm')>('@xterm/xterm', 'lib/xterm.js')).Terminal;
+	});
+
+	/** A terminal working in `cwd`; `options.closing` is what its process does as its terminal is closed. */
+	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean; readonly run?: IFacadeRun; readonly exitCode?: number; readonly closing?: () => void }): ITerminalInstance {
+		let closed = false;
 		return upcastPartial<ITerminalInstance>({
 			title: name,
 			cwd,
@@ -184,7 +201,12 @@ suite('Worktrees - making and deleting one', () => {
 			hasChildProcesses: !!options?.running,
 			reconnectionProperties: options?.run && facadeRunProperties(options.run),
 			exitCode: options?.exitCode,
-			dispose: () => { steps.push(`close ${name}`); }
+			get isDisposed() { return closed; },
+			dispose: () => {
+				closed = true;
+				steps.push(`close ${name}`);
+				options?.closing?.();
+			}
 		});
 	}
 
@@ -206,6 +228,8 @@ suite('Worktrees - making and deleting one', () => {
 		readonly instance: ITerminalInstance;
 		/** Every line sent to it, with the id it was run with; none for a line typed ahead. */
 		readonly sent: { readonly line: string; readonly id: string | undefined }[];
+		/** What runs in it writing `output` to its screen, 30 columns wide. */
+		print(output: string): Promise<void>;
 		/** Shell integration lighting up, a moment after the shell starts. */
 		integrate(): void;
 		/** The shell saying a command finished: the one run with `id`, or with none, one of somebody else's - with its exit code and output. */
@@ -233,9 +257,11 @@ suite('Worktrees - making and deleting one', () => {
 			sent.push({ line, id });
 			onDidSend.fire();
 		};
+		const raw = store.add(new TerminalCtor({ cols: 30, rows: 5, allowProposedApi: true }));
 
 		const instance = upcastPartial<ITerminalInstance>({
 			get isDisposed() { return closed; },
+			xterm: upcastPartial<XtermTerminal>({ raw }),
 			hasRemoteAuthority: false,
 			onDisposed: disposed.event,
 			onExit: exited.event,
@@ -254,6 +280,7 @@ suite('Worktrees - making and deleting one', () => {
 			instance,
 			sent,
 			closed: () => closed,
+			print: output => new Promise(resolve => raw.write(output, resolve)),
 			integrate: () => {
 				integrated = true;
 				added.fire(detection);
@@ -315,6 +342,8 @@ suite('Worktrees - making and deleting one', () => {
 		whenCommand = undefined;
 		opened = [];
 		workspaceFolders = [];
+		onDisk = new Set(['/lab']);
+		previousFolder = undefined;
 		closing = [];
 		repository = { kind: 'repository', main, folder: undefined, branch: 'main', members: [], worktrees: [{ uri: w2, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
 
@@ -330,6 +359,7 @@ suite('Worktrees - making and deleting one', () => {
 				restored.fire();
 			},
 			remove: async uris => { steps.push(`remove ${uris.map(uri => uri.path).join(', ')}`); },
+			add: async uris => { steps.push(`add ${uris.map(uri => uri.path).join(', ')}${uris.some(uri => backgroundFolderChanges.isChanging(uri)) ? ', in the background' : ''}`); },
 			setExpanded: uri => { steps.push(`open ${uri.path}`); },
 			whenListed: async uri => { steps.push(`listed ${uri.path}`); },
 			hideWorktree: uri => {
@@ -352,7 +382,11 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(IConfigurationService, {
 			getValue: ((key: string) => key === TerminalSettingId.ShellIntegrationTimeout ? shellIntegrationTimeout : undefined) as IConfigurationService['getValue']
 		});
-		instantiationService.stub(IActiveFolderService, { activeFolder: upcastPartial<IWorkspaceFolder>({ uri: w2 }) });
+		instantiationService.stub(IActiveFolderService, {
+			activeFolder: upcastPartial<IWorkspaceFolder>({ uri: w2 }),
+			get previousFolder() { return previousFolder && upcastPartial<IWorkspaceFolder>({ uri: previousFolder }); },
+			setActiveFolder: async folder => { steps.push(`back to ${(URI.isUri(folder) ? folder : folder.uri).path}`); }
+		});
 		instantiationService.stub(ICommandService, {
 			executeCommand: async <T>(id: string, ...args: unknown[]) => {
 				steps.push(describeCommand(id, args));
@@ -411,7 +445,7 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(IFileService, {
 			hasCapability: () => true,
 			resolve: (() => Promise.reject(new Error('not there'))) as IFileService['resolve'],
-			exists: async () => false,
+			exists: async (uri: URI) => onDisk.has(uri.path),
 			realpath: async (uri: URI) => {
 				const link = [...links.keys()].find(each => uri.path.startsWith(`${each}/`));
 				return link === undefined ? uri : URI.file(`${links.get(link)}${uri.path.slice(link.length)}`);
@@ -464,6 +498,8 @@ suite('Worktrees - making and deleting one', () => {
 		});
 		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ folders: workspaceFolders.map(uri => upcastPartial<IWorkspaceFolder>({ uri })) }) });
 		instantiationService.stub(IFacadeRunsService, { closingBecause: (instance, reason) => { closing.push(`${instance.title} ${reason}`); } });
+		backgroundFolderChanges = instantiationService.createInstance(BackgroundFolderChangesService);
+		instantiationService.stub(IBackgroundFolderChangesService, backgroundFolderChanges);
 	});
 
 	test('making one: named and coloured before its row is drawn, trusted, its record read, its repository opened, and the window taken to it', async () => {
@@ -486,7 +522,7 @@ suite('Worktrees - making and deleting one', () => {
 		]);
 	});
 
-	test('made without asking, for an agent: no dialog, from the commit it is given, its row there, and the window left where it is', async () => {
+	test('made without asking, for an agent: no dialog, from the commit it is given, its row there, and the window left where it is - its repository row not opened, which the person may have collapsed (XS-06)', async () => {
 		gitIsRunning();
 		trust.enabled = true;
 		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
@@ -503,7 +539,6 @@ suite('Worktrees - making and deleting one', () => {
 				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
 				'trust /home/me/.facade/worktrees/lab/w3',
 				'listed /home/me/.facade/worktrees/lab/w3',
-				'open /lab',
 			],
 		});
 	});
@@ -562,6 +597,41 @@ suite('Worktrees - making and deleting one', () => {
 		}, {
 			seven: { outcome: { kind: 'failed', line: 'echo set up; exit 7', exitCode: 7, output: 'set up\nThe shell ended with this line: the lines after it did not run.' }, sent: ['run echo set up; exit 7'] },
 			zero: { outcome: { kind: 'failed', line: 'exit 0', exitCode: 0, output: 'The shell ended with this line: the lines after it did not run.' }, sent: ['run exit 0'] }
+		});
+	});
+
+	test('made without asking, its setup can be looked at as it runs, for the caller waiting on it: the line running, where shell integration says when each finishes, and the last 20 lines of its terminal as plain text - one the terminal wraps read whole, a blank one kept, the empty rows below dropped; nothing where the window knows no setup of it (O3, O4; OR-03)', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		answers.set('_git.createWorktreeAt w4', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		files.set(`${w3.path}/.facade/worktrees.json`, '{ "setup-worktree": ["npm ci", "npm run build"] }');
+		const service = instantiationService.createInstance(WorktreeService);
+
+		const made = await service.makeWorktree(main, 'w3');
+		const shell = await setupShell.p;
+		const opened = service.setupState(made.worktree);
+		shell.integrate();
+		await shell.whenSent(1);
+		// More lines than are read, a blank one, one wider than the terminal, and the prompt's empty rows below
+		await shell.print([...[...Array(22).keys()].map(count => `added ${count} packages`), '', 'npm warn deprecated left-pad@1.3.0', '', ''].join('\r\n'));
+		const running = service.setupState(made.worktree);
+		const outcome = service.setupOutcome(made.worktree);
+		shell.finish(shell.sent[0].id, 0);
+		await shell.whenSent(2);
+		const between = service.setupState(made.worktree)?.running;
+		shell.finish(shell.sent[1].id, 0);
+		await outcome;
+		// A worktree with nothing to set up
+		const none = await service.makeWorktree(main, 'w4');
+
+		assert.deepStrictEqual({ opened, running, between, outcomeTaken: service.setupState(made.worktree), none: service.setupState(none.worktree), unknown: service.setupState(URI.file('/elsewhere')) }, {
+			opened: { lines: [] },
+			running: { running: 'npm ci', lines: [...[...Array(18).keys()].map(count => `added ${count + 4} packages`), '', 'npm warn deprecated left-pad@1.3.0'] },
+			between: 'npm run build',
+			outcomeTaken: undefined,
+			none: undefined,
+			unknown: undefined
 		});
 	});
 
@@ -638,6 +708,22 @@ suite('Worktrees - making and deleting one', () => {
 			branchTaken: 'A branch named w2 already exists. Choose another name.',
 			folderTaken: 'Something is already at /home/me/.facade/worktrees/lab/w5.',
 			asked: [],
+		});
+	});
+
+	test('a worktree Git could not check out, whose branch it had made and could not take back, says so by name - made for an agent or by New Worktree: the branch is there, its name taken (O4; OR-07)', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'error', code: undefined, message: 'could not write index: No space left on device', branchKept: 'w3' });
+		answer = { branch: 'w3', customization: {} };
+		const service = instantiationService.createInstance(WorktreeService);
+
+		const forAnAgent = await service.makeWorktree(main, 'w3').then(() => 'made', (err: Error) => err.message);
+		await service.createWorktree(main);
+
+		assert.deepStrictEqual({ forAnAgent, forThePerson: steps.filter(step => step.startsWith('error: ')) }, {
+			forAnAgent: 'The worktree could not be made: could not write index: No space left on device. Git had made its branch w3 already, which is kept: delete it, or choose another name.',
+			forThePerson: ['error: The worktree could not be made: could not write index: No space left on device. Git had made its branch w3 already, which is kept: delete it, or choose another name.'],
 		});
 	});
 
@@ -732,6 +818,46 @@ suite('Worktrees - making and deleting one', () => {
 		await first;
 
 		assert.deepStrictEqual({ asked: steps.filter(step => step === 'ask').length, made: steps.filter(step => step.startsWith('_git.createWorktreeAt')).length }, { asked: 1, made: 1 });
+	});
+
+	test('the person\'s New Worktree holds its repository\'s queue only while Git makes the worktree: an agent\'s asked for while its dialog is open is made at once, and the person\'s, created meanwhile, waits its turn; a second New Worktree while the dialog is open does nothing (O4; OR-06)', async () => {
+		gitIsRunning();
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		const makingW4 = new DeferredPromise<unknown>();
+		answers.set('_git.createWorktreeAt w4', makingW4.p);
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		// The person takes their time choosing a name
+		const named = new DeferredPromise<INewWorktreeAnswer | undefined>();
+		instantiationService.stub(IWorkspaceBarDialogService, {
+			showNewWorktreeDialog: async () => {
+				steps.push('ask');
+				return named.p;
+			}
+		});
+		const service = instantiationService.createInstance(WorktreeService);
+		const made = () => steps.filter(step => step === 'ask' || step.startsWith('_git.createWorktreeAt'));
+
+		const persons = service.createWorktree(main);
+		await stepTaken('ask');
+		await service.createWorktree(main);
+		const agents = service.makeWorktree(main, 'w4');
+		await stepTaken('_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w4');
+		const whileTheDialogIsOpen = made();
+		named.complete({ branch: 'w3', customization: {} });
+		// The person's w3 is not made while w4 is: a few turns for the service to go on, there being no step to wait for
+		for (let turn = 0; turn < 10; turn++) {
+			await timeout(0);
+		}
+		const whileW4IsMade = made();
+		makingW4.complete({ kind: 'created', copyFailures: [], hookFailure: undefined });
+		await agents;
+		await persons;
+
+		assert.deepStrictEqual({ whileTheDialogIsOpen, whileW4IsMade, made: made() }, {
+			whileTheDialogIsOpen: ['ask', '_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w4 w4'],
+			whileW4IsMade: ['ask', '_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w4 w4'],
+			made: ['ask', '_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w4 w4', '_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3'],
+		});
 	});
 
 	test('setup lines run one at a time: each once the shell says that line\'s own command finished', async () => {
@@ -916,6 +1042,7 @@ suite('Worktrees - making and deleting one', () => {
 				'close its terminal',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
+				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
 				'customize /home/me/.facade/worktrees/lab/w2 {}',
 				'order /home/me/.facade/worktrees/lab/w3',
 				'untrust /home/me/.facade/worktrees/lab/w2',
@@ -943,11 +1070,39 @@ suite('Worktrees - making and deleting one', () => {
 				'close its terminal',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
+				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
 				'customize /home/me/.facade/worktrees/lab/w2 {}',
 				'order /home/me/.facade/worktrees/lab/w3',
 				'untrust /home/me/.facade/worktrees/lab/w2',
 			],
 			progressShown: [ProgressLocation.Window],
+		});
+	});
+
+	test('the window on the worktree an agent deletes goes to its repository\'s folder; with that folder gone, back to the folder the person was on before; with none, to its neighbour as it leaves folders[] (O5; OR-27)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const deleteIt = async () => {
+			steps = [];
+			await instantiationService.createInstance(WorktreeService).removeWorktree(w2);
+			// The first two after its looks
+			return steps.filter(step => !step.startsWith('_git')).slice(0, 2);
+		};
+
+		const owned = await deleteIt();
+		previousFolder = URI.file('/other');
+		const ownerToo = await deleteIt();
+		onDisk.delete('/lab');
+		const ownerGone = await deleteIt();
+		previousFolder = undefined;
+		const both = await deleteIt();
+
+		assert.deepStrictEqual({ owned, ownerToo, ownerGone, both }, {
+			owned: ['show /lab', 'hide /home/me/.facade/worktrees/lab/w2'],
+			ownerToo: ['show /lab', 'hide /home/me/.facade/worktrees/lab/w2'],
+			ownerGone: ['back to /other', 'hide /home/me/.facade/worktrees/lab/w2'],
+			both: ['hide /home/me/.facade/worktrees/lab/w2', 'remove /home/me/.facade/worktrees/lab/w2']
 		});
 	});
 
@@ -1015,6 +1170,7 @@ suite('Worktrees - making and deleting one', () => {
 				'close its terminal',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
+				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
 				'customize /home/me/.facade/worktrees/lab/w2 {}',
 			]
 		});
@@ -1041,22 +1197,46 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
-	test('deleted without asking, it is looked at once more right before git deletes it: a file come meanwhile, an unsaved edit, or the person\'s edit to a file the caller put there, keep it - nothing lost, nothing asked, and a folder of the window is put back (X-73)', async () => {
+	test('deleted without asking, it can be looked at first - for an agent\'s deletion, before any agent is stopped - which names what deleting it would lose as its refusal names it, the caller\'s own files as it wrote them going with it, and does nothing else: nothing stopped, closed, moved or removed (O5 step 2; OR-04)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json', 'build/out.js'], submodules: true });
+		files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{}');
+		const ownFiles = [{ path: '.mcp.json', sha256: SHA256_OF_EMPTY_OBJECT }];
+		// The person is on the worktree, an image of it unsaved in its editor and a dev server running in it
+		workspaceFolders = [main, w2];
+		unsaved = [unsavedFile('/home/me/.facade/worktrees/lab/w2/logo.png')];
+		terminals = [terminal('npm run dev', '/home/me/.facade/worktrees/lab/w2', { running: true })];
+		const service = instantiationService.createInstance(WorktreeService);
+		const loss = await service.removalLoss(w2, { ownFiles });
+		const lookSteps = steps.splice(0);
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json'], submodules: false });
+		unsaved = [];
+		const nothing = await service.removalLoss(w2, { ownFiles });
+		const mainCheckout = await service.removalLoss(main).then(() => 'looked', (err: Error) => err.message);
+
+		assert.deepStrictEqual({ loss, lookSteps, nothing, mainCheckout }, {
+			loss: ['build/out.js', 'logo.png (unsaved)', 'its submodules (with any of their commits not pushed)'],
+			lookSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
+			nothing: [],
+			mainCheckout: '/lab is its repository\'s main checkout, which is never deleted.'
+		});
+	});
+
+	test('deleted without asking, it is looked at once more before anything is moved, closed or removed: a file come meanwhile, an unsaved edit, or the person\'s edit to a file the caller put there, keep it - nothing lost, nothing asked, and nothing done (X-73; XS-07)', async () => {
 		gitIsRunning();
 		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json'], submodules: false });
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
 		files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{}');
 		workspaceFolders = [main, w2];
-		instantiationService.stub(IWorkspaceBarService, 'add', async (uris: readonly URI[]) => { steps.push(`add ${uris.map(uri => uri.path).join(', ')}`); });
-		// As the deletion closes its terminals, the person types into an editor of it and edits Facade's own file
-		terminals = [upcastPartial<ITerminalInstance>({
-			title: 'its terminal', cwd: '/home/me/.facade/worktrees/lab/w2', initialCwd: '/home/me/.facade/worktrees/lab/w2', dispose: () => {
-				steps.push('close its terminal');
+		// Between the first look and the last, the person types into an editor of it and edits Facade's own file, and a file comes
+		let looks = 0;
+		whenCommand = command => {
+			if (command.endsWith(' check') && ++looks === 2) {
 				unsaved = [unsavedFile('/home/me/.facade/worktrees/lab/w2/src/a.ts')];
 				files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{"mcpServers":{"docs":{}}}');
 				answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json', 'late.txt'], submodules: false });
 			}
-		})];
+		};
 
 		const refused = await instantiationService.createInstance(WorktreeService).removeWorktree(w2, { ownFiles: [{ path: '.mcp.json', sha256: SHA256_OF_EMPTY_OBJECT }] }).then(() => 'deleted', (err: Error) => err.message);
 
@@ -1064,16 +1244,45 @@ suite('Worktrees - making and deleting one', () => {
 			refused: '/home/me/.facade/worktrees/lab/w2 was not deleted: changes came into it as it was being deleted, which deleting it would lose: .mcp.json, late.txt, src/a.ts (unsaved).',
 			steps: [
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
-				'show /lab',
-				'hide /home/me/.facade/worktrees/lab/w2',
-				'remove /home/me/.facade/worktrees/lab/w2',
-				'close its terminal',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+			]
+		});
+	});
+
+	test('deleted without asking, a deletion refused at its last look, or for an agent the call did not stop, leaves the person\'s window as it was: still on the worktree, its folder, row, terminals and editors untouched - it is decided before anything is moved, closed or removed (XS-07)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		// The person is on the worktree, with an editor of it open and a dev server running in it
+		workspaceFolders = [main, w2];
+		open = [upcastPartial<IWorkingCopy>({ resource: URI.file('/home/me/.facade/worktrees/lab/w2/src/a.ts') })];
+		terminals = [terminal('npm run dev', '/home/me/.facade/worktrees/lab/w2', { running: true })];
+		const service = instantiationService.createInstance(WorktreeService);
+		const attempt = () => service.removeWorktree(w2, { runs: [] }).then(() => 'deleted', (err: Error) => err.message);
+		// A file comes as it is looked at the last time
+		let looks = 0;
+		whenCommand = command => {
+			if (command.endsWith(' check') && ++looks === 2) {
+				answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['late.txt'], submodules: false });
+			}
+		};
+		const lastLook = await attempt();
+		const lastLookSteps = steps.splice(0);
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		whenCommand = undefined;
+		terminals = [...terminals, terminal('@x #a3', '/home/me/.facade/worktrees/lab/w2/src', { run: { workspace: 'record', id: 3 } })];
+		const agentInside = await attempt();
+
+		assert.deepStrictEqual({ lastLook, lastLookSteps, agentInside, agentInsideSteps: steps }, {
+			lastLook: '/home/me/.facade/worktrees/lab/w2 was not deleted: changes came into it as it was being deleted, which deleting it would lose: late.txt.',
+			lastLookSteps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'read-only /home/me/.facade/worktrees/lab/w2/src/a.ts',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'writable /home/me/.facade/worktrees/lab/w2/src/a.ts',
-				'unhide /home/me/.facade/worktrees/lab/w2',
-				'add /home/me/.facade/worktrees/lab/w2',
-			]
+			],
+			agentInside: '/home/me/.facade/worktrees/lab/w2 was not deleted: an agent the call did not stop is working inside it, in @x #a3. Stop it first.',
+			agentInsideSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
 		});
 	});
 
@@ -1094,16 +1303,17 @@ suite('Worktrees - making and deleting one', () => {
 
 		assert.deepStrictEqual(steps, [
 			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+			'read-only /home/me/.facade/worktrees/lab/w2/src/a.ts',
+			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 			'show /lab',
 			'hide /home/me/.facade/worktrees/lab/w2',
 			'remove /home/me/.facade/worktrees/lab/w2',
 			'close its terminal',
-			'read-only /home/me/.facade/worktrees/lab/w2/src/a.ts',
-			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
 			'read-only /home/me/.facade/worktrees/lab/w2/b.ts',
 			'writable /home/me/.facade/worktrees/lab/w2/src/a.ts, /home/me/.facade/worktrees/lab/w2/b.ts',
 			'unhide /home/me/.facade/worktrees/lab/w2',
+			'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
 			'customize /home/me/.facade/worktrees/lab/w2 {}'
 		]);
 	});
@@ -1175,14 +1385,96 @@ suite('Worktrees - making and deleting one', () => {
 			busy: 'The worktree could not be deleted: fatal: the directory is busy',
 			steps: [
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'show /lab',
 				'hide /home/me/.facade/worktrees/lab/w2',
 				'remove /home/me/.facade/worktrees/lab/w2',
 				'close its terminal',
-				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 			],
+		});
+	});
+
+	test('deleted without asking, one Git does not delete after the cleanup is put back as far as it can be - in the workspace, in the background, and the window on it, as they were - and the answer names what cannot be: the terminals closed for it, whose processes ended; one Git let go of part way, no worktree any more, stays out (O5; OR-11)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'error', code: undefined, message: 'cannot remove a locked working tree' });
+		const stopped = { workspace: 'record', id: 3 };
+		// The person is on the worktree, a dev server running in it; the agent the caller stopped there has ended
+		workspaceFolders = [main, w2];
+		onDisk.add(w2.path);
+		const deleteIt = async () => {
+			terminals = [terminal('npm run dev', w2.path, { running: true }), terminal('@x #a3', `${w2.path}/src`, { run: stopped, exitCode: 0 })];
+			const why = await instantiationService.createInstance(WorktreeService).removeWorktree(w2, { runs: [stopped] }).then(() => 'deleted', (err: Error) => err.message);
+			return { why, steps: steps.splice(0).filter(step => !step.startsWith('_git')) };
+		};
+		const refused = await deleteIt();
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'error', code: undefined, message: 'Permission denied', partial: true });
+		const partly = await deleteIt();
+
+		const cleanup = ['show /lab', 'hide /home/me/.facade/worktrees/lab/w2', 'remove /home/me/.facade/worktrees/lab/w2', 'close npm run dev', 'close @x #a3', 'unhide /home/me/.facade/worktrees/lab/w2'];
+		assert.deepStrictEqual({ refused, partly }, {
+			refused: {
+				why: 'The worktree could not be deleted: cannot remove a locked working tree\nThe terminals working in it were closed for the deletion, which ended what ran in them: npm run dev.',
+				steps: [...cleanup, 'add /home/me/.facade/worktrees/lab/w2, in the background', 'back to /home/me/.facade/worktrees/lab/w2'],
+			},
+			partly: {
+				why: 'The worktree could not be deleted: Permission denied\nThe terminals working in it were closed for the deletion, which ended what ran in them: npm run dev.',
+				steps: cleanup,
+			}
+		});
+	});
+
+	test('deleted without asking, it is looked at once more once the terminals working in it have closed, right before Git deletes it: a file one of them wrote as it stopped refuses it then - not lost to the force its first look called for - and it is put back as far as it can be (XS-07)', async () => {
+		gitIsRunning();
+		// Only what the caller put there, as it wrote it: that goes by force
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json'], submodules: false });
+		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
+		files.set('/home/me/.facade/worktrees/lab/w2/.mcp.json', '{}');
+		workspaceFolders = [main, w2];
+		onDisk.add(w2.path);
+		// The dev server writes its log as it is stopped
+		terminals = [terminal('npm run dev', w2.path, { running: true, closing: () => answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['.mcp.json', 'dev.log'], submodules: false }) })];
+
+		const refused = await instantiationService.createInstance(WorktreeService).removeWorktree(w2, { ownFiles: [{ path: '.mcp.json', sha256: SHA256_OF_EMPTY_OBJECT }] }).then(() => 'deleted', (err: Error) => err.message);
+
+		assert.deepStrictEqual({ refused, steps }, {
+			refused: '/home/me/.facade/worktrees/lab/w2 was not deleted: changes came into it as it was being deleted, which deleting it would lose: dev.log.\nThe terminals working in it were closed for the deletion, which ended what ran in them: npm run dev.',
+			steps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'show /lab',
+				'hide /home/me/.facade/worktrees/lab/w2',
+				'remove /home/me/.facade/worktrees/lab/w2',
+				'close npm run dev',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'unhide /home/me/.facade/worktrees/lab/w2',
+				'add /home/me/.facade/worktrees/lab/w2, in the background',
+				'back to /home/me/.facade/worktrees/lab/w2',
+			]
+		});
+	});
+
+	test('a locked worktree, which Git does not delete, is refused at its first look - by the person\'s Delete Worktree or a caller\'s, or as a caller looks before stopping anything - before anything is asked, closed or moved: why it is locked said, and how to unlock it (OR-11)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'error', code: 'WorktreeLocked', message: 'on an external disk' });
+		const service = instantiationService.createInstance(WorktreeService);
+		const byACaller = await service.removeWorktree(w2, {}).then(() => 'deleted', (err: Error) => err.message);
+		const looked = await service.removalLoss(w2).then(() => 'looked', (err: Error) => err.message);
+		answers.set('_git.deleteWorktreeAt check', { kind: 'error', code: 'WorktreeLocked', message: '' });
+		await service.deleteWorktree(w2);
+
+		const unlock = `git worktree unlock "${w2.fsPath}"`;
+		assert.deepStrictEqual({ byACaller, looked, steps }, {
+			byACaller: `"w2" is locked: on an external disk. Git does not delete a locked worktree: unlock it with ${unlock}, then try again.`,
+			looked: `"w2" is locked: on an external disk. Git does not delete a locked worktree: unlock it with ${unlock}, then try again.`,
+			steps: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+				`error: "w2" is locked. Git does not delete a locked worktree: unlock it with ${unlock}, then try again.`,
+			]
 		});
 	});
 
@@ -1201,7 +1493,26 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual({ byThePerson, byACaller: closing }, { byThePerson: ['@clamp #a2 worktreeDeleted'], byACaller: [] });
 	});
 
-	test('a delete git refuses brings the row back and says why, and the worktree keeps its name, colour and trust', async () => {
+	test('deleted without asking, for an agent, its folder leaves the workspace as background work - no extension host restarts for it, the window\'s first folder or not - and leaves it so only while it does; the person\'s Delete Worktree is their own act (AGENT-LAUNCHER.md, L1; VC-01)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const removals: string[] = [];
+		instantiationService.stub(IWorkspaceBarService, 'remove', async (uris: readonly URI[]) => {
+			removals.push(`${uris.map(uri => uri.path).join(', ')}${uris.some(uri => backgroundFolderChanges.isChanging(uri)) ? ', in the background' : ''}`);
+		});
+		const service = instantiationService.createInstance(WorktreeService);
+		await service.removeWorktree(w2);
+		const afterwards = backgroundFolderChanges.isChanging(w2);
+		await service.deleteWorktree(w2);
+
+		assert.deepStrictEqual({ removals, afterwards }, {
+			removals: ['/home/me/.facade/worktrees/lab/w2, in the background', '/home/me/.facade/worktrees/lab/w2'],
+			afterwards: false
+		});
+	});
+
+	test('a delete git refuses brings the row back and says why, the agents\' record is told it is over, and the worktree keeps its name, colour and trust (OR-10)', async () => {
 		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'error', code: undefined, message: 'fatal: the directory is busy' });
 
@@ -1215,6 +1526,7 @@ suite('Worktrees - making and deleting one', () => {
 			'close its terminal',
 			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
 			'unhide /home/me/.facade/worktrees/lab/w2',
+			'_facade.agents.worktreeDeleteFailed /home/me/.facade/worktrees/lab/w2',
 			'error: The worktree could not be deleted: fatal: the directory is busy',
 		]);
 	});

@@ -20,10 +20,10 @@ import { GroupModelChangeKind } from '../../../common/editor.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
-import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
+import { FolderTerminalEndReason, IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../terminal/browser/terminal.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
-import { facadeRunOf, facadeRunTerminalOf, IFacadeRun, isFacadeRunTerminal } from '../common/facadeRun.js';
+import { facadeRunOf, facadeRunTerminalOf, IFacadeRun, IPreparingRun, isFacadeRunTerminal } from '../common/facadeRun.js';
 
 /** How a run's own process ended, as this load of the window saw it end. */
 export interface IFacadeRunEnd {
@@ -32,12 +32,16 @@ export interface IFacadeRunEnd {
 
 	/**
 	 * Whether the person closed its terminal: closed for the user with no exit code, its process not ended
-	 * before. VS Code closes a terminal in the editor area whose process exited as if the user had, the
-	 * process's code kept; one killed with no code, its tab closed after, ended by its process (C-WB-16).
+	 * before - but for its folder gone from the disk, which no one the window knows did. VS Code closes a
+	 * terminal in the editor area whose process exited as if the user had, the process's code kept; one
+	 * killed with no code, its tab closed after, ended by its process (C-WB-16).
 	 */
 	readonly byThePerson: boolean;
 
-	/** Why the person's act closed it, where it was not its tab they closed: their deletion of its worktree (N-04). */
+	/**
+	 * Why it was closed, where it was not its tab that was closed: the person's deletion of its worktree (N-04), or
+	 * removal of its folder from the workspace; or its folder gone from the disk (AGENT-LAUNCHER.md, L6).
+	 */
 	readonly reason?: FacadeRunCloseReason;
 }
 
@@ -87,22 +91,39 @@ export interface IFacadeRunsService {
 	 * Says why the person's act is about to close `instance`, a run's terminal, where it is not its tab they
 	 * close - their deletion of its worktree: its run's end says so (N-04).
 	 */
-	closingBecause(instance: ITerminalInstance, reason: FacadeRunCloseReason): void;
+	closingBecause(instance: ITerminalInstance, reason: FacadeRunClosingReason): void;
 
 	/**
 	 * The runs of the window's record that are live - starting, running or stopping - as the agents' extension
-	 * last said: one making its worktree has no terminal yet, one that ended keeps its tab (X-51). Undefined
-	 * until it has said, as while it is not running in the window.
+	 * last said: those with no terminal yet, their worktrees being made or set up, listed apart in `preparing`
+	 * too; one that ended keeps its tab (X-51). Undefined until it has said, as while it is not running in the
+	 * window.
 	 */
-	readonly live: { readonly workspace: string; readonly ids: readonly number[] } | undefined;
+	readonly live: IFacadeLiveRuns | undefined;
 	readonly onDidChangeLive: Event<void>;
 
-	/** What the agents' extension says is live now in its record `workspace`. */
-	setLive(workspace: string, ids: readonly number[]): void;
+	/** What the agents' extension says is live now in its record `workspace`; `preparing`, those of them with no terminal yet. */
+	setLive(workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[]): void;
 }
 
-/** Why the person's act closes a run's terminal, where it is not its tab they close: a code, the record's to word. */
-export type FacadeRunCloseReason = 'worktreeDeleted';
+/** The live runs of the record `workspace`, as the agents' extension says them (`IFacadeRunsService.live`). */
+export interface IFacadeLiveRuns {
+	readonly workspace: string;
+	/** Every one of them, by its number. */
+	readonly ids: readonly number[];
+	/** Those of them with no terminal yet: their worktrees being made or set up (L3). */
+	readonly preparing: readonly IPreparingRun[];
+}
+
+/**
+ * Why a run's terminal is closed, where it is not its tab the person closes: a code, the record's to word - the person's
+ * deletion of its worktree, or why the folder terminals ended it: the person's removal of its folder from the workspace,
+ * or its folder gone from the disk, by no one the window knows (AGENT-LAUNCHER.md, L6).
+ */
+export type FacadeRunCloseReason = 'worktreeDeleted' | FolderTerminalEndReason;
+
+/** Why the person's act is about to close a run's terminal, as the window is told beforehand (`closingBecause`). */
+type FacadeRunClosingReason = Extract<FacadeRunCloseReason, 'worktreeDeleted'>;
 
 /** What this load of the window knows of a run beyond its terminal's mark. */
 interface IRunRecord {
@@ -121,7 +142,7 @@ interface IRunRecord {
 	exited?: { readonly exitCode: number | undefined };
 
 	/** Why the person's act is about to close its terminal, where it is not its tab they close. */
-	closingBecause?: FacadeRunCloseReason;
+	closingBecause?: FacadeRunClosingReason;
 
 	/** Set as its terminal goes with the window: whether its process comes back is the next load's to say. */
 	leaving?: boolean;
@@ -257,17 +278,17 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 		}
 	}
 
-	private _live: { readonly workspace: string; readonly ids: readonly number[] } | undefined;
+	private _live: IFacadeLiveRuns | undefined;
 	private readonly _onDidChangeLive = this._register(new Emitter<void>());
 	readonly onDidChangeLive = this._onDidChangeLive.event;
 
-	get live(): { readonly workspace: string; readonly ids: readonly number[] } | undefined {
+	get live(): IFacadeLiveRuns | undefined {
 		return this._live;
 	}
 
-	setLive(workspace: string, ids: readonly number[]): void {
+	setLive(workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[]): void {
 		const known = this._live?.workspace === workspace;
-		this._live = { workspace, ids: [...ids] };
+		this._live = { workspace, ids: [...ids], preparing: [...preparing] };
 		this._onDidChangeLive.fire();
 		// The window's record known now: its runs from before the window became a workspace are taken back too (X-31)
 		if (!known) {
@@ -275,7 +296,7 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 		}
 	}
 
-	closingBecause(instance: ITerminalInstance, reason: FacadeRunCloseReason): void {
+	closingBecause(instance: ITerminalInstance, reason: FacadeRunClosingReason): void {
 		const run = facadeRunOf(instance);
 		if (run) {
 			const record = this._runs.get(keyOf(run)) ?? { run };
@@ -378,8 +399,13 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 			// A terminal that came back for a process that had ended meanwhile never had it: closing it stops no
 			// agent, and how that one ended is the pty host's to say (N-51; REC-07)
 			const neverAttached = instance.processId === undefined && instance.shellLaunchConfig.attachPersistentProcess !== undefined;
-			const byThePerson = !neverAttached && record.exited === undefined && instance.exitReason === TerminalExitReason.User && instance.exitCode === undefined;
-			record.end = { exitCode: record.exited?.exitCode ?? instance.exitCode, byThePerson, ...(byThePerson && record.closingBecause ? { reason: record.closingBecause } : {}) };
+			const closed = !neverAttached && record.exited === undefined && instance.exitReason === TerminalExitReason.User && instance.exitCode === undefined;
+			// Why, where it was not its tab that was closed: the person's deletion of its worktree, the folder terminals
+			// ending it as its folder left the workspace - the person's act - or as its folder went from the disk, by no
+			// one the window knows (AGENT-LAUNCHER.md, L6)
+			const reason = closed ? record.closingBecause ?? this._folderTerminalsService.endedBecause(instance) : undefined;
+			const byThePerson = closed && reason !== 'folderGone';
+			record.end = { exitCode: record.exited?.exitCode ?? instance.exitCode, byThePerson, ...(reason ? { reason } : {}) };
 		}
 	}
 

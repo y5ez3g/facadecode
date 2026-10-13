@@ -206,6 +206,8 @@ export class TestActiveFolderService implements IActiveFolderService {
 	readonly onWillChangeActiveFolder = Event.None;
 	readonly onDidChangeActiveFolder = Event.None;
 
+	readonly previousFolder: IWorkspaceFolder | undefined = undefined;
+
 	constructor(readonly activeFolder: IWorkspaceFolder | undefined) { }
 
 	activeFolderFor(scheme?: string, authority?: string): IWorkspaceFolder | undefined {

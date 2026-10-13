@@ -199,6 +199,25 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(seen, '/w/api -> /w/notes');
 	});
 
+	test('the folder a move left is the previous one, while it is still a root and not where the window is', async () => {
+		const { service, workspace } = build();
+		const previous = () => service.previousFolder?.uri.path;
+		const before = previous();
+		await service.setActiveFolder(URI.file('/w/web'));
+		const afterMove = previous();
+		await service.setActiveFolder(URI.file('/w/notes'));
+		const afterSecond = previous();
+		workspace.setFolders(['/w/api', '/w/notes']);
+		const gone = previous();
+		// Moved from `api` to `web`, and `web` removed: the window lands on `api`, which it left
+		const landedOn = build({ paths: ['/w/api', '/w/web'] });
+		await landedOn.service.setActiveFolder(URI.file('/w/web'));
+		landedOn.workspace.setFolders(['/w/api']);
+		const whereTheWindowIs = { active: active(landedOn.service), previous: landedOn.service.previousFolder?.uri.path };
+
+		assert.deepStrictEqual({ before, afterMove, afterSecond, gone, whereTheWindowIs }, { before: undefined, afterMove: '/w/api', afterSecond: '/w/web', gone: undefined, whereTheWindowIs: { active: '/w/api', previous: undefined } });
+	});
+
 	test('removing the active root moves to the row that took its place', async () => {
 		const { service, workspace } = build();
 		await service.setActiveFolder(URI.file('/w/web'));

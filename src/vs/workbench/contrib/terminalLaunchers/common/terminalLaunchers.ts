@@ -4,10 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Codicon } from '../../../../base/common/codicons.js';
+import { isWindows } from '../../../../base/common/platform.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { isObject, isString } from '../../../../base/common/types.js';
 import { localize } from '../../../../nls.js';
-import { IReconnectionProperties, IShellLaunchConfig, TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
+import { IReconnectionProperties, IShellLaunchConfig } from '../../../../platform/terminal/common/terminal.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { ILifecycleService, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
 import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
@@ -53,28 +54,6 @@ function programOf(command: string): string | undefined {
 }
 
 /**
- * Every icon an agent's terminal can have, which is how one is recognised afterwards.
- *
- * A terminal has nowhere to carry a flag of ours: `reconnectionProperties` is the field upstream built
- * for an owner to mark one, and setting it takes the terminal out of `shouldPersist` unless
- * `task.reconnection` is on - a worse bug traded for a smaller one. The icon is what survives a reload,
- * so the icon is the marker.
- */
-const AGENT_ICON_IDS: ReadonlySet<string> = new Set([AGENT_TERMINAL_ICON.id, ...[...AGENT_ICONS.values()].map(icon => icon.id)]);
-
-/**
- * Whether a terminal is drawn as an agent's, which is what makes it one.
- *
- * ⚠️ It reads both ways, and that is the price of the marker. Changing an agent tab's icon to something
- * else stops it being an agent tab, and giving a plain terminal the robot or an agent's logo starts it
- * being one. A terminal that looks like an agent behaves like one, which is at least a rule somebody can
- * see.
- */
-export function isAgentTerminalIcon(icon: TerminalIcon | undefined): boolean {
-	return ThemeIcon.isThemeIcon(icon) && AGENT_ICON_IDS.has(icon.id);
-}
-
-/**
  * Whether a terminal being brought back as the window starts is an agent's that is gone: the window's
  * last shutdown - closed, quit, left for another workspace - ended its agents, and only a reload finds
  * them still running. Brought back anyway, its tab would be its CLI run again, or a fresh shell under the
@@ -110,12 +89,12 @@ export interface IAgentName {
 
 /**
  * What to keep of a terminal started now for a reload to give back: the name and title template it
- * was started with, when it is an agent's - drawn with an agent's icon, whoever started it: the agent
- * button, or anything else that gives a terminal one, as Facade's agents do. Undefined for any other,
- * one without a name, and one a reload brought back (`restoreAgentLaunch`).
+ * was started with, when it is an agent's - marked as its run's (`isFacadeRunTerminal`), as every agent
+ * Facade starts is, whatever its icon. Undefined for any other - an ordinary terminal drawn with the
+ * robot among them - one without a name, and one a reload brought back (`restoreAgentLaunch`).
  */
 export function agentLaunchOf(shellLaunchConfig: IShellLaunchConfig): IAgentName | undefined {
-	if (shellLaunchConfig.attachPersistentProcess || !isAgentTerminalIcon(shellLaunchConfig.icon) || !shellLaunchConfig.name) {
+	if (shellLaunchConfig.attachPersistentProcess || !isFacadeRunTerminal(shellLaunchConfig) || !shellLaunchConfig.name) {
 		return undefined;
 	}
 
@@ -162,11 +141,12 @@ export function readAgentNames(value: string | undefined): Map<string, IAgentNam
  * titles in one debounced call for all its terminals, so the name one was started with can have been
  * dropped for another terminal's title. Given both back, it takes the course it took when it started.
  *
- * ⚠️ Only one still drawn as an agent's: given another icon since, it is no longer one.
+ * ⚠️ Only an agent's: its process marked as its run's, whatever its icon - not an ordinary terminal drawn
+ * with the robot (`agentLaunchOf`).
  */
 export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names: ReadonlyMap<string, IAgentName>): boolean {
 	const reconnecting = shellLaunchConfig.attachPersistentProcess;
-	const kept = reconnecting && isAgentTerminalIcon(reconnecting.icon) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
+	const kept = reconnecting && isFacadeRunTerminal(reconnecting) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
 	if (!reconnecting || !kept) {
 		return false;
 	}
@@ -268,9 +248,12 @@ export function executableFileNames(executable: string, pathExtensions: readonly
 	return hasExtension ? [executable] : pathExtensions.map(extension => executable + extension);
 }
 
-/** Whether a command names a location rather than something to look for on the search path. */
+/**
+ * Whether a command names a location rather than something to look for on the search path: it has a path separator
+ * in it - a backslash one on Windows alone, as the agents' extension reads it.
+ */
 export function isPathLike(executable: string): boolean {
-	return executable.includes('/') || executable.includes('\\');
+	return (isWindows ? /[\\/]/ : /\//).test(executable);
 }
 
 /**

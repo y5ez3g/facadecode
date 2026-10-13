@@ -7,8 +7,20 @@ import type { Terminal as RawXtermTerminal } from '@xterm/xterm';
 import { CharCode } from '../../../../base/common/charCode.js';
 
 /** What bracketed paste mode wraps a paste in, for the program to take it as one. */
-export const PASTE_START = '\x1b[200~';
-export const PASTE_END = '\x1b[201~';
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+
+/**
+ * What `raw` sends its process for `text` pasted, as its own paste path sends the person's paste (xterm's `paste`,
+ * which VS Code's Paste calls): line breaks as Enter, and in the bracketed-paste markers where the program turned
+ * that mode on and the person has not told the terminal to ignore it - `terminal.integrated.ignoreBracketedPasteMode`,
+ * which VS Code gives xterm as its `ignoreBracketedPasteMode` option - with no Escape inside them that could end the
+ * paste early. Never through xterm itself, whose paste the window takes as the person's typing.
+ */
+export function pasteSequence(raw: RawXtermTerminal | undefined, text: string): string {
+	const lines = text.replace(/\r?\n/g, '\r');
+	return raw?.modes.bracketedPasteMode && raw.options.ignoreBracketedPasteMode !== true ? `${PASTE_START}${lines.replace(/\x1b/g, '\u241b')}${PASTE_END}` : lines;
+}
 
 /** A key as a keyboard event gives it, for the terminal to encode, and as it is sent without the terminal's help. */
 interface INamedKey {

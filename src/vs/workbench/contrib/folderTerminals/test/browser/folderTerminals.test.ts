@@ -1461,6 +1461,31 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		assert.deepStrictEqual({ ended: (agent as unknown as TestInstance).disposed, held: folderTerminals.terminalsOf(p1).length }, { ended: true, held: 0 });
 	});
 
+	test('a terminal it ends says why, for an agent\'s run to say so: its folder left the workspace, or its worktree is gone from the disk; the person\'s own shell it leaves says nothing (AGENT-LAUNCHER.md, L6; LA-06)', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const p1 = URI.file('/w/p1');
+		const shell = new TestInstance('shell');
+		const { folders, context, bar, folderTerminals, files } = setup([new TestGroup(0, [tabFor(shell)])], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		bar.members = [alpha, beta];
+		bar.rows.push(p1);
+		const removed = await folderTerminals.openFor(beta.uri, { name: 'removed' });
+		const gone = await folderTerminals.openFor(p1, { name: 'gone' });
+
+		context.removeFolder(beta);
+		files.gone.add('/w/p1/.git');
+		bar.read([]);
+		await timeout(0);
+
+		assert.deepStrictEqual([removed, gone, shell.asInstance()].map(instance => [(instance as unknown as TestInstance).name, (instance as unknown as TestInstance).exitReason, folderTerminals.endedBecause(instance)]), [
+			['removed', TerminalExitReason.User, 'folderRemoved'],
+			['gone', TerminalExitReason.User, 'folderGone'],
+			['shell', undefined, undefined],
+		]);
+	});
+
 	test('a row that joined the workspace while the window was closed is that folder after a reload: taking it out then ends its terminals', async () => {
 		const alpha = folder('alpha');
 		const p1 = folder('p1');

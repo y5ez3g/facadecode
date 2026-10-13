@@ -18,7 +18,7 @@ import { CommandsRegistry } from '../../../../../platform/commands/common/comman
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
-import { INotification, INotificationHandle, INotificationService, NotificationPriority } from '../../../../../platform/notification/common/notification.js';
+import { INotification, INotificationHandle, INotificationService, NotificationPriority, Severity } from '../../../../../platform/notification/common/notification.js';
 import { IProductService } from '../../../../../platform/product/common/productService.js';
 import { IMergedEnvironmentVariableCollection } from '../../../../../platform/terminal/common/environmentVariable.js';
 import { IShellLaunchConfig, ITerminalBackend } from '../../../../../platform/terminal/common/terminal.js';
@@ -38,7 +38,7 @@ import { FacadeAgentTerminal, IAgentKeysOptions, IAgentTerminalOptions, IAgentTy
 import '../../browser/facadeCommands.contribution.js';
 import { FacadeNotifications } from '../../browser/facadeNotifications.js';
 import { FacadeRunProcess, IFacadeRunsService } from '../../browser/facadeRuns.js';
-import { facadeRunOf, facadeRunProperties, IFacadeRun } from '../../common/facadeRun.js';
+import { facadeRunOf, facadeRunProperties, IFacadeRun, IPreparingRun } from '../../common/facadeRun.js';
 
 /** A terminal as the folder terminals open one: made before its process is started, its id known once that is ready. */
 class TestTerminal {
@@ -49,7 +49,10 @@ class TestTerminal {
 	private readonly _onExit = new Emitter<number | undefined>();
 	readonly onExit = this._onExit.event;
 
-	/** What the commands did to it: the signals it was sent, what was typed into it, and its closing. */
+	/**
+	 * What the commands did to it: the signals it was sent, what was typed into it, and its closing - and what they asked
+	 * of its Facade contribution, where a test keeps that here too.
+	 */
 	readonly done: string[] = [];
 
 	/** Whether its process ends on a hang-up, as a CLI does. */
@@ -151,25 +154,26 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		}
 	}
 
-	/** The Facade contribution of the terminal titled `title`, its calls kept in `steps`. */
-	function agentTerminal(title: string | undefined, exited = false): FacadeAgentTerminal {
+	/** The Facade contribution of the terminal titled `title`, its calls kept in `log`: in `steps`, unless said. */
+	function agentTerminal(title: string | undefined, exited = false, log = steps): FacadeAgentTerminal {
 		return upcastPartial<FacadeAgentTerminal>({
 			isAgent: true,
 			exited,
-			register: (options: IAgentTerminalOptions) => steps.push(`register ${title} as ${options.run.workspace}#${options.run.id}, its final screen in ${options.finalScreen.path}`),
+			register: (options: IAgentTerminalOptions) => log.push(`register ${title} as ${options.run.workspace}#${options.run.id}, its final screen in ${options.finalScreen.path}`),
 			read: async (lines: number) => {
-				steps.push(`read ${lines} of ${title}`);
+				log.push(`read ${lines} of ${title}`);
 				return { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined };
 			},
 			type: async (text: string, options: IAgentTypeOptions) => {
-				steps.push(`type ${JSON.stringify(text)} into ${title} ${JSON.stringify(options)}`);
+				log.push(`type ${JSON.stringify(text)} into ${title} ${JSON.stringify(options)}`);
 				return { outcome: 'applied', pasted: true, entered: true };
 			},
 			keys: async (keys: readonly string[], options: IAgentKeysOptions) => {
-				steps.push(`press ${keys.join(' ')} in ${title} ${JSON.stringify(options)}`);
+				log.push(`press ${keys.join(' ')} in ${title} ${JSON.stringify(options)}`);
 				return { outcome: 'applied', keysSent: keys.length };
 			},
-			inputState: () => ({ pending: true, lastKey: 7, busy: true })
+			inputState: () => ({ pending: true, lastKey: 7, busy: true }),
+			closeInput: () => log.push(`close the input of ${title}`)
 		});
 	}
 
@@ -202,11 +206,16 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				steps.push(`make ${main.path} ${branch} ${options?.startPoint} ${options?.show}`);
 				return { worktree: URI.file(`/home/me/.facade/worktrees/lab/${branch}`), copyFailures: [] };
 			},
+			setupState: worktree => worktree.path === '/home/me/.facade/worktrees/lab/clamp' ? { running: 'npm ci', lines: ['added 4 packages', 'npm warn deprecated left-pad@1.3.0'] } : undefined,
 			removeWorktree: async (worktree, options) => {
 				steps.push(`delete ${worktree.path}${options ? ` ${JSON.stringify({ ...options, main: options.main?.path })}` : ''}`);
 				if (worktree.path === '/lab') {
 					throw new Error('/lab is its repository\'s main checkout, which is never deleted.');
 				}
+			},
+			removalLoss: async (worktree, options) => {
+				steps.push(`look at ${worktree.path}${options ? ` ${JSON.stringify({ ...options, main: options.main?.path })}` : ''}`);
+				return worktree.path === '/home/me/.facade/worktrees/lab/clamp' ? ['build/out.js', 'logo.png (unsaved)'] : [];
 			},
 			terminalsInside: async worktree => worktree.path === '/home/me/.facade/worktrees/lab/clamp' ? [
 				upcastPartial<ITerminalInstance>({ reconnectionProperties: facadeRunProperties({ workspace: 'a1b2', id: 2 }), exitCode: undefined }),
@@ -274,6 +283,18 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		});
 	});
 
+	test('the setup of a worktree made for an agent is answered as it stands now - the line running and the last lines of its terminal - for the start waiting on it; nothing where the window knows no setup, and a folder that is no URI is refused (O3; OR-03)', async () => {
+		const running = await run('_facade.worktree.setupState', URI.file('/home/me/.facade/worktrees/lab/clamp'));
+		const none = await run('_facade.worktree.setupState', URI.file('/home/me/.facade/worktrees/lab/tidy'));
+		const notAUri = await failureOf('_facade.worktree.setupState', '/home/me/.facade/worktrees/lab/clamp');
+
+		assert.deepStrictEqual({ running, none, notAUri }, {
+			running: { running: 'npm ci', lines: ['added 4 packages', 'npm warn deprecated left-pad@1.3.0'] },
+			none: undefined,
+			notAUri: 'Unexpected type, expected \'URI\'',
+		});
+	});
+
 	test('a worktree is deleted without asking, as the worktrees delete one, answered once it is gone, told what the caller knows of it - its own files by hash, its main checkout, the runs stopped in it; why it could not be is the rejection, and a folder that is no URI, or options of another shape, are refused', async () => {
 		const clamp = URI.file('/home/me/.facade/worktrees/lab/clamp');
 		const deleted = await run('_facade.worktree.delete', clamp);
@@ -296,6 +317,23 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				'delete /home/me/.facade/worktrees/lab/clamp',
 				`delete /home/me/.facade/worktrees/lab/clamp {"discardChanges":false,"ownFiles":[{"path":".mcp.json","sha256":"${'ab'.repeat(32)}"}],"main":"/lab","runs":[{"workspace":"a1b2","id":2}]}`,
 				'delete /lab',
+			],
+		});
+	});
+
+	test('what deleting a worktree would lose is looked at - for an agent\'s deletion, before any agent is stopped - and answered as the worktrees name it, the options it is deleted with applied; nothing is deleted, and options of another kind are refused (O5 step 2; OR-04)', async () => {
+		const clamp = URI.file('/home/me/.facade/worktrees/lab/clamp');
+		const loss = await run('_facade.worktree.removalLoss', clamp, { ownFiles: [{ path: '.mcp.json', sha256: 'ab'.repeat(32) }], main: URI.file('/lab'), runs: [{ workspace: 'a1b2', id: 2 }] });
+		const nothing = await run('_facade.worktree.removalLoss', URI.file('/home/me/.facade/worktrees/lab/tidy'));
+		const notABoolean = await failureOf('_facade.worktree.removalLoss', clamp, { discardChanges: 'yes' });
+
+		assert.deepStrictEqual({ loss, nothing, notABoolean, steps }, {
+			loss: ['build/out.js', 'logo.png (unsaved)'],
+			nothing: [],
+			notABoolean: 'Unexpected type, expected \'IRemoveWorktreeOptions\'',
+			steps: [
+				`look at /home/me/.facade/worktrees/lab/clamp {"ownFiles":[{"path":".mcp.json","sha256":"${'ab'.repeat(32)}"}],"main":"/lab","runs":[{"workspace":"a1b2","id":2}]}`,
+				'look at /home/me/.facade/worktrees/lab/tidy',
 			],
 		});
 	});
@@ -487,8 +525,35 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		});
 	});
 
-	test('a run\'s process is ended as closing its tab ends it, and answered once it is gone, with how it exited; one that is not gone a few seconds on, or that the window cannot find yet, is answered so; one gone already is gone', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+	test('the window keeps the runs the agents\' extension says are live in its record - those with no terminal yet, their worktrees being made or set up, among them - for the agent button; runs of another kind, or a preparing run of another shape, are refused and nothing is kept (X-51; L3)', async () => {
+		instantiationService.stub(IFacadeRunsService, 'setLive', (workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[]) => {
+			steps.push(`live in ${workspace}: ${ids.join(', ')}, preparing ${JSON.stringify(preparing)}`);
+		});
+		const making = { id: 3, name: 'lint', phase: 'creating_worktree' };
+		await run('_facade.agents.live', 'a1b2', [1, 3, 4], [making, { id: 4, name: 'docs', phase: 'running_setup', folder: '/w/docs' }]);
+		// As the extension host gives what it leaves out
+		await run('_facade.agents.live', 'a1b2', [1], null);
+		const failures = [
+			await failureOf('_facade.agents.live', 7, [1]),
+			await failureOf('_facade.agents.live', 'a1b2', ['1']),
+			await failureOf('_facade.agents.live', 'a1b2', [3], making),
+			await failureOf('_facade.agents.live', 'a1b2', [3], [{ ...making, phase: 'starting' }]),
+			await failureOf('_facade.agents.live', 'a1b2', [3], [{ ...making, id: 0 }]),
+			await failureOf('_facade.agents.live', 'a1b2', [3], [{ ...making, folder: 42 }]),
+		];
+
+		assert.deepStrictEqual({ steps, failures }, {
+			steps: [
+				'live in a1b2: 1, 3, 4, preparing [{"id":3,"name":"lint","phase":"creating_worktree"},{"id":4,"name":"docs","phase":"running_setup","folder":"/w/docs"}]',
+				'live in a1b2: 1, preparing []',
+			],
+			failures: ['Unexpected type, expected \'string\'', 'Unexpected type, expected \'number[]\'', ...Array(4).fill('Unexpected type, expected \'IPreparingRun[]\'')],
+		});
+	});
+
+	test('a run\'s process is ended as closing its tab ends it - its agent\'s input closed first, so that nothing goes into the stopping CLI (D3) - and answered once it is gone, with how it exited; one that is not gone a few seconds on, or that the window cannot find yet, is answered so; one gone already is gone', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
 		const lead = new TestTerminal('@lead #1 · Claude Code');
+		lead.agent = agentTerminal(lead.title, false, lead.done);
 		const stubborn = new TestTerminal('@stubborn #2 · Codex');
 		stubborn.endsOnHangUp = false;
 		runs.set('a1b2#1', { terminal: lead, process: { state: 'present' } });
@@ -514,7 +579,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			goneAlready: {},
 			killed: isWindows ? {} : { exitCode: 129 },
 			notASignal: 'Unexpected type, expected \'SIGHUP | SIGTERM | SIGKILL\'',
-			lead: isWindows ? ['dispose'] : ['signal SIGHUP'],
+			lead: isWindows ? ['close the input of @lead #1 · Claude Code', 'dispose'] : ['close the input of @lead #1 · Claude Code', 'signal SIGHUP'],
 			stubborn: isWindows ? ['dispose', 'dispose'] : ['signal SIGHUP', 'signal SIGKILL'],
 		});
 	}));
@@ -652,24 +717,24 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		entry.handle.close();
 	}
 
-	test('a notification Facade keeps by its key is shown, and the next with that key takes its place as a new one, so that it is shown as the first was; the call answers with the button pressed, or nothing once it closed (AGENT-MESSAGES.md, M11)', async () => {
+	test('a notification Facade keeps by its key is shown - as news, or as the warning or error it says it is - and the next with that key takes its place as a new one, so that it is shown as the first was; the call answers with the button pressed, or nothing once it closed (AGENT-MESSAGES.md, M11)', async () => {
 		instantiationService.stub(IHostService, { hasFocus: true });
 		const { shown } = notifications();
 		const first = run('_facade.notification.show', 'message:3', '@lint #a3 has something for you: one.', ['Show']);
-		const second = run('_facade.notification.show', 'message:3', '@lint #a3 has something for you: two.', ['Show', 'Later']);
-		const other = run('_facade.notification.show', 'message:4', '@docs #a4 has something for you: done.', ['Show']);
+		const second = run('_facade.notification.show', 'message:3', '@lint #a3 has something for you: two.', ['Show', 'Later'], null, 'warning');
+		const other = run('_facade.notification.show', 'message:4', '@docs #a4 ended with an error.', ['Show'], null, 'error');
 		press(shown[1], 'Later');
 		shown[2].handle.close();
 
 		assert.deepStrictEqual({
 			answers: [await first, await second, await other],
-			shown: shown.map(({ notification, closed }) => ({ message: notification.message, buttons: notification.actions?.primary?.map(action => action.label), source: notification.source, closed }))
+			shown: shown.map(({ notification, closed }) => ({ message: notification.message, severity: notification.severity, buttons: notification.actions?.primary?.map(action => action.label), source: notification.source, closed }))
 		}, {
 			answers: [undefined, 'Later', undefined],
 			shown: [
-				{ message: '@lint #a3 has something for you: one.', buttons: ['Show'], source: 'Facade Agents', closed: true },
-				{ message: '@lint #a3 has something for you: two.', buttons: ['Show', 'Later'], source: 'Facade Agents', closed: true },
-				{ message: '@docs #a4 has something for you: done.', buttons: ['Show'], source: 'Facade Agents', closed: true }
+				{ message: '@lint #a3 has something for you: one.', severity: Severity.Info, buttons: ['Show'], source: 'Facade Agents', closed: true },
+				{ message: '@lint #a3 has something for you: two.', severity: Severity.Warning, buttons: ['Show', 'Later'], source: 'Facade Agents', closed: true },
+				{ message: '@docs #a4 ended with an error.', severity: Severity.Error, buttons: ['Show'], source: 'Facade Agents', closed: true }
 			]
 		});
 	});
@@ -692,17 +757,37 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		assert.deepStrictEqual(shown.map(({ notification }) => `${notification.message} ${notification.priority === NotificationPriority.SILENT ? 'quiet' : 'aloud'}`), ['One. quiet', 'Two. aloud', 'Three. aloud', 'Elsewhere. aloud']);
 	});
 
-	test('a notification is refused a key, a message, buttons or a run of the wrong kind, and none is shown', async () => {
+	test('a notification Facade keeps by its key is closed by that key - from the notification center too - its call answering with nothing pressed; a key with none up, or one whose notification closed, closes nothing (AGENT-LAUNCHER.md, L5; AGENT-MESSAGES.md, M11)', async () => {
+		instantiationService.stub(IHostService, { hasFocus: true });
+		const { shown } = notifications();
+		const warning = run('_facade.notification.show', 'message:facade:3', '@late #a3 is open, but has not connected to Facade.', ['Show'], null, 'warning');
+		const other = run('_facade.notification.show', 'message:4', '@docs #a4 has something for you: done.', ['Show']);
+		await run('_facade.notification.close', 'message:facade:3');
+		await run('_facade.notification.close', 'message:facade:3');
+		await run('_facade.notification.close', 'message:facade:9');
+		const failure = await failureOf('_facade.notification.close', 3);
+
+		assert.deepStrictEqual({ answer: await warning, failure, closed: shown.map(({ notification, closed }) => `${notification.message} ${closed ? 'closed' : 'up'}`) }, {
+			answer: undefined,
+			failure: 'Unexpected type, expected \'string\'',
+			closed: ['@late #a3 is open, but has not connected to Facade. closed', '@docs #a4 has something for you: done. up']
+		});
+		shown[1].handle.close();
+		await other;
+	});
+
+	test('a notification is refused a key, a message, buttons, a run or a severity of the wrong kind, and none is shown', async () => {
 		const { shown } = notifications();
 		const failures = [
 			await failureOf('_facade.notification.show', 42, 'text', []),
 			await failureOf('_facade.notification.show', 'key', undefined, []),
 			await failureOf('_facade.notification.show', 'key', 'text', ['Show', 2]),
-			await failureOf('_facade.notification.show', 'key', 'text', ['Show'], 41)
+			await failureOf('_facade.notification.show', 'key', 'text', ['Show'], 41),
+			await failureOf('_facade.notification.show', 'key', 'text', ['Show'], null, 'fatal')
 		];
 
 		assert.deepStrictEqual({ failures, shown: shown.length }, {
-			failures: ['Unexpected type, expected \'string\'', 'Unexpected type, expected \'string\'', 'Unexpected type, expected \'string[]\'', 'Unexpected type, expected \'IFacadeRun\''],
+			failures: ['Unexpected type, expected \'string\'', 'Unexpected type, expected \'string\'', 'Unexpected type, expected \'string[]\'', 'Unexpected type, expected \'IFacadeRun\'', 'Unexpected type, expected \'\'information\' | \'warning\' | \'error\'\''],
 			shown: 0
 		});
 	});
@@ -718,7 +803,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		});
 	});
 
-	test('the terminal a run\'s own process runs in is read, typed into, pressed keys in, registered and asked what holds Facade\'s input back, by its run; none where it runs in none (D2-D5, D8)', async () => {
+	test('the terminal a run\'s own process runs in is read, typed into - a doorbell as input that needs the agent framework (M10) - pressed keys in, registered and asked what holds Facade\'s input back, by its run; none where it runs in none (D2-D5, D8)', async () => {
 		const lint = new TestTerminal('@lint #a3');
 		lint.agent = agentTerminal('@lint #a3');
 		const gone = new TestTerminal('@gone #a5');
@@ -733,6 +818,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			readEnded: await run('_facade.terminal.read', { workspace: 'a1b2', id: 5 }, 50),
 			readNone: await run('_facade.terminal.read', none, 5),
 			typed: await run('_facade.terminal.type', three, 'yes', { enter: true, enterDelayMs: 250.4, queueTimeoutMs: 120000 }),
+			rung: await run('_facade.terminal.type', three, '[facade] 1 unread message', { enter: true, requiresFramework: true }),
 			typedNone: await run('_facade.terminal.type', none, 'yes', { enter: true }),
 			pressed: await run('_facade.terminal.keys', three, ['Down', 'Enter', 'y'], { queueTimeoutMs: null }),
 			pressedNone: await run('_facade.terminal.keys', none, ['Enter'], {}),
@@ -747,6 +833,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			await failureOf('_facade.terminal.read', 4242, 5),
 			await failureOf('_facade.terminal.type', three, 42, {}),
 			await failureOf('_facade.terminal.type', three, 'yes', { enterDelayMs: -1 }),
+			await failureOf('_facade.terminal.type', three, 'yes', { requiresFramework: 'yes' }),
 			await failureOf('_facade.terminal.keys', three, [], {}),
 			await failureOf('_facade.terminal.keys', three, ['F1'], {}),
 			await failureOf('_facade.terminal.keys', three, ['Enter'], { queueTimeoutMs: Number.POSITIVE_INFINITY }),
@@ -760,6 +847,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				readEnded: { lines: ['> hi'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1, lastOutput: undefined, exited: true },
 				readNone: undefined,
 				typed: { outcome: 'applied', pasted: true, entered: true },
+				rung: { outcome: 'applied', pasted: true, entered: true },
 				typedNone: undefined,
 				pressed: { outcome: 'applied', keysSent: 3 },
 				pressedNone: undefined,
@@ -774,6 +862,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				'Unexpected type, expected \'IFacadeRun\'',
 				'Unexpected type, expected \'string\'',
 				'Unexpected type, expected \'number\'',
+				'Unexpected type, expected \'boolean\'',
 				'Unexpected type, expected \'string[]\'',
 				'Unexpected type, expected \'string[]\'',
 				'Unexpected type, expected \'number\'',
@@ -783,7 +872,8 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			steps: [
 				'read 20 of @lint #a3',
 				'read 50 of @gone #a5',
-				'type "yes" into @lint #a3 {"enter":true,"enterDelayMs":250,"queueTimeoutMs":120000}',
+				'type "yes" into @lint #a3 {"enter":true,"enterDelayMs":250,"queueTimeoutMs":120000,"requiresFramework":false}',
+				'type "[facade] 1 unread message" into @lint #a3 {"enter":true,"enterDelayMs":0,"requiresFramework":true}',
 				'press Down Enter y in @lint #a3 {}',
 				'register @lint #a3 as a1b2#3, its final screen in /rec/screens/a3.json',
 			],

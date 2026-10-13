@@ -23,10 +23,10 @@ import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';
 import { IEditorsChangeEvent, IEditorService } from '../../../../services/editor/common/editorService.js';
 import { ILifecycleService, LifecyclePhase } from '../../../../services/lifecycle/common/lifecycle.js';
-import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
+import { FolderTerminalEndReason, IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { FacadeRunsService } from '../../browser/facadeRuns.js';
-import { facadeRunOf, facadeRunProperties, IFacadeRun, IFacadeRunTerminal } from '../../common/facadeRun.js';
+import { facadeRunOf, facadeRunProperties, facadeRunTerminalOf, IFacadeRun, IFacadeRunTerminal } from '../../common/facadeRun.js';
 
 let terminals = 0;
 
@@ -128,6 +128,8 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 		terminalService.instances = terminals.map(terminal => terminal.asInstance());
 		const eventually = new DeferredPromise<void>();
 		const takenBack: string[] = [];
+		/** Why the folder terminals ended a terminal: its folder left the workspace, or is gone from the disk. */
+		const folderEnds = new Map<ITerminalInstance, FolderTerminalEndReason>();
 		const contextKeyService = new MockContextKeyService();
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(ITerminalService, terminalService);
@@ -149,7 +151,8 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 				const terminal = new TestTerminal(details.reconnectionProperties, details.pid);
 				terminalService.instances = [...terminalService.instances, terminal.asInstance()];
 				return terminal.asInstance();
-			}
+			},
+			endedBecause: instance => folderEnds.get(instance)
 		});
 		instantiationService.stub(IContextKeyService, contextKeyService);
 		instantiationService.stub(ILifecycleService, { when: (phase: LifecyclePhase) => phase === LifecyclePhase.Eventually ? eventually.p : Promise.resolve() });
@@ -172,7 +175,7 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 			await runs.whenRestored;
 			await timeout(0);
 		}
-		return { runs, terminalService, contextKeyService, takenBack, restored, listings, eventually, editorsRestored, editorsChanged, kept };
+		return { runs, terminalService, contextKeyService, takenBack, restored, listings, eventually, editorsRestored, editorsChanged, kept, folderEnds };
 	}
 
 	/** A process the pty host runs for no window of this workspace's, or another's: a run's, marked so, or any other. */
@@ -239,6 +242,32 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 			{ id: 1, state: 'gone', end: { exitCode: undefined, byThePerson: false } },
 			{ id: 2, state: 'gone', end: { exitCode: 3, byThePerson: false } },
 			{ id: 3, state: 'gone', end: { exitCode: undefined, byThePerson: true } }
+		]);
+	});
+
+	test('a run\'s terminal closed by an act that is not the closing of its tab says why in its end: the person\'s deletion of its worktree or removal of its folder from the workspace, by the person; its folder gone from the disk, by no one the window knows; one whose process had ended first was ended by its process (N-04; AGENT-LAUNCHER.md, L6; LA-06)', async () => {
+		const lab = 'a1b2';
+		const deleted = runTerminal(lab, 1, 11);
+		const removed = runTerminal(lab, 2, 22);
+		const gone = runTerminal(lab, 3, 33);
+		const exitedFirst = runTerminal(lab, 4, 44);
+		const { runs, terminalService, restored, folderEnds } = window([deleted, removed, gone, exitedFirst]);
+		[deleted, removed, gone, exitedFirst].forEach((terminal, index) => runs.register(terminal.asInstance(), { workspace: lab, id: index + 1 }));
+		await restored();
+		runs.closingBecause(deleted.asInstance(), 'worktreeDeleted');
+		folderEnds.set(removed.asInstance(), 'folderRemoved');
+		folderEnds.set(gone.asInstance(), 'folderGone');
+		folderEnds.set(exitedFirst.asInstance(), 'folderGone');
+		exitedFirst.exit(1);
+		for (const terminal of [deleted, removed, gone, exitedFirst]) {
+			terminalService.close(terminal, TerminalExitReason.User);
+		}
+
+		assert.deepStrictEqual(runs.processes(lab), [
+			{ id: 1, state: 'gone', end: { exitCode: undefined, byThePerson: true, reason: 'worktreeDeleted' } },
+			{ id: 2, state: 'gone', end: { exitCode: undefined, byThePerson: true, reason: 'folderRemoved' } },
+			{ id: 3, state: 'gone', end: { exitCode: undefined, byThePerson: false, reason: 'folderGone' } },
+			{ id: 4, state: 'gone', end: { exitCode: 1, byThePerson: false } }
 		]);
 	});
 
@@ -397,7 +426,7 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 		]);
 		await restored();
 		const beforeKnown = [...takenBack];
-		runs.setLive('a1b2', [1, 2]);
+		runs.setLive('a1b2', [1, 2], []);
 		await timeout(10);
 
 		assert.deepStrictEqual({ beforeKnown, takenBack }, { beforeKnown: ['/lab: 11 as @lead #a1'], takenBack: ['/lab: 11 as @lead #a1', '/lab: 22 as @before #a2'] });
@@ -449,5 +478,14 @@ suite('Facade runs - an agent\'s run on the terminal made for it', () => {
 			answers: [true, false, false, false],
 			runs: [{ workspace: 'a1b2', id: 1 }, 'none', 'none']
 		});
+	});
+
+	test('a run\'s mark keeps what its terminal was opened with - its name, its folder, and the file its final screen goes to, which a terminal given back after a reload keeps it in before the agents\' extension registers it again (AGENT-DEBUGGING.md, D6; DB-05)', () => {
+		const lab = 'a1b2';
+		const opened: IFacadeRunTerminal = { name: '@lint #a3', folder: '/lab/w', finalScreen: 'file:///home/me/.facade/workspaces/lab/screens/a3.json' };
+		const marked = new TestTerminal(facadeRunProperties({ workspace: lab, id: 3 }, opened), 33);
+		const older = new TestTerminal(facadeRunProperties({ workspace: lab, id: 4 }, { name: '@doc #a4', folder: '/lab' }), 44);
+
+		assert.deepStrictEqual([facadeRunTerminalOf(marked), facadeRunTerminalOf(older)], [opened, { name: '@doc #a4', folder: '/lab' }]);
 	});
 });

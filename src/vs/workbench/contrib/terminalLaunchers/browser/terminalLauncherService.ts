@@ -5,10 +5,13 @@
 
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
+import { untildify } from '../../../../base/common/labels.js';
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { IProcessEnvironment } from '../../../../base/common/platform.js';
+import { IProcessEnvironment, isWindows } from '../../../../base/common/platform.js';
+import { isAbsolute, resolve } from '../../../../base/common/path.js';
+import { isObject } from '../../../../base/common/types.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -20,10 +23,11 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
+import { IPathService } from '../../../services/path/common/pathService.js';
 import { IFacadeRunsService } from '../../facadeCommands/browser/facadeRuns.js';
-import { facadeRunOf, isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+import { facadeRunOf, IPreparingRun, isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
-import { agentLaunchOf, BUILT_IN_LAUNCHERS, IAgentName, isAgentTerminalIcon, ITerminalLauncher, readAgentNames, restoreAgentLaunch } from '../common/terminalLaunchers.js';
+import { agentLaunchOf, BUILT_IN_LAUNCHERS, IAgentName, ITerminalLauncher, readAgentNames, restoreAgentLaunch } from '../common/terminalLaunchers.js';
 import { TerminalLauncherDetection } from './terminalLauncherDetection.js';
 
 export const ITerminalLauncherService = createDecorator<ITerminalLauncherService>('terminalLauncherService');
@@ -33,6 +37,9 @@ export const AGENT_NAMES_STORAGE_KEY = 'facade.agent.names';
 
 /** Agents: Start Agent..., which the agents' extension contributes: it takes the agent to start as `{ cli }`. */
 const START_AGENT_COMMAND = 'facade.agents.startAgent';
+
+/** The variable of the environment the operating system says the person's home folder in, as the agents' extension reads it. */
+const HOME_VARIABLE = isWindows ? 'USERPROFILE' : 'HOME';
 
 /** The search Configure Agents opens the settings at, the same every time: the agents' extension's settings. */
 const AGENT_SETTINGS_QUERY = '@ext:vscode.facade-agents';
@@ -53,8 +60,7 @@ export interface IAgentMenuButton {
 
 /**
  * What the agent menu is built on: starting an agent, editing the list, and saying afterwards which
- * terminals are agents' - the ones it started, and any other drawn with an agent's icon, as Facade's
- * agents are.
+ * terminals are agents' - by the run of Facade's agents each is marked with, whatever its icon.
  */
 export interface ITerminalLauncherService {
 
@@ -68,7 +74,7 @@ export interface ITerminalLauncherService {
 	 */
 	readonly onDidChangeAgentTerminals: Event<void>;
 
-	/** Whether this terminal is an agent's: drawn with an agent's icon, as those the agent menu starts are. */
+	/** Whether this terminal is an active agent's: marked with a run of Facade's agents that is live, whatever its icon (X-51). */
 	isAgentTerminal(resource: URI | undefined): boolean;
 
 	/**
@@ -85,10 +91,20 @@ export interface ITerminalLauncherService {
 	readonly activeAgentCount: number;
 
 	/**
-	 * Starts the agent `launcher` is in the folder on screen, with Agents: Start Agent - asking VS Code's own
-	 * question first in Restricted Mode, and nothing where the person does not trust the workspace.
+	 * The active agents with no terminal yet - their worktrees being made or set up - as the agents' extension says:
+	 * counted in `activeAgentCount`, and listed with the agents' terminals (L3). Changes with `onDidChangeAgentTerminals`.
 	 */
-	open(launcher: ITerminalLauncher): Promise<void>;
+	readonly preparingAgents: readonly IPreparingRun[];
+
+	/** Stops an active agent with no terminal yet, as the person: the record the agents' extension keeps, by its number (L3). */
+	stopPreparing(id: number): Promise<void>;
+
+	/**
+	 * Starts an agent with Agents: Start Agent - the one `launcher` is, in the folder on screen; with none, the one the
+	 * person chooses there - asking VS Code's own question first in Restricted Mode, and nothing where the person does
+	 * not trust the workspace.
+	 */
+	open(launcher?: ITerminalLauncher): Promise<void>;
 
 	/** Opens VS Code's settings at the agents' own, the same search every time. */
 	configure(): Promise<void>;
@@ -157,12 +173,13 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		@ILifecycleService private readonly _lifecycleService: ILifecycleService,
 		@ICommandService private readonly _commandService: ICommandService,
 		@ILogService private readonly _logService: ILogService,
-		@IFacadeRunsService private readonly _facadeRunsService: IFacadeRunsService
+		@IFacadeRunsService private readonly _facadeRunsService: IFacadeRunsService,
+		@IPathService private readonly _pathService: IPathService
 	) {
 		super();
 
 		// A terminal arriving or leaving, and an icon being changed on one that stayed - the second
-		// because the icon is what says a terminal is an agent's, so changing it changes the answer.
+		// because an agent is drawn by its icon, on the workspace bar's row among others.
 		// Leaving is heard on its own as well: one put in the background by a folder switch ends
 		// without `onDidChangeInstances`, and went on being counted among the agents.
 		this.onDidChangeAgentTerminals = Event.any(
@@ -176,7 +193,7 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		// ⚠️ Given back as each terminal is made, which is before it works out its title - on the
 		// terminal's own, from a reload's `attachPersistentProcess`. Afterwards is too late: its tab
 		// would read the process's name until the agent next set a title. And kept as each agent's
-		// terminal is started, whoever starts it - here, or anything that gives a terminal an agent's icon.
+		// terminal is started: a terminal marked as an agent's run (`agentLaunchOf`).
 		this._names = readAgentNames(this._storageService.get(AGENT_NAMES_STORAGE_KEY, StorageScope.WORKSPACE));
 		this._register(this._terminalService.onDidCreateInstance(instance => {
 			if (restoreAgentLaunch(instance.shellLaunchConfig, this._names)) {
@@ -215,8 +232,9 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 			return;
 		}
 
-		// Every tab drawn as an agent's, live or not: its name is its tab's while the tab is there
-		const running = new Set(this._terminalService.instances.filter(instance => isAgentTerminalIcon(instance.icon) || isFacadeRunTerminal(instance)).map(instance => instance.shellIntegrationNonce));
+		// Every tab of an agent's run - marked as its run's, whatever its icon - live or not: its name is its tab's while
+		// the tab is there
+		const running = new Set(this._terminalService.instances.filter(instance => isFacadeRunTerminal(instance)).map(instance => instance.shellIntegrationNonce));
 		for (const nonce of [...this._names.keys()]) {
 			if (!running.has(nonce)) {
 				this._names.delete(nonce);
@@ -244,6 +262,17 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 
 	get activeAgentCount(): number {
 		return this._facadeRunsService.live?.ids.length ?? this.agentTerminals.length;
+	}
+
+	get preparingAgents(): readonly IPreparingRun[] {
+		return this._facadeRunsService.live?.preparing ?? [];
+	}
+
+	async stopPreparing(id: number): Promise<void> {
+		const workspace = this._facadeRunsService.live?.workspace;
+		if (workspace !== undefined) {
+			await this._commandService.executeCommand('_facade.agents.stopAgent', workspace, id);
+		}
 	}
 
 	/**
@@ -279,7 +308,7 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		return false;
 	}
 
-	async open(launcher: ITerminalLauncher): Promise<void> {
+	async open(launcher?: ITerminalLauncher): Promise<void> {
 		// The folder on screen as the person chooses is the start's (L3), wherever they go while it is under way:
 		// the extension would ask for it only once the choice reached it, and a row clicked meanwhile would take
 		// the agent there (PS-15).
@@ -288,11 +317,19 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		// start goes on once the person trusts it (AGENT-LAUNCHER.md, L3).
 		if (!this._workspaceTrustManagementService.isWorkspaceTrusted()) {
 			const trusted = await this._workspaceTrustRequestService.requestWorkspaceTrust({
-				message: localize('facade.agent.trustToStart', "An agent works in the folders of this workspace. Trust the workspace to start {0}.", launcher.label)
+				message: launcher
+					? localize('facade.agent.trustToStart', "An agent works in the folders of this workspace. Trust the workspace to start {0}.", launcher.label)
+					: localize('facade.agent.trustToStartAny', "An agent works in the folders of this workspace. Trust the workspace to start one.")
 			});
 			if (!trusted) {
 				return;
 			}
+		}
+
+		if (!launcher) {
+			// Start Agent... as the Command Palette runs it: the extension asks which agent
+			await this._commandService.executeCommand(START_AGENT_COMMAND);
+			return;
 		}
 
 		// The agent starts at once in the folder on screen, asking nothing: its settings say how.
@@ -323,25 +360,45 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		return this._looking;
 	}
 
-	/** The built-ins the person offers, each at its path setting or its command, found as a terminal in the folder on screen finds them. */
+	/**
+	 * The built-ins the person offers, each at its path setting or its command, found as a start finds them
+	 * (AGENT-LAUNCHER.md, L10): in the environment a terminal in the folder on screen gets, with what the
+	 * built-in's launch sets in it, and its path setting as that terminal takes it.
+	 */
 	private async _lookForBuiltIns(): Promise<void> {
-		const offered = BUILT_IN_LAUNCHERS
+		const folder = (this._activeFolderService.activeFolder ?? this._workspaceContextService.getWorkspace().folders.at(0))?.uri;
+		const [env, userHome] = await Promise.all([this._terminalEnvironment(folder), this._pathService.userHome()]);
+		const detection = this._instantiationService.createInstance(TerminalLauncherDetection);
+		const found = new Set<string>();
+		await Promise.all(BUILT_IN_LAUNCHERS
 			.filter(launcher => this._configurationService.getValue(`${launcher.setting}.enabled`) !== false)
-			.map(launcher => {
+			.map(async launcher => {
+				const launchEnv = this._launchEnvironment(launcher);
+				const environment = env ? { ...env, ...launchEnv } : launchEnv.PATH !== undefined ? launchEnv : undefined;
+				// The home the start's environment says - what the launch sets over the terminal's - else the person's own,
+				// as the agents' extension takes it: in an empty window too, which has no terminal's environment to read
+				const home = { ...env, ...launchEnv }[HOME_VARIABLE] || userHome.fsPath;
 				const path = this._configurationService.getValue<unknown>(`${launcher.setting}.path`);
-				return typeof path === 'string' && path.trim() ? { ...launcher, command: `"${path.trim()}"` } : launcher;
-			});
-		const env = await this._terminalEnvironment();
-		const found = await this._instantiationService.createInstance(TerminalLauncherDetection).detect(offered, env);
+				const offered = typeof path === 'string' && path.trim() ? { ...launcher, command: `"${terminalPath(path.trim(), home, folder?.scheme === 'file' ? folder.fsPath : undefined)}"` } : launcher;
+				for (const id of await detection.detect([offered], environment)) {
+					found.add(id);
+				}
+			}));
 		if (found.size !== this._available.size || [...found].some(id => !this._available.has(id))) {
 			this._available = found;
 			this._onDidChangeAvailable.fire();
 		}
 	}
 
-	/** The environment a terminal in the folder on screen gets, as the workbench makes it; none where it cannot say. */
-	private async _terminalEnvironment(): Promise<IProcessEnvironment | undefined> {
-		const folder = (this._activeFolderService.activeFolder ?? this._workspaceContextService.getWorkspace().folders.at(0))?.uri;
+	/** What a built-in's launch sets in its environment, as the person set it: its strings. */
+	private _launchEnvironment(launcher: ITerminalLauncher): IProcessEnvironment {
+		const launch = this._configurationService.getValue<{ readonly environment?: unknown } | undefined>(`${launcher.setting}.launch`);
+		const environment = isObject(launch) && isObject(launch.environment) ? launch.environment : {};
+		return Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+	}
+
+	/** The environment a terminal in `folder` gets, as the workbench makes it; none where it cannot say. */
+	private async _terminalEnvironment(folder: URI | undefined): Promise<IProcessEnvironment | undefined> {
 		if (!folder || folder.scheme !== 'file') {
 			return undefined;
 		}
@@ -352,6 +409,21 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 			return undefined;
 		}
 	}
+}
+
+/**
+ * The file a path setting names as a terminal starting in `folder` takes it - `~` the person's home, `home`, and a
+ * relative path from the folder - as the agents' extension starts it (AGENT-LAUNCHER.md, L10); a bare name is a
+ * command, which PATH finds. A backslash separates the parts of a path on Windows alone.
+ */
+function terminalPath(file: string, home: string, folder: string | undefined): string {
+	if (file === '~' || /^~[\\/]/.test(file)) {
+		return untildify(file, home);
+	}
+	if (!(isWindows ? /[\\/]/ : /\//).test(file) || isAbsolute(file)) {
+		return file;
+	}
+	return folder ? resolve(folder, file) : file;
 }
 
 // ⚠️ Eager: made with the agent menu, before the editors are restored, so that it is listening when

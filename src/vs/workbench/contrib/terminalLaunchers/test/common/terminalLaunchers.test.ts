@@ -6,9 +6,10 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
-import { URI } from '../../../../../base/common/uri.js';
+import { isWindows } from '../../../../../base/common/platform.js';
 import { IShellLaunchConfig, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
-import { AGENT_TERMINAL_ICON, agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentTerminalIcon, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
+import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
+import { AGENT_TERMINAL_ICON, agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
 
 suite('Terminal launchers - what to look for', () => {
 
@@ -50,13 +51,13 @@ suite('Terminal launchers - what to look for', () => {
 		]);
 	});
 
-	test('a path is checked where it points, not searched for', () => {
+	test('a path is checked where it points, not searched for - a backslash being a separator on Windows alone, as the agents\' extension takes it', () => {
 		assert.deepStrictEqual([
 			isPathLike('claude'),
 			isPathLike('./claude'),
 			isPathLike('C:\\tools\\claude.exe'),
 			isPathLike('/usr/local/bin/claude')
-		], [false, true, true, true]);
+		], [false, true, isWindows, true]);
 	});
 
 	test('a built-in is a name, a command and where its settings are, and carries no artwork at all', () => {
@@ -86,19 +87,6 @@ suite('Terminal launchers - what to look for', () => {
 			'C:\\tools',
 			'C:\\Windows'
 		]);
-	});
-
-	test('a terminal is an agent\'s when it is drawn with an agent\'s icon', () => {
-		assert.deepStrictEqual([
-			isAgentTerminalIcon(AGENT_TERMINAL_ICON),
-			isAgentTerminalIcon(agentIcon('claude')),	// a built-in agent's logo
-			isAgentTerminalIcon(Codicon.terminal),		// a plain terminal
-			isAgentTerminalIcon(Codicon.claude),		// the font's mark, which is not an agent's icon
-			isAgentTerminalIcon(undefined),				// one that never had an icon
-			isAgentTerminalIcon(URI.file('/robot.png')),	// an icon that is a file, not a glyph
-			isAgentTerminalIcon({ id: AGENT_TERMINAL_ICON.id }),	// the same glyph, rebuilt from a stored record
-			isAgentTerminalIcon({ id: agentIcon('codex').id })		// and a logo, rebuilt the same way
-		], [true, true, false, false, false, false, true, true]);
 	});
 
 	test('a built-in agent is drawn with the logo of the program its command starts; every custom agent with the robot, whatever program it runs (X-60)', () => {
@@ -152,38 +140,43 @@ suite('Terminal launchers - an agent across a reload', () => {
 		]);
 	});
 
-	test('a terminal started now is kept with its name and title template when it is drawn as an agent\'s and named, whoever started it, and no other is', () => {
+	test('a terminal started now is kept with its name and title template when it is an agent\'s run - marked so, whatever its icon - and named; no other is, an ordinary terminal the person drew with the robot included (VC-06)', () => {
+		const run = facadeRunProperties({ workspace: 'w', id: 1 });
 		const configs: Record<string, IShellLaunchConfig> = {
-			button: { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE, icon: agentIcon('claude') },
-			facade: { name: '@main #1 · Claude Code', icon: AGENT_TERMINAL_ICON },	// one of Facade's agents, whose name is its title
+			agent: { name: '@claude #a1', titleTemplate: '${sequence}${separator}@claude #a1', icon: agentIcon('claude'), reconnectionProperties: run },
+			repainted: { name: '@codex #a2', icon: Codicon.terminal, reconnectionProperties: run },	// an agent's, given another icon
+			robot: { name: 'pwsh', icon: AGENT_TERMINAL_ICON },	// an ordinary terminal drawn with the robot
 			shell: { name: 'pwsh', icon: Codicon.terminal },
-			unnamed: { icon: AGENT_TERMINAL_ICON },
+			unnamed: { icon: AGENT_TERMINAL_ICON, reconnectionProperties: run },
 			// One a reload brought back, given its name again: kept already, not kept anew
 			reconnecting: {
-				name: 'Claude Code', icon: AGENT_TERMINAL_ICON,
-				attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: 'known' }
+				name: '@claude #a1', icon: AGENT_TERMINAL_ICON, reconnectionProperties: run,
+				attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: 'known', reconnectionProperties: run }
 			},
 		};
 
 		assert.deepStrictEqual(Object.entries(configs).map(([which, config]) => [which, agentLaunchOf(config)]), [
-			['button', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }],
-			['facade', { name: '@main #1 · Claude Code', titleTemplate: undefined }],
+			['agent', { name: '@claude #a1', titleTemplate: '${sequence}${separator}@claude #a1' }],
+			['repainted', { name: '@codex #a2', titleTemplate: undefined }],
+			['robot', undefined],
 			['shell', undefined],
 			['unnamed', undefined],
 			['reconnecting', undefined],
 		]);
 	});
 
-	test('a reconnecting agent terminal gets back its name and title template, found by its nonce, and nothing else does', () => {
+	test('a reconnecting agent terminal - its run\'s, by its mark, whatever its icon - gets back its name and title template, found by its nonce, and nothing else does, an ordinary terminal drawn with the robot included (VC-06)', () => {
 		const names = new Map([['known', { name: 'Claude Code', titleTemplate: AGENT_TITLE_TEMPLATE }], ['facade', { name: '@main · Claude Code' }]]);
-		const reconnecting = (nonce: string, icon: TerminalIcon): IShellLaunchConfig => ({
-			attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon, shellIntegrationNonce: nonce }
+		const run = facadeRunProperties({ workspace: 'w', id: 1 });
+		const reconnecting = (nonce: string, icon: TerminalIcon, marked = true): IShellLaunchConfig => ({
+			attachPersistentProcess: { id: 1, pid: 1, title: 'node', titleSource: TitleEventSource.Process, cwd: '', icon, shellIntegrationNonce: nonce, reconnectionProperties: marked ? run : undefined }
 		});
 		const configs: Record<string, IShellLaunchConfig> = {
 			agent: reconnecting('known', AGENT_TERMINAL_ICON),
 			facade: reconnecting('facade', AGENT_TERMINAL_ICON),	// one of Facade's agents, whose name is its title
 			unknown: reconnecting('other', AGENT_TERMINAL_ICON),
-			repainted: reconnecting('known', Codicon.terminal),	// given another icon since, so no longer an agent's
+			repainted: reconnecting('known', Codicon.terminal),	// given another icon since, an agent's all the same
+			robot: reconnecting('known', AGENT_TERMINAL_ICON, false),	// an ordinary terminal drawn with the robot
 			started: {},										// a new terminal rather than a reconnecting one
 		};
 
@@ -193,7 +186,8 @@ suite('Terminal launchers - an agent across a reload', () => {
 			['agent', true, 'Claude Code', AGENT_TITLE_TEMPLATE],
 			['facade', true, '@main · Claude Code', undefined],
 			['unknown', false, undefined, undefined],
-			['repainted', false, undefined, undefined],
+			['repainted', true, 'Claude Code', AGENT_TITLE_TEMPLATE],
+			['robot', false, undefined, undefined],
 			['started', false, undefined, undefined],
 		]);
 	});
@@ -201,7 +195,7 @@ suite('Terminal launchers - an agent across a reload', () => {
 	test('a reconnecting agent terminal gets back its name and title template, its title as the pty host kept it - its CLI\'s own, the label made from it again once (N-03)', () => {
 		const names = new Map([['codex', { name: '@codex #a3', titleTemplate: AGENT_TITLE_TEMPLATE }], ['plain', { name: '@main · Claude Code' }]]);
 		const reconnecting = (nonce: string, title: string): IShellLaunchConfig => ({
-			attachPersistentProcess: { id: 1, pid: 1, title, titleSource: TitleEventSource.Sequence, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: nonce }
+			attachPersistentProcess: { id: 1, pid: 1, title, titleSource: TitleEventSource.Sequence, cwd: '', icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: nonce, reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 3 }) }
 		});
 		const configs = [reconnecting('codex', 'Fix it'), reconnecting('plain', 'Fix it')];
 

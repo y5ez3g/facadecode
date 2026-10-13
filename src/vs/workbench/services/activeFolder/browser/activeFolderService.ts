@@ -35,6 +35,13 @@ export class ActiveFolderService extends Disposable implements IActiveFolderServ
 	private _activeFolder: IWorkspaceFolder | undefined;
 	get activeFolder(): IWorkspaceFolder | undefined { return this._activeFolder; }
 
+	/** The root a deliberate move left, by its folder: an index would point elsewhere once the list changed. */
+	private _previousFolder: URI | undefined;
+	get previousFolder(): IWorkspaceFolder | undefined {
+		const folder = this._previousFolder && this.folderFor(this._previousFolder);
+		return folder && !(this._activeFolder && this.uriIdentityService.extUri.isEqual(folder.uri, this._activeFolder.uri)) ? folder : undefined;
+	}
+
 	constructor(
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IStorageService private readonly storageService: IStorageService,
@@ -161,6 +168,7 @@ export class ActiveFolderService extends Disposable implements IActiveFolderServ
 			// handled by the joiner
 		}
 
+		this._previousFolder = from?.uri;
 		this._activeFolder = target;
 		this.save();
 		this._onDidChangeActiveFolder.fire();

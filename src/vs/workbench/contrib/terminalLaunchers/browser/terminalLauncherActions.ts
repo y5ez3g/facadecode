@@ -12,7 +12,7 @@ import { IHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate.
 import { getBaseLayerHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegate2.js';
 import { getDefaultHoverDelegate } from '../../../../base/browser/ui/hover/hoverDelegateFactory.js';
 import { IAction } from '../../../../base/common/actions.js';
-import { RunOnceScheduler } from '../../../../base/common/async.js';
+import { raceTimeout, RunOnceScheduler } from '../../../../base/common/async.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { isCancellationError, onUnexpectedError } from '../../../../base/common/errors.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
@@ -33,6 +33,7 @@ import { ITelemetryService } from '../../../../platform/telemetry/common/telemet
 import { TitleBarLeadingActionsGroup } from '../../../browser/parts/titlebar/titlebarActions.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
+import { WorkspaceTrustContext } from '../../workspace/common/workspace.js';
 import { TerminalLauncherQuickPick } from './terminalLauncherQuickPick.js';
 import { IAgentMenuButton, ITerminalLauncherService } from './terminalLauncherService.js';
 
@@ -47,9 +48,13 @@ const AGENT_MENU_MANAGE_GROUP = 'z_configure';
 
 const SHOW_AGENT_MENU = 'facade.agent.showMenu';
 const SHOW_ACTIVE_AGENTS = 'facade.agent.showActive';
+const START_AGENT_RESTRICTED = 'facade.agent.startAgentRestricted';
 export const CONFIGURE_AGENTS = 'facade.agent.configure';
 
 const AGENTS_PRECONDITION = ContextKeyExpr.or(TerminalContextKeys.processSupported, TerminalContextKeys.webExtensionContributedProfile);
+
+/** How long the agent menu, opened where no button is on screen, waits for the built-ins to be looked for. */
+const DETECTION_WAIT_MS = 1_000;
 
 /** The category the agents' commands are under, as the agents' extension's are (AGENT-LAUNCHER.md, L7). */
 const AGENTS_CATEGORY = localize2('facade.agents.category', "Agents");
@@ -232,7 +237,7 @@ export function createAgentMenuActionViewItem(action: IAction, options: IActionV
  * The agent menu from the keyboard: the one the button drops, on the button - or where the title bar's
  * own overflow opens, when there is no button on screen to drop it from.
  */
-class ShowAgentMenuAction extends Action2 {
+export class ShowAgentMenuAction extends Action2 {
 
 	constructor() {
 		super({
@@ -248,19 +253,28 @@ class ShowAgentMenuAction extends Action2 {
 		});
 	}
 
-	override run(accessor: ServicesAccessor): void {
+	override async run(accessor: ServicesAccessor): Promise<void> {
 		const window = getActiveWindow();
-		if (accessor.get(ITerminalLauncherService).showMenu(window)) {
+		const launcherService = accessor.get(ITerminalLauncherService);
+		if (launcherService.showMenu(window)) {
 			return;
 		}
 
+		const layoutService = accessor.get(IWorkbenchLayoutService);
+		const contextMenuService = accessor.get(IContextMenuService);
+		const contextKeyService = accessor.get(IContextKeyService);
+
+		// Detection runs whenever the menu opens: a context menu is drawn once, so what this machine has now is looked
+		// for first - a moment at most, as no one waits long for a menu; a longer look is the next opening's
+		// (AGENT-LAUNCHER.md, L3; LA-08)
+		await raceTimeout(launcherService.refreshAvailable().catch(onUnexpectedError), DETECTION_WAIT_MS);
+
 		// Put away in the title bar's overflow, or no title bar drawn: under the title bar at its end, as
 		// the overflow's menu opens, else at the window's top corner
-		const layoutService = accessor.get(IWorkbenchLayoutService);
 		const titleBar = layoutService.isVisible(Parts.TITLEBAR_PART, window) ? layoutService.getContainer(window, Parts.TITLEBAR_PART) : undefined;
-		accessor.get(IContextMenuService).showContextMenu({
+		contextMenuService.showContextMenu({
 			menuId: AGENT_MENU,
-			contextKeyService: accessor.get(IContextKeyService),
+			contextKeyService,
 			getAnchor: () => titleBar ?? { x: window.innerWidth, y: 0 },
 			anchorAlignment: AnchorAlignment.RIGHT
 		});
@@ -294,6 +308,29 @@ class ShowActiveAgentsAction extends Action2 {
 
 	override run(accessor: ServicesAccessor): void {
 		accessor.get(IInstantiationService).createInstance(TerminalLauncherQuickPick).show();
+	}
+}
+
+/**
+ * Start Agent... in Restricted Mode, where the agents' extension - whose Start Agent... it is - does not run: VS Code's
+ * question whether to trust the workspace first, and the same start once the person does (AGENT-LAUNCHER.md, L3), as
+ * the agent menu has it (`ITerminalLauncherService.open`). Once the workspace is trusted, the extension's own is the one
+ * the Command Palette lists.
+ */
+export class StartAgentRestrictedAction extends Action2 {
+
+	constructor() {
+		super({
+			id: START_AGENT_RESTRICTED,
+			title: localize2('facade.agent.startRestricted', "Start Agent..."),
+			category: AGENTS_CATEGORY,
+			f1: true,
+			precondition: ContextKeyExpr.and(AGENTS_PRECONDITION, WorkspaceTrustContext.IsTrusted.negate())
+		});
+	}
+
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		await accessor.get(ITerminalLauncherService).open();
 	}
 }
 
@@ -335,4 +372,5 @@ export function registerTerminalLauncherActions(): void {
 	registerAction2(ShowAgentMenuAction);
 	registerAction2(ShowActiveAgentsAction);
 	registerAction2(ConfigureAgentsAction);
+	registerAction2(StartAgentRestrictedAction);
 }

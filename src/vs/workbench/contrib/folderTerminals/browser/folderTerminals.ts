@@ -36,6 +36,12 @@ export const FOLLOW_FOLDER = 'facade.terminal.followFolder';
 
 export const IFolderTerminalsService = createDecorator<IFolderTerminalsService>('folderTerminalsService');
 
+/**
+ * Why the folder terminals end a terminal: its folder left the workspace - the person removed it, or the last folder
+ * of its row's repository - or its worktree is gone from the disk, removed outside the window.
+ */
+export type FolderTerminalEndReason = 'folderRemoved' | 'folderGone';
+
 /** Which terminals belong to a folder of the workspace (`FolderTerminals`). */
 export interface IFolderTerminalsService {
 	readonly _serviceBrand: undefined;
@@ -81,6 +87,13 @@ export interface IFolderTerminalsService {
 	 * {@link reveal} puts it in front.
 	 */
 	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance>;
+
+	/**
+	 * Why it ended `instance` - its folder left the workspace, or its worktree is gone from the disk - told from the
+	 * moment it disposes it, for whoever hears the terminal close to say so: an agent's run records why it ended
+	 * (AGENT-LAUNCHER.md, L6). Undefined for a terminal it did not end.
+	 */
+	endedBecause(instance: ITerminalInstance): FolderTerminalEndReason | undefined;
 }
 
 /** `IFolderTerminalsService`, served by the `FolderTerminals` contribution that keeps the terminals. */
@@ -102,6 +115,10 @@ export class FolderTerminalsService implements IFolderTerminalsService {
 
 	openFor(folder: URI, config: IShellLaunchConfig): Promise<ITerminalInstance> {
 		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).openFor(folder, config);
+	}
+
+	endedBecause(instance: ITerminalInstance): FolderTerminalEndReason | undefined {
+		return getWorkbenchContribution<FolderTerminals>(FolderTerminals.ID).endedBecause(instance);
 	}
 }
 
@@ -293,6 +310,9 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 */
 	private readonly _openedFor = new Map<ITerminalInstance, IOpenedFor>();
 
+	/** Why each terminal this ended was ended (`endedBecause`). */
+	private readonly _endReasons = new WeakMap<ITerminalInstance, FolderTerminalEndReason>();
+
 	/** What was kept of `_openedFor`, until `_restore` has it again: kept again meanwhile, as `_unrestored` is. */
 	private _unrestoredOpenedFor: ReadonlyMap</*nonce*/string, URI> | undefined;
 
@@ -424,6 +444,11 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		// With a tab, the folder's it was opened in, which leaving the folder on screen puts it away for
 		const shownFor = instance.target === TerminalLocation.Editor && this._terminalService.foregroundInstances.includes(instance) ? this._shownFor(instance) : undefined;
 		return shownFor === undefined ? undefined : this._folderFor(shownFor)?.uri;
+	}
+
+	/** {@link IFolderTerminalsService.endedBecause}. */
+	endedBecause(instance: ITerminalInstance): FolderTerminalEndReason | undefined {
+		return this._endReasons.get(instance);
 	}
 
 	/**
@@ -1126,7 +1151,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 				this._rows.delete(key);
 			} else if (row.members && ![...row.members].some(member => present.has(member))) {
 				this._logService.trace(`[folderTerminals] repository removed, disposing ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
-				this._endHeld(key);
+				this._endHeld(key, 'folderRemoved');
 			}
 		}
 
@@ -1137,7 +1162,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			}
 
 			this._logService.trace(`[folderTerminals] folder removed, disposing ${parked.length} parked terminal(s)`);
-			this._endHeld(key);
+			this._endHeld(key, 'folderRemoved');
 		}
 
 		// Those opened for a folder, wherever they are, as those held for one: a folder that left takes them,
@@ -1148,7 +1173,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 				opened.joined = true;
 			} else if (opened.joined || (opened.members && ![...opened.members].some(member => present.has(member)))) {
 				this._logService.trace(`[folderTerminals] folder removed, disposing a terminal opened for ${opened.key}`);
-				this._endOpenedFor(instance);
+				this._endOpenedFor(instance, 'folderRemoved');
 			}
 		}
 	}
@@ -1197,7 +1222,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		// Unless it has ended meanwhile
 		if (this._openedFor.get(instance) === opened) {
 			this._logService.trace(`[folderTerminals] worktree gone from disk, disposing a terminal opened for ${opened.key}`);
-			this._endOpenedFor(instance);
+			this._endOpenedFor(instance, 'folderGone');
 		}
 	}
 
@@ -1228,13 +1253,14 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 	/**
 	 * Ends a terminal opened for a folder that has gone, wherever it is: out of the editor area first, as
-	 * the folder on screen's are (`_pruneRemovedFolders`).
+	 * the folder on screen's are (`_pruneRemovedFolders`) - saying why (`endedBecause`).
 	 */
-	private _endOpenedFor(instance: ITerminalInstance): void {
+	private _endOpenedFor(instance: ITerminalInstance, reason: FolderTerminalEndReason): void {
 		this._forgetOpenedFor(instance);
 		if (this._placeOf(instance)) {
 			this._terminalService.moveToBackground(instance);
 		}
+		this._endReasons.set(instance, reason);
 		instance.dispose(TerminalExitReason.User);
 	}
 
@@ -1255,16 +1281,17 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		// Unless it has joined the workspace, ended, or been read again meanwhile
 		if (this._rows.get(key)?.uri === uri && !this._membersOf(uri)) {
 			this._logService.trace(`[folderTerminals] row gone from disk, disposing ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
-			this._endHeld(key);
+			this._endHeld(key, 'folderGone');
 		}
 	}
 
-	/** Ends the terminals held for a folder or a row that has gone, and keeps nothing more for it. */
-	private _endHeld(key: string): void {
+	/** Ends the terminals held for a folder or a row that has gone, saying why (`endedBecause`), and keeps nothing more for it. */
+	private _endHeld(key: string, reason: FolderTerminalEndReason): void {
 		const parked = this._parked.get(key) ?? [];
 		this._drop(key);
 
 		for (const { instance } of parked) {
+			this._endReasons.set(instance, reason);
 			instance.dispose(TerminalExitReason.User);
 		}
 	}

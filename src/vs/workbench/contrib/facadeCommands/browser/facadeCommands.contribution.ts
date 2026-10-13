@@ -27,10 +27,10 @@ import { IEnvironmentVariableService } from '../../terminal/common/environmentVa
 import { ITerminalProfileResolverService } from '../../terminal/common/terminal.js';
 import { createTerminalEnvironment, createVariableResolver, getWorkspaceForTerminal, mergeEnvironments } from '../../terminal/common/terminalEnvironment.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
-import { IOwnedWorktreeFile, IRemoveWorktreeOptions, IWorktreeService } from '../../worktrees/browser/worktrees.js';
+import { IOwnedWorktreeFile, IRemoveWorktreeOptions, IWorktreeService, IWorktreeSetupState } from '../../worktrees/browser/worktrees.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
-import { facadeRunOf, facadeRunProperties, IFacadeRun, isFacadeRun } from '../common/facadeRun.js';
+import { facadeRunOf, facadeRunProperties, IFacadeRun, isFacadeRun, isPreparingRun } from '../common/facadeRun.js';
 import { isAgentKey } from './facadeAgentKeys.js';
 import { MOST_SCREEN_LINES } from './facadeAgentScreen.js';
 import { FacadeAgentTerminal, IAgentInputEffect, IAgentInputState, IAgentScreenRead } from './facadeAgentTerminal.js';
@@ -213,6 +213,16 @@ CommandsRegistry.registerCommand('_facade.worktree.setupOutcome', async (accesso
 	return accessor.get(IWorktreeService).setupOutcome(worktree);
 });
 
+// `(worktree)`: how the setup of a worktree `_facade.worktree.create` made stands now - the line running, where shell
+// integration says so, and the last lines of its terminal as plain text - for a start still waiting on it to say what
+// it is doing (O3); none where the window knows no setup of it (`IWorktreeService.setupState`).
+CommandsRegistry.registerCommand('_facade.worktree.setupState', (accessor, ...args): IWorktreeSetupState | undefined => {
+	const [worktree] = args;
+	assertType(URI.isUri(worktree), 'URI');
+
+	return accessor.get(IWorktreeService).setupState(worktree);
+});
+
 // `(worktree)`: closes the setup terminal of a worktree `_facade.worktree.create` made, its agent's start
 // cancelled; the worktree stays (`IWorktreeService.stopSetup`).
 CommandsRegistry.registerCommand('_facade.worktree.stopSetup', (accessor, ...args) => {
@@ -238,6 +248,17 @@ CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...
 	await accessor.get(IWorktreeService).removeWorktree(worktree, options ?? undefined);
 });
 
+// `(worktree, options?)`: what `_facade.worktree.delete` with these options would lose, each named as its refusal
+// names it, for an agent's deletion to be refused before it stops anything (O5 step 2): nothing is done
+// (`IWorktreeService.removalLoss`).
+CommandsRegistry.registerCommand('_facade.worktree.removalLoss', (accessor, ...args): Promise<readonly string[]> => {
+	const [worktree, options] = args;
+	assertType(URI.isUri(worktree), 'URI');
+	assertType(isUndefinedOrNull(options) || isRemoveWorktreeOptions(options), 'IRemoveWorktreeOptions');
+
+	return accessor.get(IWorktreeService).removalLoss(worktree, options ?? undefined);
+});
+
 function isRemoveWorktreeOptions(candidate: unknown): candidate is IRemoveWorktreeOptions {
 	if (!isObject(candidate)) {
 		return false;
@@ -260,14 +281,16 @@ function isOwnedWorktreeFile(candidate: unknown): candidate is IOwnedWorktreeFil
 	return isString(path) && isString(sha256);
 }
 
-// `(workspace, ids)`: the runs of the record `workspace` that are live now - starting, running or stopping - as the
-// agents' extension says each time its record changes: what the agent button counts (X-51).
+// `(workspace, ids, preparing?)`: the runs of the record `workspace` that are live now - starting, running or stopping -
+// as the agents' extension says each time its record changes: what the agent button counts (X-51); `preparing`, those
+// of them with no terminal yet - their worktrees being made or set up - listed as active agents too (L3).
 CommandsRegistry.registerCommand('_facade.agents.live', (accessor, ...args) => {
-	const [workspace, ids] = args;
+	const [workspace, ids, preparing] = args;
 	assertType(isString(workspace), 'string');
 	assertType(Array.isArray(ids) && ids.every(isNumber), 'number[]');
+	assertType(isUndefinedOrNull(preparing) || (Array.isArray(preparing) && preparing.every(isPreparingRun)), 'IPreparingRun[]');
 
-	accessor.get(IFacadeRunsService).setLive(workspace, ids);
+	accessor.get(IFacadeRunsService).setLive(workspace, ids, preparing ?? []);
 });
 
 // `(folder)`: the agents' runs whose terminals work inside `folder` - where they are now, or where they started
@@ -315,7 +338,7 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 		useShellEnvironment: inheritsShellEnvironment(accessor.get(IConfigurationService)),
 		cwd: options?.cwd ?? folder,
 		icon: options?.agent !== undefined ? agentIcon(options.agent, options.custom) : undefined,
-		reconnectionProperties: options?.run ? facadeRunProperties(options.run, { name: options.name, folder: folder.fsPath }) : undefined
+		reconnectionProperties: options?.run ? facadeRunProperties(options.run, { name: options.name, folder: folder.fsPath, finalScreen: options.finalScreen?.toString() }) : undefined
 	});
 	if (options?.run) {
 		runs.register(instance, options.run);
@@ -377,6 +400,9 @@ CommandsRegistry.registerCommand('_facade.terminal.stop', async (accessor, ...ar
 		return where.state === 'gone' ? { ...(where.end?.exitCode !== undefined ? { exitCode: where.end.exitCode } : {}) } : false;
 	}
 
+	// Its queued input, and what is left of an operation going in, go in no more: not into the stopping CLI (D3)
+	FacadeAgentTerminal.get(instance)?.closeInput();
+
 	// ⚠️ Not closed outright where it can be helped: the terminal's process manager lets go of the process
 	// as it closes, and nothing would say when it is gone. Sent the hang-up closing its tab sends, it ends as
 	// it would then, and its terminal closes after it. Windows has no signals: there its console is closed,
@@ -423,16 +449,18 @@ CommandsRegistry.registerCommand('_facade.terminal.read', async (accessor, ...ar
 // `(run, text, options)`: pastes `text` into the terminal the run's own process runs in, with Enter
 // `options.enterDelayMs` milliseconds later where `options.enter`, once its turn comes - behind Facade's own input
 // there, and the person's typing - `options.queueTimeoutMs` milliseconds at most (`FacadeAgentTerminal.type`; D3, D4).
+// With `options.requiresFramework` - a doorbell - not at all if the agent framework is off when its turn comes (M10).
 // Answers with what went in (`IAgentInputEffect`); none where it runs in none.
 CommandsRegistry.registerCommand('_facade.terminal.type', async (accessor, ...args): Promise<IAgentInputEffect | undefined> => {
 	const [run, text, options] = args;
 	assertType(isFacadeRun(run), 'IFacadeRun');
 	assertType(isString(text), 'string');
 	assertType(isObject(options), 'object');
-	const { enter, enterDelayMs, queueTimeoutMs } = options as Record<string, unknown>;
+	const { enter, enterDelayMs, queueTimeoutMs, requiresFramework } = options as Record<string, unknown>;
 	assertType(isUndefinedOrNull(enter) || isBoolean(enter), 'boolean');
+	assertType(isUndefinedOrNull(requiresFramework) || isBoolean(requiresFramework), 'boolean');
 	assertType(isWait(enterDelayMs) && isWait(queueTimeoutMs), 'number');
-	return agentTerminalOf(accessor, run)?.type(text, { enter: enter === true, enterDelayMs: Math.round(enterDelayMs ?? 0), queueTimeoutMs: queueTimeoutMs ?? undefined });
+	return agentTerminalOf(accessor, run)?.type(text, { enter: enter === true, enterDelayMs: Math.round(enterDelayMs ?? 0), queueTimeoutMs: queueTimeoutMs ?? undefined, requiresFramework: requiresFramework === true });
 });
 
 // `(run, keys, options)`: presses `keys` in the terminal the run's own process runs in, each as the terminal sends
