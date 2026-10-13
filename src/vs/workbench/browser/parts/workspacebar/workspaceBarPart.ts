@@ -36,6 +36,7 @@ import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { IRemoveOptions, IWorkspaceBarService, RemoveResult, ShowResult } from './workspaceBarService.js';
 import { WorkspaceBarRemoval } from './workspaceBarRemoval.js';
+import { WorkspaceBarTrustGate } from './workspaceBarTrust.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 import { ROW_HEIGHT, WorkspaceBarView } from './workspaceBarView.js';
@@ -126,6 +127,13 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private get removal(): WorkspaceBarRemoval {
 		this._removal ??= this.instantiationService.createInstance(WorkspaceBarRemoval, this.model, (uri: URI) => this.repositoryFor(uri));
 		return this._removal;
+	}
+
+	/** W5's trust question for folders on their way in, made on first use as `removal` is. */
+	private _trustGate: WorkspaceBarTrustGate | undefined;
+	private get trustGate(): WorkspaceBarTrustGate {
+		this._trustGate ??= this.instantiationService.createInstance(WorkspaceBarTrustGate);
+		return this._trustGate;
 	}
 
 	// A relay because the switcher is created in `createContentArea`, after a listener can arrive
@@ -298,7 +306,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	}
 
 	async add(uris: readonly URI[]): Promise<void> {
-		await this.model.add(uris);
+		const admitted = await this.trustGate.admit(uris);
+		if (admitted?.here.length) {
+			await this.model.add(admitted.here);
+		}
 	}
 
 	async addAndShow(uris: readonly URI[]): Promise<ShowResult> {
@@ -309,13 +320,20 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			return this.show(uris[0]);
 		}
 
+		// One question for all of them, before the one edit (W5)
+		const admitted = await this.trustGate.admit(uris);
+		if (!admitted?.here.length) {
+			return { kind: 'cancelled' };
+		}
+		const here = admitted.here;
+
 		let added: readonly URI[];
 		try {
-			added = await this.addForShow(uris);
+			added = await this.addForShow(here);
 		} catch (error) {
-			return this.couldNotAdd(uris[uris.length - 1], toErrorMessage(error));
+			return this.couldNotAdd(here[here.length - 1], toErrorMessage(error));
 		}
-		return this.doShow(uris[uris.length - 1], added);
+		return this.doShow(here[here.length - 1], added);
 	}
 
 	show(uri: URI): Promise<ShowResult> {
@@ -328,6 +346,12 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		if (this.contextService.getWorkbenchState() === WorkbenchState.EMPTY) {
 			await this.hostService.openWindow([{ folderUri: uri }], { forceReuseWindow: true });
 			return { kind: 'shown' };
+		}
+
+		// W5: a folder that is not trusted is asked about before it joins a trusted window
+		const admitted = await this.trustGate.admit([uri]);
+		if (!admitted?.here.length) {
+			return { kind: 'cancelled' };
 		}
 
 		// ⚠️ Through the model, not straight to the workspace: it is what knows that `/tmp/x` and
