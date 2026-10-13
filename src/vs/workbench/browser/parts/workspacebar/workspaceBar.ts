@@ -3,13 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { parse, ParseError } from '../../../../base/common/json.js';
-import { basename, dirname, IExtUri, isEqual, joinPath } from '../../../../base/common/resources.js';
-import { isObject } from '../../../../base/common/types.js';
+import { basename, dirname, isEqual, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { isStoredWorkspaceFolder, toWorkspaceFolders } from '../../../../platform/workspaces/common/workspaces.js';
 
 /**
  * Whether two paths name one folder. ⚠️ Not `uri.toString()`: a file system that ignores case gives
@@ -124,21 +121,6 @@ export async function canonicalUri(fileService: IFileService, uri: URI): Promise
 	// Nothing on the way up could be resolved. The uri as given still makes a row, and a folder that
 	// is gone shows as one that is gone.
 	return uri;
-}
-
-/**
- * The folders a `.code-workspace` lists, resolved against where the file is. ⚠️ Read, never entered:
- * entering replaces this window's workspace identity, which every folder's editors are stored
- * under. Throws rather than answering with an empty list, so the caller can open the file instead.
- */
-export function foldersInWorkspaceFile(contents: string, resource: URI, extUri: IExtUri): URI[] {
-	const errors: ParseError[] = [];
-	const stored: { folders?: unknown } | undefined = parse(contents, errors);
-	if (errors.length || !isObject(stored) || !Array.isArray(stored.folders)) {
-		throw new Error(`Not a workspace file: ${resource.toString(true)}`);
-	}
-
-	return toWorkspaceFolders(stored.folders.filter(isStoredWorkspaceFolder), resource, extUri).map(folder => folder.uri);
 }
 
 /**
