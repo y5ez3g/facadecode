@@ -8,7 +8,7 @@ import { Part } from '../../part.js';
 import { Dimension, $, EventHelper, addDisposableGenericMouseDownListener, getWindow, isAncestorOfActiveElement, getActiveElement, isHTMLElement } from '../../../../base/browser/dom.js';
 import { Event, Emitter, Relay, PauseableEmitter } from '../../../../base/common/event.js';
 import { contrastBorder, editorBackground } from '../../../../platform/theme/common/colorRegistry.js';
-import { GroupDirection, GroupsArrangement, GroupOrientation, IMergeGroupOptions, MergeGroupMode, GroupsOrder, GroupLocation, IFindGroupScope, EditorGroupLayout, GroupLayoutArgument, IEditorSideGroup, IEditorDropTargetDelegate, IEditorPart, GroupActivationReason, IEditorGroupActivationEvent } from '../../../services/editor/common/editorGroupsService.js';
+import { GroupDirection, GroupsArrangement, GroupOrientation, IMergeGroupOptions, MergeGroupMode, GroupsOrder, GroupLocation, IFindGroupScope, EditorGroupLayout, GroupLayoutArgument, IEditorSideGroup, IEditorDropTargetDelegate, IEditorPart, GroupActivationReason, IEditorGroupActivationEvent, IEditorWorkingSetOptions } from '../../../services/editor/common/editorGroupsService.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IView, orthogonal, LayoutPriority, IViewSize, Direction, SerializableGrid, Sizing, ISerializedGrid, ISerializedNode, Orientation, GridBranchNode, isGridBranchNode, GridNode, createSerializedGrid, Grid } from '../../../../base/browser/ui/grid/grid.js';
 import { GroupIdentifier, EditorInputWithOptions, IEditorPartOptions, IEditorPartOptionsChangeEvent, GroupModelChangeKind } from '../../../common/editor.js';
@@ -1510,16 +1510,16 @@ export class EditorPart extends Part<IEditorPartMemento> implements IEditorPart,
 		};
 	}
 
-	applyState(state: IEditorPartUIState | 'empty', options?: IEditorGroupViewOptions): Promise<void> {
+	applyState(state: IEditorPartUIState | 'empty', options?: IEditorGroupViewOptions & Pick<IEditorWorkingSetOptions, 'exclude' | 'putAway'>): Promise<void> {
 		if (state === 'empty') {
-			return this.doApplyEmptyState();
+			return this.doApplyEmptyState(options);
 		} else {
 			return this.doApplyState(state, options);
 		}
 	}
 
-	private async doApplyState(state: IEditorPartUIState, options?: IEditorGroupViewOptions): Promise<void> {
-		const groups = await this.doPrepareApplyState();
+	private async doApplyState(state: IEditorPartUIState, options?: IEditorGroupViewOptions & Pick<IEditorWorkingSetOptions, 'exclude' | 'putAway'>): Promise<void> {
+		const groups = await this.doPrepareApplyState(options);
 
 		// Pause add/remove events for groups during the duration of applying the state
 		// This ensures that we can do this transition atomically with the new state
@@ -1558,13 +1558,13 @@ export class EditorPart extends Part<IEditorPartMemento> implements IEditorPart,
 		);
 	}
 
-	private async doApplyEmptyState(): Promise<void> {
-		await this.doPrepareApplyState();
+	private async doApplyEmptyState(options?: Pick<IEditorWorkingSetOptions, 'exclude' | 'putAway'>): Promise<void> {
+		await this.doPrepareApplyState(options);
 
 		this.mergeAllGroups(this.activeGroup);
 	}
 
-	private async doPrepareApplyState(): Promise<IEditorGroupView[]> {
+	private async doPrepareApplyState(options?: Pick<IEditorWorkingSetOptions, 'exclude' | 'putAway'>): Promise<IEditorGroupView[]> {
 
 		// Before disposing groups, try to close as many editors as
 		// possible, but skip over those that would trigger a dialog
@@ -1573,7 +1573,7 @@ export class EditorPart extends Part<IEditorPartMemento> implements IEditorPart,
 
 		const groups = this.getGroups(GroupsOrder.MOST_RECENTLY_ACTIVE);
 		for (const group of groups) {
-			await group.closeAllEditors({ excludeConfirming: true, force: true });
+			await group.closeAllEditors({ excludeConfirming: true, force: true, exclude: options?.exclude, putAway: options?.putAway });
 		}
 
 		return groups;

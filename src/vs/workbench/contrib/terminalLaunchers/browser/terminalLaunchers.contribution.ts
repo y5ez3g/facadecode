@@ -14,6 +14,7 @@ import { registerTerminalLauncherActions } from './terminalLauncherActions.js';
 import './terminalLauncherService.js';
 import { TerminalLauncherMenu } from './terminalLauncherMenu.js';
 import { TerminalLauncherWorkspaceBar } from './terminalLauncherWorkspaceBar.js';
+import { RunningWorkShutdownQuestion } from './terminalLauncherShutdown.js';
 
 registerTerminalLauncherActions();
 
@@ -21,15 +22,16 @@ registerTerminalLauncherActions();
 // This is what puts the agents beside it, and it runs early so the first opening is the real list.
 registerWorkbenchContribution2(TerminalLauncherMenu.ID, TerminalLauncherMenu, WorkbenchPhase.BlockRestore);
 
-// After the folder terminals, which it asks where each agent is and which start `AfterRestored`.
-registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.Eventually);
+// With the folder terminals they ask, which start `AfterRestored`
+registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.AfterRestored);
+registerWorkbenchContribution2(RunningWorkShutdownQuestion.ID, RunningWorkShutdownQuestion, WorkbenchPhase.AfterRestored);
 
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,
 	properties: {
 		[AGENTS_SETTING]: {
 			type: 'array',
-			description: localize('agents.description', "The agents on the agent button. Each one starts a terminal tab in the folder the window is on and runs its command there. The Configure Agents command edits this list."),
+			description: localize('agents.description', "The agents in the Agent menu. Each one opens a terminal in the current folder and runs its command there. The Configure Agents command edits this list."),
 			default: [],
 			scope: ConfigurationScope.APPLICATION,
 			items: {

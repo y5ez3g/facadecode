@@ -1659,7 +1659,8 @@ export class EnableForWorkspaceAction extends ExtensionAction {
 		@IProductService private readonly productService: IProductService,
 	) {
 		super(EnableForWorkspaceAction.ID, EnableForWorkspaceAction.LABEL, ExtensionAction.LABEL_ACTION_CLASS);
-		this.tooltip = localize('enableForWorkspaceActionToolTip', "Enable this extension only in this workspace");
+		// Facade Code: a workspace here is every folder of the window, not the one on screen (WORKSPACE.md W7)
+		this.tooltip = localize('enableForWorkspaceActionToolTip', "Enable this extension only in this workspace. It applies to all folders in this window.");
 		this.update();
 	}
 
@@ -1731,7 +1732,8 @@ export class DisableForWorkspaceAction extends ExtensionAction {
 		@IProductService private readonly productService: IProductService,
 	) {
 		super(DisableForWorkspaceAction.ID, DisableForWorkspaceAction.LABEL, ExtensionAction.LABEL_ACTION_CLASS);
-		this.tooltip = localize('disableForWorkspaceActionToolTip', "Disable this extension only in this workspace");
+		// Facade Code: a workspace here is every folder of the window, not the one on screen (WORKSPACE.md W7)
+		this.tooltip = localize('disableForWorkspaceActionToolTip', "Disable this extension only in this workspace. It applies to all folders in this window.");
 		this.update();
 		this._register(this.extensionService.onDidChangeExtensions(() => this.update()));
 	}

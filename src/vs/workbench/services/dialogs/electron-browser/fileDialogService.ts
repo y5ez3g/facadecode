@@ -7,7 +7,7 @@ import { localize } from '../../../../nls.js';
 import { SaveDialogOptions, OpenDialogOptions } from '../../../../base/parts/sandbox/common/electronTypes.js';
 import { IHostService } from '../../host/browser/host.js';
 import { IPickAndOpenOptions, ISaveDialogOptions, IOpenDialogOptions, IFileDialogService, IDialogService, INativeOpenDialogOptions } from '../../../../platform/dialogs/common/dialogs.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../activeFolder/common/activeFolder.js';
 import { IHistoryService } from '../../history/common/history.js';
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
@@ -165,7 +165,10 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
 		if (this.shouldUseSimplified(schema).useSimplified) {
 			return this.pickWorkspaceAndOpenSimplified(schema, options);
 		}
-		return this.nativeHostService.pickWorkspaceAndOpen(this.toNativeOpenDialogOptions(options));
+
+		// Facade Code: the main process opens it past the host service, so its new-window rule is applied here (W4)
+		const forceNewWindow = options.forceNewWindow || this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY;
+		return this.nativeHostService.pickWorkspaceAndOpen(this.toNativeOpenDialogOptions({ ...options, forceNewWindow }));
 	}
 
 	async pickFileToSave(defaultUri: URI, availableFileSystems?: string[]): Promise<URI | undefined> {

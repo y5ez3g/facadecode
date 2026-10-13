@@ -15,10 +15,14 @@ import { InstantiationType, registerSingleton } from '../../../../platform/insta
 import { Emitter, Event, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+import { IHostService } from '../../../services/host/browser/host.js';
+import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Part } from '../../part.js';
 import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
 import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
@@ -30,7 +34,10 @@ import { moveRow, rowsOfFolders } from './workspaceBar.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
-import { IWorkspaceBarService } from './workspaceBarService.js';
+import { IRemoveOptions, IWorkspaceBarService, RemoveResult, ShowResult } from './workspaceBarService.js';
+import { WorkspaceBarRemoval } from './workspaceBarRemoval.js';
+import { WorkspaceBarTrustGate } from './workspaceBarTrust.js';
+import { orderByRecent } from './workspaceBarSwitchFolder.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 import { ROW_HEIGHT, WorkspaceBarView } from './workspaceBarView.js';
@@ -57,6 +64,22 @@ const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
 export const WORKSPACEBAR_COLLAPSED_WIDTH = 36;
 
 const COLLAPSED_STORAGE_KEY = 'facade.workspaceBar.collapsed';
+
+/** Where the folders the window has been on are kept, most recent first (`recentRows`). */
+const RECENT_STORAGE_KEY = 'facade.workspaceBar.recentRows';
+
+/** How many of them are kept: more than a bar shows, and fewer than anybody scrolls. */
+const MAX_RECENT = 100;
+
+/** What was kept of the recent folders; storage that cannot be read keeps none. */
+function readRecent(value: string | undefined): string[] {
+	try {
+		const stored: unknown = value ? JSON.parse(value) : [];
+		return Array.isArray(stored) ? stored.filter((key): key is string => typeof key === 'string') : [];
+	} catch {
+		return [];
+	}
+}
 
 /**
  * Whether the grid has the workspace bar as the middle row's first column, which every hard-coded
@@ -111,10 +134,27 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	readonly onDidChangeCollapsed = this._onDidChangeCollapsed.event;
 
 	private readonly model: WorkspaceBarModel;
+
+	/** The folders the window has been on, by key, most recent first: Switch Folder's order (`recentRows`). */
+	private recent: string[];
 	private readonly git: WorkspaceBarGit;
 	private view: WorkspaceBarView | undefined;
 	private editors: WorkspaceBarEditors | undefined;
 	private switcher: WorkspaceBarSwitcher | undefined;
+
+	/** Made on the first removal: what it asks of the workbench need not exist while the part is being built. */
+	private _removal: WorkspaceBarRemoval | undefined;
+	private get removal(): WorkspaceBarRemoval {
+		this._removal ??= this.instantiationService.createInstance(WorkspaceBarRemoval, this.model, (uri: URI) => this.repositoryFor(uri));
+		return this._removal;
+	}
+
+	/** W5's trust question for folders on their way in, made on first use as `removal` is. */
+	private _trustGate: WorkspaceBarTrustGate | undefined;
+	private get trustGate(): WorkspaceBarTrustGate {
+		this._trustGate ??= this.instantiationService.createInstance(WorkspaceBarTrustGate);
+		return this._trustGate;
+	}
 
 	// A relay because the switcher is created in `createContentArea`, after a listener can arrive
 	private readonly _onDidRestoreEditors = this._register(new Relay<void>());
@@ -131,6 +171,9 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@ILogService private readonly logService: ILogService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkspaceBarCustomizationService customizationService: IWorkspaceBarCustomizationService,
+		@INotificationService private readonly notificationService: INotificationService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IHostService private readonly hostService: IHostService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -149,6 +192,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// Collapsed until somebody opens it: a profile that has never touched the toggle starts with
 		// the column of icons, and the choice is remembered from the first time it is made.
 		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, true);
+		this.recent = readRecent(this.storageService.get(RECENT_STORAGE_KEY, StorageScope.WORKSPACE));
 		this.collapsedContext = WorkspaceBarCollapsedContext.bindTo(contextKeyService);
 		this.collapsedContext.set(this._collapsed);
 
@@ -156,9 +200,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
 		this.model = this._register(this.instantiationService.createInstance(WorkspaceBarModel));
 
-		// Which of those folders are one repository, and its worktrees - read from git's own files, so
-		// that the first drawing of the bar already has them (WORKTREE.md section 5). While the bar lists
-		// no worktrees (section 11) the reader is handed no folders, and reads and watches nothing.
+		// Repositories and their worktrees from git's own files, read before the first drawing (WORKTREE.md WT-3)
 		const model = this.model;
 		this.git = this._register(this.instantiationService.createInstance(WorkspaceBarGit, {
 			get folders() { return areWorktreesShown(configurationService) ? model.folders : []; },
@@ -205,11 +247,19 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this._register(this.model.onDidChange(() => this.pruneEditors()));
 		this.pruneEditors();
 		this.switcher = this._register(this.instantiationService.createInstance(WorkspaceBarSwitcher, this.model, this.editors));
+		const switcher = this.switcher;
+		const noteActive = () => {
+			if (switcher.active) {
+				this.noteRecent(switcher.active);
+			}
+		};
+		noteActive();
+		this._register(switcher.onDidChangeActive(noteActive));
 		this._onDidRestoreEditors.input = this.switcher.onDidRestoreEditors;
 		// `show` handed in rather than resolved as `IWorkspaceBarService`: this part is that service,
 		// and the view is built while the part is being created.
 		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView,
-			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, (uri: URI) => this.show(uri)));
+			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, async (uri: URI) => { await this.show(uri); }));
 
 		return this.content;
 	}
@@ -251,7 +301,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	 * folder and comes back the colour it was.
 	 */
 	private pruneEditors(): void {
-		this.editors?.prune(new Set(this.model.folders.map(folder => this.model.key(folder.uri))));
+		void this.editors?.prune(this.model.folders.map(folder => folder.uri), folder => this.isRemoving(folder));
 	}
 
 	override updateStyles(): void {
@@ -285,58 +335,103 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	}
 
 	async add(uris: readonly URI[]): Promise<void> {
-		await this.model.add(uris);
+		const admitted = await this.trustGate.admit(uris);
+		if (admitted?.here.length) {
+			await this.model.add(admitted.here);
+		}
 	}
 
-	async addAndShow(uris: readonly URI[]): Promise<void> {
+	async addAndShow(uris: readonly URI[]): Promise<ShowResult> {
 		if (uris.length === 0) {
-			return;
+			return { kind: 'cancelled' };
+		}
+		if (uris.length === 1) {
+			return this.show(uris[0]);
 		}
 
-		await this.addForShow(uris);
-		await this.show(uris[uris.length - 1]);
+		// One question for all of them, before the one edit (W5)
+		const admitted = await this.trustGate.admit(uris);
+		if (!admitted?.here.length) {
+			return { kind: 'cancelled' };
+		}
+		const here = admitted.here;
+
+		let added: readonly URI[];
+		try {
+			added = await this.addForShow(here);
+		} catch (error) {
+			return this.couldNotAdd(here[here.length - 1], toErrorMessage(error));
+		}
+		return this.doShow(here[here.length - 1], added);
 	}
 
-	async show(uri: URI): Promise<void> {
+	show(uri: URI): Promise<ShowResult> {
+		return this.doShow(uri, []);
+	}
+
+	/** `show`, for a folder that `addedBefore` were put in the workspace on the way to. */
+	private async doShow(uri: URI, addedBefore: readonly URI[]): Promise<ShowResult> {
+		// An empty window opens on its first folder, as stock, rather than becoming an untitled workspace (W4)
+		if (this.contextService.getWorkbenchState() === WorkbenchState.EMPTY) {
+			await this.hostService.openWindow([{ folderUri: uri }], { forceReuseWindow: true });
+			return { kind: 'shown' };
+		}
+
+		// W5: a folder that is not trusted is asked about before it joins a trusted window
+		const admitted = await this.trustGate.admit([uri]);
+		if (!admitted?.here.length) {
+			return { kind: 'cancelled' };
+		}
+
 		// ⚠️ Through the model, not straight to the workspace: it is what knows that `/tmp/x` and
 		// `/private/tmp/x` are one folder, so a folder opened twice under two spellings is one row
 		// rather than two. `add` skips what is already there, which makes this the same call whether
 		// the folder is new to the window or one it already has.
-		await this.addForShow([uri]);
+		let added: readonly URI[];
+		try {
+			added = [...addedBefore, ...await this.addForShow([uri])];
+		} catch (error) {
+			return this.couldNotAdd(uri, toErrorMessage(error));
+		}
 
 		// ⚠️ Switched to the row, not to the spelling that was asked for. A folder the workspace
 		// took in long ago under the other spelling of the same place is a row `setActiveFolder`
 		// would not find, and it throws rather than guess.
 		const folder = await this.model.resolve(uri);
-		if (!folder) {
-			// ⚠️ Nothing stats what is handed in here - `addFolders` writes what it is given - so this
-			// is the workspace having refused it: an empty window that could not be turned into one,
-			// or an edit that failed. Too rare to have a screen of its own, too quiet to leave out of
-			// the log.
-			this.logService.warn(`[workspaceBar] ${uri.toString(true)} did not become a folder of this workspace`);
-			return;
+		if (!folder || !this.switcher) {
+			// The workspace refused the edit
+			return this.couldNotAdd(uri, localize('workspaceBar.notTaken', "the folder was not added to the workspace"));
 		}
 
-		await this.switcher?.switchTo(folder.uri);
+		// The folders stay if the switch fails, which the switcher reports (W5)
+		const result = await this.switcher.switchTo(folder.uri, added);
+		return result.kind === 'failed' && added.length > 0 ? { ...result, added: true } : result;
 	}
 
-	/**
-	 * Puts folders in the workspace for the window to move onto, and when any were added, waits for
-	 * git's files to be read again: the rows come from that read, and moving onto a folder before its
-	 * row exists left no row marked for a moment.
-	 */
-	private async addForShow(uris: readonly URI[]): Promise<void> {
+	private couldNotAdd(uri: URI, reason: string): ShowResult {
+		this.logService.warn(`[workspaceBar] ${uri.toString(true)} did not become a folder of this workspace: ${reason}`);
+		this.notificationService.error(localize('workspaceBar.couldNotAdd', "Failed to add folder '{0}' to the workspace: {1}", uri.scheme === 'file' ? uri.fsPath : uri.toString(true), reason));
+		return { kind: 'failed', reason };
+	}
+
+	/** Adds folders to move onto and waits for their rows to be read from git; returns the ones added. */
+	private async addForShow(uris: readonly URI[]): Promise<readonly URI[]> {
 		const added = await this.model.add(uris);
 		if (added.length > 0) {
 			await this.git.refresh();
 		}
+		return added;
 	}
 
-	async remove(uris: readonly URI[]): Promise<void> {
+	remove(uris: readonly URI[], options?: IRemoveOptions): Promise<RemoveResult> {
 		// ⚠️ Nothing to forget here. Taking the folders out of the workspace is what moves the window
 		// off one that is leaving, and `pruneEditors` drops what they left behind - which is the same
 		// work whether the removal came from this bar or from someone editing the workspace file.
-		await this.model.remove(uris);
+		return this.removal.remove(uris, options);
+	}
+
+	isRemoving(folder: URI): boolean {
+		return !!this._removal?.isRemoving(folder);
 	}
 
 	async moveFolder(uri: URI, offset: number): Promise<void> {
@@ -374,7 +469,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	}
 
 	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined {
-		// None while worktrees are switched off (WORKTREE.md section 11): every row is then a folder.
+		// None while worktrees are switched off (WORKTREE.md WT-9): every row is then a folder.
 		if (!areWorktreesShown(this.configurationService)) {
 			return undefined;
 		}
@@ -387,6 +482,21 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		}
 
 		return undefined;
+	}
+
+	recentRows(): readonly URI[] {
+		return orderByRecent(this.rowOrder(), this.recent, uri => this.model.key(uri));
+	}
+
+	/** Puts the folder the window is on at the head of the recent ones, and keeps them for the next window. */
+	private noteRecent(uri: URI): void {
+		const key = this.model.key(uri);
+		if (this.recent[0] === key) {
+			return;
+		}
+
+		this.recent = [key, ...this.recent.filter(other => other !== key)].slice(0, MAX_RECENT);
+		this.storageService.store(RECENT_STORAGE_KEY, JSON.stringify(this.recent), StorageScope.WORKSPACE, StorageTarget.MACHINE);
 	}
 
 	rowOrder(): readonly URI[] {

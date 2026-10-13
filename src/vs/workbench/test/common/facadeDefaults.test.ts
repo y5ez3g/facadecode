@@ -25,7 +25,17 @@ suite('Facade defaults', () => {
 			{
 				// Upstream says `visibleInWorkspace`. Closed, because this window already spends a
 				// column on the left and the editor should not open as the middle of three.
-				'workbench.secondarySideBar.defaultVisibility': 'hidden'
+				'workbench.secondarySideBar.defaultVisibility': 'hidden',
+				// WS-49: upstream says `never`. Closing with an agent at work asks first
+				'terminal.integrated.confirmOnExit': 'hasChildProcesses',
+				// WS-14: upstream says `prompt`. A clone joins this window without a question, as Open Folder does
+				'git.openAfterClone': 'always'
 			});
+	});
+
+	test('WS-14 a repository just cloned is opened in this window, nothing asked: `git.openAfterClone` is `always`', () => {
+		const overrides = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).getConfigurationDefaultsOverrides();
+
+		assert.strictEqual(overrides.get('git.openAfterClone')?.value, 'always');
 	});
 });

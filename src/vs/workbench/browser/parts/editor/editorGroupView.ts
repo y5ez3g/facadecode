@@ -1977,7 +1977,7 @@ export class EditorGroupView extends Themable implements IEditorGroupView {
 
 	//#region closeAllEditors()
 
-	closeAllEditors(options: { excludeConfirming: true; force?: boolean }): boolean;
+	closeAllEditors(options: { excludeConfirming: true; force?: boolean; exclude?: (editor: EditorInput) => boolean; putAway?: (editor: EditorInput) => boolean }): boolean;
 	closeAllEditors(options?: ICloseAllEditorsOptions): Promise<boolean>;
 	closeAllEditors(options?: ICloseAllEditorsOptions): boolean | Promise<boolean> {
 		if (this.isEmpty) {
@@ -1999,7 +1999,7 @@ export class EditorGroupView extends Themable implements IEditorGroupView {
 		}
 
 		// Otherwise go through potential confirmation "async"
-		const editors = this.model.getEditors(EditorsOrder.MOST_RECENTLY_ACTIVE, options).filter(editor => options?.force || !editor.hasCapability(EditorInputCapabilities.CannotClose));
+		const editors = this.model.getEditors(EditorsOrder.MOST_RECENTLY_ACTIVE, options).filter(editor => (options?.force || !editor.hasCapability(EditorInputCapabilities.CannotClose)) && !options?.exclude?.(editor));
 		if (!editors.length) {
 			return true;
 		}
@@ -2015,9 +2015,9 @@ export class EditorGroupView extends Themable implements IEditorGroupView {
 	}
 
 	private doCloseAllEditors(options?: ICloseAllEditorsOptions): void {
-		let editors = this.model.getEditors(EditorsOrder.SEQUENTIAL, options).filter(editor => options?.force || !editor.hasCapability(EditorInputCapabilities.CannotClose));
+		let editors = this.model.getEditors(EditorsOrder.SEQUENTIAL, options).filter(editor => (options?.force || !editor.hasCapability(EditorInputCapabilities.CannotClose)) && !options?.exclude?.(editor));
 		if (options?.excludeConfirming) {
-			editors = editors.filter(editor => !this.shouldConfirmClose(editor));
+			editors = editors.filter(editor => !this.shouldConfirmClose(editor) || !!options.putAway?.(editor));
 		}
 
 		// Close all inactive editors first

@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
+import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
@@ -20,7 +21,7 @@ import { IActiveFolderService } from '../../../../services/activeFolder/common/a
 import { FOLLOW_FOLDER, IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance } from '../../../terminal/browser/terminal.js';
 import { ITerminalLauncherService } from '../../browser/terminalLauncherService.js';
-import { agentsByFolder, TerminalLauncherWorkspaceBar } from '../../browser/terminalLauncherWorkspaceBar.js';
+import { agentsByFolder, runningWork, TerminalLauncherWorkspaceBar } from '../../browser/terminalLauncherWorkspaceBar.js';
 
 /** An agent's terminal, as much of one as the bar is told about: when it was made, and its tab's icon. */
 class TestAgent extends mock<ITerminalInstance>() {
@@ -44,7 +45,7 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 		store.add(new TerminalLauncherWorkspaceBar(
 			upcastPartial<ITerminalLauncherService>({ onDidChangeAgentTerminals: agentsChanged.event, get agentTerminals() { return agents; } }),
 			upcastPartial<IFolderTerminalsService>({ folderOf: agent => { const path = folders.get(agent); return path ? URI.file(path) : undefined; } }),
-			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder, icons }) => `${folder.path}: ${icons.map(icon => icon.id).join(' ')}`)); } }),
+			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder, icons }) => `${folder.path}: ${icons.map(icon => icon.id).join(' ')}`)); }, registerWorkProvider: () => Disposable.None }),
 			upcastPartial<IWorkspaceBarService>({ onDidRestoreEditors: editorsRestored.event }),
 			upcastPartial<IActiveFolderService>({ onDidChangeActiveFolder: activeFolderChanged.event }),
 			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: foldersChanged.event }),
@@ -88,7 +89,7 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 		store.add(new TerminalLauncherWorkspaceBar(
 			upcastPartial<ITerminalLauncherService>({ onDidChangeAgentTerminals: Event.None, agentTerminals: [agent] }),
 			upcastPartial<IFolderTerminalsService>({ folderOf: () => folder }),
-			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder }) => folder.path)); } }),
+			upcastPartial<IWorkspaceBarAgentsService>({ set: reported => { told.push(reported.map(({ folder }) => folder.path)); }, registerWorkProvider: () => Disposable.None }),
 			upcastPartial<IWorkspaceBarService>({ onDidRestoreEditors: Event.None }),
 			upcastPartial<IActiveFolderService>({ onDidChangeActiveFolder: Event.None }),
 			upcastPartial<IWorkspaceContextService>({ onDidChangeWorkspaceFolders: Event.None }),
@@ -101,6 +102,24 @@ suite('Agent launchers - the agents the workspace bar shows', () => {
 		await timeout(1);
 
 		assert.deepStrictEqual(told, [['/lab'], []]);
+	});
+
+	test('WS-33 WS-49 what taking a folder out or closing the window stops, of the terminals it ends: its agents whose process runs, and its other terminals running one - oldest first, an agent by the name it was started under, a terminal by its title', () => {
+		const terminal = (instanceId: number, title: string, state: { name?: string; exitCode?: number; hasChildProcesses?: boolean; isDisposed?: boolean } = {}) =>
+			upcastPartial<ITerminalInstance>({ instanceId, title, shellLaunchConfig: { name: state.name }, exitCode: state.exitCode, hasChildProcesses: !!state.hasChildProcesses, isDisposed: !!state.isDisposed });
+		const claude = terminal(5, 'Claude Code', { name: 'Claude Code' });
+		// The title its program set, as ping sets `PING`
+		const pinger = terminal(6, 'PING', { name: 'Pinger' });
+		const finished = terminal(2, 'Codex', { name: 'Codex', exitCode: 0 });
+		const server = terminal(3, 'npm run dev', { hasChildProcesses: true });
+		const idle = terminal(1, 'pwsh');
+		const closed = terminal(4, 'npm test', { hasChildProcesses: true, isDisposed: true });
+
+		assert.deepStrictEqual(runningWork([pinger, claude, finished, server, idle, closed], new Set([pinger, claude, finished])), [
+			{ id: 3, kind: 'terminal', name: 'npm run dev' },
+			{ id: 5, kind: 'agent', name: 'Claude Code' },
+			{ id: 6, kind: 'agent', name: 'Pinger' },
+		]);
 	});
 
 	test('each folder\'s agents in the order they were started, a custom icon as the robot, and one in the panel on no row', () => {

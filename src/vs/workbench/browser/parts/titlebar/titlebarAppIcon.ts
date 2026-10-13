@@ -37,7 +37,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		[SHOW_APP_ICON]: {
 			type: 'boolean',
-			description: localize('titleBar.showAppIcon', "Controls whether the product icon is shown at the left of the title bar. The workspace bar's toggle occupies that corner, so it is hidden by default. Applies to windows opened after the change, and only where the title bar is custom, on Windows and Linux."),
+			description: localize('titleBar.showAppIcon', "Controls whether the application icon is shown in the custom title bar. When disabled, the corner is reserved for the workspace bar toggle. Applies only to custom title bars on Windows and Linux; requires a new window to take effect."),
 			default: false,
 			scope: ConfigurationScope.APPLICATION
 		}

@@ -7,14 +7,16 @@ import { DeferredPromise } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
-import { joinPath } from '../../../../base/common/resources.js';
+import { basename, joinPath } from '../../../../base/common/resources.js';
 import { isBoolean, isNumber, isObject, isString } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { EditorActivation } from '../../../../platform/editor/common/editor.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IShellLaunchConfig, TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
@@ -27,6 +29,7 @@ import { GroupsOrder, IEditorGroup, IEditorGroupsService } from '../../../servic
 import { EditorGroupColumn } from '../../../services/editor/common/editorGroupColumn.js';
 import { AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYPE } from '../../../services/editor/common/editorService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
+import { refreshTerminalSoleFolders, setTerminalSoleFolder } from '../common/terminalSoleFolder.js';
 
 /**
  * Controls whether a terminal in the editor area belongs to the folder it was opened in. Off, it belongs
@@ -322,6 +325,9 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	 */
 	private _editorsUpFor: string | undefined;
 
+	/** The workspace's folders as they were before its last change: those that left are no longer in it to ask. */
+	private _known: ReadonlyMap</*folder*/string, URI>;
+
 	constructor(
 		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@IWorkspaceBarService private readonly _workspaceBarService: IWorkspaceBarService,
@@ -332,9 +338,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		@IUriIdentityService private readonly _uriIdentityService: IUriIdentityService,
 		@IFileService private readonly _fileService: IFileService,
 		@IStorageService private readonly _storageService: IStorageService,
-		@ILogService private readonly _logService: ILogService
+		@ILogService private readonly _logService: ILogService,
+		@INotificationService private readonly _notificationService: INotificationService
 	) {
 		super();
+
+		this._known = this._foldersByKey();
 
 		// Made once the workbench has restored the editors (`WorkbenchPhase.AfterRestored`): those of the
 		// folder the window opened on are up
@@ -378,6 +387,16 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			if (e.affectsConfiguration(FOLLOW_FOLDER) && this._isEnabled()) {
 				this._putBack();
 			}
+			// Either way the editor area's terminals became folders' own or the window's: named or not, below
+			if (e.affectsConfiguration(FOLLOW_FOLDER)) {
+				refreshTerminalSoleFolders();
+			}
+		}));
+
+		// A folder's editor-area terminal is only seen on that folder, so its label leaves the folder out (WORKSPACE.md W7)
+		this._register(setTerminalSoleFolder(terminal => {
+			const instance = this._terminalService.instances.find(candidate => candidate === terminal);
+			return instance?.target === TerminalLocation.Editor ? this.folderOf(instance) : undefined;
 		}));
 
 		// Kept while the window is closed: a reload, or a restart of the app, brings the terminals back
@@ -1096,6 +1115,13 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	private _pruneRemovedFolders(): void {
 		const present = new Set(this._contextService.getWorkspace().folders.map(folder => this._key(folder.uri)));
 
+		// Only a folder that left through Remove Folder stops what runs in it; otherwise it moves to the panel (W9.6)
+		const known = this._known;
+		this._known = this._foldersByKey();
+		const agreed = new Set([...known].filter(([key, uri]) => !present.has(key) && this._workspaceBarService.isRemoving(uri)).map(([key]) => key));
+		const stops = (key: string, members?: ReadonlySet<string>) => agreed.has(key) || (!!members && [...members].some(member => agreed.has(member)));
+		const kept: ITerminalInstance[] = [];
+
 		// The folder on screen gone: the active folder service moved on without announcing it, which is a
 		// move all the same - a restore in flight stops - and its terminals are put away as on any: those
 		// that are its for it, to end below with those held for it, those that came along with the window
@@ -1117,8 +1143,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			if (present.has(key)) {
 				this._rows.delete(key);
 			} else if (row.members && ![...row.members].some(member => present.has(member))) {
-				this._logService.trace(`[folderTerminals] repository removed, disposing ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
-				this._endHeld(key);
+				this._logService.trace(`[folderTerminals] repository removed, ${stops(key, row.members) ? 'disposing' : 'keeping'} ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
+				if (stops(key, row.members)) {
+					this._endHeld(key);
+				} else {
+					kept.push(...this._keepHeld(key));
+				}
 			}
 		}
 
@@ -1128,8 +1158,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 				continue;
 			}
 
-			this._logService.trace(`[folderTerminals] folder removed, disposing ${parked.length} parked terminal(s)`);
-			this._endHeld(key);
+			this._logService.trace(`[folderTerminals] folder removed, ${stops(key) ? 'disposing' : 'keeping'} ${parked.length} parked terminal(s)`);
+			if (stops(key)) {
+				this._endHeld(key);
+			} else {
+				kept.push(...this._keepHeld(key));
+			}
 		}
 
 		// Those opened for a folder, wherever they are, as those held for one: a folder that left takes them,
@@ -1139,10 +1173,39 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			if (present.has(opened.key)) {
 				opened.joined = true;
 			} else if (opened.joined || (opened.members && ![...opened.members].some(member => present.has(member)))) {
-				this._logService.trace(`[folderTerminals] folder removed, disposing a terminal opened for ${opened.key}`);
-				this._endOpenedFor(instance);
+				this._logService.trace(`[folderTerminals] folder removed, ${stops(opened.key, opened.members) ? 'disposing' : 'keeping'} a terminal opened for ${opened.key}`);
+				if (stops(opened.key, opened.members)) {
+					this._endOpenedFor(instance);
+				} else {
+					kept.push(this._keepOpenedFor(instance));
+				}
 			}
 		}
+
+		if (kept.length) {
+			this._sayKept([...known].filter(([key]) => !present.has(key) && !agreed.has(key)).map(([, uri]) => uri), kept);
+		}
+	}
+
+	/** The workspace's folders, by key. */
+	private _foldersByKey(): Map</*folder*/string, URI> {
+		return new Map(this._contextService.getWorkspace().folders.map(folder => [this._key(folder.uri), folder.uri]));
+	}
+
+	/** Says that what ran in folders that left without asking goes on in the panel, and offers to stop it (W9.6). */
+	private _sayKept(folders: readonly URI[], kept: readonly ITerminalInstance[]): void {
+		this._notificationService.prompt(Severity.Info,
+			localize('folderTerminals.keptRunning', "Folder '{0}' was removed from the workspace. Active terminals continue running in the panel: {1}.", folders.map(folder => basename(folder)).join(', '), kept.map(instance => instance.title).join(', ')),
+			[{
+				label: localize('folderTerminals.stop', "Stop"),
+				run: () => {
+					for (const instance of kept) {
+						if (!instance.isDisposed) {
+							instance.dispose(TerminalExitReason.User);
+						}
+					}
+				}
+			}]);
 	}
 
 	/**
@@ -1249,6 +1312,29 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			this._logService.trace(`[folderTerminals] row gone from disk, disposing ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
 			this._endHeld(key);
 		}
+	}
+
+	/** Releases the terminals held for `key` to the panel, where they keep running. */
+	private _keepHeld(key: string): ITerminalInstance[] {
+		const parked = this._parked.get(key) ?? [];
+		this._drop(key);
+
+		for (const { instance, persisted } of parked) {
+			this._forgetOpenedFor(instance);
+			instance.target = TerminalLocation.Panel;
+			instance.shellLaunchConfig.forcePersist = persisted;
+			this._terminalService.showBackgroundTerminal(instance, true).then(undefined, onUnexpectedError);
+		}
+		return parked.map(({ instance }) => instance);
+	}
+
+	/** Lets a terminal opened for a folder that left without anyone agreeing to stop it go on running, the panel's. */
+	private _keepOpenedFor(instance: ITerminalInstance): ITerminalInstance {
+		this._forgetOpenedFor(instance);
+		if (this._placeOf(instance)) {
+			this._terminalService.moveToTerminalView(instance).then(undefined, onUnexpectedError);
+		}
+		return instance;
 	}
 
 	/** Ends the terminals held for a folder or a row that has gone, and keeps nothing more for it. */

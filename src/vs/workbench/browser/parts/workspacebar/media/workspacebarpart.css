@@ -462,7 +462,7 @@
 
 /*
  * ---------------------------------------------------------------------------------------------
- * Worktrees: a repository's row opens onto its worktrees (WORKTREE.md section 3).
+ * Worktrees: a repository's row opens onto its worktrees (WORKTREE.md WT-1).
  * -------------------------------------------------------------------------------------------
  */
 
@@ -491,7 +491,7 @@
 /*
  * A worktree's glyph (`worktreeIcon`): the level is said by the glyph, not an indent. In the ink a
  * folder's icon takes (`.workspacebar-icon`), the row's or the colour the worktree was given;
- * transitioned, for the running state it will show (WORKTREE.md section 13).
+ * transitioned, for the running state it will show (WORKTREE.md WT-13).
  *
  * ⚠️ Not the quiet ink it once had: a step darker than the folder icons and the triangle in the same
  * column, the dot read as dimmed rather than as one level down.

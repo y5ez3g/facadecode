@@ -3,23 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/*
- * What the bar's two dialogs add to the shape every dialog here has.
- *
- * ⚠️ The bands, the rules and the width live in `parts/dialogs/media/facadedialog.css` under
- * `.facade-dialog`, which both of these carry as their first class. Only what is particular to a
- * folder - the colours, the glyphs, and a confirm with nothing to close - is left here.
- */
-
-/* --- Remove Folder: a question, and nothing to close ------------------------------------------ */
-
-/*
- * It carried a close button, and the row has a height whether or not it carried one. Customize keeps
- * its close button: a dialog you are filling in is one you might mean to leave.
- */
-.monaco-dialog-box.workspacebar-confirm .dialog-toolbar-row {
-	display: none;
-}
+/* The fields of the Customize and New Worktree forms; their frame is `.facade-dialog` (WORKSPACE.md W10.7) */
 
 /* --- Customize: a name and a colour ---------------------------------------------------------- */
 
@@ -31,8 +15,9 @@
 }
 
 .workspacebar-customize-label {
+	font-size: var(--vscode-fontSize-body1);
+	line-height: 1;
 	font-weight: var(--vscode-fontWeight-semiBold);
-	/* The space above a section heading. The first one needs none - the title is right above it. */
 	margin-top: var(--vscode-spacing-size200);
 	margin-bottom: var(--vscode-spacing-size80);
 }
@@ -43,20 +28,29 @@
 
 .workspacebar-customize-hint {
 	color: var(--vscode-descriptionForeground);
-	font-size: var(--vscode-fontSize-label2);
-	margin-top: var(--vscode-spacing-size60);
+	font-size: var(--vscode-fontSize-body1);
+	line-height: 20px;
+	margin-top: var(--vscode-spacing-size80);
 }
 
-/* What New Worktree does to a folder first (WORKTREE.md WT-5.8), boxed above the fields: an inner surface. */
+/* What New Worktree does to a folder first (WORKTREE.md WT-5.8) */
 .workspacebar-customize-notice {
 	margin-bottom: var(--vscode-spacing-size200);
 	padding: var(--vscode-spacing-size80) var(--vscode-spacing-size100);
-	border: var(--vscode-strokeThickness) solid var(--vscode-facadeDialog-divider);
-	border-radius: var(--vscode-cornerRadius-medium);
+	border: var(--vscode-strokeThickness) solid var(--vscode-facadeDialog-border);
+	border-radius: 10px;
+	font-size: var(--vscode-fontSize-body1);
+	line-height: 20px;
+	color: var(--vscode-descriptionForeground);
 }
 
 .workspacebar-customize-notice p {
-	margin: 0 0 var(--vscode-spacing-size60);
+	margin: 0 0 2px;
+}
+
+.workspacebar-customize-notice p:first-child {
+	font-weight: var(--vscode-fontWeight-semiBold);
+	color: var(--vscode-foreground);
 }
 
 .workspacebar-customize-notice p:last-child {
@@ -93,16 +87,16 @@
 	margin-top: 0;
 }
 
-/* 12 apart, so eleven swatches fit on one line of the 400px dialog (`facadedialog.css`). */
+/* Eleven fit on one line of the dialog */
 .workspacebar-customize-swatches {
 	display: flex;
-	gap: var(--vscode-spacing-size120);
+	gap: var(--vscode-spacing-size80);
 	flex-wrap: wrap;
 }
 
 .workspacebar-swatch {
-	width: var(--vscode-spacing-size200);
-	height: var(--vscode-spacing-size200);
+	width: var(--vscode-spacing-size240);
+	height: var(--vscode-spacing-size240);
 	border-radius: var(--vscode-cornerRadius-circle);
 	cursor: pointer;
 	display: flex;
@@ -162,6 +156,7 @@
 	gap: var(--vscode-spacing-size80);
 }
 
+/* Ten of them fill the dialog's width exactly */
 .workspacebar-icon-choice {
 	display: flex;
 	flex: 0 0 auto;
@@ -171,8 +166,8 @@
 	width: var(--vscode-spacing-size280);
 	height: var(--vscode-spacing-size280);
 	border: var(--vscode-strokeThickness) solid var(--vscode-facadeDialog-controlBorder);
-	border-radius: var(--vscode-cornerRadius-small);
-	background-color: transparent;
+	border-radius: 8px;
+	background-color: var(--vscode-facadeDialog-controlBackground);
 	cursor: pointer;
 }
 
@@ -210,10 +205,7 @@
 	border-color: var(--vscode-contrastActiveBorder);
 }
 
-/*
- * Chosen is the tick or the tint; focus is a ring 2 out, from the keyboard only. `.monaco-workbench`
- * in front to outrank the workbench's focus ring on anything with a tabindex.
- */
+/* `.monaco-workbench` to outrank the workbench's focus ring on anything with a tabindex */
 .monaco-workbench .workspacebar-customize-swatches > .workspacebar-swatch:focus,
 .monaco-workbench .workspacebar-customize-icons > .workspacebar-icon-choice:focus {
 	outline: none;
@@ -221,6 +213,9 @@
 
 .monaco-workbench .workspacebar-customize-swatches > .workspacebar-swatch:focus-visible,
 .monaco-workbench .workspacebar-customize-icons > .workspacebar-icon-choice:focus-visible {
-	outline: var(--vscode-strokeThickness) solid var(--vscode-focusBorder);
-	outline-offset: 2px;
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-focusBorder) 50%, transparent);
+}
+
+.monaco-workbench .workspacebar-customize-icons > .workspacebar-icon-choice:focus-visible {
+	border-color: var(--vscode-focusBorder);
 }

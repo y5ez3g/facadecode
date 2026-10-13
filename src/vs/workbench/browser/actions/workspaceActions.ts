@@ -18,6 +18,7 @@ import { IHostService } from '../../services/host/browser/host.js';
 import { KeyChord, KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
 import { ContextKeyExpr } from '../../../platform/contextkey/common/contextkey.js';
 import { IWorkbenchEnvironmentService } from '../../services/environment/common/environmentService.js';
+import { IWorkspaceBarService } from '../parts/workspacebar/workspaceBarService.js';
 import { IWorkspacesService } from '../../../platform/workspaces/common/workspaces.js';
 import { KeybindingWeight } from '../../../platform/keybinding/common/keybindingsRegistry.js';
 import { IsMacNativeContext } from '../../../platform/contextkey/common/contextkeys.js';
@@ -247,11 +248,12 @@ export class RemoveRootFolderAction extends Action2 {
 
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		const commandService = accessor.get(ICommandService);
-		const workspaceEditingService = accessor.get(IWorkspaceEditingService);
+		// Facade Code: through the bar, which asks first when something would be lost (WORKSPACE.md W9.6)
+		const workspaceBarService = accessor.get(IWorkspaceBarService);
 
 		const folder = await commandService.executeCommand<IWorkspaceFolder>(PICK_WORKSPACE_FOLDER_COMMAND_ID);
 		if (folder) {
-			await workspaceEditingService.removeFolders([folder.uri]);
+			await workspaceBarService.remove([folder.uri]);
 		}
 	}
 }

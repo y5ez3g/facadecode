@@ -25,6 +25,9 @@ import { IFileToOpen, IFolderToOpen, IOpenEmptyWindowOptions, IOpenWindowOptions
 import { IRecent, IWorkspacesService } from '../../../platform/workspaces/common/workspaces.js';
 import { IPathService } from '../../services/path/common/pathService.js';
 import { ILocalizedString } from '../../../platform/action/common/action.js';
+import { IWorkbenchEnvironmentService } from '../../services/environment/common/environmentService.js';
+import { IEditorService } from '../../services/editor/common/editorService.js';
+import { IWorkspaceBarService, reaches } from '../parts/workspacebar/workspaceBarService.js';
 
 export const ADD_ROOT_FOLDER_COMMAND_ID = 'addRootFolder';
 export const ADD_ROOT_FOLDER_LABEL: ILocalizedString = localize2('addFolderToWorkspace', 'Add Folder to Workspace...');
@@ -205,6 +208,20 @@ CommandsRegistry.registerCommand({
 
 		const workspaceToOpen: IWorkspaceToOpen | IFolderToOpen = (hasWorkspaceFileExtension(uri) || uri.scheme === Schemas.untitled) ? { workspaceUri: uri } : { folderUri: uri };
 		const filesToOpen: IFileToOpen[] = arg?.filesToOpen?.map(file => ({ fileUri: URI.from(file, true) })) ?? [];
+
+		// Facade Code: a folder joins this window and is shown, as Open Folder does, instead of replacing its list (W5)
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		if (!hasWorkspaceFileExtension(uri) && uri.scheme !== Schemas.untitled && !options.forceNewWindow && reaches(uri, environmentService) && !environmentService.isSessionsWindow) {
+			const workspaceBarService = accessor.get(IWorkspaceBarService);
+			const editorService = accessor.get(IEditorService);
+			return (async () => {
+				const shown = await workspaceBarService.show(uri);
+				if (shown.kind === 'shown' && filesToOpen.length) {
+					await editorService.openEditors(filesToOpen.map(file => ({ resource: file.fileUri })));
+				}
+			})();
+		}
+
 		return commandService.executeCommand('_files.windowOpen', [workspaceToOpen, ...filesToOpen], options);
 	},
 	metadata: {

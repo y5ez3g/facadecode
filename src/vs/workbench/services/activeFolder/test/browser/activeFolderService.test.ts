@@ -107,19 +107,19 @@ suite('Active folder - which root the window is on', () => {
 
 	const active = (service: ActiveFolderService) => service.activeFolder?.uri.path;
 
-	test('a window with no record of itself starts on the first root', () => {
+	test('WS-23 a window with no record of itself starts on the first root', () => {
 		assert.strictEqual(active(build().service), '/w/api');
 	});
 
-	test('and on the root the last editor was in, when there is one', () => {
+	test('WS-23 and on the root the last editor was in, when there is one', () => {
 		assert.strictEqual(active(build({ lastActive: URI.file('/w/web') }).service), '/w/web');
 	});
 
-	test('a guess at a folder that is not a root is not taken', () => {
+	test('WS-23 a guess at a folder that is not a root is not taken', () => {
 		assert.strictEqual(active(build({ lastActive: URI.file('/w/elsewhere') }).service), '/w/api');
 	});
 
-	test('what the window was on outlives it, and outranks the guess', async () => {
+	test('WS-23 what the window was on outlives it, and outranks the guess', async () => {
 		const storage = disposables.add(new InMemoryStorageService());
 		const before = build({ storage });
 		await before.service.setActiveFolder(URI.file('/w/notes'));
@@ -127,7 +127,7 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(active(build({ storage, lastActive: URI.file('/w/web') }).service), '/w/notes');
 	});
 
-	test('a remembered root that is no longer one falls back', async () => {
+	test('WS-23 a remembered root that is no longer one falls back', async () => {
 		const storage = disposables.add(new InMemoryStorageService());
 		await build({ storage }).service.setActiveFolder(URI.file('/w/notes'));
 
@@ -180,13 +180,28 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(active(service), '/w/web');
 	});
 
-	test('a joiner that throws costs its own work, not the switch', async () => {
+	test('WS-58 a joiner that could not put its state away stops the move, and the window stays where it was', async () => {
 		const { service } = build();
+		const before = active(service);
 		disposables.add(service.onWillChangeActiveFolder(e => e.join(Promise.reject(new Error('could not put it away')))));
 
-		await service.setActiveFolder(URI.file('/w/web'));
+		await assert.rejects(() => service.setActiveFolder(URI.file('/w/web')), /could not put it away/);
 
-		assert.strictEqual(active(service), '/w/web');
+		assert.strictEqual(active(service), before);
+	});
+
+	test('WS-57 a folder that left the workspace while the joiners worked is not moved onto', async () => {
+		const { service, workspace } = build();
+		const before = active(service);
+		const joiner = new DeferredPromise<void>();
+		disposables.add(service.onWillChangeActiveFolder(e => e.join(joiner.p)));
+
+		const moving = service.setActiveFolder(URI.file('/w/web'));
+		workspace.setFolders(['/w/api', '/w/notes']);
+		await joiner.complete();
+
+		await assert.rejects(() => moving, (error: Error) => error.name === 'Canceled');
+		assert.strictEqual(active(service), before);
 	});
 
 	test('the joiner is told where the window is going, and where from', async () => {
@@ -199,7 +214,7 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(seen, '/w/api -> /w/notes');
 	});
 
-	test('removing the active root moves to the row that took its place', async () => {
+	test('WS-21 removing the active root moves to the row that took its place', async () => {
 		const { service, workspace } = build();
 		await service.setActiveFolder(URI.file('/w/web'));
 
@@ -209,7 +224,7 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(active(service), '/w/notes');
 	});
 
-	test('removing the last root, when that is where the window is, moves up', async () => {
+	test('WS-21 removing the last root, when that is where the window is, moves up', async () => {
 		const { service, workspace } = build();
 		await service.setActiveFolder(URI.file('/w/notes'));
 
@@ -218,7 +233,7 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(active(service), '/w/web');
 	});
 
-	test('removing some other root leaves the window where it is', async () => {
+	test('WS-21 removing some other root leaves the window where it is', async () => {
 		const { service, workspace } = build();
 		await service.setActiveFolder(URI.file('/w/notes'));
 		let changes = 0;
@@ -230,7 +245,7 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(changes, 0);
 	});
 
-	test('removing every root leaves the window on none', () => {
+	test('WS-21 removing every root leaves the window on none', () => {
 		const { service, workspace } = build();
 
 		workspace.setFolders([]);
@@ -238,7 +253,7 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(service.activeFolder, undefined);
 	});
 
-	test('and the first root added after that is where it goes', () => {
+	test('WS-21 and the first root added after that is where it goes', () => {
 		const { service, workspace } = build({ paths: [] });
 		assert.strictEqual(service.activeFolder, undefined);
 
@@ -275,7 +290,7 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(changes, 0);
 	});
 
-	test('a folder added below it is not', async () => {
+	test('WS-06 a folder added below it is not', async () => {
 		const { service, workspace } = build();
 		let changes = 0;
 		disposables.add(service.onDidChangeActiveFolder(() => changes++));
@@ -309,11 +324,11 @@ suite('Active folder - the order a chooser offers', () => {
 
 	const order = (active: IWorkspaceFolder | undefined) => foldersWithActiveFirst(all, active).map(f => f.name);
 
-	test('the folder the window is on comes first', () => {
+	test('WS-28 the folder the window is on comes first', () => {
 		assert.deepStrictEqual(order(web), ['web', 'api', 'notes']);
 	});
 
-	test('and the rest keep the order the workspace has them in', () => {
+	test('WS-28 and the rest keep the order the workspace has them in', () => {
 		// ⚠️ That order is the `.code-workspace` file's, and people arrange it.
 		assert.deepStrictEqual(order(notes), ['notes', 'api', 'web']);
 	});
@@ -338,7 +353,7 @@ suite('Active folder - the order a chooser offers', () => {
 
 	suite('activeFirst - the same question asked of a list that is not folders', () => {
 
-		test('the one that answers moves to the front, and nothing else moves', () => {
+		test('WS-28 the one that answers moves to the front, and nothing else moves', () => {
 			assert.deepStrictEqual(activeFirst(['a', 'b', 'c', 'd'], x => x === 'c'), ['c', 'a', 'b', 'd']);
 		});
 

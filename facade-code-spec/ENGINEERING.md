@@ -53,7 +53,8 @@ where a feature began and ended.
 ✓ vendor nothing; import it ourselves
 ✓ keep our files together, so merging upstream stays cheap
 ✓ in upstream files, add optional hooks - do not rewrite their logic
-✓ every feature gets a switch, and off means stock VS Code
+✓ every feature gets a switch, and off means stock VS Code - except the workspace,
+  which is the product: its off state is VS Code itself (WORKSPACE.md W18)
 ✓ every step lands with tests
 ✓ English everywhere: documents, comments, commit messages
 

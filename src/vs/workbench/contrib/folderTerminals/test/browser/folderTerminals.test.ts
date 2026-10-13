@@ -15,13 +15,14 @@ import { TestConfigurationService } from '../../../../../platform/configuration/
 import { EditorActivation } from '../../../../../platform/editor/common/editor.js';
 import { FileOperationError, FileOperationResult, FileSystemProviderCapabilities, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { INotificationService, IPromptChoice, Severity } from '../../../../../platform/notification/common/notification.js';
 import { StorageScope, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
 import { IShellLaunchConfig, TerminalExitReason, TerminalLocation } from '../../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
-import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IWorkspaceBarService, ShowResult } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService, IActiveFolderWillChangeEvent } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../../services/editor/common/editorGroupsService.js';
@@ -64,6 +65,9 @@ class TestInstance {
 	target: TerminalLocation;
 
 	get isDisposed(): boolean { return this.disposed; }
+
+	/** What its tab says: its name. */
+	get title(): string { return this.name; }
 
 	constructor(readonly name: string, target = TerminalLocation.Editor) {
 		this.target = target;
@@ -300,6 +304,16 @@ class TestTerminalService extends mock<ITerminalService>() {
 		}
 	}
 
+	/** As upstream's: out of the editor area, into the panel. */
+	override async moveToTerminalView(source?: ITerminalInstance | URI): Promise<void> {
+		const named = source as unknown as TestInstance;
+		for (const group of [...this.groups.main.groups, ...this.groups.floated.groups]) {
+			group.remove(named.name);
+		}
+		named.target = TerminalLocation.Panel;
+		this.toPanel.push(named.name);
+	}
+
 	override async showBackgroundTerminal(instance: ITerminalInstance, _suppressSetActive?: boolean, editorOptions?: TerminalEditorLocation): Promise<void> {
 		const named = instance as unknown as TestInstance;
 
@@ -396,6 +410,11 @@ class TestWorkspaceBarService extends mock<IWorkspaceBarService>() {
 	/** The folders of the workspace their repository has, as the bar read them. */
 	members: IWorkspaceFolder[] = [];
 
+	/** Whether folders leave through Remove Folder, which agreed to stop what runs in them, rather than a file edit. */
+	removing = true;
+
+	override isRemoving(): boolean { return this.removing; }
+
 	restored(): void { this._onDidRestoreEditors.fire(); }
 
 	/** Git's files read again, finding the worktrees `rows` says - none at all while worktrees are switched off. */
@@ -404,14 +423,26 @@ class TestWorkspaceBarService extends mock<IWorkspaceBarService>() {
 		this._onDidChangeRepositories.fire();
 	}
 
-	override async show(uri: URI): Promise<void> {
+	override async show(uri: URI): Promise<ShowResult> {
 		this.moves.push(uri.path);
 		await this.moving(uri);
+		return { kind: 'shown' };
 	}
 
 	override repositoryFor(uri: URI): IWorkspaceBarRepository | undefined {
 		const row = this.rows.find(candidate => candidate.path === uri.path);
 		return row && { kind: 'repository', main: URI.file('/w/main'), folder: undefined, branch: 'main', members: this.members, worktrees: [{ uri: row, branch: 'p1', label: 'p1', exists: true, folder: undefined }] };
+	}
+}
+
+/** What the person is told, and the buttons offered with it. */
+class TestNotifications extends mock<INotificationService>() {
+
+	readonly said: { message: string; choices: IPromptChoice[] }[] = [];
+
+	override prompt(_severity: Severity, message: string, choices: IPromptChoice[]) {
+		this.said.push({ message, choices });
+		return undefined!;
 	}
 }
 
@@ -439,7 +470,14 @@ class TestContextService extends mock<IWorkspaceContextService>() {
 	private readonly _onDidChangeFolders = new Emitter<never>();
 	override readonly onDidChangeWorkspaceFolders = this._onDidChangeFolders.event as Event<never>;
 
-	folders: IWorkspaceFolder[] = [];
+	private _folders: IWorkspaceFolder[] = [];
+
+	/** The workspace's folders: changing them says so, as a real workspace does. */
+	get folders(): IWorkspaceFolder[] { return this._folders; }
+	set folders(folders: IWorkspaceFolder[]) {
+		this._folders = folders;
+		this._onDidChangeFolders.fire(undefined as never);
+	}
 
 	override getWorkspace(): IWorkspace {
 		return { id: 'test', folders: this.folders, transient: false, configuration: null } satisfies IWorkspace;
@@ -447,12 +485,10 @@ class TestContextService extends mock<IWorkspaceContextService>() {
 
 	removeFolder(folder: IWorkspaceFolder): void {
 		this.folders = this.folders.filter(candidate => candidate !== folder);
-		this._onDidChangeFolders.fire(undefined as never);
 	}
 
 	addFolder(folder: IWorkspaceFolder): void {
 		this.folders = [...this.folders, folder];
-		this._onDidChangeFolders.fire(undefined as never);
 	}
 }
 
@@ -496,9 +532,10 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 
 		const configuration = new TestConfigurationService();
 		const files = new TestFileService();
+		const notifications = new TestNotifications();
 		const folderTerminals = store.add(new FolderTerminals(
 			folders, bar, terminals, context, groups,
-			configuration, uriIdentityService, files, storage, new NullLogService()
+			configuration, uriIdentityService, files, storage, new NullLogService(), notifications
 		));
 
 		// A terminal whose tab is moved to another group stops being tracked, as upstream's is.
@@ -506,7 +543,7 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			column.closeMovedOut = name => terminals.instances = terminals.instances.filter(instance => (instance as unknown as TestInstance).name !== name);
 		}
 
-		return { terminals, folders, context, bar, groups, folderTerminals, storage, configuration, files };
+		return { terminals, folders, context, bar, groups, folderTerminals, storage, configuration, files, notifications };
 	}
 
 	/** The window on `target`, with its editors up, as when it opened there. */
@@ -909,6 +946,70 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			panel: false,
 			held: false,
 		});
+	});
+
+	test('WS-55 folders that leave by an edit to the workspace file, not Remove Folder from Workspace, keep what runs in them - shown, held, opened for them - running in the panel, the window\'s now: said once, with Stop, which ends them', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const notes = folder('notes');
+		const agent = new TestInstance('agent');
+		const panel = new TestInstance('panel', TerminalLocation.Panel);
+		const { terminals, folders, context, bar, folderTerminals, notifications } = setup([new TestGroup(0, [tabFor(agent)])], [agent, panel]);
+		context.folders = [alpha, beta, notes];
+		onScreen(folders, bar, alpha);
+		const held = await folderTerminals.openFor(beta.uri, { name: 'held' }) as unknown as TestInstance;
+		bar.removing = false;
+
+		// One edit takes two out, the one on screen among them: the active folder service moves on, unannounced
+		folders.activeFolder = notes;
+		context.folders = [notes];
+		await timeout(0);
+		const kept = {
+			ended: [agent, held, panel].map(each => each.disposed),
+			inPanel: [...terminals.toPanel].sort(),
+			theirs: [agent, held].map(each => folderTerminals.folderOf(each.asInstance())?.path),
+			said: notifications.said.map(({ message, choices }) => `${message} [${choices.map(choice => choice.label).join(', ')}]`)
+		};
+		await notifications.said[0].choices[0].run();
+
+		assert.deepStrictEqual({ ...kept, stopped: [agent, held, panel].map(each => [each.disposed, each.exitReason]) }, {
+			ended: [false, false, false],
+			inPanel: ['agent', 'held'],
+			theirs: [undefined, undefined],
+			said: ['Folder \'alpha, beta\' was removed from the workspace. Active terminals continue running in the panel: held, agent. [Stop]'],
+			stopped: [[true, TerminalExitReason.User], [true, TerminalExitReason.User], [false, undefined]],
+		});
+	});
+
+	test('WS-55 the last of a repository\'s folders leaving by an edit keeps the terminals held under its rows running too', async () => {
+		const alpha = folder('alpha');
+		const notes = folder('notes');
+		const p1 = URI.file('/w/p1');
+		const { terminals, folders, context, bar, folderTerminals } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha, notes];
+		onScreen(folders, bar, notes);
+		bar.members = [alpha];
+		bar.rows.push(p1);
+		const first = await folderTerminals.openFor(p1, { name: 'first' }) as unknown as TestInstance;
+		bar.removing = false;
+
+		context.removeFolder(alpha);
+		await timeout(0);
+
+		assert.deepStrictEqual({ ended: first.disposed, inPanel: terminals.toPanel, held: folderTerminals.terminalsOf(p1).length }, { ended: false, inPanel: ['first'], held: 0 });
+	});
+
+	test('WS-33 a folder taken out through Remove Folder from Workspace ends what runs in it, as its confirmation said, and says nothing more', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const { folders, context, bar, folderTerminals, notifications } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		const held = await folderTerminals.openFor(beta.uri, { name: 'held' }) as unknown as TestInstance;
+
+		context.removeFolder(beta);
+
+		assert.deepStrictEqual({ ended: [held.disposed, held.exitReason], said: notifications.said.length }, { ended: [true, TerminalExitReason.User], said: 0 });
 	});
 
 	test('another folder leaving ends none of the terminals shown for the folder on screen, nor does the folder on screen leaving while terminals do not follow folders', async () => {

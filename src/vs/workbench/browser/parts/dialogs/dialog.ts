@@ -6,9 +6,7 @@
 import './media/facadedialog.css';
 import { EventHelper } from '../../../../base/browser/dom.js';
 import { StandardKeyboardEvent } from '../../../../base/browser/keyboardEvent.js';
-import { IButtonStyles } from '../../../../base/browser/ui/button/button.js';
 import { IDialogOptions, IDialogStyles } from '../../../../base/browser/ui/dialog/dialog.js';
-import { IInputBoxStyles } from '../../../../base/browser/ui/inputbox/inputBox.js';
 import { fromNow } from '../../../../base/common/date.js';
 import { localize } from '../../../../nls.js';
 import { IHostService } from '../../../services/host/browser/host.js';
@@ -17,8 +15,8 @@ import { ResultKind } from '../../../../platform/keybinding/common/keybindingRes
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { defaultButtonStyles, defaultCheckboxStyles, defaultInputBoxStyles, defaultDialogStyles } from '../../../../platform/theme/browser/defaultStyles.js';
-import { asCssVariable, asCssVariableWithDefault, buttonBorder, foreground, toolbarHoverBackground } from '../../../../platform/theme/common/colorRegistry.js';
-import { FACADE_DIALOG_BORDER, FACADE_DIALOG_CONTROL_BORDER } from './facadeDialogColors.js';
+// Facade Code: the colours `media/facadedialog.css` draws the box and the choices in
+import './facadeDialogColors.js';
 import { releaseVersionLabel } from '../../../../platform/product/common/releaseVersion.js';
 
 const defaultDialogAllowableCommands = new Set([
@@ -32,35 +30,11 @@ const defaultDialogAllowableCommands = new Set([
 	'editor.action.clipboardPasteAction'
 ]);
 
-/**
- * Facade Code: the inputs of a `facade-dialog` (`media/facadedialog.css`) - no fill, and the control
- * border. In code because an input box writes its colours inline.
- */
-export const facadeDialogInputBoxStyles: IInputBoxStyles = {
-	...defaultInputBoxStyles,
-	inputBackground: 'transparent',
-	inputBorder: asCssVariable(FACADE_DIALOG_CONTROL_BORDER)
-};
-
-/**
- * Facade Code: the buttons of a `facade-dialog`. Only the primary is filled; the rest are outlined
- * with the control border, and on hover take the toolbar's tint, as the close button does.
- */
-export const facadeDialogButtonStyles: IButtonStyles = {
-	...defaultButtonStyles,
-	// A border even when the theme has none, so outlined and filled buttons are the same size.
-	buttonBorder: asCssVariableWithDefault(buttonBorder, 'transparent'),
-	buttonSecondaryBackground: 'transparent',
-	buttonSecondaryHoverBackground: asCssVariable(toolbarHoverBackground),
-	buttonSecondaryForeground: asCssVariable(foreground),
-	buttonSecondaryBorder: asCssVariable(FACADE_DIALOG_CONTROL_BORDER)
-};
-
-/** Facade Code: the box of a `facade-dialog` - no shadow, and a hairline edge. */
+/** Facade Code: a `facade-dialog` box has no shadow or border; its style sheet draws the hairline outside it. */
 const facadeDialogStyles: IDialogStyles = {
 	...defaultDialogStyles,
 	dialogShadow: undefined,
-	dialogBorder: asCssVariable(FACADE_DIALOG_BORDER)
+	dialogBorder: undefined
 };
 
 export function createWorkbenchDialogOptions(
@@ -83,9 +57,9 @@ export function createWorkbenchDialogOptions(
 				}
 			}
 		},
-		buttonStyles: facade ? facadeDialogButtonStyles : defaultButtonStyles,
+		buttonStyles: defaultButtonStyles,
 		checkboxStyles: defaultCheckboxStyles,
-		inputBoxStyles: facade ? facadeDialogInputBoxStyles : defaultInputBoxStyles,
+		inputBoxStyles: defaultInputBoxStyles,
 		dialogStyles: facade ? facadeDialogStyles : defaultDialogStyles,
 		// Facade Code: not for the fork's own dialogs, which dim the window by 10%. The native window
 		// controls are dimmed separately, by the host's fixed 50%, and were the darkest thing on screen.

@@ -6,27 +6,25 @@
 import './media/workspacebardialog.css';
 import './media/workspacebartoggle.css';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
-import { basename } from '../../../../base/common/resources.js';
+import { basename, basenameOrAuthority } from '../../../../base/common/resources.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ContextKeyExpr, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
-import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
-import { ILabelService } from '../../../../platform/label/common/label.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { asCodeSpan, folderKey, orderWorktrees } from './workspaceBar.js';
-import { IWorkspaceBarAgentsService } from './workspaceBarAgents.js';
-import { findWorktree, IWorkspaceBarRepository } from './workspaceBarGit.js';
+import { folderKey, orderWorktrees } from './workspaceBar.js';
+import { findWorktree } from './workspaceBarGit.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
-import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
+import { explicitNameOf, IFolderCustomization, IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from './workspaceBarCustomize.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
@@ -96,29 +94,16 @@ const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
  */
 export const WorkspaceBarRowExpansionContext = new RawContextKey<'' | 'expanded' | 'collapsed'>('facadeWorkspaceBarRowExpansion', '', localize('workspaceBar.rowExpansionContext', "Whether the repository of the focused row of the workspace shows its worktrees"));
 
-/**
- * Creates a worktree of a repository (WORKTREE.md section 7). Registered by `contrib/worktrees`, which
- * can reach the terminal this part cannot; the bar only calls it, with the repository's folder.
- */
+/** Creates a worktree of a repository (WORKTREE.md WT-5); registered by `contrib/worktrees`, which can reach terminals. */
 export const NEW_WORKTREE_COMMAND = 'facade.workspaceBar.newWorktree';
 
-/** Deletes a worktree (WORKTREE.md section 10). Registered by `contrib/worktrees`, beside New Worktree. */
+/** Deletes a worktree (WORKTREE.md WT-8). Registered by `contrib/worktrees`, beside New Worktree. */
 export const DELETE_WORKTREE_COMMAND = 'facade.workspaceBar.deleteWorktree';
 
 export const WORKSPACE_BAR_CATEGORY = localize2('workspaceBar.category', "Workspace");
 
 /**
- * Whether taking a folder off the list asks first.
- *
- * ⚠️ A setting and nothing else. There is no "do not ask me again" in the dialog: the question is
- * one line and it is asked about something that cannot be undone from inside the dialog, so the box
- * that turns it off is clutter in front of the one thing worth reading. Somebody who does not want to
- * be asked can say so here, where it can also be found again and turned back on.
- */
-export const CONFIRM_REMOVE_FOLDER = 'facade.workspaceBar.confirmRemoveFolder';
-
-/**
- * The switch for worktrees (WORKTREE.md section 11). Off, the bar is the flat list of `folders[]` it was
+ * The switch for worktrees (WORKTREE.md WT-9). Off, the bar is the flat list of `folders[]` it was
  * before worktrees existed.
  */
 export const SHOW_WORKTREES = 'facade.workspaceBar.worktrees';
@@ -134,14 +119,9 @@ export const WORKTREES_SHOWN = ContextKeyExpr.notEquals(`config.${SHOW_WORKTREES
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,
 	properties: {
-		[CONFIRM_REMOVE_FOLDER]: {
-			type: 'boolean',
-			description: localize('workspaceBar.confirmRemoveFolder', "Controls whether the workspace asks for confirmation before taking a folder off the list. The folder itself is never deleted."),
-			default: true
-		},
 		[SHOW_WORKTREES]: {
 			type: 'boolean',
-			description: localize('workspaceBar.worktrees', "Controls whether the workspace lists each repository's Git worktrees under it."),
+			description: localize('workspaceBar.worktrees', "Controls whether the workspace bar lists Git worktrees under each repository."),
 			default: true
 		}
 	}
@@ -312,19 +292,37 @@ class CustomizeFolderAction extends Action2 {
 		const workspaceBarDialogService = accessor.get(IWorkspaceBarDialogService);
 		const contextService = accessor.get(IWorkspaceContextService);
 		const uriIdentityService = accessor.get(IUriIdentityService);
+		const workspaceEditingService = accessor.get(IWorkspaceEditingService);
 
 		const target = uri ?? workspaceBarService.folderForCommand();
 		if (!target) {
 			return;
 		}
 
-		// A worktree first: once visited it is also a workspace folder, but it is named by its branch.
+		const memberAt = (at: URI) => contextService.getWorkspace().folders.find(candidate => uriIdentityService.extUri.isEqual(candidate.uri, at));
+
+		// A listed folder's name goes in `folders[].name`; colour, icon and an unlisted row's name stay in the profile (W9.7)
+		const current = (at: URI, folder: IWorkspaceFolder | undefined): IFolderCustomization => {
+			const kept = customizationService.get(at);
+			return { ...kept, name: (folder && explicitNameOf(folder)) || kept?.name };
+		};
+		const save = async (at: URI, folder: IWorkspaceFolder | undefined, answer: IFolderCustomization) => {
+			if (folder && contextService.getWorkbenchState() === WorkbenchState.WORKSPACE) {
+				customizationService.set(at, { color: answer.color, icon: answer.icon });
+				await workspaceEditingService.renameFolder(folder.uri, answer.name);
+			} else {
+				customizationService.set(at, answer);
+			}
+		};
+
+		// A worktree first: once visited it is also a workspace folder, but unnamed it is called by its branch.
 		const repository = workspaceBarService.repositoryFor(target);
 		const worktree = findWorktree(repository, target, uriIdentityService.extUri);
 		if (worktree) {
-			const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: worktree.label, worktree: true }, customizationService.get(worktree.uri));
+			const folder = memberAt(worktree.uri);
+			const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: worktree.label, worktree: true }, current(worktree.uri, folder));
 			if (answer) {
-				customizationService.set(worktree.uri, answer);
+				await save(worktree.uri, folder, answer);
 			}
 			return;
 		}
@@ -332,17 +330,17 @@ class CustomizeFolderAction extends Action2 {
 		// The row's own folder - never one it is inside of, which is a row of its own. A repository whose
 		// own checkout is not in the workspace, only worktrees of it, has a row all the same, named for
 		// its folder on disk.
-		const folder = contextService.getWorkspace().folders.find(candidate => uriIdentityService.extUri.isEqual(candidate.uri, target));
-		const row = folder ? { uri: folder.uri, name: folder.name }
+		const folder = memberAt(target);
+		const row = folder ? { uri: folder.uri, name: basenameOrAuthority(folder.uri) }
 			: repository && uriIdentityService.extUri.isEqual(repository.main, target) ? { uri: repository.main, name: basename(repository.main) }
 				: undefined;
 		if (!row) {
 			return;
 		}
 
-		const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: row.name, worktree: false }, customizationService.get(row.uri));
+		const answer = await workspaceBarDialogService.showCustomizeDialog({ defaultName: row.name, worktree: false }, current(row.uri, folder));
 		if (answer) {
-			customizationService.set(row.uri, answer);
+			await save(row.uri, folder, answer);
 		}
 	}
 }
@@ -358,7 +356,7 @@ class RemoveFolderAction extends Action2 {
 	constructor() {
 		super({
 			id: RemoveFolderAction.ID,
-			title: localize2('workspaceBar.removeFolder', "Remove Folder"),
+			title: localize2('workspaceBar.removeFolder', "Remove Folder from Workspace"),
 			category: WORKSPACE_BAR_CATEGORY,
 			icon: Codicon.trash,
 			f1: true,
@@ -366,108 +364,15 @@ class RemoveFolderAction extends Action2 {
 		});
 	}
 
-	/** `uri` comes from the context menu. From the command palette there is none, and the row the
-	 * list has focus on is what was meant. */
+	/** Removes the context menu's row, or the focused one from the command palette, through the bar (WORKSPACE.md W9.6). */
 	override async run(accessor: ServicesAccessor, uri?: URI): Promise<void> {
-		// ⚠️ All of them before the first `await`: a `ServicesAccessor` is only good for the
-		// synchronous part of a run, and this one has a dialog in the middle of it.
 		const workspaceBarService = accessor.get(IWorkspaceBarService);
-		const agentsService = accessor.get(IWorkspaceBarAgentsService);
-		const dialogService = accessor.get(IDialogService);
-		const labelService = accessor.get(ILabelService);
-		const configurationService = accessor.get(IConfigurationService);
-		const uriIdentityService = accessor.get(IUriIdentityService);
 
 		const folder = uri ?? workspaceBarService.folderForCommand();
-		if (!folder) {
-			return;
-		}
-
-		const isEqual = (a: URI, b: URI) => uriIdentityService.extUri.isEqual(a, b);
-		const repository = workspaceBarService.repositoryFor(folder);
-		const leaving = foldersToRemove(folder, repository, isEqual);
-		const agents = agentsStoppedBy(repository, leaving, agentsService, isEqual);
-
-		if (configurationService.getValue<boolean>(CONFIRM_REMOVE_FOLDER) === false) {
-			return workspaceBarService.remove(leaving);
-		}
-
-		// The path, then what the two words in the button actually do. Both matter: two folders can
-		// be called the same thing, and what a row takes with it when it goes is not obvious.
-		// ⚠️ `appendMarkdown` for the sentence too, not `appendText`: `appendText` turns every run of
-		// spaces into `&nbsp;`, which makes the whole sentence one unbreakable word and leaves the
-		// renderer to split it mid-word. The sentence is escaped because a translator writes it; the
-		// path is not, because it goes inside a code span - see `asCodeSpan`.
-		const detail = new MarkdownString();
-		detail.appendMarkdown(`${asCodeSpan(labelService.getUriLabel(folder))}\n\n`);
-		detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('workspaceBar.removeFolderDetail', "Removes this folder from the workspace, and the editors kept open for it. Files on disk will not be deleted.")));
-		if (leaving.length > 1) {
-			detail.appendMarkdown('\n\n');
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(leaving.length === 2
-				? localize('workspaceBar.removeFolderWorktree', "The associated worktree will also be removed from the workspace, but remains on disk.")
-				: localize('workspaceBar.removeFolderWorktrees', "The {0} associated worktrees will also be removed from the workspace, but remain on disk.", leaving.length - 1)));
-		}
-		if (agents > 0) {
-			detail.appendMarkdown('\n\n');
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(agents === 1
-				? localize('workspaceBar.removeFolderAgent', "An agent is working in it, and will be stopped.")
-				: localize('workspaceBar.removeFolderAgents', "{0} agents are working in it, and will be stopped.", agents)));
-		}
-
-		const { confirmed } = await dialogService.confirm({
-			// ⚠️ No severity glyph while nothing here is destroyed - the folder is left where it is - as a
-			// warning triangle over a reversible act is a claim the dialog cannot back up. `none` is the
-			// type for it, and it announces the same as `question` does, which is nothing. The agents it
-			// stops are not given back: then it is a warning.
-			type: agents > 0 ? 'warning' : 'none',
-			message: localize('workspaceBar.removeFolderMessage', "Remove Folder?"),
-			detail,
-			// Just the verb: the question above it already named the thing, and a button that repeats
-			// its own dialog is a button asking to be read twice.
-			primaryButton: localize({ key: 'workspaceBar.removeFolderButton', comment: ['&& denotes a mnemonic'] }, "&&Remove"),
-			// ⚠️ The workbench's dialog rather than the system's, whatever `window.dialogStyle` says:
-			// a native alert renders one run of plain text, and the path is the whole point of asking.
-			// The class is what shapes it - see `media/workspacebardialog.css`.
-			custom: {
-				classes: ['facade-dialog', 'workspacebar-confirm'],
-				// ⚠️ `disableCloseButton`, not `disableCloseAction`: the latter takes the Escape key
-				// with it and leaves a dialog there is no way out of but a button.
-				disableCloseButton: true
-			}
-		});
-
-		if (confirmed) {
-			await workspaceBarService.remove(leaving);
+		if (folder) {
+			await workspaceBarService.remove([folder]);
 		}
 	}
-}
-
-/**
- * How many agents `Remove Folder` stops: those working in the folders it takes out of the workspace
- * (`foldersToRemove`) and, when they are the last of `repository`'s, those under the rows that go with
- * it - its worktrees' that never joined the workspace, and its checkout's when that did not either.
- */
-export function agentsStoppedBy(repository: IWorkspaceBarRepository | undefined, leaving: readonly URI[], agentsService: Pick<IWorkspaceBarAgentsService, 'agentsIn'>, isEqual: (a: URI, b: URI) => boolean): number {
-	const repositoryLeaves = !!repository && repository.members.every(member => leaving.some(uri => isEqual(uri, member.uri)));
-	const rows = repository && repositoryLeaves
-		? [...repository.worktrees.filter(worktree => !worktree.folder).map(worktree => worktree.uri), ...(repository.folder ? [] : [repository.main])]
-		: [];
-	return [...leaving, ...rows].reduce((count, uri) => count + agentsService.agentsIn(uri).length, 0);
-}
-
-/**
- * What `Remove Folder` on a row takes out of the workspace: the folder, and - on a repository's row -
- * every other folder on that row: its worktrees in the workspace (WORKTREE.md WT-8.8), and the
- * checkout under any other spelling it was added by. Their rows hang under the repository's, so
- * leaving them would leave rows under a folder the list no longer has. Nothing on disk is touched
- * either way.
- */
-export function foldersToRemove(folder: URI, repository: IWorkspaceBarRepository | undefined, isEqual: (a: URI, b: URI) => boolean): URI[] {
-	if (!repository || !isEqual(repository.main, folder)) {
-		return [folder];
-	}
-
-	return [folder, ...repository.members.map(member => member.uri).filter(uri => !isEqual(uri, folder))];
 }
 
 /**
@@ -692,7 +597,7 @@ class FocusWorkspaceAction extends Action2 {
 	constructor() {
 		super({
 			id: FocusWorkspaceAction.ID,
-			title: localize2('workspaceBar.focus', "Focus on Workspace"),
+			title: localize2('workspaceBar.focus', "Focus on Workspace Bar"),
 			category: WORKSPACE_BAR_CATEGORY,
 			f1: true
 		});

@@ -199,6 +199,19 @@ export abstract class AbstractWorkspaceEditingService extends Disposable impleme
 		}
 	}
 
+	/** Facade Code: see `IWorkspaceEditingService.renameFolder`. */
+	async renameFolder(folder: URI, name: string | undefined, donotNotifyError = false): Promise<void> {
+		try {
+			await this.contextService.renameFolder(folder, name);
+		} catch (error) {
+			if (donotNotifyError) {
+				throw error;
+			}
+
+			this.handleWorkspaceConfigurationEditingError(error);
+		}
+	}
+
 	addFolders(foldersToAddCandidates: IWorkspaceFolderCreationData[], donotNotifyError = false): Promise<void> {
 
 		// Normalize

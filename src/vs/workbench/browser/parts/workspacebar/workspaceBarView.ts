@@ -135,13 +135,8 @@ function displayNameOf(row: WorkspaceBarRow, customizationService: IWorkspaceBar
 }
 
 /**
- * What the tree holds: `folders[]` flat while `worktrees` is false - switched off (WORKTREE.md
- * section 11), or before git's files were first read.
- *
- * `groups` are git's files as last read, and `folders[]` changes before the next read is in. A folder
- * that has left is not drawn. One that joined since is drawn where git's records put it - a worktree
- * or the main checkout of a repository they list (WORKTREE.md WT-3.6) - and one they do not name is
- * drawn on a row of its own at the end, until it has been read.
+ * The rows to draw: `folders[]` flat while worktrees are off or unread, else grouped by git's records
+ * (WORKTREE.md WT-3.6). A folder that joined since the last read gets a row of its own at the end.
  */
 export function workspaceBarRows(input: {
 	readonly folders: readonly IWorkspaceFolder[];
@@ -450,10 +445,7 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 				+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
 		}
 
-		// ⚠️ The hover is the name, whole, and not the path: the agents at the row's end can cut the name
-		// short, and a worktree's folder is named for where it lives rather than for its branch - its
-		// path did not say which worktree it was. Two folders of one name are told apart by giving one
-		// another name in Customize.
+		// The hover shows the whole name, which the row's agents can cut short
 		template.name = displayNameOf(element, this.customizationService);
 		template.label.setLabel(template.name, undefined, { title: template.name });
 	}
@@ -476,22 +468,26 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 
 	constructor(
 		private readonly isUnavailable: (row: WorkspaceBarRow) => boolean,
+		/** Of those, the ones whose read failed: not on disk is not something to say of them (WS-63). */
+		private readonly isUnreadable: (row: WorkspaceBarRow) => boolean,
 		private readonly nameOf: (row: WorkspaceBarRow) => string,
 		/** What the row shows is in it: asked of its tree node, which knows whether it is closed. */
 		private readonly contentsOf: (row: WorkspaceBarRow) => IRowContents
 	) { }
 
 	getWidgetAriaLabel(): string {
-		return localize('workspaceBar.ariaLabel', "Workspace folders");
+		return localize('workspaceBar.ariaLabel', "Workspace Folders");
 	}
 
 	getAriaLabel(row: WorkspaceBarRow): string {
 		const name = this.nameOf(row);
 		const label = this.isUnavailable(row)
-			? localize('workspaceBar.unavailableAria', "{0}, not on disk", name)
+			? this.isUnreadable(row)
+				? localize('workspaceBar.unreadableAria', "{0}, folder cannot be read", name)
+				: localize('workspaceBar.unavailableAria', "{0}, folder does not exist on disk", name)
 			: row.kind === 'worktree' ? localize('workspaceBar.worktreeAria', "{0}, worktree", name) : name;
 
-		// What the row shows at its end and on its icon, read out after its name (WT-1.15)
+		// What the row shows at its end and on its icon, read out after its name (WT-1.15, W9.14)
 		const { worktrees, agents } = this.contentsOf(row);
 		const counts: string[] = [];
 		if (worktrees) {
@@ -551,11 +547,12 @@ export class WorkspaceBarView extends Disposable {
 		this.empty = append(container, $('.workspacebar-empty'));
 		// ⚠️ Says what to do next, and names both ways of doing it - the column is a drop target over
 		// its whole height, which nothing else on screen says.
-		this.empty.textContent = localize('workspaceBar.empty', "Open a folder or drag one here.");
+		this.empty.textContent = localize('workspaceBar.empty', "Drag a folder here or click +.");
 
 		const isUnavailable = (row: WorkspaceBarRow) => row.kind === 'worktree'
 			? !row.worktree.exists
 			: row.kind === 'folder' && !!row.folder && model.isUnavailable(row.folder);
+		const isUnreadable = (row: WorkspaceBarRow) => row.kind === 'folder' && !!row.folder && model.isUnreadable(row.folder);
 
 		const list = append(container, $('.workspacebar-list'));
 
@@ -616,7 +613,7 @@ export class WorkspaceBarView extends Disposable {
 				// The bar's own folder key, so rebuilds keep focus, selection and expansion on the right rows.
 				identityProvider: identity,
 				// ⚠️ `this.tree` is read when a row is labelled, which is after it has been assigned.
-				accessibilityProvider: new WorkspaceBarAccessibilityProvider(isUnavailable, row => displayNameOf(row, this.customizationService), row => rowContentsOf(this.tree.getNode(row), agentsService)),
+				accessibilityProvider: new WorkspaceBarAccessibilityProvider(isUnavailable, isUnreadable, row => displayNameOf(row, this.customizationService), row => rowContentsOf(this.tree.getNode(row), agentsService)),
 				keyboardNavigationLabelProvider: new WorkspaceBarKeyboardNavigationLabelProvider(row => displayNameOf(row, this.customizationService)),
 				// One click. Left alone this follows `workbench.list.openMode`, which is about files.
 				openOnSingleClick: true,
@@ -722,10 +719,10 @@ export class WorkspaceBarView extends Disposable {
 				this.rememberClosed(row.uri, e.node.collapsed);
 			}
 
-			// Closing the repository whose worktree the window is on takes the window to the repository
-			// (WT-1.5), however it was closed. Rebuilds preserve the state, so only a person gets here.
+			// Collapsing the active worktree's repository waits until the window is on its checkout (WT-1.5)
 			if (row?.kind === 'folder' && e.node.collapsed && isOnWorktreeOf(row, this.switcher.active, this.model.key)) {
-				this.goToFolder(row).then(undefined, onUnexpectedError);
+				this.tree.expand(row);
+				this.closeOnceOnCheckout(row).then(undefined, onUnexpectedError);
 			}
 		}));
 
@@ -733,7 +730,10 @@ export class WorkspaceBarView extends Disposable {
 		this._register(this.git.onDidChange(() => this.refresh()));
 		// ⚠️ A redraw, not a class toggled on whatever happens to be rendered: the list is
 		// virtualised, so the rows are recycled and the mark has to come from the renderer.
-		this._register(this.switcher.onDidChangeActive(() => this.refresh()));
+		this._register(this.switcher.onDidChangeActive(() => {
+			this.refresh();
+			this.openRepositoryOfActive();
+		}));
 		// ⚠️ A name or a colour is drawn by the renderer, so a change to one has to reach the rows
 		// the same way a change to the folder list does. Without this the dialog saves and the bar
 		// goes on showing what it showed before, until something else happens to redraw it.
@@ -820,15 +820,31 @@ export class WorkspaceBarView extends Disposable {
 
 		const { worktree } = row;
 		if (worktree.folder || !worktree.exists) {
-			return this.switcher.switchTo(worktree.folder?.uri ?? worktree.uri);
+			await this.switcher.switchTo(worktree.folder?.uri ?? worktree.uri);
+			return;
 		}
 
 		return this.show(worktree.uri);
 	}
 
+	/** Moves the window to a repository's checkout, and collapses the repository once it is there (WT-1.5). */
+	private async closeOnceOnCheckout(row: IFolderRow): Promise<void> {
+		await this.goToFolder(row);
+
+		// By its folder: the move redrew the rows, and `row` is no longer one of them
+		const active = this.switcher.active;
+		if (active && this.model.key(active) === this.model.key(row.folder?.uri ?? row.uri)) {
+			this.setExpanded(row.uri, false);
+		}
+	}
+
 	/** A folder row's own place: through the switcher when it is in the workspace, `show` when not. */
-	private goToFolder(row: IFolderRow): Promise<void> {
-		return row.folder ? this.switcher.switchTo(row.folder.uri) : this.show(row.uri);
+	private async goToFolder(row: IFolderRow): Promise<void> {
+		if (row.folder) {
+			await this.switcher.switchTo(row.folder.uri);
+		} else {
+			await this.show(row.uri);
+		}
 	}
 
 	private setRowKind(row: WorkspaceBarRow | undefined): void {
@@ -853,6 +869,15 @@ export class WorkspaceBarView extends Disposable {
 
 		const node = this.tree.getNode(row);
 		return node.children.length === 0 ? '' : node.collapsed ? 'collapsed' : 'expanded';
+	}
+
+	/** Expands the collapsed repository of the active worktree, however the window got there (WT-1.10). */
+	private openRepositoryOfActive(): void {
+		for (const node of this.tree.getNode().children) {
+			if (node.element && node.collapsed && isOnWorktreeOf(node.element, this.switcher.active, this.model.key)) {
+				this.tree.expand(node.element);
+			}
+		}
 	}
 
 	/** Opens or closes a repository's row onto its worktrees: `IWorkspaceBarService.setExpanded`. */

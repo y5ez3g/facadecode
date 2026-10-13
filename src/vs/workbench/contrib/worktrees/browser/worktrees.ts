@@ -34,7 +34,6 @@ import { ICommandDetectionCapability, TerminalCapability } from '../../../../pla
 import { TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
-import { asCodeSpan } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
@@ -228,6 +227,17 @@ type DeleteWorktreeAtResult =
 	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean }
 	| { readonly kind: 'removed' }
 	| WorktreeAtError;
+
+/** `text` as a markdown code span, fenced by more backticks than it holds in a row. */
+function asCodeSpan(text: string): string {
+	const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
+	const fence = '`'.repeat(longestRun + 1);
+
+	// A span drops one space at each end, which keeps a backtick at either end off the fence
+	const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+
+	return `${fence}${pad}${text}${pad}${fence}`;
+}
 
 export const IWorktreeService = createDecorator<IWorktreeService>('worktreeService');
 
@@ -823,7 +833,7 @@ export class WorktreeService implements IWorktreeService {
 				const hidden = this.workspaceBarService.hideWorktree(worktree);
 				try {
 					// 4  leave folders[] - which also makes folderTerminals dispose what it parked for it (WT-8.4).
-					await this.workspaceBarService.remove([worktree]);
+					await this.workspaceBarService.remove([worktree], { confirmed: true });
 
 					// 5  close whatever else works inside it - the panel's terminals, say. A shell can take a moment
 					//    to let go of the folder after its terminal is disposed; the git extension's delete allows for that.
@@ -933,8 +943,7 @@ export class WorktreeService implements IWorktreeService {
 				? localize({ key: 'worktrees.deleteDiscardButton', comment: ['&& denotes a mnemonic'] }, "&&Delete and Discard Changes")
 				: localize({ key: 'worktrees.deleteButton', comment: ['&& denotes a mnemonic'] }, "&&Delete"),
 			custom: {
-				classes: ['facade-dialog', 'workspacebar-confirm'],
-				disableCloseButton: true
+				classes: ['facade-dialog', 'workspacebar-confirm']
 			}
 		});
 
