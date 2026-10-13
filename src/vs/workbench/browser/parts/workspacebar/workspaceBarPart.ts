@@ -37,6 +37,7 @@ import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { IRemoveOptions, IWorkspaceBarService, RemoveResult, ShowResult } from './workspaceBarService.js';
 import { WorkspaceBarRemoval } from './workspaceBarRemoval.js';
 import { WorkspaceBarTrustGate } from './workspaceBarTrust.js';
+import { orderByRecent } from './workspaceBarSwitchFolder.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 import { ROW_HEIGHT, WorkspaceBarView } from './workspaceBarView.js';
@@ -63,6 +64,22 @@ const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
 export const WORKSPACEBAR_COLLAPSED_WIDTH = 36;
 
 const COLLAPSED_STORAGE_KEY = 'facade.workspaceBar.collapsed';
+
+/** Where the folders the window has been on are kept, most recent first (`recentRows`). */
+const RECENT_STORAGE_KEY = 'facade.workspaceBar.recentRows';
+
+/** How many of them are kept: more than a bar shows, and fewer than anybody scrolls. */
+const MAX_RECENT = 100;
+
+/** What was kept of the recent folders; storage that cannot be read keeps none. */
+function readRecent(value: string | undefined): string[] {
+	try {
+		const stored: unknown = value ? JSON.parse(value) : [];
+		return Array.isArray(stored) ? stored.filter((key): key is string => typeof key === 'string') : [];
+	} catch {
+		return [];
+	}
+}
 
 /**
  * Whether the grid has the workspace bar as the middle row's first column, which every hard-coded
@@ -117,6 +134,9 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	readonly onDidChangeCollapsed = this._onDidChangeCollapsed.event;
 
 	private readonly model: WorkspaceBarModel;
+
+	/** The folders the window has been on, by key, most recent first: Switch Folder's order (`recentRows`). */
+	private recent: string[];
 	private readonly git: WorkspaceBarGit;
 	private view: WorkspaceBarView | undefined;
 	private editors: WorkspaceBarEditors | undefined;
@@ -172,6 +192,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// Collapsed until somebody opens it: a profile that has never touched the toggle starts with
 		// the column of icons, and the choice is remembered from the first time it is made.
 		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, true);
+		this.recent = readRecent(this.storageService.get(RECENT_STORAGE_KEY, StorageScope.WORKSPACE));
 		this.collapsedContext = WorkspaceBarCollapsedContext.bindTo(contextKeyService);
 		this.collapsedContext.set(this._collapsed);
 
@@ -226,6 +247,14 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this._register(this.model.onDidChange(() => this.pruneEditors()));
 		this.pruneEditors();
 		this.switcher = this._register(this.instantiationService.createInstance(WorkspaceBarSwitcher, this.model, this.editors));
+		const switcher = this.switcher;
+		const noteActive = () => {
+			if (switcher.active) {
+				this.noteRecent(switcher.active);
+			}
+		};
+		noteActive();
+		this._register(switcher.onDidChangeActive(noteActive));
 		this._onDidRestoreEditors.input = this.switcher.onDidRestoreEditors;
 		// `show` handed in rather than resolved as `IWorkspaceBarService`: this part is that service,
 		// and the view is built while the part is being created.
@@ -453,6 +482,21 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		}
 
 		return undefined;
+	}
+
+	recentRows(): readonly URI[] {
+		return orderByRecent(this.rowOrder(), this.recent, uri => this.model.key(uri));
+	}
+
+	/** Puts the folder the window is on at the head of the recent ones, and keeps them for the next window. */
+	private noteRecent(uri: URI): void {
+		const key = this.model.key(uri);
+		if (this.recent[0] === key) {
+			return;
+		}
+
+		this.recent = [key, ...this.recent.filter(other => other !== key)].slice(0, MAX_RECENT);
+		this.storageService.store(RECENT_STORAGE_KEY, JSON.stringify(this.recent), StorageScope.WORKSPACE, StorageTarget.MACHINE);
 	}
 
 	rowOrder(): readonly URI[] {

@@ -129,6 +129,9 @@ export interface IWorkspaceBarService {
 	 */
 	rowOrder(): readonly URI[];
 
+	/** Every row, most recently visited first, for Switch Folder (WORKSPACE.md W9.11). */
+	recentRows(): readonly URI[];
+
 	/**
 	 * Opens or closes a repository's row onto its worktrees (WORKTREE.md WT-1.10). The state is the
 	 * bar's and outlives a collapse of the bar to its icons. Nothing happens for a folder that is not a
