@@ -27,13 +27,28 @@ export function installedClis(configFor: (cli: AgentCli) => CliConfig = cli => c
 	const installed: InstalledCli[] = [];
 	for (const cli of AGENT_CLIS) {
 		const config = configFor(cli);
-		// In the environment its launch gives it, as a start finds it
-		const found = config.enabled ? locateCli(cli, config, { ...env, ...config.launch.environment }, folder) : undefined;
+		const found = config.enabled ? foundAsStarted(cli, config, env, folder) : undefined;
 		if (found) {
 			installed.push(found);
 		}
 	}
 	return installed;
+}
+
+/**
+ * The built-ins this machine has that the person turned off (`facade.agents.<cli>.enabled`), found as `installedClis` finds
+ * the others: why no built-in is offered where none is, for all that one is there (AGENT-LAUNCHER.md, L3).
+ */
+export function turnedOffClis(configFor: (cli: AgentCli) => CliConfig = cli => cli.defaults, env: Environment = process.env, folder?: string): AgentCli[] {
+	return AGENT_CLIS.filter(cli => {
+		const config = configFor(cli);
+		return !config.enabled && !!foundAsStarted(cli, config, env, folder);
+	});
+}
+
+/** `cli` where a start finds it: in the environment its launch gives it. */
+function foundAsStarted(cli: AgentCli, config: CliConfig, env: Environment, folder: string | undefined): InstalledCli | undefined {
+	return locateCli(cli, config, { ...env, ...config.launch.environment }, folder);
 }
 
 /**

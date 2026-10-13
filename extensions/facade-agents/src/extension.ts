@@ -76,6 +76,28 @@ export function activate(context: vscode.ExtensionContext): void {
 				await service?.worktreeDeleting(folder.fsPath);
 			}
 		}),
+		// `(workspace, id)`: the person stops that agent from the window - one with no terminal yet (L3)
+		vscode.commands.registerCommand('_facade.agents.stopAgent', async (workspace?: unknown, id?: unknown) => {
+			await ready;
+			if (typeof workspace === 'string' && typeof id === 'number') {
+				await service?.stopFromWindow(workspace, id);
+			}
+		}),
+		// `(folder)`: the window deleted that worktree - git is done - which its record says, the host that asked for it
+		// started again meanwhile or not (O5)
+		vscode.commands.registerCommand('_facade.agents.worktreeDeleted', async (folder?: unknown) => {
+			await ready;
+			if (folder instanceof vscode.Uri && folder.scheme === 'file') {
+				service?.worktreeDeleted(folder.fsPath);
+			}
+		}),
+		// `(folder)`: the person's deletion of that worktree failed in the window - agents can start there again (O5; OR-10)
+		vscode.commands.registerCommand('_facade.agents.worktreeDeleteFailed', async (folder?: unknown) => {
+			await ready;
+			if (folder instanceof vscode.Uri && folder.scheme === 'file') {
+				service?.worktreeDeleteFailed(folder.fsPath);
+			}
+		}),
 		vscode.commands.registerCommand('facade.agents.startAgent', async (args?: unknown) => {
 			// The first start can come as the extension comes up - the person trusted the workspace from the
 			// agent menu, which activated it - and waits for it rather than asking them to try again.

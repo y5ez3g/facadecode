@@ -16,6 +16,11 @@ export function isStringArray(value: unknown): value is readonly string[] {
 	return Array.isArray(value) && value.every(item => typeof item === 'string');
 }
 
+/** Whether two JSON values are the same: written as JSON, the same text - an object's keys in the same order too. */
+export function sameJson(a: unknown, b: unknown): boolean {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * `defaults` with `set` over it, key by key down through objects: a key set to null taken out, any other
  * value replacing the default's. An object of the person's where the default has none is gone through

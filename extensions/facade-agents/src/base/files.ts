@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { sleepSync } from './async';
-import { codeOf } from './errors';
+import { codeOf, messageOf } from './errors';
 import { isJsonObject, JsonObject } from './json';
 import { JsonNode, JsonObjectNode, nodeValue, parseJsonc } from './jsonc';
 
@@ -186,12 +186,12 @@ export function jsonLayoutOf(text: string): JsonLayout {
 
 /**
  * A JSON file as read: missing, an object - with its text, where each of its parts is in it, its layout and
- * stamp - or anything else, which is left alone.
+ * stamp - or anything else, which is left alone, with why, as the person is told it (AGENT-LAUNCHER.md, L11).
  */
 export type JsonFile =
 	| { readonly kind: 'missing' }
 	| { readonly kind: 'object'; readonly value: JsonObject; readonly text: string; readonly tree: JsonObjectNode; readonly layout: JsonLayout; readonly stamp: FileStamp }
-	| { readonly kind: 'other' };
+	| { readonly kind: 'other'; readonly why: string };
 
 /**
  * Reads a JSON file that should hold an object, such as a settings file - comments and trailing commas
@@ -207,22 +207,22 @@ export function readJsonFile(file: string): JsonFile {
 			text = fs.readFileSync(file, 'utf8');
 			after = stampOf(file);
 		} catch (err) {
-			return codeOf(err) === 'ENOENT' ? { kind: 'missing' } : { kind: 'other' };
+			return codeOf(err) === 'ENOENT' ? { kind: 'missing' } : { kind: 'other', why: `could not be read: ${messageOf(err)}` };
 		}
 		if (before === undefined || !sameStamp(after, before)) {
 			if (attempt < CHANGED_ATTEMPTS) {
 				continue;
 			}
-			return { kind: 'other' };
+			return { kind: 'other', why: 'kept changing as it was read' };
 		}
 		let tree: JsonNode;
 		try {
 			tree = parseJsonc(text);
-		} catch {
-			return { kind: 'other' };
+		} catch (err) {
+			return { kind: 'other', why: `is not valid JSON: ${messageOf(err)}` };
 		}
 		const value = nodeValue(tree);
-		return tree.kind === 'object' && isJsonObject(value) ? { kind: 'object', value, text, tree, layout: jsonLayoutOf(text), stamp: before } : { kind: 'other' };
+		return tree.kind === 'object' && isJsonObject(value) ? { kind: 'object', value, text, tree, layout: jsonLayoutOf(text), stamp: before } : { kind: 'other', why: `holds ${Array.isArray(value) ? 'a list' : value === null ? 'null' : `a ${typeof value}`}, not a JSON object` };
 	}
 }
 

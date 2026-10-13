@@ -58,7 +58,17 @@ export function factsText(facade: Facade, facts: AgentFacts): string {
 /** One line of `list_agents`, as the model reads it; `self` is the caller's number, none for the person. */
 function line(facade: Facade, row: AgentFacts, self: number | undefined, now: number): string {
 	const state = row.end ? `ended at ${timeOfDay(row.end.time)} (${endText(facade, row.end)}${row.end.exitCode !== undefined ? `, exit code ${row.end.exitCode}` : ''})` : row.state;
-	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  by ${facade.whoIs(row.creator)}  tree ${agentRef(row.root)}  ${state}  ${row.outsideGit ? `folder ${row.folder} (in no Git repository)` : `worktree ${row.worktree}`}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}${row.mailbox ? `  mailbox: ${mailboxText(row.mailbox, now)}` : ''}`;
+	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  by ${facade.whoIs(row.creator)}  tree ${agentRef(row.root)}  ${state}  ${row.outsideGit ? `folder ${row.folder} (in no Git repository)` : `worktree ${row.worktree}`}${setupText(row.setup)}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}${row.mailbox ? `  mailbox: ${mailboxText(row.mailbox, now)}` : ''}`;
+}
+
+/** How the setup of an agent's new worktree went, as its row says it, where one ran or should have (O11). */
+function setupText(setup: AgentFacts['setup']): string {
+	switch (setup) {
+		case 'succeeded': return ', its setup succeeded';
+		case 'submitted': return ', its setup sent - whether it finished is not known';
+		case 'invalid': return ', its setup file unreadable - none ran';
+		default: return '';
+	}
 }
 
 /** The line a list opens with: how many agents, and how many in each state - `3 agents: 1 starting, 2 running`. */

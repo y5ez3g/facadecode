@@ -3,7 +3,9 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { ErrorOutcome, FacadeError } from '../core/errors';
 import type { Facade, Started } from '../core/facade';
+import type { SetupProgress } from '../core/ports';
 import { excerptText } from '../core/screens';
 import { describe } from '../record/events';
 import { Args } from './args';
@@ -13,23 +15,58 @@ import type { ContractTool } from './tools';
 const PARAMS = ['name', 'cli', 'model?', 'effort?', 'task?', 'folder?', 'new_worktree?'];
 
 /**
- * `start_agent` (AGENT-ORCHESTRATION.md, O3): starts an agent in its own UI, in any folder of the window
- * or a new worktree. It answers with the agent's number once it has started, or that its start is not
- * confirmed.
- */
-/**
- * What of the model and effort a start was given its CLI was not given, and why: its launch has no group for
- * it, so its own applies; or - an effort given with a model whose name carries one - the model's applies (N-64).
+ * What of the model and effort a start was given is not known to be applied, and why: its launch has no group for it,
+ * so its CLI was not given it and its own applies; or - an effort given with a model whose name may carry one of its own -
+ * its CLI was given it, and may run at the model's instead (O3; N-64; OR-01).
  */
 function ignoredText(facade: Facade, started: Started): string {
 	const byModel = started.ignored.includes('effort') && started.model !== undefined && !started.ignored.includes('model') && facade.modelCarriesEffort(started.cli);
 	const noGroup = started.ignored.filter(what => !(what === 'effort' && byModel));
 	return [
 		...noGroup.length ? [` The ${noGroup.join(' and ')} you gave ${noGroup.length === 1 ? 'was' : 'were'} not used: ${started.cli}'s launch has no group for ${noGroup.length === 1 ? 'it' : 'them'}, so its own applies.`] : [],
-		...byModel ? [` The effort you gave was not used: ${facade.cliName(started.cli)}'s models carry their effort, so ${started.model}'s applies. Name a model that carries the effort you want, or give the effort without a model.`] : []
+		...byModel ? [` The effort you gave was passed on, but ${facade.cliName(started.cli)} may override it where the model's name carries an effort, as ${started.model}'s may: the effort it runs at is not known.`] : []
 	].join('');
 }
 
+/** A failed start's data: its error's outcome, with the agent's facts and its status (O3). */
+type FailedStart = ErrorOutcome & Omit<Started, 'status' | 'why' | 'screen' | 'phase'> & { readonly status: 'failed' };
+
+/**
+ * A start that failed once its agent had a number, as its caller is answered (AGENT-ORCHESTRATION.md, O3; O2): with the
+ * facts a start that started or is not confirmed answers with - status failed - in words and as data, beside the phase it
+ * had got to, its final screen and what was made for it, which stays. Undefined for any other failure, which is answered
+ * as it is.
+ */
+function failedStart(facade: Facade, err: unknown, newWorktree: boolean): FacadeError | undefined {
+	const outcome = err instanceof FacadeError && err.code === 'FAILED' && err.outcome?.outcome === 'failed' ? err.outcome : undefined;
+	const facts = outcome?.agent !== undefined ? facade.facts(outcome.agent) : undefined;
+	if (!(err instanceof FacadeError) || !outcome || !facts) {
+		return undefined;
+	}
+	// Its facts after what failed, before the last lines of its screen
+	const [first, ...rest] = err.message.split('\n');
+	const text = `${first}${/[.!?]$/.test(first) ? '' : '.'} Its start: ${factsText(facade, facts)}.`;
+	const data: FailedStart = { ...outcome, ...facts, status: 'failed', newWorktree };
+	return new FacadeError(err.code, [text, ...rest].join('\n'), data);
+}
+
+/**
+ * Where the setup of the worktree of a start that is not confirmed is, as its answer says it - the line running, and the last
+ * lines of its setup terminal - for a start with no terminal of its own yet (O3: setup diagnostics). None without one.
+ */
+function settingUpText(settingUp: SetupProgress | undefined): string {
+	if (!settingUp) {
+		return '';
+	}
+	const running = settingUp.running !== undefined ? `Its worktree's setup is running \`${settingUp.running}\`.` : 'Its worktree\'s setup is running.';
+	return `\n${running} ${settingUp.lines.length ? `The last lines of its setup terminal, as they were:\n${settingUp.lines.join('\n')}` : 'Its setup terminal shows nothing yet.'}`;
+}
+
+/**
+ * `start_agent` (AGENT-ORCHESTRATION.md, O3): starts an agent in its own UI, in any folder of the window
+ * or a new worktree. It answers with the agent's number once it has started, or that its start is not
+ * confirmed.
+ */
 export const startAgentTool: ContractTool = {
 	definition: {
 		name: 'start_agent',
@@ -75,21 +112,27 @@ export const startAgentTool: ContractTool = {
 		const task = args.optionalWords('task');
 		const folder = args.optionalText('folder');
 		const newWorktree = args.boolean('new_worktree');
-		const started = await facade.startAgent(caller, {
-			name,
-			cli,
-			...(model !== undefined ? { model } : {}),
-			...(effort !== undefined ? { effort } : {}),
-			...(task !== undefined ? { task } : {}),
-			...(folder !== undefined ? { folder } : {}),
-			...(newWorktree !== undefined ? { newWorktree } : {})
-		}, progress);
+		let started: Started;
+		try {
+			started = await facade.startAgent(caller, {
+				name,
+				cli,
+				...(model !== undefined ? { model } : {}),
+				...(effort !== undefined ? { effort } : {}),
+				...(task !== undefined ? { task } : {}),
+				...(folder !== undefined ? { folder } : {}),
+				...(newWorktree !== undefined ? { newWorktree } : {})
+			}, progress);
+		} catch (err) {
+			throw failedStart(facade, err, newWorktree === true) ?? err;
+		}
 		const ignored = ignoredText(facade, started);
-		const where = started.newWorktree ? `the new worktree ${started.worktree} (a new branch)` : `the worktree ${started.worktree}`;
+		// A folder in no Git repository has no worktree (N-57)
+		const where = started.newWorktree ? `the new worktree ${started.worktree} (a new branch)` : started.outsideGit ? `${started.folder}, a folder in no Git repository` : `the worktree ${started.worktree}`;
 		const notes = started.notes?.length ? ` ${started.notes.join(' ')}` : '';
 		// Started is not fetched: the agent fetches its task itself (M7)
 		const fetched = started.taskMessage === undefined ? '' : ' It fetches its task itself: list_agents shows when it has.';
-		const screen = started.screen ? `\n${excerptText(started.id, started.screen.text)}` : '';
+		const screen = started.screen ? `\n${excerptText(started.id, started.screen.text)}` : settingUpText(started.settingUp);
 		return {
 			text: started.status === 'started'
 				? `Started ${describe(started)} in ${where}: ${factsText(facade, started)}.${fetched}${ignored}${notes}`

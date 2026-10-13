@@ -9,17 +9,18 @@ import * as l10n from '@vscode/l10n';
 import { DeferredPromise } from '../base/async';
 import { clauseOf, messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
-import { AgentCli, Connection, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec, launchFor, sandboxOf } from '../clis/cli';
+import { AgentCli, capabilitiesOf, Connection, connectionFor, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec, launchFor, sandboxOf } from '../clis/cli';
 import { launchTarget, unsafeForCmd } from '../clis/executable';
 import { trustTarget } from '../clis/trust';
 import { AgentTable, agentName, StartedAgent } from '../record/agents';
-import { Agent, Caller, describe, Ignored, isLive, PERSON, StartPhase } from '../record/events';
+import { Agent, Caller, describe, Ignored, isLive, PERSON, SetupState, StartPhase } from '../record/events';
 import { Message } from '../record/messages';
 import { screensDir } from '../record/screens';
 import { LaunchDelays } from './doorbell';
 import { FacadeError } from './errors';
-import { InjectionGit, Injections, InjectionUser } from './injections';
-import { AgentSetup, CliCatalog, Disposable, Ports, Timing } from './ports';
+import { InjectionGit, Injections, InjectionUser, whyNotMerged } from './injections';
+import { facadeNoticeKey } from './mail';
+import { AgentSetup, CliCatalog, Disposable, Ports, SetupProgress, Timing } from './ports';
 import { excerptText, ScreenRead } from './screens';
 
 /**
@@ -47,10 +48,13 @@ export function customAgentNameProblem(name: string, builtIns: ReadonlySet<strin
 /** A start, as `start_agent` or the person decided it, with the settings read as it was accepted. */
 export interface Run {
 	readonly name: string;
-	/** As the caller gave them; none for the CLI's own. One in `ignored` is recorded, and not given to the CLI. */
+	/** As the caller gave them; none for the CLI's own. Each goes to the CLI where its launch has a group for it. */
 	readonly model?: string;
 	readonly effort?: string;
-	/** What the caller gave and the CLI's launch has no group for: left out, and said. */
+	/**
+	 * What the caller gave that is not known to be applied, and said: left out, the CLI's launch having no group for it; or
+	 * an effort given with a model whose name may carry one of its own, given all the same (O3; OR-01).
+	 */
 	readonly ignored: readonly Ignored[];
 	readonly task?: string;
 	readonly worktree: string;
@@ -58,6 +62,11 @@ export interface Run {
 	readonly outsideGit?: boolean;
 	/** The home folder, as the environment its terminal starts with has it (X-58). */
 	readonly home?: string;
+	/**
+	 * The environment its terminal starts with - the terminals' in its folder, with what its launch sets - where its
+	 * program is found as it runs: on Windows, the Node an npm shim's script runs with (AGENT-LAUNCHER.md, L10).
+	 */
+	readonly env?: Environment;
 	/** What its caller is told of its launch as it is accepted - what takes away its exemption, say - and the log says. */
 	readonly notes?: readonly string[];
 	readonly folder: string;
@@ -90,8 +99,8 @@ interface LaunchPlan {
 }
 
 /**
- * Whether an agent with no task is given its opening alone as its argument - who it is, and to ask in words: one
- * started through `start_agent` of a CLI that takes its notice as an argument and keeps its question tool, which
+ * Whether an agent with no task is given its opening alone as its argument - who it is, and to ask through Facade's
+ * messages: one started through `start_agent` of a CLI that takes its notice as an argument and keeps its question tool, which
  * nothing else it is sure to read would tell it (L4; N-71).
  */
 function opensAlone(cli: AgentCli, unattended: boolean): boolean {
@@ -109,6 +118,11 @@ export interface Launched {
 	readonly task?: number;
 	/** Where its start is not confirmed: the last lines of its screen, as they were then (AGENT-ORCHESTRATION.md, O3). */
 	readonly screen?: ScreenRead;
+	/**
+	 * Where its start is not confirmed as its worktree's setup runs, no terminal of its own there yet: that setup's line
+	 * running and its terminal's last lines, as they were then (O3: setup diagnostics where no agent terminal exists).
+	 */
+	readonly settingUp?: SetupProgress;
 }
 
 /** How the folder of a start is prepared before its CLI: its worktree made and set up. */
@@ -119,14 +133,21 @@ export interface Prepared {
 	readonly notes: readonly string[];
 	/** What the agent is told of it with its task: that its setup's completion is not known. */
 	readonly startNote?: string;
+	/** How its worktree's setup went, as the record keeps it (O11). */
+	readonly setup?: SetupState;
 }
+
+/** Word of how a start goes; with the run's number once it is recorded, for a caller whose call is cut after to name it. */
+export type LaunchProgress = (message: string, agent?: number) => void;
 
 /** How `launch` goes. */
 export interface LaunchOptions {
 	/** Whether its caller waits until it has started; else, once its terminal runs. */
 	readonly wait: boolean;
-	/** Word of how it goes; with the run's number once it is recorded, for a caller whose call is cut after to name it. */
-	readonly progress?: (message: string, agent?: number) => void;
+	/** Word of how it goes. */
+	readonly progress?: LaunchProgress;
+	/** Told the run's number once it is recorded, its task with it: before the word that says so, and before its CLI is launched. */
+	readonly onRecorded?: (agent: number) => void;
 	/** When its start was accepted: its time counts from then (AGENT-ORCHESTRATION.md, O9); now, where not given. */
 	readonly acceptedAt?: number;
 	/** Prepares its folder - its worktree made and set up - recording each phase, once it is recorded. */
@@ -142,6 +163,8 @@ export interface LaunchContext {
 	readonly injections: Injections;
 	/** How long the core waits, as the person sets it. */
 	readonly timing?: () => Timing;
+	/** The platform its programs run on: this machine's, or a test's. */
+	readonly platform?: NodeJS.Platform;
 	/** Ends an agent whose launch failed before it had a process: recorded as failed, its terminal closed. */
 	fail(agent: Agent, reason: string): Promise<void>;
 	/** Records the task the caller gives a new agent: a message to it, sent right after it was recorded (M7). */
@@ -160,13 +183,20 @@ export interface LaunchContext {
 	log(message: string): void;
 }
 
+/** How a start that waits for its agent comes out: started, or - with why - not confirmed, with what it showed then. */
+interface Up {
+	readonly why?: string;
+	readonly screen?: ScreenRead;
+	readonly settingUp?: SetupProgress;
+}
+
 /** An agent on its way up, a start waiting for it. */
 interface Startup {
 	/**
 	 * Settles once the agent has started - its MCP server said hello - or, with why and its screen then, once its
 	 * start is not confirmed; rejects once it ended.
 	 */
-	readonly up: DeferredPromise<{ readonly why?: string; readonly screen?: ScreenRead }>;
+	readonly up: DeferredPromise<Up>;
 	/** Answers the start as not confirmed once its time is over; cleared by its MCP server's hello. */
 	timer: ReturnType<typeof setTimeout> | undefined;
 	/**
@@ -174,6 +204,11 @@ interface Startup {
 	 * agent menu, only until its terminal is up - from then on, the person is told.
 	 */
 	answered: boolean;
+	/**
+	 * Set on a start timed again after a reload: the call that waited for it went with the window, so nobody hears
+	 * how it goes - an agent's creator is told of its end as of any child's (AGENT-MESSAGES.md, M8).
+	 */
+	resumed?: true;
 }
 
 /**
@@ -190,6 +225,8 @@ export class Launcher implements Disposable {
 	private readonly startups = new Map<number, Startup>();
 	/** The launches under way, by number: each settles once its terminal is open, or it gave up. */
 	private readonly opening = new Map<number, Promise<void>>();
+	/** The notice the person was told that an agent's start is not confirmed, by its number: until it connects, or ends (L5). */
+	private readonly unconfirmedTold = new Map<number, string>();
 	/** What each start's preparation came to that its caller is told, by number. */
 	private readonly notes = new Map<number, readonly string[]>();
 	/** What each agent is told of its preparation with its first line, by number. */
@@ -230,13 +267,14 @@ export class Launcher implements Disposable {
 				yolo: run.yolo,
 				unattended: run.unattended,
 				...(run.task !== undefined || opensAlone(installed.cli, run.unattended) ? { task: firstLine } : {}),
-				...applied(run),
+				...(run.unattended ? { opening: setup.firstLine({ id: 1, name: 'check' }, PERSON, undefined) } : {}),
+				...applied(run, installed),
 				// What goes into the folder as the launch will put it: a server the same for every agent, and the skills.
-				...(run.integration ? { connection: installed.cli.sharedServer ? { mcp: setup.sharedMcpServer(), values: {} } : setup.connection(path.join(table.runsDir, 'check.token')) } : {}),
+				...(run.integration ? { connection: connectionFor(installed.cli, setup.sharedMcpServer(), setup.connection(path.join(table.runsDir, 'check.token'))) } : {}),
 				skills: run.integration ? setup.skills() : [],
 				runDir: table.runsDir,
 				slug: 'check'
-			});
+			}, env);
 			trustTarget(installed.cli, launchFor(installed.config, run.unattended), { folder: run.folder, repository: run.repository }, env);
 			conflict = installed.cli.conflict?.(spec.args, run.folder, env);
 			injected = spec.injected;
@@ -276,7 +314,7 @@ export class Launcher implements Disposable {
 		for (const file of files) {
 			const committed = await this.context.ports.git.fileAt(main, commit, file.path);
 			if (committed !== undefined && file.merge?.(committed) === undefined) {
-				throw new FacadeError('REFUSED', `${installed.cli.displayName} is not started: ${path.join(folder, file.path)} is in the commit its worktree would start at, and Facade does not write over it. Nothing was made.`);
+				throw new FacadeError('REFUSED', `${installed.cli.displayName} is not started: ${path.join(folder, file.path)}, in the commit its worktree would start at, ${whyNotMerged(committed, file)}. Nothing was made.`);
 			}
 		}
 	}
@@ -295,6 +333,7 @@ export class Launcher implements Disposable {
 		const { table } = this.context;
 		const { cli } = installed;
 		this.stillOpen();
+		const given = applied(run, installed);
 		const started = table.start({
 			name: run.name,
 			creator: caller.id,
@@ -306,7 +345,7 @@ export class Launcher implements Disposable {
 			yolo: run.yolo,
 			...(run.unattended ? { unattended: true } : {}),
 			// As the launch the person has set up leaves it: never on where its file is left out (X-07)
-			sandbox: sandboxOf(cli, launchFor(installed.config, run.unattended), { framework: run.integration, yolo: run.yolo, model: run.model !== undefined && !run.ignored.includes('model'), effort: run.effort !== undefined && !run.ignored.includes('effort'), task: run.task !== undefined, trust: true }),
+			sandbox: sandboxOf(cli, launchFor(installed.config, run.unattended), { framework: run.integration, yolo: run.yolo, model: given.model !== undefined, effort: given.effort !== undefined, task: run.task !== undefined, trust: true }),
 			integration: run.integration,
 			worktree: run.worktree,
 			...(run.outsideGit ? { outsideGit: true } : {}),
@@ -330,6 +369,7 @@ export class Launcher implements Disposable {
 			this.notes.set(agent.id, run.notes);
 			run.notes.forEach(note => this.context.log(`${describe(agent)}: ${note}`));
 		}
+		options.onRecorded?.(agent.id);
 		options.progress?.(`${describe(agent)} is recorded, and starting.`, agent.id);
 		const startup = this.watch(agent, run.integration, options.acceptedAt);
 		// Prepared and opened on its own: the caller hears whichever comes first - its time over, unconfirmed in
@@ -357,7 +397,7 @@ export class Launcher implements Disposable {
 			return { agent: now, status: 'started', notes: this.notes.get(agent.id) ?? [], ...taskOf };
 		}
 		options.progress?.(`Waiting for @${agent.name} to start.`);
-		let up: { readonly why?: string; readonly screen?: ScreenRead };
+		let up: Up;
 		try {
 			up = await startup.up.p;
 		} catch (err) {
@@ -367,12 +407,13 @@ export class Launcher implements Disposable {
 	}
 
 	/** How a launch came out, as its caller is answered: started, or not confirmed, with why and its screen then. */
-	private launchedOf(agent: Agent, up: { readonly why?: string; readonly screen?: ScreenRead }, task: { readonly task?: number }): Launched {
+	private launchedOf(agent: Agent, up: Up, task: { readonly task?: number }): Launched {
 		return {
 			agent: this.context.table.get(agent.id) ?? agent,
 			status: up.why === undefined ? 'started' : 'unconfirmed',
 			...(up.why !== undefined ? { why: up.why } : {}),
 			...(up.screen ? { screen: up.screen } : {}),
+			...(up.settingUp ? { settingUp: up.settingUp } : {}),
 			notes: this.notes.get(agent.id) ?? [],
 			...task
 		};
@@ -401,12 +442,12 @@ export class Launcher implements Disposable {
 				}
 				this.stillOpen();
 				this.assertStarting(agent);
-				table.phase(agent.id, 'launching_cli');
+				table.phase(agent.id, 'launching_cli', undefined, prepared.setup);
 			}
 			const opened = new DeferredPromise<void>();
 			this.opening.set(agent.id, opened.p);
 			try {
-				const connection: Connection | undefined = !run.integration ? undefined : cli.sharedServer ? { mcp: setup.sharedMcpServer(), values: {} } : setup.connection(started.tokenFile);
+				const connection: Connection | undefined = !run.integration ? undefined : connectionFor(cli, setup.sharedMcpServer(), setup.connection(started.tokenFile));
 				// A CLI told of its task in its terminal has its first line typed by its doorbell (M7)
 				const argument = cli.task !== 'argument' ? undefined : task ? this.firstLineOf(agent, caller, task.id) : opensAlone(cli, run.unattended) ? this.firstLineOf(agent, caller, undefined) : undefined;
 				const { spec, args, throughCmd } = this.launchOf(installed, {
@@ -418,12 +459,14 @@ export class Launcher implements Disposable {
 					yolo: run.yolo,
 					unattended: run.unattended,
 					...(argument !== undefined ? { task: argument } : {}),
-					...applied(run),
+					// Who it is, for a warm-up to tell it - Antigravity's: its first line comes only with a task (L9)
+					...(run.unattended ? { opening: this.firstLineOf(agent, caller, undefined) } : {}),
+					...applied(run, installed),
 					...(connection ? { connection } : {}),
 					skills: run.integration ? setup.skills() : [],
 					runDir: table.runsDir,
 					slug: String(agent.id)
-				});
+				}, run.env);
 				const { enterDelay, taskDelay } = installed.config.launch;
 				const plan: LaunchPlan = { program: spec.executable, args, cwd: spec.cwd, environment: spec.env, enterDelay, taskDelay };
 				for (const file of [...spec.files, { path: table.launchFileOf(agent.id), content: JSON.stringify(plan, undefined, '\t') }]) {
@@ -558,12 +601,14 @@ export class Launcher implements Disposable {
 			// own (AGENT-LAUNCHER.md, L5) - rather than starting for ever.
 			const startup = this.watch(agent, true, agent.startTime);
 			startup.answered = agent.creator !== undefined;
+			startup.resumed = true;
 		}
 	}
 
 	/** Whether a start waits for the agent `id` and answers its caller how it goes - a tool call's, or the person's while its terminal is not up. */
 	answers(id: number): boolean {
-		return this.startups.get(id)?.answered ?? false;
+		const startup = this.startups.get(id);
+		return !!startup?.answered && !startup.resumed;
 	}
 
 	/** Settles once a launch under way for the agent `id` has opened its terminal, or given up; at once where none is under way. */
@@ -575,9 +620,10 @@ export class Launcher implements Disposable {
 	 * The launch of `installed` for `input`, as the person has it set up, with its arguments whole; throws
 	 * where one would not reach a CLI that Windows starts through cmd.exe as it is.
 	 */
-	private launchOf(installed: InstalledCli, input: Omit<LaunchInput, 'config'>): { readonly spec: LaunchSpec; readonly args: readonly string[]; readonly throughCmd: boolean } {
+	private launchOf(installed: InstalledCli, input: Omit<LaunchInput, 'config'>, env: Environment | undefined): { readonly spec: LaunchSpec; readonly args: readonly string[]; readonly throughCmd: boolean } {
 		const { cli } = installed;
-		const target = launchTarget(installed.executable);
+		// Found as its terminal finds it, and as Show Agent Launch says: in the environment it starts with (L10)
+		const target = launchTarget(installed.executable, this.context.platform ?? process.platform, env ?? process.env);
 		// The launch of its starter: an agent's, or the person's (L4)
 		const spec = cli.launch({ ...input, config: launchFor(installed.config, input.unattended) }, target.executable);
 		const args = [...target.args, ...spec.args];
@@ -588,8 +634,19 @@ export class Launcher implements Disposable {
 		return { spec, args, throughCmd: target.throughCmd };
 	}
 
-	/** An agent ended: the start that waits for it fails with why. */
+	/**
+	 * Tells the person that their agent's start is not confirmed (AGENT-LAUNCHER.md, L5), `text` saying how, as the notice
+	 * about that agent, `message:facade:<id>` (AGENT-MESSAGES.md, M11), with a way to its terminal: its later connection,
+	 * or its end, closes it again - with no second toast.
+	 */
+	tellUnconfirmed(agent: Agent, text: string): void {
+		this.unconfirmedTold.set(agent.id, text);
+		this.context.ports.person.tell(text, agent.id, 'warning', facadeNoticeKey(agent.id));
+	}
+
+	/** An agent ended: the start that waits for it fails with why, and a notice that its start is not confirmed goes. */
 	ended(id: number, reason: string): void {
+		this.unconfirmedOver(id);
 		const startup = this.startups.get(id);
 		if (startup) {
 			this.startups.delete(id);
@@ -607,7 +664,7 @@ export class Launcher implements Disposable {
 	private watch(agent: Agent, integration: boolean, since = Date.now()): Startup {
 		const ms = this.timing().startTimeoutMs;
 		const startup: Startup = {
-			up: new DeferredPromise<{ readonly why?: string; readonly screen?: ScreenRead }>(),
+			up: new DeferredPromise<Up>(),
 			timer: setTimeout(() => {
 				startup.timer = undefined;
 				void this.unconfirmed(agent, notStartedWhy(this.context.table.get(agent.id)?.phase, integration, ms));
@@ -634,18 +691,44 @@ export class Launcher implements Disposable {
 		this.context.log(`${describe(agent)} is not confirmed to have started: ${why}.`);
 		if (!startup.answered && this.isRunning(agent)) {
 			// One nonmodal notice for the person's own: its terminal stays theirs to use (AGENT-LAUNCHER.md, L5).
-			this.context.ports.person.tell(l10n.t("{0} is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.", describe(agent)), agent.id, 'warning');
+			this.tellUnconfirmed(agent, notConnectedNotice(agent));
 			startup.up.complete({ why });
 			return;
 		}
-		// Read for the caller that waits: what its CLI shows is often why
-		const screen = this.context.table.get(agent.id)?.processId !== undefined ? await this.context.excerptOf(agent) : undefined;
-		startup.up.complete({ why, ...(screen ? { screen } : {}) });
+		// Read for the caller that waits: what its CLI shows is often why - or, its worktree's setup running, with no
+		// terminal of its own yet, what that setup shows: a slow install, or one waiting on a prompt (O3)
+		const now = this.context.table.get(agent.id);
+		const screen = now?.processId !== undefined ? await this.context.excerptOf(agent) : undefined;
+		const settingUp = now?.processId === undefined && now?.phase === 'running_setup' ? await this.setupOf(now.folder) : undefined;
+		startup.up.complete({ why, ...(screen ? { screen } : {}), ...(settingUp ? { settingUp } : {}) });
 	}
 
-	/** An agent has started: the start that waits for it answers, and its mailbox watches it from now (M5). */
+	/** Where the setup of the worktree `folder` is, as the window tells it; undefined where it cannot. */
+	private async setupOf(folder: string): Promise<SetupProgress | undefined> {
+		try {
+			return await this.context.ports.git.setupState(folder);
+		} catch (err) {
+			this.context.log(`Where the setup of ${folder} is could not be told: ${messageOf(err)}`);
+			return undefined;
+		}
+	}
+
+	/**
+	 * The notice that `id`'s start is not confirmed is over: it connected, or ended. It closes, unless another notice
+	 * about that agent took its place (AGENT-LAUNCHER.md, L5: a later connection clears that condition).
+	 */
+	private unconfirmedOver(id: number): void {
+		const text = this.unconfirmedTold.get(id);
+		if (text !== undefined) {
+			this.unconfirmedTold.delete(id);
+			this.context.ports.person.close(facadeNoticeKey(id), text);
+		}
+	}
+
+	/** An agent has started: the start that waits for it answers, its notice of a start not confirmed goes, and its mailbox watches it from now (M5). */
 	private isUp(agent: Agent): void {
 		this.context.table.running(agent.id);
+		this.unconfirmedOver(agent.id);
 		const startup = this.startups.get(agent.id);
 		if (startup) {
 			this.startups.delete(agent.id);
@@ -722,16 +805,28 @@ function notStartedWhy(phase: StartPhase | undefined, integration: boolean, ms: 
 	}
 }
 
+/**
+ * What the person is told of their agent whose start is not confirmed, its CLI open but not connected to Facade
+ * (AGENT-LAUNCHER.md, L5): in their language.
+ */
+export function notConnectedNotice(agent: Agent): string {
+	return l10n.t("{0} is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.", describe(agent));
+}
+
 /** What a call answers once the window closed under it: it does nothing more. */
 export function windowClosed(): FacadeError {
 	return new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
 }
 
-/** The model and the effort a launch gives its CLI: those the caller gave that its launch has a group for. */
-function applied(run: Pick<Run, 'model' | 'effort' | 'ignored'>): { readonly model?: string; readonly effort?: string } {
+/**
+ * The model and the effort a launch of `installed` gives its CLI: those the caller gave that the launch of its starter has a
+ * group for - passed through as they are, an effort with a model whose name may carry one too (O3; OR-01).
+ */
+function applied(run: Pick<Run, 'model' | 'effort' | 'unattended'>, installed: InstalledCli): { readonly model?: string; readonly effort?: string } {
+	const takes = capabilitiesOf(installed.cli, launchFor(installed.config, run.unattended));
 	return {
-		...(run.model !== undefined && !run.ignored.includes('model') ? { model: run.model } : {}),
-		...(run.effort !== undefined && !run.ignored.includes('effort') ? { effort: run.effort } : {})
+		...(run.model !== undefined && takes.model ? { model: run.model } : {}),
+		...(run.effort !== undefined && takes.effort ? { effort: run.effort } : {})
 	};
 }
 

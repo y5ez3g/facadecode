@@ -20,7 +20,7 @@ Coding agents' CLIs - Claude Code, Codex, Antigravity, Muse Code, and the person
 
 ## Settings
 
-Three groups. **Agents**: `facade.agents.yolo`, `facade.orchestration.enabled` and, for whoever asks for advanced settings, `facade.agents.timeout` (seconds, 1-3600). **Each built-in** (`claude`, `codex`, `antigravity`, `muse`): `facade.agents.<cli>.enabled`, `.path`, and, advanced, `.launch` - its arguments group by group (`warmUp`, `connect`, `quiet`, `questions`, `messages`, `yoloOn`, `yoloOff`, `model`, `effort`, `extra`, `task`), environment, trust, Claude Code's settings and two delays. A launch holds only what you change; `null` takes one of Facade's parts out. **Custom Agents**: `facade.agents.custom`, `{ "<name>": { "path": "...", "launch": { ... } } }`, whose launch has the same parts and none of Facade's: `${mcpConfig}` names a file with Facade's server for its `connect` group.
+Three groups, each setting always shown - an advanced one's description begins "Advanced:". **Agents**: `facade.agents.yolo`, `facade.orchestration.enabled` and, advanced, `facade.agents.timeout` (seconds, 1-3600). **Each built-in** (`claude`, `codex`, `antigravity`, `muse`): `facade.agents.<cli>.enabled`, `.path`, and, advanced, `.launch` - its arguments group by group (`warmUp`, `connect`, `quiet`, `questions`, `messages`, `yoloOn`, `yoloOff`, `model`, `effort`, `extra`, `task`), environment, trust, Claude Code's settings and two delays. A launch holds only what you change; `null` takes one of Facade's parts out. **Custom Agents**: `facade.agents.custom`, `{ "<name>": { "path": "...", "launch": { ... } } }`, whose launch has the same parts and none of Facade's: `${mcpConfig}` names a file with Facade's server for its `connect` group.
 
 ## Known limits
 

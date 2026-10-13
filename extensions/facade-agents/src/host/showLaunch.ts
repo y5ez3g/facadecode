@@ -7,17 +7,14 @@ import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { AgentCli, CliConfig, Environment, InstalledCli } from '../clis/cli';
-import { claudeCli, claudeDenyOf } from '../clis/claude';
 import { whyNotInstalled } from '../clis/config';
 import { CUSTOM_AGENTS_SETTING } from '../clis/custom';
-import { DescribedCli, launchDocument } from '../clis/describe';
+import { DescribedCli, launchDocument, starterFacts } from '../clis/describe';
 import { launchTarget } from '../clis/executable';
 import { knownClis, locateCli } from '../clis/registry';
-import { trustTarget } from '../clis/trust';
 import { repositoryAt } from './git';
 import { configFor, customAgents, frameworkOn, yolo } from './settings';
-import { folderOnScreen } from './startAgent';
-import { terminalEnvironment } from './terminals';
+import { terminalPlace } from './startAgent';
 
 /** Where the document Agents: Show Agent Launch shows lives: read-only, as a provider's documents are. */
 const LAUNCH = vscode.Uri.from({ scheme: 'facade-agents', path: '/agent-launch.jsonc' });
@@ -60,9 +57,7 @@ export function registerShowLaunch(problemsOf: LaunchProblems): vscode.Disposabl
  * window's own environment finds it.
  */
 async function shownNow(problemsOf: LaunchProblems): Promise<string> {
-	const folders = (vscode.workspace.workspaceFolders ?? []).filter(each => each.uri.scheme === 'file').map(each => each.uri.fsPath);
-	const folder = await folderOnScreen() ?? folders.at(0);
-	const terminal: Environment = folder === undefined ? process.env : await terminalEnvironment(folder);
+	const { folder, env: terminal } = await terminalPlace();
 	const repository = folder === undefined ? undefined : (await repositoryAt(folder))?.main ?? folder;
 	let shownYolo: boolean | { readonly wrong: string };
 	try {
@@ -92,42 +87,18 @@ async function shownNow(problemsOf: LaunchProblems): Promise<string> {
 async function describedCli(cli: AgentCli, config: CliConfig, yours: unknown, folder: string | undefined, place: { readonly folder: string; readonly repository: string } | undefined, terminal: Environment, problemsOf: LaunchProblems): Promise<DescribedCli> {
 	const env = { ...terminal, ...config.launch.environment };
 	const found = locateCli(cli, config, env, folder);
-	const overridden = cli === claudeCli ? claudeDeny(config, env, folder) : undefined;
 	// What would refuse its start there, as a start finds it: only for one there is, in a folder (L9)
 	const problems = found && folder !== undefined ? await problemsOf(found, folder) : [];
+	// Its trust and a deny rule of the person's, for each starter in the environment and with the settings of its own launch (L9; L10)
+	const theirs = starterFacts(cli, config, place, terminal, false);
 	return {
 		cli,
 		config,
 		yours,
 		program: found ? { target: launchTarget(found.executable, process.platform, env) } : { missing: whyNotInstalled(cli, config, folder === undefined ? undefined : 'the PATH a terminal there has') },
-		trust: trustShown(cli, config, place, env),
-		...(overridden !== undefined ? { overridden } : {}),
+		trust: theirs.trust,
+		...(theirs.overridden !== undefined ? { overridden: theirs.overridden } : {}),
+		throughStartAgent: starterFacts(cli, config, place, terminal, true),
 		...(problems.length ? { problems } : {})
 	};
-}
-
-/** Where Claude Code's settings deny Facade's tools, as the document says it (L4, rule 4). */
-function claudeDeny(config: CliConfig, env: Environment, folder: string | undefined): string | undefined {
-	const deny = claudeDenyOf(config, env, folder);
-	return deny && vscode.l10n.t("{0} denies {1}, which wins over Facade's allow: with YOLO off, Claude Code refuses Facade's tools", deny.where, deny.rule);
-}
-
-/** The trust `cli` would be given for an agent in `place`, and where; as its launch writes it, without one. */
-function trustShown(cli: AgentCli, config: CliConfig, place: { readonly folder: string; readonly repository: string } | undefined, env: Environment): DescribedCli['trust'] {
-	const { trust } = config.launch;
-	if (!trust) {
-		return { kind: 'none' };
-	}
-	if (trust.arguments) {
-		return { kind: 'arguments', arguments: trust.arguments };
-	}
-	if (!place) {
-		return { kind: 'file', file: trust.file, merge: trust.merge };
-	}
-	try {
-		const target = trustTarget(cli, config, place, env);
-		return target ? { kind: 'file', file: target.file, merge: target.entry } : { kind: 'none' };
-	} catch (err) {
-		return { kind: 'cannot', why: messageOf(err) };
-	}
 }

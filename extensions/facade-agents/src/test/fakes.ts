@@ -12,10 +12,11 @@ import { customAgentOf } from '../clis/custom';
 import { Facade, StartRequest, Started } from '../core/facade';
 import { customAgentNameProblem } from '../core/launch';
 import { Fetched, FetchRequest } from '../core/mail';
-import { Disposable, EndedAgent, Git, InputEffect, KeysOptions, ListedWorktree, MadeWorktreeFolder, Notification, Person, PersonInput, Repository, SetupOutcome, Severity, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TerminalsInside, TypeOptions, WorktreeChanges, WorktreeDeletion } from '../core/ports';
+import { Disposable, EndedAgent, EndTold, Git, InputEffect, KeysOptions, ListedWorktree, MadeWorktreeFolder, Notification, Person, PersonInput, Repository, SetupOutcome, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TerminalsInside, TypeOptions, WorktreeChanges, WorktreeDeletion } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
-import { ClosedBy } from '../record/ledger';
+import { ClosedBy, Ledger } from '../record/ledger';
+import { FACADE, MailboxEntry, Message, MessageRecord, NewMessage } from '../record/messages';
 import { settled, until } from './clock';
 
 /** The window's terminals, in memory: what was launched, typed and closed, and which run. */
@@ -58,6 +59,8 @@ export class FakeTerminals implements Terminals {
 	readonly typed: string[] = [];
 	/** Each text typed, into which agent's terminal, and whether Enter went after it. */
 	readonly texts: { readonly id: number; readonly text: string; readonly enter: boolean }[] = [];
+	/** How each text was asked to be typed, in order: every call, whether it went in or not. */
+	readonly typeOptions: TypeOptions[] = [];
 	/** What each agent's terminal shows, by its number: none for an empty screen. */
 	readonly screens = new Map<number, TerminalScreen>();
 	/** The terminals the window was told the final screens of, after a reload: `#a<id> <file>`. */
@@ -180,7 +183,7 @@ export class FakeTerminals implements Terminals {
 		return this.titleOf(id) !== undefined;
 	}
 
-	async read(id: number, lines: number): Promise<TerminalScreen | undefined> {
+	async read(id: number, lines: number, _waitMs: number): Promise<TerminalScreen | undefined> {
 		if (this.titleOf(id) === undefined) {
 			return undefined;
 		}
@@ -189,6 +192,7 @@ export class FakeTerminals implements Terminals {
 	}
 
 	async type(id: number, text: string, options: TypeOptions): Promise<InputEffect | undefined> {
+		this.typeOptions.push(options);
 		if (this.titleOf(id) === undefined) {
 			return undefined;
 		}
@@ -296,6 +300,13 @@ export class FakeGit implements Git {
 	setup: SetupOutcome | Promise<SetupOutcome> = { kind: 'none' };
 	/** What deleting a worktree would lose, by its folder: nothing unless a test says. */
 	readonly changes = new Map<string, WorktreeChanges>();
+	/**
+	 * What the window's own check of a deletion finds that the extension host never sees - an unsaved image in its image
+	 * editor, say - by the worktree's folder, as the window words it: nothing unless a test says.
+	 */
+	readonly windowOnlyLoss = new Map<string, readonly string[]>();
+	/** Where the setup of each worktree is while it runs, by its folder, as the window tells it: none unless a test says. */
+	readonly setupStates = new Map<string, SetupProgress>();
 	/** While set, deleting a worktree fails with this. */
 	failDelete: string | undefined;
 	/** Whether a deletion that fails gets as far as git forgetting the worktree, its folder left: a file it cannot delete. */
@@ -347,6 +358,10 @@ export class FakeGit implements Git {
 		return found && { main: found.main, mainCheckout: found.main === found.worktree.folder, worktree: found.worktree.name, head: this.unborn.includes(found.main) ? undefined : this.heads.get(found.worktree.folder) ?? this.head };
 	}
 
+	async worktreeRootOf(folder: string): Promise<string | undefined> {
+		return this.worktreeAt(folder)?.worktree.folder;
+	}
+
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
 		await this.hold;
 		return this.worktrees.get(main) ?? [];
@@ -366,8 +381,18 @@ export class FakeGit implements Git {
 
 	/** What each deletion was told, by the worktree's folder. */
 	readonly deletions = new Map<string, WorktreeDeletion>();
+	/** While set, a deletion waits for it before git is asked. */
+	deleting: Promise<void> | undefined;
+
+	/** What the window's own check finds deleting the worktree `folder` would lose, `options` applied: as it words each. */
+	async deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]> {
+		this.steps.push(`check the deletion of ${folder}`);
+		const changes = this.changes.get(folder);
+		return [...(options.leftover ? [] : changes?.files ?? []).filter(file => !options.ownFiles.some(owned => owned.path === file)), ...(changes?.unsaved ?? []).map(file => `${file} (unsaved)`), ...this.windowOnlyLoss.get(folder) ?? []];
+	}
 
 	async deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void> {
+		await this.deleting;
 		this.deletions.set(folder, options);
 		if (options.leftover) {
 			if (this.failDelete) {
@@ -387,8 +412,8 @@ export class FakeGit implements Git {
 		if (!found || found.main === found.worktree.folder) {
 			throw new Error(`${folder} is no worktree to delete`);
 		}
-		// As the window looks as it deletes it: changes git would lose refuse it unless discarded.
-		const lost = (this.changes.get(folder)?.files ?? []).filter(file => !options.ownFiles.some(owned => owned.path === file));
+		// As the window looks as it deletes it: changes git would lose, and what only the window sees, refuse it unless discarded.
+		const lost = [...(this.changes.get(folder)?.files ?? []).filter(file => !options.ownFiles.some(owned => owned.path === file)), ...this.windowOnlyLoss.get(folder) ?? []];
 		if (lost.length && !options.discardChanges) {
 			throw new Error(`${folder} has changes that deleting it would lose: ${lost.join(', ')}`);
 		}
@@ -423,6 +448,10 @@ export class FakeGit implements Git {
 	async setupOutcome(folder: string): Promise<SetupOutcome> {
 		this.steps.push(`set up ${folder}`);
 		return await this.setup;
+	}
+
+	async setupState(folder: string): Promise<SetupProgress | undefined> {
+		return this.setupStates.get(folder);
 	}
 
 	stopSetup(folder: string): void {
@@ -501,12 +530,39 @@ export class FakePerson implements Person {
 	/** The agents that ended the person was shown, in turn. */
 	readonly ended: EndedAgent[] = [];
 
-	tell(text: string, agent: number | undefined, severity: Severity): void {
+	/** The notices closed, each as `<key>: <text>`, in order. */
+	readonly closed: string[] = [];
+	/** What was last told or shown with each key, a notice's text or a notification's. */
+	private readonly shownWith = new Map<string, string>();
+
+	tell(text: string, agent: number | undefined, severity: Severity, key?: string): void {
 		this.told.push(`${severity}: ${text}${agent !== undefined ? ` (#a${agent}'s terminal)` : ''}`);
+		if (key !== undefined) {
+			this.shownWith.set(key, text);
+		}
+	}
+
+	/** As the window closes a notice: only while it is the one last shown with its key. */
+	close(key: string, text: string): void {
+		if (this.shownWith.get(key) === text) {
+			this.shownWith.delete(key);
+			this.closed.push(`${key}: ${text}`);
+		}
+	}
+
+	/** The ends told together, by batch: each one's ends as last told. */
+	readonly endsTold = new Map<string, readonly EndTold[]>();
+
+	tellEnded(batch: string, ends: readonly EndTold[]): void {
+		this.endsTold.set(batch, ends);
+		// Told as each end comes: the newest, as a notice of its own reads
+		const newest = ends[ends.length - 1];
+		this.tell(newest.text, newest.agent, newest.severity);
 	}
 
 	notify(notification: Notification): Promise<string | undefined> {
 		this.notified.push(notification);
+		this.shownWith.set(notification.key, notification.text);
 		this.answers.get(notification.key)?.(undefined);
 		this.shown.set(notification.key, notification);
 		return new Promise(resolve => this.answers.set(notification.key, resolve));
@@ -526,6 +582,39 @@ export class FakePerson implements Person {
 		this.answers.delete(key);
 		this.shown.delete(key);
 		answer?.(button);
+	}
+}
+
+/**
+ * How recording a world's messages fails, where a test says: each message `fails` gives an error for, with that error;
+ * each delivery of an agent's messages `deliveryFails` gives one for, with that one.
+ */
+interface Recording {
+	fails?: (message: NewMessage) => Error | undefined;
+	deliveryFails?: (agent: number, ids: readonly number[]) => Error | undefined;
+}
+
+/** A world's record of messages: Facade's own, but that recording one fails where `recording` says, as a disk that refuses the write would. */
+class FallibleMessageRecord extends MessageRecord {
+
+	constructor(dir: string, ledger: Ledger, private readonly recording: Recording) {
+		super(dir, ledger);
+	}
+
+	override send(message: NewMessage): Message {
+		const failure = this.recording.fails?.(message);
+		if (failure) {
+			throw failure;
+		}
+		return super.send(message);
+	}
+
+	override delivered(agent: number, ids: readonly number[]): void {
+		const failure = this.recording.deliveryFails?.(agent, ids);
+		if (failure) {
+			throw failure;
+		}
+		super.delivered(agent, ids);
 	}
 }
 
@@ -583,7 +672,8 @@ export function argCli(home: string): AgentCli {
 					config,
 					...input.model !== undefined ? { model: input.model } : {},
 					...input.effort !== undefined ? { effort: input.effort } : {},
-					...input.task !== undefined ? { task: input.task } : {}
+					...input.task !== undefined ? { task: input.task } : {},
+					...input.opening !== undefined ? { opening: input.opening } : {}
 				}, { framework: !!input.connection, yolo: input.yolo, model: input.model !== undefined, effort: input.effort !== undefined, task: input.task !== undefined, trust: true }),
 				env: input.config.launch.environment,
 				cwd: input.folder,
@@ -662,6 +752,8 @@ export interface WorldOptions {
 	readonly repositories?: { readonly [main: string]: readonly string[] };
 	/** The workspace's folders besides the repositories' main checkouts. */
 	readonly folders?: readonly string[];
+	/** The window's folders before its repositories, as a workspace whose first folder is a worktree has them. */
+	readonly firstFolders?: readonly string[];
 	/** The main checkouts of those repositories that have no commit yet. */
 	readonly unborn?: readonly string[];
 	/** The CLIs this machine has, by id: `arg` and `told` unless set. */
@@ -673,11 +765,13 @@ export interface WorldOptions {
 	/** How long a new agent may take to come up, where not two minutes. */
 	readonly startTimeoutMs?: number;
 	/** The environment the agents' terminals start with, by their folder: none of the person's home folders. */
-	readonly environment?: (folder: string) => Environment;
+	readonly environment?: (folder: string) => Environment | Promise<Environment>;
 	/** The body of the skill every agent is handed, as this build of Facade writes it. */
 	readonly skill?: string;
 	/** Where a terminal with the environment `env` finds a CLI, by its id: where the window does unless set; undefined for nowhere. */
 	readonly locate?: (cli: string, env: Environment) => string | undefined;
+	/** The platform agents' programs run on: this machine's unless set. */
+	readonly platform?: NodeJS.Platform;
 	/** Whether a process the ledger's lock names runs, as the operating system says unless set. */
 	readonly isRunning?: (pid: number) => boolean;
 	/** The folder on the person's screen: none unless set. */
@@ -704,7 +798,8 @@ let loads = 0;
  * say.
  */
 export function fakeWorld(dir: string, options: WorldOptions = {}) {
-	const table = AgentTable.open({ dir, isRunning: options.isRunning, owner: options.owner ?? 'lab', session: options.session ?? `load-${++loads}` });
+	const recording: Recording = {};
+	const table = AgentTable.open({ dir, isRunning: options.isRunning, owner: options.owner ?? 'lab', session: options.session ?? `load-${++loads}`, messageRecord: (recordDir, ledger) => new FallibleMessageRecord(recordDir, ledger, recording) });
 	const terminals = new FakeTerminals();
 	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
 	const person = new FakePerson();
@@ -729,8 +824,9 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const refreshes = { count: 0 };
 	const ignoringTermination = new Set<number>();
 	const facade = new Facade({
+		...(options.platform ? { platform: options.platform } : {}),
 		table,
-		ports: { terminals, git, workspace: { folders: () => [...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder }, person },
+		ports: { terminals, git, workspace: { folders: () => [...options.firstFolders ?? [], ...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder }, person },
 		clis: {
 			known,
 			custom: () => Object.entries(custom).map(([name, value]) => customAgentOf(name, value, customAgentNameProblem(name, new Set(known.map(cli => cli.id))))),
@@ -750,7 +846,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			},
 			framework: () => switches.framework,
 			configOf: configFor,
-			environment: async folder => options.environment?.(folder) ?? {}
+			environment: async folder => await options.environment?.(folder) ?? {}
 		},
 		setup: {
 			connection: tokenFile => ({
@@ -803,6 +899,8 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		switches,
 		/** The person's custom agents, by name: a test adds them. */
 		custom,
+		/** How recording a message, or a delivery of messages, fails: never, unless a test says. */
+		recording,
 		/** The agent numbered `id`. */
 		agent(id: number): Agent {
 			const found = table.get(id);
@@ -818,6 +916,17 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		/** As agent `id` fetches its messages - `request`, else its unread ones - and the result reaches its MCP server. */
 		fetched(id: number, request: FetchRequest = {}): Promise<Fetched> {
 			return facade.mail.fetch(callerOf(this.agent(id)), request, listener => listener(true));
+		},
+		/**
+		 * The texts of Facade's messages to agent `id` - its notices, and what came back to it - in the order they came; with
+		 * `state`, of those in that state alone.
+		 */
+		facadeMessagesTo(id: number, state?: MailboxEntry['state']): string[] {
+			const mail = table.state.mail;
+			return (mail.mailboxes.get(id) ?? []).flatMap(each => {
+				const message = mail.messages.get(each);
+				return message?.from === FACADE && (state === undefined || mail.entries.get(each)?.state === state) ? [table.messages.textOf(message) ?? ''] : [];
+			});
 		},
 		/**
 		 * A start whose child's MCP server says hello once its terminal is launched, as a CLI's does: what

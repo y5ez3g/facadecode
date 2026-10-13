@@ -94,4 +94,13 @@ suite('Notices: how much each matters', () => {
 
 		assert.deepStrictEqual(asNews, []);
 	});
+
+	test('the window\'s own notifications, in host/, do not lead with "Facade: ": VS Code shows their source, Facade Agents, with them, as it does for its own extensions\' notifications - a message\'s sender label is no such prefix', () => {
+		// host/ alone: a message to the person shows who sent it - an agent, or Facade as `Facade: ` in core/mail.ts - a
+		// label of the message, not a prefix of the window's own
+		const prefixed = sourcesIn(path.join(SRC, 'host')).flatMap(file =>
+			[...fs.readFileSync(file, 'utf8').matchAll(/l10n\.t\(\s*"Facade: [^"]*"/g)].map(match => `${path.relative(SRC, file)}: ${match[0]}`));
+
+		assert.deepStrictEqual(prefixed, []);
+	});
 });

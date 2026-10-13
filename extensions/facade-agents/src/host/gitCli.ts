@@ -84,6 +84,26 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 }
 
 /**
+ * The folder of the worktree `folder` is in, its top level: the way up from `folder` git gives, so that it is written as
+ * `folder` is, links and all, not as git resolves them; undefined outside a work tree - in no repository, or in one's git
+ * directory or a bare one (O5 step 1; OR-09).
+ */
+export async function worktreeRootIn(git: string, folder: string): Promise<string | undefined> {
+	let answer: string;
+	try {
+		answer = await runGit(git, ['-C', folder, 'rev-parse', '--is-inside-work-tree', '--show-cdup']);
+	} catch (err) {
+		if (inNoRepository(err)) {
+			return undefined;
+		}
+		throw err;
+	}
+	// Outside a work tree in a repository git does not fail: it says so, and gives no way up
+	const [inside, up] = answer.split(/\r?\n/);
+	return inside === 'true' ? path.resolve(folder, up ?? '') : undefined;
+}
+
+/**
  * The branch checked out in `folder`, as its HEAD names it - whether or not that branch has a commit, or
  * one git can read; undefined on a detached HEAD. git failing otherwise rejects with why.
  */

@@ -27,7 +27,7 @@ const RETRY_MS = 60_000;
 /** How many unread messages a doorbell names: the others it counts. */
 const NAMED = 5;
 
-/** The delays of a launch: from a paste into its terminal to Enter, and from its hello to the first input there. */
+/** The delays of a launch: from a paste into its terminal to Enter, and from its hello to its task's first line typed there. */
 export interface LaunchDelays {
 	readonly enterDelay: number;
 	readonly taskDelay: number;
@@ -146,8 +146,8 @@ export class Doorbell implements Disposable {
 
 	/**
 	 * When the agent's doorbell is due, as the ledger says; undefined while none is - it is not running, has
-	 * nothing unread, or was launched without Facade's integration, which has no tool to fetch with. Never sooner
-	 * than its launch's task delay after it was running.
+	 * nothing unread, or was launched without Facade's integration, which has no tool to fetch with. One that types
+	 * its task's first line never sooner than its launch's task delay after it was running (M5, M7).
 	 */
 	dueAt(agent: Agent): number | undefined {
 		const mail = this.context.table.state.mail;
@@ -168,7 +168,8 @@ export class Doorbell implements Disposable {
 		if (named.length && last !== undefined) {
 			due = Math.min(due, last + againAfter(Math.min(...named)));
 		}
-		const settled = (agent.runningTime ?? agent.startTime) + this.context.delaysOf(agent).taskDelay;
+		// The task delay bounds the line that types the task alone: a doorbell after it waits for nothing of the kind
+		const settled = this.taskOf(agent, unread) ? (agent.runningTime ?? agent.startTime) + this.context.delaysOf(agent).taskDelay : 0;
 		return Math.max(due, settled, this.retryAt.get(agent.id) ?? 0);
 	}
 
@@ -198,11 +199,17 @@ export class Doorbell implements Disposable {
 			}
 			const task = this.taskOf(agent, now);
 			const line = task ? this.context.firstLine(agent, task) : doorbellLine(now, this.context.senderOf);
-			// In the terminal's turn, behind what Facade typed there before: its line, then its Enter after the
-			// pause its CLI needs, Facade turned off meanwhile or not - a line left unsent would wait in its input
-			const effect = await this.context.ports.terminals.type(id, line, { enter: true, enterDelayMs: this.context.delaysOf(agent).enterDelay });
+			// In the terminal's turn, behind what Facade typed there before: its line, then its Enter after the pause its
+			// CLI needs - begun, Facade turned off meanwhile or not, as a line left unsent would wait in its input; the
+			// window drops one Facade is off for when its turn comes, before anything of it goes in (M10)
+			const effect = await this.context.ports.terminals.type(id, line, { enter: true, enterDelayMs: this.context.delaysOf(agent).enterDelay, requiresFramework: true });
 			if (!effect) {
 				throw new Error('its terminal was not there');
+			}
+			// Nothing went in and nothing rang: due again once Facade is on again, not tried again meanwhile (M10)
+			if (effect.reason === 'frameworkOff') {
+				this.context.log(`The doorbell of ${label} was not typed: the agent framework was off when its turn came. It rings once the framework is on again.`);
+				return;
 			}
 			if (effect.outcome !== 'applied') {
 				if (this.context.table.get(id)?.state !== 'running') {

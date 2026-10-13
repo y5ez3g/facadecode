@@ -45,10 +45,14 @@ export const stopAgentTool: ContractTool = {
 		const discardChanges = args.boolean('discard_changes') ?? false;
 		const stopped = await facade.stopAgent(caller, agent, { deleteWorktree, discardChanges });
 		const ended = stopped.alreadyEnded && stopped.agent.end ? `${describe(stopped.agent)} had ended already (${endText(facade, stopped.agent.end)}).` : '';
-		const others = stopped.stopped.length ? `Stopped ${stopped.stopped.map(each => describe(each)).join(', ')}: ${stopped.stopped.length === 1 ? 'its terminal closed' : 'their terminals closed'}.` : '';
+		// One whose start was stopped before its CLI had a terminal had none to close: what is true of it is said (O4; OR-05)
+		const closed = stopped.startStopped === 'creating_worktree' ? 'its start was stopped as its worktree was being made, before its CLI was launched'
+			: stopped.startStopped === 'running_setup' ? 'its start was stopped as its worktree was set up, before its CLI was launched'
+				: stopped.stopped.length === 1 ? 'its terminal closed' : 'their terminals closed';
+		const others = stopped.stopped.length ? `Stopped ${stopped.stopped.map(each => describe(each)).join(', ')}: ${closed}.` : '';
 		const worktree = stopped.worktree === undefined
 			// An agent in no Git repository has a folder, not a worktree (N-57)
-			? (stopped.alreadyEnded ? '' : stopped.agent.outsideGit ? ' Its folder stays as it is.' : ' Its worktree stays as it is.')
+			? (stopped.alreadyEnded ? '' : stopped.startStopped === 'creating_worktree' ? ' Git may still make its worktree, which would stay, with its branch.' : stopped.agent.outsideGit ? ' Its folder stays as it is.' : ' Its worktree stays as it is.')
 			: stopped.worktree.deleted
 				? ` ${stopped.worktree.folder} was deleted; its branch stays.`
 				: ` ${notDeleted(stopped.worktree.folder, stopped.worktree.why ?? '')}`;

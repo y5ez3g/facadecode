@@ -5,6 +5,9 @@
 
 import * as vscode from 'vscode';
 import { isJsonObject } from '../base/json';
+import { Environment } from '../clis/cli';
+import { agentIconId } from './agentIcons';
+import { terminalEnvironment } from './terminals';
 
 /** An agent the person can start, as Start Agent offers it. */
 export interface OfferedAgent {
@@ -18,23 +21,30 @@ export interface OfferedAgent {
  * Agents: Start Agent... asks only which agent (AGENT-LAUNCHER.md, L3): the agent menu, and a script, give
  * it as `{ cli, custom?, folder? }` - `custom` for the person's custom agent of that name, `folder` the one on
  * screen as the person chose it, which the menu sends with the choice (PS-15). Answers with its id, whether it
- * is a custom agent and that folder; undefined where the person chose none.
+ * is a custom agent and that folder; undefined where the person chose none. Asked which, it lists `offered`, the
+ * agents there are as they are found now, each with its icon as the agent menu has it; with none, it says why - no
+ * built-in on this machine, or only those the person turned off, `turnedOff`, by their names.
  */
-export async function pickAgent(rawArgs: unknown, offered: readonly OfferedAgent[]): Promise<{ readonly id: string; readonly custom: boolean; readonly folder?: string } | undefined> {
+export async function pickAgent(rawArgs: unknown, offered: () => Promise<readonly OfferedAgent[]>, turnedOff: () => Promise<readonly string[]>): Promise<{ readonly id: string; readonly custom: boolean; readonly folder?: string } | undefined> {
 	const args = isJsonObject(rawArgs) ? rawArgs : {};
 	if (typeof args.cli === 'string' && args.cli.trim()) {
 		const folder = args.folder instanceof vscode.Uri && args.folder.scheme === 'file' ? args.folder.fsPath : undefined;
 		return { id: args.cli.trim(), custom: args.custom === true, ...(folder !== undefined ? { folder } : {}) };
 	}
-	if (!offered.length) {
+	const agents = await offered();
+	if (!agents.length) {
 		const configure = vscode.l10n.t("Configure Agents");
-		const choice = await vscode.window.showInformationMessage(vscode.l10n.t("No agent is available: Facade found none of its built-in CLIs on this machine, and you have no custom agent."), configure);
+		const off = await turnedOff();
+		const choice = await vscode.window.showInformationMessage(off.length
+			? vscode.l10n.t("No agent is available: the built-in CLIs Facade found on this machine are turned off in your settings ({0}), and you have no custom agent.", off.join(', '))
+			: vscode.l10n.t("No agent is available: Facade found none of its built-in CLIs on this machine, and you have no custom agent."), configure);
 		if (choice === configure) {
 			await vscode.commands.executeCommand('facade.agent.configure');
 		}
 		return undefined;
 	}
-	const pick = await vscode.window.showQuickPick(offered.map(each => ({ label: each.label, description: each.custom ? vscode.l10n.t("custom") : undefined, agent: each })), { title: vscode.l10n.t("Start Agent"), placeHolder: vscode.l10n.t("Which agent?") });
+	// Each with the icon the agent menu shows it with: a built-in's logo, the robot for a custom agent
+	const pick = await vscode.window.showQuickPick(agents.map(each => ({ label: each.label, iconPath: new vscode.ThemeIcon(agentIconId(each.id, each.custom)), description: each.custom ? vscode.l10n.t("custom") : undefined, agent: each })), { title: vscode.l10n.t("Start Agent"), placeHolder: vscode.l10n.t("Which agent?") });
 	return pick && { id: pick.agent.id, custom: pick.agent.custom };
 }
 
@@ -43,4 +53,13 @@ export async function folderOnScreen(): Promise<string | undefined> {
 	// Only Facade's workbench has the command; its answer crosses to the extension host as a URI.
 	const onScreen = (await vscode.commands.getCommands()).includes('_facade.folder.active') ? await vscode.commands.executeCommand<unknown>('_facade.folder.active') : undefined;
 	return onScreen instanceof vscode.Uri && onScreen.scheme === 'file' ? onScreen.fsPath : undefined;
+}
+
+/**
+ * Where the CLIs are looked for, as a terminal finds them (X-39): the folder on screen - else the window's first on this
+ * machine - and the environment a terminal there starts with; with no folder, this process's own.
+ */
+export async function terminalPlace(): Promise<{ readonly folder?: string; readonly env: Environment }> {
+	const folder = await folderOnScreen() ?? vscode.workspace.workspaceFolders?.find(each => each.uri.scheme === 'file')?.uri.fsPath;
+	return folder === undefined ? { env: process.env } : { folder, env: await terminalEnvironment(folder) };
 }

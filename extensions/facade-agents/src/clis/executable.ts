@@ -23,9 +23,12 @@ const NODE_EXECUTABLE = /\.(?:exe|com)$/i;
  */
 const CMD_SPECIAL = /["%^&|<>!()\r\n]/;
 
+/** The variable of the environment the operating system says the person's home folder in. */
+export const HOME_VARIABLE = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+
 /** The person's home folder as the operating system says it in `env`: where the CLIs keep their settings. */
 export function homeOf(env: Environment = process.env): string {
-	return env[process.platform === 'win32' ? 'USERPROFILE' : 'HOME'] || os.homedir();
+	return env[HOME_VARIABLE] || os.homedir();
 }
 
 /** Where `command` resolves on `PATH`, with `PATHEXT` on Windows, as `platform` looks for it. Undefined if nowhere. */

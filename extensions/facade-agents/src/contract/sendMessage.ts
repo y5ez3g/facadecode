@@ -24,6 +24,9 @@ function sentText(sent: readonly SentMessage[]): string {
 		if (message.starting) {
 			lines.push(`${message.to} is still starting: its doorbell rings once it runs.`);
 		}
+		if (message.reconnecting) {
+			lines.push(`${message.to} is not connected to Facade now: its doorbell rings once it connects again.`);
+		}
 		if (message.cannotReply) {
 			lines.push(`${message.to} has its YOLO off, and you are not in its tree: it can reply to the person only, not to you.`);
 		}
@@ -62,7 +65,7 @@ export const sendMessageTool: ContractTool = {
 		const sent = facade.mail.send(caller, args.strings('to'), args.string('text'), args.optionalText('reply_to'));
 		return {
 			text: sentText(sent),
-			data: { messages: sent.map(({ id, to, starting, cannotReply }) => ({ id, to, ...(starting ? { starting } : {}), ...(cannotReply ? { cannotReply } : {}) })) }
+			data: { messages: sent.map(({ id, to, starting, reconnecting, cannotReply }) => ({ id, to, ...(starting ? { starting } : {}), ...(reconnecting ? { reconnecting } : {}), ...(cannotReply ? { cannotReply } : {}) })) }
 		};
 	}
 };

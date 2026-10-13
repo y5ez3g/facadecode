@@ -28,11 +28,6 @@ export interface McpServerOptions {
 	listTools(): Promise<readonly McpTool[]>;
 	/** Runs a tool; a failure it throws is a result the model reads, marked as an error. */
 	callTool(name: string, args: unknown, context: McpCallContext): Promise<ToolResult>;
-	/**
-	 * Whether a call of `name` is run, the tools listed now being `tools`; by default, whether it is one of
-	 * them. A tool a client listed before the list changed can still be one the server answers.
-	 */
-	isTool?(name: string, tools: readonly McpTool[]): boolean;
 	/** Writes diagnostics, never to stdout, which carries the protocol. */
 	log?(message: string): void;
 }
@@ -213,7 +208,7 @@ export class McpStdioServer {
 			// Never sent: a cancelled request gets no response, and its tool is not run
 			throw new RpcError(-32603, 'Cancelled');
 		}
-		if (!(this.options.isTool?.(name, tools) ?? tools.some(tool => tool.name === name))) {
+		if (!tools.some(tool => tool.name === name)) {
 			throw new RpcError(-32602, `Unknown tool: ${name}`);
 		}
 		const token = isJsonObject(params._meta) ? params._meta.progressToken : undefined;

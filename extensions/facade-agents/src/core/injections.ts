@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as l10n from '@vscode/l10n';
 import { codeOf, messageOf } from '../base/errors';
 import { formatJson, isEqualPath, isInsideFolder, jsonLayoutOf, parseJson, replaceFile } from '../base/files';
-import { isJsonObject, isStringArray } from '../base/json';
+import { isJsonObject, isStringArray, JsonObject, sameJson } from '../base/json';
 import { withFileLock } from '../base/lock';
 import { Injected } from '../clis/cli';
 import { OwnedFile } from './ports';
@@ -465,12 +465,11 @@ export class Injections {
 			if (link !== undefined) {
 				throw new Error(`${cli} is not started: ${link} is a symbolic link, and Facade writes nothing through one, nor over it.`);
 			}
-			const refused = new Error(`${cli} is not started: ${target} is there already, and Facade does not write over it.`);
 			let current: Buffer | undefined;
 			try {
 				current = readBytes(target);
-			} catch {
-				throw refused;
+			} catch (err) {
+				throw new Error(`${cli} is not started: ${target} could not be read (${messageOf(err)}), and Facade does not write over what it cannot read.`);
 			}
 			const written = entry?.files[file.path];
 			const isOurs = current !== undefined && written !== undefined && hashOf(current) === written.hash;
@@ -487,9 +486,10 @@ export class Injections {
 					? current.toString('base64')
 					: written?.theirs === undefined && changed.empty ? undefined : Buffer.from(changed.text).toString('base64');
 			}
-			const content = theirs === undefined ? file.content : file.merge?.(Buffer.from(theirs, 'base64').toString('utf8'));
+			const theirText = theirs === undefined ? undefined : Buffer.from(theirs, 'base64').toString('utf8');
+			const content = theirText === undefined ? file.content : file.merge?.(theirText);
 			if (content === undefined) {
-				throw refused;
+				throw new Error(`${cli} is not started: ${target} ${whyNotMerged(theirText ?? '', file)}.`);
 			}
 			const same = isOurs && hashOf(Buffer.from(content)) === written.hash;
 			if (isOurs && used && !same) {
@@ -821,6 +821,60 @@ export class Injections {
 }
 
 /**
+ * Why Facade's part of `file` cannot be added to `theirs`, the file of the person's at its path, and what to do,
+ * said to go after the file's name (AGENT-ORCHESTRATION.md, O10 step 1; O2): it is not JSON, holds no JSON object,
+ * or has an entry of its own where Facade's goes - named. That the file is there is no reason by itself (O10; OR-13),
+ * but for one Facade puts nothing of its own into: a skill's, say.
+ */
+export function whyNotMerged(theirs: string, file: Injected): string {
+	if (!file.merge) {
+		return 'is there already, and Facade does not write over it';
+	}
+	let parsed: unknown;
+	try {
+		parsed = parseJson(theirs);
+	} catch (err) {
+		return `is not JSON that Facade can add its part to (${messageOf(err)}). Take out what is not JSON - a comment, say - or start the agent in another folder`;
+	}
+	if (!isJsonObject(parsed)) {
+		return 'holds no JSON object for Facade\'s part to go in. Make it one, or start the agent in another folder';
+	}
+	let ours: unknown;
+	try {
+		ours = parseJson(file.content);
+	} catch {
+		// Facade's own part that is no JSON names no entry to point at: the reason goes without one
+	}
+	const clash = isJsonObject(ours) ? clashOf(parsed, ours) : undefined;
+	return clash !== undefined
+		? `has an entry of its own at ${clash.join('.')}, where Facade's goes, and Facade does not write over it. Rename that entry, or start the agent in another folder`
+		: 'cannot take Facade\'s part beside what it holds, and Facade does not write over it. Start the agent in another folder';
+}
+
+/**
+ * Where `theirs` has something of its own at a key Facade's part - one entry, down keys it alone is under - needs:
+ * the keys down to it; undefined where it has nothing there.
+ */
+function clashOf(theirs: JsonObject, ours: JsonObject): string[] | undefined {
+	for (const [key, value] of Object.entries(ours)) {
+		const their = theirs[key];
+		if (their === undefined) {
+			continue;
+		}
+		// A key Facade's entry is under, alone - mcpServers - may hold the person's beside it: what counts is below
+		if (isJsonObject(value) && isJsonObject(their) && Object.keys(value).length === 1) {
+			const below = clashOf(their, value);
+			if (below !== undefined) {
+				return [key, ...below];
+			}
+			continue;
+		}
+		return [key];
+	}
+	return undefined;
+}
+
+/**
  * `current`, the person's JSON file that Facade added `ours` to over `theirs`, as they left it but
  * without Facade's part, laid out as it is; undefined where one of them is not JSON or nothing of
  * Facade's is left in it.
@@ -833,7 +887,7 @@ function withoutOurs(current: string, theirs: string | undefined, ours: string):
 		if (changed) {
 			return 'changed';
 		}
-		return isSameJson(kept, now) ? undefined : { text: formatJson(kept, jsonLayoutOf(current)), empty: isSameJson(kept, {}) || isSameJson(kept, []) };
+		return sameJson(kept, now) ? undefined : { text: formatJson(kept, jsonLayoutOf(current)), empty: sameJson(kept, {}) || sameJson(kept, []) };
 	} catch {
 		return undefined;
 	}
@@ -847,7 +901,7 @@ function stripped(now: unknown, before: unknown, ours: unknown, changed: () => v
 	if (Array.isArray(now) && Array.isArray(ours)) {
 		const left = [...now];
 		for (const item of ours.slice(Array.isArray(before) ? before.length : 0)) {
-			const index = left.findIndex(each => isSameJson(each, item));
+			const index = left.findIndex(each => sameJson(each, item));
 			if (index >= 0) {
 				left.splice(index, 1);
 			}
@@ -863,12 +917,12 @@ function stripped(now: unknown, before: unknown, ours: unknown, changed: () => v
 		if (Object.hasOwn(ours, key) && !Object.hasOwn(theirs, key)) {
 			// A key Facade added goes as it wrote it; one that holds entries keeps those the person added since;
 			// one of Facade's own the person changed stays, and says so.
-			if (isSameJson(value, ours[key])) {
+			if (sameJson(value, ours[key])) {
 				continue;
 			}
 			if (holdsEntries(ours[key])) {
 				const left = stripped(value, Array.isArray(value) ? [] : {}, ours[key], changed);
-				if (!isSameJson(left, []) && !isSameJson(left, {})) {
+				if (!sameJson(left, []) && !sameJson(left, {})) {
 					kept[key] = left;
 				}
 			} else {
@@ -885,10 +939,6 @@ function stripped(now: unknown, before: unknown, ours: unknown, changed: () => v
 /** Whether a value Facade wrote holds entries others may add to: an array, or an object of entries such as the servers of an `.mcp.json`. */
 function holdsEntries(value: unknown): boolean {
 	return Array.isArray(value) || (isJsonObject(value) && Object.values(value).every(each => Array.isArray(each) || isJsonObject(each)));
-}
-
-function isSameJson(a: unknown, b: unknown): boolean {
-	return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function readBytes(file: string): Buffer | undefined {

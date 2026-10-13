@@ -48,6 +48,22 @@ export interface ContractTool {
 const TOOLS: readonly ContractTool[] = [startAgentTool, listAgentsTool, stopAgentTool, sendMessageTool, readMessagesTool, readScreenTool, typeTextTool, pressKeysTool];
 
 /**
+ * The eight tools as an agent's MCP server lists them while the window does not answer (AGENT-LAUNCHER.md, L1;
+ * AGENT-ORCHESTRATION.md, O8): each as its definition has it - start_agent's without the agents this machine can
+ * start, which only the window knows.
+ */
+export function toolDefinitions(): readonly Tool[] {
+	return TOOLS.map(tool => tool.definition);
+}
+
+/**
+ * How often a call that runs on tells its caller's client that it does: the client takes a window silent for long as
+ * gone, and a call that waited its turn behind the person's typing past that would be said to have done who knows
+ * what - then go in all the same (AGENT-DEBUGGING.md, D3).
+ */
+const STILL_GOING_MS = 30_000;
+
+/**
  * The tools of Facade's MCP server, `facade`, as the model sees them: `start_agent`, `list_agents` and
  * `stop_agent`; `send_message` and `read_messages` (AGENT-MESSAGES.md); and `read_screen`, `type_text` and
  * `press_keys` (AGENT-DEBUGGING.md). Each result is text the model reads whole, with the same facts as data;
@@ -83,7 +99,12 @@ export class Contract {
 			if (!tool) {
 				throw new FacadeError('INVALID', `Unknown tool ${name}. The tools: ${TOOLS.map(each => each.definition.name).join(', ')}.`);
 			}
-			result = await tool.call(this.facade, caller, args, progress, listener => listeners.push(listener));
+			const going = setInterval(() => progress(`${name} is still going.`), STILL_GOING_MS);
+			try {
+				result = await tool.call(this.facade, caller, args, progress, listener => listeners.push(listener));
+			} finally {
+				clearInterval(going);
+			}
 		} catch (err) {
 			for (const listener of listeners) {
 				listener(false);

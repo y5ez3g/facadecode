@@ -44,6 +44,7 @@ export const typeTextTool: ContractTool = {
 		const result = await facade.screens.type(caller, agent, text, enter);
 		const chars = [...text].length;
 		const typed = `Typed ${chars} ${chars === 1 ? 'character' : 'characters'} into ${describe(result)}'s terminal, as one paste${result.effect.entered ? ', and pressed Enter' : ', without Enter'}.`;
-		return { text: `${typed} ${screenAfter(result, facade.cliName(facade.agent(result.id)?.cli ?? ''))}`, data: result };
+		// What was sent, as the text says it: the line and its count of characters (D4)
+		return { text: `${typed} ${screenAfter(result, facade.cliName(facade.agent(result.id)?.cli ?? ''))}`, data: { ...result, text, chars } };
 	}
 };

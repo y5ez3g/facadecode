@@ -13,8 +13,9 @@ import { AgentCli, launchArgs, launchUses, launchValues, skillMarkdown } from '.
  * MCP servers and skills from its folder - `.mcp.json` and `.agents/skills/` - once the folder is trusted,
  * which `--trust-workspace` does for the launch alone. Its server finds the agent through `${VAR}`
  * references to its environment. The notice of its task is its argument - through `start_agent`, its opening
- * alone where it has no task, which tells it to ask in words: no setting takes its question tool away, and its
- * model is not given its server's instructions (L4; N-71). Through `start_agent` its update is off.
+ * alone where it has no task, which tells it to ask through Facade messages: no setting takes its question
+ * tool away, and its model is not given its server's instructions (L4; N-71). Through `start_agent` its
+ * update is off.
  */
 export const museCli: AgentCli = {
 	id: 'muse',
@@ -54,6 +55,7 @@ export const museCli: AgentCli = {
 	exemption: 'all',
 	// Its settings turn off only artifact, web_fetch and web_search (YO-07)
 	questionTool: 'kept',
+	verified: '1.4.4',
 	launch(input, executable) {
 		const { connection } = input;
 		// Expanded from the agent's own environment when its MCP server starts - empty where it is not set: a

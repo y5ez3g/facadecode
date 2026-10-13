@@ -5,12 +5,16 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { Agent, describe, End } from './events';
+import { isJsonObject } from '../base/json';
+import { Agent, describe, End, WorktreeRemoval } from './events';
 
 /** The person's history of a workspace's agents, in its record. */
 export const AGENTS_LOG = 'agents.log';
 
-/** What an agent's terminal runs, as the log writes it at its launch: nothing of it is a token - a token's file's path at most. */
+/**
+ * What an agent's terminal runs, as the log is given it at its launch: nothing of it is a token - a token's file's path
+ * at most. The log writes the values of its environment and files by name alone (AGENT-ORCHESTRATION.md, O11).
+ */
 export interface LoggedLaunch {
 	readonly program: string;
 	readonly args: readonly string[];
@@ -25,13 +29,31 @@ function shown(word: string): string {
 	return /^[\w@%+=:,./-]+$/.test(word) ? word : JSON.stringify(word);
 }
 
-/** A file's content on one line: JSON as JSON writes it compactly, anything else quoted. */
-function oneLine(content: string): string {
+/**
+ * A file's content as the log writes it, on one line: the keys of its JSON, a dot between a key and those under it,
+ * without their values - the person's settings may hold a key of theirs, which the log never copies (O11; OR-16).
+ */
+function keysOf(content: string): string {
+	let value: unknown;
 	try {
-		return JSON.stringify(JSON.parse(content));
+		value = JSON.parse(content);
 	} catch {
-		return JSON.stringify(content);
+		return 'not JSON: its content is not written here';
 	}
+	const keys: string[] = [];
+	const walk = (at: unknown, under: string) => {
+		if (!isJsonObject(at) || !Object.keys(at).length) {
+			if (under) {
+				keys.push(under);
+			}
+			return;
+		}
+		for (const [key, below] of Object.entries(at)) {
+			walk(below, under ? `${under}.${key}` : key);
+		}
+	};
+	walk(value, '');
+	return `keys ${keys.length ? keys.join(', ') : 'none'}`;
 }
 
 /** A time as the log writes it: the date and time of day, on this machine's clock. */
@@ -62,15 +84,16 @@ export class AgentLog {
 	}
 
 	/**
-	 * An agent's CLI launched in its terminal, at `time`: its command line, what its launch sets in its environment,
-	 * and the files its arguments name - its settings, where it is given a file of them - as written (UI-14).
+	 * An agent's CLI launched in its terminal, at `time`: its command line, the variables its launch sets in its
+	 * environment, and the files its arguments name - its settings, where it is given a file of them - with their keys
+	 * (UI-14). Their values are the person's, a key of theirs among them maybe: those are in the run's plan alone (O11; OR-16).
 	 */
 	launched(agent: Agent, launch: LoggedLaunch, time: number): void {
-		const environment = Object.entries(launch.environment).map(([name, value]) => `${name}=${shown(value)}`);
+		const environment = Object.keys(launch.environment);
 		this.write([
 			`${logTime(time)}  launched ${describe(agent)}  ${[launch.program, ...launch.args].map(shown).join(' ')}`,
 			...environment.length ? [`environment ${environment.join(' ')}`] : [],
-			...launch.files.map(file => `${file.path} ${oneLine(file.content)}`)
+			...launch.files.map(file => `${file.path} ${keysOf(file.content)}`)
 		].join('  '));
 	}
 
@@ -87,6 +110,11 @@ export class AgentLog {
 	/** An agent ended: how, by whom - as Facade's words name them - and why, which says its CLI's exit code where it is known. */
 	ended(agent: Agent, end: End, by: string | undefined): void {
 		this.write(`${logTime(end.time)}  ended    ${describe(agent)}  ${end.kind}${by === undefined ? '' : ` by ${by}`}: ${end.reason}`);
+	}
+
+	/** A worktree's removal with `stop_agent`, asked for by `by`, at `time`: deleted, or not and why (AGENT-ORCHESTRATION.md, O11). */
+	removal(removal: WorktreeRemoval, time: number, by: string): void {
+		this.write(`${logTime(time)}  ${removal.deleted ? 'deleted' : 'not deleted'}  ${removal.folder}  with stop_agent by ${by}${removal.deleted ? '' : `: ${removal.reason ?? 'no reason given'}`}`);
 	}
 
 	/**

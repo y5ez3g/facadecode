@@ -18,17 +18,16 @@ import { homeOf } from '../clis/executable';
 import { TrustedFolder, trustProblem, writeTrust } from '../clis/trust';
 import { agentName, AgentTable } from '../record/agents';
 import { identityOf } from '../record/identity';
-import { Agent, agentRef, AgentState, Caller, describe, End, EndKind, Ignored, isLive, LiveAgent, parseAgentReference, PERSON, StartPhase, StoppedBy } from '../record/events';
+import { Agent, agentRef, AgentState, Caller, describe, End, EndKind, Ignored, isLive, LiveAgent, parseAgentReference, PERSON, SetupState, StartPhase, StoppedBy, WorktreeRemoval } from '../record/events';
 import { closedByItsWindow, isLedgerHeld } from '../record/ledger';
-import { HUMAN, Recipient } from '../record/messages';
 import { injectedFile } from '../record/paths';
 import { screensDir } from '../record/screens';
 import { LaunchDelays } from './doorbell';
-import { FacadeError } from './errors';
+import { ErrorOutcome, FacadeError } from './errors';
 import { Injections, InjectionUser, UnchangedFile } from './injections';
-import { delaysOf, inBackground, Launched, Launcher, Prepared, timingOf, windowClosed } from './launch';
+import { delaysOf, inBackground, Launched, Launcher, LaunchProgress, notConnectedNotice, Prepared, timingOf, windowClosed } from './launch';
 import { Mail, Mailbox } from './mail';
-import { AgentSetup, CliCatalog, Disposable, EndedAgent, MadeWorktreeFolder, OwnedFile, Ports, Repository, Severity, StopSignal, TerminalEnd, Timing } from './ports';
+import { AgentSetup, CliCatalog, Disposable, EndedAgent, EndTold, MadeWorktreeFolder, OwnedFile, Ports, Repository, SetupProgress, Severity, StopSignal, TerminalEnd, Timing } from './ports';
 import { ScreenRead, Screens } from './screens';
 
 /**
@@ -41,6 +40,8 @@ const TAKE_BACK_AGAIN_MS = 15_000;
 const TAKE_BACK_TRIES = 12;
 /** The exit code of a CLI interrupted from the keyboard: the person's doing (AGENT-LAUNCHER.md, L6). */
 const INTERRUPTED = 130;
+/** How long after one of the person's agents ended unexpectedly the next's end joins its notification (M11). */
+const ENDS_GATHERED_MS = 2_000;
 /** How many of the files a worktree's deletion would lose a refusal names before saying how many more. */
 const SHOWN_CHANGES = 10;
 /**
@@ -74,6 +75,8 @@ export interface FacadeOptions {
 	readonly killProcess?: (pid: number, signal: StopSignal) => void;
 	/** What is wrong in the person's settings that hold for every agent, and what is used instead: said with each start. */
 	readonly settingsProblems?: () => readonly string[];
+	/** The platform agents' programs run on: this machine's unless a test says. */
+	readonly platform?: NodeJS.Platform;
 	/** How long the core waits, as the person sets it; where left out, two minutes. */
 	readonly timing?: () => Timing;
 }
@@ -112,7 +115,10 @@ export interface AgentFacts {
 	/** As asked for; none where the CLI's own applies. */
 	readonly model?: string;
 	readonly effort?: string;
-	/** What was asked for and left out, its launch having no group for it: not applied, so not known. */
+	/**
+	 * What was asked for and is not known to be applied: left out, its launch having no group for it - or, an effort given
+	 * with a model whose name may carry one of its own, passed on, the model's perhaps applying instead (O3, O6).
+	 */
 	readonly ignored: readonly Ignored[];
 	readonly yolo: boolean;
 	readonly sandbox: Agent['sandbox'];
@@ -126,8 +132,15 @@ export interface AgentFacts {
 	readonly state: AgentState;
 	/** Where its start is, while it is starting (O4, O6). */
 	readonly phase?: StartPhase;
+	/** How the setup of the worktree made for it went, once its start went on to its CLI (O11). */
+	readonly setup?: SetupState;
 	/** Who set out to stop it, and why, while it is stopping. */
 	readonly stopping?: { readonly by?: StoppedBy; readonly reason: string };
+	/**
+	 * The removal of its folder's worktree with stop_agent, where one is under way or the last one failed - who asked for
+	 * it, and why it failed - until one succeeds or the folder is gone (O5, O11; OR-15).
+	 */
+	readonly worktreeRemoval?: { readonly state: 'pending' } | { readonly state: 'failed'; readonly by?: StoppedBy; readonly reason?: string };
 	readonly startTime: number;
 	/** The number of its task's message, `#m12`, where it was given a task (M7). */
 	readonly taskMessage?: number;
@@ -148,17 +161,50 @@ export interface Started extends AgentFacts {
 	readonly notes?: readonly string[];
 	/** Where its start is not confirmed: the last lines of its screen, as they were then (O3). */
 	readonly screen?: ScreenRead;
+	/** Where its start is not confirmed as its worktree's setup runs: that setup's line running and its terminal's last lines, as they were then (O3). */
+	readonly settingUp?: SetupProgress;
 }
 
 /**
  * How an agent ended, for its messages (AGENT-MESSAGES.md, M6, M8): `how`, as Facade's messages say it - "stopped
- * by @human", "it exited, with exit code 1"; whether its creator, an agent, is told; and whose messages to it are
- * noted in its chat room rather than sent back, their senders told of the end otherwise.
+ * by @human", "it exited, with exit code 1"; and whether its creator, an agent, is told. Its unread messages go
+ * back to every live sender, the person whose window went among them: M8 spares only the notice of an end (M6).
  */
 interface EndNotice {
+	/** How it ended, as a returned message says it (M6). */
 	readonly how: string;
+	/** How it ended, as its creator's notice says it: with its CLI's exit code where the window saw one (M8). */
+	readonly told: string;
 	readonly tell: boolean;
-	readonly knownTo: readonly Recipient[];
+}
+
+/**
+ * How Facade's tools go for an agent with YOLO off, as Facade knew it at its launch (AGENT-LAUNCHER.md, L4, rule 4):
+ * a setting of the person's that refuses them, which wins over the launch; the groups of Facade's launch that let
+ * them through which the person changed; a custom agent's launch, all of it the person's. None of these: Facade's
+ * own launch lets them through, never asked about.
+ */
+export interface ToolsExemption {
+	/** The setting of the person's that refuses Facade's tools, in words: where, and the rule. */
+	readonly refused?: string;
+	readonly changed: readonly ('yoloOff' | 'connect')[];
+	readonly custom: boolean;
+}
+
+/** That the person changed the groups of Facade's launch that let its server through, `changed`, as a clause (L4, rule 4). */
+export function exemptionChangedText(changed: ToolsExemption['changed']): string {
+	return `its launch's ${changed.join(' and ')} ${changed.length > 1 ? 'groups are' : 'group is'} changed from Facade's, which lets its server through`;
+}
+
+/**
+ * What a deletion waiting for agents still stopping did, as its error's data carries it - and its text says it:
+ * the agents in the worktree it stopped, and those still stopping (AGENT-ORCHESTRATION.md, O2, O5).
+ */
+interface PendingDeletion extends ErrorOutcome {
+	readonly outcome: 'pending';
+	readonly agent: number;
+	readonly stopped: readonly number[];
+	readonly stopping: readonly number[];
 }
 
 /** A folder of the window an agent can start in, and the worktree it is. */
@@ -196,6 +242,11 @@ export interface Stopped {
 	readonly stopped: readonly AgentFacts[];
 	/** With `delete_worktree`: the folder, and whether it was deleted - or why not. */
 	readonly worktree?: { readonly folder: string; readonly deleted: boolean; readonly why?: string };
+	/**
+	 * Where the start of the agent the call named was when it was stopped, before its CLI had a terminal: its worktree
+	 * being made - git may finish it - or set up (AGENT-ORCHESTRATION.md, O4; OR-05).
+	 */
+	readonly startStopped?: 'creating_worktree' | 'running_setup';
 }
 
 /** Half of a character written as two UTF-16 units, without its other half. */
@@ -214,6 +265,8 @@ const PROCESS_END_WAIT_MS = 5_000;
 interface DeletionTarget {
 	readonly main: string;
 	readonly head?: string;
+	/** The worktree's branch, as git has it now. */
+	readonly branch?: string;
 	readonly leftover?: string;
 }
 
@@ -258,8 +311,27 @@ export class Facade implements Disposable {
 	private readonly branchesBeingMade: { readonly main: string; readonly branch: string }[] = [];
 	/** The deletions of worktrees under way: no agent starts there meanwhile, and a second deletion joins the first. */
 	private readonly deletions: { readonly folder: string; readonly done: Promise<Stopped> }[] = [];
+	/**
+	 * The worktrees the person is deleting in the window: no agent starts there either, until the window says the deletion
+	 * is done or failed - or, should it never say, a while on (O5 step 3; OR-10).
+	 */
+	private readonly personDeletions: { readonly folder: string; readonly timer: ReturnType<typeof setTimeout> }[] = [];
+	/** The person's agents' ends told together: those that came within {@link ENDS_GATHERED_MS} of each other. */
+	private endsTold: { readonly batch: string; readonly ends: EndTold[]; last: number } | undefined;
+	/**
+	 * The worktrees made for starts, by the agent's number, from when git is asked: the folder git made, or none where
+	 * it made none - where a start stopped as git made it has its worktree, which its record does not say (O4).
+	 */
+	private readonly worktreesMaking = new Map<number, Promise<string | undefined>>();
 	/** The processes of the agents' MCP servers, as each said in its hello, by number: every one that did. */
 	private readonly servers = new Map<number, Set<number>>();
+	/** How Facade's tools go for each agent with YOLO off, as its launch had it, by number: what it is told as it connects (L4, rule 4). */
+	private readonly exemptions = new Map<number, ToolsExemption>();
+	/**
+	 * The agents stopped while a start waited for them, by number: that start answered its caller with the stop, so
+	 * their end, however it is recorded after, is no news to their creator (AGENT-MESSAGES.md, M8).
+	 */
+	private readonly stoppedWhileAnswered = new Set<number>();
 	/** When the folders a process had in use are tried again, while some are. */
 	private takingBack: ReturnType<typeof setTimeout> | undefined;
 	private takeBackTriesLeft = 0;
@@ -290,6 +362,7 @@ export class Facade implements Disposable {
 			setup: options.setup,
 			injections: this.injections,
 			...(options.timing ? { timing: options.timing } : {}),
+			...(options.platform ? { platform: options.platform } : {}),
 			fail: (agent, reason) => this.fail(agent, reason),
 			sendTask: (caller, agent, task) => this.mail.sendTask(caller, agent, task),
 			firstRing: (agent, task) => this.mail.firstRing(agent, task),
@@ -322,6 +395,7 @@ export class Facade implements Disposable {
 		disposeAll(this.disposables.splice(0), err => this.log(`Stopping Facade agents: ${messageOf(err)}`));
 		clearTimeout(this.takingBack);
 		this.takingBack = undefined;
+		this.personDeletions.splice(0).forEach(each => clearTimeout(each.timer));
 	}
 
 	/** The agent numbered `id`, ended or not. */
@@ -329,9 +403,26 @@ export class Facade implements Disposable {
 		return this.table.get(id);
 	}
 
+	/** The agent numbered `id` as the tools describe it, ended or not: what a start that failed answers with too (O3). */
+	facts(id: number): AgentFacts | undefined {
+		const agent = this.table.get(id);
+		return agent && this.factsOf(agent);
+	}
+
 	/** Who started or stopped an agent, as Facade's words name them: `@lead #a1`, `@human`; a number alone for one the list no longer has. */
 	whoIs(who: StoppedBy | undefined): string {
 		return this.table.whoIs(who);
+	}
+
+	/** Tells the person of an unexpected end of an agent of theirs, in one notification with those just before it (M11). */
+	private tellEnded(end: EndTold): void {
+		const now = Date.now();
+		if (!this.endsTold || now - this.endsTold.last > ENDS_GATHERED_MS) {
+			this.endsTold = { batch: `${now}`, ends: [], last: now };
+		}
+		this.endsTold.ends.push(end);
+		this.endsTold.last = now;
+		this.ports.person.tellEnded(this.endsTold.batch, [...this.endsTold.ends]);
 	}
 
 	/** The agent a caller is; undefined for the person. */
@@ -339,14 +430,23 @@ export class Facade implements Disposable {
 		return caller.id === undefined ? undefined : this.table.get(caller.id);
 	}
 
+	/** What an agent must know of its start's preparation: its worktree's setup, sent with no word of how it went (O4). */
+	startNoteOf(id: number): string | undefined {
+		return this.launcher.startNoteOf(id);
+	}
+
 	/** A CLI's name for people, by its id: a custom agent's is its name. */
 	cliName(id: string): string {
 		return this.cliOf(id)?.cli.displayName ?? id;
 	}
 
-	/** Whether a CLI's models carry their effort, by its id: then an effort given with a model is not used (N-64). */
+	/**
+	 * Whether a CLI's model names may carry an effort of their own, by its id, where its launch through `start_agent` takes
+	 * an effort: an effort given with a model is passed on, and may not be the one it runs at (N-64; OR-01).
+	 */
 	modelCarriesEffort(id: string): boolean {
-		return !!this.cliOf(id)?.cli.modelCarriesEffort;
+		const found = this.cliOf(id);
+		return !!found?.cli.modelCarriesEffort && capabilitiesOf(found.cli, launchFor(found.config, true)).effort;
 	}
 
 	/** Whether the agent framework is on: Facade's tools answer only while it is. */
@@ -468,23 +568,55 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * What its start says, with YOLO off, where the person's settings take away what lets Facade's server
-	 * through unasked: a deny rule of theirs, or a group of Facade's launch that carries it changed - never that
-	 * it works (AGENT-LAUNCHER.md, L4, rule 4: the launch diagnostics; X-38; YO-09).
+	 * How Facade's tools go with YOLO off for agent `id`, as Facade knew it at its launch (AGENT-LAUNCHER.md, L4, rule 4);
+	 * undefined for one with YOLO on, which nothing asks, and for one this load of Facade did not launch.
 	 */
-	private exemptionNotes(installed: InstalledCli, yolo: boolean, unattended: boolean, env: Environment, folder: string): string[] {
+	exemptionOf(id: number): ToolsExemption | undefined {
+		return this.exemptions.get(id);
+	}
+
+	/**
+	 * How Facade's tools go for a launch of `installed` in `folder` with YOLO off, as things are as it is made: a rule
+	 * of the person's that refuses them, a group of Facade's launch that carries their exemption changed, a custom
+	 * agent's launch, all of it the person's (AGENT-LAUNCHER.md, L4, rule 4). None with YOLO on, which asks nothing.
+	 */
+	private exemptionFor(installed: InstalledCli, yolo: boolean, unattended: boolean, env: Environment, folder: string): ToolsExemption | undefined {
 		if (yolo) {
+			return undefined;
+		}
+		const refused = installed.cli.exemptionOverride?.(launchFor(installed.config, unattended), env, folder);
+		return { ...refused !== undefined ? { refused } : {}, changed: exemptionGroupsChanged(installed.cli, installed.config, unattended), custom: !!installed.cli.custom };
+	}
+
+	/**
+	 * What its start says of `exemption`, where the person's settings take away what lets Facade's server through
+	 * unasked: a deny rule of theirs, or a group of Facade's launch that carries it changed - never that it works
+	 * (AGENT-LAUNCHER.md, L4, rule 4: the launch diagnostics; X-38; YO-09).
+	 */
+	private exemptionNotes(installed: InstalledCli, exemption: ToolsExemption | undefined): string[] {
+		if (!exemption) {
 			return [];
 		}
 		// A rule of the person's that refuses Facade's tools, and a group of Facade's launch changed: the first
 		// refuses them, the second may have them asked for - each said as it is (N-45)
-		const config = launchFor(installed.config, unattended);
-		const own = installed.cli.exemptionOverride?.(config, env, folder);
-		const changed = exemptionGroupsChanged(installed.cli, installed.config, unattended);
+		const { refused, changed } = exemption;
 		return [
-			...own !== undefined ? [`With YOLO off, ${installed.cli.displayName} refuses Facade's tools: ${own}.`] : [],
-			...changed.length ? [`With YOLO off, ${installed.cli.displayName} may ask for approval before Facade's tools: its launch's ${changed.join(' and ')} ${changed.length > 1 ? 'groups are' : 'group is'} changed from Facade's, which lets its server through.`] : []
+			...refused !== undefined ? [`With YOLO off, ${installed.cli.displayName} refuses Facade's tools: ${refused}.`] : [],
+			...changed.length ? [`With YOLO off, ${installed.cli.displayName} may ask for approval before Facade's tools: ${exemptionChangedText(changed)}.`] : []
 		];
+	}
+
+	/**
+	 * What a launch tells once it has recorded the agent: it files `exemption` under the agent's number - before its CLI
+	 * can connect and be told it (L4, rule 4) - then tells `onRecorded`.
+	 */
+	private filingExemption(exemption: ToolsExemption | undefined, onRecorded?: (agent: number) => void): (agent: number) => void {
+		return agent => {
+			if (exemption) {
+				this.exemptions.set(agent, exemption);
+			}
+			onRecorded?.(agent);
+		};
 	}
 
 	/**
@@ -505,15 +637,15 @@ export class Facade implements Disposable {
 		};
 		try {
 			const repository = await this.ports.git.repositoryOf(folder);
-			const env = await this.environmentOf(installed, folder);
 			// An agent's start, through start_agent, and the person's, from the UI, each with its own launch (L4)
+			const envs = { unattended: await this.environmentOf(installed, folder, true), theirs: await this.environmentOf(installed, folder, false) };
 			const can = capabilitiesOf(installed.cli, launchFor(installed.config, true));
 			const integration = this.options.clis.framework() && can.integration;
 			const theirs = this.options.clis.framework() && capabilitiesOf(installed.cli, launchFor(installed.config, false)).integration;
 			const given = { ...(integration && can.task ? { task: 'A task.' } : {}), ...(can.model ? { model: 'model' } : {}), ...(can.effort ? { effort: 'high' } : {}) };
 			for (const yolo of [true, false]) {
-				const run = { ignored: [], folder, repository: repository?.main ?? folder, home: homeOf(env), yolo };
-				for (const each of [{ ...run, ...given, integration, unattended: true }, { ...run, integration: theirs, unattended: false }]) {
+				const run = { ignored: [], folder, repository: repository?.main ?? folder, yolo };
+				for (const [each, env] of [[{ ...run, ...given, home: homeOf(envs.unattended), integration, unattended: true }, envs.unattended], [{ ...run, home: homeOf(envs.theirs), integration: theirs, unattended: false }, envs.theirs]] as const) {
 					try {
 						this.launcher.check(installed, each, env);
 					} catch (err) {
@@ -542,15 +674,18 @@ export class Facade implements Disposable {
 		const name = this.nameOf(installed.cli.id);
 		const repository = await this.ports.git.repositoryOf(folder);
 		const worktree = repository?.worktree ?? path.basename(folder);
-		const env = await this.environmentOf(installed, folder);
+		const env = await this.environmentOf(installed, folder, false);
 		this.stillOpen();
 		// The person's own, from the UI: it runs as its CLI usually does (L4)
-		const run = { ignored: [], folder, repository: repository?.main ?? folder, home: homeOf(env), yolo, unattended: false, integration, notes: this.exemptionNotes(installed, yolo, false, env, folder) };
+		const exemption = this.exemptionFor(installed, yolo, false, env, folder);
+		const run = { ignored: [], folder, repository: repository?.main ?? folder, home: homeOf(env), env, yolo, unattended: false, integration, notes: this.exemptionNotes(installed, exemption) };
 		const files = this.launcher.check(installed, run, env);
 		this.launcher.checkFiles(installed, files, folder);
 		this.stillOpen();
+		// Asked again as it is recorded: a deletion of its folder that began meanwhile keeps it out (O5)
+		this.assertNotDeleting(folder);
 		this.trust(installed, { folder, repository: run.repository }, env);
-		const { agent } = await this.launcher.launch(PERSON, installed, { ...run, name, worktree, outsideGit: !repository }, { wait: false });
+		const { agent } = await this.launcher.launch(PERSON, installed, { ...run, name, worktree, outsideGit: !repository }, { wait: false, onRecorded: this.filingExemption(exemption) });
 		return this.factsOf(agent);
 	}
 
@@ -562,15 +697,34 @@ export class Facade implements Disposable {
 	 * child has started, or once the timeout runs out with it starting still - left as it is, for the caller
 	 * to decide; a child whose process ends before it started fails the call. Once begun, a start is carried
 	 * through: a caller that ends meanwhile leaves its child as it is. Its model and effort go to its CLI as
-	 * they are, where given: the CLI is the one that knows which it has.
+	 * they are, where given: the CLI is the one that knows which it has. Until the child is recorded, the start
+	 * is `validating` (AGENT-ORCHESTRATION.md, O4): the caller is told so, and an error then says it - no run
+	 * was made for it (O2; OR-18).
 	 */
-	async startAgent(caller: Caller, request: StartRequest, progress?: (message: string, agent?: number) => void): Promise<Started> {
+	async startAgent(caller: Caller, request: StartRequest, progress?: LaunchProgress): Promise<Started> {
+		let recorded = false;
+		try {
+			return await this.startChecked(caller, request, progress, () => {
+				recorded = true;
+			});
+		} catch (err) {
+			if (recorded || !(err instanceof FacadeError) || err.outcome?.agent !== undefined) {
+				throw err;
+			}
+			throw new FacadeError(err.code, err.message, { ...err.outcome, phase: 'validating' });
+		}
+	}
+
+	/** `startAgent`, which tells `onRecorded` once the child is recorded. */
+	private async startChecked(caller: Caller, request: StartRequest, progress: LaunchProgress | undefined, onRecorded: () => void): Promise<Started> {
 		// Its time counts from now, when it is accepted, whatever it waits for after (O9).
 		const acceptedAt = Date.now();
 		this.stillOpen();
 		// The person's settings are read once, as the call is accepted: a change applies to the next start.
 		const yolo = this.yolo(caller);
 		const name = this.nameOf(request.name);
+		// Nothing is made for it while it is checked, which can take a while - git asked, its CLI looked for (O4)
+		progress?.(`Validating the start of @${name}: nothing is made for it until it is recorded.`);
 		const model = request.model?.trim() || undefined;
 		const effort = request.effort?.trim() || undefined;
 		const task = request.task?.trim() ? request.task : undefined;
@@ -581,7 +735,7 @@ export class Facade implements Disposable {
 		const reserved = place.kind === 'new' ? this.reserveBranch(place.repository.main, place.branch) : undefined;
 		try {
 			const home = place.kind === 'new' ? place.repository.main : place.folder;
-			const { installed, config } = await this.startableHere(request.cli, home);
+			const { installed, config } = await this.startableHere(request.cli, home, false, true);
 			// Through start_agent, where nobody may be watching: its launch's unattended part (L4)
 			const launch = launchFor(config, true);
 			const capabilities = capabilitiesOf(installed.cli, launch);
@@ -593,13 +747,16 @@ export class Facade implements Disposable {
 					? `${name} cannot be given a task while the agent framework is off.`
 					: `${name} cannot be given a task: its launch in ${installed.cli.setting}.launch has ${capabilities.integration ? 'no task group' : 'no connect group, so it cannot read Facade\'s messages'}. Start it without a task, or ask the person to fill that in.`);
 			}
-			// A model that carries its effort decides it: an effort given with it would be recorded and never run (N-64)
-			const effortOfModel = model !== undefined && capabilities.model && !!installed.cli.modelCarriesEffort;
-			const ignored: Ignored[] = [...model !== undefined && !capabilities.model ? ['model' as const] : [], ...effort !== undefined && (!capabilities.effort || effortOfModel) ? ['effort' as const] : []];
+			// What its launch has no group for is left out, and recorded unknown (O3)
+			const withheld: Ignored[] = [...model !== undefined && !capabilities.model ? ['model' as const] : [], ...effort !== undefined && !capabilities.effort ? ['effort' as const] : []];
+			// An effort given with a model whose name may carry one of its own - Antigravity's - is given all the same, as
+			// every value is passed through, and recorded unknown: the model's may apply instead (O3, O6; N-64; OR-01)
+			const effortOfModel = effort !== undefined && capabilities.effort && model !== undefined && capabilities.model && !!installed.cli.modelCarriesEffort;
+			const ignored: Ignored[] = [...withheld, ...effortOfModel ? ['effort' as const] : []];
 			// What cannot reach the CLI as it is - read as an option of its own, or no text at all - is refused before
 			// anything is made, not rewritten (AGENT-LAUNCHER.md, L10; X-08, N-10)
 			for (const [what, value] of [['model', model], ['effort', effort]] as const) {
-				if (value === undefined || ignored.includes(what)) {
+				if (value === undefined || withheld.includes(what)) {
 					continue;
 				}
 				if (value.includes('\0') || LONE_SURROGATE.test(value)) {
@@ -609,11 +766,15 @@ export class Facade implements Disposable {
 					throw new FacadeError('INVALID', `The ${what} ${value} starts with a dash: ${installed.cli.displayName} would read it as an option of its own, not as the ${what}. Give it without the leading dash.`);
 				}
 			}
-			const env = await this.environmentOf(installed, home);
+			const env = await this.environmentOf(installed, home, true);
 			this.stillOpen();
 			// Recorded as asked for; given to the CLI only where its launch has a group for it.
 			const repository = place.kind === 'new' ? place.repository.main : place.main;
-			const run = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ignored, task, folder: home, repository, home: homeOf(env), yolo, unattended: true, integration, notes: this.exemptionNotes(installed, yolo, true, env, home) };
+			const exemption = this.exemptionFor(installed, yolo, true, env, home);
+			const whenRecorded = this.filingExemption(exemption, onRecorded);
+			// The project's MCP servers its launch runs without, where its folder is there to read them; a new worktree's, once made
+			const serversOff = place.kind === 'new' ? [] : serversOffNotes(installed, { folder: place.folder, repository }, homeOf(env), yolo);
+			const run = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ignored, task, folder: home, repository, home: homeOf(env), env, yolo, unattended: true, integration, notes: [...this.exemptionNotes(installed, exemption), ...serversOff] };
 			const files = this.launcher.check(installed, run, env);
 			this.launcher.checkFiles(installed, files, place.kind === 'new' ? undefined : place.folder);
 			this.stillOpen();
@@ -622,13 +783,15 @@ export class Facade implements Disposable {
 			// outside any - so that it does not stop to ask; what would keep that from being given refuses the start
 			// before anything is made for it, a new worktree included (X-30).
 			if (place.kind !== 'new') {
+				// Asked again as it is recorded: a deletion of its folder that began while it was checked keeps it out (O5)
+				this.assertNotDeleting(place.folder);
 				try {
 					this.trust(installed, { folder: place.folder, repository }, env);
 				} catch (err) {
 					throw new FacadeError('FAILED', messageOf(err));
 				}
-				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.worktree, outsideGit: place.outsideGit, folder: place.folder }, { wait: true, acceptedAt, ...(progress ? { progress } : {}) });
-				return this.startedOf(launched, false);
+				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.worktree, outsideGit: place.outsideGit, folder: place.folder }, { wait: true, acceptedAt, ...(progress ? { progress } : {}), onRecorded: whenRecorded });
+				return this.startedOf(caller, launched, false);
 			}
 			const planned = this.ports.git.plannedWorktreeFolder(place.repository.main, place.branch);
 			const problem = trustProblem(installed.cli, installed.config, { folder: planned, repository }, env);
@@ -643,9 +806,13 @@ export class Facade implements Disposable {
 			const prepare = async (agent: Agent): Promise<Prepared> => {
 				progress?.(`Making the worktree ${place.branch} for ${describe(agent)}.`);
 				let worktree: MadeWorktreeFolder;
+				// Where git makes it is known once it has: a stop that deletes it meanwhile waits for that (O4)
+				const making = new DeferredPromise<string | undefined>();
+				this.worktreesMaking.set(agent.id, making.p);
 				try {
 					worktree = await this.ports.git.makeWorktree(place.repository.main, place.branch, place.head);
 				} catch (err) {
+					making.complete(undefined);
 					throw new FacadeError('FAILED', `The worktree ${place.branch} could not be made: ${messageOf(err)}`, { outcome: 'failed', agent: agent.id });
 				} finally {
 					// Made, git has the branch; not made, it is free again
@@ -654,7 +821,10 @@ export class Facade implements Disposable {
 				const folder = made = worktree.folder;
 				// Recorded even where the window closed or the agent was stopped meanwhile: it was made, and stays.
 				this.table.recordWorktree({ name: place.branch, folder, repository: place.repository.main, commit: place.head, ...(caller.id !== undefined ? { madeBy: caller.id } : {}) });
+				making.complete(folder);
 				if (!this.isStarting(agent)) {
+					// Its run is where git made the worktree, not at the folder planned for it - taken, maybe (O4; OR-05)
+					this.table.recordWorktreeFolder(agent.id, folder);
 					this.ports.git.stopSetup(folder);
 					throw new Error('it was stopped as its worktree was made');
 				}
@@ -663,7 +833,8 @@ export class Facade implements Disposable {
 					// The branch is the name asked for; the folder, where its own was taken, gets a suffix - said, not silent (WT-2.3; O3)
 					...!isEqualPath(folder, planned) ? [`Its worktree is at ${folder}: ${planned} was taken.`] : [],
 					...worktree.copyFailures.length ? [`What .worktreeinclude names could not all be copied into its worktree: ${worktree.copyFailures.join(', ')}.`] : [],
-					...worktree.hookFailure ? [`A git hook failed as its worktree was made: ${worktree.hookFailure}`] : []
+					...worktree.hookFailure ? [`A git hook failed as its worktree was made: ${worktree.hookFailure}`] : [],
+					...serversOffNotes(installed, { folder, repository }, homeOf(env), yolo)
 				];
 				progress?.(`Setting up the worktree ${place.branch}.`);
 				const setup = await this.ports.git.setupOutcome(folder);
@@ -692,11 +863,11 @@ export class Facade implements Disposable {
 				} catch (err) {
 					throw new FacadeError('FAILED', messageOf(err), { outcome: 'failed', agent: agent.id });
 				}
-				return { folder, notes, ...(startNote ? { startNote } : {}) };
+				return { folder, notes, ...(startNote ? { startNote } : {}), setup: setup.kind };
 			};
 			try {
-				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.branch, folder: planned }, { wait: true, acceptedAt, prepare, ...(progress ? { progress } : {}) });
-				return this.startedOf(launched, true);
+				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.branch, folder: planned }, { wait: true, acceptedAt, prepare, ...(progress ? { progress } : {}), onRecorded: whenRecorded });
+				return this.startedOf(caller, launched, true);
 			} catch (err) {
 				// A worktree made for a start that fails stays, its branch with it: the answer says where (O4).
 				if (made !== undefined && err instanceof FacadeError && err.code === 'FAILED') {
@@ -710,11 +881,31 @@ export class Facade implements Disposable {
 	}
 
 	/** A start's answer: the agent's facts, how its start went, and what its preparation came to. */
-	private startedOf(launched: Launched, newWorktree: boolean): Started {
-		const { agent, status, why, screen } = launched;
+	private startedOf(caller: Caller, launched: Launched, newWorktree: boolean): Started {
+		const { agent, status, why, screen, settingUp } = launched;
+		// The person's script started it, whom its answer tells: the person, who may not be watching that script, is
+		// told as of a start of theirs from the window - an agent's start tells its creator alone (L5)
+		if (caller.id === undefined && status === 'unconfirmed') {
+			this.tellUnconfirmed(agent, why ?? '');
+		}
 		// What of the person's settings was not taken as set goes with the start it changed (X-59)
 		const notes = [...(this.options.settingsProblems?.() ?? []).map(problem => `${problem}.`), ...launched.notes];
-		return { status, ...(why !== undefined ? { why } : {}), ...this.factsOf(this.table.get(agent.id) ?? agent), newWorktree, ...(notes.length ? { notes } : {}), ...(screen ? { screen } : {}) };
+		return { status, ...(why !== undefined ? { why } : {}), ...this.factsOf(this.table.get(agent.id) ?? agent), newWorktree, ...(notes.length ? { notes } : {}), ...(screen ? { screen } : {}), ...(settingUp ? { settingUp } : {}) };
+	}
+
+	/**
+	 * Tells the person, once, that their agent's start is not confirmed (AGENT-LAUNCHER.md, L5): its CLI open but not
+	 * connected, as the person's own start from the window says it - or, its CLI not launched yet, why - in the notice
+	 * that its connection, or its end, closes. Not of one stopped meanwhile.
+	 */
+	private tellUnconfirmed(agent: Agent, why: string): void {
+		const now = this.table.get(agent.id);
+		if (this.disposed || now?.state !== 'starting') {
+			return;
+		}
+		this.launcher.tellUnconfirmed(now, now.phase === 'connecting'
+			? notConnectedNotice(now)
+			: l10n.t("{0} is not confirmed to have started: {1}.", describe(now), why));
 	}
 
 	/** Whether `agent` is starting still: not stopped meanwhile. */
@@ -743,23 +934,58 @@ export class Facade implements Disposable {
 	}
 
 	/**
+	 * The window deleted the worktree `folder`: one Facade made is its no more - said by the window once git is done,
+	 * where the extension host that asked for it may have started again meanwhile (O5, O11).
+	 */
+	worktreeDeleted(folder: string): void {
+		this.deletionOver(folder);
+		if (this.table.madeWorktree(folder) && !fs.existsSync(folder)) {
+			this.table.forgetWorktree(folder);
+			this.log(`${folder} was deleted.`);
+		}
+	}
+
+	/** The person's deletion of the worktree `folder` failed in the window: agents can start there again (O5; OR-10). */
+	worktreeDeleteFailed(folder: string): void {
+		if (this.deletionOver(folder)) {
+			this.log(`${folder} was not deleted: agents can start there again.`);
+		}
+	}
+
+	/** The person's deletion of the worktree `folder` is over, however it went: answers whether one was under way. */
+	private deletionOver(folder: string): boolean {
+		const at = this.personDeletions.findIndex(each => isEqualPath(each.folder, folder));
+		if (at < 0) {
+			return false;
+		}
+		clearTimeout(this.personDeletions[at].timer);
+		this.personDeletions.splice(at, 1);
+		return true;
+	}
+
+	/**
+	 * The person is deleting the worktree `folder` in the window: the agents still starting in it - making it, or
+	 * running its setup - are stopped by them, its worktree deleted, before it goes; no CLI is launched in it after
+	 * (AGENT-LAUNCHER.md: removing a worktree stops the agents associated with it; N-34), and no agent starts in it until
+	 * the window says how the deletion went (O5 step 3; OR-10). Those running in it end as its terminals close (N-04).
+	 */
+	async worktreeDeleting(folder: string): Promise<void> {
+		// No start goes in from now - one rule for the person's deletion and an agent's (O5 step 3; OR-10) - until the
+		// window says how it went: a deletion it never says the end of lets starts in again after the person's timeout
+		this.deletionOver(folder);
+		const timer = setTimeout(() => this.deletionOver(folder), this.timing().startTimeoutMs);
+		this.personDeletions.push({ folder, timer });
+		const starting = this.liveAgents().filter(agent => agent.state === 'starting' && isEqualPath(agent.folder, folder));
+		await Promise.all(starting.map(agent => this.stopOne(agent, 'human', 'as its worktree was deleted').catch(err => this.log(`Stopping ${describe(agent)} as its worktree is deleted: ${messageOf(err)}`))));
+	}
+
+	/**
 	 * Stops one agent the caller reaches - a child, a sibling, its creator, itself, one the person started -
 	 * and, with `deleteWorktree`, the other agents in its worktree and then the worktree, its branch kept
 	 * (AGENT-ORCHESTRATION.md, O5). A worktree with work in it that would be lost is not deleted, and nothing
 	 * is stopped, unless the call says to discard it. Answers once everything is done; a process that has not
 	 * ended in time answers pending, and its worktree stays.
 	 */
-	/**
-	 * The person is deleting the worktree `folder` in the window: the agents still starting in it - making it, or
-	 * running its setup - are stopped by them, its worktree deleted, before it goes; no CLI is launched in it after
-	 * (AGENT-LAUNCHER.md: removing a worktree stops the agents associated with it; N-34). Those running in it end as
-	 * its terminals close (N-04).
-	 */
-	async worktreeDeleting(folder: string): Promise<void> {
-		const starting = this.liveAgents().filter(agent => agent.state === 'starting' && isEqualPath(agent.folder, folder));
-		await Promise.all(starting.map(agent => this.stopOne(agent, 'human', 'as its worktree was deleted').catch(err => this.log(`Stopping ${describe(agent)} as its worktree is deleted: ${messageOf(err)}`))));
-	}
-
 	async stopAgent(caller: Caller, target: string, options: { readonly deleteWorktree?: boolean; readonly discardChanges?: boolean } = {}): Promise<Stopped> {
 		this.stillOpen();
 		if (options.discardChanges && !options.deleteWorktree) {
@@ -774,13 +1000,49 @@ export class Facade implements Disposable {
 			if (alreadyEnded) {
 				return { agent: this.factsOf(agent), alreadyEnded, stopped: [] };
 			}
+			// Read before it is stopped: one with no terminal yet has its start stopped, nothing closed (OR-05)
+			const startStopped = agent.state === 'starting' && (agent.phase === 'creating_worktree' || agent.phase === 'running_setup') ? agent.phase : undefined;
 			await this.stopOne(agent, by, 'with stop_agent');
-			return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded: false, stopped: [this.factsOf(this.table.get(agent.id) ?? agent)] };
+			return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded: false, stopped: [this.factsOf(this.table.get(agent.id) ?? agent)], ...(startStopped ? { startStopped } : {}) };
 		}
 
+		// Its worktree still being made: its start is stopped, and git - which may finish - waited for as long as a
+		// start is; then the worktree it made is the one deleted, not the folder planned for it (O4)
+		let folder = agent.folder;
+		let ended = alreadyEnded;
+		const making = this.worktreesMaking.get(agent.id);
+		// One still making its worktree - starting, or stopping by an earlier call - or ended as git made it
+		if (making && (alreadyEnded || agent.phase === 'creating_worktree')) {
+			if (!alreadyEnded) {
+				await this.stopOne(agent, by, 'with stop_agent');
+				ended = true;
+			}
+			// Git's answer, or none once the wait is over - its timer cleared as soon as git answers
+			const over = new AbortController();
+			const made = await Promise.race([making.then(result => ({ folder: result })), timeout(this.timing().startTimeoutMs, over.signal).then(() => undefined, () => undefined)]);
+			over.abort();
+			if (!made) {
+				throw new FacadeError('UNAVAILABLE', `${describe(agent)} ${ended && !alreadyEnded ? 'was stopped, but its' : 'ended, and its'} worktree ${agent.worktree} is still being made, so it was not deleted: git may still make it, and it would stay, with its branch. Call stop_agent with delete_worktree again later.`, { outcome: 'pending', agent: agent.id });
+			}
+			if (made.folder === undefined) {
+				// Git made none: nothing of its to delete - never the folder that was planned for it, which may be another's
+				const now = this.factsOf(this.table.get(agent.id) ?? agent);
+				return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: 'git made no worktree for it: there is nothing to delete' } };
+			}
+			folder = made.folder;
+		}
+		const stoppedFirst = ended && !alreadyEnded ? [this.factsOf(this.table.get(agent.id) ?? agent)] : [];
+		if (stoppedFirst.length) {
+			const deleted = await this.deleteMade(caller, agent, folder, by, options);
+			return { ...deleted, alreadyEnded: false, stopped: [...stoppedFirst, ...deleted.stopped.filter(each => each.id !== agent.id)] };
+		}
+		return this.deleteMade(caller, agent, folder, by, options, alreadyEnded);
+	}
+
+	/** Deletes the worktree `folder` of `agent` - stopped already, or `alreadyEnded` not - with the agents in it (O5). */
+	private async deleteMade(caller: Caller, agent: Agent, folder: string, by: StoppedBy, options: { readonly discardChanges?: boolean }, alreadyEnded = true): Promise<Stopped> {
 		// A worktree whose folder is gone already - deleted by hand - has nothing left to delete: the agent alone is
 		// stopped, and the answer says so, rather than what git says of a folder that is not there (X-37).
-		const folder = agent.folder;
 		if (!fs.existsSync(folder)) {
 			if (!alreadyEnded) {
 				await this.stopOne(agent, by, 'with stop_agent');
@@ -795,7 +1057,7 @@ export class Facade implements Disposable {
 		// What a deletion left of a worktree Facade made - a folder git no longer lists, whose files could not all
 		// be deleted then - is no repository, and a retry finishes it (AGENT-ORCHESTRATION.md, O5).
 		const repository = await this.ports.git.repositoryOf(folder);
-		const leftover = repository ? undefined : this.table.madeWorktree(folder);
+		const leftover = repository ? undefined : this.table.madeWorktree(folder) ?? this.leftoverOfRemoval(folder);
 		if ((!repository && !leftover) || repository?.mainCheckout) {
 			if (!alreadyEnded) {
 				await this.stopOne(agent, by, 'with stop_agent');
@@ -803,12 +1065,17 @@ export class Facade implements Disposable {
 			const now = this.factsOf(this.table.get(agent.id) ?? agent);
 			return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: repository ? 'it is its repository\'s main checkout, which is never deleted' : 'it is in no git repository: there is no worktree to delete' } };
 		}
-		// A worktree that is one of the window's folders is the window's: deleting it would take it out of the
-		// workspace - and, the window's only folder, put the repository's main checkout in its place - which an
-		// agent's work never does (AGENT-ORCHESTRATION.md, O1). The person can, or their scripts.
-		if (caller.id !== undefined && this.ports.workspace.folders().some(each => isEqualPath(each, folder))) {
-			throw new FacadeError('REFUSED', `${folder} is one of this window's folders, so an agent does not delete it: that would change the person's window. Nothing was stopped. Stop the agents without delete_worktree, or ask the person to remove the folder from the window first.`);
+		// An agent's folder inside a worktree is not the worktree: the worktree is what is deleted, its top level - with
+		// every agent in it, by the same preflight (AGENT-ORCHESTRATION.md, O5 step 1; OR-09)
+		const root = repository ? await this.ports.git.worktreeRootOf(folder) : undefined;
+		if (root !== undefined && !isEqualPath(root, folder)) {
+			folder = root;
 		}
+		// A worktree that is one of the window's folders, the one the window is on too - its first, or its only - is
+		// deleted as any other, by the same preflight: the window moves off it to its repository's folder, or back to
+		// the one the person was on before (AGENT-ORCHESTRATION.md, O5). A window of that folder alone becomes another
+		// workspace, which starts Facade's extension host again: this call may be cut then, and the record says what
+		// came of it (O8)
 		// One deletion of a folder at a time: a second joins the first, and answers as it does (X-10). Registered
 		// before anything is awaited, so that two that come at once cannot both go.
 		const underWay = this.deletions.find(each => isEqualPath(each.folder, folder));
@@ -821,7 +1088,7 @@ export class Facade implements Disposable {
 		const entry = { folder, done: deleting.p };
 		this.deletions.push(entry);
 		try {
-			const target: DeletionTarget = repository ? { main: repository.main, ...(repository.head !== undefined ? { head: repository.head } : {}) } : { main: leftover!.repository, leftover: leftover!.name };
+			const target: DeletionTarget = repository ? { main: repository.main, branch: repository.worktree, ...(repository.head !== undefined ? { head: repository.head } : {}) } : { main: leftover!.repository, leftover: leftover!.name };
 			const stopped = await this.deleteWorktreeOf(caller, agent, folder, target, by, alreadyEnded, options);
 			deleting.complete(stopped);
 			return stopped;
@@ -855,30 +1122,37 @@ export class Facade implements Disposable {
 		}
 		const live = this.liveAgents();
 		// Its terminal the window cannot see go there - the CLI itself, or a shell it runs, cd'd - its processes say
-		const startedElsewhere = live.filter(each => !isEqualPath(each.folder, folder) && !terminals.agents.includes(each.id) && each.processId !== undefined);
+		const startedElsewhere = live.filter(each => !isEqualPath(each.folder, folder) && !isInsideFolder(each.folder, folder) && !terminals.agents.includes(each.id) && each.processId !== undefined);
 		const working = startedElsewhere.length ? await (this.options.workingFolders ?? workingFoldersOf)(startedElsewhere.map(each => each.processId!)) : new Map<number, readonly string[]>();
 		// The system names a process's folder by its real path
 		const real = canonicalFolder(folder);
 		const wentThere = (agent: Agent) => (working.get(agent.processId!) ?? []).some(each => [folder, real].some(at => isEqualPath(each, at) || isInsideFolder(each, at)));
-		const inside = live.filter(each => isEqualPath(each.folder, folder) || terminals.agents.includes(each.id) || (each.processId !== undefined && wentThere(each)));
+		const inside = live.filter(each => isEqualPath(each.folder, folder) || isInsideFolder(each.folder, folder) || terminals.agents.includes(each.id) || (each.processId !== undefined && wentThere(each)));
 		const outOfReach = inside.filter(each => !this.reaches(caller, each));
 		if (outOfReach.length) {
 			throw new FacadeError('REFUSED', `${folder} has ${outOfReach.map(each => `${describe(each)}${isEqualPath(each.folder, folder) ? '' : ` (started in ${each.folder})`}`).join(', ')} working in it, outside your tree: your YOLO is off, and you reach only your own tree. Nothing was stopped.`);
 		}
-		const changes = await this.changesIn(folder, target);
-		if (changes && !options.discardChanges) {
+		// The terminals the deletion may close: those of the agents it stops, the ones started elsewhere included
+		const agents = [...new Set([...inside.map(each => each.id), ...terminals.agents])];
+		// The shared Delete Worktree's own preflight, before any agent is stopped: what it would refuse - an unsaved editor
+		// of any kind among it, where the extension host sees text and notebooks alone - refuses it here, all left running
+		// (O5 step 2; O8; OR-19; OR-04)
+		const changes = options.discardChanges ? undefined : await this.lossIn(folder, target, agents);
+		if (changes) {
 			throw new FacadeError('REFUSED', `${folder} has work that deleting it would lose: ${changes}. Nothing was stopped. Commit what should stay, or call again with discard_changes: true to lose it.`);
 		}
 		const results = await Promise.allSettled(inside.map(each => this.stopOne(each, by, 'with stop_agent, its worktree being deleted')));
-		const pending = results.some(result => result.status === 'rejected');
 		const stopped = inside.map(each => this.factsOf(this.table.get(each.id) ?? each));
-		if (pending) {
-			throw new FacadeError('UNAVAILABLE', `Not every agent in ${folder} has ended yet, so it was not deleted: ${stopped.filter(each => each.state !== 'ended').map(each => describe(each)).join(', ')} ${stopped.filter(each => each.state !== 'ended').length === 1 ? 'is' : 'are'} still stopping. Call stop_agent with delete_worktree again once it has ended.`, { outcome: 'pending', agent: agent.id });
+		if (results.some(result => result.status === 'rejected')) {
+			// What happened all the same, said and given as the same facts: the agents it stopped, and those whose stops
+			// answered pending, still stopping (O2)
+			const facts: PendingDeletion = { outcome: 'pending', agent: agent.id, stopped: inside.filter((_, i) => results[i].status === 'fulfilled').map(each => each.id), stopping: inside.filter((_, i) => results[i].status === 'rejected').map(each => each.id) };
+			throw new FacadeError('UNAVAILABLE', this.pendingDeletionText(folder, facts), facts);
 		}
 		this.stillOpen();
 		// Looked at again, the agents gone and what Facade put there taken back: what came meanwhile - an edit
 		// a CLI finished as it ended, a build's output - is work too, and is not deleted unasked.
-		const since = options.discardChanges ? undefined : await this.changesIn(folder, target);
+		const since = options.discardChanges ? undefined : await this.lossIn(folder, target, agents);
 		this.stillOpen();
 		if (since) {
 			// Refused, as an error: what happened all the same - the agents stopped - said with it (X-23)
@@ -889,12 +1163,19 @@ export class Facade implements Disposable {
 				discardChanges: !!options.discardChanges,
 				ownFiles: target.leftover === undefined ? await this.ownFilesIn(folder, target) : [],
 				main: target.main,
-				agents: [...new Set([...inside.map(each => each.id), ...terminals.agents])],
+				agents,
 				...(target.leftover !== undefined ? { leftover: true } : {})
 			});
 		} catch (err) {
+			// Said in the log as well as to the caller, and kept in the record - the ledger and the person's history - where
+			// the caller and the person can read what came of the removal, a call cut as it went too (O5, O11; OR-15)
+			this.log(`${folder} could not be deleted with stop_agent by ${this.whoIs(by)}: ${messageOf(err)}`);
+			// With what a retry needs to finish what is left once git forgot the worktree, whoever made it (OR-08)
+			const branch = target.leftover ?? target.branch;
+			this.recordRemoval({ folder, by, deleted: false, reason: messageOf(err), main: target.main, ...(branch !== undefined ? { branch } : {}) });
 			return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped, worktree: { folder, deleted: false, why: messageOf(err) } };
 		}
+		this.recordRemoval({ folder, by, deleted: true });
 		this.table.forgetWorktree(folder);
 		this.log(`${folder} was deleted with stop_agent by ${this.whoIs(by)}.`);
 		return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped, worktree: { folder, deleted: true } };
@@ -1057,36 +1338,41 @@ export class Facade implements Disposable {
 
 	/**
 	 * Records the end of an agent whose process was gone as Facade came back: one set out to be stopped was
-	 * stopped; one the window saw end ended as it did - its tab closed by the person, or its CLI exited with
-	 * its code (AGENT-LAUNCHER.md, L12: a known exit is recorded) - but one killed, which is no exit of its
-	 * CLI's, is lost, its reason naming the signal (D11); any other went with its window, or is lost - failed,
-	 * had it not started. Nobody is told: it ended while no window was there to see it.
+	 * stopped; one the window saw end ended as it did - its tab closed, or its folder removed, by the person, its
+	 * folder gone from the disk, or its CLI exited with its code (AGENT-LAUNCHER.md, L12: a known exit is
+	 * recorded) - but one killed, which is no exit of its CLI's, is lost, its reason naming the signal (D11); any
+	 * other went with its window, or is lost - failed, had it not started. The person hears of what L6 tells them -
+	 * a nonzero exit, a stop they did not ask for - as when Facade sees it, unless they closed the window, which
+	 * ended its session: nothing of that is news to them, nor is a loss nobody saw.
 	 */
 	private endedUnseen(agent: LiveAgent, closedByThePerson: boolean): void {
 		const end = this.ports.terminals.endOf?.(agent.id);
-		if (cutBeforeLaunch(agent)) {
+		// Cut before its CLI ran: in its worktree's preparation, or as its CLI was being launched - no process recorded,
+		// and no terminal the window saw end - a pre-launch run that is definitely absent (O11; OR-14)
+		if (cutBeforeLaunch(agent) || (agent.state === 'starting' && agent.phase === 'launching_cli' && agent.processId === undefined && end === undefined)) {
 			const made = !!this.table.madeWorktree(agent.folder) && fs.existsSync(agent.folder);
 			// Its setup goes with the window that went - not with an extension host that started again in this very
 			// window, whose terminals are the person's, untouched (WIN-03)
 			const hostOnly = !!this.table.lastClose?.thisWindow || this.sameWindow;
-			if (made && !hostOnly) {
+			if (made && !hostOnly && agent.phase === 'running_setup') {
 				this.ports.git.stopSetup(agent.folder);
 			}
 			this.ended(agent, 'failed', cutReason(agent, made, hostOnly), { quiet: true });
 			return;
 		}
 		if (agent.state === 'stopping') {
-			this.ended(agent, 'stopped', agent.stopping?.reason ?? 'with stop_agent', { ...(agent.stopping?.by !== undefined ? { by: agent.stopping.by } : {}) });
-		} else if (end?.byThePerson) {
-			this.ended(agent, 'stopped', end.reason === 'worktreeDeleted' ? 'its worktree was deleted' : 'its tab was closed', { by: 'human', quiet: true });
+			// A stop under way as the whole window went: of a session that is gone, and no news (L6; M8)
+			this.ended(agent, 'stopped', agent.stopping?.reason ?? 'with stop_agent', { ...(agent.stopping?.by !== undefined ? { by: agent.stopping.by } : {}), ...(closedByThePerson ? { quiet: true, windowWent: true } : {}) });
+		} else if (end?.byThePerson || end?.reason === 'folderGone') {
+			this.ended(agent, 'stopped', closedBecause(end), { ...(end.byThePerson ? { by: 'human' as const } : {}), ...(end.exitCode !== undefined ? { exitCode: end.exitCode } : {}), quiet: end.byThePerson || closedByThePerson });
 		} else if (end?.exitCode !== undefined && end.exitCode >= 0 && signalOf(end.exitCode) === undefined) {
-			this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', `its CLI ended with exit code ${end.exitCode} while Facade was away`, { exitCode: end.exitCode, quiet: true });
+			this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', `${exitedWith(end.exitCode)} while Facade was away`, { exitCode: end.exitCode, quiet: closedByThePerson });
 		} else if (end?.exitCode !== undefined) {
 			// Killed, which Facade did not see - no exit of its CLI's own: lost, saying what is known (D11)
 			const signal = signalOf(end.exitCode);
 			this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', signal !== undefined ? `its CLI was killed (signal ${signal}) while Facade was away` : HOST_RESTARTED, { quiet: true });
 		} else if (closedByThePerson) {
-			// The whole window went: nobody is told, and the person's messages to it are no news to them (M8)
+			// The whole window went: nobody is told of the end (M8) - what it had not fetched goes back all the same (M6)
 			this.ended(agent, 'stopped', 'its window went', { quiet: true, windowWent: true });
 		} else {
 			this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', 'its terminal was gone when Facade came back', { quiet: true });
@@ -1162,7 +1448,8 @@ export class Facade implements Disposable {
 			left = still;
 		}
 		for (const agent of left) {
-			this.log(`Whether ${describe(agent)} still runs is not known: the window could not tell. It stays as it was; closing its tab, or stop_agent, ends it.`);
+			// The window watches it still, and says its end once it can tell (LB-05)
+			this.log(`Whether ${describe(agent)} still runs is not known: the window could not tell. It stays as it was, and its end is recorded once the window tells of it.`);
 		}
 	}
 
@@ -1182,6 +1469,11 @@ export class Facade implements Disposable {
 		const stopBy = first ? first.by : by;
 		const why = first?.reason ?? reason;
 		if (!first) {
+			// A start that waits for it answers its caller with the stop: read before that start hears of it, for the
+			// end that follows, whichever way it is recorded, to be no second word to its creator (M8)
+			if (this.launcher.answers(agent.id)) {
+				this.stoppedWhileAnswered.add(agent.id);
+			}
 			this.table.stopping(agent.id, why, stopBy);
 			this.launcher.ended(agent.id, `it was stopped ${why}`);
 			// A start in its worktree's setup: the setup terminal is the start's, and goes with it (O4)
@@ -1350,28 +1642,61 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * What deleting the worktree `folder` of `repository` would lose, as a refusal names it - besides what
-	 * Facade put there and nobody changed, and with what someone changed of it, which git may not show;
-	 * undefined where nothing would be lost.
+	 * What a removal with stop_agent that failed left of the worktree `folder` - git forgot it, its folder stayed - as a
+	 * worktree Facade made is named: its repository's main checkout and its branch; undefined where none failed there.
+	 * A worktree of the person's is finished by a retry as one of Facade's is (AGENT-ORCHESTRATION.md, O5; OR-08).
 	 */
-	private async changesIn(folder: string, repository: DeletionTarget): Promise<string | undefined> {
-		const named = (list: readonly string[]) => list.length > SHOWN_CHANGES ? `${list.slice(0, SHOWN_CHANGES).join(', ')} and ${list.length - SHOWN_CHANGES} more` : list.join(', ');
-		// What a deletion left holds no git to ask: what of it the branch does not hold as it is, is work
-		if (repository.leftover !== undefined) {
-			const work = await this.ports.git.leftoverWorkIn(repository.main, repository.leftover, folder);
-			return work.length ? `what a deletion left of it holds ${work.length} ${work.length === 1 ? 'file' : 'files'} its branch ${repository.leftover} does not hold as ${work.length === 1 ? 'it is' : 'they are'} (${named(work)})` : undefined;
+	private leftoverOfRemoval(folder: string): { readonly repository: string; readonly name: string } | undefined {
+		const failed = this.table.failedRemoval(folder);
+		return failed?.main !== undefined && failed.branch !== undefined ? { repository: failed.main, name: failed.branch } : undefined;
+	}
+
+	/** Records how a removal went (O11); what cannot be recorded is said in the log, the removal's outcome unchanged. */
+	private recordRemoval(removal: WorktreeRemoval): void {
+		try {
+			this.table.recordWorktreeRemoval(removal);
+		} catch (err) {
+			this.log(`How the removal of ${removal.folder} went could not be recorded: ${messageOf(err)}`);
 		}
-		const changes = await this.ports.git.changesIn(folder);
-		const owned = (await this.ownFilesIn(folder, repository)).map(file => file.path);
-		const files = [...new Set([...changes.files.filter(file => !owned.includes(file)), ...this.editedIn(folder)])];
-		if (!files.length && !changes.unsaved.length && !changes.submodules.length) {
+	}
+
+	/** What the deletion of `folder` that waits for agents still stopping says: the facts its data carries, in words (O2, O5). */
+	private pendingDeletionText(folder: string, facts: PendingDeletion): string {
+		const named = (ids: readonly number[]) => ids.map(id => this.whoIs(id)).join(', ');
+		const one = facts.stopping.length === 1;
+		return `Not every agent in ${folder} has ended yet, so it was not deleted: ${named(facts.stopping)} ${one ? 'is' : 'are'} still stopping${facts.stopped.length ? `; ${named(facts.stopped)} stopped` : ''}. Call stop_agent with delete_worktree again once ${one ? 'it has' : 'they have'} ended.`;
+	}
+
+	/**
+	 * What deleting the worktree `folder` of `repository` - closing the terminals of `agents` - would lose, as a refusal
+	 * names it; undefined where nothing would be lost. What the shared Delete Worktree's own preflight finds, what Facade
+	 * put there and nobody changed applied as for the deletion - its check alone, nothing stopped, closed or removed
+	 * (AGENT-ORCHESTRATION.md, O5 step 2; O8; OR-04) - each as it words it; and beside it what only Facade knows: what of
+	 * its own someone changed since, which git may not show, a worktree's submodules, and what a deletion left of it
+	 * holds that its branch does not.
+	 */
+	private async lossIn(folder: string, repository: DeletionTarget, agents: readonly number[]): Promise<string | undefined> {
+		const named = (list: readonly string[]) => list.length > SHOWN_CHANGES ? `${list.slice(0, SHOWN_CHANGES).join(', ')} and ${list.length - SHOWN_CHANGES} more` : list.join(', ');
+		const leftover = repository.leftover;
+		let shared: readonly string[];
+		try {
+			shared = await this.ports.git.deletionLoss(folder, { discardChanges: false, ownFiles: leftover === undefined ? await this.ownFilesIn(folder, repository) : [], main: repository.main, agents, ...(leftover !== undefined ? { leftover: true } : {}) });
+		} catch (err) {
+			throw new FacadeError('FAILED', `${folder} could not be checked for work that deleting it would lose: ${messageOf(err)}. Nothing was stopped.`);
+		}
+		// What a deletion left holds no git to ask: what of it the branch does not hold as it is, is work
+		const work = leftover !== undefined ? await this.ports.git.leftoverWorkIn(repository.main, leftover, folder) : [];
+		const changes = leftover === undefined ? [...shared, ...this.editedIn(folder).filter(file => !shared.includes(file))] : shared;
+		// Git keeps no copy of a submodule's commits in the repository: those not pushed go with it (X-14) - which the
+		// window's check names in no list
+		const submodules = leftover === undefined ? (await this.ports.git.changesIn(folder)).submodules : [];
+		if (!changes.length && !work.length && !submodules.length) {
 			return undefined;
 		}
 		return [
-			...files.length ? [`${files.length} uncommitted or untracked ${files.length === 1 ? 'file' : 'files'} (${named(files)})`] : [],
-			...changes.unsaved.length ? [`${changes.unsaved.length} unsaved ${changes.unsaved.length === 1 ? 'editor' : 'editors'} (${named(changes.unsaved)})`] : [],
-			// Git keeps no copy of a submodule's commits in the repository: those not pushed go with it (X-14)
-			...changes.submodules.length ? [`${changes.submodules.length} ${changes.submodules.length === 1 ? 'submodule' : 'submodules'} (${named(changes.submodules)}), with any of ${changes.submodules.length === 1 ? 'its' : 'their'} commits not pushed`] : []
+			...changes.length ? [named(changes)] : [],
+			...work.length ? [`what a deletion left of it holds ${work.length} ${work.length === 1 ? 'file' : 'files'} its branch ${leftover} does not hold as ${work.length === 1 ? 'it is' : 'they are'} (${named(work)})`] : [],
+			...submodules.length ? [`${submodules.length} ${submodules.length === 1 ? 'submodule' : 'submodules'} (${named(submodules)}), with any of ${submodules.length === 1 ? 'its' : 'their'} commits not pushed`] : []
 		].join(' and ');
 	}
 
@@ -1443,9 +1768,9 @@ export class Facade implements Disposable {
 		};
 	}
 
-	/** Refuses a start in a worktree being deleted. */
+	/** Refuses a start in a worktree being deleted: by an agent's `stop_agent`, or by the person in the window. */
 	private assertNotDeleting(folder: string): void {
-		if (this.deletions.some(each => isEqualPath(each.folder, folder))) {
+		if ([...this.deletions, ...this.personDeletions].some(each => isEqualPath(each.folder, folder))) {
 			throw new FacadeError('REFUSED', `${folder} is being deleted: no agent starts there.`);
 		}
 	}
@@ -1546,8 +1871,9 @@ export class Facade implements Disposable {
 
 	/**
 	 * An agent's process ended: the agent ended, unless it had already. One Facade set out to stop was
-	 * stopped, by whom it says; closed with its tab by the person, it was stopped by them; else its CLI ended
-	 * by itself - with its exit code, where it is known - or it did not start.
+	 * stopped, by whom it says; closed with its tab by the person - or with its worktree, or its folder - it was
+	 * stopped by them; closed as its folder went from the disk, by no one Facade knows; else its CLI ended by
+	 * itself - with its exit code, where it is known - or it did not start.
 	 */
 	private terminalEnded(id: number, end: TerminalEnd): void {
 		const found = this.liveAgents().find(each => each.id === id);
@@ -1568,14 +1894,18 @@ export class Facade implements Disposable {
 		try {
 			if (agent.state === 'stopping') {
 				this.ended(agent, 'stopped', agent.stopping?.reason ?? 'with stop_agent', { ...(agent.stopping?.by !== undefined ? { by: agent.stopping.by } : {}), ...(end.exitCode !== undefined ? { exitCode: end.exitCode } : {}) });
-			} else if (end.byThePerson) {
-				this.ended(agent, 'stopped', end.reason === 'worktreeDeleted' ? 'its worktree was deleted' : 'its tab was closed', { by: 'human' });
+			} else if (end.byThePerson || end.reason === 'folderGone') {
+				// A stop the person did, or - its folder gone - one nobody they know did: not asked for by them (L6). With
+				// the exit code the window saw, for its creator's notice (M8)
+				this.ended(agent, 'stopped', closedBecause(end), { ...(end.byThePerson ? { by: 'human' as const } : {}), ...(end.exitCode !== undefined ? { exitCode: end.exitCode } : {}) });
 			} else if (end.exitCode !== undefined && end.exitCode < 0) {
 				// No exit code: no CLI exits -1, its process went with the terminal host (TM-17)
 				this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', HOST_RESTARTED);
 			} else {
-				const reason = end.exitCode === undefined ? 'its terminal closed' : `its CLI ended with exit code ${end.exitCode}`;
-				this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', reason, end.exitCode !== undefined ? { exitCode: end.exitCode } : {});
+				// An exit code 130 just after an agent pressed Ctrl+C there is its doing, and said so (L6)
+				const interrupter = end.exitCode === INTERRUPTED ? this.screens.interruptedBy(agent.id) : undefined;
+				const reason = end.exitCode === undefined ? 'its terminal closed' : `${exitedWith(end.exitCode)}${interrupter !== undefined ? `, after ${this.whoIs(interrupter)} pressed Ctrl+C there` : ''}`;
+				this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', reason, { ...end.exitCode !== undefined ? { exitCode: end.exitCode } : {}, ...interrupter !== undefined ? { interruptedByAgent: true } : {} });
 			}
 		} catch (err) {
 			this.log(`Recording that ${describe(agent)} ended failed: ${messageOf(err)}`);
@@ -1585,18 +1915,20 @@ export class Facade implements Disposable {
 	/**
 	 * Records how an agent ended - once - and takes back what was put into its folder once no agent runs
 	 * there. The person hears of an agent they started that ended unexpectedly (AGENT-LAUNCHER.md, L6): its
-	 * CLI exited with a code other than 0, or 130 from the keyboard - or one the window could not tell - or it
-	 * was stopped other than by them;
-	 * nothing of what they did, of a window that went, of a lost agent, or of a start of theirs that says it
-	 * failed itself. The agents it started are not touched. Answers with its end; undefined for an agent that
-	 * had ended already, or once the window closed.
+	 * CLI exited with a code other than 0, or 130 from the keyboard - or one the window could not tell - also
+	 * as it started; or it was stopped other than by them - by an agent, or by no one Facade knows; nothing of
+	 * what they did, of a window that went, of a lost agent, or of a start from the window that says it failed
+	 * itself. A start of their script's says it to the script, and to them (L5). The agents it started are not
+	 * touched. Answers with its end; undefined for an agent that had ended already, or once the window closed.
 	 */
-	private ended(agent: Agent, kind: EndKind, reason: string, details: { readonly by?: StoppedBy; readonly exitCode?: number; readonly quiet?: boolean; readonly windowWent?: boolean } = {}): End | undefined {
+	private ended(agent: Agent, kind: EndKind, reason: string, details: { readonly by?: StoppedBy; readonly exitCode?: number; readonly quiet?: boolean; readonly windowWent?: boolean; readonly interruptedByAgent?: boolean } = {}): End | undefined {
 		if (this.disposed) {
 			return undefined;
 		}
-		// Read before the start that waits for it, if one does, hears of its end.
-		const answered = this.launcher.answers(agent.id);
+		// Read before the start that waits for it, if one does, hears of its end - or, stopped as one waited, as that
+		// start answered its caller with the stop (M8)
+		const stoppedAnswered = this.stoppedWhileAnswered.delete(agent.id);
+		const answered = stoppedAnswered || this.launcher.answers(agent.id);
 		const end = this.table.end(agent.id, kind, reason, { ...(details.by !== undefined ? { by: details.by } : {}), ...(details.exitCode !== undefined ? { exitCode: details.exitCode } : {}) });
 		if (!end) {
 			return undefined;
@@ -1604,20 +1936,21 @@ export class Facade implements Disposable {
 		this.log(`${describe(agent)} ended (${kind}): ${reason}`);
 		this.launcher.ended(agent.id, reason);
 		this.withdraw(agent);
-		// A start that answers its caller says how it failed itself; what the person did is no news to them.
-		const unexpected = (kind === 'exited' && details.exitCode !== 0 && details.exitCode !== INTERRUPTED)
-			|| (kind === 'stopped' && typeof details.by === 'number')
-			|| (kind === 'failed' && !answered);
+		// A start from the window that answers says how it failed itself; one of the person's script's, whom nobody may
+		// be watching, is told them too (L5). Their CLI's normal exit is no news to them - nor what they did: an exit
+		// 130 no agent is known to have caused is their own Ctrl+C - whether or not it had started (L6)
+		const asUsual = details.exitCode === 0 || (details.exitCode === INTERRUPTED && !details.interruptedByAgent);
+		const unexpected = ((kind === 'exited' || (kind === 'failed' && (!answered || !!agent.unattended))) && !asUsual)
+			|| (kind === 'stopped' && details.by !== 'human');
 		if (agent.creator === undefined && !details.quiet && unexpected) {
-			this.ports.person.tell(endNotice(agent, end, this.table.whoIs(end.by)), agent.id, endSeverity(end));
+			this.tellEnded({ text: endNotice(agent, end, this.table.whoIs(end.by)), agent: agent.id, severity: endSeverity(end) });
 		}
 		// Its messages: those unread go back to their senders, and its creator, an agent, hears of its end (M6, M8)
 		const notice: EndNotice = {
 			how: howItEnded(end, this.table.whoIs(end.by)),
+			told: howItEnded(end, this.table.whoIs(end.by), true),
 			// Every end, exit 0 too - but a stop it asked for, one its start answered it with, and the window going
-			tell: agent.creator !== undefined && !details.windowWent && !answered && !(end.kind === 'stopped' && end.by === agent.creator),
-			// Senders the end is no news to: the creator its start answered, and the person whose window went
-			knownTo: [...answered ? [agent.creator ?? HUMAN] : [], ...details.windowWent ? [HUMAN] : []] as Recipient[]
+			tell: agent.creator !== undefined && !details.windowWent && !answered && !(end.kind === 'stopped' && end.by === agent.creator)
 		};
 		if (this.settling) {
 			this.settling.push([agent, notice]);
@@ -1627,10 +1960,14 @@ export class Facade implements Disposable {
 		return end;
 	}
 
-	/** An agent ended: its unread messages go back, and its creator hears of it as `notice` says. */
+	/**
+	 * An agent ended: its unread messages go back - to every live sender, the person whose window went too, and a
+	 * creator its start answered with the failure, its task among them: M8 spares only the notice of an end (M6) -
+	 * and its creator hears of it as `notice` says.
+	 */
 	private messagesOfEnded(agent: Agent, notice: EndNotice): void {
 		try {
-			this.mail.ended(this.table.get(agent.id) ?? agent, notice.how, notice.tell, notice.knownTo);
+			this.mail.ended(this.table.get(agent.id) ?? agent, notice.how, notice.tell, notice.told);
 		} catch (err) {
 			this.log(`The unread messages of ${describe(agent)}, and its creator's notice, could not all be recorded: ${messageOf(err)}`);
 		}
@@ -1731,7 +2068,7 @@ export class Facade implements Disposable {
 	 * Refused, saying why and what can be started: one turned off, one not on this machine, and one whose
 	 * settings are wrong.
 	 */
-	private async startableHere(id: string, folder: string, custom = false): Promise<{ readonly installed: InstalledCli; readonly config: CliConfig }> {
+	private async startableHere(id: string, folder: string, custom = false, unattended = false): Promise<{ readonly installed: InstalledCli; readonly config: CliConfig }> {
 		const found = this.cliOf(id, custom);
 		const startable = () => this.startable().map(each => each.id).join(', ') || 'none';
 		if (!found) {
@@ -1744,9 +2081,9 @@ export class Facade implements Disposable {
 		if (config.wrong) {
 			throw new FacadeError('UNAVAILABLE', `Facade cannot start ${cli.displayName} until the person puts its settings right: ${config.wrong.join('; ')}. Show Agent Launch shows them.`);
 		}
-		const env = { ...await this.options.clis.environment(folder), ...config.launch.environment };
+		const env = { ...await this.options.clis.environment(folder), ...launchFor(config, unattended).launch.environment };
 		this.stillOpen();
-		// Found as its terminal will find it: in the environment a terminal there has.
+		// Found as its terminal will find it: in the environment a terminal there has, with its starter's launch's (L10).
 		const installed = this.options.clis.locate(cli, config, env, folder);
 		if (!installed) {
 			throw new FacadeError('UNAVAILABLE', `Facade cannot start ${cli.displayName} in ${folder}: ${whyNotInstalled(cli, config, 'the PATH a terminal there has')}.`);
@@ -1792,17 +2129,22 @@ export class Facade implements Disposable {
 		}
 	}
 
-	/** The environment a CLI starts with in `folder`: the terminals' there, with what its launch sets in it. */
-	private async environmentOf(installed: InstalledCli, folder: string): Promise<Environment> {
-		return { ...await this.options.clis.environment(folder), ...installed.config.launch.environment };
+	/**
+	 * The environment a CLI starts with in `folder`: the terminals' there, with what its launch sets in it - for one
+	 * started through `start_agent`, `unattended`, its launch's unattended part too - where its trust and its
+	 * configuration are found (AGENT-LAUNCHER.md, L10).
+	 */
+	private async environmentOf(installed: InstalledCli, folder: string, unattended: boolean): Promise<Environment> {
+		return { ...await this.options.clis.environment(folder), ...launchFor(installed.config, unattended).launch.environment };
 	}
 
 	/**
 	 * The agent a tool names (O2): by its number, `#a7`, `#7`, `a7` or `7`; by `@name`, where one agent that
 	 * has not ended and that the caller reaches has that name; or as Facade's words name it, `@name #a7`, the
-	 * number that agent's. A number of another kind, the person, and a bare number an agent that has not ended
-	 * is also called are refused: no agent is named on a guess. A name only ended agents have answers with
-	 * their numbers.
+	 * number that agent's. A number of another kind, and a bare number an agent that has not ended is also
+	 * called, are refused: no agent is named on a guess. The person is refused too, one way for every tool that
+	 * takes an agent: they exist, and have no run to stop, read or type into (O2; D2). A name only ended agents
+	 * have answers with their numbers.
 	 */
 	private agentNamed(target: string, caller: Caller): Agent {
 		const reference = parseAgentReference(target);
@@ -1830,7 +2172,7 @@ export class Facade implements Disposable {
 			return agent;
 		}
 		if (reference.name === PERSON.name) {
-			throw new FacadeError('INVALID', `@${reference.name} is the person, not an agent: the tools that manage agents do not take them.`);
+			throw new FacadeError('REFUSED', `${describe(PERSON)} is the person, not an agent: they have no run to stop, read or type into. send_message reaches them.`);
 		}
 		const named = AgentTable.liveNamedIn(reach, reference.name);
 		if (named.length > 1) {
@@ -1874,11 +2216,22 @@ export class Facade implements Disposable {
 			folder: agent.folder,
 			state: agent.state,
 			...(agent.state === 'starting' ? { phase: agent.phase ?? (agent.processId !== undefined ? 'connecting' : 'launching_cli') } : {}),
+			...(agent.setup !== undefined ? { setup: agent.setup } : {}),
 			...(agent.state === 'stopping' && agent.stopping ? { stopping: agent.stopping } : {}),
+			...this.removalOf(agent.folder),
 			startTime: agent.startTime,
 			...(this.table.state.mail.tasks.has(agent.id) ? { taskMessage: this.table.state.mail.tasks.get(agent.id) } : {}),
 			...(agent.end ? { end: agent.end } : {})
 		};
+	}
+
+	/** The removal of the worktree `folder` with stop_agent, as an agent there is described: under way, or the last one failed (O11). */
+	private removalOf(folder: string): Pick<AgentFacts, 'worktreeRemoval'> {
+		if (this.deletions.some(each => isEqualPath(each.folder, folder))) {
+			return { worktreeRemoval: { state: 'pending' } };
+		}
+		const failed = this.table.failedRemoval(folder);
+		return failed && fs.existsSync(folder) ? { worktreeRemoval: { state: 'failed', ...(failed.by !== undefined ? { by: failed.by } : {}), ...(failed.reason !== undefined ? { reason: failed.reason } : {}) } } : {};
 	}
 
 	private liveAgents(): LiveAgent[] {
@@ -1933,6 +2286,16 @@ export class Facade implements Disposable {
 	}
 }
 
+/**
+ * What a start of `installed` through `start_agent` in `place` says of the servers of its folder's project MCP configuration
+ * its launch runs without: with YOLO off, Claude Code's, those the person has not approved for the project, which it would
+ * stop to ask about (AGENT-LAUNCHER.md, L4, rule 3; LV-02). None where there are none.
+ */
+function serversOffNotes(installed: InstalledCli, place: { readonly folder: string; readonly repository: string }, home: string, yolo: boolean): string[] {
+	const off = installed.cli.projectServersOff?.(launchFor(installed.config, true), place, home, yolo, true) ?? [];
+	return off.length ? [`With YOLO off, ${installed.cli.displayName} runs without the MCP servers of ${place.folder}'s project the person has not approved for it, so that it does not stop to ask about them: ${off.join(', ')}.`] : [];
+}
+
 /** A sandbox as Facade's words say it. */
 export function sandboxText(sandbox: Sandbox): string {
 	return sandbox === 'unavailable' ? 'no sandbox' : sandbox === 'unknown' ? 'sandbox unknown' : `sandbox ${sandbox}`;
@@ -1953,31 +2316,55 @@ function signalOf(exitCode: number): number | undefined {
 /** Why an agent whose process the window has no exit code for - its terminal host restarted, which says -1 - is lost (TM-17). */
 const HOST_RESTARTED = 'the window\'s terminal host restarted, ending its process';
 
+/** Why an agent ended whose CLI exited with `exitCode`, where nothing more is known of it. */
+function exitedWith(exitCode: number): string {
+	return `its CLI ended with exit code ${exitCode}`;
+}
+
+/**
+ * Why an agent's terminal was closed, where its CLI did not exit by itself (AGENT-LAUNCHER.md, L6): its tab closed,
+ * its worktree deleted or its folder removed from the workspace, by the person; or its folder gone from the disk - a
+ * worktree removed outside Facade - by no one Facade knows.
+ */
+function closedBecause(end: TerminalEnd): string {
+	switch (end.reason) {
+		case 'worktreeDeleted': return 'its worktree was deleted';
+		case 'folderRemoved': return 'its folder was removed from the workspace';
+		case 'folderGone': return 'its folder is gone from the disk';
+		default: return 'its tab was closed';
+	}
+}
+
 function cutBeforeLaunch(agent: LiveAgent): boolean {
 	return agent.state === 'starting' && (agent.phase === 'creating_worktree' || agent.phase === 'running_setup');
 }
 
 /**
- * Why a start cut before its CLI was launched failed: as the window went, or - `hostOnly` - as Facade started
- * again in this very window; and where its worktree stays, where `made`.
+ * Why a start cut before its CLI was launched - or ran, cut as it was being launched - failed: as the window went, or -
+ * `hostOnly` - as Facade started again in this very window; and where its worktree stays, where `made` (O11; OR-14).
  */
 function cutReason(agent: LiveAgent, made: boolean, hostOnly: boolean): string {
 	const cut = hostOnly ? 'as Facade started again in this window' : 'as the window went';
-	const where = agent.phase === 'creating_worktree' ? 'as its worktree was made' : 'as its worktree was set up';
+	const where = agent.phase === 'creating_worktree' ? 'as its worktree was made' : agent.phase === 'running_setup' ? 'as its worktree was set up' : 'as its CLI was being launched';
 	const left = made ? `; its worktree stays, at ${agent.folder}${hostOnly && agent.phase === 'running_setup' ? ', its setup going on in its terminal' : ''}` : '';
-	return `its start was cut ${cut}, ${where}, before its CLI was launched${left}`;
+	return `its start was cut ${cut}, ${where}, before its CLI ${agent.phase === 'launching_cli' ? 'ran' : 'was launched'}${left}`;
 }
 
 /**
  * How an agent ended, as Facade's messages say it (AGENT-MESSAGES.md, M6, M8): "stopped by @lead #a1 with
- * stop_agent", "it exited, with exit code 1", "it did not start: ...". `stopper` names who stopped it.
+ * stop_agent", "it exited, with exit code 1", "it exited: its CLI ended with exit code 130, after @x #a5 pressed
+ * Ctrl+C there", "it did not start: ...". `stopper` names who stopped it.
  */
-function howItEnded(end: End, stopper: string): string {
+function howItEnded(end: End, stopper: string, withExitCode = false): string {
 	switch (end.kind) {
-		case 'stopped':
-			return end.by === undefined ? `stopped: ${end.reason}` : /^(with|as) /.test(end.reason) ? `stopped by ${stopper} ${end.reason}` : `stopped by ${stopper}: ${end.reason}`;
+		case 'stopped': {
+			// Its exit code where the window saw one, for the notice of its end (AGENT-MESSAGES.md, M8)
+			const code = withExitCode && end.exitCode !== undefined ? `, its CLI ending with exit code ${end.exitCode}` : '';
+			return end.by === undefined ? `stopped: ${end.reason}${code}` : /^(with|as) /.test(end.reason) ? `stopped by ${stopper} ${end.reason}${code}` : `stopped by ${stopper}: ${end.reason}${code}`;
+		}
 		case 'exited':
-			return end.exitCode !== undefined ? `it exited, with exit code ${end.exitCode}` : `it ended: ${end.reason}`;
+			// Its reason, where it says more than its code: which agent pressed Ctrl+C there, Facade away (M8; L6)
+			return end.exitCode === undefined ? `it ended: ${end.reason}` : end.reason === exitedWith(end.exitCode) ? `it exited, with exit code ${end.exitCode}` : `it exited: ${end.reason}`;
 		case 'failed':
 			return `it did not start: ${end.reason}`;
 		case 'lost':

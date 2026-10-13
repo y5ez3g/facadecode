@@ -26,8 +26,11 @@ export type ErrorCode =
  */
 export interface ErrorOutcome {
 	readonly outcome?: 'unknown' | 'pending' | 'failed' | 'not_applied' | 'partial';
-	/** Why not all of an input went in: its terminal ended, or it waited for its turn past its time. */
-	readonly reason?: 'ended' | 'timeout';
+	/**
+	 * Why not all of an input went in: its terminal ended, it waited for its turn past its time, or - for input that
+	 * needs the agent framework - the framework was off when its turn came.
+	 */
+	readonly reason?: 'ended' | 'timeout' | 'frameworkOff';
 	/** For text typed: whether it was pasted, and whether Enter followed. */
 	readonly pasted?: boolean;
 	readonly entered?: boolean;
@@ -40,8 +43,13 @@ export interface ErrorOutcome {
 	readonly worktree?: string;
 	/** The agents the call stopped before it was refused: what happened all the same. */
 	readonly stopped?: readonly number[];
-	/** Where the start of `agent` had got to (AGENT-ORCHESTRATION.md, O2). */
-	readonly phase?: StartPhase;
+	/** For a message to several cut short: those it recorded before it was, by number and recipient (AGENT-MESSAGES.md, M11; XS-02). */
+	readonly sent?: readonly { readonly id: number; readonly to: string }[];
+	/**
+	 * Where the start of `agent` had got to (AGENT-ORCHESTRATION.md, O2); `validating`, with no `agent`, for one
+	 * refused or failed before it was recorded: no run was made for it (O4; OR-18).
+	 */
+	readonly phase?: StartPhase | 'validating';
 }
 
 /** How Facade's operations fail: with one of five codes, and a message that says what is wrong and what would be right. */

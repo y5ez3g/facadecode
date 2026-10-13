@@ -12,10 +12,11 @@ const PLUGIN_DIR = '.agents/plugins/facade';
 /**
  * Antigravity's CLI in its own UI. YOLO on: every command without asking, edits accepted. YOLO off: it
  * has no way to let Facade's server alone through unasked, so it asks for nothing either - edits accepted
- * too (AGENT-LAUNCHER.md, L4, rule 3; X-42); it has no sandbox of its own. It reads MCP servers only from its global configuration or a plugin, so
- * Facade's server and skills go into the folder as a plugin, which every agent there shares: the server
- * finds the agent from its environment. Through `start_agent` its background update is turned off for the launch, and its
- * warm-up tells it to ask in words (AGENT-LAUNCHER.md, L4; N-71). Wherever an
+ * too (AGENT-LAUNCHER.md, L4, rule 3; X-42); it has no sandbox of its own. It reads MCP servers only from
+ * its global configuration or a plugin, so Facade's server and skills go into the folder as a plugin,
+ * which every agent there shares: the server finds the agent from its environment. Through `start_agent`
+ * its background update is turned off for the launch, and its warm-up tells it who it is and to ask
+ * through Facade's messages - its opening, `${opening}` (AGENT-LAUNCHER.md, L4, L9; N-71). Wherever an
  * agent starts, the person's trust in its folder goes into the `trustedWorkspaces` of its settings, as
  * Antigravity writes it when they answer its question. With the agent framework on it always has its
  * warm-up turn, with no task too: its MCP servers connect only after its first turn.
@@ -54,7 +55,7 @@ export const antigravityCli: AgentCli = {
 				arguments: {
 					// Its first conversation tells it what it must not do while nobody may be watching: no tool of its
 					// takes its question tool away, and its model may not be given its server's instructions (L4; N-71)
-					warmUp: ['-i', 'Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer.']
+					warmUp: ['-i', 'Reply with the single word ready, and nothing else. Nobody may be watching this terminal. ${opening}']
 				},
 				// Only the literal true turns its background update off.
 				environment: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' }
@@ -66,13 +67,15 @@ export const antigravityCli: AgentCli = {
 	// folders (N-85)
 	trustValues: ({ folder }) => ({ folder: path.resolve(folder) }),
 	sharedServer: true,
-	// Its --model gemini-3.8-flash-high runs High whatever --effort says; --effort alone sets it (AS-13)
+	// A model's name may carry an effort - its --model gemini-3.8-flash-high runs High whatever --effort says (AS-13) - so an
+	// effort given with a model, passed on as every value is, is not known to be the one it runs at (OR-01)
 	modelCarriesEffort: true,
 	task: 'terminal',
 	sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' },
 	exemption: 'all',
 	// No setting or argument of its takes its question tool away (YO-07)
 	questionTool: 'kept',
+	verified: '1.3.2',
 	launch(input, executable) {
 		const { connection } = input;
 		return {

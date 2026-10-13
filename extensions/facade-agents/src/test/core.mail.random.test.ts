@@ -60,7 +60,7 @@ suite('Core: messages at random', () => {
 	});
 
 	for (const seed of SEEDS) {
-		test(`run ${seed}: every message delivered at least once or returned, none lost while its recipient runs; one recipient's given in number order, given again marked; a doorbell a minute at most but once all was fetched, and within a minute of a message; messages waiting told of once, after the timeout; the ledger read back the same`, async function () {
+		test(`run ${seed}: every message delivered at least once or returned, none lost while its recipient runs; one recipient's given in number order, given again under its number with its text, in the delivery state it reached; a doorbell a minute at most but once all was fetched, and within a minute of a message; messages waiting told of once, after the timeout; the ledger read back the same`, async function () {
 			this.timeout(120_000);
 			const random = randomFrom(seed);
 			const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
@@ -74,6 +74,8 @@ suite('Core: messages at random', () => {
 			const written = new Map<number, Set<number>>();
 			/** The messages each agent was given, by number: in any result, reached or not. */
 			const given = new Map<number, Set<number>>();
+			/** Each message's text, as a result first gave it. */
+			const texts = new Map<number, string>();
 			const problems: string[] = [];
 			let names = 0;
 
@@ -106,16 +108,25 @@ suite('Core: messages at random', () => {
 				return `@${agent.name} #a${agent.id}`;
 			};
 
-			/** Takes in a fetch: its order, its marks, and what reached the agent. */
+			/** Takes in a fetch: its order, its delivery states, its texts, and what reached the agent. */
 			const took = (agent: number, fetched: Fetched, reached: boolean) => {
 				const ids = fetched.messages.map(message => message.id);
 				if (ids.join() !== [...ids].sort((a, b) => a - b).join()) {
 					problems.push(`#a${agent} was given ${ids.join()}, out of order`);
 				}
 				const before = given.get(agent) ?? new Set<number>();
+				const reachedBefore = written.get(agent) ?? new Set<number>();
 				for (const message of fetched.messages) {
-					if (message.mark !== 'returned' && (message.mark === 'given before') !== before.has(message.id)) {
-						problems.push(`#m${message.id} was given to #a${agent} marked ${message.mark}, ${before.has(message.id) ? '' : 'never '}given it before`);
+					// One of its own is delivered once a result with it reached it, unread until then: no mark of who was given what (M4)
+					if (message.own && message.state !== 'returned' && message.state !== (reachedBefore.has(message.id) ? 'delivered' : 'unread')) {
+						problems.push(`#m${message.id} was given to #a${agent} as ${message.state}, a result with it ${reachedBefore.has(message.id) ? '' : 'never '}having reached it`);
+					}
+					const text = texts.get(message.id);
+					if (message.text !== undefined && text !== undefined && message.text !== text) {
+						problems.push(`#m${message.id} was given to #a${agent} with another text`);
+					}
+					if (message.text !== undefined) {
+						texts.set(message.id, message.text);
 					}
 				}
 				ids.forEach(id => before.add(id));

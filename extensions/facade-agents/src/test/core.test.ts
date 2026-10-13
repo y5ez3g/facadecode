@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DeferredPromise } from '../base/async';
 import { readCliConfig } from '../clis/config';
+import { instructionsFor } from '../contract/prompts';
 import { FacadeError } from '../core/errors';
 import { Injections } from '../core/injections';
 import { SetupOutcome } from '../core/ports';
@@ -17,7 +18,7 @@ import { writeIdentity } from '../record/identity';
 import { screensDir } from '../record/screens';
 import { settled, sleep, until, useFakeClock } from './clock';
 import { argCli, callerOf, endFakeProcess, fakeWorld, isFakeProcessRunning, startFakeProcess, worktreeFolder } from './fakes';
-import { outcomeOf, tempDir } from './util';
+import { failureOf, outcomeOf, tempDir } from './util';
 
 type World = ReturnType<typeof fakeWorld>;
 
@@ -179,7 +180,7 @@ suite('Core: starting an agent, step by step', () => {
 			trust: fs.readFileSync(file, 'utf8'),
 			logged: world.logs.filter(line => line.includes(': Arg Code trust'))
 		}, {
-			started: { status: 'started', id: 2, name: 'clamp', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'clamp', folder, state: 'running', startTime: 0, taskMessage: 2, newWorktree: true },
+			started: { status: 'started', id: 2, name: 'clamp', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'clamp', folder, setup: 'none', state: 'running', startTime: 0, taskMessage: 2, newWorktree: true },
 			steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${folder}`],
 			made: { name: 'clamp', folder, repository: lab, commit: 'a'.repeat(40), madeBy: 1 },
 			// The rest of the file as it was, and its layout.
@@ -219,6 +220,59 @@ suite('Core: starting an agent, step by step', () => {
 			unset: `UNAVAILABLE: Facade cannot start Told Code in ${lab}: told is not on the PATH a terminal there has, and facade.agents.told.path names no other.`,
 			misnamed: `UNAVAILABLE: Facade cannot start Told Code in ${lab}: facade.agents.told.path is "/nowhere/told", which is no file, nor a command on the PATH a terminal there has.`
 		});
+	});
+
+	test('for an agent started through start_agent, the trust goes where its CLI reads it as the unattended part of its launch has it started - its environment over the launch\'s - and for the person\'s own, where the launch alone has it (L10)', async () => {
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, clis: ['arg'] });
+		const own = path.join(temp.dir, 'own-home');
+		const bots = path.join(temp.dir, 'bots-home');
+		world.settings.arg = { launch: { environment: { ARG_HOME: own }, unattended: { environment: { ARG_HOME: bots } } } };
+		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
+		await world.facade.startForPerson('arg', lab);
+		const both = { own: trustIn(own), bots: trustIn(bots) };
+		fs.rmSync(own, { recursive: true, force: true });
+		await world.startUp(PERSON, { name: 'again', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
+
+		assert.deepStrictEqual({ both, unattendedAlone: { own: trustIn(own), bots: trustIn(bots) } }, {
+			both: { own: { trusted: [lab] }, bots: { trusted: [lab] } },
+			unattendedAlone: { own: undefined, bots: { trusted: [lab] } }
+		});
+	});
+
+	test('an agent started through start_agent has its opening - who it is, who created it, to ask through messages - for a launch that names ${opening}, as Antigravity\'s warm-up does; the person\'s own has none (L9)', async () => {
+		world.settings.arg = { launch: { unattended: { arguments: { extra: ['--opening', '${opening}'] } } } };
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', model: 'large', effort: 'high', folder: lab });
+		await world.startUp(callerOf(world.agent(1)), { name: 'scout', cli: 'arg', model: 'small', effort: 'high' });
+		await world.facade.startForPerson('arg', lab);
+		const opening = (id: number) => {
+			const args = world.terminals.launched.find(launch => launch.id === id)?.args ?? [];
+			return args.includes('--opening') ? args[args.indexOf('--opening') + 1] : 'none';
+		};
+
+		assert.deepStrictEqual([1, 2, 3].map(opening), [
+			'[facade] You are @lead #a1, created by @human.',
+			'[facade] You are @scout #a2, created by @lead #a1.',
+			'none'
+		]);
+	});
+
+	test('on Windows, the script an npm shim runs is run with the Node the terminal\'s environment finds - with what the launch sets in it - as Show Agent Launch says, not the one the extension host\'s finds (L10)', async () => {
+		const tools = path.join(temp.dir, 'tools');
+		const shim = path.join(tools, 'npm', 'arg.cmd');
+		const script = path.join(tools, 'npm', 'node_modules', 'arg', 'bin', 'arg.js');
+		const node = path.join(tools, 'node', 'node.exe');
+		for (const [file, content] of [[shim, ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', 'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', 'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\arg\\bin\\arg.js" %*', ''].join('\r\n')], [script, ''], [node, '']] as const) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, content, { mode: 0o755 });
+		}
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, clis: ['arg'], platform: 'win32', locate: () => shim, environment: () => ({ PATH: path.join(temp.dir, 'nowhere'), PATHEXT: '.EXE;.CMD' }) });
+		world.settings.arg = { launch: { environment: { PATH: path.dirname(node) } } };
+		await world.startUp(PERSON, { name: 'win', cli: 'arg', model: 'large', effort: 'high', task: 'Go.', folder: lab });
+		const launched = world.terminals.launched.at(-1);
+
+		assert.deepStrictEqual({ executable: launched?.executable, script: launched?.args[0] }, { executable: node, script });
 	});
 
 	test('a CLI given its trust in its arguments is given them wherever an agent starts, before the person\'s own arguments; a trust the person set to null is no trust: nothing is written, and the CLI asks', async () => {
@@ -404,7 +458,7 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('a launch the window fails, and a CLI that ends as it starts, end the child as failed - its terminal closed, where it has one - and start_agent says why; one that has not started within the timeout is left starting, its start not confirmed, saying why, and starts once its CLI connects; the person who started them hears of it from the start alone', async () => {
+	test('a launch the window fails, and a CLI that ends as it starts, end the child as failed - its terminal closed, where it has one - and start_agent says why; one that has not started within the timeout is left starting, its start not confirmed, saying why, and starts once its CLI connects; the person\'s script that started them hears of it from the start, and the person - who may not be watching that script - once each, as of a start of theirs from the window (L5, L6; LA-12)', async () => {
 		world.terminals.failNext = 'the window has no terminal for it';
 		const launchFailed = await outcomeOf(world.facade.startAgent(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'One.', folder: lab }));
 		const ending = world.facade.startAgent(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Two.', folder: lab });
@@ -418,7 +472,7 @@ suite('Core: starting an agent, step by step', () => {
 		const whileUnconfirmed = agents(world);
 		world.hello(3);
 
-		assert.deepStrictEqual({ launchFailed, ended, timedOut: { status, why }, whileUnconfirmed, agents: agents(world), typed: world.terminals.typed, told: world.person.told }, {
+		assert.deepStrictEqual({ launchFailed, ended, timedOut: { status, why }, whileUnconfirmed, agents: agents(world), typed: world.terminals.typed, told: world.person.told, closed: world.person.closed }, {
 			launchFailed: 'FAILED: Arg Code did not start as @main #a1: the window has no terminal for it',
 			ended: 'FAILED: Arg Code did not start as @main #a2: its CLI ended with exit code 2',
 			timedOut: { status: 'unconfirmed', why: NOT_STARTED },
@@ -433,6 +487,32 @@ suite('Core: starting an agent, step by step', () => {
 				'#a3 @main by @human running'
 			],
 			typed: [],
+			told: [
+				'error: @main #a1 did not start: the window has no terminal for it. (#a1\'s terminal)',
+				'error: @main #a2 did not start: its CLI ended with exit code 2. (#a2\'s terminal)',
+				'warning: @main #a3 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a3\'s terminal)'
+			],
+			// Its connection closes that warning (L5)
+			closed: ['message:facade:3: @main #a3 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.']
+		});
+	});
+
+	test('an agent\'s start that is not confirmed in time, or fails as it waits, is its creator\'s to hear of from its answer alone: the person is told nothing of it (L5: an agent-created launch reports to its creator)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', task: 'Lead.', folder: lab });
+		const lead = callerOf(world.agent(1));
+		const silent = world.facade.startAgent(lead, { name: 'silent', cli: 'arg', task: 'One.' });
+		await until(() => world.terminals.launched.length === 2);
+		await sleep(5_000);
+		const { status } = await settled(silent);
+		const failing = world.facade.startAgent(lead, { name: 'failing', cli: 'arg', task: 'Two.' });
+		await until(() => world.terminals.launched.length === 3);
+		world.terminals.end('@failing #a3', { exitCode: 1, byThePerson: false });
+		const failed = await outcomeOf(settled(failing));
+
+		assert.deepStrictEqual({ status, failed, told: world.person.told }, {
+			status: 'unconfirmed',
+			failed: 'FAILED: Arg Code did not start as @failing #a3: its CLI ended with exit code 1',
 			told: []
 		});
 	});
@@ -516,15 +596,15 @@ suite('Core: starting an agent, step by step', () => {
 		world.hello(1);
 		await world.startUp(PERSON, { cli: 'arg', task: 'Script.', name: 'scripted', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Child.', name: 'child' });
-		const asked = world.terminals.launched.map(launch => `${launch.name} ${launch.args.includes('--no-ask') ? 'asks in words' : 'may put a question up'}`);
+		const asked = world.terminals.launched.map(launch => `${launch.name} ${launch.args.includes('--no-ask') ? 'asks through messages' : 'may put a question up'}`);
 
 		assert.deepStrictEqual({ asked, unattended: [1, 2, 3].map(id => world.agent(id).unattended ?? false) }, {
-			asked: ['@arg #a1 may put a question up', '@scripted #a2 asks in words', '@child #a3 asks in words'],
+			asked: ['@arg #a1 may put a question up', '@scripted #a2 asks through messages', '@child #a3 asks through messages'],
 			unattended: [false, true, true]
 		});
 	});
 
-	test('an agent started through start_agent with no task, of a CLI that keeps its question tool and takes its notice as its argument - Muse Code - is given its opening alone, which tells it to ask in words: nothing else it is sure to read does; one with a task its task\'s notice; the person\'s own nothing, at its prompt (L4; N-71)', async () => {
+	test('an agent started through start_agent with no task, of a CLI that keeps its question tool and takes its notice as its argument - Muse Code - is given its opening alone, which tells it to ask through Facade messages: nothing else it is sure to read does; one with a task its task\'s notice; the person\'s own nothing, at its prompt (L4; N-71)', async () => {
 		world.dispose();
 		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, argKeepsQuestions: true });
 		await world.facade.startForPerson('arg', lab);
@@ -540,14 +620,14 @@ suite('Core: starting an agent, step by step', () => {
 		]);
 	});
 
-	test('the person\'s history says what each agent\'s terminal runs, as it is launched: its command line, what its launch sets in its environment, and the files its arguments name - its settings - as written; its token\'s file by its path, never the token (N-76; UI-14)', async () => {
+	test('the person\'s history says what each agent\'s terminal runs, as it is launched: its command line, the variables its launch sets in its environment, and the files its arguments name - its settings - with their keys, never their values, which may be a key of the person\'s; its token\'s file by its path, never the token (N-76; UI-14; O11; OR-16)', async () => {
 		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Plan.', folder: lab });
 		const token = fs.readFileSync(path.join(world.table.runsDir, '1.token'), 'utf8').trim();
 
 		assert.deepStrictEqual({ history: history(world).map(line => line.split(world.table.dir).join('…')), token: fs.readFileSync(world.table.logFile, 'utf8').includes(token) }, {
 			history: [
 				`started  @main #a1  arg large high  YOLO on  by @human  in ${lab}`,
-				'launched @main #a1  …/bin/arg.exe --config …/runs/1.config.json --no-ask --yolo --model large --effort high -- "[facade] You are @main #a1, created by @human. Your task is #m1."  environment ARG_QUIET=1  …/runs/1.config.json {"command":"/facade/facade","args":["/facade/shim.js","mcp","--pipe","pipe","--token-file","…/runs/1.token"],"env":{"ELECTRON_RUN_AS_NODE":"1"}}',
+				'launched @main #a1  …/bin/arg.exe --config …/runs/1.config.json --no-ask --yolo --model large --effort high -- "[facade] You are @main #a1, created by @human. Your task is #m1."  environment ARG_QUIET  …/runs/1.config.json keys command, args, env.ELECTRON_RUN_AS_NODE',
 				'connected @main #a1',
 				'running  @main #a1'
 			],
@@ -612,7 +692,7 @@ suite('Core: starting an agent, step by step', () => {
 		assert.deepStrictEqual({ first: [from(first.args, 4), first.env], second: [from(second.args, 3), second.env], inArguments, inTrust, made: world.git.steps, slow: (await settled(slow)).why }, {
 			first: [['--model', 'large', '--effort', 'high'], { ARG_QUIET: '1' }],
 			second: [['--model', 'huge', '--verbose'], { ARG_COLOR: 'never' }],
-			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.agents.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}.',
+			inArguments: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.agents.arg.launch.arguments.extra has ${home}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}, ${opening}.',
 			inTrust: 'UNAVAILABLE: Arg Code cannot be started as its settings are: facade.agents.arg.launch.trust.file has ${nowhere}, for which Facade has no value: it has ${home}, ${folder}, ${repository}, ${argHome}.',
 			made: [],
 			slow: 'it has not started within 5 seconds: its CLI is open but has not connected to Facade, and may be slow, or waiting for an answer on its screen'
@@ -632,9 +712,9 @@ suite('Core: starting an agent, step by step', () => {
 		assert.deepStrictEqual({ none, problems, allocated: [...world.table.state.agents.keys()], steps: world.git.steps }, {
 			none: [],
 			problems: [
-				'Arg Code cannot be started as its settings are: facade.agents.arg.launch.arguments.model has ${size}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}.',
+				'Arg Code cannot be started as its settings are: facade.agents.arg.launch.arguments.model has ${size}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}, ${opening}.',
 				`Arg Code cannot be started: ${own} has a server of its own named facade.`,
-				'Arg Code cannot be started as its settings are: facade.agents.arg.launch.arguments.yoloOff has ${nowhere}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}.'
+				'Arg Code cannot be started as its settings are: facade.agents.arg.launch.arguments.yoloOff has ${nowhere}, for which Facade has no value: it has ${config}, ${model}, ${effort}, ${task}, ${opening}.'
 			],
 			allocated: [],
 			steps: []
@@ -839,7 +919,7 @@ suite('Core: list_agents and stop_agent', () => {
 			outcomes: [
 				'INVALID: 2 agents that have not ended are called @twin: @twin #a2, @twin #a3. Name one by its number.',
 				'fulfilled',
-				'INVALID: @human is the person, not an agent: the tools that manage agents do not take them.',
+				'REFUSED: @human is the person, not an agent: they have no run to stop, read or type into. send_message reaches them.',
 				'NOT_FOUND: No agent is #a99: list_agents with all lists every agent you reach.',
 				'NOT_FOUND: No agent you reach is called @nobody: list_agents with all lists them.',
 				'NOT_FOUND: No agent is both @solo and #a2: #a2 is @twin. Name it by its number alone, or by its name.',
@@ -910,7 +990,7 @@ suite('Core: list_agents and stop_agent', () => {
 			'fulfilled',
 			'INVALID: a3 could be #a3 or the name of @a3 #a7: write #a3, or the name with its number.',
 			'INVALID: #m7 is not an agent\'s number but a message\'s: agents are numbered #a1, #a2 and on.',
-			'INVALID: @human is the person, not an agent: the tools that manage agents do not take them.'
+			'REFUSED: @human is the person, not an agent: they have no run to stop, read or type into. send_message reaches them.'
 		]);
 	});
 
@@ -972,6 +1052,30 @@ suite('Core: exits', () => {
 				'#a4 @d by @human exited: its terminal closed'
 			],
 			told: ['error: @b #a2 exited: its CLI ended with exit code 1. (#a2\'s terminal)', 'error: @d #a4 exited: its terminal closed. (#a4\'s terminal)']
+		});
+	});
+
+	test('an agent whose folder the person removed from the workspace was stopped by them, saying so, and they are not told; one whose folder went from the disk - a worktree removed outside Facade - was stopped by no one Facade knows: the person hears of their own, as of a stop they did not ask for, and a child\'s creator of its child, with that reason (L6; M8; LA-06)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.fetched(1);
+		await world.startUp(PERSON, { cli: 'arg', task: 'Removed.', name: 'removed', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Gone.', name: 'gone', folder: lab });
+		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Child.', name: 'child' });
+		await world.fetched(4);
+		world.terminals.end('@removed #a2', { byThePerson: true, reason: 'folderRemoved' });
+		world.terminals.end('@gone #a3', { byThePerson: false, reason: 'folderGone' });
+		world.terminals.end('@child #a4', { byThePerson: false, reason: 'folderGone' });
+		await sleep(1_000);
+
+		assert.deepStrictEqual({ agents: agents(world), told: world.person.told, notices: world.facadeMessagesTo(1).map(text => text.split('\n')[0]) }, {
+			agents: [
+				'#a1 @lead by @human running',
+				'#a2 @removed by @human stopped by @human: its folder was removed from the workspace',
+				'#a3 @gone by @human stopped: its folder is gone from the disk',
+				'#a4 @child by #a1 stopped: its folder is gone from the disk'
+			],
+			told: ['information: @gone #a3 was stopped: its folder is gone from the disk. (#a3\'s terminal)'],
+			notices: ['@child #a4 ended: stopped: its folder is gone from the disk. It takes no more messages. Its last screen was not kept: read_screen #a4 says why.']
 		});
 	});
 
@@ -1096,7 +1200,7 @@ suite('Core: after a reload', () => {
 		});
 	});
 
-	test('one whose process the window saw end while Facade was away ended as it did - its CLI with its exit code, its tab closed by the person - not lost; one killed - the window writes 128 and the signal - is lost, saying by which signal, no exit of its CLI\'s (D11; N-58); nobody is told', async () => {
+	test('one whose process the window saw end while Facade was away ended as it did - its CLI with its exit code, its tab closed by the person - not lost; one killed - the window writes 128 and the signal - is lost, saying by which signal, no exit of its CLI\'s (D11; N-58); the person hears of their agent\'s nonzero exit as when Facade sees one, of nothing else (L6; XS-13)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Three.', name: 'three', folder: lab });
 		await world.startUp(PERSON, { cli: 'arg', task: 'Closed.', name: 'closed', folder: lab });
 		await world.startUp(PERSON, { cli: 'arg', task: 'Gone.', name: 'gone', folder: lab });
@@ -1114,7 +1218,58 @@ suite('Core: after a reload', () => {
 				'#a3 @gone by @human lost: its terminal was gone when Facade came back',
 				process.platform === 'win32' ? '#a4 @killed by @human exited: its CLI ended with exit code 137 while Facade was away' : '#a4 @killed by @human lost: its CLI was killed (signal 9) while Facade was away'
 			],
+			told: [
+				'error: @three #a1 exited: its CLI ended with exit code 3 while Facade was away. (#a1\'s terminal)',
+				...process.platform === 'win32' ? ['error: @killed #a4 exited: its CLI ended with exit code 137 while Facade was away. (#a4\'s terminal)'] : []
+			]
+		});
+	});
+
+	test('a stop under way as the person closed the window ends as that stop when the window opens again, and nobody is told of it: the session it was part of is gone (L6; XS-13)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Own.', name: 'own', folder: lab });
+		world.terminals.stubborn = true;
+		const stopping = outcomeOf(world.facade.stopAgent(callerOf(world.agent(1)), '#a2'));
+		await sleep(1_000);
+		const after = reopen();
+		await settled(stopping);
+		await after.facade.recover();
+
+		assert.deepStrictEqual({ ends: history(after).filter(line => line.startsWith('ended')), told: after.person.told }, {
+			ends: ['ended    @lead #a1  stopped: its window went', 'ended    @own #a2  stopped by @lead #a1: with stop_agent'],
 			told: []
+		});
+	});
+
+	test('one whose folder the person removed from the workspace while Facade was away was stopped by them, saying so; one whose folder went from the disk was stopped by no one Facade knows - a stop the person did not ask for, which they hear of (L6; LA-06)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Removed.', name: 'removed', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Gone.', name: 'gone', folder: lab });
+		const after = reopen();
+		after.terminals.seenEnds.set(1, { byThePerson: true, reason: 'folderRemoved' });
+		after.terminals.seenEnds.set(2, { byThePerson: false, reason: 'folderGone' });
+		await after.facade.recover(true);
+
+		assert.deepStrictEqual({ agents: agents(after), told: after.person.told }, {
+			agents: ['#a1 @removed by @human stopped by @human: its folder was removed from the workspace', '#a2 @gone by @human stopped: its folder is gone from the disk'],
+			told: ['information: @gone #a2 was stopped: its folder is gone from the disk. (#a2\'s terminal)']
+		});
+	});
+
+	test('a message of the person\'s its recipient had not fetched as the window the person closed took it goes back to them at the next start - every run ended first, so that nothing goes back to an agent that went too (M6, M10; MS-02)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Lint.', name: 'lint' });
+		await world.fetched(1);
+		await world.fetched(2);
+		world.facade.mail.send(PERSON, ['@lint'], 'Rebase onto main, then report.', undefined);
+		world.facade.mail.send(callerOf(world.agent(1)), ['@lint'], 'Then the docs.', undefined);
+		const after = reopen();
+		await after.facade.recover();
+		const room = fs.readFileSync(path.join(dir, 'rooms', 'lead-a1.md'), 'utf8');
+
+		assert.deepStrictEqual({ person: after.person.notified.map(each => each.text), notes: room.split('\n').filter(line => line.startsWith('>')) }, {
+			person: ['Facade: #m3 was not fetched by @lint #a2 before it ended (stopped: its window went).'],
+			notes: ['> #m4 was not fetched by @lint #a2 before it ended (stopped: its window went). It could not be returned: @lead #a1, its sender, had ended.']
 		});
 	});
 
@@ -1152,6 +1307,19 @@ suite('Core: after a reload', () => {
 			meanwhile: ['#a1 @up by @human running', '#a2 @gone by @human running'],
 			agents: ['#a1 @up by @human running', '#a2 @gone by @human lost: its terminal was gone when Facade came back'],
 			told: []
+		});
+	});
+
+	test('one the window still cannot tell of after it was asked after a few times is left as it is, and the log says its end is recorded once the window tells of it - the window watches it still (L12; LB-05)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Untold.', name: 'untold', folder: lab });
+		const after = reopen('@untold #a1');
+		after.terminals.untold.add(1);
+		await after.facade.recover(true);
+		await sleep(8 * 15_000);
+
+		assert.deepStrictEqual({ agents: agents(after), logged: after.logs.filter(line => line.startsWith('Whether')) }, {
+			agents: ['#a1 @untold by @human running'],
+			logged: ['Whether @untold #a1 still runs is not known: the window could not tell. It stays as it was, and its end is recorded once the window tells of it.']
 		});
 	});
 
@@ -1467,7 +1635,7 @@ suite('Core: what Facade puts into a folder', () => {
 		});
 	});
 
-	test('a child in a new worktree whose base commit has a .mcp.json that cannot take Facade\'s part is refused before anything is made - no number, no branch, no folder - as in an existing folder; one that can take it is merged into (X-30)', async () => {
+	test('a child in a new worktree whose base commit has a .mcp.json that cannot take Facade\'s part is refused before anything is made - no number, no branch, no folder - as in an existing folder, saying why and what to do; one that can take it is merged into (X-30; OR-13)', async () => {
 		await world.startUp(PERSON, { name: 'lead', cli: 'arg', task: 'Lead.', folder: lab });
 		const lead = callerOf(world.agent(1));
 		world.git.committed.set('.mcp.json', '{ "mcpServers": { "facade": { "command": "the-project-s-own" } } }');
@@ -1477,7 +1645,7 @@ suite('Core: what Facade puts into a folder', () => {
 		const merged = await world.startUp(lead, { name: 'merged', cli: 'told', task: 'Go.', newWorktree: true });
 
 		assert.deepStrictEqual({ refused, afterRefusal, merged: merged.status }, {
-			refused: `REFUSED: Told Code is not started: ${path.join(worktreeFolder(lab, 'conflict'), '.mcp.json')} is in the commit its worktree would start at, and Facade does not write over it. Nothing was made.`,
+			refused: `REFUSED: Told Code is not started: ${path.join(worktreeFolder(lab, 'conflict'), '.mcp.json')}, in the commit its worktree would start at, has an entry of its own at mcpServers.facade, where Facade's goes, and Facade does not write over it. Rename that entry, or start the agent in another folder. Nothing was made.`,
 			afterRefusal: { agents: ['#a1 @lead by @human running'], steps: [], folder: false },
 			merged: 'started'
 		});
@@ -1685,7 +1853,7 @@ suite('Core: what Facade puts into a folder', () => {
 		const clean = await world.facade.stopAgent(PERSON, '#a1', { deleteWorktree: true });
 		cleanAgain.dispose();
 
-		const refusal = (branch: string) => `REFUSED: ${at(branch)} has work that deleting it would lose: 1 uncommitted or untracked file (.mcp.json). Nothing was stopped. Commit what should stay, or call again with discard_changes: true to lose it.`;
+		const refusal = (branch: string) => `REFUSED: ${at(branch)} has work that deleting it would lose: .mcp.json. Nothing was stopped. Commit what should stay, or call again with discard_changes: true to lose it.`;
 		assert.deepStrictEqual({ mine, edited, whileRefused, clean: clean.worktree }, {
 			mine: refusal('mine'),
 			edited: refusal('edited'),
@@ -1731,7 +1899,7 @@ suite('Core: what Facade puts into a folder', () => {
 		});
 	});
 
-	test('a file Facade would put there that git tracks gets Facade\'s part beside what it holds and no line in info/exclude - its change shows in git diff while agents use it, never hidden - and is as it was, byte for byte, once the last agent there ends; one of the person\'s it cannot add its part to refuses the start before anything is made, saying why', async () => {
+	test('a file Facade would put there that git tracks gets Facade\'s part beside what it holds and no line in info/exclude - its change shows in git diff while agents use it, never hidden - and is as it was, byte for byte, once the last agent there ends; one of the person\'s it cannot add its part to refuses the start before anything is made, saying why - not JSON, or an entry of its own where Facade\'s goes, named - and what to do (O10 step 1; OR-13)', async () => {
 		const tracked = '{}';
 		fs.writeFileSync(mcp, tracked);
 		world.git.trackedFiles.add(mcp);
@@ -1743,13 +1911,17 @@ suite('Core: what Facade puts into a folder', () => {
 		world.git.trackedFiles.clear();
 		fs.writeFileSync(mcp, 'not JSON');
 		const notJson = await outcomeOf(world.facade.startAgent(PERSON, { name: 'other', cli: 'told', task: 'Two.', folder: lab }));
+		const ownFacade = '{ "mcpServers": { "facade": { "command": "my-own-server" } } }';
+		fs.writeFileSync(mcp, ownFacade);
+		const clash = await outcomeOf(world.facade.startAgent(PERSON, { name: 'other', cli: 'told', task: 'Two.', folder: lab }));
 
-		assert.deepStrictEqual({ servers: Object.keys(whileItRuns.mcpServers), excluded, after, notJson, theirs: fs.readFileSync(mcp, 'utf8'), launched: world.terminals.launched.length, agents: agents(world) }, {
+		assert.deepStrictEqual({ servers: Object.keys(whileItRuns.mcpServers), excluded, after, notJson, clash, theirs: fs.readFileSync(mcp, 'utf8'), launched: world.terminals.launched.length, agents: agents(world) }, {
 			servers: ['facade'],
 			excluded: '/.told/skills/facade/SKILL.md\n',
 			after: tracked,
-			notJson: `REFUSED: Told Code is not started: ${mcp} is there already, and Facade does not write over it.`,
-			theirs: 'not JSON',
+			notJson: `REFUSED: Told Code is not started: ${mcp} is not JSON that Facade can add its part to (Unexpected token 'o', "not JSON" is not valid JSON). Take out what is not JSON - a comment, say - or start the agent in another folder.`,
+			clash: `REFUSED: Told Code is not started: ${mcp} has an entry of its own at mcpServers.facade, where Facade's goes, and Facade does not write over it. Rename that entry, or start the agent in another folder.`,
+			theirs: ownFacade,
 			launched: 1,
 			agents: ['#a1 @main by @human exited: its CLI ended with exit code 0']
 		});
@@ -2030,6 +2202,30 @@ suite('Core: the person\'s own agents', () => {
 		});
 	});
 
+	test('the person\'s warning that their agent has not connected is the notice about that agent, message:facade:<id>, which its later connection closes - with no second word - as does its end (AGENT-LAUNCHER.md, L5: a later connection clears that condition; AGENT-MESSAGES.md, M11)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.facade.startForPerson('arg', lab);
+		await world.facade.startForPerson('arg', lab);
+		await sleep(5_000);
+		const closedBefore = [...world.person.closed];
+		world.hello(1);
+		world.terminals.end('@arg #a2', { exitCode: 0, byThePerson: true });
+		await sleep(1_000);
+
+		assert.deepStrictEqual({ closedBefore, closed: world.person.closed, told: world.person.told, agents: agents(world) }, {
+			closedBefore: [],
+			closed: [
+				'message:facade:1: @arg #a1 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.',
+				'message:facade:2: @arg #a2 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.'
+			],
+			told: [
+				'warning: @arg #a1 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a1\'s terminal)',
+				'warning: @arg #a2 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a2\'s terminal)'
+			],
+			agents: ['#a1 @arg by @human running', '#a2 @arg by @human stopped by @human: its tab was closed']
+		});
+	});
+
 	test('the person\'s start whose CLI ends before it connects - an option it does not know, a login run out - failed, and the person is told, as of a failure (N-73), with a way to its terminal: nobody waits for that start\'s answer once its terminal runs', async () => {
 		const facts = await world.facade.startForPerson('arg', lab);
 		world.terminals.end('@arg #a1', { exitCode: 1, byThePerson: false });
@@ -2038,6 +2234,24 @@ suite('Core: the person\'s own agents', () => {
 			state: 'starting',
 			agents: ['#a1 @arg by @human failed: its CLI ended with exit code 1'],
 			told: ['error: @arg #a1 did not start: its CLI ended with exit code 1. (#a1\'s terminal)']
+		});
+	});
+
+	test('the person\'s start they quit before it connected - its CLI ending with exit code 0, or 130 from a Ctrl+C no agent is known to have pressed - failed, and is their own doing: no error tells them of it; another code still does (L6; N-73; LA-04)', async () => {
+		for (let i = 0; i < 3; i++) {
+			await world.facade.startForPerson('arg', lab);
+		}
+		world.terminals.end('@arg #a1', { exitCode: 0, byThePerson: false });
+		world.terminals.end('@arg #a2', { exitCode: 130, byThePerson: false });
+		world.terminals.end('@arg #a3', { exitCode: 1, byThePerson: false });
+
+		assert.deepStrictEqual({ agents: agents(world), told: world.person.told }, {
+			agents: [
+				'#a1 @arg by @human failed: its CLI ended with exit code 0',
+				'#a2 @arg by @human failed: its CLI ended with exit code 130',
+				'#a3 @arg by @human failed: its CLI ended with exit code 1'
+			],
+			told: ['error: @arg #a3 did not start: its CLI ended with exit code 1. (#a3\'s terminal)']
 		});
 	});
 
@@ -2100,6 +2314,23 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		temp.remove();
 	});
 
+	test('an agent whose folder is inside a worktree - a package of it - has the worktree deleted, its top level, with every agent in it: never its folder alone, which is no worktree (O5 step 1; OR-09)', async () => {
+		world.dispose();
+		const w = worktreeFolder(lab, 'w');
+		const web = path.join(w, 'packages', 'web');
+		fs.mkdirSync(web, { recursive: true });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['w'] }, folders: [web] });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Web.', name: 'web', folder: web });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Top.', name: 'top', folder: w });
+		const stopped = await world.facade.stopAgent(PERSON, '@web', { deleteWorktree: true });
+
+		assert.deepStrictEqual({ stopped: stopped.stopped.map(each => each.id), worktree: stopped.worktree, deletions: [...world.git.deletions.keys()] }, {
+			stopped: [1, 2],
+			worktree: { folder: w, deleted: true },
+			deletions: [w]
+		});
+	});
+
 	test('delete_worktree stops every agent in the worktree, whoever started it, then deletes the worktree, keeping its branch; work that would be lost - uncommitted or untracked files, unsaved editors - refuses it, listing them, with nothing stopped, unless the call says to discard it; discard_changes alone is refused', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
@@ -2124,7 +2355,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 			told: world.person.told
 		}, {
 			discardAlone: 'INVALID: discard_changes says what to do with the changes in a worktree being deleted: give it with delete_worktree.',
-			refused: `REFUSED: ${clamp} has work that deleting it would lose: 2 uncommitted or untracked files (src/clamp.ts, notes.md) and 1 unsaved editor (src/width.ts). Nothing was stopped. Commit what should stay, or call again with discard_changes: true to lose it.`,
+			refused: `REFUSED: ${clamp} has work that deleting it would lose: src/clamp.ts, notes.md, src/width.ts (unsaved). Nothing was stopped. Commit what should stay, or call again with discard_changes: true to lose it.`,
 			whileRefused: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running', '#a3 @helper by @human running'],
 			deleted: { alreadyEnded: false, stopped: [2, 3], worktree: { folder: clamp, deleted: true } },
 			agents: [
@@ -2132,32 +2363,109 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 				'#a2 @clamp by #a1 stopped by #a1: with stop_agent, its worktree being deleted',
 				'#a3 @helper by @human stopped by #a1: with stop_agent, its worktree being deleted'
 			],
-			steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${clamp}`, `delete ${clamp}`],
+			steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${clamp}`, `check the deletion of ${clamp}`, `delete ${clamp}`],
 			exists: false,
 			made: undefined,
 			told: ['information: @helper #a3 was stopped by @lead #a1. (#a3\'s terminal)']
 		});
 	});
 
-	test('an agent\'s delete_worktree of one of the window\'s folders is refused, nothing stopped: deleting it would change the person\'s window; the person\'s own deletes it', async () => {
-		const folders: string[] = [];
-		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders });
+	test('a deletion is checked by the window\'s own Delete Worktree before any agent is stopped: what it alone sees would be lost - an unsaved image in its image editor, which the extension host never sees - refuses it, every agent left running and nothing deleted; discard_changes loses it (O5 step 2; O8; OR-19; OR-04)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
 		const clamp = worktreeFolder(lab, 'clamp');
-		folders.push(clamp);
+		await world.startUp(lead, { cli: 'arg', task: 'Help.', name: 'helper', folder: clamp });
+		world.git.windowOnlyLoss.set(clamp, ['logo.png (unsaved)']);
 		const refused = await outcomeOf(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true }));
-		const before = agents(world);
-		const deleted = await world.facade.stopAgent(PERSON, '#a2', { deleteWorktree: true });
+		const whileRefused = { agents: agents(world), steps: [...world.git.steps], exists: fs.existsSync(clamp) };
+		const deleted = await world.facade.stopAgent(lead, '#a2', { deleteWorktree: true, discardChanges: true });
 
-		assert.deepStrictEqual({ refused, before, worktree: deleted.worktree, exists: fs.existsSync(clamp) }, {
-			refused: `REFUSED: ${clamp} is one of this window's folders, so an agent does not delete it: that would change the person's window. Nothing was stopped. Stop the agents without delete_worktree, or ask the person to remove the folder from the window first.`,
-			before: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running'],
-			worktree: { folder: clamp, deleted: true },
-			exists: false
+		assert.deepStrictEqual({ refused, whileRefused, deleted: deleted.worktree }, {
+			refused: `REFUSED: ${clamp} has work that deleting it would lose: logo.png (unsaved). Nothing was stopped. Commit what should stay, or call again with discard_changes: true to lose it.`,
+			whileRefused: {
+				agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running', '#a3 @helper by #a1 running'],
+				steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${clamp}`, `check the deletion of ${clamp}`],
+				exists: true
+			},
+			deleted: { folder: clamp, deleted: true }
 		});
+	});
+
+	test('an agent\'s delete_worktree of one of the window\'s folders - the one it is on, its first too - deletes it as any other, by the same preflight: work there refuses it, and discard_changes loses it (O5; OR-27)', async () => {
+		const folders: string[] = [];
+		const firstFolders: string[] = [];
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders, firstFolders });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		await world.startUp(lead, { cli: 'arg', task: 'First.', name: 'first', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		const first = worktreeFolder(lab, 'first');
+		firstFolders.push(first);
+		folders.push(clamp);
+		world.git.changes.set(clamp, { files: ['a.txt'], unsaved: [], submodules: [] });
+		const withWork = await outcomeOf(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true }));
+		const before = agents(world);
+		const deleted = await world.facade.stopAgent(lead, '#a2', { deleteWorktree: true, discardChanges: true });
+		const firstFolder = await world.facade.stopAgent(lead, '#a3', { deleteWorktree: true });
+
+		assert.deepStrictEqual({ withWork: withWork.split(':')[0], before, worktree: deleted.worktree, exists: fs.existsSync(clamp), firstFolder: firstFolder.worktree, firstExists: fs.existsSync(first) }, {
+			withWork: 'REFUSED',
+			before: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running', '#a3 @first by #a1 running'],
+			worktree: { folder: clamp, deleted: true },
+			exists: false,
+			firstFolder: { folder: first, deleted: true },
+			firstExists: false
+		});
+	});
+
+	test('a start into a worktree that passed its checks just before the worktree\'s deletion began is refused as it would be recorded: no agent starts in a folder being deleted (O5, step 3)', async () => {
+		let lookedUp = () => { };
+		const lookup = new Promise<void>(resolve => lookedUp = resolve);
+		let looking = false;
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, environment: async () => {
+			if (looking) {
+				await lookup;
+			}
+			return {};
+		} });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		let deleted = () => { };
+		world.git.deleting = new Promise<void>(resolve => deleted = resolve);
+		looking = true;
+		const late = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'late', folder: clamp }));
+		await sleep(50);
+		const deleting = world.facade.stopAgent(lead, '#a2', { deleteWorktree: true });
+		await until(() => world.terminals.typed.some(line => line.includes('[closed]')));
+		lookedUp();
+		const refused = await late;
+		deleted();
+		const done = await deleting;
+
+		assert.deepStrictEqual({ refused, deleted: done.worktree, agents: agents(world) }, {
+			refused: `REFUSED: ${clamp} is being deleted: no agent starts there.`,
+			deleted: { folder: clamp, deleted: true },
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent, its worktree being deleted']
+		});
+	});
+
+	test('the window says a worktree it deleted is gone - the extension host that asked may have started again meanwhile: the record forgets one Facade made once its folder is gone, and nothing else (O5, O11)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		world.facade.worktreeDeleted(clamp);
+		const whileThere = !!world.table.madeWorktree(clamp);
+		fs.rmSync(clamp, { recursive: true, force: true });
+		world.facade.worktreeDeleted(clamp);
+		world.facade.worktreeDeleted(lab);
+
+		assert.deepStrictEqual({ whileThere, after: !!world.table.madeWorktree(clamp), lab: fs.existsSync(lab) }, { whileThere: true, after: false, lab: true });
 	});
 
 	test('work that comes while the agents in a worktree stop - an edit a CLI finished as it ended, a build\'s output - keeps the worktree: the agents are stopped, and the call is refused, as an error, saying what deleting it would lose and whom it stopped (X-23)', async () => {
@@ -2177,11 +2485,11 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		assert.deepStrictEqual({ refused, agents: agents(world), steps: world.git.steps, exists: fs.existsSync(clamp) }, {
 			refused: {
 				code: 'REFUSED',
-				message: `${clamp} was not deleted: work came into it as its agents stopped, which deleting it would lose: 1 uncommitted or untracked file (build/out.js). Stopped meanwhile: @clamp #a2. Commit what should stay, or call again with discard_changes: true to lose it.`,
+				message: `${clamp} was not deleted: work came into it as its agents stopped, which deleting it would lose: build/out.js. Stopped meanwhile: @clamp #a2. Commit what should stay, or call again with discard_changes: true to lose it.`,
 				outcome: { agent: 2, worktree: clamp, stopped: [2] }
 			},
 			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent, its worktree being deleted'],
-			steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${clamp}`],
+			steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${clamp}`, `check the deletion of ${clamp}`, `check the deletion of ${clamp}`],
 			exists: true
 		});
 	});
@@ -2201,6 +2509,47 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 			answer: 'UNAVAILABLE: @clamp #a2 is still stopping: its process has not ended within 5 seconds. Facade goes on stopping it; list_agents shows when it has ended.',
 			escalated: ['#a2 SIGTERM', '#a2 SIGKILL'],
 			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent']
+		});
+	});
+
+	test('a deletion that waits for an agent still stopping says which agents it stopped and which are still stopping, its data the same facts as its text; the worktree stays (AGENT-ORCHESTRATION.md, O2, O5; XS-02)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		await world.startUp(PERSON, { cli: 'arg', task: 'Help.', name: 'helper', folder: clamp });
+		world.terminals.stubborn = true;
+		const deleting = failureOf(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true }));
+		await sleep(1_000);
+		// The helper's CLI ends as it is stopped; the clamp's does not in time
+		world.terminals.end('@helper #a3', { byThePerson: false });
+		await sleep(5_000);
+		const failure = await deleting;
+
+		assert.deepStrictEqual({ failure, exists: fs.existsSync(clamp) }, {
+			failure: {
+				code: 'UNAVAILABLE',
+				message: `Not every agent in ${clamp} has ended yet, so it was not deleted: @clamp #a2 is still stopping; @helper #a3 stopped. Call stop_agent with delete_worktree again once it has ended.`,
+				data: { outcome: 'pending', agent: 2, stopped: [3], stopping: [2] }
+			},
+			exists: true
+		});
+	});
+
+	test('a starting child that someone other than its creator stops is reported to its waiting creator once - its start\'s answer, its task given back - and by no notice of its end besides (M8; XS-09)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.fetched(1);
+		const starting = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: lab }));
+		await until(() => world.terminals.launched.length === 2);
+		await world.facade.stopAgent(PERSON, '#a2');
+		const answer = await starting;
+		await sleep(1_000);
+
+		assert.deepStrictEqual({ answer, notices: world.facadeMessagesTo(1).map(text => text.split('\n')[0]) }, {
+			answer: 'FAILED: Arg Code did not start as @clamp #a2: it was stopped with stop_agent',
+			notices: ['#m2 was not fetched by @clamp #a2 before it ended (stopped by @human with stop_agent).']
 		});
 	});
 
@@ -2224,6 +2573,27 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 			finished: { folder: clamp, deleted: true },
 			gone: false,
 			recorded: undefined,
+			told: true
+		});
+	});
+
+	test('a deletion of a worktree of the person\'s that git got as far as forgetting, its folder left, is finished by a retry against the ended agent, as one Facade made is - through a reload too (AGENT-ORCHESTRATION.md, O5; OR-08)', async () => {
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['w'] } });
+		const w = worktreeFolder(lab, 'w');
+		await world.startUp(PERSON, { cli: 'arg', task: 'W.', name: 'w', folder: w });
+		world.git.failDelete = `EBUSY: resource busy or locked, rmdir '${w}'`;
+		world.git.failAfterForgetting = true;
+		const failed = await world.facade.stopAgent(PERSON, '#a1', { deleteWorktree: true });
+		world.git.failDelete = undefined;
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		const finished = await world.facade.stopAgent(PERSON, '#a1', { deleteWorktree: true });
+
+		assert.deepStrictEqual({ failed: failed.worktree, finished: finished.worktree, there: fs.existsSync(w), told: world.git.deletions.get(w)?.leftover }, {
+			failed: { folder: w, deleted: false, why: `EBUSY: resource busy or locked, rmdir '${w}'` },
+			finished: { folder: w, deleted: true },
+			there: false,
 			told: true
 		});
 	});
@@ -2470,6 +2840,30 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 				'#a2 @clamp by #a1 stopped by @human: with stop_agent, its worktree being deleted',
 				'#a3 @other by @human stopped by @human: with stop_agent, its worktree being deleted'
 			]
+		});
+	});
+
+	test('what came of a worktree\'s removal with stop_agent is kept in the record, whatever it was and whoever\'s call was cut as it went: one that failed - who asked, and git\'s reason - in the ledger, read again after a reload, the person\'s history and the facts of the agents of that folder, until one succeeds (O5, O11; OR-15)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		world.git.failDelete = 'git could not remove the folder: a process has it open';
+		await world.facade.stopAgent(lead, '#a2', { deleteWorktree: true });
+		world.git.failDelete = undefined;
+		const failed = world.facade.facts(2)?.worktreeRemoval;
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world.terminals.running.add('@lead #a1');
+		await world.facade.recover(true);
+		const reloaded = world.facade.facts(2)?.worktreeRemoval;
+		await world.facade.stopAgent(PERSON, '#a2', { deleteWorktree: true });
+
+		assert.deepStrictEqual({ failed, reloaded, deleted: world.facade.facts(2)?.worktreeRemoval, history: history(world).filter(line => / deleted {2}/.test(` ${line}`)) }, {
+			failed: { state: 'failed', by: 1, reason: 'git could not remove the folder: a process has it open' },
+			reloaded: { state: 'failed', by: 1, reason: 'git could not remove the folder: a process has it open' },
+			deleted: undefined,
+			history: [`not deleted  ${clamp}  with stop_agent by @lead #a1: git could not remove the folder: a process has it open`, `deleted  ${clamp}  with stop_agent by @human`]
 		});
 	});
 });
@@ -2736,6 +3130,66 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		});
 	});
 
+	test('stopped with delete_worktree while its worktree is made, its start is stopped, git let finish, and the worktree git made deleted - not the folder planned for it, which was taken (O4, O5)', async () => {
+		let made = () => { };
+		world.git.making = new Promise<void>(resolve => made = resolve);
+		// The folder planned for it taken already: git makes it beside, as the window does (WT-2.3)
+		fs.mkdirSync(worktreeFolder(lab, 'clamp'), { recursive: true });
+		const { lead, starting, clamp } = await leadStarting();
+		await until(() => world.table.get(2)?.phase === 'creating_worktree' && world.git.steps.length === 1);
+		const stopping = world.facade.stopAgent(lead, '#a2', { deleteWorktree: true });
+		await sleep(50);
+		made();
+		const stopped = await stopping;
+		await starting.catch(() => undefined);
+
+		assert.deepStrictEqual({ stopped: stopped.stopped.map(each => each.id), worktree: stopped.worktree, planned: fs.existsSync(clamp), made: fs.existsSync(`${clamp}-1`), launched: world.terminals.launched.length }, {
+			stopped: [2],
+			worktree: { folder: `${clamp}-1`, deleted: true },
+			planned: true,
+			made: false,
+			launched: 1
+		});
+	});
+
+	test('stopped while its worktree is made, the folder planned for it taken, it is recorded where git made the worktree - list_agents says so, and a reload keeps it so - never at the folder planned for it, another\'s (O4; OR-05)', async () => {
+		let made = () => { };
+		world.git.making = new Promise<void>(resolve => made = resolve);
+		fs.mkdirSync(worktreeFolder(lab, 'clamp'), { recursive: true });
+		const { lead, starting, clamp } = await leadStarting();
+		await until(() => world.table.get(2)?.phase === 'creating_worktree' && world.git.steps.length === 1);
+		await world.facade.stopAgent(lead, '#a2');
+		made();
+		await starting.catch(() => undefined);
+		await until(() => world.git.steps.length === 2);
+		const listed = world.facade.listAgents(lead).agents.find(agent => agent.id === 2)?.folder;
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+
+		assert.deepStrictEqual({ listed, reloaded: world.table.get(2)?.folder }, { listed: `${clamp}-1`, reloaded: `${clamp}-1` });
+	});
+
+	test('stopped with delete_worktree while git fails to make its worktree: nothing is deleted - not the folder planned for it, which is another\'s (O4, O5)', async () => {
+		let fail = (_err: Error) => { };
+		const making = new Promise<void>((_resolve, reject) => fail = reject);
+		making.catch(() => undefined);
+		world.git.making = making;
+		fs.mkdirSync(worktreeFolder(lab, 'clamp'), { recursive: true });
+		const { lead, starting, clamp } = await leadStarting();
+		await until(() => world.table.get(2)?.phase === 'creating_worktree' && world.git.steps.length === 1);
+		const stopping = world.facade.stopAgent(lead, '#a2', { deleteWorktree: true });
+		await sleep(50);
+		fail(new Error('git says no'));
+		const stopped = await stopping;
+		await starting;
+
+		assert.deepStrictEqual({ stopped: stopped.stopped.map(each => each.id), worktree: stopped.worktree, planned: fs.existsSync(clamp) }, {
+			stopped: [2],
+			worktree: { folder: clamp, deleted: false, why: 'git made no worktree for it: there is nothing to delete' },
+			planned: true
+		});
+	});
+
 	test('stopped while its worktree\'s setup runs, it ends stopped by its caller, its setup terminal closed with it, the worktree staying, no CLI ever launched (O4)', async () => {
 		world.git.setup = new Promise<SetupOutcome>(() => { });
 		const { lead, starting, clamp } = await leadStarting();
@@ -2762,6 +3216,25 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by @human: as its worktree was deleted'],
 			launched: 1,
 			steps: [`make clamp from aaaaaaa in ${lab}`, `set up ${clamp}`, `stop setup ${clamp}`]
+		});
+	});
+
+	test('while the person deletes a worktree in the window, no agent starts in it - an agent\'s child by its folder, nor the person\'s own from the window - until the window says how the deletion went: failed, starts go in again (O5 step 3; L6; OR-10)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		await world.facade.worktreeDeleting(clamp);
+		const byAgent = await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'late', folder: clamp }));
+		const byPerson = await outcomeOf(world.facade.startForPerson('arg', clamp));
+		world.facade.worktreeDeleteFailed(clamp);
+		const after = await world.startUp(lead, { cli: 'arg', name: 'after', folder: clamp });
+
+		assert.deepStrictEqual({ byAgent, byPerson, after: after.status, agents: agents(world) }, {
+			byAgent: `REFUSED: ${clamp} is being deleted: no agent starts there.`,
+			byPerson: `REFUSED: ${clamp} is being deleted: no agent starts there.`,
+			after: 'started',
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running', '#a3 @after by #a1 running']
 		});
 	});
 
@@ -2812,7 +3285,15 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		const started = await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Go.', name: 'typed', newWorktree: true });
 		const notice = world.terminals.launched.at(-1)?.args.find(arg => arg.includes('Your task is #m')) ?? '';
 
-		assert.deepStrictEqual({ failed, launchedAfterFailure, made: world.table.madeWorktree(clamp)?.name, notes: started.notes, noticeSays: /setup was sent without shell integration: whether it finished is not known/.test(notice) }, {
+		// Told in its server's instructions too, which an agent with no task - and no first line - reads (O4)
+		const instructionsSay = instructionsFor(world.facade, callerOf(world.agent(started.id))).includes('Your worktree\'s setup was sent without shell integration: whether it finished is not known');
+		// The record keeps how its setup went, through a reopening, and list_agents says it (O11)
+		const listed = world.facade.listAgents(callerOf(world.agent(1))).agents.find(agent => agent.id === started.id)?.setup;
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		const recorded = world.table.get(started.id)?.setup;
+
+		assert.deepStrictEqual({ failed, launchedAfterFailure, made: world.table.madeWorktree(clamp)?.name, notes: started.notes, noticeSays: /setup was sent without shell integration: whether it finished is not known/.test(notice), instructionsSay, listed, recorded }, {
 			failed: `FAILED: Arg Code did not start as @clamp #a2: its worktree's setup failed - \`npm ci\` exited with code 7: npm ERR! missing script. The worktree clamp was made for it, at ${clamp}, and stays, with its branch: start an agent there by its folder, or delete it.`,
 			launchedAfterFailure: 1,
 			made: 'clamp',
@@ -2821,18 +3302,22 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 				'A git hook failed as its worktree was made: the hook says no',
 				'Its worktree\'s setup was sent without shell integration: whether it finished, or how, is not known.'
 			],
-			noticeSays: true
+			noticeSays: true,
+			instructionsSay: true,
+			listed: 'submitted',
+			recorded: 'submitted'
 		});
 	});
 
-	test('a trust file its CLI\'s trust cannot be merged into refuses a start in a new worktree before the worktree is made', async () => {
+	test('a trust file its CLI\'s trust cannot be merged into refuses a start in a new worktree before the worktree is made, saying where the file is not as the CLI writes it', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const home = path.join(temp.dir, 'workspace', 'arg-home');
 		fs.mkdirSync(home, { recursive: true });
 		fs.writeFileSync(path.join(home, 'trust.json'), '{ "trusted": "not a list" }\n');
 		const answer = await outcomeOf(world.facade.startAgent(callerOf(world.agent(1)), { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true }));
 
-		assert.deepStrictEqual({ refused: /^FAILED: .*trust\.json could not be read, or is not as Arg Code writes it/.test(answer), steps: world.git.steps, agents: agents(world) }, {
+		// Its specific problem said: which key holds a value of another kind (L11)
+		assert.deepStrictEqual({ refused: /^FAILED: .*trust\.json has "trusted" as another kind of value than Arg Code writes there/.test(answer), steps: world.git.steps, agents: agents(world) }, {
 			refused: true,
 			steps: [],
 			agents: ['#a1 @lead by @human running']
@@ -2887,6 +3372,22 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		assert.deepStrictEqual({ agents: agents(world), steps: world.git.steps, launched: world.terminals.launched.length }, {
 			agents: ['#a1 @lead by @human running', `#a2 @clamp by #a1 failed: its start was cut as the window went, as its worktree was set up, before its CLI was launched; its worktree stays, at ${clamp}`],
 			steps: [`stop setup ${clamp}`],
+			launched: 0
+		});
+	});
+
+	test('the window coming back finds a start cut as its CLI was being launched - its setup done, no process recorded, no terminal the window saw end - failed as a start cut before its CLI ran, saying where its worktree stays; no CLI is launched (O11; OR-14)', async () => {
+		world.terminals.hold = new Promise(() => { });
+		const { clamp } = await leadStarting();
+		await until(() => world.table.get(2)?.phase === 'launching_cli');
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world.terminals.running.add('@lead #a1');
+		await world.facade.recover(true);
+
+		assert.deepStrictEqual({ agents: agents(world), steps: world.git.steps, launched: world.terminals.launched.length }, {
+			agents: ['#a1 @lead by @human running', `#a2 @clamp by #a1 failed: its start was cut as the window went, as its CLI was being launched, before its CLI ran; its worktree stays, at ${clamp}`],
+			steps: [],
 			launched: 0
 		});
 	});

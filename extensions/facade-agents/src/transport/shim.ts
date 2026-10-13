@@ -6,11 +6,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { timeout } from '../base/async';
-import { clauseOf, messageOf, stackOf } from '../base/errors';
-import { isJsonObject } from '../base/json';
+import { CancelledError, clauseOf, messageOf, stackOf } from '../base/errors';
+import { isJsonObject, sameJson } from '../base/json';
 import { McpStdioServer } from './mcpServer';
 import { PipeClient, PipeClientError } from './pipe';
-import { Hello, helloOf, MAX_TIMER_MS, McpTool, ToolResult, toolResultOf, WINDOW_WAIT_MS } from './protocol';
+import { Hello, helloOf, MAX_TIMER_MS, McpTool, ToolResult, toolResultOf, TOOLS_FILE, toolsOf, WINDOW_WAIT_MS } from './protocol';
 
 /** The version the MCP server gives of itself. */
 const VERSION = '0.2.0';
@@ -23,6 +23,8 @@ const RETRY_MS = 1_000;
  * does not answer soon (Codex after 30 s). A window that comes later is announced as tools that changed.
  */
 const INITIALIZE_WAIT_MS = 10_000;
+/** How often an agent's server whose client has the tools of the record, not the window's, looks for the window in the background (O8). */
+const DISCOVER_MS = 2_000;
 /**
  * How long past its wait a call the window accepted may go without a word from it before it is taken as cut
  * off: the window answers by then, unconfirmed or pending where it must, so a few seconds more mean it is
@@ -31,18 +33,31 @@ const INITIALIZE_WAIT_MS = 10_000;
  */
 const SILENCE_MARGIN_MS = 4_000;
 
+/** Says what went wrong on stderr, which a CLI keeps for its MCP server: stdout carries the server's messages alone. */
+function log(message: string): void {
+	process.stderr.write(`${message}\n`);
+}
+
 interface Connection {
 	readonly pipe: string;
 	readonly token: string;
 	/** Whether the window's record says the agent framework is off. */
 	readonly disabled: boolean;
+	/**
+	 * The window the record names now, where it names one: its process and its pipe. A window back from a reload is
+	 * another - a new extension host, which knows nothing of the servers that said hello to the one before.
+	 */
+	readonly window?: string;
 }
 
-/** What `window.json` in a workspace's record says now: the pipe the window listens on, and whether the framework is on. */
-function windowOf(recordDir: string): { readonly pipe: string; readonly enabled: boolean } | undefined {
+/**
+ * What `window.json` in a workspace's record says now: the pipe the window listens on, whether the framework is on,
+ * and which window it is - its process and its pipe.
+ */
+function windowOf(recordDir: string): { readonly pipe: string; readonly enabled: boolean; readonly id: string } | undefined {
 	try {
 		const parsed: unknown = JSON.parse(fs.readFileSync(path.join(recordDir, 'window.json'), 'utf8'));
-		return isJsonObject(parsed) && typeof parsed.pipe === 'string' && parsed.pipe ? { pipe: parsed.pipe, enabled: parsed.enabled !== false } : undefined;
+		return isJsonObject(parsed) && typeof parsed.pipe === 'string' && parsed.pipe ? { pipe: parsed.pipe, enabled: parsed.enabled !== false, id: `${typeof parsed.pid === 'number' ? parsed.pid : ''} ${parsed.pipe}` } : undefined;
 	} catch {
 		return undefined;
 	}
@@ -60,17 +75,43 @@ function tokenFrom(value: string): string | string[] {
 	return value;
 }
 
-/** The tool offered when no Facade window can be reached. */
-const STATUS_TOOL: McpTool = {
-	name: 'facade_status',
-	title: 'Facade Status',
-	description: 'Explains why Facade\'s tools are unavailable.',
-	inputSchema: { type: 'object', properties: {}, additionalProperties: false }
-};
-
 function argumentAfter(args: readonly string[], name: string): string | undefined {
 	const index = args.indexOf(name);
 	return index >= 0 ? args[index + 1] : undefined;
+}
+
+/** A value of the environment as the server was given it: none where a CLI that did not expand its configuration's variables passes them on as they were written. */
+function given(value: string | undefined): string | undefined {
+	return value && !value.includes('${') ? value : undefined;
+}
+
+/** The workspace's record the server was given: in the arguments Facade launched it with, else in the environment. */
+function recordOf(args: readonly string[]): string | undefined {
+	return argumentAfter(args, '--token-file') !== undefined ? argumentAfter(args, '--record') : given(process.env.FACADE_AGENTS_RECORD);
+}
+
+/**
+ * The tools the window wrote into the workspace's record as it last started: what the server lists while the window
+ * does not answer - its tools are the same whatever the window's state, start_agent's description without what only
+ * the window knows (AGENT-LAUNCHER.md, L1; O8). None where it has no record, as a script given a pipe alone; none,
+ * and why said on stderr, where the record's tools cannot be read.
+ */
+function recordedTools(args: readonly string[]): readonly McpTool[] {
+	const record = recordOf(args);
+	if (!record) {
+		return [];
+	}
+	const file = path.join(record, TOOLS_FILE);
+	try {
+		const tools = toolsOf(JSON.parse(fs.readFileSync(file, 'utf8')));
+		if (!tools) {
+			log(`${file} holds no tools this version can read: none are listed until the window answers.`);
+		}
+		return tools ?? [];
+	} catch (err) {
+		log(`${file} could not be read (${messageOf(err)}): no tools are listed until the window answers.`);
+		return [];
+	}
 }
 
 /**
@@ -80,12 +121,10 @@ function argumentAfter(args: readonly string[], name: string): string | undefine
  * where the record names none.
  */
 function connectionOf(args: readonly string[]): Connection | string {
-	const { FACADE_AGENTS_RECORD: envRecord, FACADE_AGENTS_PIPE: envPipe, FACADE_AGENTS_TOKEN: envToken } = process.env;
-	// A CLI that did not expand its configuration's variables passes them on as they were written.
-	const given = (value: string | undefined) => value && !value.includes('${') ? value : undefined;
+	const { FACADE_AGENTS_PIPE: envPipe, FACADE_AGENTS_TOKEN: envToken } = process.env;
 	const tokenFile = argumentAfter(args, '--token-file');
 	const fromArgs = tokenFile !== undefined;
-	const record = fromArgs ? argumentAfter(args, '--record') : given(envRecord);
+	const record = recordOf(args);
 	const launchedPipe = fromArgs ? argumentAfter(args, '--pipe') : given(envPipe);
 	const tokenValue = fromArgs ? tokenFile : given(envToken);
 	if (!tokenValue || (!record && !launchedPipe)) {
@@ -100,7 +139,7 @@ function connectionOf(args: readonly string[]): Connection | string {
 	if (!pipe) {
 		return `the window of the record ${record} has not said where it listens`;
 	}
-	return { pipe, token, disabled: window?.enabled === false };
+	return { pipe, token, disabled: window?.enabled === false, ...(window ? { window: window.id } : {}) };
 }
 
 /** Whether this server was started for an agent or a script at all: a CLI run by hand in a folder Facade wrote a configuration into was not. */
@@ -109,8 +148,7 @@ function isConfigured(args: readonly string[]): boolean {
 		return true;
 	}
 	const { FACADE_AGENTS_RECORD: envRecord, FACADE_AGENTS_PIPE: envPipe, FACADE_AGENTS_TOKEN: envToken } = process.env;
-	const given = (value: string | undefined) => !!value && !value.includes('${');
-	return given(envToken) && (given(envRecord) || given(envPipe));
+	return !!given(envToken) && (!!given(envRecord) || !!given(envPipe));
 }
 
 /**
@@ -128,17 +166,28 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 	// A call the window accepted ends with a word from it - progress, then its result - within its own wait;
 	// past that and a margin, the window is taken as gone without a word (frozen, killed).
 	const silenceMs = waitFromEnv('FACADE_AGENTS_SILENCE_MS', Math.min(Math.max(waitMs, WINDOW_WAIT_MS) + SILENCE_MARGIN_MS, MAX_TIMER_MS));
-	const folder = process.cwd();
 	// A CLI run by hand where Facade's configuration is gets no Facade tools and no noise (O9).
 	const configured = isConfigured(args);
 	let hello: Hello | undefined;
 	let unavailable = '';
 	/** Since when the window is away, through every call: one outage is waited for once, not once per call (O8). */
 	let awaySince: number | undefined;
-	/** Whether the client was given the status tool alone: once the window comes, it is told the tools changed. */
-	let gaveStatusOnly = false;
+	/** Whether the client was given the record's tools, not the window's: once the window comes, it is told the tools changed. */
+	let gaveRecorded = false;
 	/** Aborted once the CLI closed the MCP server's input: what waits for the window stops. */
 	const stopped = new AbortController();
+	/** Set once the window refused this server for good - its token, or a hello it cannot read: nothing to look for. */
+	let refused = false;
+	/** A hello on its way, which another wait for the window takes too: one hello at a time. */
+	let connecting: Promise<Hello | undefined> | undefined;
+	/** Whether the window is looked for in the background. */
+	let discovering = false;
+	/** The window this server said hello to last, as the record named it then (`Connection.window`). */
+	let helloWindow: string | undefined;
+	/** A hello again on its way (`helloAgain`): one at a time. */
+	let sayingAgain: Promise<void> | undefined;
+	/** Whether an agent's server watches the record for a window back from a reload, to say hello to it. */
+	let watching = false;
 
 	/** How long this outage may still be waited for: what is left of the wait since the window went away. */
 	const outageLeft = () => awaySince === undefined ? waitMs : Math.max(awaySince + waitMs - Date.now(), 0);
@@ -162,13 +211,16 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 				awaySince = undefined;
 				if (!received) {
 					unavailable = 'Facade said hello with something this version cannot read';
+					refused = true;
 					return undefined;
 				}
+				helloWindow = connection.window;
 				return received;
 			} catch (err) {
 				const code = err instanceof PipeClientError ? err.code : undefined;
 				if (code === 'UNAUTHORIZED') {
 					unavailable = 'Facade no longer accepts this session\'s token';
+					refused = true;
 					return undefined;
 				}
 				awaySince ??= Date.now();
@@ -181,31 +233,126 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 		}
 	};
 
-	/** The tools; found once the window says hello, waiting no longer than a client waits for a server that starts. */
+	/**
+	 * The tools: the window's, once it says hello, waiting no longer than a client waits for a server that starts; until
+	 * then the same tools as the window wrote them into the record, never a tool of the server's own (L1; O8).
+	 */
 	const tools = async (maxWaitMs = Math.min(outageLeft(), INITIALIZE_WAIT_MS)): Promise<readonly McpTool[]> => {
 		if (!configured) {
 			return [];
 		}
 		if (!hello) {
-			hello = await connect(maxWaitMs);
-			if (hello && gaveStatusOnly) {
+			connecting ??= connect(maxWaitMs).finally(() => connecting = undefined);
+			hello = await connecting;
+			if (hello && gaveRecorded) {
+				gaveRecorded = false;
 				server.toolsChanged();
+			}
+			if (hello) {
+				watchWindow();
 			}
 		}
 		if (!hello) {
-			gaveStatusOnly = true;
-			return [STATUS_TOOL];
+			gaveRecorded = true;
+			discover();
+			return recordedTools(args);
 		}
 		return hello.tools;
 	};
 
-	const call = async (name: string, toolArgs: unknown, context: { readonly signal: AbortSignal; progress(message: string): void }): Promise<ToolResult> => {
-		if (name === STATUS_TOOL.name || !hello) {
-			// The window may have come since the client listed the tools: it lists them again.
-			if (await tools(0) !== undefined && hello) {
-				return { text: 'Facade\'s window is reachable now and its tools are listed again: list the tools, and call the one you need.', data: { code: 'OK' } };
+	/**
+	 * An agent's server whose client was given the record's tools looks for the window in the background, and says
+	 * once it came - its tools listed anew, start_agent's with what only the window knows - rather than waiting for a
+	 * call that may never come (O8).
+	 */
+	const discover = () => {
+		if (!isAgent || discovering || refused) {
+			return;
+		}
+		discovering = true;
+		void (async () => {
+			try {
+				while (!hello && !refused && !stopped.signal.aborted) {
+					await timeout(DISCOVER_MS, stopped.signal);
+					await tools(0);
+				}
+			} catch (err) {
+				// Cancelled, its CLI closed it: nothing more to look for. Whatever else ends the looking is said
+				if (!(err instanceof CancelledError)) {
+					log(`Looking for Facade's window failed: ${stackOf(err)}`);
+				}
+			} finally {
+				discovering = false;
 			}
-			return { text: `Facade's tools are not available: ${unavailable || 'the reason is not known'}. Turn on the setting facade.orchestration.enabled in Facade, and start the agent with Facade: Start Agent, in a window whose workspace has ${folder}.`, isError: true, data: { code: 'UNAVAILABLE' } };
+		})();
+	};
+
+	/**
+	 * Says hello again to the window the record names now, where it is not the one this server said hello to: a window
+	 * back from a reload - a new extension host - knows which process serves the agent only from a hello, and without
+	 * one never sees it end (AGENT-ORCHESTRATION.md, O6, O8). Its tools, where they changed, are listed anew. A window
+	 * that does not answer yet is tried again at the next look; one that no longer knows this server's token refuses it
+	 * for good.
+	 */
+	const helloAgain = (connection: Connection): Promise<void> => {
+		if (!hello || refused || connection.window === undefined || connection.window === helloWindow) {
+			return Promise.resolve();
+		}
+		sayingAgain ??= (async () => {
+			try {
+				const received = helloOf(await new PipeClient(connection.pipe, connection.token).hello(AbortSignal.any([stopped.signal, AbortSignal.timeout(RETRY_MS)])));
+				if (received && hello) {
+					helloWindow = connection.window;
+					const changed = !sameJson(received.tools, hello.tools);
+					hello = received;
+					if (changed) {
+						server.toolsChanged();
+					}
+				}
+			} catch (err) {
+				if (err instanceof PipeClientError && err.code === 'UNAUTHORIZED') {
+					unavailable = 'Facade no longer accepts this session\'s token';
+					refused = true;
+				}
+			}
+		})().finally(() => sayingAgain = undefined);
+		return sayingAgain;
+	};
+
+	/**
+	 * An agent's server, once it said hello, looks at the record now and then for a window back from a reload, and says
+	 * hello to it as it comes - not only with the next call, which an agent waiting for a message may not make for long.
+	 */
+	const watchWindow = () => {
+		if (!isAgent || watching) {
+			return;
+		}
+		watching = true;
+		void (async () => {
+			try {
+				while (!refused && !stopped.signal.aborted) {
+					await timeout(DISCOVER_MS, stopped.signal);
+					const connection = connectionOf(args);
+					if (typeof connection !== 'string') {
+						await helloAgain(connection);
+					}
+				}
+			} catch (err) {
+				// Cancelled, its CLI closed it: nothing more to look for. Whatever else ends the watching is said
+				if (!(err instanceof CancelledError)) {
+					log(`Watching for a window back from a reload failed: ${stackOf(err)}`);
+				}
+			}
+		})();
+	};
+
+	const call = async (name: string, toolArgs: unknown, context: { readonly signal: AbortSignal; progress(message: string): void }): Promise<ToolResult> => {
+		if (!hello) {
+			// The window may have come since the client listed the tools: said hello to now, the call goes to it
+			await tools(0);
+			if (!hello) {
+				return { text: `Facade's tools are not available, so ${name} did not run: ${unavailable || 'the reason is not known'}.${refused ? '' : ' Call it again once Facade\'s window is there.'}`, isError: true, data: { code: 'UNAVAILABLE' } };
+			}
 		}
 		// A call that finds no window has not run: it waits for the window, as through a reload - for what is
 		// left of this outage, which every call shares.
@@ -220,6 +367,8 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 			if (typeof connection === 'string') {
 				return { text: `Facade's tools are not available: ${connection}.`, isError: true, data: { code: 'UNAVAILABLE' } };
 			}
+			// A window back from a reload is told which process serves the agent before the call goes to it
+			await helloAgain(connection);
 			const client = new PipeClient(connection.pipe, connection.token);
 			// Each word from the window - progress, the result - restarts the silence the call may take.
 			const silence = new AbortController();
@@ -288,8 +437,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 		},
 		listTools: () => tools(),
 		callTool: call,
-		isTool: (name, listed) => listed.some(tool => tool.name === name) || (configured && name === STATUS_TOOL.name),
-		log: message => process.stderr.write(`${message}\n`)
+		log
 	});
 	await server.start();
 	stopped.abort();

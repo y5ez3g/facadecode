@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { PassThrough } from 'stream';
 import { DeferredPromise } from '../base/async';
+import { toolDefinitions } from '../contract/tools';
 import { PipeEndpoint } from '../transport/endpoint';
 import { McpStdioServer } from '../transport/mcpServer';
 import { PipeClient, PipeClientError, PipeHandlers, PipeServer, pipePath } from '../transport/pipe';
@@ -713,22 +714,24 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 	let helloFails: string | undefined;
 	/** What the calls of `echo` that the window ran were given. */
 	let echoed: string[];
+	/** The hellos the window was said, each by whom, and whether it said which process it is. */
+	let hellos: string[];
+
+	/** The tools the window serves: those it says hello with, and writes into the record for a server that cannot reach it. */
+	const TOOLS = [
+		{ name: 'echo', title: 'Echo', description: 'Says what it was given.', inputSchema: { type: 'object' } },
+		{ name: 'hang', title: 'Hang', description: 'Never answers.', inputSchema: { type: 'object' } }
+	];
 
 	/** A contract whose tool `echo` says who called it and with what, `fail` fails as it is told, and `hang` never answers. */
 	const echo: PipeHandlers<string> = {
 		authenticate: token => tokens.get(token),
-		hello: caller => {
+		hello: (caller, server) => {
 			if (helloFails) {
 				throw new Error(helloFails);
 			}
-			return {
-				name: caller,
-				tools: [
-					{ name: 'echo', title: 'Echo', description: 'Says what it was given.', inputSchema: { type: 'object' } },
-					{ name: 'hang', title: 'Hang', description: 'Never answers.', inputSchema: { type: 'object' } }
-				],
-				instructions: `You are @${caller}.`
-			};
+			hellos.push(`${caller}${server.pid === undefined ? ', its process not said' : ''}`);
+			return { name: caller, tools: TOOLS, instructions: `You are @${caller}.` };
 		},
 		call: async (caller, tool, args, progress) => {
 			if (tool === 'hang') {
@@ -770,14 +773,23 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		}
 	}
 
+	/** The record of a window that is gone - listening nowhere now - with the tools it served, which it leaves behind as it goes. */
+	async function recordOfAWindowGone(): Promise<string> {
+		const dir = path.join(temp.dir, `gone-${crypto.randomBytes(4).toString('hex')}`);
+		fs.mkdirSync(dir);
+		(await PipeEndpoint.start(pipePath(`gone-${crypto.randomBytes(6).toString('hex')}`), dir, echo, true, TOOLS)).dispose();
+		return dir;
+	}
+
 	setup(async () => {
 		temp = tempDir('facade-transport-');
 		tokens = new Map([['person-token', 'you']]);
 		helloFails = undefined;
 		hanging = 0;
 		echoed = [];
+		hellos = [];
 		pipe = pipePath(`test-${crypto.randomBytes(6).toString('hex')}`);
-		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
+		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo, true, TOOLS);
 	});
 
 	teardown(async () => {
@@ -914,6 +926,20 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		assert.deepStrictEqual({ after: after.text, pipeMoved: windowRecord()?.pipe !== pipe }, { after: '@main said moved to echo', pipeMoved: true });
 	});
 
+	test('an agent\'s MCP server says hello again to a window back from a reload - a new extension host, which knows nothing of it - with no call of its own, so that the window knows which process serves the agent, and sees it end; a call goes on to that window (AGENT-ORCHESTRATION.md, O6, O8; OR-17)', async () => {
+		const main = agent('main');
+		await main.initialize();
+		const before = [...hellos];
+		endpoint.dispose();
+		// The next extension host, as the record names it: listening anew
+		endpoint = await PipeEndpoint.start(pipePath(`reloaded-${crypto.randomBytes(6).toString('hex')}`), temp.dir, echo);
+		await waitFor(() => hellos.length > before.length, 10_000);
+		const again = hellos.slice(before.length);
+		const after = await main.call('echo', { text: 'still here' });
+
+		assert.deepStrictEqual({ before, again, after: after.text, hellos: hellos.length }, { before: ['main'], again: ['main'], after: '@main said still here to echo', hellos: 2 });
+	});
+
 	test('one outage is waited for once: the calls that follow are told at once that the window did not come back, and the first after it is back runs', async () => {
 		const main = agentWith('main', { FACADE_AGENTS_WAIT_MS: '700' });
 		await main.initialize();
@@ -980,17 +1006,57 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		});
 	});
 
-	test('a window that was not there as the agent\'s MCP server started is announced once it comes: its tools are listed anew', async () => {
+	test('a window that was not there as the agent\'s MCP server started is announced once it comes: the tools the window left in the record were listed - a call then saying why it did not run - and the window\'s are listed anew', async () => {
+		endpoint.dispose();
+		const late = agentWith('late', { FACADE_AGENTS_WAIT_MS: '300' });
+		await late.initialize();
+		const before = await late.tools();
+		const away = await late.call('echo', { text: 'anyone?' });
+		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
+		const back = await late.call('echo', { text: 'back' });
+		const after = await late.tools();
+
+		assert.deepStrictEqual({ before, away: [away.isError, away.data?.code, away.text.replace(/\(.*\)/, '(...)')], back: back.text, changed: late.notifications.includes('notifications/tools/list_changed'), after }, {
+			before: ['echo', 'hang'],
+			away: [true, 'UNAVAILABLE', 'Facade\'s tools are not available, so echo did not run: Facade is not reachable (...). Call it again once Facade\'s window is there.'],
+			back: '@late said back to echo',
+			changed: true,
+			after: ['echo', 'hang']
+		});
+	});
+
+	test('while the window does not answer, an agent\'s MCP server lists the very tools the window serves - the eight of the contract, as the window wrote them into the record, start_agent\'s naming no agents - and never a tool of its own; a call then says why it did not run (L1; O8)', async () => {
+		// The window as it starts, with the contract's tools; then gone, as while it reloads
+		endpoint.dispose();
+		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo, true, toolDefinitions());
+		endpoint.dispose();
+		const late = agentWith('late', { FACADE_AGENTS_WAIT_MS: '300' });
+		await late.initialize();
+		const { tools } = await late.request('tools/list', {}) as { tools: { name: string; description: string; inputSchema: object }[] };
+		const away = await late.call('send_message', { to: ['@lead'], text: 'Done.' });
+		const shown = (each: { name: string; description: string; inputSchema: object }) => ({ name: each.name, description: each.description, inputSchema: each.inputSchema });
+
+		assert.deepStrictEqual({
+			names: tools.map(tool => tool.name),
+			tools: tools.map(shown),
+			away: [away.isError, away.data?.code, away.text.replace(/\(.*\)/, '(...)')]
+		}, {
+			names: ['start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'],
+			tools: JSON.parse(JSON.stringify(toolDefinitions().map(shown))),
+			away: [true, 'UNAVAILABLE', 'Facade\'s tools are not available, so send_message did not run: Facade is not reachable (...). Call it again once Facade\'s window is there.']
+		});
+	});
+
+	test('a window that was not there as the agent\'s MCP server started is looked for in the background, and announced once it comes - its tools listed anew - with no call made meanwhile (O8)', async () => {
 		endpoint.dispose();
 		const late = agentWith('late', { FACADE_AGENTS_WAIT_MS: '300' });
 		await late.initialize();
 		const before = await late.tools();
 		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
-		const status = await late.call('facade_status');
-		const after = await late.tools();
+		await waitFor(() => late.notifications.includes('notifications/tools/list_changed'), 10_000);
 
-		assert.deepStrictEqual({ before, status: status.isError, changed: late.notifications.includes('notifications/tools/list_changed'), after }, {
-			before: ['facade_status'], status: false, changed: true, after: ['echo', 'hang']
+		assert.deepStrictEqual({ before, changed: late.notifications.includes('notifications/tools/list_changed'), after: await late.tools() }, {
+			before: ['echo', 'hang'], changed: true, after: ['echo', 'hang']
 		});
 	});
 
@@ -1008,34 +1074,33 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		assert.deepStrictEqual({ reason: off.data?.reason, atOnce: Date.now() - started < 1000, record: JSON.parse(stale).enabled }, { reason: 'framework_disabled', atOnce: true, record: false });
 	});
 
-	test('with no window, an agent\'s MCP server offers facade_status, which says why - as does one whose token file cannot be read; one started without a pipe and a token - run by hand where Facade\'s configuration is, by a CLI that did not expand its variables, or by one that expanded them empty (Muse\'s `${name:-}`; N-42) - offers no tool at all', async () => {
+	test('with no window, an agent\'s MCP server lists the tools the record holds, and a call says why it did not run - as for one whose token file cannot be read; one started without a pipe and a token - run by hand where Facade\'s configuration is, by a CLI that did not expand its variables, or by one that expanded them empty (Muse\'s `${name:-}`; N-42) - offers no tool at all', async () => {
 		const orphan = StdioMcpClient.start([]);
 		const unexpanded = StdioMcpClient.start(['--agent'], { FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE:-}', FACADE_AGENTS_TOKEN: '${FACADE_AGENTS_TOKEN:-}' });
 		const empty = StdioMcpClient.start(['--agent'], { FACADE_AGENTS_RECORD: '', FACADE_AGENTS_PIPE: '', FACADE_AGENTS_TOKEN: '', FACADE_AGENTS_WAIT_MS: '' });
 		const gone = path.join(temp.dir, 'gone.token');
-		const tokenless = StdioMcpClient.start(['--pipe', pipe, '--token-file', gone]);
-		const away = StdioMcpClient.start(['--pipe', pipePath(`nobody-${crypto.randomBytes(6).toString('hex')}`), '--token-file', gone], { FACADE_AGENTS_WAIT_MS: '300' });
-		clients.push(orphan, unexpanded, empty, tokenless, away);
-		await Promise.all([orphan.initialize(), unexpanded.initialize(), empty.initialize(), tokenless.initialize(), away.initialize()]);
-		const tokenlessStatus = await tokenless.call('facade_status');
+		const tokenless = StdioMcpClient.start(['--record', temp.dir, '--pipe', pipe, '--token-file', gone]);
+		clients.push(orphan, unexpanded, empty, tokenless);
+		await Promise.all([orphan.initialize(), unexpanded.initialize(), empty.initialize(), tokenless.initialize()]);
+		const refused = await tokenless.call('echo', { text: 'me?' });
 
 		assert.deepStrictEqual({
 			byHand: [await orphan.tools(), await unexpanded.tools(), await empty.tools()],
 			agent: await tokenless.tools(),
-			isError: tokenlessStatus.isError,
-			code: tokenlessStatus.data?.code,
-			why: tokenlessStatus.text.includes(`the token file ${gone} cannot be read`)
-		}, { byHand: [[], [], []], agent: ['facade_status'], isError: true, code: 'UNAVAILABLE', why: true });
+			isError: refused.isError,
+			code: refused.data?.code,
+			why: refused.text.includes(`echo did not run: the token file ${gone} cannot be read`)
+		}, { byHand: [[], [], []], agent: ['echo', 'hang'], isError: true, code: 'UNAVAILABLE', why: true });
 	});
 
 	test('a window that fails to say hello is not taken for a window that is there: a script is told why, at once', async () => {
 		helloFails = 'Another Facade window took this workspace\'s agents.';
-		const you = StdioMcpClient.start([], { FACADE_AGENTS_PIPE: pipe, FACADE_AGENTS_TOKEN: 'person-token', FACADE_SCRIPT_WAIT_MS: '500' });
+		const you = StdioMcpClient.start([], { FACADE_AGENTS_RECORD: temp.dir, FACADE_AGENTS_PIPE: pipe, FACADE_AGENTS_TOKEN: 'person-token', FACADE_SCRIPT_WAIT_MS: '500' });
 		clients.push(you);
 		await you.initialize();
-		const status = await you.call('facade_status');
+		const told = await you.call('echo', { text: 'hello?' });
 
-		assert.deepStrictEqual({ tools: await you.tools(), why: status.text.includes('Facade\'s window failed to say hello (Another Facade window took this workspace\'s agents.)') }, { tools: ['facade_status'], why: true });
+		assert.deepStrictEqual({ tools: await you.tools(), why: told.text.includes('Facade\'s window failed to say hello (Another Facade window took this workspace\'s agents.)') }, { tools: ['echo', 'hang'], why: true });
 	});
 
 	test('an endpoint that cannot record where it listens does not listen: its pipe is left for the next try', async () => {
@@ -1077,16 +1142,16 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 			};
 			const unreadable = await main.call('echo');
 			hello = { name: 'main' };
-			const later = StdioMcpClient.start(['--pipe', fake, '--token-file', tokenFile]);
+			const later = StdioMcpClient.start(['--record', await recordOfAWindowGone(), '--pipe', fake, '--token-file', tokenFile]);
 			clients.push(later);
 			await later.initialize();
-			const status = await later.call('facade_status');
+			const told = await later.call('echo');
 
-			assert.deepStrictEqual({ refused: [refused.data?.code, refused.text], unreadable: [unreadable.data?.code, unreadable.text], tools: await later.tools(), status: status.text.includes('Facade said hello with something this version cannot read') }, {
+			assert.deepStrictEqual({ refused: [refused.data?.code, refused.text], unreadable: [unreadable.data?.code, unreadable.text], tools: await later.tools(), told: told.text }, {
 				refused: ['INVALID', 'Facade could not read the call to echo, so it did not run. Facade refused the call (400).'],
 				unreadable: ['FAILED', 'Facade answered echo with something this version cannot read.'],
-				tools: ['facade_status'],
-				status: true
+				tools: ['echo', 'hang'],
+				told: 'Facade\'s tools are not available, so echo did not run: Facade said hello with something this version cannot read.'
 			});
 		} finally {
 			server.close();
@@ -1142,26 +1207,26 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		});
 	});
 
-	test('an agent whose token the window does not know, from its start, is offered facade_status, which says so', async () => {
+	test('an agent whose token the window does not know, from its start, is listed the tools the record holds, and a call says so', async () => {
 		const tokenFile = path.join(temp.dir, 'stranger.token');
 		fs.writeFileSync(tokenFile, 'not a token the window gave');
-		const stranger = StdioMcpClient.start(['--pipe', pipe, '--token-file', tokenFile]);
+		const stranger = StdioMcpClient.start(['--record', temp.dir, '--pipe', pipe, '--token-file', tokenFile]);
 		clients.push(stranger);
 		await stranger.initialize();
-		const status = await stranger.call('facade_status');
+		const told = await stranger.call('echo', { text: 'me?' });
 
-		assert.deepStrictEqual({ tools: await stranger.tools(), why: status.text.includes('Facade no longer accepts this session\'s token') }, { tools: ['facade_status'], why: true });
+		assert.deepStrictEqual({ tools: await stranger.tools(), told: [told.data?.code, told.text] }, { tools: ['echo', 'hang'], told: ['UNAVAILABLE', 'Facade\'s tools are not available, so echo did not run: Facade no longer accepts this session\'s token.'] });
 	});
 
-	test('a window that is not there is waited for once: after that, listing the tools or calling facade_status says it is away at once', async () => {
-		const away = StdioMcpClient.start([], { FACADE_AGENTS_PIPE: pipePath(`nobody-${crypto.randomBytes(6).toString('hex')}`), FACADE_AGENTS_TOKEN: 'person-token', FACADE_SCRIPT_WAIT_MS: '500' });
+	test('a window that is not there is waited for once: after that, listing the tools or calling one says it is away at once', async () => {
+		const away = StdioMcpClient.start([], { FACADE_AGENTS_RECORD: await recordOfAWindowGone(), FACADE_AGENTS_PIPE: pipePath(`nobody-${crypto.randomBytes(6).toString('hex')}`), FACADE_AGENTS_TOKEN: 'person-token', FACADE_SCRIPT_WAIT_MS: '500' });
 		clients.push(away);
 		await away.initialize();
 		const start = Date.now();
 		const tools = await away.tools();
-		const status = await away.call('facade_status');
+		const told = await away.call('echo', { text: 'anyone?' });
 
-		assert.deepStrictEqual({ tools, why: status.text.includes('Facade is not reachable ('), atOnce: Date.now() - start < 500 }, { tools: ['facade_status'], why: true, atOnce: true });
+		assert.deepStrictEqual({ tools, why: told.text.includes('Facade is not reachable ('), atOnce: Date.now() - start < 500 }, { tools: ['echo', 'hang'], why: true, atOnce: true });
 	});
 
 	test('an agent\'s MCP server whose CLI quits while it waits for the window stops waiting, and exits by itself', async () => {
@@ -1180,14 +1245,14 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 	test('an agent\'s MCP server waits for a window that is not there as long as its launch says - as the person set it - and then says it is away', async () => {
 		const tokenFile = path.join(temp.dir, 'main.token');
 		fs.writeFileSync(tokenFile, 'any');
-		const waiting = StdioMcpClient.start(['--pipe', pipePath(`nobody-${crypto.randomBytes(6).toString('hex')}`), '--token-file', tokenFile], { FACADE_AGENTS_WAIT_MS: '700' });
+		const waiting = StdioMcpClient.start(['--record', await recordOfAWindowGone(), '--pipe', pipePath(`nobody-${crypto.randomBytes(6).toString('hex')}`), '--token-file', tokenFile], { FACADE_AGENTS_WAIT_MS: '700' });
 		clients.push(waiting);
 		const start = Date.now();
 		await waiting.initialize();
 		const waited = Date.now() - start;
-		const status = await waiting.call('facade_status');
+		const told = await waiting.call('echo', { text: 'anyone?' });
 
-		assert.deepStrictEqual({ waited: waited >= 600 && waited < 10_000, why: status.text.includes('Facade is not reachable (') }, { waited: true, why: true });
+		assert.deepStrictEqual({ waited: waited >= 600 && waited < 10_000, why: told.text.includes('Facade is not reachable (') }, { waited: true, why: true });
 	});
 
 	test('a window that does not answer its hello - stopped in a debugger, say - is waited for no longer than one that is not there', async () => {
@@ -1196,12 +1261,12 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		const server = http.createServer(req => req.resume());
 		await new Promise<void>(resolve => server.listen(stopped, resolve));
 		try {
-			const you = StdioMcpClient.start([], { FACADE_AGENTS_PIPE: stopped, FACADE_AGENTS_TOKEN: 'person-token', FACADE_SCRIPT_WAIT_MS: '500' });
+			const you = StdioMcpClient.start([], { FACADE_AGENTS_RECORD: await recordOfAWindowGone(), FACADE_AGENTS_PIPE: stopped, FACADE_AGENTS_TOKEN: 'person-token', FACADE_SCRIPT_WAIT_MS: '500' });
 			clients.push(you);
 			await you.initialize();
-			const status = await you.call('facade_status');
+			const told = await you.call('echo', { text: 'anyone?' });
 
-			assert.strictEqual(status.text.includes('Facade is not reachable (Facade did not say hello in time.)'), true);
+			assert.strictEqual(told.text.includes('Facade is not reachable (Facade did not say hello in time.)'), true);
 		} finally {
 			server.close();
 		}

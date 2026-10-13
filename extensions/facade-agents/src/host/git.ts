@@ -7,8 +7,17 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { canonicalFolder, isInsideFolder } from '../base/files';
-import { Git, ListedWorktree, MadeWorktreeFolder, Repository, SetupOutcome, WorktreeChanges, WorktreeDeletion } from '../core/ports';
-import { changedFilesIn, excludeIn, fileAtIn, hasBranchIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreesIn } from './gitCli';
+import { Git, ListedWorktree, MadeWorktreeFolder, OwnedFile, Repository, SetupOutcome, SetupProgress, WorktreeChanges, WorktreeDeletion } from '../core/ports';
+import { changedFilesIn, excludeIn, fileAtIn, hasBranchIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreeRootIn, worktreesIn } from './gitCli';
+
+/** The options the window's `_facade.worktree.delete` and `_facade.worktree.removalLoss` take: its `IRemoveWorktreeOptions`. */
+interface WindowDeletion {
+	readonly discardChanges: boolean;
+	readonly ownFiles: readonly OwnedFile[];
+	readonly main: vscode.Uri;
+	readonly runs: readonly { readonly workspace: string; readonly id: number }[];
+	readonly leftover?: true;
+}
 
 /**
  * The core's Git port: git's own records, read with the git the git extension uses - the one the
@@ -22,6 +31,10 @@ export class HostGit implements Git {
 
 	async repositoryOf(folder: string): Promise<Repository | undefined> {
 		return repositoryAt(folder);
+	}
+
+	async worktreeRootOf(folder: string): Promise<string | undefined> {
+		return worktreeRootIn(await gitPath(), folder);
 	}
 
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
@@ -49,6 +62,10 @@ export class HostGit implements Git {
 		return await vscode.commands.executeCommand<SetupOutcome>('_facade.worktree.setupOutcome', vscode.Uri.file(folder)) ?? { kind: 'none' };
 	}
 
+	async setupState(folder: string): Promise<SetupProgress | undefined> {
+		return await vscode.commands.executeCommand<SetupProgress | undefined>('_facade.worktree.setupState', vscode.Uri.file(folder)) ?? undefined;
+	}
+
 	stopSetup(folder: string): void {
 		void vscode.commands.executeCommand('_facade.worktree.stopSetup', vscode.Uri.file(folder)).then(undefined, () => undefined);
 	}
@@ -67,13 +84,23 @@ export class HostGit implements Git {
 	}
 
 	async deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void> {
-		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder), {
+		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder), this.deletionOf(options));
+	}
+
+	async deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]> {
+		// The same deletion's shared preflight alone: nothing stopped, closed or removed (O5 step 2)
+		return await vscode.commands.executeCommand<readonly string[] | undefined>('_facade.worktree.removalLoss', vscode.Uri.file(folder), this.deletionOf(options)) ?? [];
+	}
+
+	/** The options `_facade.worktree.delete` and `_facade.worktree.removalLoss` take for a deletion `options` describe. */
+	private deletionOf(options: WorktreeDeletion): WindowDeletion {
+		return {
 			discardChanges: options.discardChanges,
 			ownFiles: options.ownFiles,
 			main: vscode.Uri.file(options.main),
 			runs: options.agents.map(id => ({ workspace: this.workspace, id })),
 			...(options.leftover ? { leftover: true } : {})
-		});
+		};
 	}
 
 	async excludeOf(folder: string): Promise<{ readonly file: string; readonly root: string } | undefined> {

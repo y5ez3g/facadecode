@@ -12,7 +12,10 @@ import { Environment } from '../clis/cli';
 import { FacadeError } from '../core/errors';
 import { Disposable, InputEffect, KeysOptions, PersonInput, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TerminalsInside, TypeOptions } from '../core/ports';
 
-/** How long Facade's workbench is waited for at most to have its terminals back: its pty host may not answer. */
+/**
+ * How long Facade's workbench is waited for at most to have its terminals back where the wait has no time of its own -
+ * whether an agent's process is alive, a doorbell: its pty host may not answer. A call waits its own time (D2, D3).
+ */
 const RESTORE_TIMEOUT_MS = 60_000;
 /** How long, once the window has its terminals back, a process it cannot tell of yet is asked after: its id comes a moment after its terminal. */
 const UNKNOWN_WAIT_MS = 10_000;
@@ -21,6 +24,10 @@ const UNKNOWN_POLL_MS = 250;
 const ENDS_POLL_MS = 5_000;
 /** Why a window cannot read agents' screens or type there: in English, as Facade's errors say it to the agent. */
 const WITHOUT_WORKBENCH = 'This window cannot read agents\' screens or type into their terminals: it runs without Facade\'s workbench.';
+/** Why the window says it closed an agent's terminal, where it was not its tab. */
+const TERMINAL_END_REASONS: ReadonlySet<string> = new Set<NonNullable<TerminalEnd['reason']>>(['worktreeDeleted', 'folderRemoved', 'folderGone']);
+/** Why the window says not all of an input went in. */
+const INPUT_REASONS: ReadonlySet<string> = new Set<NonNullable<InputEffect['reason']>>(['ended', 'timeout', 'frameworkOff']);
 
 /** What the window knows of an agent's process, as `_facade.terminal.processes` answers. */
 type RunProcess =
@@ -34,7 +41,17 @@ function isRunProcess(candidate: unknown): candidate is RunProcess {
 		return false;
 	}
 	const { state, end, processId } = candidate;
-	return (state === 'present' && (processId === undefined || (typeof processId === 'number' && Number.isInteger(processId) && processId > 0))) || state === 'unknown' || (state === 'gone' && (end === undefined || (isJsonObject(end) && typeof end.byThePerson === 'boolean' && (end.exitCode === undefined || typeof end.exitCode === 'number') && (end.reason === undefined || end.reason === 'worktreeDeleted'))));
+	return (state === 'present' && (processId === undefined || (typeof processId === 'number' && Number.isInteger(processId) && processId > 0))) || state === 'unknown' || (state === 'gone' && (end === undefined || (isJsonObject(end) && typeof end.byThePerson === 'boolean' && (end.exitCode === undefined || typeof end.exitCode === 'number') && (end.reason === undefined || isTerminalEndReason(end.reason)))));
+}
+
+/** Whether `value` is a reason the window gives for closing an agent's terminal. */
+function isTerminalEndReason(value: unknown): value is NonNullable<TerminalEnd['reason']> {
+	return typeof value === 'string' && TERMINAL_END_REASONS.has(value);
+}
+
+/** Whether `value` is a reason the window gives for not all of an input going in. */
+function isInputReason(value: unknown): value is NonNullable<InputEffect['reason']> {
+	return typeof value === 'string' && INPUT_REASONS.has(value);
 }
 
 /**
@@ -48,11 +65,14 @@ function isRunProcess(candidate: unknown): candidate is RunProcess {
 export class HostTerminals implements Terminals, vscode.Disposable {
 
 	private readonly listeners = new Set<(id: number, end: TerminalEnd) => void>();
-	/** The agents whose processes' ends are looked for: those launched here, and those found running coming back. */
+	/**
+	 * The agents whose processes' ends are looked for: those launched here, and those found running coming back - or not
+	 * told of then, whose end is recorded once the window can tell of it (AGENT-LAUNCHER.md, L12).
+	 */
 	private readonly watched = new Set<number>();
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly poll: ReturnType<typeof setInterval>;
-	/** Settles once the window has the terminals it had back, or a minute on. */
+	/** Settles once the window has the terminals it had back; each call waits for it for its own time at most. */
 	private readonly restored = terminalsRestored();
 	/** Set while the ends are looked for; looked for again once that is done, where asked meanwhile. */
 	private looking: 'once' | 'again' | undefined;
@@ -100,7 +120,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 	}
 
 	async isAlive(id: number): Promise<boolean> {
-		await this.restored;
+		await this.whenRestored(undefined);
 		const deadline = Date.now() + UNKNOWN_WAIT_MS;
 		let known = await this.processOf(id);
 		while (known.state === 'unknown' && Date.now() < deadline) {
@@ -108,6 +128,8 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 			known = await this.processOf(id);
 		}
 		if (known.state === 'unknown') {
+			// Looked for all the same: once the window tells of its end, that end is recorded (L12)
+			this.watched.add(id);
 			throw new Error('the window cannot tell whether its process runs');
 		}
 		if (known.state === 'present') {
@@ -147,12 +169,12 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		return typeof gone.exitCode === 'number' ? { exitCode: gone.exitCode } : {};
 	}
 
-	async read(id: number, lines: number): Promise<TerminalScreen | undefined> {
+	async read(id: number, lines: number, waitMs: number): Promise<TerminalScreen | undefined> {
 		if (!await hasCommand('_facade.terminal.read')) {
 			throw new FacadeError('UNAVAILABLE', WITHOUT_WORKBENCH);
 		}
-		// A terminal the window is still giving back after a reload is waited for (D2)
-		await this.restored;
+		// A terminal the window is still giving back after a reload is waited for, the call's time at most (D2)
+		await this.whenRestored(waitMs);
 		return screenOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.read', this.runOf(id), lines));
 	}
 
@@ -160,16 +182,30 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		if (!await hasCommand('_facade.terminal.type')) {
 			throw new FacadeError('UNAVAILABLE', WITHOUT_WORKBENCH, { outcome: 'not_applied' });
 		}
-		await this.restored;
-		return effectOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.type', this.runOf(id), text, { enter: options.enter, enterDelayMs: options.enterDelayMs, queueTimeoutMs: options.queueTimeoutMs ?? null }));
+		// Its wait for the terminals back counts in its queue's time: a call waits that long at most before it begins (D3)
+		const queueTimeoutMs = await this.whenRestored(options.queueTimeoutMs);
+		return effectOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.type', this.runOf(id), text, { enter: options.enter, enterDelayMs: options.enterDelayMs, queueTimeoutMs: queueTimeoutMs ?? null, ...(options.requiresFramework ? { requiresFramework: true } : {}) }));
 	}
 
 	async keys(id: number, keys: readonly string[], options: KeysOptions): Promise<InputEffect | undefined> {
 		if (!await hasCommand('_facade.terminal.keys')) {
 			throw new FacadeError('UNAVAILABLE', WITHOUT_WORKBENCH, { outcome: 'not_applied' });
 		}
-		await this.restored;
-		return effectOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.keys', this.runOf(id), keys, { queueTimeoutMs: options.queueTimeoutMs ?? null }));
+		const queueTimeoutMs = await this.whenRestored(options.queueTimeoutMs);
+		return effectOf(await vscode.commands.executeCommand<unknown>('_facade.terminal.keys', this.runOf(id), keys, { queueTimeoutMs: queueTimeoutMs ?? null }));
+	}
+
+	/**
+	 * Waits until the window has its terminals back after a reload - `waitMs` at most, {@link RESTORE_TIMEOUT_MS}
+	 * with none - and answers with what is left of `waitMs`. Its timer is cleared once they are back: no call leaves
+	 * one running.
+	 */
+	private async whenRestored(waitMs: number | undefined): Promise<number | undefined> {
+		const start = Date.now();
+		const over = new AbortController();
+		await Promise.race([this.restored, timeout(waitMs ?? RESTORE_TIMEOUT_MS, over.signal).catch(() => undefined)]);
+		over.abort();
+		return waitMs === undefined ? undefined : Math.max(waitMs - (Date.now() - start), 0);
 	}
 
 	/** What holds Facade's input into the agent's terminal back, as Facade's workbench saw the person's keys there; undefined where it cannot tell. */
@@ -315,7 +351,7 @@ function effectOf(value: unknown): InputEffect | undefined {
 		return undefined;
 	}
 	if (!isJsonObject(value) || (value.outcome !== 'applied' && value.outcome !== 'partial' && value.outcome !== 'not_applied')
-		|| (value.reason !== undefined && value.reason !== 'ended' && value.reason !== 'timeout')
+		|| (value.reason !== undefined && !isInputReason(value.reason))
 		|| (value.pasted !== undefined && typeof value.pasted !== 'boolean') || (value.entered !== undefined && typeof value.entered !== 'boolean')
 		|| (value.keysSent !== undefined && (typeof value.keysSent !== 'number' || !Number.isInteger(value.keysSent) || value.keysSent < 0))) {
 		throw new Error(`the window answered with ${JSON.stringify(value)}, which does not say what went in`);
@@ -336,8 +372,8 @@ function exitedAsItStarted(executable: string, exitCode: number | undefined): st
 
 /**
  * Settles once the window has the terminals it had back - reconnected to their processes, the editor
- * area's and floating windows' restored - as Facade's workbench says, for a minute at most.
+ * area's and floating windows' restored - as Facade's workbench says.
  */
 async function terminalsRestored(): Promise<void> {
-	await Promise.race([Promise.resolve(vscode.commands.executeCommand('_facade.terminal.whenRestored')).catch(() => undefined), timeout(RESTORE_TIMEOUT_MS)]);
+	await Promise.resolve(vscode.commands.executeCommand('_facade.terminal.whenRestored')).catch(() => undefined);
 }

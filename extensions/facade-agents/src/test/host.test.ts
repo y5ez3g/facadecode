@@ -8,7 +8,9 @@ import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { processStartedAt, workingFoldersOf } from '../base/system';
-import { changedFilesIn, excludeIn, fileAtIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreesIn } from '../host/gitCli';
+import { knownClis } from '../clis/registry';
+import { agentIconId } from '../host/agentIcons';
+import { changedFilesIn, excludeIn, fileAtIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreeRootIn, worktreesIn } from '../host/gitCli';
 import { JsonFileState } from '../host/windowState';
 import { outcomeOf, tempDir } from './util';
 
@@ -22,6 +24,20 @@ suite('Host: Facade: Start Agent', () => {
 		const hidden = (manifest.contributes?.menus?.commandPalette ?? []).some((each: { command?: string; when?: string }) => each.command === 'facade.agents.startAgent' && each.when === 'false');
 
 		assert.deepStrictEqual({ title: names[String(command?.title).replace(/^%|%$/g, '')], category: names[String(command?.category).replace(/^%|%$/g, '')], hidden }, { title: 'Start Agent...', category: 'Agents', hidden: false });
+	});
+
+	test('it lists each agent with the icon the agent menu shows it with: a built-in\'s logo, the product icon the workbench registers for its CLI, and the robot for a custom agent, whatever it runs (L3)', () => {
+		// Read from the workbench's source on purpose: the workbench alone registers these icons, and an id of the
+		// extension's that drifts from its own shows no icon at all - nothing in the extension could catch that
+		const launchers = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'src', 'vs', 'workbench', 'contrib', 'terminalLaunchers', 'common', 'terminalLaunchers.ts'), 'utf8');
+		const registered = new Map([...launchers.matchAll(/\['(?<cli>[\w-]+)', registerIcon\('(?<icon>[\w-]+)'/g)].map(match => [match.groups?.cli, match.groups?.icon]));
+		const logos = ['claude: agent-claude', 'codex: agent-codex', 'agy: agent-antigravity', 'muse: agent-muse'];
+
+		assert.deepStrictEqual({
+			builtIns: knownClis().map(cli => `${cli.id}: ${agentIconId(cli.id, false)}`),
+			registered: knownClis().map(cli => `${cli.id}: ${registered.get(cli.id)}`),
+			custom: [agentIconId('my-agent', true), agentIconId('claude', true)]
+		}, { builtIns: logos, registered: logos, custom: ['robot', 'robot'] });
 	});
 });
 
@@ -201,6 +217,42 @@ suite('Host: git\'s records, read with git', function () {
 			tracked: ['.mcp.json', '.agents/skills/facade/SKILL.md'],
 			atCommit: ['.mcp.json'],
 			changed: ['.mcp.json', 'notes.md']
+		});
+	});
+
+	test('the worktree a folder is in, its top level, written as the folder is - through a link, the link: the main checkout\'s, or a worktree git added, from a folder inside it; none in its git directory, in a bare repository or in no repository; git failing otherwise says why (O5 step 1; OR-09)', async () => {
+		const lab = path.join(temp.dir, 'lab');
+		const added = path.join(temp.dir, 'lab-lint');
+		const bare = path.join(temp.dir, 'lab.git');
+		const link = path.join(temp.dir, 'link');
+		const plain = path.join(temp.dir, 'plain');
+		fs.mkdirSync(lab);
+		fs.mkdirSync(plain);
+		git(lab, 'init', '-q', '-b', 'main');
+		git(lab, '-c', 'user.name=Test', '-c', 'user.email=test@test.invalid', 'commit', '-q', '--allow-empty', '-m', 'first');
+		git(lab, 'worktree', 'add', '-q', '-b', 'lint', added);
+		git(temp.dir, 'clone', '-q', '--bare', lab, bare);
+		fs.mkdirSync(path.join(added, 'packages', 'app'), { recursive: true });
+		fs.symlinkSync(added, link, 'junction');
+		// Not there, in a folder whose name has words of git's in it, written otherwise: git's failure, never taken for none
+		const gone = path.join(temp.dir, 'My Work Tree', 'gone');
+
+		assert.deepStrictEqual({
+			main: await worktreeRootIn('git', lab),
+			nested: await worktreeRootIn('git', path.join(added, 'packages', 'app')),
+			linked: await worktreeRootIn('git', path.join(link, 'packages', 'app')),
+			gitDir: await worktreeRootIn('git', path.join(lab, '.git')),
+			bare: await worktreeRootIn('git', bare),
+			plain: await worktreeRootIn('git', plain),
+			gone: /cannot change to/.test(await outcomeOf(worktreeRootIn('git', gone)))
+		}, {
+			main: lab,
+			nested: added,
+			linked: link,
+			gitDir: undefined,
+			bare: undefined,
+			plain: undefined,
+			gone: true
 		});
 	});
 

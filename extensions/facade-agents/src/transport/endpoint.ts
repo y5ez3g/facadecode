@@ -8,6 +8,7 @@ import * as path from 'path';
 import { replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
 import { PipeHandlers, PipeServer } from './pipe';
+import { McpTool, TOOLS_FILE } from './protocol';
 
 const WINDOW_FILE = 'window.json';
 
@@ -29,7 +30,8 @@ export interface McpServerLaunch {
  * The window's end of the pipe every agent's MCP server calls. It hands each request to what the host
  * gave it - the agent table to know a caller by its token, the contract to answer `/hello` and
  * `/call` - and knows no tool itself. `window.json`, next to the ledger, says which pipe the window
- * listens on, so that a script holding the person's token can reach it.
+ * listens on, so that a script holding the person's token can reach it; `tools.json`, the tools the host
+ * gave it, which an agent's MCP server lists while the window does not answer.
  *
  * The MCP servers are the shim beside this file - in `out/transport/` as a development build runs it,
  * in `dist/` next to the bundled extension - run as Node by this process's own executable.
@@ -43,12 +45,16 @@ export class PipeEndpoint<C> {
 
 	/**
 	 * Listens on `pipe` and records it in `dir`, the workspace's folder under ~/.facade/workspaces, with
-	 * whether the agent framework is on. One that cannot record where it listens does not listen: its pipe
-	 * is left for the next try.
+	 * whether the agent framework is on - and, where given, `tools`, the tools it serves, which an agent's MCP
+	 * server lists while the window does not answer (`TOOLS_FILE`). One that cannot record where it listens does
+	 * not listen: its pipe is left for the next try.
 	 */
-	static async start<C>(pipe: string, dir: string, handlers: PipeHandlers<C>, enabled = true): Promise<PipeEndpoint<C>> {
+	static async start<C>(pipe: string, dir: string, handlers: PipeHandlers<C>, enabled = true, tools?: readonly McpTool[]): Promise<PipeEndpoint<C>> {
 		const server = await PipeServer.listen(pipe, handlers);
 		try {
+			if (tools) {
+				replaceFile(path.join(dir, TOOLS_FILE), JSON.stringify(tools));
+			}
 			writeWindowRecord(dir, { pipe: server.path, pid: process.pid, enabled });
 		} catch (err) {
 			server.dispose();

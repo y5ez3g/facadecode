@@ -11,13 +11,13 @@ import { codeOf, messageOf, stackOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
 import { isJsonObject } from '../base/json';
 import { InstalledCli } from '../clis/cli';
-import { installedClis, knownClis, locateCli } from '../clis/registry';
+import { installedClis, knownClis, locateCli, turnedOffClis } from '../clis/registry';
 import { facadeSkill, firstLineFor } from '../contract/prompts';
-import { Contract } from '../contract/tools';
+import { Contract, toolDefinitions } from '../contract/tools';
 import { FacadeError } from '../core/errors';
 import { Facade } from '../core/facade';
 import { AgentTable, countOnFrom, numberedUpTo } from '../record/agents';
-import { Caller, isLive } from '../record/events';
+import { agentRef, Caller, isLive, PERSON } from '../record/events';
 import { earlierRecordOf, identityOf, isSameWorkspace, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { ClosedBy, LedgerLockedError, LedgerUnreadableError, lockStateOf, lockWait } from '../record/ledger';
 import { AGENTS_LOG } from '../record/log';
@@ -29,7 +29,7 @@ import { HostPerson } from './person';
 import { confirmDeleteRooms, pickRoom } from './rooms';
 import { ScreenDocuments } from './screenDocuments';
 import { configFor, customAgents, frameworkOn, settingsProblems, timeoutMs, yolo } from './settings';
-import { folderOnScreen, OfferedAgent, pickAgent } from './startAgent';
+import { folderOnScreen, OfferedAgent, pickAgent, terminalPlace } from './startAgent';
 import { agentProcessesRun, HostTerminals, terminalEnvironment } from './terminals';
 import { JsonFileState, StateStore } from './windowState';
 
@@ -70,6 +70,8 @@ export class AgentsService implements vscode.Disposable {
 	private endpoint: PipeEndpoint<Caller> | undefined;
 	/** The workspace's record, open in this window. */
 	private table: AgentTable | undefined;
+	/** That record's id, as the window's commands name it. */
+	private recordId: string | undefined;
 	/** Set once the service stopped: as the window goes, as Facade agents are turned off, or as another window took its agents. */
 	private stopped = false;
 	/** How it stopped first: as the window went, or as Facade let go of its agents. */
@@ -81,6 +83,8 @@ export class AgentsService implements vscode.Disposable {
 
 	/** Where Facade's notices go, and the last screens of agents that ended. */
 	private person: HostPerson | undefined;
+	/** The built-ins this machine has and the person offers - their settings wrong too - as a terminal found them when last looked for (X-39). */
+	private installed: readonly InstalledCli[] = [];
 
 	/**
 	 * `workspaceState` keeps the id of the record this workspace's agents are in, as its folders come and go;
@@ -178,6 +182,7 @@ export class AgentsService implements vscode.Disposable {
 		}
 		// Closed last, saying how Facade stopped
 		this.table = table;
+		this.recordId = id;
 		if (this.stopped) {
 			this.dispose();
 			return;
@@ -190,7 +195,7 @@ export class AgentsService implements vscode.Disposable {
 		this.disposables.push(terminals);
 
 		// The CLIs this machine has, as a terminal finds them: Facade's own PATH until they are looked for there (X-39)
-		let installedNow = installedClis(configFor);
+		this.installed = installedClis(configFor);
 		const facade = new Facade({
 			table,
 			ports: {
@@ -205,10 +210,10 @@ export class AgentsService implements vscode.Disposable {
 			clis: {
 				known: knownClis(),
 				custom: customAgents,
-				installed: () => installedNow,
+				installed: () => this.installed,
 				refresh: async () => {
-					const folder = await folderOnScreen() ?? vscode.workspace.workspaceFolders?.find(each => each.uri.scheme === 'file')?.uri.fsPath;
-					installedNow = installedClis(configFor, folder === undefined ? process.env : await terminalEnvironment(folder), folder);
+					const { folder, env } = await terminalPlace();
+					this.installed = installedClis(configFor, env, folder);
 				},
 				locate: (cli, config, env, folder) => locateCli(cli, config, env, folder),
 				yolo,
@@ -255,8 +260,12 @@ export class AgentsService implements vscode.Disposable {
 		const pushLive = () => {
 			pushing ??= setTimeout(() => {
 				pushing = undefined;
-				const live = [...table.state.agents.values()].filter(isLive).map(agent => agent.id);
-				void vscode.commands.executeCommand('_facade.agents.live', id, live).then(undefined, () => undefined);
+				const agents = [...table.state.agents.values()].filter(isLive);
+				// Those with no terminal yet - their worktrees being made or set up - listed by the window with the rest (L3)
+				const preparing = agents
+					.filter(agent => agent.state === 'starting' && (agent.phase === 'creating_worktree' || agent.phase === 'running_setup'))
+					.map(agent => ({ id: agent.id, name: agent.name, phase: agent.phase, ...(agent.phase === 'running_setup' ? { folder: agent.folder } : {}) }));
+				void vscode.commands.executeCommand('_facade.agents.live', id, agents.map(agent => agent.id), preparing).then(undefined, () => undefined);
 			}, 100);
 		};
 		const changes = table.onDidChange(pushLive);
@@ -277,10 +286,14 @@ export class AgentsService implements vscode.Disposable {
 			if (event.affectsConfiguration('facade.orchestration.enabled')) {
 				try {
 					endpoint.setEnabled(frameworkOn());
-					// Doorbells stop or start again with the switch (AGENT-MESSAGES.md, M10)
-					facade.frameworkChanged();
 				} catch (err) {
 					this.say(`Could not record in window.json that the agent framework is ${frameworkOn() ? 'on' : 'off'}: ${messageOf(err)}`);
+				}
+				// Doorbells stop or start again with the switch, whatever became of window.json (AGENT-MESSAGES.md, M10)
+				try {
+					facade.frameworkChanged();
+				} catch (err) {
+					this.say(`The agents' doorbells could not be ${frameworkOn() ? 'started again' : 'stopped'} with the agent framework: ${messageOf(err)}`);
 				}
 			}
 		}));
@@ -352,6 +365,27 @@ export class AgentsService implements vscode.Disposable {
 		return await this.facade?.launchProblems(installed, folder) ?? [];
 	}
 
+	/** The person stops agent `id` of the record `workspace` from the window - one with no terminal yet, from Show Active Agents (L3). */
+	async stopFromWindow(workspace: string, id: number): Promise<void> {
+		if (this.facade && workspace === this.recordId) {
+			try {
+				await this.facade.stopAgent(PERSON, agentRef(id));
+			} catch (err) {
+				this.say(`Stopping ${agentRef(id)} failed: ${messageOf(err)}`);
+			}
+		}
+	}
+
+	/** The window deleted the worktree `folder` (O5, O11). */
+	worktreeDeleted(folder: string): void {
+		this.facade?.worktreeDeleted(folder);
+	}
+
+	/** The person's deletion of the worktree `folder` failed in the window (O5; OR-10). */
+	worktreeDeleteFailed(folder: string): void {
+		this.facade?.worktreeDeleteFailed(folder);
+	}
+
 	/** The person is deleting the worktree `folder` in the window: its agents still starting are stopped first (N-34). */
 	async worktreeDeleting(folder: string): Promise<void> {
 		await this.facade?.worktreeDeleting(folder);
@@ -368,12 +402,19 @@ export class AgentsService implements vscode.Disposable {
 					: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to start an agent in it.")));
 			return undefined;
 		}
-		const offered: OfferedAgent[] = [
-			...facade.startable().filter(each => !each.custom).map(each => ({ id: each.id, label: each.displayName, custom: false })),
-			// Listed as the person wrote them, found or not: a start says what is wrong.
-			...customAgents().map(({ cli }) => ({ id: cli.id, label: cli.displayName, custom: true }))
-		];
-		const picked = await pickAgent(rawArgs, offered);
+		const picked = await pickAgent(rawArgs, async (): Promise<OfferedAgent[]> => {
+			// What a terminal finds now, as the agent menu does as it opens: a CLI installed since is offered, one gone is not (L3)
+			await facade.refreshClis();
+			return [
+				// Each the person offers that is found, its settings wrong too: choosing it says what is wrong, as the menu does (L5)
+				...this.installed.map(({ cli }) => ({ id: cli.id, label: cli.displayName, custom: false })),
+				// Listed as the person wrote them, found or not: a start says what is wrong.
+				...customAgents().map(({ cli }) => ({ id: cli.id, label: cli.displayName, custom: true }))
+			];
+		}, async () => {
+			const { folder, env } = await terminalPlace();
+			return turnedOffClis(configFor, env, folder).map(cli => cli.displayName);
+		});
 		if (!picked) {
 			return undefined;
 		}
@@ -535,7 +576,8 @@ export class AgentsService implements vscode.Disposable {
 	 * The endpoint on the pipe the agents still running call, which only that pipe reaches; undefined
 	 * once the service stopped meanwhile. The extension host before is waited for while it lets go of
 	 * it - while agents run, as long as their MCP servers wait for the window - and only then is a new pipe
-	 * taken, the person told that the agents still running lost Facade's tools.
+	 * taken, the person told that the agents still running lost Facade's tools. The tools it serves go into
+	 * the record with it: an agent's MCP server lists them while the window does not answer (L1; O8).
 	 */
 	private async listen(windowState: StateStore, dir: string, handlers: PipeHandlers<Caller>, agentsRun: boolean, unreadable?: string): Promise<PipeEndpoint<Caller> | undefined> {
 		const kept = windowState.get(PIPE_ID_KEY);
@@ -551,7 +593,7 @@ export class AgentsService implements vscode.Disposable {
 			// No shorter than the extension host before takes to let go of it, however short the person set it.
 			const deadline = Date.now() + (agentsRun ? Math.max(timeoutMs(), HANDOVER_MS) : HANDOVER_MS);
 			try {
-				return await this.retried(() => PipeEndpoint.start(pipePath(kept), dir, handlers, frameworkOn()), err => codeOf(err) === 'EADDRINUSE' && Date.now() < deadline);
+				return await this.retried(() => PipeEndpoint.start(pipePath(kept), dir, handlers, frameworkOn(), toolDefinitions()), err => codeOf(err) === 'EADDRINUSE' && Date.now() < deadline);
 			} catch (err) {
 				if (codeOf(err) !== 'EADDRINUSE') {
 					throw err;
@@ -564,7 +606,7 @@ export class AgentsService implements vscode.Disposable {
 		}
 		const pipeId = crypto.randomBytes(8).toString('hex');
 		await windowState.update(PIPE_ID_KEY, pipeId);
-		return this.stopped ? undefined : PipeEndpoint.start(pipePath(pipeId), dir, handlers, frameworkOn());
+		return this.stopped ? undefined : PipeEndpoint.start(pipePath(pipeId), dir, handlers, frameworkOn(), toolDefinitions());
 	}
 
 	/** What `attempt` makes, tried again while `again` says so of what it failed with; undefined once the service stopped meanwhile. */

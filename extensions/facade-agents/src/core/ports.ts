@@ -57,8 +57,11 @@ export interface TerminalScreen {
 export interface InputEffect {
 	/** `applied`: all of it; `partial`: a first part, the terminal ending before the rest; `not_applied`: nothing. */
 	readonly outcome: 'applied' | 'partial' | 'not_applied';
-	/** Why not all of it went in: the terminal ended, or the input waited behind the person's typing past its time. */
-	readonly reason?: 'ended' | 'timeout';
+	/**
+	 * Why not all of it went in: the terminal ended, the input waited behind the person's typing past its time, or - for
+	 * input that needs the agent framework, a doorbell - the framework was off when its turn came (AGENT-MESSAGES.md, M10).
+	 */
+	readonly reason?: 'ended' | 'timeout' | 'frameworkOff';
 	/** For text: whether it was pasted. */
 	readonly pasted?: boolean;
 	/** For text: whether Enter followed. */
@@ -74,6 +77,11 @@ export interface TypeOptions {
 	readonly enterDelayMs: number;
 	/** How long it may wait for its turn; none to wait as long as the person's typing holds it. */
 	readonly queueTimeoutMs?: number;
+	/**
+	 * Set for input the agent framework makes - a doorbell, a typed first line: dropped, not applied, if the framework is
+	 * off when its turn comes (AGENT-MESSAGES.md, M10; AGENT-LAUNCHER.md, L13).
+	 */
+	readonly requiresFramework?: boolean;
 }
 
 /** How keys are pressed in a terminal: how long they may wait for their turn. */
@@ -103,8 +111,12 @@ export interface TerminalEnd {
 	readonly exitCode?: number;
 	/** Whether the person closed the terminal. */
 	readonly byThePerson: boolean;
-	/** Why the person's act closed it, where it was not its tab they closed: their deletion of its worktree (N-04). */
-	readonly reason?: 'worktreeDeleted';
+	/**
+	 * Why it was closed, where it was not its tab: the person's deletion of its worktree (N-04); its folder removed from the
+	 * workspace by the person; or its folder gone from the disk - a worktree removed outside Facade - by no one Facade knows
+	 * (AGENT-LAUNCHER.md, L6).
+	 */
+	readonly reason?: 'worktreeDeleted' | 'folderRemoved' | 'folderGone';
 }
 
 /**
@@ -131,9 +143,9 @@ export interface Terminals {
 	/**
 	 * The bottom `lines` lines of the screen of the agent's terminal, read without changing anything of it;
 	 * undefined where its process runs in none, or the terminal has no screen yet. A terminal the window is
-	 * still giving back after a reload is waited for.
+	 * still giving back after a reload is waited for, `waitMs` at most (AGENT-DEBUGGING.md, D2).
 	 */
-	read(id: number, lines: number): Promise<TerminalScreen | undefined>;
+	read(id: number, lines: number, waitMs: number): Promise<TerminalScreen | undefined>;
 	/**
 	 * Types `text` into the agent's terminal as one paste and, with `options.enter`, presses Enter after it: in
 	 * the terminal's turn, after what Facade typed there before, and once the person's typing there lets it
@@ -212,6 +224,15 @@ export type SetupOutcome =
 	| { readonly kind: 'none' | 'invalid' | 'succeeded' | 'submitted' | 'stopped' }
 	| { readonly kind: 'failed'; readonly line: string; readonly exitCode: number; readonly output?: string };
 
+/**
+ * Where the setup of a worktree is, while it runs (AGENT-ORCHESTRATION.md, O3, O4): the line running now, where shell
+ * integration tells it, and the last lines of its terminal as plain text, blank ones at the end dropped.
+ */
+export interface SetupProgress {
+	readonly running?: string;
+	readonly lines: readonly string[];
+}
+
 /** What deleting a worktree would lose: files git keeps no copy of, editors with unsaved changes, and its submodules. */
 export interface WorktreeChanges {
 	/** Changed, staged and untracked files, relative to the worktree, with forward slashes. */
@@ -249,6 +270,11 @@ export interface WorktreeDeletion {
 export interface Git {
 	/** The repository `folder` is in; undefined for a folder with none. */
 	repositoryOf(folder: string): Promise<Repository | undefined>;
+	/**
+	 * The folder of the worktree `folder` is in - its top level, `folder` itself or one it is in - written as `folder`
+	 * is; undefined where git says none, outside a work tree. A folder inside a worktree is not one (O5 step 1; OR-09).
+	 */
+	worktreeRootOf(folder: string): Promise<string | undefined>;
 	/** The worktrees of the repository whose main checkout is `main`, main included. */
 	worktreesOf(main: string): Promise<readonly ListedWorktree[]>;
 	/** Whether the repository whose main checkout is `main` has a branch called `branch`. */
@@ -269,10 +295,21 @@ export interface Git {
 	makeWorktree(main: string, branch: string, startPoint: string): Promise<MadeWorktreeFolder>;
 	/** How the setup of the worktree `folder`, which `makeWorktree` made, came out, once it has. */
 	setupOutcome(folder: string): Promise<SetupOutcome>;
+	/**
+	 * Where the setup of the worktree `folder`, which `makeWorktree` made, is now: its terminal's last lines, and the line
+	 * running; undefined where the window knows no setup for it (O3: setup diagnostics where no agent terminal exists).
+	 */
+	setupState(folder: string): Promise<SetupProgress | undefined>;
 	/** Closes the setup terminal of the worktree `folder`: its start was cancelled. */
 	stopSetup(folder: string): void;
-	/** What deleting the worktree `folder` would lose. */
+	/** What deleting the worktree `folder` would lose, as git and the extension host see it: of it, its submodules are what the window's own check does not name. */
 	changesIn(folder: string): Promise<WorktreeChanges>;
+	/**
+	 * What deleting the worktree `folder` as `options` say would lose, as the window's own Delete Worktree checks it - its
+	 * preflight alone, nothing stopped, closed or removed (AGENT-ORCHESTRATION.md, O5 step 2; O8): each as the window's
+	 * refusal words it, `logo.png (unsaved)`; none where nothing would be. Rejects with why it could not check.
+	 */
+	deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]>;
 	/**
 	 * Deletes the worktree `folder` as Delete Worktree does, with nothing asked, its branch kept; rejects with
 	 * why it could not. Changes git would lose, as the window finds them deleting it, refuse it unless
@@ -329,6 +366,13 @@ export interface Notification {
 	readonly quietIn?: number;
 }
 
+/** The end of one of the person's agents, as its notification tells it. */
+export interface EndTold {
+	readonly text: string;
+	readonly agent: number;
+	readonly severity: Severity;
+}
+
 /** An agent that ended, as a notice about it shows it. */
 export interface EndedAgent {
 	readonly id: number;
@@ -343,14 +387,27 @@ export interface EndedAgent {
 export interface Person {
 	/**
 	 * A notice of Facade's for the person, shown as `severity` says: a failure as one, never as news (UI-17).
-	 * Going to it shows the terminal of `agent`, the agent it is about.
+	 * Going to it shows the terminal of `agent`, the agent it is about. With `key` - `message:facade:<agent>` for
+	 * one about that agent - it is the notification up with that key, taking the place of the one up with it,
+	 * until `close` closes it (AGENT-MESSAGES.md, M11).
 	 */
-	tell(text: string, agent: number | undefined, severity: Severity): void;
+	tell(text: string, agent: number | undefined, severity: Severity, key?: string): void;
+	/**
+	 * The unexpected ends of the person's own agents (AGENT-LAUNCHER.md, L6), gathered by `batch` into one
+	 * notification - `ended:<batch>`, each call the batch's ends so far - shown as the most severe says: going to it
+	 * shows each agent's terminal, or its last screen (AGENT-MESSAGES.md, M11).
+	 */
+	tellEnded(batch: string, ends: readonly EndTold[]): void;
 	/**
 	 * Shows a notification, or updates the one up with its key in place, as Do Not Disturb has it. Answers with
 	 * the label of the button pressed; undefined once it closed, or another took its place.
 	 */
 	notify(notification: Notification): Promise<string | undefined>;
+	/**
+	 * Closes the notice `text` told with `key`, as what it told of is over (AGENT-LAUNCHER.md, L5): not where a
+	 * notice or notification with that key took its place since, nor where none is up with it.
+	 */
+	close(key: string, text: string): void;
 	/** Opens a chat room in an editor, at a message of it. */
 	openRoom(file: string, message: number): Promise<void>;
 	/** Shows an agent that ended: its terminal while that is still open, else its last screen, read-only; where none was kept, how it ended (D6). */

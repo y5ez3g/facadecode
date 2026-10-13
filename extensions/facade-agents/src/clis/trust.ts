@@ -5,7 +5,7 @@
 
 import * as path from 'path';
 import { messageOf } from '../base/errors';
-import { canonicalFolder, isEqualPath, readJsonFile, updateJsonFile } from '../base/files';
+import { canonicalFolder, isEqualPath, JsonFile, readJsonFile, updateJsonFile } from '../base/files';
 import { isJsonObject, JsonObject } from '../base/json';
 import { addItems, addMembers, applyJsonEdits, JsonEdit, JsonObjectNode, JsonStyle, jsonStyleOf, memberOf, nodeValue, replaceValue } from '../base/jsonc';
 import { FileLock } from '../base/lock';
@@ -61,7 +61,7 @@ export function writeTrust(cli: AgentCli, config: CliConfig, trusted: TrustedFol
 	switch (outcome) {
 		case 'written': return { outcome, text: `Facade merged ${JSON.stringify(entry)} into ${file}: ${cli.displayName} trusts ${trusted.folder} now.` };
 		case 'there': return { outcome, text: `${file} has ${JSON.stringify(entry)} already: ${cli.displayName} trusted ${trusted.folder} before.` };
-		case 'unreadable': return { outcome, text: `${file} could not be read, or is not as ${cli.displayName} writes it, so Facade left it alone and cannot give ${cli.displayName} the person's trust in ${trusted.folder}: put the file right, or set ${cli.setting}.launch.trust to null for ${cli.displayName} to ask.` };
+		case 'unreadable': return { outcome, text: `${whyLeftAlone(file, readJsonFile(file), entry, cli.displayName)}, so Facade left it alone and cannot give ${cli.displayName} the person's trust in ${trusted.folder}: put the file right, or set ${cli.setting}.launch.trust to null for ${cli.displayName} to ask.` };
 	}
 }
 
@@ -82,10 +82,25 @@ export function trustProblem(cli: AgentCli, config: CliConfig, trusted: TrustedF
 		return undefined;
 	}
 	const read = readJsonFile(target.file);
-	if (read.kind === 'missing' || (read.kind === 'object' && mergedInto(read.value, target.entry) !== 'conflict')) {
+	if (read.kind === 'missing' || (read.kind === 'object' && mergedInto(read.value, target.entry).kind !== 'conflict')) {
 		return undefined;
 	}
-	return `${target.file} could not be read, or is not as ${cli.displayName} writes it, so Facade cannot give ${cli.displayName} the person's trust in ${trusted.folder}: put the file right, or set ${cli.setting}.launch.trust to null for ${cli.displayName} to ask.`;
+	return `${whyLeftAlone(target.file, read, target.entry, cli.displayName)}, so Facade cannot give ${cli.displayName} the person's trust in ${trusted.folder}: put the file right, or set ${cli.setting}.launch.trust to null for ${cli.displayName} to ask.`;
+}
+
+/**
+ * Why a trust file Facade leaves alone is left alone, as the person is told it - its specific problem, not only that
+ * there is one (AGENT-LAUNCHER.md, L11): `file`, as `read`, could not be read, is no JSON object, or has where the entry
+ * goes a value of another kind, named by its keys.
+ */
+function whyLeftAlone(file: string, read: JsonFile, entry: JsonObject, cliName: string): string {
+	if (read.kind === 'other') {
+		return `${file} ${read.why}`;
+	}
+	const merged = read.kind === 'object' ? mergedInto(read.value, entry) : undefined;
+	return merged?.kind === 'conflict'
+		? `${file} has ${JSON.stringify(merged.at)} as another kind of value than ${cliName} writes there`
+		: `${file} could not be read, or is not as ${cliName} writes it`;
 }
 
 /**
@@ -103,7 +118,7 @@ export function mergeIntoJsonFile(file: string, entry: JsonObject, lock: FileLoc
 		}
 		if (read.kind === 'missing') {
 			const merged = mergedInto({}, entry);
-			return merged === 'conflict' ? { outcome: 'unreadable' } : merged === 'same' ? { outcome: 'there' } : { outcome: 'written', write: merged };
+			return merged.kind === 'conflict' ? { outcome: 'unreadable' } : merged.kind === 'same' ? { outcome: 'there' } : { outcome: 'written', write: merged.value };
 		}
 		// The file's own text, edited where the entry goes: its comments, its numbers, its keys and its
 		// layout stay as they were (X-48)
@@ -148,8 +163,11 @@ function mergeEdits(text: string, node: JsonObjectNode, entry: JsonObject, style
 	return 'merged';
 }
 
-/** `entry` merged into `into`: `same` where it changes nothing, `conflict` where a value is of another kind than what would be merged into it. */
-function mergedInto(into: JsonObject, entry: JsonObject): JsonObject | 'same' | 'conflict' {
+/**
+ * `entry` merged into `into`: `same` where it changes nothing; a `conflict` where a value is of another kind than what
+ * would be merged into it, `at` its keys, dotted - the first such.
+ */
+function mergedInto(into: JsonObject, entry: JsonObject): { readonly kind: 'merged'; readonly value: JsonObject } | { readonly kind: 'same' } | { readonly kind: 'conflict'; readonly at: string } {
 	const merged: { [key: string]: unknown } = { ...into };
 	let changed = false;
 	for (const [key, value] of Object.entries(entry)) {
@@ -157,15 +175,15 @@ function mergedInto(into: JsonObject, entry: JsonObject): JsonObject | 'same' | 
 		const there = into[key] ?? undefined;
 		// A value of another kind there is the person's, or the CLI's, and stays as it is.
 		if (there !== undefined && (isJsonObject(value) !== isJsonObject(there) || Array.isArray(value) !== Array.isArray(there))) {
-			return 'conflict';
+			return { kind: 'conflict', at: key };
 		}
 		if (isJsonObject(value)) {
 			const inner = mergedInto(isJsonObject(there) ? there : {}, value);
-			if (inner === 'conflict') {
-				return 'conflict';
+			if (inner.kind === 'conflict') {
+				return { kind: 'conflict', at: `${key}.${inner.at}` };
 			}
-			merged[key] = inner === 'same' ? there ?? {} : inner;
-			changed ||= inner !== 'same' || there === undefined;
+			merged[key] = inner.kind === 'same' ? there ?? {} : inner.value;
+			changed ||= inner.kind !== 'same' || there === undefined;
 		} else if (Array.isArray(value)) {
 			const list: readonly unknown[] = Array.isArray(there) ? there : [];
 			const missing = value.filter(item => !list.some(had => sameItem(had, item)));
@@ -176,7 +194,7 @@ function mergedInto(into: JsonObject, entry: JsonObject): JsonObject | 'same' | 
 			changed ||= there !== value;
 		}
 	}
-	return changed ? merged : 'same';
+	return changed ? { kind: 'merged', value: merged } : { kind: 'same' };
 }
 
 /**

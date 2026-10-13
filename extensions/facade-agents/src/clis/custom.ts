@@ -65,7 +65,8 @@ export function customAgentOf(name: string, value: unknown, nameProblem: string 
 	const launch = launchOf(blank, isJsonObject(set.launch) ? set.launch : {}, `${setting}.launch`, wrong);
 	const cli: AgentCli = {
 		...blank,
-		task: launch.arguments.task?.length ? 'argument' : 'none',
+		// A task group in its launch, or in the unattended part an agent that gives it a task starts it with (L9)
+		task: launch.arguments.task?.length || launch.unattended?.arguments.task?.length ? 'argument' : 'none',
 		trustValues: ({ folder, repository }) => ({ folder: canonicalFolder(folder), repository: canonicalFolder(repository) }),
 		launch(input, executable) {
 			const { connection } = input;

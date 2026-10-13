@@ -9,7 +9,7 @@ import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { isEqualPath, readLastNumber, replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
-import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LedgerEventBody, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, StartPhase, StoppedBy, WorkspaceState } from './events';
+import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LedgerEventBody, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, SetupState, StartPhase, StoppedBy, WorkspaceState, WorktreeRemoval } from './events';
 import { ClosedBy, LastClose, Ledger, LEDGER_FILE, LedgerOptions } from './ledger';
 import { AgentLog, LoggedLaunch } from './log';
 import { LAST_MESSAGE_FILES, MessageRecord } from './messages';
@@ -46,10 +46,12 @@ export function nameOfWorktree(worktree: string): string {
 	return isAgentName(name) ? name : 'agent';
 }
 
-/** Where a workspace's agents are recorded, and what tests replace of the ledger's. */
+/** Where a workspace's agents are recorded, and what tests replace of the ledger's and of its record of messages. */
 export interface AgentTableOptions extends LedgerOptions {
 	/** The workspace's folder under `~/.facade/workspaces`. */
 	readonly dir: string;
+	/** Makes the record of the workspace's messages, over its ledger: Facade's own where left out. */
+	readonly messageRecord?: (dir: string, ledger: Ledger) => MessageRecord;
 }
 
 /** An agent to start: who it is, who starts it, how, where it works, and its task. */
@@ -107,7 +109,7 @@ export class AgentTable {
 
 	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) {
 		this.log = AgentLog.of(options.dir);
-		this.messages = new MessageRecord(options.dir, ledger);
+		this.messages = options.messageRecord?.(options.dir, ledger) ?? new MessageRecord(options.dir, ledger);
 	}
 
 	/** Opens a workspace's ledger, making it the first time. */
@@ -265,10 +267,23 @@ export class AgentTable {
 		this.log.input(Date.now(), what);
 	}
 
-	/** Records that a starting agent's start moved on: to `phase`, its worktree made in `folder` where one was. */
-	phase(id: number, phase: StartPhase, folder?: string): void {
+	/**
+	 * Records that a starting agent's start moved on: to `phase`, its worktree made in `folder` where one was, and how
+	 * its setup went, `setup`, as it goes on to its CLI (O11).
+	 */
+	phase(id: number, phase: StartPhase, folder?: string, setup?: SetupState): void {
 		if (this.state.agents.get(id)?.state === 'starting') {
-			this.ledger.append({ type: 'agent.phase', id, phase, ...(folder !== undefined ? { folder } : {}) });
+			this.ledger.append({ type: 'agent.phase', id, phase, ...(folder !== undefined ? { folder } : {}), ...(setup !== undefined ? { setup } : {}) });
+		}
+	}
+
+	/**
+	 * Records that the worktree made for agent `id`'s start is in `folder`, whatever its state: one stopped while git made
+	 * it is where git made it, not in the folder planned for it - another's, maybe (AGENT-ORCHESTRATION.md, O4; OR-05).
+	 */
+	recordWorktreeFolder(id: number, folder: string): void {
+		if (this.state.agents.has(id)) {
+			this.ledger.append({ type: 'agent.worktreeMade', id, folder });
 		}
 	}
 
@@ -343,6 +358,15 @@ export class AgentTable {
 		this.ledger.append({ type: 'worktree.made', ...worktree });
 	}
 
+	/**
+	 * Records how a worktree's removal with `stop_agent` went - deleted, or not and why - in the ledger and the person's
+	 * history alike: what came of it, whoever's tool call was cut as it went (AGENT-ORCHESTRATION.md, O5, O11).
+	 */
+	recordWorktreeRemoval(removal: WorktreeRemoval): void {
+		this.ledger.append({ type: 'worktree.removal', ...removal });
+		this.log.removal(removal, Date.now(), this.whoIs(removal.by));
+	}
+
 	/** Records that a worktree Facade made is gone; nothing for a folder Facade did not make. */
 	forgetWorktree(folder: string): void {
 		if ([...this.state.worktrees.keys()].some(made => isEqualPath(made, folder))) {
@@ -353,6 +377,11 @@ export class AgentTable {
 	/** The worktree Facade made at `folder`, if it did. */
 	madeWorktree(folder: string): MadeWorktree | undefined {
 		return [...this.state.worktrees.values()].find(made => isEqualPath(made.folder, folder));
+	}
+
+	/** The last removal of the worktree `folder` with `stop_agent`, where it failed: until one there succeeds, or the folder is gone (O11). */
+	failedRemoval(folder: string): WorktreeRemoval | undefined {
+		return [...this.state.removals.values()].find(removal => isEqualPath(removal.folder, folder));
 	}
 
 	/** Removes the run files of the agents `exited` names; a file that is in use stays for the next opening. */

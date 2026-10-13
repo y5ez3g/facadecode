@@ -234,13 +234,13 @@ function projectKey(folder: string): string {
 
 /**
  * Codex in its own UI. YOLO on: no approvals and no sandbox. YOLO off: its workspace-write sandbox, while its
- * server setting lets Facade's tools through unasked; the person's own agent asks them before what the sandbox
- * does not allow, and one started through `start_agent`, where nobody may be watching, is refused it unasked
+ * server setting lets Facade's tools through unasked; the person's own agent asks them as their approval policy
+ * has it, and one started through `start_agent`, where nobody may be watching, is refused unasked what would ask
  * (AGENT-LAUNCHER.md, L4). A project's hooks nobody reviewed: the person's own agent asks them as Codex does;
  * through `start_agent`, YOLO on trusts them for the run, YOLO off runs none (rule 3). Facade's MCP server comes
  * as `-c` overrides, and so do - through `start_agent` - the settings that would update it or show it tips and
- * nudges, and the person's trust in the folder it starts in, for the launch alone. Nothing is written into the
- * person's own config.toml.
+ * nudges, or offer it its question tool outside plan mode, and the person's trust in the folder it starts in, for
+ * the launch alone. Nothing is written into the person's own config.toml.
  */
 export const codexCli: AgentCli = {
 	id: 'codex',
@@ -267,7 +267,8 @@ export const codexCli: AgentCli = {
 					'--no-daemon'
 				],
 				yoloOn: ['--dangerously-bypass-approvals-and-sandbox'],
-				yoloOff: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'],
+				// Its sandbox alone: what it asks, and when, is the person's approval policy's (L4)
+				yoloOff: ['--sandbox', 'workspace-write'],
 				model: ['--model', '${model}'],
 				// A whole TOML string, so that an effort with a quote or a line break in it stays one.
 				effort: ['-c', 'model_reasoning_effort=${effortToml}'],
@@ -281,6 +282,9 @@ export const codexCli: AgentCli = {
 			unattended: {
 				arguments: {
 					quiet: ['-c', 'check_for_update_on_startup=false', '-c', 'tui.show_tooltips=false', '-c', 'notice.hide_rate_limit_model_nudge=true'],
+					// Its request_user_input would leave its terminal waiting for someone to pick an answer: the feature that
+					// offers it outside plan mode - default_mode_request_user_input, as 0.162.1 names it - is off for the run (L4)
+					questions: ['-c', 'features.default_mode_request_user_input=false'],
 					// The project's hooks run, trusted for this run, rather than stop it at their review screen (L4, rule 3)
 					yoloOn: ['--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust'],
 					// What would ask is refused unasked; and no hook runs, nor waits to be reviewed (L4, rule 3)
@@ -293,8 +297,10 @@ export const codexCli: AgentCli = {
 	task: 'argument',
 	sandbox: { yoloOn: 'off', yoloOff: process.platform === 'win32' ? 'unavailable' : 'on' },
 	exemption: 'precise',
-	// It asks in words: none of its tools waits for a pick in its own UI (YO-07)
-	questionTool: 'none',
+	// Its request_user_input waits for a pick in its own UI, in plan mode - and outside it where the person's
+	// configuration turns its feature on: its unattended questions group turns that off (L4)
+	questionTool: 'removed',
+	verified: '0.162.1',
 	// Its `-c` overrides are merged into a server of the person's of the same name - its `url` beside Facade's
 	// `command`, say: a server neither theirs nor Facade's (X-47)
 	conflict(args, folder, env) {

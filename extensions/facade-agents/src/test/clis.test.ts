@@ -12,16 +12,17 @@ import { messageOf } from '../base/errors';
 import { FileLock } from '../base/lock';
 import { antigravityCli } from '../clis/antigravity';
 import { claudeCli, claudeConfigFile, claudeDenyOf } from '../clis/claude';
-import { AgentCli, ARG_GROUPS, capabilitiesOf, LaunchInput, launchFor, LaunchSpec, sandboxOf, skillMarkdown } from '../clis/cli';
+import { AgentCli, ARG_GROUPS, capabilitiesOf, connectionFor, LaunchInput, launchFor, LaunchSpec, sandboxOf, skillMarkdown } from '../clis/cli';
 import { codexCli } from '../clis/codex';
 import { MAX_DELAY_MS, MAX_TIME_S, readCliConfig, readSeconds } from '../clis/config';
 import { customAgentOf } from '../clis/custom';
-import { launchDocument } from '../clis/describe';
+import { launchDocument, starterFacts } from '../clis/describe';
 import { launchTarget, unsafeForCmd, which } from '../clis/executable';
 import { museCli } from '../clis/muse';
-import { installedClis, knownClis, locateCli } from '../clis/registry';
-import { mergeIntoJsonFile, trustTarget, writeTrust } from '../clis/trust';
-import { START_TIMEOUT_MS } from '../core/launch';
+import { installedClis, knownClis, locateCli, turnedOffClis } from '../clis/registry';
+import { mergeIntoJsonFile, trustProblem, trustTarget, writeTrust } from '../clis/trust';
+import { firstLineFor } from '../contract/prompts';
+import { customAgentNameProblem, START_TIMEOUT_MS } from '../core/launch';
 import { WINDOW_WAIT_MS } from '../transport/protocol';
 import { replaceFsFunction, tempDir } from './util';
 
@@ -42,6 +43,8 @@ interface Declared {
 	readonly markdownDescription?: string;
 	readonly dependencies?: unknown;
 	readonly properties?: { readonly [part: string]: Declared };
+	/** What the names of an object's properties must be: a pattern, names they must not be, and what settings.json says otherwise. */
+	readonly propertyNames?: { readonly pattern?: string; readonly not?: { readonly enum?: readonly string[] }; readonly errorMessage?: string };
 }
 
 /** What a call came to: `done`, or the message of what it threw. */
@@ -54,13 +57,17 @@ function outcome(call: () => unknown): string {
 	}
 }
 
+/** An agent's opening, as its launcher gives #7, started through start_agent by #1: its first line without a task. */
+const OPENING = firstLineFor({ id: 7, name: 'lint' }, { id: 1, name: 'lead' }, undefined);
+
 /**
  * What a launch of `cli` is given, as the core gives it for #7: its defaults - the launch of its starter, the person
  * where a test says no other (`launchFor`) - YOLO on, with the agent framework, where a test sets nothing else.
  */
 function inputFor(cli: AgentCli, overrides: Partial<LaunchInput> = {}): LaunchInput {
 	const unattended = overrides.unattended ?? false;
-	return { folder: '/lab', repository: '/lab', messagesDir: '/record/messages', screensDir: '/record/screens', yolo: true, model: 'model-x', effort: 'high', connection: CONNECTION, skills: [SKILL], runDir: '/runs', slug: '7', ...overrides, unattended, config: launchFor(overrides.config ?? cli.defaults, unattended) };
+	// Started through start_agent, it has its opening, as the launcher gives it (L9)
+	return { folder: '/lab', repository: '/lab', messagesDir: '/record/messages', screensDir: '/record/screens', yolo: true, model: 'model-x', effort: 'high', connection: CONNECTION, skills: [SKILL], runDir: '/runs', slug: '7', ...(unattended ? { opening: OPENING } : {}), ...overrides, unattended, config: launchFor(overrides.config ?? cli.defaults, unattended) };
 }
 
 /** The folder `/lab` as Codex keys its trust in it: its path, its drive in lower case on Windows. */
@@ -132,7 +139,7 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('Codex runs in its own UI with YOLO on - no approvals, no sandbox - with Facade\'s server, its tools approved, and the person\'s trust in its folder as -c overrides, in a process of its own, at the effort asked for; its skill goes into the folder. Started through start_agent, what would update it or show it tips and nudges is off, and the project\'s hooks run unreviewed, trusted for the run; the person\'s own, from the window, starts at its prompt as it usually does, the project\'s hooks theirs to review (L4, rule 3)', () => {
+	test('Codex runs in its own UI with YOLO on - no approvals, no sandbox - with Facade\'s server, its tools approved, and the person\'s trust in its folder as -c overrides, in a process of its own, at the effort asked for; its skill goes into the folder. Started through start_agent, what would update it or show it tips and nudges is off, its question tool is not offered outside plan mode, and the project\'s hooks run unreviewed, trusted for the run; the person\'s own, from the window, starts at its prompt as it usually does, the project\'s hooks theirs to review (L4, rule 3)', () => {
 		const spec = codexCli.launch(inputFor(codexCli, { model: 'gpt-6-luna', effort: 'max', task: '--- Plan', unattended: true }), '/bin/codex');
 		const connect = [
 			'-c', 'mcp_servers.facade.command="/facade/facade"',
@@ -152,6 +159,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				'-c', 'check_for_update_on_startup=false',
 				'-c', 'tui.show_tooltips=false',
 				'-c', 'notice.hide_rate_limit_model_nudge=true',
+				'-c', 'features.default_mode_request_user_input=false',
 				'--dangerously-bypass-approvals-and-sandbox',
 				'--dangerously-bypass-hook-trust',
 				'--model', 'gpt-6-luna',
@@ -187,7 +195,7 @@ suite('CLIs: each launch, argument by argument', () => {
 		}
 	});
 
-	test('with YOLO off, each CLI is started with its yoloOff arguments in place of its yoloOn - the person\'s own where they set them - and with everything else as it was. The person\'s own agent: Claude Code edits its folder unasked and asks them before anything else, Codex asks them before what its sandbox does not allow - each keeping its sandbox and letting Facade\'s server alone through. Through start_agent what would ask is refused unasked - Claude Code\'s edits in its folder let through - and Codex runs no hook; the person\'s groups for their own agents do not reach it, its unattended part\'s in their place. Muse Code keeps its sandbox and asks for nothing, and Antigravity, with no sandbox, asks for nothing - its edits accepted as with YOLO on - whoever started them (L4; X-42)', () => {
+	test('with YOLO off, each CLI is started with its yoloOff arguments in place of its yoloOn - the person\'s own where they set them - and with everything else as it was. The person\'s own agent: Claude Code and Codex are given their sandbox and Facade\'s server let through alone, and nothing more - what else asks, and when, is theirs, in the mode and the approval policy they set. Through start_agent what would ask is refused unasked - Claude Code\'s edits in its folder let through - and Codex runs no hook; the person\'s groups for their own agents do not reach it, its unattended part\'s in their place. Muse Code keeps its sandbox and asks for nothing, and Antigravity, with no sandbox, asks for nothing - its edits accepted as with YOLO on - whoever started them (L4; X-42)', () => {
 		const theirs = readCliConfig(codexCli, name => name === 'launch' ? { arguments: { yoloOn: ['--yolo'], yoloOff: ['--careful'] } } : undefined);
 		const swapped = (cli: AgentCli, unattended: boolean, config = cli.defaults) => {
 			const on = cli.launch(inputFor(cli, { config, unattended, ...unattended ? { task: 'Plan.' } : {} }), '/bin/cli').args;
@@ -200,8 +208,8 @@ suite('CLIs: each launch, argument by argument', () => {
 			startAgents: [...knownClis().map(cli => swapped(cli, true)), swapped(codexCli, true, theirs)]
 		}, {
 			persons: [
-				{ removed: ['--dangerously-skip-permissions'], added: ['--permission-mode', 'acceptEdits', '--allowedTools', 'mcp__facade'] },
-				{ removed: ['--dangerously-bypass-approvals-and-sandbox'], added: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'] },
+				{ removed: ['--dangerously-skip-permissions'], added: ['--allowedTools', 'mcp__facade'] },
+				{ removed: ['--dangerously-bypass-approvals-and-sandbox'], added: ['--sandbox', 'workspace-write'] },
 				{ removed: [], added: [] },
 				{ removed: ['--disable-sandbox'], added: [] },
 				{ removed: ['--yolo'], added: ['--careful'] }
@@ -216,23 +224,63 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('Claude Code\'s sandbox follows the agent\'s YOLO in the settings file of its run, where it has one, unless the person\'s launch sets its own: with YOLO off, one started through start_agent has no way out of it - a command run outside it would ask - while the person\'s own asks them for one (L4, rule 2; N-70); the warning about skipped permissions is off with YOLO on alone', () => {
+	test('Claude Code\'s sandbox follows the agent\'s YOLO in the settings file of its run, where it has one, the keys of a sandbox setting of the person\'s launch over Facade\'s - a key of theirs alone leaves the rest as Facade has it: with YOLO off, one started through start_agent has no way out of it - a command run outside it would ask - while the person\'s own asks them for one (L4, rule 2; N-70); the warning about skipped permissions is off with YOLO on alone', () => {
 		const settingsOf = (yolo: boolean, unattended: boolean, config = claudeCli.defaults) => {
 			const { sandbox, skipDangerousModePermissionPrompt } = JSON.parse(claudeCli.launch(inputFor(claudeCli, { yolo, unattended, config }), '/bin/claude').files[0].content);
 			return { sandbox, skip: skipDangerousModePermissionPrompt };
 		};
 		const theirs = readCliConfig(claudeCli, name => name === 'launch' ? { settings: { sandbox: { enabled: true, autoAllowBashIfSandboxed: false } } } : undefined);
+		const keyAlone = readCliConfig(claudeCli, name => name === 'launch' ? { settings: { sandbox: { excludedCommands: ['docker'] } } } : undefined);
 		const has = process.platform !== 'win32';
 
 		assert.deepStrictEqual({
 			persons: [settingsOf(true, false), settingsOf(false, false)],
 			startAgents: [settingsOf(true, true), settingsOf(false, true)],
-			theirs: settingsOf(false, true, theirs)
+			theirs: settingsOf(false, true, theirs),
+			keyAlone: [settingsOf(false, false, keyAlone), settingsOf(false, true, keyAlone)]
 		}, {
 			persons: [{ sandbox: has ? { enabled: false } : undefined, skip: true }, { sandbox: has ? { enabled: true } : undefined, skip: undefined }],
 			startAgents: [{ sandbox: has ? { enabled: false } : undefined, skip: true }, { sandbox: has ? { enabled: true, allowUnsandboxedCommands: false } : undefined, skip: undefined }],
-			theirs: { sandbox: { enabled: true, autoAllowBashIfSandboxed: false }, skip: undefined }
+			theirs: { sandbox: has ? { enabled: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false } : { enabled: true, autoAllowBashIfSandboxed: false }, skip: undefined },
+			keyAlone: [
+				{ sandbox: has ? { enabled: true, excludedCommands: ['docker'] } : { excludedCommands: ['docker'] }, skip: undefined },
+				{ sandbox: has ? { enabled: true, allowUnsandboxedCommands: false, excludedCommands: ['docker'] } : { excludedCommands: ['docker'] }, skip: undefined }
+			]
 		});
+	});
+
+	test('with YOLO off, Claude Code started through start_agent runs without the servers of its folder\'s .mcp.json the person has not approved for its project - Facade\'s own entry aside - so that it does not wait at its question "New MCP server found in this project", nor run one nobody reviewed; those approved - in the settings of its launch, the project\'s local settings, Claude Code\'s configuration for the project, or all of them at once - it runs as they are. The person\'s own asks as Claude Code does, and with YOLO on nothing is asked; Show Agent Launch says so in its start_agent column (L4, rule 3; LV-02)', () => {
+		const temp = tempDir('facade-mcpjson-');
+		try {
+			const [lab, config] = ['lab', 'config'].map(name => path.join(temp.dir, name));
+			fs.mkdirSync(path.join(lab, '.claude'), { recursive: true });
+			fs.mkdirSync(config);
+			fs.writeFileSync(path.join(lab, '.mcp.json'), JSON.stringify({ mcpServers: { facade: { command: 'facade' }, 'la13-own': { command: 'own' }, 'in-launch': { command: 'a' }, 'in-local': { command: 'b' }, 'in-config': { command: 'c' } } }));
+			fs.writeFileSync(path.join(lab, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['in-local'] }));
+			const project = (approval: object) => fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ projects: { [fs.realpathSync(lab)]: { hasTrustDialogAccepted: true, ...approval } } }));
+			project({ enabledMcpjsonServers: ['in-config'] });
+			const launch = readCliConfig(claudeCli, name => name === 'launch' ? { environment: { CLAUDE_CONFIG_DIR: config }, settings: { enabledMcpjsonServers: ['in-launch'] } } : undefined);
+			const offIn = (yolo: boolean, unattended: boolean) => JSON.parse(claudeCli.launch(inputFor(claudeCli, { folder: lab, repository: lab, yolo, unattended, config: launch }), '/bin/claude').files[0].content).disabledMcpjsonServers;
+			const shown = () => {
+				const place = { folder: lab, repository: lab };
+				const document = launchDocument({ folder: lab, yolo: false, framework: true, clis: [{ cli: claudeCli, config: launch, yours: undefined, program: { target: { executable: '/bin/claude', args: [], throughCmd: false } }, trust: { kind: 'none' }, throughStartAgent: starterFacts(claudeCli, launch, place, process.env, true) }] });
+				const { whenYouStartIt, throughStartAgent } = JSON.parse(document.split('\n').filter(line => !line.startsWith('// ')).join('\n')).claude;
+				return [whenYouStartIt.projectMcpServers, throughStartAgent.projectMcpServers];
+			};
+			const before = { startAgent: offIn(false, true), yoloOn: offIn(true, true), persons: offIn(false, false), shown: shown() };
+			project({ enableAllProjectMcpServers: true });
+
+			assert.deepStrictEqual({ ...before, allApproved: offIn(false, true), allShown: shown()[1] }, {
+				startAgent: ['facade', 'la13-own'],
+				yoloOn: ['facade'],
+				persons: ['facade'],
+				shown: [undefined, 'with YOLO off, turned off for the run, so that it does not stop to ask about them - you have not approved them for this project: la13-own'],
+				allApproved: ['facade'],
+				allShown: 'with YOLO off, none turned off: this folder\'s .mcp.json has no server you have not approved for its project'
+			});
+		} finally {
+			temp.remove();
+		}
 	});
 
 	test('without the agent framework a launch has none of its integration - no connect, warm-up or messages group, no server, skill or file in the folder - and the rest as with it', () => {
@@ -275,18 +323,35 @@ suite('CLIs: each launch, argument by argument', () => {
 		});
 	});
 
-	test('Claude Code\'s sandbox goes in its launch\'s settings file: with YOLO off it is on where the launch passes that file, and off - said so, never on - where the person\'s launch leaves it out (X-07)', () => {
+	test('Claude Code\'s sandbox goes in its launch\'s settings file: with YOLO off it is on where the launch passes that file, and off - said so, never on - where the person\'s launch leaves it out (X-07); where the person\'s launch decides it, it is said as theirs - their sandbox setting\'s enabled, or, for a CLI whose arguments set it, unknown once they changed the group that does - never as Facade\'s (L4, rule 4)', () => {
 		const uses = (yolo: boolean) => ({ framework: true, yolo, model: false, effort: false, task: false, trust: true });
 		const maintained = readCliConfig(claudeCli, () => undefined);
 		const withoutQuiet = readCliConfig(claudeCli, name => name === 'launch' ? { arguments: { quiet: null } } : undefined);
-		const off = process.platform === 'win32' ? 'unavailable' : 'off';
+		const settingsSandbox = (sandbox: object) => readCliConfig(claudeCli, name => name === 'launch' ? { settings: { sandbox } } : undefined);
+		const codexOff = readCliConfig(codexCli, name => name === 'launch' ? { arguments: { yoloOff: ['--sandbox', 'danger-full-access'] } } : undefined);
+		const museExtra = readCliConfig(museCli, name => name === 'launch' ? { arguments: { extra: ['--disable-sandbox'] } } : undefined);
+		const museOtherExtra = readCliConfig(museCli, name => name === 'launch' ? { arguments: { extra: ['--mcp-config', '${folder}/.mcp.json'] } } : undefined);
+		const win = process.platform === 'win32';
 
 		assert.deepStrictEqual({
 			maintained: [sandboxOf(claudeCli, maintained, uses(false)), sandboxOf(claudeCli, maintained, uses(true))],
-			withoutQuiet: sandboxOf(claudeCli, withoutQuiet, uses(false))
+			withoutQuiet: sandboxOf(claudeCli, withoutQuiet, uses(false)),
+			theirsOff: sandboxOf(claudeCli, settingsSandbox({ enabled: false }), uses(false)),
+			theirsOn: sandboxOf(claudeCli, settingsSandbox({ enabled: true }), uses(true)),
+			keyAlone: sandboxOf(claudeCli, settingsSandbox({ excludedCommands: ['docker'] }), uses(false)),
+			codex: [sandboxOf(codexCli, readCliConfig(codexCli, () => undefined), uses(false)), sandboxOf(codexCli, codexOff, uses(false)), sandboxOf(codexCli, codexOff, uses(true))],
+			muse: [sandboxOf(museCli, museExtra, uses(false)), sandboxOf(museCli, museExtra, uses(true))],
+			// An extra group of the person's that names no sandbox leaves it as Facade's
+			museOther: [sandboxOf(museCli, museOtherExtra, uses(false)), sandboxOf(museCli, museOtherExtra, uses(true))]
 		}, {
-			maintained: [process.platform === 'win32' ? 'unavailable' : 'on', 'off'],
-			withoutQuiet: off
+			maintained: [win ? 'unavailable' : 'on', 'off'],
+			withoutQuiet: win ? 'unavailable' : 'off',
+			theirsOff: win ? 'unavailable' : 'off',
+			theirsOn: win ? 'unavailable' : 'on',
+			keyAlone: win ? 'unavailable' : 'on',
+			codex: [win ? 'unavailable' : 'on', win ? 'unavailable' : 'unknown', 'off'],
+			muse: ['unknown', 'unknown'],
+			museOther: ['on', 'off']
 		});
 	});
 
@@ -315,7 +380,7 @@ suite('CLIs: each launch, argument by argument', () => {
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task, persons: { args: persons.args, env: persons.env } }, {
 			executable: '/bin/agy.exe',
-			args: ['-i', 'Reply with the single word ready, and nothing else. Nobody may be watching this terminal: from now on, ask in words - never with a tool that waits for someone to pick an answer.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
+			args: ['-i', `Reply with the single word ready, and nothing else. Nobody may be watching this terminal. ${OPENING}`, '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
 			env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
 			cwd: '/lab',
 			files: [],
@@ -450,9 +515,51 @@ suite('CLIs: how the person has Facade start each one', () => {
 		});
 	});
 
+	test('a custom agent whose task group is in its launch\'s unattended part alone takes a task through start_agent - the launch an agent starts it with has the group, and its notice goes there - and one the person starts, given none, has none to take (L9; M7)', () => {
+		const { cli, config } = customAgentOf('bot', { path: '/bin/bot', launch: { arguments: { connect: ['--mcp', '${mcpConfig}'] }, unattended: { arguments: { task: ['--', '${task}'] } } } }, undefined);
+		const notice = '[facade] You are @b1 #a7, created by @lead #a1. Your task is #m3.';
+
+		assert.deepStrictEqual({
+			throughStartAgent: capabilitiesOf(cli, launchFor(config, true)).task,
+			fromTheUi: capabilitiesOf(cli, launchFor(config, false)).task,
+			args: cli.launch(inputFor(cli, { config, unattended: true, task: notice }), '/bin/bot').args
+		}, {
+			throughStartAgent: true,
+			fromTheUi: false,
+			args: ['--mcp', path.join('/runs', '7.mcp.json'), '--', notice]
+		});
+	});
+
+	test('a custom agent\'s launch waits 250 milliseconds between a line typed into its terminal and its Enter, and nothing before its first line, where the person sets no delays of their own (L9)', () => {
+		const delays = (launch: unknown) => {
+			const { config } = customAgentOf('bot', { path: '/bin/bot', ...(launch !== undefined ? { launch } : {}) }, undefined);
+			return [config.launch.enterDelay, config.launch.taskDelay];
+		};
+
+		assert.deepStrictEqual([delays(undefined), delays({}), delays({ enterDelay: 900, taskDelay: 3_000 })], [[250, 0], [250, 0], [900, 3_000]]);
+	});
+
 	test('every launch has the same values - where it runs, its repository, the home folder, where its messages are, and what it was given - each CLI\'s own files besides', () => {
 		const extra = (cli: AgentCli) => cli.launch(inputFor(cli, { config: readCliConfig(cli, name => name === 'launch' ? { arguments: { extra: ['${folder}', '${repository}', '${home}', '${messagesDir}'] } } : undefined) }), '/bin/cli').args.slice(-4);
 		assert.deepStrictEqual(knownClis().map(extra), knownClis().map(() => ['/lab', '/lab', os.homedir(), '/record/messages']));
+	});
+
+	test('a CLI that reads Facade\'s server from its folder is given that server, which every agent there shares, with the connection\'s values all the same - its executable, its shim, the record, the agent\'s token file and its wait - as every other CLI is, for the person\'s groups to use (O9; L9)', () => {
+		const shared = { command: '/facade/facade', args: ['/facade/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } };
+		const values = ['${executable}', '${shimFile}', '${recordDir}', '${tokenFile}', '${waitMs}'];
+		const given = (cli: AgentCli) => {
+			const connection = connectionFor(cli, shared, CONNECTION);
+			const config = readCliConfig(cli, name => name === 'launch' ? { arguments: { extra: values } } : undefined);
+			return { server: connection.mcp === shared ? 'shared' : 'its own', values: cli.launch(inputFor(cli, { config, connection }), '/bin/cli').args.filter(arg => Object.values(CONNECTION.values).includes(arg)) };
+		};
+		const each = { values: ['/facade/facade', '/facade/shim.js', '/record', '/runs/7.token', '120000'] };
+
+		assert.deepStrictEqual(Object.fromEntries(knownClis().map(cli => [cli.id, given(cli)])), {
+			claude: { server: 'its own', ...each },
+			codex: { server: 'its own', ...each },
+			agy: { server: 'shared', ...each },
+			muse: { server: 'shared', ...each }
+		});
 	});
 
 	test('a time the person sets in seconds is a whole number of them, from one to an hour; any other value is not made into one - its default is used, and that is said, naming the setting (X-59)', () => {
@@ -464,7 +571,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 		]);
 	});
 
-	test('package.json declares the agents\' settings in three groups: Agents - YOLO and the agent framework\'s switch, on by default and shown to everyone, and one timeout, the code\'s, for whoever asks for advanced settings - then each built-in - whether it is offered and where to find it, shown to everyone, and its launch, empty, for whoever asks for advanced settings - then Custom Agents; each on this machine alone; each part of a launch, its unattended part\'s too, and each group of its arguments, has Facade\'s own as the default completion fills in, and its description is short and names the command that shows it all; the three commands are under Agents', () => {
+	test('package.json declares the agents\' settings in three groups: Agents - YOLO and the agent framework\'s switch, on by default, and one timeout, the code\'s - then each built-in - whether it is offered and where to find it, and its launch, empty - then Custom Agents; each on this machine alone, and shown on the one page Configure Agents opens, whatever the person\'s setting for advanced settings: the timeout and the launches are said to be advanced in their descriptions, not hidden by a tag (L7); each part of a launch, its unattended part\'s too, and each group of its arguments, has Facade\'s own as the default completion fills in, and its description is short and names the command that shows it all; the three commands are under Agents', () => {
 		const { sections, commands, texts } = manifest();
 		const own = sections.find(each => each.id === 'facade.agents')?.properties ?? {};
 		const text = (description: string | undefined) => texts[description?.replace(/^%|%$/g, '') ?? ''] ?? '';
@@ -476,7 +583,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			return {
 				names: Object.keys(section?.properties ?? {}),
 				defaults: [declared('enabled')?.default, declared('path')?.default, launch?.default],
-				advanced: [declared('enabled')?.tags, declared('path')?.tags, launch?.tags],
+				advanced: [declared('enabled')?.tags, declared('path')?.tags, launch?.tags, text(launch?.markdownDescription).startsWith('Advanced: ')],
 				scopes: [declared('enabled')?.scope, declared('path')?.scope, launch?.scope],
 				parts: Object.fromEntries(Object.entries(parts).map(([part, schema]) => [part, schema.default])),
 				groups: Object.fromEntries(Object.entries(parts.arguments?.properties ?? {}).map(([group, schema]) => [group, schema.default])),
@@ -492,7 +599,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			sections: sections.map(each => each.id),
 			own: Object.keys(own),
 			switches: [own['facade.agents.yolo']?.default, own['facade.agents.yolo']?.tags, own['facade.orchestration.enabled']?.default, own['facade.orchestration.enabled']?.tags],
-			timeout: [own['facade.agents.timeout']?.default, own['facade.agents.timeout']?.maximum, own['facade.agents.timeout']?.tags],
+			timeout: [own['facade.agents.timeout']?.default, own['facade.agents.timeout']?.maximum, own['facade.agents.timeout']?.tags, text(own['facade.agents.timeout']?.markdownDescription).startsWith('Advanced: ')],
 			waits: [START_TIMEOUT_MS, WINDOW_WAIT_MS],
 			custom: [custom?.default, custom?.scope],
 			commands: commands.map(each => each.command),
@@ -502,7 +609,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			sections: ['facade.agents', 'facade.agents.claude', 'facade.agents.codex', 'facade.agents.antigravity', 'facade.agents.muse', 'facade.agents.custom'],
 			own: ['facade.agents.yolo', 'facade.orchestration.enabled', 'facade.agents.timeout'],
 			switches: [true, undefined, true, undefined],
-			timeout: [START_TIMEOUT_MS / 1000, MAX_TIME_S, ['advanced']],
+			timeout: [START_TIMEOUT_MS / 1000, MAX_TIME_S, undefined, true],
 			waits: [START_TIMEOUT_MS, START_TIMEOUT_MS],
 			custom: [{}, 'machine'],
 			commands: ['facade.agents.startAgent', 'facade.agents.openChatRoom', 'facade.agents.deleteChatRooms', 'facade.agents.showLog', 'facade.agents.showLaunch'],
@@ -510,7 +617,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			seen: knownClis().map(({ setting, task, defaults: { launch } }) => ({
 				names: [`${setting}.enabled`, `${setting}.path`, `${setting}.launch`],
 				defaults: [true, '', {}],
-				advanced: [undefined, undefined, ['advanced']],
+				advanced: [undefined, undefined, undefined, true],
 				scopes: ['machine', 'machine', 'machine'],
 				parts: { arguments: launch.arguments, environment: launch.environment, trust: launch.trust, ...(launch.settings ? { settings: launch.settings } : {}), enterDelay: launch.enterDelay, taskDelay: launch.taskDelay, unattended: launch.unattended },
 				// A CLI told of its task in its terminal takes no task group.
@@ -522,6 +629,22 @@ suite('CLIs: how the person has Facade start each one', () => {
 				delays: [MAX_DELAY_MS, MAX_DELAY_MS],
 				described: [true, false]
 			}))
+		});
+	});
+
+	test('settings.json checks a custom agent\'s name as the person types it, as a start checks it: one an agent can have, neither a built-in\'s id nor a reserved name - and says what a name is (L9)', () => {
+		const { sections, texts } = manifest();
+		const names = sections.find(each => each.id === 'facade.agents.custom')?.properties['facade.agents.custom']?.propertyNames;
+		const bySchema = (name: string) => new RegExp(names?.pattern ?? '').test(name) && !(names?.not?.enum ?? []).includes(name);
+		const builtIns = new Set(knownClis().map(cli => cli.id));
+		const candidates = ['bot', 'my.bot_2-x', '7up', 'a'.repeat(40), 'a'.repeat(41), 'My Bot', 'Bot', '-bot', '.bot', '', 'claude', 'codex', 'agy', 'muse', 'antigravity', 'human', 'you', 'me', 'facade', 'all', 'everyone', 'init', 'kernel'];
+
+		assert.deepStrictEqual({
+			names: candidates.map(name => [name, bySchema(name)]),
+			says: texts[names?.errorMessage?.replace(/^%|%$/g, '') ?? '']
+		}, {
+			names: candidates.map(name => [name, customAgentNameProblem(name, builtIns) === undefined]),
+			says: 'A custom agent\'s name is 1 to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit - not a built-in\'s id (claude, codex, agy, muse), nor human, you, me, facade, all, everyone, init or kernel.'
 		});
 	});
 
@@ -553,7 +676,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 		const theirs = parts(launchDocument({ folder: '/lab', yolo: false, framework: true, clis: [{ cli: codexCli, config: theirConnect, yours: { arguments: { connect } }, program: { target: { executable: '/bin/codex', args: [], throughCmd: false } }, trust: { kind: 'none' }, problems }] })).shown.codex;
 		const sandboxOff = process.platform === 'win32' ? 'unavailable' : 'on';
 		const yoursToAnswer = 'kept: it can put up a question for you to answer, as it does outside Facade';
-		const toldInWords = 'kept: no launch can take its question tool away, so what it is told as it starts has it ask in words; asked for that tool by name, it can still put one up';
+		const toldInWords = 'kept: no launch can take its question tool away, so what it is told as it starts has it ask through Facade messages; asked for that tool by name, it can still put one up';
 		const changedConnect = 'as your launch\'s connect group says: Facade\'s own lets its server through, and you changed it';
 
 		assert.deepStrictEqual({
@@ -565,34 +688,34 @@ suite('CLIs: how the person has Facade start each one', () => {
 			shown: {
 				claude: {
 					program: 'C:/tools/claude.cmd', throughCmd: true, offered: true, task: 'argument',
-					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', questions: 'taken away by its launch\'s questions group: it asks in words' },
-					trust: { file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } }, kept: 'for good: Facade never takes it back' }, wrongSettings: ['facade.agents.claude.launch has extra, which Claude Code\'s launch does not have: it has arguments, environment, trust, settings, enterDelay, taskDelay, unattended'], verified: 'not yet', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours
+					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'its edits in its folder unasked; anything else that would ask is refused unasked', questions: 'taken away by its launch\'s questions group: it asks through Facade messages', projectMcpServers: 'with YOLO off, those of its folder\'s .mcp.json you have not approved for its project are turned off for the run, so that it does not stop to ask about them' },
+					trust: { file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } }, kept: 'for good: Facade never takes it back' }, wrongSettings: ['facade.agents.claude.launch has extra, which Claude Code\'s launch does not have: it has arguments, environment, trust, settings, enterDelay, taskDelay, unattended'], verified: '2.1.296', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours
 				},
 				codex: {
 					program: 'C:/node/node.exe', script: 'C:/npm/codex.js', offered: true, task: 'argument',
-					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch lets Facade\'s server through alone', questions: 'none: no tool of its waits for someone to pick an answer' },
-					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch lets Facade\'s server through alone', questions: 'none: no tool of its waits for someone to pick an answer' },
-					trust: { arguments: ['-c', 'projects={ ${folder} = { trust_level = "trusted" } }'] }, verified: 'not yet', launch: launch(codexCli), yourChanges: {}
+					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch lets Facade\'s server through alone', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch lets Facade\'s server through alone', approvalsWithYoloOff: 'anything that would ask is refused unasked', questions: 'taken away by its launch\'s questions group: it asks through Facade messages' },
+					trust: { arguments: ['-c', 'projects={ ${folder} = { trust_level = "trusted" } }'] }, verified: '0.162.1', launch: launch(codexCli), yourChanges: {}
 				},
 				muse: {
 					program: 'C:/muse/muse.exe', offered: true, task: 'argument',
-					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing, its sandbox still on', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing, its sandbox still on', questions: toldInWords },
-					trust: 'none: the CLI asks whether you trust the folder', verified: 'not yet', launch: launch(museCli), yourChanges: {}
+					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing, its sandbox still on', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing, its sandbox still on', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: toldInWords },
+					trust: 'none: the CLI asks whether you trust the folder', verified: '1.4.4', launch: launch(museCli), yourChanges: {}
 				},
 				antigravity: {
 					program: 'not found: agy is not on the PATH a terminal there has', offered: true, task: 'typed',
-					whenYouStartIt: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', questions: toldInWords },
-					trust: 'cannot be given: the file is no absolute path', verified: 'not yet', launch: launch(antigravityCli), yourChanges: {}
+					whenYouStartIt: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: toldInWords },
+					trust: 'cannot be given: the file is no absolute path', verified: '1.3.2', launch: launch(antigravityCli), yourChanges: {}
 				}
 			},
 			theirs: { yours: changedConnect, startAgent: changedConnect, cannotStart: problems }
 		});
 	});
 
-	test('Show Agent Launch says, for each agent, whether it can put up a question that waits for someone to pick an answer: the person\'s own can, theirs to answer; through start_agent, Claude Code\'s is taken away unless the person empties its unattended questions group, Muse Code\'s and Antigravity\'s cannot be, and what they are told as they start makes up for it; a custom agent\'s is as its launch says (L4; N-55)', () => {
+	test('Show Agent Launch says, for each agent, whether it can put up a question that waits for someone to pick an answer: the person\'s own can, theirs to answer; through start_agent, Claude Code\'s and Codex\'s are taken away unless the person empties their unattended questions group, Muse Code\'s and Antigravity\'s cannot be, and what they are told as they start makes up for it; a custom agent\'s is as its launch says (L4; N-55)', () => {
 		const shown = (cli: AgentCli, launch?: unknown) => {
 			const config = readCliConfig(cli, name => name === 'launch' ? launch : undefined);
 			const document = launchDocument({ folder: '/lab', yolo: true, framework: true, clis: [{ cli, config, yours: undefined, program: { target: { executable: '/bin/x', args: [], throughCmd: false } }, trust: { kind: 'none' } }] });
@@ -604,15 +727,48 @@ suite('CLIs: how the person has Facade start each one', () => {
 
 		assert.deepStrictEqual({
 			claude: shown(claudeCli),
+			codex: shown(codexCli),
 			emptied: shown(claudeCli, { unattended: { arguments: { questions: null } } }),
 			muse: shown(museCli),
 			custom: shown(customAgentOf('mine', { path: '/bin/mine' }, undefined).cli)
 		}, {
-			claude: [yours, 'taken away by its launch\'s questions group: it asks in words'],
+			claude: [yours, 'taken away by its launch\'s questions group: it asks through Facade messages'],
+			codex: [yours, 'taken away by its launch\'s questions group: it asks through Facade messages'],
 			emptied: [yours, 'kept: your launch empties its questions group, so it can put up a question that waits for someone to pick an answer'],
-			muse: [yours, 'kept: no launch can take its question tool away, so what it is told as it starts has it ask in words; asked for that tool by name, it can still put one up'],
+			muse: [yours, 'kept: no launch can take its question tool away, so what it is told as it starts has it ask through Facade messages; asked for that tool by name, it can still put one up'],
 			custom: ['as your launch\'s questions group says', 'as your launch\'s questions group says']
 		});
+	});
+
+	test('Show Agent Launch says what an agent started through start_agent gets in the environment and with the settings its launch\'s unattended part gives it - where its trust goes, and a deny rule there that refuses it Facade\'s tools - beside what the person\'s own gets, each one\'s trust shown where the two differ (L9; L10)', () => {
+		const temp = tempDir('facade-starters-');
+		try {
+			const [home, bots, lab] = ['home', 'bots', 'lab'].map(name => path.join(temp.dir, name));
+			for (const dir of [home, bots, lab]) {
+				fs.mkdirSync(dir);
+			}
+			// A separate account for the agents tools start, which refuses them Facade's tools
+			fs.writeFileSync(path.join(bots, 'settings.json'), JSON.stringify({ permissions: { deny: ['mcp__facade'] } }));
+			const yours = { unattended: { environment: { CLAUDE_CONFIG_DIR: bots } } };
+			const config = readCliConfig(claudeCli, name => name === 'launch' ? yours : undefined);
+			const place = { folder: lab, repository: lab };
+			const terminal = { HOME: home, USERPROFILE: home };
+			const theirs = starterFacts(claudeCli, config, place, terminal, false);
+			const document = launchDocument({ folder: lab, yolo: false, framework: true, clis: [{ cli: claudeCli, config, yours, program: { target: { executable: '/bin/claude', args: [], throughCmd: false } }, trust: theirs.trust, ...(theirs.overridden !== undefined ? { overridden: theirs.overridden } : {}), throughStartAgent: starterFacts(claudeCli, config, place, terminal, true) }] });
+			const shown = JSON.parse(document.split('\n').filter(line => !line.startsWith('// ')).join('\n')).claude;
+
+			assert.deepStrictEqual({
+				whenYouStartIt: [shown.whenYouStartIt.facadeTools, shown.whenYouStartIt.trust?.file],
+				throughStartAgent: [shown.throughStartAgent.facadeTools, shown.throughStartAgent.trust?.file],
+				both: shown.trust
+			}, {
+				whenYouStartIt: ['never asked: its launch lets Facade\'s server through alone', path.join(home, '.claude.json')],
+				throughStartAgent: [`refused: ${path.join(bots, 'settings.json')} denies mcp__facade, which wins over Facade's allow: with YOLO off, Claude Code refuses Facade's tools`, path.join(bots, '.claude.json')],
+				both: undefined
+			});
+		} finally {
+			temp.remove();
+		}
 	});
 
 	test('a CLI told of its task in its terminal has no task group: one the person sets is wrong, and is never given', () => {
@@ -725,22 +881,54 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 		});
 	});
 
-	test('a file that is not a JSON object, or a value in it of another kind than what would be merged there - projects that are not an object, a project that is not one, a list that is not a list - is left alone', () => {
+	test('a file that is not a JSON object, or a value in it of another kind than what would be merged there - projects that are not an object, a project that is not one, a list that is not a list - is left alone, and why is said: what the file holds, or the keys of that value; so is a file that kept changing as it was read (L11)', () => {
 		const file = path.join(temp.dir, 'settings.json');
+		const repository = path.join(temp.dir, 'Lab');
+		fs.mkdirSync(repository);
+		// Its own problem, as a start refused for it says it first
+		const why = (entry: { readonly [key: string]: unknown }) => trustProblem(antigravityCli, readCliConfig(antigravityCli, name => name === 'launch' ? { trust: { file, merge: entry } } : undefined), { folder: repository, repository }, {})?.split(', so Facade')[0];
 		const left = (content: string, entry: { readonly [key: string]: unknown }) => {
 			fs.writeFileSync(file, content);
-			return [mergeIntoJsonFile(file, entry, lock), fs.readFileSync(file, 'utf8') === content];
+			return [mergeIntoJsonFile(file, entry, lock), fs.readFileSync(file, 'utf8') === content, why(entry)];
 		};
 		const project = { projects: { 'C:/Lab': { hasTrustDialogAccepted: true } } };
-
-		assert.deepStrictEqual([
+		const table = [
 			left('{ not json', project),
 			left('[]', project),
 			left('{"projects":[]}', project),
 			left('{"projects":{"C:/Lab":true}}', project),
 			left('{"trustedWorkspaces": "everything"}', { trustedWorkspaces: ['C:\\Lab'] }),
 			left('{"trustedWorkspaces": {"C:\\\\Lab": true}}', { trustedWorkspaces: ['C:\\Lab'] })
-		], [['unreadable', true], ['unreadable', true], ['unreadable', true], ['unreadable', true], ['unreadable', true], ['unreadable', true]]);
+		];
+		// Written again, longer, as each read of it ends: it never holds still
+		fs.writeFileSync(file, '{}');
+		let longer = 0;
+		const restore = replaceFsFunction('readFileSync', original => ((...args: Parameters<typeof fs.readFileSync>) => {
+			const text = original(...args);
+			if (args[0] === file) {
+				fs.writeFileSync(file, `{${' '.repeat(++longer)}}`);
+			}
+			return text;
+		}) as typeof fs.readFileSync);
+		let changing: unknown[];
+		try {
+			changing = [mergeIntoJsonFile(file, project, lock), why(project)];
+		} finally {
+			restore();
+		}
+
+		const otherKind = (keys: string) => `${file} has ${JSON.stringify(keys)} as another kind of value than Antigravity writes there`;
+		assert.deepStrictEqual({ table, changing }, {
+			table: [
+				['unreadable', true, `${file} is not valid JSON: A key was expected at offset 2`],
+				['unreadable', true, `${file} holds a list, not a JSON object`],
+				['unreadable', true, otherKind('projects')],
+				['unreadable', true, otherKind('projects.C:/Lab')],
+				['unreadable', true, otherKind('trustedWorkspaces')],
+				['unreadable', true, otherKind('trustedWorkspaces')]
+			],
+			changing: ['unreadable', `${file} kept changing as it was read`]
+		});
 	});
 
 	test('a file with comments and trailing commas, as a settings file has them, is merged into, not left alone; and only where the entry goes: its comments, a number too large for JavaScript, a key written twice, its line endings and its layout - compact, or a line comment after its last part - stay as they were; a file that has the entry already is not written (X-48)', () => {
@@ -875,7 +1063,8 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 			muse: undefined,
 			older: legacy,
 			elsewhere: path.join(temp.dir, 'qclaude', '.claude.json'),
-			unreadable: `${path.join(temp.dir, 'qclaude', '.claude.json')} could not be read, or is not as Claude Code writes it, so Facade left it alone and cannot give Claude Code the person's trust in ${repository}: put the file right, or set facade.agents.claude.launch.trust to null for Claude Code to ask.`,
+			// Its specific problem said (L11)
+			unreadable: `${path.join(temp.dir, 'qclaude', '.claude.json')} could not be read: EISDIR: illegal operation on a directory, read, so Facade left it alone and cannot give Claude Code the person's trust in ${repository}: put the file right, or set facade.agents.claude.launch.trust to null for Claude Code to ask.`,
 			nothingWritten: ['.claude']
 		});
 	});
@@ -1170,6 +1359,19 @@ suite('CLIs: which of them this machine has', () => {
 			installed: [['claude', first], ['agy', agy]],
 			none: []
 		});
+	});
+
+	test('a built-in this machine has that the person turned off is not among those Facade offers, and is found as turned off - why Start Agent offers none, where it offers none; one not on this machine is neither (L3)', () => {
+		executable('bin', 'claude');
+		executable('bin', 'codex');
+		const env = { PATH: path.join(temp.dir, 'bin'), PATHEXT: '.EXE' };
+		const configFor = (cli: AgentCli) => readCliConfig(cli, name => name === 'enabled' ? !['codex', 'agy'].includes(cli.id) : undefined);
+
+		assert.deepStrictEqual({
+			offered: installedClis(configFor, env).map(each => each.cli.id),
+			turnedOff: turnedOffClis(configFor, env).map(cli => cli.id),
+			noneOff: turnedOffClis(cli => cli.defaults, env)
+		}, { offered: ['claude'], turnedOff: ['codex'], noneOff: [] });
 	});
 
 	test('the CLI Facade starts is the file its path setting names, or the command named there that PATH has; one with none there is not offered', () => {

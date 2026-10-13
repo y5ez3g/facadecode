@@ -74,6 +74,15 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		temp.remove();
 	});
 
+	/** The name `agentName` takes `text` as - or, where it refuses it, why. */
+	function nameOrRefusal(text: string): string {
+		try {
+			return agentName(text);
+		} catch (err) {
+			return messageOf(err);
+		}
+	}
+
 	test('an agent\'s token is revoked as its run ends: the record maps it to nothing - not only refused, its agent having ended - and a reopening reads it so; a token the record still knew would name whatever it was given to (M9; REC-02)', () => {
 		const { agent, token } = table.start(newAgent('main'));
 		const before = table.state.tokens.size;
@@ -283,17 +292,9 @@ suite('Record: agents, their numbers, names and tokens', () => {
 	});
 
 	test('a name is taken as it is given, trimmed: one that is no name - with an @, in upper case, reserved - is refused, saying why; a worktree\'s gives a name, its branch\'s slashes as dashes, never one Facade keeps', () => {
-		const refused = (text: string) => {
-			try {
-				return agentName(text);
-			} catch (err) {
-				return messageOf(err);
-			}
-		};
-
 		assert.deepStrictEqual({
 			named: [agentName('clamp'), agentName(' slug.2_x ')],
-			refused: [refused('@clamp'), refused('Clamp'), refused('human'), refused('you'), refused('-x'), refused('a b'), refused('x'.repeat(41))],
+			refused: [nameOrRefusal('@clamp'), nameOrRefusal('Clamp'), nameOrRefusal('human'), nameOrRefusal('you'), nameOrRefusal('-x'), nameOrRefusal('a b'), nameOrRefusal('x'.repeat(41))],
 			ofWorktrees: [nameOfWorktree('Feature/Clamp-It'), nameOfWorktree('main'), nameOfWorktree('human'), nameOfWorktree('init'), nameOfWorktree('---')]
 		}, {
 			named: ['clamp', 'slug.2_x'],
@@ -307,6 +308,15 @@ suite('Record: agents, their numbers, names and tokens', () => {
 				`"${'x'.repeat(41)}" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.`
 			],
 			ofWorktrees: ['feature-clamp-it', 'main', 'agent', 'agent', 'agent']
+		});
+	});
+
+	test('every name L2 reserves - human, you, me, facade, all, everyone, init and kernel - is refused as an agent\'s, saying so, and a worktree of that name gives none of them (AGENT-LAUNCHER.md, L2)', () => {
+		const reserved = ['human', 'you', 'me', 'facade', 'all', 'everyone', 'init', 'kernel'];
+
+		assert.deepStrictEqual({ named: reserved.map(nameOrRefusal), ofWorktrees: reserved.map(nameOfWorktree) }, {
+			named: reserved.map(name => `"${name}" is reserved: choose another name.`),
+			ofWorktrees: reserved.map(() => 'agent')
 		});
 	});
 

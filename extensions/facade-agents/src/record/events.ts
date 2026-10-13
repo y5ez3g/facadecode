@@ -66,6 +66,13 @@ export interface End {
 	readonly exitCode?: number;
 }
 
+/**
+ * How the setup of the worktree made for an agent went, where it went on to its CLI (AGENT-ORCHESTRATION.md, O4,
+ * O11): none to run, ran and succeeded, sent without shell integration - how it went not known - or its file could not
+ * be read, so none ran.
+ */
+export type SetupState = 'none' | 'succeeded' | 'submitted' | 'invalid';
+
 /** An agent: one CLI running in its own terminal, in one folder. */
 export interface Agent {
 	/** Its number, which no other agent of the workspace gets: #a13, as words write it (`agentRef`). */
@@ -107,6 +114,8 @@ export interface Agent {
 	 * started, where it got to; none once it started, and none before phases were recorded.
 	 */
 	phase?: StartPhase;
+	/** How the setup of the worktree made for it went, once its start went on to its CLI; none where none was made (O11). */
+	setup?: SetupState;
 	/** Whether its MCP server said hello to Facade. */
 	connected: boolean;
 	/** Its CLI's process, once its terminal runs it. */
@@ -138,6 +147,23 @@ export interface MadeWorktree {
 	readonly madeBy?: number;
 }
 
+/**
+ * A removal of a worktree with `stop_agent`, and how it went (AGENT-ORCHESTRATION.md, O5, O11): its folder, who asked
+ * for it, whether it was deleted, and - where it was not - why, in git's or the filesystem's words.
+ */
+export interface WorktreeRemoval {
+	readonly folder: string;
+	readonly by?: StoppedBy;
+	readonly deleted: boolean;
+	readonly reason?: string;
+	/**
+	 * For one that failed, the main checkout of the worktree's repository and its branch: what a retry needs to finish
+	 * what the deletion left of it once git forgot it - a worktree of the person's too, not only Facade's (O5; OR-08).
+	 */
+	readonly main?: string;
+	readonly branch?: string;
+}
+
 /** The events a workspace's ledger records; its state is what replaying them gives. */
 export type LedgerEventBody =
 	| {
@@ -167,8 +193,10 @@ export type LedgerEventBody =
 		readonly phase?: StartPhase;
 	}
 	/** Its start moved on: to the phase it is in now, and - its worktree made - the folder it was made in. */
-	| { readonly type: 'agent.phase'; readonly id: number; readonly phase: StartPhase; readonly folder?: string }
+	| { readonly type: 'agent.phase'; readonly id: number; readonly phase: StartPhase; readonly folder?: string; readonly setup?: SetupState }
 	| { readonly type: 'agent.launched'; readonly id: number; readonly processId: number }
+	/** The worktree made for its start is in `folder` - whatever its state, one stopped as git made it too (O4; OR-05). */
+	| { readonly type: 'agent.worktreeMade'; readonly id: number; readonly folder: string }
 	| { readonly type: 'agent.connected' | 'agent.running'; readonly id: number }
 	/**
 	 * A ledger of version 5: the notice of a task kept in a file of its own being typed into the agent's terminal,
@@ -179,6 +207,8 @@ export type LedgerEventBody =
 	| { readonly type: 'agent.ended'; readonly id: number; readonly kind: EndKind; readonly by?: StoppedBy; readonly reason: string; readonly exitCode?: number }
 	| { readonly type: 'worktree.made' } & MadeWorktree
 	| { readonly type: 'worktree.gone'; readonly folder: string }
+	/** A worktree's removal with stop_agent was tried: deleted, or not and why - whoever's tool call it was, cut or not (O11). */
+	| { readonly type: 'worktree.removal' } & WorktreeRemoval
 	/** A start of the window that is not a reload: the agents that ended leave the list, and their mailboxes are emptied. */
 	| { readonly type: 'list.cleared' }
 	| MessageEventBody;
@@ -270,13 +300,15 @@ export interface WorkspaceState {
 	readonly tokens: Map<string, number>;
 	/** The worktrees Facade made, by folder. */
 	readonly worktrees: Map<string, MadeWorktree>;
+	/** The removals of worktrees with stop_agent that failed, by folder, until one there succeeds or the folder is gone (O11). */
+	readonly removals: Map<string, WorktreeRemoval>;
 	/** The messages, and the mailboxes (AGENT-MESSAGES.md). */
 	readonly mail: MessagesState;
 }
 
 /** The state of a workspace with no ledger yet: no agent and no message, the next numbers the first. */
 export function createState(): WorkspaceState {
-	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), identities: new Map(), tokens: new Map(), worktrees: new Map(), mail: createMessagesState() };
+	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), identities: new Map(), tokens: new Map(), worktrees: new Map(), removals: new Map(), mail: createMessagesState() };
 }
 
 const END_KINDS: ReadonlySet<string> = new Set<EndKind>(['exited', 'stopped', 'failed', 'lost']);
@@ -284,6 +316,7 @@ const END_KINDS: ReadonlySet<string> = new Set<EndKind>(['exited', 'stopped', 'f
 const STARTING_TASKS: ReadonlySet<string> = new Set(['none', 'argument', 'pending']);
 const SANDBOX_STATES: ReadonlySet<string> = new Set<SandboxState>(['on', 'off', 'unavailable', 'unknown']);
 const START_PHASES: ReadonlySet<string> = new Set<StartPhase>(['creating_worktree', 'running_setup', 'launching_cli', 'connecting']);
+const SETUP_STATES: ReadonlySet<string> = new Set<SetupState>(['none', 'succeeded', 'submitted', 'invalid']);
 const IGNORABLE: ReadonlySet<string> = new Set<Ignored>(['model', 'effort']);
 
 function isEndKind(value: unknown): value is EndKind {
@@ -345,10 +378,15 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 			};
 		}
 		case 'agent.phase': {
-			const { id, phase, folder } = value;
-			return isId(id) && typeof phase === 'string' && START_PHASES.has(phase) && (folder === undefined || isText(folder))
-				? { type: 'agent.phase', id, phase: phase as StartPhase, ...(folder !== undefined ? { folder } : {}) }
+			// Its worktree's setup comes with the phase after it: a field a Facade before it reads past (O11)
+			const { id, phase, folder, setup } = value;
+			return isId(id) && typeof phase === 'string' && START_PHASES.has(phase) && (folder === undefined || isText(folder)) && (setup === undefined || (typeof setup === 'string' && SETUP_STATES.has(setup)))
+				? { type: 'agent.phase', id, phase: phase as StartPhase, ...(folder !== undefined ? { folder } : {}), ...(setup !== undefined ? { setup: setup as SetupState } : {}) }
 				: undefined;
+		}
+		case 'agent.worktreeMade': {
+			const { id, folder } = value;
+			return isId(id) && isText(folder) ? { type: 'agent.worktreeMade', id, folder } : undefined;
 		}
 		case 'agent.launched': {
 			const { id, processId } = value;
@@ -381,6 +419,13 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 			const { folder } = value;
 			return isText(folder) ? { type: 'worktree.gone', folder } : undefined;
 		}
+		case 'worktree.removal': {
+			const { folder, by, deleted, reason, main, branch } = value;
+			return isText(folder) && (by === undefined || isStoppedBy(by)) && typeof deleted === 'boolean' && (reason === undefined || typeof reason === 'string')
+				&& (main === undefined || isText(main)) && (branch === undefined || isText(branch))
+				? { type: 'worktree.removal', folder, ...(by !== undefined ? { by } : {}), deleted, ...(reason !== undefined ? { reason } : {}), ...(main !== undefined ? { main } : {}), ...(branch !== undefined ? { branch } : {}) }
+				: undefined;
+		}
 		case 'list.cleared':
 			return { type: 'list.cleared' };
 	}
@@ -395,6 +440,9 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
  */
 export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 	const known = (id: number | undefined) => id === undefined || state.agents.has(id);
+	// Who stopped an agent, or removed a worktree, is the person or a number given before - the list may have dropped that
+	// agent since (X-13)
+	const given = (by: StoppedBy | undefined) => by === undefined || by === HUMAN || by <= state.lastId;
 	switch (event.type) {
 		case 'agent.started':
 			return event.id > state.lastId && known(event.creator) && (event.root === undefined || event.root === event.id || event.creator !== undefined);
@@ -404,18 +452,29 @@ export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 		case 'task.typed':
 		case 'agent.running':
 		case 'agent.phase':
+		case 'agent.worktreeMade':
 			return state.agents.has(event.id);
 		case 'agent.stopping':
 		case 'agent.ended':
-			// Who stopped it is a number given before - the list may have dropped that agent since (X-13)
-			return state.agents.has(event.id) && (event.by === undefined || event.by === HUMAN || event.by <= state.lastId);
+			return state.agents.has(event.id) && given(event.by);
 		case 'worktree.made':
 			return known(event.madeBy);
+		case 'worktree.removal':
+			return given(event.by);
 		case 'worktree.gone':
 		case 'list.cleared':
 			return true;
 		default:
 			return fitsMessages(state.agents, state.mail, event);
+	}
+}
+
+/** Forgets the failed removal of the worktree `folder`, if one is kept. */
+function removalOver(state: WorkspaceState, folder: string): void {
+	for (const kept of [...state.removals.keys()]) {
+		if (isEqualPath(kept, folder)) {
+			state.removals.delete(kept);
+		}
 	}
 }
 
@@ -468,12 +527,22 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			}
 			break;
 		}
+		case 'agent.worktreeMade': {
+			const agent = state.agents.get(event.id);
+			if (agent) {
+				agent.folder = event.folder;
+			}
+			break;
+		}
 		case 'agent.phase': {
 			const agent = state.agents.get(event.id);
 			if (agent?.state === 'starting') {
 				agent.phase = event.phase;
 				if (event.folder !== undefined) {
 					agent.folder = event.folder;
+				}
+				if (event.setup !== undefined) {
+					agent.setup = event.setup;
 				}
 			}
 			break;
@@ -529,6 +598,16 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				if (isEqualPath(folder, event.folder)) {
 					state.worktrees.delete(folder);
 				}
+			}
+			removalOver(state, event.folder);
+			break;
+		}
+		case 'worktree.removal': {
+			// The last that failed is kept, until one succeeds
+			removalOver(state, event.folder);
+			if (!event.deleted) {
+				const { folder, by, reason, main, branch } = event;
+				state.removals.set(folder, { folder, ...(by !== undefined ? { by } : {}), deleted: false, ...(reason !== undefined ? { reason } : {}), ...(main !== undefined ? { main } : {}), ...(branch !== undefined ? { branch } : {}) });
 			}
 			break;
 		}

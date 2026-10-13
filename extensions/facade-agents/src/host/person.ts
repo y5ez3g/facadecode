@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
-import { EndedAgent, Notification, Person, Severity } from '../core/ports';
+import { EndedAgent, EndTold, Notification, Person, Severity } from '../core/ports';
 import { agentRef } from '../record/events';
 import { openRoom } from './rooms';
 import { ScreenDocuments } from './screenDocuments';
@@ -13,6 +13,14 @@ import { HostTerminals } from './terminals';
 
 /** How much of a notice's first line a notification shows. */
 const SHOWN_CHARS = 200;
+
+/**
+ * A notice or notification shown with a key: its text - and, by its identity, that very showing of it, which the next
+ * shown with the key takes the place of.
+ */
+interface Shown {
+	readonly text: string;
+}
 
 /**
  * The core's Person port: Facade's notices and notifications, from which the person goes to the agent's
@@ -25,6 +33,8 @@ export class HostPerson implements Person {
 
 	/** Whether the window keeps Facade's notifications by key: asked once. */
 	private keeps: Promise<boolean> | undefined;
+	/** What was last shown with each key - a notice, or a notification - while it may be up: for `close` to close only that. */
+	private readonly shownWith = new Map<string, Shown>();
 
 	/**
 	 * `endedOf` says where the last screen of an agent that ended is; `log` says why a terminal the person asked
@@ -37,11 +47,28 @@ export class HostPerson implements Person {
 		private readonly log: (message: string) => void
 	) { }
 
-	tell(text: string, agent: number | undefined, severity: Severity): void {
-		void this.show(text, agent, severity).catch(err => this.log(`A notice could not be shown, or its terminal put in front: ${messageOf(err)}`));
+	tell(text: string, agent: number | undefined, severity: Severity, key?: string): void {
+		const shown: Shown = { text };
+		if (key !== undefined) {
+			this.shownWith.set(key, shown);
+		}
+		void this.show(text, agent, severity, key !== undefined ? { key, shown } : undefined).catch(err => this.log(`A notice could not be shown, or its terminal put in front: ${messageOf(err)}`));
+	}
+
+	close(key: string, text: string): void {
+		if (this.shownWith.get(key)?.text !== text) {
+			return;
+		}
+		this.shownWith.delete(key);
+		void this.closeKept(key).catch(err => this.log(`A notice could not be closed: ${messageOf(err)}`));
+	}
+
+	tellEnded(batch: string, ends: readonly EndTold[]): void {
+		void this.showEnds(batch, ends).catch(err => this.log(`The ends of the person's agents could not be shown, or their terminals put in front: ${messageOf(err)}`));
 	}
 
 	async notify({ key, text, buttons, quietIn }: Notification): Promise<string | undefined> {
+		this.shownWith.set(key, { text });
 		if (!await this.keepsNotifications()) {
 			return vscode.window.showInformationMessage(text, ...buttons);
 		}
@@ -69,14 +96,18 @@ export class HostPerson implements Person {
 
 	/**
 	 * Shows a notice: one still open as the window goes is rejected with it, nobody there to see it. Its Show goes
-	 * to the agent's terminal while there is one, else to its last screen, once it ended (D6; N-33).
+	 * to the agent's terminal while there is one, else to its last screen, once it ended (D6; N-33). One `kept` with a
+	 * key is the notification up with it, where the window keeps them by key - none once it was closed - and else a
+	 * notice of its own. Its message is the notice alone: VS Code names its source, Facade Agents, beside it.
 	 */
-	private async show(text: string, agent: number | undefined, severity: Severity): Promise<void> {
+	private async show(text: string, agent: number | undefined, severity: Severity, kept?: { readonly key: string; readonly shown: Shown }): Promise<void> {
 		const show = vscode.l10n.t("Show");
 		const showable = agent !== undefined && (await this.terminals.hasTerminal(agent) || this.endedOf(agent) !== undefined);
-		const message = vscode.l10n.t("Facade: {0}", firstLineOf(text));
+		const message = firstLineOf(text);
 		const items = showable ? [show] : [];
-		const choice = await (severity === 'error' ? vscode.window.showErrorMessage(message, ...items) : severity === 'warning' ? vscode.window.showWarningMessage(message, ...items) : vscode.window.showInformationMessage(message, ...items));
+		const choice = kept && await this.keepsNotifications()
+			? await this.showKept(kept.key, kept.shown, message, items, severity)
+			: await (severity === 'error' ? vscode.window.showErrorMessage(message, ...items) : severity === 'warning' ? vscode.window.showWarningMessage(message, ...items) : vscode.window.showInformationMessage(message, ...items));
 		if (choice !== show || agent === undefined || await this.terminals.reveal(agent)) {
 			return;
 		}
@@ -85,6 +116,61 @@ export class HostPerson implements Person {
 			await this.screens.open(ended);
 		} else {
 			this.log(`${agentRef(agent)}'s terminal could not be put in front: it is gone, or the window did not go to it.`);
+		}
+	}
+
+	/**
+	 * Shows a notice as the notification up with `key`, unless it was closed before it came up: answers with the
+	 * button pressed; undefined once it closed, or another took its place.
+	 */
+	private async showKept(key: string, shown: Shown, message: string, buttons: readonly string[], severity: Severity): Promise<string | undefined> {
+		if (this.shownWith.get(key) !== shown) {
+			return undefined;
+		}
+		try {
+			const pressed = await vscode.commands.executeCommand<unknown>('_facade.notification.show', key, message, buttons, null, severity);
+			return typeof pressed === 'string' ? pressed : undefined;
+		} finally {
+			if (this.shownWith.get(key) === shown) {
+				this.shownWith.delete(key);
+			}
+		}
+	}
+
+	/** Closes the notification up with `key`, where the window keeps Facade's notifications by key. */
+	private async closeKept(key: string): Promise<void> {
+		if (await this.keepsNotifications()) {
+			await vscode.commands.executeCommand('_facade.notification.close', key);
+		}
+	}
+
+	/**
+	 * Shows the ends of the person's agents that came together as one notification, `ended:<batch>`, which the next
+	 * end of the batch replaces, as the most severe of them says (AGENT-MESSAGES.md, M11). Its Show goes to each one's
+	 * terminal while there is one, else to its last screen. Without Facade's workbench, the newest is a notice of its own.
+	 */
+	private async showEnds(batch: string, ends: readonly EndTold[]): Promise<void> {
+		const newest = ends[ends.length - 1];
+		if (!await this.keepsNotifications()) {
+			return this.show(newest.text, newest.agent, newest.severity);
+		}
+		const show = vscode.l10n.t("Show");
+		const severity = ends.some(end => end.severity === 'error') ? 'error' : ends.some(end => end.severity === 'warning') ? 'warning' : 'information';
+		const text = ends.length === 1
+			? firstLineOf(newest.text)
+			: vscode.l10n.t("{0} of your agents ended. {1}", ends.length, ends.map(end => firstLineOf(end.text)).join(' '));
+		const pressed = await vscode.commands.executeCommand<unknown>('_facade.notification.show', `ended:${batch}`, text, [show], null, severity);
+		if (pressed !== show) {
+			return;
+		}
+		for (const end of ends) {
+			if (await this.terminals.reveal(end.agent)) {
+				continue;
+			}
+			const ended = this.endedOf(end.agent);
+			if (ended) {
+				await this.screens.open(ended);
+			}
 		}
 	}
 
