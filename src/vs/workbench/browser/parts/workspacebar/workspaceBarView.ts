@@ -135,13 +135,8 @@ function displayNameOf(row: WorkspaceBarRow, customizationService: IWorkspaceBar
 }
 
 /**
- * What the tree holds: `folders[]` flat while `worktrees` is false - switched off (WORKTREE.md
- * section 11), or before git's files were first read.
- *
- * `groups` are git's files as last read, and `folders[]` changes before the next read is in. A folder
- * that has left is not drawn. One that joined since is drawn where git's records put it - a worktree
- * or the main checkout of a repository they list (WORKTREE.md WT-3.6) - and one they do not name is
- * drawn on a row of its own at the end, until it has been read.
+ * The rows to draw: `folders[]` flat while worktrees are off or unread, else grouped by git's records
+ * (WORKTREE.md WT-3.6). A folder that joined since the last read gets a row of its own at the end.
  */
 export function workspaceBarRows(input: {
 	readonly folders: readonly IWorkspaceFolder[];
@@ -450,10 +445,7 @@ class RowRenderer implements ITreeRenderer<WorkspaceBarRow, void, IRowTemplate> 
 				+ (customization?.color ? ` workspacebar-icon-${customization.color}` : '');
 		}
 
-		// ⚠️ The hover is the name, whole, and not the path: the agents at the row's end can cut the name
-		// short, and a worktree's folder is named for where it lives rather than for its branch - its
-		// path did not say which worktree it was. Two folders of one name are told apart by giving one
-		// another name in Customize.
+		// The hover shows the whole name, which the row's agents can cut short
 		template.name = displayNameOf(element, this.customizationService);
 		template.label.setLabel(template.name, undefined, { title: template.name });
 	}
@@ -491,7 +483,7 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 			? localize('workspaceBar.unavailableAria', "{0}, not on disk", name)
 			: row.kind === 'worktree' ? localize('workspaceBar.worktreeAria', "{0}, worktree", name) : name;
 
-		// What the row shows at its end and on its icon, read out after its name (WT-1.15)
+		// What the row shows at its end and on its icon, read out after its name (WT-1.15, W9.14)
 		const { worktrees, agents } = this.contentsOf(row);
 		const counts: string[] = [];
 		if (worktrees) {

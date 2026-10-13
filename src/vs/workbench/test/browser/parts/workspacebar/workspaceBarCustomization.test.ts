@@ -151,7 +151,7 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		assert.deepStrictEqual(heard, [folder.uri.toString()], 'a no-op was announced');
 	});
 
-	test('a repository\'s worktree order survives a reload, is announced once, and a record it cannot read is dropped', () => {
+	test('WTA-04 a repository\'s worktree order survives a reload, is announced once, and a record it cannot read is dropped', () => {
 		const { service, storage, reopen } = setup();
 		const repository = URI.file('/w/api');
 		const [a, b, c] = ['/wt/a', '/wt/b', '/wt/c'].map(path => URI.file(path));
@@ -183,7 +183,7 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		});
 	});
 
-	test('⭐ the palettes and their labels cannot drift apart', () => {
+	test('WS-43 ⭐ the palettes and their labels cannot drift apart', () => {
 		// ⚠️ `colorLabel` and `iconLabel` are exhaustive switches over these two lists, so a value
 		// added here without a label fails the build. This asserts the shape the dialog lays out for:
 		// ten of each, `folder` first because it is what an untagged row already draws.

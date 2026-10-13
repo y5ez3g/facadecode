@@ -40,7 +40,7 @@ suite('The default workspace', () => {
 		assert.strictEqual(DEFAULT_WORKSPACE_FILE_NAME.endsWith('.code-workspace'), true);
 	});
 
-	test('and is created holding a workspace with no folders in it', () => {
+	test('WS-01 and is created holding a workspace with no folders in it', () => {
 		const parsed = JSON.parse(DEFAULT_WORKSPACE_CONTENT);
 
 		assert.deepStrictEqual(parsed.folders, []);

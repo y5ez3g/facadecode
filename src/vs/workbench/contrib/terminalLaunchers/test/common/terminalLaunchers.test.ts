@@ -8,7 +8,8 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IShellLaunchConfig, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
-import { AGENT_TERMINAL_ICON, agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentTerminalIcon, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
+import { StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
+import { AGENT_TERMINAL_ICON, agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentGoneAtStartup, isAgentTerminalIcon, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
 
 suite('Terminal launchers - what to look for', () => {
 
@@ -169,6 +170,16 @@ suite('Terminal launchers - an agent across a reload', () => {
 			['unnamed', undefined],
 			['reconnecting', undefined],
 		]);
+	});
+
+	test('WS-38 after a restart an agent is gone - what would come back in its tab is a new shell under its old output - and after a reload it is still running; a plain terminal comes back either way', () => {
+		const claude = agentIcon('claude');
+
+		assert.deepStrictEqual({
+			restarted: isAgentGoneAtStartup(claude, StartupKind.ReopenedWindow),
+			reloaded: isAgentGoneAtStartup(claude, StartupKind.ReloadedWindow),
+			plain: isAgentGoneAtStartup(Codicon.terminal, StartupKind.ReopenedWindow),
+		}, { restarted: true, reloaded: false, plain: false });
 	});
 
 	test('a reconnecting agent terminal gets back its name and title template, found by its nonce, and nothing else does', () => {

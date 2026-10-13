@@ -113,7 +113,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 			});
 	}
 
-	test('a main checkout lists every worktree git records, oldest first, none of them added', async () => {
+	test('WTA-01 WTA-02 a main checkout lists every worktree git records, oldest first, none of them added', async () => {
 		// ⚠️ A moment between each, so that each record is made at a time of its own: the order is the
 		// creation time of git's record, and the in-memory disk stamps it to the millisecond.
 		await repository('/lab');
@@ -136,7 +136,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		}]);
 	});
 
-	test('a worktree in the workspace joins its repository, which sits where its first member is', async () => {
+	test('WTA-01 a worktree in the workspace joins its repository, which sits where its first member is', async () => {
 		await repository('/lab');
 		await worktree('/lab', 'w2', '/wt/w2');
 
@@ -148,7 +148,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		]);
 	});
 
-	test('a worktree added on its own still makes its repository the row, without adding the repository', async () => {
+	test('WTA-07 a worktree added on its own still makes its repository the row, without adding the repository', async () => {
 		await repository('/lab');
 		await worktree('/lab', 'w2', '/wt/w2');
 
@@ -159,7 +159,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		]);
 	});
 
-	test('a detached HEAD shows its short hash, and a worktree whose folder is gone is still listed', async () => {
+	test('WTA-03 a detached HEAD shows its short hash, and a worktree whose folder is gone is still listed', async () => {
 		await repository('/lab');
 		await worktree('/lab', 'probe', '/wt/probe', '0123456789abcdef0123456789abcdef01234567');
 		await worktree('/lab', 'gone', '/wt/gone', 'ref: refs/heads/gone', false);
@@ -176,7 +176,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		}]);
 	});
 
-	test('a reftable repository, whose HEAD files do not say the branch, has its worktrees named by their folders, on no branch', async () => {
+	test('WTA-03 a reftable repository, whose HEAD files do not say the branch, has its worktrees named by their folders, on no branch', async () => {
 		await write('/lab/.git/HEAD', 'ref: refs/heads/.invalid');
 		await worktree('/lab', 'w2', '/wt/w2', 'ref: refs/heads/.invalid');
 
@@ -188,7 +188,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		});
 	});
 
-	test('a worktree in the workspace whose folder was deleted by hand is one row, under its repository', async () => {
+	test('WTA-03 a worktree in the workspace whose folder was deleted by hand is one row, under its repository', async () => {
 		await repository('/lab');
 		await worktree('/lab', 'gone', '/wt/gone', 'ref: refs/heads/gone', false);
 
@@ -207,7 +207,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		});
 	});
 
-	test('one repository added under two spellings - its own name, and a link to it - is one row, with both folders on it', async () => {
+	test('WTA-03 one repository added under two spellings - its own name, and a link to it - is one row, with both folders on it', async () => {
 		const linked = disposables.add(new FileService(new NullLogService()));
 		disposables.add(linked.registerProvider(Schemas.file, disposables.add(new LinkedFileSystemProvider(new Map([['/link-lab', '/lab']])))));
 		// What reading through the link finds is what is there.
@@ -225,7 +225,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		]);
 	});
 
-	test('a folder whose .git names a git directory that is gone - its repository moved, or its record pruned - is a plain row', async () => {
+	test('WTA-03 a folder whose .git names a git directory that is gone - its repository moved, or its record pruned - is a plain row', async () => {
 		await write('/wt/orphan/.git', 'gitdir: /moved/.git/worktrees/orphan');
 
 		const { groups } = await read('/wt/orphan');
@@ -233,7 +233,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		assert.deepStrictEqual(groups, [{ folder: '/wt/orphan' }]);
 	});
 
-	test('a folder without a .git of its own is a plain row, even inside a repository', async () => {
+	test('WTA-01 a folder without a .git of its own is a plain row, even inside a repository', async () => {
 		await repository('/lab');
 		await write('/lab/packages/a/package.json', '{}');
 		await write('/notes/readme.md', 'notes');
@@ -243,7 +243,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		assert.deepStrictEqual(groups, [{ folder: '/notes' }, { folder: '/lab/packages/a' }]);
 	});
 
-	test('relative paths, as worktree.useRelativePaths writes them, resolve against the file they are in', async () => {
+	test('WTA-03 relative paths, as worktree.useRelativePaths writes them, resolve against the file they are in', async () => {
 		await repository('/lab');
 		await write('/lab/.git/worktrees/w3/gitdir', '../../../../wt/w3/.git');
 		await write('/lab/.git/worktrees/w3/HEAD', 'ref: refs/heads/w3');
@@ -257,7 +257,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		]);
 	});
 
-	test('a worktree of a bare repository stays a plain row: there is no main checkout to hang it under', async () => {
+	test('WTA-01 a worktree of a bare repository stays a plain row: there is no main checkout to hang it under', async () => {
 		await write('/store/bare.git/HEAD', 'ref: refs/heads/main');
 		await write('/store/bare.git/worktrees/b/gitdir', '/wt/b/.git');
 		await write('/store/bare.git/worktrees/b/HEAD', 'ref: refs/heads/b');
@@ -269,7 +269,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		assert.deepStrictEqual(groups, [{ folder: '/wt/b' }]);
 	});
 
-	test('a read that finds what the last one found does not fire; a new worktree does', async () => {
+	test('WTA-11 a read that finds what the last one found does not fire; a new worktree does', async () => {
 		await repository('/lab');
 		const { git } = await read('/lab');
 
@@ -304,7 +304,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		assert.deepStrictEqual(groupsWhenOlderResolved, summary(git.groups));
 	});
 
-	test('the next window has the groups the last one read before its own first read, which finds the same and fires nothing (WT-3.7)', async () => {
+	test('WTA-11 the next window has the groups the last one read before its own first read, which finds the same and fires nothing (WT-3.7)', async () => {
 		await repository('/lab');
 		await worktree('/lab', 'w2', '/wt/w2');
 		await read('/lab', '/wt/w2');
@@ -325,7 +325,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		});
 	});
 
-	test('a folder that left the workspace between two windows is not on the kept groups, nor a repository none of whose folders is left', async () => {
+	test('WTA-11 a folder that left the workspace between two windows is not on the kept groups, nor a repository none of whose folders is left', async () => {
 		await repository('/lab');
 		await worktree('/lab', 'w2', '/wt/w2');
 		await repository('/other');
@@ -341,7 +341,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		]);
 	});
 
-	test('a kept record that cannot be read, or names none of the folders, is not drawn from: the bar starts flat, as with none kept', async () => {
+	test('WTA-11 a kept record that cannot be read, or names none of the folders, is not drawn from: the bar starts flat, as with none kept', async () => {
 		await repository('/lab');
 		const records = [
 			'{ not json',

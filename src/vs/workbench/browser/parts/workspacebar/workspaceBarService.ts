@@ -91,7 +91,7 @@ export interface IWorkspaceBarService {
 
 	/**
 	 * The repository `uri` belongs to - as its main checkout or as one of its worktrees - the way the
-	 * bar last read it from git's own files (WORKTREE.md section 5). Undefined for a folder the bar
+	 * bar last read it from git's own files (WORKTREE.md WT-3). Undefined for a folder the bar
 	 * does not know as part of a repository, and for every folder while the bar lists no worktrees.
 	 */
 	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined;

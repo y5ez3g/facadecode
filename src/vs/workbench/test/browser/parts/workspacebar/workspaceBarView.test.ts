@@ -143,7 +143,7 @@ suite('Workspace bar - the rows it draws', () => {
 		assert.deepStrictEqual(summary(rows), ['repository /lab +']);
 	});
 
-	test('switched off, or before git has been read, the bar is folders[] exactly, and offers none', () => {
+	test('WTA-27 switched off, or before git has been read, the bar is folders[] exactly, and offers none', () => {
 		const rows = workspaceBarRows({ folders: [notes, lab, w2], groups, worktrees: false, key });
 
 		assert.deepStrictEqual(summary(rows), [
@@ -236,7 +236,7 @@ suite('Workspace bar - the rows it draws', () => {
 		});
 	});
 
-	test('worktrees are in the order they were made until somebody moves one; then theirs come first, and new ones after', () => {
+	test('WTA-04 worktrees are in the order they were made until somebody moves one; then theirs come first, and new ones after', () => {
 		const [w2, w10, fix, fresh] = ['/wt/w2', '/wt/w10', '/wt/fix', '/wt/new'].map(path => URI.file(path));
 		const made = [fix, w2, w10];   // as the reader gives them, oldest first
 		const moved = [w10, fix, w2];

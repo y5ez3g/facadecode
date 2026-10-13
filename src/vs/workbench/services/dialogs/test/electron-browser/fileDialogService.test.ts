@@ -209,7 +209,7 @@ suite('FileDialogService', function () {
 		assert.deepStrictEqual(activeFolderFor.args[1], [Schemas.vscodeRemote, 'testRemote']);
 	});
 
-	test(`⭐ a folder picked from the native Open dialog becomes a row, not a window`, async function () {
+	test(`WS-03 ⭐ a folder picked from the native Open dialog becomes a row, not a window`, async function () {
 		// ⚠️ `pickFileFolderAndOpen` used to hand the whole job to the main process, which picks and
 		// opens in one call and can only answer with a window. The dialog is asked for a path now, and
 		// what to do with it is decided here - so a folder joins this window instead of starting
@@ -268,7 +268,7 @@ suite('FileDialogService', function () {
 		assert.deepStrictEqual(opened.map(uri => uri.fsPath), files.map(file => file.fsPath));
 	});
 
-	test(`⭐ and several folders all join this window`, async function () {
+	test(`WS-03 ⭐ and several folders all join this window, in one request`, async function () {
 		const folders = [URI.file('/test/alpha'), URI.file('/test/beta')];
 		const shown: URI[][] = [];
 

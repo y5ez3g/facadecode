@@ -96,13 +96,10 @@ const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
  */
 export const WorkspaceBarRowExpansionContext = new RawContextKey<'' | 'expanded' | 'collapsed'>('facadeWorkspaceBarRowExpansion', '', localize('workspaceBar.rowExpansionContext', "Whether the repository of the focused row of the workspace shows its worktrees"));
 
-/**
- * Creates a worktree of a repository (WORKTREE.md section 7). Registered by `contrib/worktrees`, which
- * can reach the terminal this part cannot; the bar only calls it, with the repository's folder.
- */
+/** Creates a worktree of a repository (WORKTREE.md WT-5); registered by `contrib/worktrees`, which can reach terminals. */
 export const NEW_WORKTREE_COMMAND = 'facade.workspaceBar.newWorktree';
 
-/** Deletes a worktree (WORKTREE.md section 10). Registered by `contrib/worktrees`, beside New Worktree. */
+/** Deletes a worktree (WORKTREE.md WT-8). Registered by `contrib/worktrees`, beside New Worktree. */
 export const DELETE_WORKTREE_COMMAND = 'facade.workspaceBar.deleteWorktree';
 
 export const WORKSPACE_BAR_CATEGORY = localize2('workspaceBar.category', "Workspace");
@@ -118,7 +115,7 @@ export const WORKSPACE_BAR_CATEGORY = localize2('workspaceBar.category', "Worksp
 export const CONFIRM_REMOVE_FOLDER = 'facade.workspaceBar.confirmRemoveFolder';
 
 /**
- * The switch for worktrees (WORKTREE.md section 11). Off, the bar is the flat list of `folders[]` it was
+ * The switch for worktrees (WORKTREE.md WT-9). Off, the bar is the flat list of `folders[]` it was
  * before worktrees existed.
  */
 export const SHOW_WORKTREES = 'facade.workspaceBar.worktrees';

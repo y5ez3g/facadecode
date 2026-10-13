@@ -24,14 +24,14 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('a file is opened and a folder is added', () => {
+	test('WS-07 a file is opened and a folder is added', () => {
 		const { editors, folders } = splitDrop(dropped('/w/notes.md', '/w/api'), [undefined, [URI.file('/w/api')]]);
 
 		assert.deepStrictEqual(opened(editors), ['/w/notes.md']);
 		assert.deepStrictEqual(added(folders), ['/w/api']);
 	});
 
-	test(`⭐ a workspace file is a window, not a handful of folders`, () => {
+	test(`WS-07 ⭐ a workspace file is a window, not a handful of folders`, () => {
 		// ⭐ A `.code-workspace` carries its own `settings`, `extensions`, `launch` and `tasks`, and
 		// none of those can be merged into the workspace this window already has. Taking only its
 		// folders would be the dangerous half of "merge" wearing the word "add".
@@ -54,7 +54,7 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 		assert.deepStrictEqual(windowed(workspaces), ['/w/team.code-workspace']);
 	});
 
-	test('a mixed drop is both, each in the order it arrived', () => {
+	test('WS-07 a mixed drop is both, each in the order it arrived', () => {
 		const { editors, folders } = splitDrop(dropped('/w/a', '/w/one.md', '/w/b', '/w/two.md', '/w/c'), [
 			[URI.file('/w/a')], undefined, [URI.file('/w/b')], undefined, [URI.file('/w/c')]
 		]);
@@ -96,14 +96,14 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 		const asks = (target: Element | null, options: { shift?: boolean; dropIntoEditor?: boolean } = {}) =>
 			takesThePathAsText({ target, shiftKey: !!options.shift } as unknown as DragEvent, options.dropIntoEditor ?? true);
 
-		test('a document takes a drop as somewhere to go, until Shift says otherwise', () => {
+		test('WS-08 a document takes a drop as somewhere to go, until Shift says otherwise', () => {
 			const at = surfaces();
 
 			assert.strictEqual(asks(at('.mtk1')), false);
 			assert.strictEqual(asks(at('.mtk1'), { shift: true }), true);
 		});
 
-		test('Shift over a document asks for nothing when the editor is not listening', () => {
+		test('WS-08 Shift over a document asks for nothing when the editor is not listening', () => {
 			// ⚠️ `editorDropTarget` gates its own bypass on `editor.dropIntoEditor.enabled`. Stepping
 			// over a drop it is not going to take hands a folder to `ResourcesDropHandler`, which
 			// opens a second window.
@@ -112,7 +112,7 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 			assert.strictEqual(asks(at('.mtk1'), { shift: true, dropIntoEditor: false }), false);
 		});
 
-		test('the terminal always asks - it is a line someone is typing', () => {
+		test('WS-08 the terminal always asks - it is a line someone is typing', () => {
 			const at = surfaces();
 
 			assert.strictEqual(asks(at('.xterm-screen')), true);
@@ -120,13 +120,13 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 			assert.strictEqual(asks(at('.terminal-wrapper')), true);
 		});
 
-		test('a text field outside a document asks', () => {
+		test('WS-08 a text field outside a document asks', () => {
 			const at = surfaces();
 
 			assert.strictEqual(asks(at('.settings-search')), true);
 		});
 
-		test('a text field the editor owns does not', () => {
+		test('WS-08 a text field the editor owns does not', () => {
 			// ⚠️ The editor keeps helpers in its own DOM, and everything inside it that is stepped
 			// over reaches `editorDropTarget`, which opens a second window for a folder.
 			const at = surfaces();

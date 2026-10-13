@@ -156,9 +156,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// drawn, and "add a folder" has nothing to do with whether the bar has been laid out.
 		this.model = this._register(this.instantiationService.createInstance(WorkspaceBarModel));
 
-		// Which of those folders are one repository, and its worktrees - read from git's own files, so
-		// that the first drawing of the bar already has them (WORKTREE.md section 5). While the bar lists
-		// no worktrees (section 11) the reader is handed no folders, and reads and watches nothing.
+		// Repositories and their worktrees from git's own files, read before the first drawing (WORKTREE.md WT-3)
 		const model = this.model;
 		this.git = this._register(this.instantiationService.createInstance(WorkspaceBarGit, {
 			get folders() { return areWorktreesShown(configurationService) ? model.folders : []; },
@@ -374,7 +372,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	}
 
 	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined {
-		// None while worktrees are switched off (WORKTREE.md section 11): every row is then a folder.
+		// None while worktrees are switched off (WORKTREE.md WT-9): every row is then a folder.
 		if (!areWorktreesShown(this.configurationService)) {
 			return undefined;
 		}
