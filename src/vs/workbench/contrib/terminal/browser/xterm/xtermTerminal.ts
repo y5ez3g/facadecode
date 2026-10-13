@@ -67,7 +67,7 @@ const enum TextBlinkConstants {
 }
 
 
-function getFullBufferLineAsString(lineIndex: number, buffer: IBuffer): { lineData: string | undefined; lineIndex: number } {
+export function getFullBufferLineAsString(lineIndex: number, buffer: IBuffer): { lineData: string | undefined; lineIndex: number } {
 	let line = buffer.getLine(lineIndex);
 	if (!line) {
 		return { lineData: undefined, lineIndex };

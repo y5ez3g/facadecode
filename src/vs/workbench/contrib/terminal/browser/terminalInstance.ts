@@ -73,7 +73,6 @@ import { ITerminalProcessManager, ITerminalProfileResolverService, ProcessState,
 import { TERMINAL_BACKGROUND_COLOR } from '../common/terminalColorRegistry.js';
 import { TerminalContextKeys } from '../common/terminalContextKey.js';
 import { getUriLabelForShell, getShellIntegrationTimeout, getWorkspaceForTerminal, preparePathForShell } from '../common/terminalEnvironment.js';
-import { isAgentTerminalIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
@@ -1435,11 +1434,11 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	}
 
 	async sendPath(originalPath: string | URI, shouldExecute: boolean): Promise<void> {
-		// Facade Code: a path inserted into an agent's terminal, as a dropped file's is, is read by the
-		// agent rather than the shell. So it is not made PowerShell's command to run it, `& '...'`, which
-		// the agent takes for text, and it goes pasted - both as Windows Terminal inserts one. Other
-		// terminals, and a path sent to be run, keep upstream's form.
-		if (!shouldExecute && isAgentTerminalIcon(this.icon)) {
+		// Facade Code: a path inserted into an agent's terminal - its run's, by its mark - as a dropped file's
+		// is, is read by the agent rather than the shell. So it is not made PowerShell's command to run it,
+		// `& '...'`, which the agent takes for text, and it goes pasted - both as Windows Terminal inserts one.
+		// Other terminals, and a path sent to be run, keep upstream's form.
+		if (!shouldExecute && isFacadeRunTerminal(this)) {
 			return this.sendText(await this.preparePathForShell(originalPath, false), false, true);
 		}
 		return this.sendText(await this.preparePathForShell(originalPath), shouldExecute);

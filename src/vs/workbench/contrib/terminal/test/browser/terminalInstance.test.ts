@@ -550,12 +550,16 @@ suite('Workbench - TerminalInstance', () => {
 			deepStrictEqual(persists, { on: true, off: false });
 		});
 
-		test('a path inserted into an agent\'s terminal is not PowerShell\'s command to run it, as it is in any other terminal', async () => {
+		test('a path inserted into an agent\'s terminal - its run\'s, by its mark - is not PowerShell\'s command to run it, as it is in any other terminal, one the person drew with the robot included (VC-06)', async () => {
 			const path = isWindows ? 'c:\\Screenshots\\Screenshot 2026-09-24 171704.png' : '/Screenshots/Screenshot 2026-09-24 171704.png';
 			const sent: Record<string, string[]> = {};
-			for (const [name, icon] of [['agent', AGENT_TERMINAL_ICON], ['plain', undefined]] as const) {
+			for (const [name, config] of [
+				['agent', { icon: AGENT_TERMINAL_ICON, reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }],
+				['robot', { icon: AGENT_TERMINAL_ICON }],
+				['plain', {}]
+			] as const) {
 				const process = new ReadyTestTerminalChildProcess(false);
-				const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => process)), undefined, { executable: 'pwsh', icon });
+				const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => process)), undefined, { executable: 'pwsh', ...config });
 				await instance.processReady;
 				await instance.sendPath(path, false);
 				sent[name] = process.sent;
@@ -563,6 +567,7 @@ suite('Workbench - TerminalInstance', () => {
 
 			deepStrictEqual(sent, {
 				agent: [isWindows ? `"${path}"` : `'${path}'`],
+				robot: [`& '${path}'`],
 				plain: [`& '${path}'`],
 			});
 		});
