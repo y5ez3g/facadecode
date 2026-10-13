@@ -31,7 +31,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		[AGENTS_SETTING]: {
 			type: 'array',
-			description: localize('agents.description', "The agents on the agent button. Each one starts a terminal tab in the folder the window is on and runs its command there. The Configure Agents command edits this list."),
+			description: localize('agents.description', "The agents in the Agent menu. Each one opens a terminal in the current folder and runs its command there. The Configure Agents command edits this list."),
 			default: [],
 			scope: ConfigurationScope.APPLICATION,
 			items: {

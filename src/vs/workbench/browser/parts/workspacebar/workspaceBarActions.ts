@@ -121,7 +121,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		[SHOW_WORKTREES]: {
 			type: 'boolean',
-			description: localize('workspaceBar.worktrees', "Controls whether the workspace lists each repository's Git worktrees under it."),
+			description: localize('workspaceBar.worktrees', "Controls whether the workspace bar lists Git worktrees under each repository."),
 			default: true
 		}
 	}
@@ -356,7 +356,7 @@ class RemoveFolderAction extends Action2 {
 	constructor() {
 		super({
 			id: RemoveFolderAction.ID,
-			title: localize2('workspaceBar.removeFolder', "Remove Folder"),
+			title: localize2('workspaceBar.removeFolder', "Remove Folder from Workspace"),
 			category: WORKSPACE_BAR_CATEGORY,
 			icon: Codicon.trash,
 			f1: true,
@@ -597,7 +597,7 @@ class FocusWorkspaceAction extends Action2 {
 	constructor() {
 		super({
 			id: FocusWorkspaceAction.ID,
-			title: localize2('workspaceBar.focus', "Focus on Workspace"),
+			title: localize2('workspaceBar.focus', "Focus on Workspace Bar"),
 			category: WORKSPACE_BAR_CATEGORY,
 			f1: true
 		});

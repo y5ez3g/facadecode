@@ -12,13 +12,6 @@
 	box-sizing: border-box;
 }
 
-.terminal-launchers-hint {
-	color: var(--vscode-descriptionForeground);
-	font-size: var(--vscode-fontSize-label2);
-	/* The space under a heading, which is what this sentence is for the list below it. */
-	margin-bottom: var(--vscode-spacing-size200);
-}
-
 .terminal-launchers-list {
 	display: flex;
 	flex-direction: column;

@@ -1385,7 +1385,7 @@ begin
 
   #if "user" == InstallTarget
     if not WizardSilent() and IsAdmin() then begin
-      if MsgBox('This User Installer is not meant to be run as an Administrator. If you would like to install {#NameLong} for all users on this system, use the System Installer instead. Are you sure you want to continue?', mbError, MB_OKCANCEL) = IDCANCEL then begin
+      if MsgBox('The User Installer is not designed to run as Administrator. To install {#NameLong} for all users on this system, download and run the System Installer instead. Do you want to continue?', mbError, MB_OKCANCEL) = IDCANCEL then begin
         Result := False;
       end;
     end;

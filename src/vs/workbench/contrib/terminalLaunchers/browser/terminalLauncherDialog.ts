@@ -77,17 +77,16 @@ export async function showAgentsDialog(
 
 	const dialog = disposables.add(new Dialog(
 		services.layoutService.activeContainer,
-		localize('terminalLaunchers.title', "Agents"),
+		localize('terminalLaunchers.configureTitle', "Configure Agents"),
 		[save, cancel],
 		createWorkbenchDialogOptions({
 			type: 'none',
 			extraClasses: ['facade-dialog', 'terminal-launchers-dialog'],
 			cancelId: 1,
+			// The dialog's description, under its title as the other forms have theirs
+			detail: localize('terminalLaunchers.about', "Configures AI agents available in the Agent menu. Each agent runs its command in a dedicated terminal within the current folder."),
 			renderBody: container => {
 				container.classList.add('terminal-launchers-body');
-
-				append(container, $('.terminal-launchers-hint', undefined,
-					localize('terminalLaunchers.hint', "Configure detected agents and custom commands. Items appear in the Agent menu and launch in a new terminal at the workspace root.")));
 
 				const list = append(container, $('.terminal-launchers-list'));
 
@@ -115,7 +114,7 @@ export async function showAgentsDialog(
 
 						const labelBox = rowDisposables.add(new InputBox(append(line, $('.terminal-launchers-name')), services.contextViewService, {
 							inputBoxStyles: defaultInputBoxStyles,
-							placeholder: localize('terminalLaunchers.namePlaceholder', "Agent Name"),
+							placeholder: localize('terminalLaunchers.agentNamePlaceholder', "Agent name"),
 							ariaLabel: localize('terminalLaunchers.nameAria', "Name of agent {0}", index + 1)
 						}));
 						labelBox.value = row.label;
@@ -129,7 +128,7 @@ export async function showAgentsDialog(
 							inputBoxStyles: defaultInputBoxStyles,
 							// An example rather than a description of the empty case: the field is the one
 							// thing somebody is here to fill in, and a blank one still opens a plain shell
-							placeholder: localize('terminalLaunchers.commandPlaceholder', "Terminal Command (e.g. claude)"),
+							placeholder: localize('terminalLaunchers.agentCommandPlaceholder', "Command (e.g. claude)"),
 							ariaLabel: localize('terminalLaunchers.commandAria', "Command for agent {0}", index + 1)
 						}));
 						commandBox.value = row.command;
@@ -140,7 +139,7 @@ export async function showAgentsDialog(
 						const remove = rowDisposables.add(new Button(append(line, $('.terminal-launchers-remove')), {
 							...FLAT_BUTTON_STYLES,
 							secondary: true,
-							title: localize('terminalLaunchers.remove', "Remove this agent")
+							title: localize('terminalLaunchers.removeAgent', "Remove Agent")
 						}));
 						remove.icon = Codicon.close;
 						rowDisposables.add(remove.onDidClick(() => {
@@ -176,7 +175,7 @@ export async function showAgentsDialog(
 				const detectSlot = append(actions, $('.terminal-launchers-action'));
 				const detectButton = disposables.add(new Button(detectSlot, {
 					...secondary,
-					title: localize('terminalLaunchers.detectTitle', "Look for agents installed on this machine")
+					title: localize('terminalLaunchers.detectTitle', "Detect installed agents on this machine")
 				}));
 				detectButton.label = `$(search) ${localize('terminalLaunchers.detect', "Detect Agents")}`;
 

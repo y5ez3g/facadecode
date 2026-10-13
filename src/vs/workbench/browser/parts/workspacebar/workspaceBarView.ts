@@ -476,7 +476,7 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 	) { }
 
 	getWidgetAriaLabel(): string {
-		return localize('workspaceBar.ariaLabel', "Workspace folders");
+		return localize('workspaceBar.ariaLabel', "Workspace Folders");
 	}
 
 	getAriaLabel(row: WorkspaceBarRow): string {
@@ -547,7 +547,7 @@ export class WorkspaceBarView extends Disposable {
 		this.empty = append(container, $('.workspacebar-empty'));
 		// ⚠️ Says what to do next, and names both ways of doing it - the column is a drop target over
 		// its whole height, which nothing else on screen says.
-		this.empty.textContent = localize('workspaceBar.empty', "Open a folder or drag one here.");
+		this.empty.textContent = localize('workspaceBar.empty', "Drag a folder here or click +.");
 
 		const isUnavailable = (row: WorkspaceBarRow) => row.kind === 'worktree'
 			? !row.worktree.exists
