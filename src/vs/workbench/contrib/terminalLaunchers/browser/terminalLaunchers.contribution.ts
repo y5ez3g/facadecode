@@ -21,8 +21,8 @@ registerTerminalLauncherActions();
 // This is what puts the agents beside it, and it runs early so the first opening is the real list.
 registerWorkbenchContribution2(TerminalLauncherMenu.ID, TerminalLauncherMenu, WorkbenchPhase.BlockRestore);
 
-// After the folder terminals, which it asks where each agent is and which start `AfterRestored`.
-registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.Eventually);
+// With the folder terminals they ask, which start `AfterRestored`
+registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.AfterRestored);
 
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
 	...workbenchConfigurationNodeBase,

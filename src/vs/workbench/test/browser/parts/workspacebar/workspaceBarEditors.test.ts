@@ -143,7 +143,7 @@ suite('Workspace bar - folder editors', () => {
 		leaves.capture(a);
 		await leaves.restore(b);
 		await timeout(0);
-		await leaves.prune([b]);
+		await leaves.prune([b], () => false);
 
 		assert.deepStrictEqual({ away, back: back.released, gone: gone.released }, {
 			away: { held: ['/w/a/x.ts'], released: [] },
@@ -217,7 +217,7 @@ suite('Workspace bar - folder editors', () => {
 		editors.capture(URI.parse('file:///a'));
 		editors.capture(URI.parse('file:///b'));
 
-		editors.prune([URI.parse('file:///b')]);
+		editors.prune([URI.parse('file:///b')], () => false);
 
 		assert.deepStrictEqual(groups.names, ['file:///b']);
 	});
@@ -231,7 +231,7 @@ suite('Workspace bar - folder editors', () => {
 		editors.capture(URI.parse('file:///b'));
 		editors.capture(URI.parse('file:///c'));
 
-		editors.prune([URI.parse('file:///b')]);
+		editors.prune([URI.parse('file:///b')], () => false);
 
 		assert.deepStrictEqual(groups.names, ['file:///b']);
 	});
@@ -240,7 +240,7 @@ suite('Workspace bar - folder editors', () => {
 		const shared = storage();
 		const groups = new TestEditorGroups();
 		editorsFor(groups, shared).capture(URI.parse('file:///a'));
-		editorsFor(groups, shared).prune([]);
+		editorsFor(groups, shared).prune([], () => false);
 
 		const later = editorsFor(groups, shared);
 		later.restore(URI.parse('file:///a'));
@@ -251,7 +251,7 @@ suite('Workspace bar - folder editors', () => {
 	test('a folder nobody opened has nothing to prune', () => {
 		const groups = new TestEditorGroups();
 
-		editorsFor(groups, storage()).prune([URI.parse('file:///never')]);
+		editorsFor(groups, storage()).prune([URI.parse('file:///never')], () => false);
 
 		assert.deepStrictEqual(groups.names, []);
 	});
@@ -262,7 +262,7 @@ suite('Workspace bar - folder editors', () => {
 		editors.capture(URI.parse('file:///a'));
 		editors.capture(URI.parse('file:///b'));
 
-		editors.prune([URI.parse('file:///a'), URI.parse('file:///b')]);
+		editors.prune([URI.parse('file:///a'), URI.parse('file:///b')], () => false);
 
 		assert.deepStrictEqual(groups.names, ['file:///a', 'file:///b']);
 	});

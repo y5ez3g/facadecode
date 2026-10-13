@@ -24,6 +24,8 @@ import { isWeb, isWindows } from '../../../../base/common/platform.js';
 import { ITextModelService } from '../../../../editor/common/services/resolverService.js';
 import { getResourceForCommand, getMultiSelectedResources, getOpenEditorsViewMultiSelection, IExplorerService } from './files.js';
 import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { resolveCommandsContext } from '../../../browser/parts/editor/editorCommandsContext.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
@@ -616,6 +618,11 @@ CommandsRegistry.registerCommand({
 			const commandService = accessor.get(ICommandService);
 			// Show a picker for the user to choose which folder to remove
 			return commandService.executeCommand(RemoveRootFolderAction.ID);
+		}
+
+		// Facade Code: through the bar, which asks first when something would be lost (W9.6); the Agents window has none
+		if (!accessor.get(IWorkbenchEnvironmentService).isSessionsWindow) {
+			return accessor.get(IWorkspaceBarService).remove(resources);
 		}
 
 		const workspaceEditingService = accessor.get(IWorkspaceEditingService);

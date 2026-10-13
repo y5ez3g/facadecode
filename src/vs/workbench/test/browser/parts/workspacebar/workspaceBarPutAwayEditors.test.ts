@@ -150,27 +150,34 @@ suite('Workspace bar - unsaved editors put away with their folder', () => {
 		await untitled.get(draft.resource)?.revert();
 	});
 
-	test('WS-55 a folder that leaves the workspace brings what it had put away into the folder the window is on', async () => {
+	test('WS-55 a folder that leaves the workspace by anything but Remove Folder from Workspace brings what it had put away into the folder the window is on; one Remove Folder from Workspace takes leaves it to that', async () => {
 		const { editors, putAway, untitled, onScreen, unsavedOnScreen, draft: open, close } = await window();
 		const a = URI.file('/w/a');
 		const b = URI.file('/w/b');
+		const c = URI.file('/w/c');
 
-		// A draft put away with `a`; the window on `b`.
+		// A draft put away with `a`, another with `c`; the window on `b`.
 		const inA = await open('a draft in a');
 		editors.capture(a);
+		await editors.restore(c);
+		const inC = await open('a draft in c');
+		editors.capture(c);
 		await editors.restore(b);
 		const away = onScreen();
 
-		await editors.prune([b]);
+		// `a` leaves by a workspace file edit, `c` through Remove Folder, which asks about its own unsaved editors
+		await editors.prune([b], folder => folder.path === '/w/c');
 
-		assert.deepStrictEqual({ away, onScreen: onScreen(), unsaved: unsavedOnScreen(), held: putAway.folders().length }, {
+		assert.deepStrictEqual({ away, onScreen: onScreen(), unsaved: unsavedOnScreen(), held: putAway.folders().length, cStillUnsaved: untitled.get(inC.resource)?.isDirty() }, {
 			away: [],
 			onScreen: [inA.resource.path],
 			unsaved: [inA.resource.path],
-			held: 0
+			held: 0,
+			cStillUnsaved: true
 		});
 
 		await close();
 		await untitled.get(inA.resource)?.revert();
+		await untitled.get(inC.resource)?.revert();
 	});
 });

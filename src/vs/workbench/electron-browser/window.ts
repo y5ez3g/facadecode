@@ -21,7 +21,6 @@ import { setFullscreen, getZoomLevel, onDidChangeZoomLevel, getZoomFactor } from
 import { ICommandService, CommandsRegistry } from '../../platform/commands/common/commands.js';
 import { IResourceEditorInput } from '../../platform/editor/common/editor.js';
 import { ipcRenderer, process } from '../../base/parts/sandbox/electron-browser/globals.js';
-import { IWorkspaceEditingService } from '../services/workspaces/common/workspaceEditing.js';
 import { IWorkspaceBarService } from '../browser/parts/workspacebar/workspaceBarService.js';
 import { IHeldEditorsService } from '../services/heldEditors/common/heldEditors.js';
 import { IMenuService, MenuId, IMenu, MenuItemAction, MenuRegistry } from '../../platform/actions/common/actions.js';
@@ -108,7 +107,6 @@ export class NativeWindow extends BaseWindow {
 		@ICommandService private readonly commandService: ICommandService,
 		@IKeybindingService private readonly keybindingService: IKeybindingService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
-		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IHeldEditorsService private readonly heldEditorsService: IHeldEditorsService,
 		@IFileService private readonly fileService: IFileService,
@@ -1058,7 +1056,8 @@ export class NativeWindow extends BaseWindow {
 		}
 
 		if (foldersToRemove.length) {
-			await this.workspaceEditingService.removeFolders(foldersToRemove);
+			// Facade Code: through the bar, which asks first when something would be lost (WORKSPACE.md W9.6)
+			await this.workspaceBarService.remove(foldersToRemove);
 		}
 
 		return shown;

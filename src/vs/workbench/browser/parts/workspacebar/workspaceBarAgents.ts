@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
@@ -18,12 +18,22 @@ export interface IFolderAgents {
 	readonly icons: readonly ThemeIcon[];
 }
 
-/**
- * What runs in each folder of the bar, so that its row can show it (WORKTREE.md WT-1.15).
- *
- * ⚠️ Told, not asked. The bar lives in `vs/workbench/browser`, below the terminals, and cannot reach
- * them; the agent launchers reach both, so they say what runs where and the bar draws it.
- */
+/** Something running in a folder that taking the folder out of the workspace stops (WORKSPACE.md W9.6). */
+export interface IRunningWork {
+	/** The same for as long as it runs: what a confirmation named is told apart from what started since. */
+	readonly id: number;
+	readonly kind: 'agent' | 'terminal';
+	/** What its tab is called. */
+	readonly name: string;
+}
+
+/** Says what runs in a folder now (`IWorkspaceBarAgentsService.registerWorkProvider`). */
+export interface IRunningWorkProvider {
+	/** The agents running in `folder`, and its terminals running a process, oldest first. */
+	workIn(folder: URI): readonly IRunningWork[];
+}
+
+/** What runs in each folder, told by the agent launchers, which reach the terminals the bar cannot (WORKTREE.md WT-1.15). */
 export interface IWorkspaceBarAgentsService {
 	readonly _serviceBrand: undefined;
 
@@ -35,6 +45,12 @@ export interface IWorkspaceBarAgentsService {
 
 	/** Says what runs in every folder, replacing what was said before: a folder left out runs none. */
 	set(agents: readonly IFolderAgents[]): void;
+
+	/** What runs in `folder` now, for a confirmation to name before stopping it. */
+	workIn(folder: URI): readonly IRunningWork[];
+
+	/** Answers `workIn` from now on, until disposed. */
+	registerWorkProvider(provider: IRunningWorkProvider): IDisposable;
 }
 
 export const IWorkspaceBarAgentsService = createDecorator<IWorkspaceBarAgentsService>('workspaceBarAgentsService');
@@ -48,12 +64,27 @@ export class WorkspaceBarAgentsService extends Disposable implements IWorkspaceB
 
 	private agents = new Map<string, readonly ThemeIcon[]>();
 
+	private provider: IRunningWorkProvider | undefined;
+
 	constructor(@IUriIdentityService private readonly uriIdentityService: IUriIdentityService) {
 		super();
 	}
 
 	agentsIn(folder: URI): readonly ThemeIcon[] {
 		return this.agents.get(this.uriIdentityService.extUri.getComparisonKey(folder)) ?? [];
+	}
+
+	workIn(folder: URI): readonly IRunningWork[] {
+		return this.provider?.workIn(folder) ?? [];
+	}
+
+	registerWorkProvider(provider: IRunningWorkProvider): IDisposable {
+		this.provider = provider;
+		return toDisposable(() => {
+			if (this.provider === provider) {
+				this.provider = undefined;
+			}
+		});
 	}
 
 	set(agents: readonly IFolderAgents[]): void {

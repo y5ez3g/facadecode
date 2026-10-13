@@ -152,9 +152,9 @@ export class WorkspaceBarEditors extends Disposable {
 
 	/**
 	 * Drops the editor sets of folders no longer in the workspace, however they left. Unsaved editors put
-	 * away by a folder that left are opened again here (W9.6).
+	 * away by a folder that left any way but Remove Folder are opened again here (W9.6).
 	 */
-	async prune(members: readonly URI[]): Promise<void> {
+	async prune(members: readonly URI[], removing: (folder: URI) => boolean): Promise<void> {
 		const keys = new Set(members.map(member => this.key(member)));
 		let dropped = false;
 
@@ -185,7 +185,9 @@ export class WorkspaceBarEditors extends Disposable {
 				continue;
 			}
 
-			bringBack.push(...this.putAwayEditorsService.get(folder).filter(resource => this.workingCopyService.isDirty(resource)));
+			if (!removing(folder)) {
+				bringBack.push(...this.putAwayEditorsService.get(folder).filter(resource => this.workingCopyService.isDirty(resource)));
+			}
 			this.putAwayEditorsService.set(folder, []);
 		}
 

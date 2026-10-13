@@ -34,7 +34,8 @@ import { moveRow, rowsOfFolders } from './workspaceBar.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
-import { IWorkspaceBarService, ShowResult } from './workspaceBarService.js';
+import { IRemoveOptions, IWorkspaceBarService, RemoveResult, ShowResult } from './workspaceBarService.js';
+import { WorkspaceBarRemoval } from './workspaceBarRemoval.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 import { ROW_HEIGHT, WorkspaceBarView } from './workspaceBarView.js';
@@ -119,6 +120,13 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	private view: WorkspaceBarView | undefined;
 	private editors: WorkspaceBarEditors | undefined;
 	private switcher: WorkspaceBarSwitcher | undefined;
+
+	/** Made on the first removal: what it asks of the workbench need not exist while the part is being built. */
+	private _removal: WorkspaceBarRemoval | undefined;
+	private get removal(): WorkspaceBarRemoval {
+		this._removal ??= this.instantiationService.createInstance(WorkspaceBarRemoval, this.model, (uri: URI) => this.repositoryFor(uri));
+		return this._removal;
+	}
 
 	// A relay because the switcher is created in `createContentArea`, after a listener can arrive
 	private readonly _onDidRestoreEditors = this._register(new Relay<void>());
@@ -256,7 +264,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	 * folder and comes back the colour it was.
 	 */
 	private pruneEditors(): void {
-		void this.editors?.prune(this.model.folders.map(folder => folder.uri));
+		void this.editors?.prune(this.model.folders.map(folder => folder.uri), folder => this.isRemoving(folder));
 	}
 
 	override updateStyles(): void {
@@ -362,11 +370,15 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		return added;
 	}
 
-	async remove(uris: readonly URI[]): Promise<void> {
+	remove(uris: readonly URI[], options?: IRemoveOptions): Promise<RemoveResult> {
 		// ⚠️ Nothing to forget here. Taking the folders out of the workspace is what moves the window
 		// off one that is leaving, and `pruneEditors` drops what they left behind - which is the same
 		// work whether the removal came from this bar or from someone editing the workspace file.
-		await this.model.remove(uris);
+		return this.removal.remove(uris, options);
+	}
+
+	isRemoving(folder: URI): boolean {
+		return !!this._removal?.isRemoving(folder);
 	}
 
 	async moveFolder(uri: URI, offset: number): Promise<void> {

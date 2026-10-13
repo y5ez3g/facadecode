@@ -22,6 +22,17 @@ export type ShowResult =
 	| { readonly kind: 'cancelled' }
 	| { readonly kind: 'failed'; readonly reason: string; readonly added?: boolean };
 
+/** How `remove` ended (WORKSPACE.md W9.6); a failure has already been reported. */
+export type RemoveResult =
+	| { readonly kind: 'removed'; readonly folders: readonly URI[] }
+	| { readonly kind: 'cancelled' }
+	| { readonly kind: 'failed'; readonly reason: string };
+
+export interface IRemoveOptions {
+	/** The caller has already asked about what would be lost, as deleting a worktree does. */
+	readonly confirmed?: boolean;
+}
+
 /**
  * What the bar offers the rest of the workbench.
  *
@@ -71,8 +82,14 @@ export interface IWorkspaceBarService {
 	/** Collapses the bar to a column of icons, or opens it again. */
 	toggleCollapsed(): void;
 
-	/** Takes folders out of the workspace, leaving them where they are on disk. */
-	remove(uris: readonly URI[]): Promise<void>;
+	/**
+	 * Takes folders out of the workspace for every caller, leaving them on disk; asks first only when
+	 * something would be lost (W9.6).
+	 */
+	remove(uris: readonly URI[], options?: IRemoveOptions): Promise<RemoveResult>;
+
+	/** Whether `folder` is leaving through `remove`, so what runs in it stops rather than moves to the panel. */
+	isRemoving(folder: URI): boolean;
 
 	/**
 	 * Moves the row `uri` is - a folder's, or a repository's with its worktrees in the workspace -

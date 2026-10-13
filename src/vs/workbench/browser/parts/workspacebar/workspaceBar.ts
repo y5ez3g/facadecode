@@ -146,19 +146,3 @@ export async function canonicalUri(fileService: IFileService, uri: URI): Promise
 	return uri;
 }
 
-/**
- * `text` as a markdown code span. ⚠️ Not `escapeMarkdownSyntaxTokens`: inside a span a backslash is
- * a literal, so escaping there prints them - `ios_app` renders as `ios\_app`. Only a backtick ends
- * a span, and it is carried by a longer fence.
- */
-export function asCodeSpan(text: string): string {
-	const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
-	const fence = '`'.repeat(longestRun + 1);
-
-	// A span drops one leading and one trailing space when it has both, which is how a backtick is
-	// kept off the fence.
-	const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-
-	return `${fence}${pad}${text}${pad}${fence}`;
-}
-
