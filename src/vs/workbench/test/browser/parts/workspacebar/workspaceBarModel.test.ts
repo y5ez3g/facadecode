@@ -6,9 +6,9 @@
 import assert from 'assert';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { mock } from '../../../../../base/test/common/mock.js';
+import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { FileSystemProviderCapabilities, IFileService } from '../../../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderCapabilities, FileSystemProviderErrorCode, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
@@ -28,12 +28,26 @@ class TestFileService extends mock<IFileService>() {
 	/** Paths that are not on disk. Everything else is. */
 	readonly missing = new Set<string>();
 
+	/** Paths whose read fails, with what it fails with: a remote that lost its connection, say. */
+	readonly unreadable = new Map<string, Error>();
+
 	constructor(private readonly links = new Map<string, string>()) {
 		super();
 	}
 
 	override async exists(resource: URI): Promise<boolean> {
 		return !this.missing.has(resource.path);
+	}
+
+	override async stat(resource: URI): Promise<IFileStatWithPartialMetadata> {
+		const failure = this.unreadable.get(resource.path);
+		if (failure) {
+			throw failure;
+		}
+		if (this.missing.has(resource.path)) {
+			throw createFileSystemProviderError(`ENOENT: ${resource.path}`, FileSystemProviderErrorCode.FileNotFound);
+		}
+		return upcastPartial<IFileStatWithPartialMetadata>({ resource, isDirectory: true });
 	}
 
 	override hasProvider(): boolean { return true; }
@@ -76,12 +90,21 @@ class TestContextService extends mock<IWorkspaceContextService>() {
 	}
 
 	setPaths(paths: string[]): void {
-		this.folders = paths.map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) }));
+		this.setUris(paths.map(path => URI.file(path)));
+	}
+
+	/** For folders that are not on this machine: `setPaths` makes local ones. */
+	setUris(uris: URI[]): void {
+		this.folders = uris.map((uri, index) => new WorkspaceFolder({ uri, index, name: uri.path.slice(uri.path.lastIndexOf('/') + 1) }));
 		this._onDidChangeWorkspaceFolders.fire(undefined as never);
 	}
 
 	get paths(): string[] {
 		return this.folders.map(folder => folder.uri.path);
+	}
+
+	get uris(): URI[] {
+		return this.folders.map(folder => folder.uri);
 	}
 
 	dispose(): void {
@@ -105,14 +128,15 @@ class TestWorkspaceEditingService extends mock<IWorkspaceEditingService>() {
 
 	override async addFolders(folders: { uri: URI }[]): Promise<void> {
 		this.calls++;
-		const paths = this.workspace.paths;
-		this.workspace.setPaths([...paths, ...folders.map(folder => folder.uri.path).filter(path => !paths.includes(path))]);
+		const uris = this.workspace.uris;
+		const listed = new Set(uris.map(uri => uri.toString()));
+		this.workspace.setUris([...uris, ...folders.map(folder => folder.uri).filter(uri => !listed.has(uri.toString()))]);
 	}
 
 	override async removeFolders(folders: URI[]): Promise<void> {
 		this.calls++;
-		const leaving = new Set(folders.map(folder => folder.path));
-		this.workspace.setPaths(this.workspace.paths.filter(path => !leaving.has(path)));
+		const leaving = new Set(folders.map(folder => folder.toString()));
+		this.workspace.setUris(this.workspace.uris.filter(uri => !leaving.has(uri.toString())));
 	}
 }
 
@@ -272,6 +296,38 @@ suite('Workspace bar - the folder list', () => {
 		await model.refreshAvailability();
 
 		assert.strictEqual(model.isUnavailable(model.folders[0]), false);
+	});
+
+	test('WS-63 a folder that cannot be read is marked as one that cannot be read, not as one that is gone', async () => {
+		const { model, disk } = buildModel({ paths: ['/w/api', '/w/web'], missing: ['/w/web'] });
+		disk.unreadable.set('/w/api', createFileSystemProviderError('connection lost', FileSystemProviderErrorCode.Unavailable));
+		await model.refreshAvailability();
+
+		const [api, web] = model.folders;
+		assert.deepStrictEqual({
+			api: { unavailable: model.isUnavailable(api), unreadable: model.isUnreadable(api) },
+			web: { unavailable: model.isUnavailable(web), unreadable: model.isUnreadable(web) }
+		}, {
+			api: { unavailable: true, unreadable: true },
+			web: { unavailable: true, unreadable: false }
+		});
+	});
+
+	test('WS-63 the same path on two remotes is two rows, and each is found under its own authority', async () => {
+		const { model } = buildModel();
+		const onA = URI.from({ scheme: 'vscode-remote', authority: 'ssh-remote+a', path: '/home/me/api' });
+		const onB = onA.with({ authority: 'ssh-remote+b' });
+
+		await model.add([onA, onB]);
+		await model.add([onB]);
+
+		assert.deepStrictEqual({
+			rows: model.folders.map(folder => folder.uri.toString()),
+			b: (await model.resolve(onB))?.uri.toString()
+		}, {
+			rows: [onA.toString(), onB.toString()],
+			b: onB.toString()
+		});
 	});
 
 	test('a removed folder leaves the workspace and the rest keep their order', async () => {

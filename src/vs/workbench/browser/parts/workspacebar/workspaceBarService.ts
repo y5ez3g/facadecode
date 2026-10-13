@@ -14,6 +14,15 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import type { IWorkspaceBarRepository } from './workspaceBarGit.js';
 
 /**
+ * How `show` ended (WORKSPACE.md W6.2). Work that depends on the folder being shown goes on only after `shown`;
+ * a failure has already been reported, and `added` says whether the folder joined the workspace regardless.
+ */
+export type ShowResult =
+	| { readonly kind: 'shown' }
+	| { readonly kind: 'cancelled' }
+	| { readonly kind: 'failed'; readonly reason: string; readonly added?: boolean };
+
+/**
  * What the bar offers the rest of the workbench.
  *
  * In its own file so that an action can reach the bar without importing the part that registers it:
@@ -57,7 +66,7 @@ export interface IWorkspaceBarService {
 	 * three, and walking the window through the first two on the way to the third is a switch nobody
 	 * asked for. The last one, because that is the one somebody's hand let go of.
 	 */
-	addAndShow(uris: readonly URI[]): Promise<void>;
+	addAndShow(uris: readonly URI[]): Promise<ShowResult>;
 
 	/** Collapses the bar to a column of icons, or opens it again. */
 	toggleCollapsed(): void;
@@ -81,7 +90,7 @@ export interface IWorkspaceBarService {
 	 * makes rather than a default it inherits. "in New Window", the modifier in Open Recent and an
 	 * extension calling `vscode.openFolder` all still mean a window.
 	 */
-	show(uri: URI): Promise<void>;
+	show(uri: URI): Promise<ShowResult>;
 
 	/**
 	 * What a command that was invoked without a folder should act on: the row the list has focus
@@ -158,7 +167,8 @@ export async function openOrShow(
 	options?: IOpenWindowOptions
 ): Promise<void> {
 	if (isFolderToOpen(toOpen) && reaches(toOpen.folderUri, environmentService) && !options?.forceNewWindow) {
-		return workspaceBarService.show(toOpen.folderUri);
+		await workspaceBarService.show(toOpen.folderUri);
+		return;
 	}
 
 	return hostService.openWindow([toOpen], options);

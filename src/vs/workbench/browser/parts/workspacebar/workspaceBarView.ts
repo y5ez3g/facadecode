@@ -468,6 +468,8 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 
 	constructor(
 		private readonly isUnavailable: (row: WorkspaceBarRow) => boolean,
+		/** Of those, the ones whose read failed: not on disk is not something to say of them (WS-63). */
+		private readonly isUnreadable: (row: WorkspaceBarRow) => boolean,
 		private readonly nameOf: (row: WorkspaceBarRow) => string,
 		/** What the row shows is in it: asked of its tree node, which knows whether it is closed. */
 		private readonly contentsOf: (row: WorkspaceBarRow) => IRowContents
@@ -480,7 +482,9 @@ class WorkspaceBarAccessibilityProvider implements IListAccessibilityProvider<Wo
 	getAriaLabel(row: WorkspaceBarRow): string {
 		const name = this.nameOf(row);
 		const label = this.isUnavailable(row)
-			? localize('workspaceBar.unavailableAria', "{0}, not on disk", name)
+			? this.isUnreadable(row)
+				? localize('workspaceBar.unreadableAria', "{0}, folder cannot be read", name)
+				: localize('workspaceBar.unavailableAria', "{0}, folder does not exist on disk", name)
 			: row.kind === 'worktree' ? localize('workspaceBar.worktreeAria', "{0}, worktree", name) : name;
 
 		// What the row shows at its end and on its icon, read out after its name (WT-1.15, W9.14)
@@ -548,6 +552,7 @@ export class WorkspaceBarView extends Disposable {
 		const isUnavailable = (row: WorkspaceBarRow) => row.kind === 'worktree'
 			? !row.worktree.exists
 			: row.kind === 'folder' && !!row.folder && model.isUnavailable(row.folder);
+		const isUnreadable = (row: WorkspaceBarRow) => row.kind === 'folder' && !!row.folder && model.isUnreadable(row.folder);
 
 		const list = append(container, $('.workspacebar-list'));
 
@@ -608,7 +613,7 @@ export class WorkspaceBarView extends Disposable {
 				// The bar's own folder key, so rebuilds keep focus, selection and expansion on the right rows.
 				identityProvider: identity,
 				// ⚠️ `this.tree` is read when a row is labelled, which is after it has been assigned.
-				accessibilityProvider: new WorkspaceBarAccessibilityProvider(isUnavailable, row => displayNameOf(row, this.customizationService), row => rowContentsOf(this.tree.getNode(row), agentsService)),
+				accessibilityProvider: new WorkspaceBarAccessibilityProvider(isUnavailable, isUnreadable, row => displayNameOf(row, this.customizationService), row => rowContentsOf(this.tree.getNode(row), agentsService)),
 				keyboardNavigationLabelProvider: new WorkspaceBarKeyboardNavigationLabelProvider(row => displayNameOf(row, this.customizationService)),
 				// One click. Left alone this follows `workbench.list.openMode`, which is about files.
 				openOnSingleClick: true,
@@ -812,15 +817,20 @@ export class WorkspaceBarView extends Disposable {
 
 		const { worktree } = row;
 		if (worktree.folder || !worktree.exists) {
-			return this.switcher.switchTo(worktree.folder?.uri ?? worktree.uri);
+			await this.switcher.switchTo(worktree.folder?.uri ?? worktree.uri);
+			return;
 		}
 
 		return this.show(worktree.uri);
 	}
 
 	/** A folder row's own place: through the switcher when it is in the workspace, `show` when not. */
-	private goToFolder(row: IFolderRow): Promise<void> {
-		return row.folder ? this.switcher.switchTo(row.folder.uri) : this.show(row.uri);
+	private async goToFolder(row: IFolderRow): Promise<void> {
+		if (row.folder) {
+			await this.switcher.switchTo(row.folder.uri);
+		} else {
+			await this.show(row.uri);
+		}
 	}
 
 	private setRowKind(row: WorkspaceBarRow | undefined): void {

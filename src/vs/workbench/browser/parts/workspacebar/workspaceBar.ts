@@ -3,9 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { basename, dirname, isEqual, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
-import { IFileService } from '../../../../platform/files/common/files.js';
+import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 
 /**
@@ -83,6 +84,28 @@ export function moveRow(rows: readonly IRowOfFolders[], uri: URI, offset: number
 
 /** Deep enough for any path, and a stop if a file system answers a parent with itself. */
 const MAX_CANONICAL_DEPTH = 32;
+
+/** Why a folder cannot be reached: nothing is there, or the read itself failed. */
+export type Unreachable =
+	| { readonly kind: 'missing' }
+	| { readonly kind: 'unreadable'; readonly reason: string };
+
+/** Why `uri` cannot be reached, telling a missing folder from one that cannot be read (WORKSPACE.md WS-63). */
+export async function unreachable(fileService: IFileService, uri: URI): Promise<Unreachable | undefined> {
+	try {
+		await fileService.stat(uri);
+		return undefined;
+	} catch (error) {
+		return toFileOperationResult(error) === FileOperationResult.FILE_NOT_FOUND
+			? { kind: 'missing' }
+			: { kind: 'unreadable', reason: toErrorMessage(error) };
+	}
+}
+
+/** `uri` as a person reads it in a message: a path on this machine, the whole URI anywhere else. */
+export function pathOf(uri: URI): string {
+	return uri.scheme === 'file' ? uri.fsPath : uri.toString(true);
+}
 
 /**
  * One spelling per directory, resolved once when a folder enters the workspace.

@@ -206,7 +206,7 @@ suite('Workspace bar - drop target - what a drop from outside means', () => {
 
 			services.stub(IWorkspaceBarService, new class extends mock<IWorkspaceBarService>() {
 				override async add(uris: readonly URI[]) { added.push(uris.map(uri => uri.path)); }
-				override async addAndShow(uris: readonly URI[]) { shown.push(uris.map(uri => uri.path)); }
+				override async addAndShow(uris: readonly URI[]) { shown.push(uris.map(uri => uri.path)); return { kind: 'shown' } as const; }
 			});
 			const target = disposables.add(services.createInstance(WorkspaceBarDropTarget));
 			return { target, added, shown };

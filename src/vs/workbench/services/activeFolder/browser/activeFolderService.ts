@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Promises } from '../../../../base/common/async.js';
+import { CancellationError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -152,16 +153,19 @@ export class ActiveFolderService extends Disposable implements IActiveFolderServ
 		const joiners: Promise<void>[] = [];
 		this._onWillChangeActiveFolder.fire({ from, to: target, join(promise) { joiners.push(promise); } });
 
-		// ⚠️ Swallowed, like upstream's own folder-change joiners: a listener that could not put
-		// its state away is a reason to lose that state, not to strand the window between two
-		// projects with the parts disagreeing about which one it is on.
-		try {
-			await Promises.settled(joiners);
-		} catch {
-			// handled by the joiner
+		// A joiner that fails stops the move while nothing has changed yet (WORKSPACE.md W6.2)
+		await Promises.settled(joiners);
+
+		// The folder may have left, been renamed or moved while the joiners ran
+		const current = this.folderFor(target.uri);
+		if (!current) {
+			throw new CancellationError();
+		}
+		if (this._activeFolder && this.uriIdentityService.extUri.isEqual(this._activeFolder.uri, current.uri)) {
+			return;
 		}
 
-		this._activeFolder = target;
+		this._activeFolder = current;
 		this.save();
 		this._onDidChangeActiveFolder.fire();
 	}

@@ -232,7 +232,7 @@ suite('FileDialogService', function () {
 			override async openWindow(...args: unknown[]) { windowed.push(args); }
 		});
 		instantiationService.stub(IWorkspaceBarService, new class extends mock<IWorkspaceBarService>() {
-			override async addAndShow(uris: readonly URI[]) { shown.push(...uris); }
+			override async addAndShow(uris: readonly URI[]) { shown.push(...uris); return { kind: 'shown' } as const; }
 		});
 
 		const dialogService = instantiationService.createInstance(TestFileDialogService, undefined as unknown as ISimpleFileDialog);
@@ -282,7 +282,7 @@ suite('FileDialogService', function () {
 			override async stat(resource: URI) { return { isDirectory: true, resource } as never; }
 		});
 		instantiationService.stub(IWorkspaceBarService, new class extends mock<IWorkspaceBarService>() {
-			override async addAndShow(uris: readonly URI[]) { shown.push([...uris]); }
+			override async addAndShow(uris: readonly URI[]) { shown.push([...uris]); return { kind: 'shown' } as const; }
 		});
 
 		const dialogService = instantiationService.createInstance(TestFileDialogService, undefined as unknown as ISimpleFileDialog);

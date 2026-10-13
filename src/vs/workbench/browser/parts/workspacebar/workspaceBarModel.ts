@@ -11,7 +11,7 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { FolderReorder, IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
-import { canonicalUri, folderKey, FolderKey } from './workspaceBar.js';
+import { canonicalUri, folderKey, FolderKey, unreachable } from './workspaceBar.js';
 
 /**
  * The rows: the workspace's own roots.
@@ -32,11 +32,8 @@ export class WorkspaceBarModel extends Disposable {
 		return this.contextService.getWorkspace().folders;
 	}
 
-	/**
-	 * Folders that could not be reached. ⚠️ Marked, never dropped: deleted, unplugged and
-	 * removed-from-a-terminal look the same from here, and the row is the only way to remove one.
-	 */
-	private unavailable = new Set<string>();
+	/** Folders that could not be reached, by key; marked rather than dropped, as the row is the way to remove one. */
+	private unavailable = new Map<string, 'missing' | 'unreadable'>();
 
 	constructor(
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
@@ -62,29 +59,29 @@ export class WorkspaceBarModel extends Disposable {
 		return this.unavailable.has(this.key(folder.uri));
 	}
 
+	/** Whether `folder` is unavailable because it could not be read, rather than not being there (WS-63). */
+	isUnreadable(folder: IWorkspaceFolder): boolean {
+		return this.unavailable.get(this.key(folder.uri)) === 'unreadable';
+	}
+
 	/**
 	 * Re-reads whether each folder's folder is still there. On demand, not watched: the moments
 	 * worth paying for are starting up and a change to the list.
 	 */
 	async refreshAvailability(): Promise<void> {
 		const folders = this.folders;
-		const reachable = await Promise.all(folders.map(async folder => {
-			try {
-				return await this.fileService.exists(folder.uri);
-			} catch {
-				return false;	// a file system that cannot answer is one that cannot be switched to
-			}
-		}));
+		const reached = await Promise.all(folders.map(folder => unreachable(this.fileService, folder.uri)));
 
-		const unavailable = new Set<string>();
+		const unavailable = new Map<string, 'missing' | 'unreadable'>();
 		folders.forEach((folder, at) => {
-			if (!reachable[at]) {
-				unavailable.add(this.key(folder.uri));
+			const why = reached[at];
+			if (why) {
+				unavailable.set(this.key(folder.uri), why.kind);
 			}
 		});
 
 		// Compared before firing: a redraw that changes nothing still costs focus and scroll.
-		if (unavailable.size === this.unavailable.size && [...unavailable].every(key => this.unavailable.has(key))) {
+		if (unavailable.size === this.unavailable.size && [...unavailable].every(([key, why]) => this.unavailable.get(key) === why)) {
 			return;
 		}
 

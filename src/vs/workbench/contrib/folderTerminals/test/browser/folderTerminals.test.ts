@@ -21,7 +21,7 @@ import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
-import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IWorkspaceBarService, ShowResult } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService, IActiveFolderWillChangeEvent } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../../services/editor/common/editorGroupsService.js';
@@ -404,9 +404,10 @@ class TestWorkspaceBarService extends mock<IWorkspaceBarService>() {
 		this._onDidChangeRepositories.fire();
 	}
 
-	override async show(uri: URI): Promise<void> {
+	override async show(uri: URI): Promise<ShowResult> {
 		this.moves.push(uri.path);
 		await this.moving(uri);
+		return { kind: 'shown' };
 	}
 
 	override repositoryFor(uri: URI): IWorkspaceBarRepository | undefined {

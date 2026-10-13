@@ -67,14 +67,11 @@ export interface IActiveFolderService {
 	 */
 	activeFolderFor(scheme?: string, authority?: string): IWorkspaceFolder | undefined;
 
-	/** A folder that is not one of the workspace's roots is refused, not adopted. */
+	/** Moves to a workspace root; rejects when a will-change listener fails, with a `CancellationError` when the folder left meanwhile. */
 	setActiveFolder(folder: IWorkspaceFolder | URI): Promise<void>;
 }
 
-/**
- * ⚠️ `join`, in the shape of `IWorkspaceFoldersWillChangeEvent`: a listener with work to finish
- * first hands back a promise rather than racing the change it was told about.
- */
+/** Lets a listener `join` work the change waits for, as `IWorkspaceFoldersWillChangeEvent` does; a rejection stops it (WORKSPACE.md W6.2). */
 export interface IActiveFolderWillChangeEvent {
 	readonly from: IWorkspaceFolder | undefined;
 	readonly to: IWorkspaceFolder;

@@ -3,7 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { onUnexpectedError } from '../../../../base/common/errors.js';
+import { addDisposableListener, EventType } from '../../../../base/browser/dom.js';
+import { mainWindow } from '../../../../base/browser/window.js';
+import { DeferredPromise } from '../../../../base/common/async.js';
+import { isCancellationError } from '../../../../base/common/errors.js';
+import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -13,18 +17,21 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
-import { folderKey } from './workspaceBar.js';
+import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
+import { folderKey, pathOf, unreachable } from './workspaceBar.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 
-/**
- * Takes the window from one folder to another.
- *
- * ⚠️ Nothing moves. The workspace goes on holding every root; only which one the workbench draws
- * changes. So there is no queue here, no guard against a burst of clicks and no way back from a
- * failure - none of them have anything to fail at. What is left is the bar's two errands either
- * side of the change: the folder's editors, and saying so when a folder is not there any more.
- */
+/** How a request to move the window ended (WORKSPACE.md W6.2); a failure has already been reported. */
+export type SwitchResult =
+	| { readonly kind: 'shown' }
+	| { readonly kind: 'cancelled' }
+	| { readonly kind: 'failed'; readonly reason: string };
+
+/** The parts where someone works, whose focus a switch back restores. */
+const WORK_PARTS = [Parts.EDITOR_PART, Parts.PANEL_PART, Parts.SIDEBAR_PART, Parts.AUXILIARYBAR_PART] as const;
+
+/** Moves the window from one folder to another, one request at a time with the latest winning (WORKSPACE.md W6.2). */
 export class WorkspaceBarSwitcher extends Disposable {
 
 	readonly onDidChangeActive: Event<void>;
@@ -35,13 +42,20 @@ export class WorkspaceBarSwitcher extends Disposable {
 	/** The folder whose editors are on screen, or on their way there. */
 	private showing: string | undefined;
 
-	/** Resolves when the editors asked for last are actually up. */
+	/** Settles once the last requested editors are restored or have failed to be. */
 	private settled: Promise<void> = Promise.resolve();
 
-	/**
-	 * Fires once a switch has put the incoming folder's editors on screen. Not fired for a rename,
-	 * where nothing is restored.
-	 */
+	/** Why the last restore failed, if it did. */
+	private restoreFailure: unknown;
+
+	/** The newest request waiting its turn. */
+	private waiting: { readonly uri: URI; readonly added: readonly URI[]; readonly done: DeferredPromise<SwitchResult> } | undefined;
+	private running = false;
+
+	/** The part last worked in, per folder key. */
+	private readonly lastWorkedIn = new Map<string, typeof WORK_PARTS[number]>();
+
+	/** Fires once a switch has restored the incoming folder's editors. */
 	private readonly _onDidRestoreEditors = this._register(new Emitter<void>());
 	readonly onDidRestoreEditors = this._onDidRestoreEditors.event;
 
@@ -53,46 +67,29 @@ export class WorkspaceBarSwitcher extends Disposable {
 		@INotificationService private readonly notificationService: INotificationService,
 		@ILogService private readonly logService: ILogService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
+		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
 	) {
 		super();
 
 		this.onDidChangeActive = this.activeFolderService.onDidChangeActiveFolder;
 
-		// ⚠️ The window already has a folder before anybody clicks anything, and its editors are up:
-		// the workbench restored them. Starting this blank would make the first event - a rename, say -
-		// look like a move and put a saved set over what is on screen.
+		this._register(addDisposableListener(mainWindow.document, EventType.FOCUS_IN, e => this.noteFocus(e.target)));
+
+		// The workbench has already restored the active folder's editors
 		const active = this.active;
 		this.showing = active && this.key(active);
 
-		// ⚠️ On the way out, while the folder being left is still on screen: the set is read out of
-		// the live editor part. Reversed, this writes the outgoing folder's editors into the
-		// incoming one's slot.
-		//
-		// ⚠️ Behind whatever restore is still in flight, and **joined**, so the switch waits for it.
-		// `switchTo` returns as soon as the active folder has moved - the restore that follows is
-		// started, not awaited - so a switch can be finished and awaited while the editors it asked
-		// for are still arriving. Capturing then reads a screen that still holds the folder before
-		// last, and writes it into this folder's slot. Joining is what makes capture, move and
-		// restore one piece of work rather than three that can overlap.
+		// Joined behind any restore in flight, so a failed capture stops the switch before anything closes
 		this._register(this.activeFolderService.onWillChangeActiveFolder(e => {
 			if (!e.from) {
 				return;
 			}
 
-			const key = this.key(e.from.uri);
-			e.join(this.settled.then(() => editors.capture(key)));
+			const from = e.from.uri;
+			e.join(this.settled.then(() => editors.capture(from)));
 		}));
 
-		// And now the other way round, against the folder the window is on.
-		//
-		// ⚠️ Also fires when the active root was removed from the workspace and the service moved to
-		// its neighbour. Restoring is right there too: nothing was captured on the way out, because
-		// the folder that was left no longer exists to come back to.
-		//
-		// ⚠️ And it fires when the active root was only **renamed**, because the name is drawn in the
-		// title and the explorer's header and they have to hear about it. That is not a move, and
-		// restoring on it would put back whatever this folder had saved last time - or nothing at all
-		// for one that has never been left - over the editors somebody has open right now.
+		// Also fires when the active folder is renamed, which keeps its key and must restore nothing
 		this._register(this.activeFolderService.onDidChangeActiveFolder(() => {
 			const active = this.active;
 			if (!active) {
@@ -105,7 +102,13 @@ export class WorkspaceBarSwitcher extends Disposable {
 			}
 
 			this.showing = key;
-			this.settled = editors.restore(key).then(() => this._onDidRestoreEditors.fire(), onUnexpectedError);
+			this.restoreFailure = undefined;
+			this.settled = editors.restore(active).then(
+				() => this._onDidRestoreEditors.fire(),
+				error => {
+					this.restoreFailure = error;
+					this.logService.error(`[workspaceBar] failed to restore editors for ${key}`, error);
+				});
 		}));
 	}
 
@@ -113,24 +116,117 @@ export class WorkspaceBarSwitcher extends Disposable {
 		return folderKey(this.uriIdentityService, uri);
 	}
 
-	async switchTo(uri: URI): Promise<void> {
-		// Before anything else: a row whose folder has gone answers with the reason rather than a
-		// root row carrying a file-system error, which is what the explorer would draw instead.
-		//
-		// ⚠️ On the hot path on purpose, and it can afford to be: measured at 1-4ms against a switch
-		// that takes 49-86ms end to end, nearly all of it redrawing. The alternative is the model's
-		// own record of what is reachable, which is only as fresh as the last change to the folder
-		// list - and a folder that went away while the window sat open is exactly the case this is
-		// for.
-		if (!(await this.fileService.exists(uri))) {
-			this.logService.warn(`[workspaceBar] ${this.key(uri)} is not on disk any more`);
-			this.notificationService.error(localize('workspaceBar.gone', "{0} is not on disk any more.", uri.fsPath));
-
-			// And shown from then on: a notification is gone in five seconds.
-			await this.model.refreshAvailability();
+	private noteFocus(target: EventTarget | null): void {
+		const active = this.active;
+		if (!active || !(target instanceof Node)) {
 			return;
 		}
 
-		await this.activeFolderService.setActiveFolder(uri);
+		for (const part of WORK_PARTS) {
+			if (this.layoutService.getContainer(mainWindow, part)?.contains(target)) {
+				this.lastWorkedIn.set(this.key(active), part);
+				return;
+			}
+		}
+	}
+
+	/** Moves the window onto `uri`; `added` are the folders put in the workspace for this move. */
+	switchTo(uri: URI, added: readonly URI[] = []): Promise<SwitchResult> {
+		this.waiting?.done.complete({ kind: 'cancelled' });
+		const done = new DeferredPromise<SwitchResult>();
+		this.waiting = { uri, added, done };
+		void this.drain();
+		return done.p;
+	}
+
+	private async drain(): Promise<void> {
+		if (this.running) {
+			return;
+		}
+
+		this.running = true;
+		try {
+			while (this.waiting) {
+				const { uri, added, done } = this.waiting;
+				this.waiting = undefined;
+				let result: SwitchResult;
+				try {
+					result = await this.run(uri);
+				} catch (error) {
+					result = { kind: 'failed', reason: toErrorMessage(error) };
+				}
+
+				// Joined, but the window did not get there (W5); a failed restore leaves it on the folder
+				if (result.kind === 'failed' && added.length > 0 && !this.isOn(uri)) {
+					this.sayAdded(uri, added);
+				}
+				done.complete(result);
+			}
+		} finally {
+			this.running = false;
+		}
+	}
+
+	private async run(uri: URI): Promise<SwitchResult> {
+		// Checked on every switch, as a folder can go while the window is open; a failed read is not a deletion
+		const why = await unreachable(this.fileService, uri);
+		if (why) {
+			let reason: string;
+			if (why.kind === 'missing') {
+				this.logService.warn(`[workspaceBar] ${this.key(uri)} is not on disk any more`);
+				this.notificationService.error(localize('workspaceBar.gone', "Folder '{0}' no longer exists on disk.", pathOf(uri)));
+				reason = localize('workspaceBar.goneReason', "no longer exists on disk");
+			} else {
+				this.logService.warn(`[workspaceBar] ${this.key(uri)} could not be read: ${why.reason}`);
+				this.notificationService.error(localize('workspaceBar.unreadable', "Failed to read folder '{0}': {1}", pathOf(uri), why.reason));
+				reason = why.reason;
+			}
+
+			// Keeps the row marked after the notification is gone
+			await this.model.refreshAvailability();
+			return { kind: 'failed', reason };
+		}
+
+		if (this.isOn(uri)) {
+			return { kind: 'shown' };
+		}
+
+		try {
+			await this.activeFolderService.setActiveFolder(uri);
+		} catch (error) {
+			if (isCancellationError(error)) {
+				return { kind: 'cancelled' };
+			}
+
+			// The outgoing folder could not be captured, so nothing has changed (W6.2)
+			const reason = toErrorMessage(error);
+			this.logService.error(`[workspaceBar] could not leave for ${this.key(uri)}`, error);
+			this.notificationService.error(localize('workspaceBar.couldNotLeave', "Failed to switch folder: could not store the open editors of the current folder. {0}", reason));
+			return { kind: 'failed', reason };
+		}
+
+		await this.settled;
+		if (this.restoreFailure !== undefined) {
+			// The window stays on the target, and both folders' editor sets are kept (W6.2)
+			const reason = toErrorMessage(this.restoreFailure);
+			this.notificationService.error(localize('workspaceBar.couldNotRestore', "Some editors could not be restored for this folder. {0}", reason));
+			return { kind: 'failed', reason };
+		}
+
+		// Focus where this folder was left, or the editor on a first visit (W6.2)
+		const part = this.lastWorkedIn.get(this.key(uri)) ?? Parts.EDITOR_PART;
+		this.layoutService.focusPart(part, mainWindow);
+
+		return { kind: 'shown' };
+	}
+
+	private isOn(uri: URI): boolean {
+		return !!this.active && this.uriIdentityService.extUri.isEqual(this.active, uri);
+	}
+
+	private sayAdded(target: URI, added: readonly URI[]): void {
+		this.notificationService.info(added.length === 1 && this.uriIdentityService.extUri.isEqual(added[0], target)
+			? localize('workspaceBar.addedNotShown', "Folder '{0}' was added to the workspace, but could not be switched to.", pathOf(target))
+			: localize('workspaceBar.addedNotShownOf', "Added folders to the workspace: {0}. Failed to switch to '{1}'.", added.map(pathOf).join(', '), pathOf(target)));
 	}
 }

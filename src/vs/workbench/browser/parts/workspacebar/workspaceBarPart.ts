@@ -15,6 +15,8 @@ import { InstantiationType, registerSingleton } from '../../../../platform/insta
 import { Emitter, Event, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -30,7 +32,7 @@ import { moveRow, rowsOfFolders } from './workspaceBar.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
-import { IWorkspaceBarService } from './workspaceBarService.js';
+import { IWorkspaceBarService, ShowResult } from './workspaceBarService.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarSwitcher } from './workspaceBarSwitcher.js';
 import { ROW_HEIGHT, WorkspaceBarView } from './workspaceBarView.js';
@@ -131,6 +133,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@ILogService private readonly logService: ILogService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkspaceBarCustomizationService customizationService: IWorkspaceBarCustomizationService,
+		@INotificationService private readonly notificationService: INotificationService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -207,7 +210,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// `show` handed in rather than resolved as `IWorkspaceBarService`: this part is that service,
 		// and the view is built while the part is being created.
 		this.view = this._register(this.instantiationService.createInstance(WorkspaceBarView,
-			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, (uri: URI) => this.show(uri)));
+			this.content, this.model, this.git, this.switcher, () => this.collapsed, this.onDidChangeCollapsed, async (uri: URI) => { await this.show(uri); }));
 
 		return this.content;
 	}
@@ -286,48 +289,67 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		await this.model.add(uris);
 	}
 
-	async addAndShow(uris: readonly URI[]): Promise<void> {
+	async addAndShow(uris: readonly URI[]): Promise<ShowResult> {
 		if (uris.length === 0) {
-			return;
+			return { kind: 'cancelled' };
+		}
+		if (uris.length === 1) {
+			return this.show(uris[0]);
 		}
 
-		await this.addForShow(uris);
-		await this.show(uris[uris.length - 1]);
+		let added: readonly URI[];
+		try {
+			added = await this.addForShow(uris);
+		} catch (error) {
+			return this.couldNotAdd(uris[uris.length - 1], toErrorMessage(error));
+		}
+		return this.doShow(uris[uris.length - 1], added);
 	}
 
-	async show(uri: URI): Promise<void> {
+	show(uri: URI): Promise<ShowResult> {
+		return this.doShow(uri, []);
+	}
+
+	/** `show`, for a folder that `addedBefore` were put in the workspace on the way to. */
+	private async doShow(uri: URI, addedBefore: readonly URI[]): Promise<ShowResult> {
 		// ⚠️ Through the model, not straight to the workspace: it is what knows that `/tmp/x` and
 		// `/private/tmp/x` are one folder, so a folder opened twice under two spellings is one row
 		// rather than two. `add` skips what is already there, which makes this the same call whether
 		// the folder is new to the window or one it already has.
-		await this.addForShow([uri]);
+		let added: readonly URI[];
+		try {
+			added = [...addedBefore, ...await this.addForShow([uri])];
+		} catch (error) {
+			return this.couldNotAdd(uri, toErrorMessage(error));
+		}
 
 		// ⚠️ Switched to the row, not to the spelling that was asked for. A folder the workspace
 		// took in long ago under the other spelling of the same place is a row `setActiveFolder`
 		// would not find, and it throws rather than guess.
 		const folder = await this.model.resolve(uri);
-		if (!folder) {
-			// ⚠️ Nothing stats what is handed in here - `addFolders` writes what it is given - so this
-			// is the workspace having refused it: an empty window that could not be turned into one,
-			// or an edit that failed. Too rare to have a screen of its own, too quiet to leave out of
-			// the log.
-			this.logService.warn(`[workspaceBar] ${uri.toString(true)} did not become a folder of this workspace`);
-			return;
+		if (!folder || !this.switcher) {
+			// The workspace refused the edit
+			return this.couldNotAdd(uri, localize('workspaceBar.notTaken', "the folder was not added to the workspace"));
 		}
 
-		await this.switcher?.switchTo(folder.uri);
+		// The folders stay if the switch fails, which the switcher reports (W5)
+		const result = await this.switcher.switchTo(folder.uri, added);
+		return result.kind === 'failed' && added.length > 0 ? { ...result, added: true } : result;
 	}
 
-	/**
-	 * Puts folders in the workspace for the window to move onto, and when any were added, waits for
-	 * git's files to be read again: the rows come from that read, and moving onto a folder before its
-	 * row exists left no row marked for a moment.
-	 */
-	private async addForShow(uris: readonly URI[]): Promise<void> {
+	private couldNotAdd(uri: URI, reason: string): ShowResult {
+		this.logService.warn(`[workspaceBar] ${uri.toString(true)} did not become a folder of this workspace: ${reason}`);
+		this.notificationService.error(localize('workspaceBar.couldNotAdd', "Failed to add folder '{0}' to the workspace: {1}", uri.scheme === 'file' ? uri.fsPath : uri.toString(true), reason));
+		return { kind: 'failed', reason };
+	}
+
+	/** Adds folders to move onto and waits for their rows to be read from git; returns the ones added. */
+	private async addForShow(uris: readonly URI[]): Promise<readonly URI[]> {
 		const added = await this.model.add(uris);
 		if (added.length > 0) {
 			await this.git.refresh();
 		}
+		return added;
 	}
 
 	async remove(uris: readonly URI[]): Promise<void> {

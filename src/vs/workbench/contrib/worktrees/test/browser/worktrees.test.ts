@@ -253,6 +253,7 @@ suite('Worktrees - making and deleting one', () => {
 			show: async uri => {
 				steps.push(`show ${uri.path}`);
 				restored.fire();
+				return { kind: 'shown' };
 			},
 			remove: async uris => { steps.push(`remove ${uris.map(uri => uri.path).join(', ')}`); },
 			setExpanded: uri => { steps.push(`open ${uri.path}`); },

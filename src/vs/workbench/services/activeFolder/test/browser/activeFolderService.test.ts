@@ -180,13 +180,28 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(active(service), '/w/web');
 	});
 
-	test('a joiner that throws costs its own work, not the switch', async () => {
+	test('WS-58 a joiner that could not put its state away stops the move, and the window stays where it was', async () => {
 		const { service } = build();
+		const before = active(service);
 		disposables.add(service.onWillChangeActiveFolder(e => e.join(Promise.reject(new Error('could not put it away')))));
 
-		await service.setActiveFolder(URI.file('/w/web'));
+		await assert.rejects(() => service.setActiveFolder(URI.file('/w/web')), /could not put it away/);
 
-		assert.strictEqual(active(service), '/w/web');
+		assert.strictEqual(active(service), before);
+	});
+
+	test('WS-57 a folder that left the workspace while the joiners worked is not moved onto', async () => {
+		const { service, workspace } = build();
+		const before = active(service);
+		const joiner = new DeferredPromise<void>();
+		disposables.add(service.onWillChangeActiveFolder(e => e.join(joiner.p)));
+
+		const moving = service.setActiveFolder(URI.file('/w/web'));
+		workspace.setFolders(['/w/api', '/w/notes']);
+		await joiner.complete();
+
+		await assert.rejects(() => moving, (error: Error) => error.name === 'Canceled');
+		assert.strictEqual(active(service), before);
 	});
 
 	test('the joiner is told where the window is going, and where from', async () => {
