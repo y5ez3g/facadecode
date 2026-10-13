@@ -348,12 +348,17 @@ suite('Workspace bar - the view', () => {
 			isUnreadable: folder => look.unavailable?.get(folder.uri.path) === 'unreadable'
 		});
 		let now = active;
+		/** The folders the window cannot get to: gone from disk, say. */
+		const refusing = new Set<string>();
 		const activeChanged = store.add(new Emitter<void>());
 		const switcher = upcastPartial<WorkspaceBarSwitcher>({
 			get active() { return now; },
 			onDidChangeActive: activeChanged.event,
 			switchTo: async uri => {
 				asked.push(`switch to ${uri.path}`);
+				if (refusing.has(uri.path)) {
+					return { kind: 'failed', reason: `${uri.path} is gone` } as const;
+				}
 				now = uri;
 				activeChanged.fire();
 				return { kind: 'shown' } as const;
@@ -384,6 +389,12 @@ suite('Workspace bar - the view', () => {
 			runs: (folder: string, icons: readonly ThemeIcon[]) => {
 				agents.set(folder, icons);
 				agentsChanged.fire();
+			},
+			refusing,
+			/** The window on `uri` now, however it got there, as the switcher says once it has. */
+			arrive: (uri: URI) => {
+				now = uri;
+				activeChanged.fire();
 			},
 			/** Finishes the reads of git's files asked for so far, which found `groups`. */
 			read: async (groups: WorkspaceBarGroup[]) => {
@@ -425,6 +436,21 @@ suite('Workspace bar - the view', () => {
 		assert.deepStrictEqual({ marks: [bar.has('.workspacebar-unsaved', 1), bar.has('.codicon-circle-filled', 1)], aria: bar.rows() }, {
 			marks: [false, false],
 			aria: ['lab', 'notes']
+		});
+	});
+
+	test('WTA-05 the window arriving at a worktree of a closed repository, whichever way it came, opens the repository first, and it stays open', () => {
+		const storage = store.add(new TestStorageService());
+		const bar = view([lab, notes, w2], [repository(w2)], notes.uri, new Map([['/wt/w2', 'Payments']]), {}, storage);
+		click(bar.find('.workspacebar-twistie'));
+		const closed = bar.rows();
+
+		bar.arrive(w2.uri);
+
+		assert.deepStrictEqual({ closed, arrived: bar.rows(), afterReload: view([lab, notes, w2], [repository(w2)], notes.uri, new Map([['/wt/w2', 'Payments']]), {}, storage).rows().slice(0, 2) }, {
+			closed: ['lab, 1 worktree', 'notes'],
+			arrived: ['lab', 'Payments, worktree', 'notes'],
+			afterReload: ['lab', 'Payments, worktree'],
 		});
 	});
 
@@ -640,12 +666,23 @@ suite('Workspace bar - the view', () => {
 		});
 	});
 
-	test('closing a repository while the window is on one of its worktrees takes the window to the repository', () => {
+	test('WTA-06 closing a repository while the window is on one of its worktrees takes the window to the repository first, and closes it once it is there', async () => {
 		const bar = view([lab, w2], [repository(w2)], w2.uri);
 
 		click(bar.find('.workspacebar-twistie'));
+		await timeout(0);
 
-		assert.deepStrictEqual(bar.asked, ['switch to /lab']);
+		assert.deepStrictEqual({ asked: bar.asked, rows: bar.rows() }, { asked: ['switch to /lab'], rows: ['lab, 1 worktree'] });
+	});
+
+	test('WTA-37 a window that cannot get to the repository stays on the worktree, the repository open', async () => {
+		const bar = view([lab, w2], [repository(w2)], w2.uri);
+		bar.refusing.add('/lab');
+
+		click(bar.find('.workspacebar-twistie'));
+		await timeout(0);
+
+		assert.deepStrictEqual({ asked: bar.asked, rows: bar.rows() }, { asked: ['switch to /lab'], rows: ['lab', 'w2, worktree'] });
 	});
 
 	test('a worktree being deleted loses its row at once, and gets it back only if git still lists it when its files are next read', async () => {

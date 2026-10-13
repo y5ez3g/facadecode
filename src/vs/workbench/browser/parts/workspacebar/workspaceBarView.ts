@@ -719,10 +719,10 @@ export class WorkspaceBarView extends Disposable {
 				this.rememberClosed(row.uri, e.node.collapsed);
 			}
 
-			// Closing the repository whose worktree the window is on takes the window to the repository
-			// (WT-1.5), however it was closed. Rebuilds preserve the state, so only a person gets here.
+			// Collapsing the active worktree's repository waits until the window is on its checkout (WT-1.5)
 			if (row?.kind === 'folder' && e.node.collapsed && isOnWorktreeOf(row, this.switcher.active, this.model.key)) {
-				this.goToFolder(row).then(undefined, onUnexpectedError);
+				this.tree.expand(row);
+				this.closeOnceOnCheckout(row).then(undefined, onUnexpectedError);
 			}
 		}));
 
@@ -730,7 +730,10 @@ export class WorkspaceBarView extends Disposable {
 		this._register(this.git.onDidChange(() => this.refresh()));
 		// ⚠️ A redraw, not a class toggled on whatever happens to be rendered: the list is
 		// virtualised, so the rows are recycled and the mark has to come from the renderer.
-		this._register(this.switcher.onDidChangeActive(() => this.refresh()));
+		this._register(this.switcher.onDidChangeActive(() => {
+			this.refresh();
+			this.openRepositoryOfActive();
+		}));
 		// ⚠️ A name or a colour is drawn by the renderer, so a change to one has to reach the rows
 		// the same way a change to the folder list does. Without this the dialog saves and the bar
 		// goes on showing what it showed before, until something else happens to redraw it.
@@ -824,6 +827,17 @@ export class WorkspaceBarView extends Disposable {
 		return this.show(worktree.uri);
 	}
 
+	/** Moves the window to a repository's checkout, and collapses the repository once it is there (WT-1.5). */
+	private async closeOnceOnCheckout(row: IFolderRow): Promise<void> {
+		await this.goToFolder(row);
+
+		// By its folder: the move redrew the rows, and `row` is no longer one of them
+		const active = this.switcher.active;
+		if (active && this.model.key(active) === this.model.key(row.folder?.uri ?? row.uri)) {
+			this.setExpanded(row.uri, false);
+		}
+	}
+
 	/** A folder row's own place: through the switcher when it is in the workspace, `show` when not. */
 	private async goToFolder(row: IFolderRow): Promise<void> {
 		if (row.folder) {
@@ -855,6 +869,15 @@ export class WorkspaceBarView extends Disposable {
 
 		const node = this.tree.getNode(row);
 		return node.children.length === 0 ? '' : node.collapsed ? 'collapsed' : 'expanded';
+	}
+
+	/** Expands the collapsed repository of the active worktree, however the window got there (WT-1.10). */
+	private openRepositoryOfActive(): void {
+		for (const node of this.tree.getNode().children) {
+			if (node.element && node.collapsed && isOnWorktreeOf(node.element, this.switcher.active, this.model.key)) {
+				this.tree.expand(node.element);
+			}
+		}
 	}
 
 	/** Opens or closes a repository's row onto its worktrees: `IWorkspaceBarService.setExpanded`. */
