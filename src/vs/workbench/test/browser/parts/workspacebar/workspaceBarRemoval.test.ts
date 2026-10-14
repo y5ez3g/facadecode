@@ -20,7 +20,7 @@ import { IRunningWork, IWorkspaceBarAgentsService } from '../../../../browser/pa
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { WorkspaceBarModel } from '../../../../browser/parts/workspacebar/workspaceBarModel.js';
-import { foldersToRemove, rowsLeavingWith, stoppingNames, WorkspaceBarRemoval } from '../../../../browser/parts/workspacebar/workspaceBarRemoval.js';
+import { foldersToRemove, rowsLeavingWith, WorkspaceBarRemoval } from '../../../../browser/parts/workspacebar/workspaceBarRemoval.js';
 import { IRemoveOptions, RemoveResult } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IEditorIdentifier } from '../../../../common/editor.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
@@ -239,20 +239,6 @@ suite('Workspace bar - removing folders', () => {
 			steps: ['edit -/w/notes', 'revert /w/notes/todo.md', 'close /w/notes/todo.md'],
 			said: [],
 			folders: ['/w/api']
-		});
-	});
-
-	test('WS-33 what stops, in a sentence: agents by name, terminals by title, those that share a name counted once', () => {
-		assert.deepStrictEqual({
-			mixed: stoppingNames([agent(1, 'Pinger'), terminal(2, 'PING'), terminal(3, 'PING'), terminal(4, 'npm test')], true),
-			terminalsFirst: stoppingNames([terminal(2, 'PING'), terminal(3, 'PING')], true),
-			oneTerminal: stoppingNames([terminal(2, 'PING')], true),
-			inFolders: stoppingNames([agent(1, 'Pinger'), terminal(2, 'PING')], true, item => item.kind === 'agent' ? 'alpha' : 'beta'),
-		}, {
-			mixed: 'Pinger, 2 \'PING\' terminals, and terminal \'npm test\'',
-			terminalsFirst: '2 \'PING\' terminals',
-			oneTerminal: 'Terminal \'PING\'',
-			inFolders: 'Pinger in folder \'alpha\' and terminal \'PING\' in folder \'beta\'',
 		});
 	});
 

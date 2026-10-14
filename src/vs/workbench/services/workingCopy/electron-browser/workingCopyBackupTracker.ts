@@ -25,6 +25,7 @@ import { IProgressService, ProgressLocation } from '../../../../platform/progres
 import { Promises, raceCancellation } from '../../../../base/common/async.js';
 import { IWorkingCopyEditorService } from '../common/workingCopyEditorService.js';
 import { IPutAwayEditorsService } from '../../putAwayEditors/common/putAwayEditors.js';
+import { unsavedNamesOf } from '../common/workingCopyUnsavedNames.js';
 
 export class NativeWorkingCopyBackupTracker extends WorkingCopyBackupTracker implements IWorkbenchContribution {
 
@@ -216,8 +217,9 @@ export class NativeWorkingCopyBackupTracker extends WorkingCopyBackupTracker imp
 		const modifiedWorkingCopies = workingCopies.filter(workingCopy => workingCopy.isModified());
 
 		const advice = localize('backupErrorDetails', "Try saving or reverting the editors with unsaved changes first and then try again.");
+		// Facade Code: each named with its place, as the question before shutdown names them (`unsavedNamesOf`)
 		const detail = modifiedWorkingCopies.length
-			? `${getFileNamesMessage(modifiedWorkingCopies.map(x => x.name))}\n${advice}`
+			? `${getFileNamesMessage(unsavedNamesOf(modifiedWorkingCopies))}\n${advice}`
 			: advice;
 
 		const { result } = await this.dialogService.prompt({
@@ -296,7 +298,8 @@ export class NativeWorkingCopyBackupTracker extends WorkingCopyBackupTracker imp
 	private async confirmBeforeShutdown(modifiedWorkingCopies: IWorkingCopy[]): Promise<boolean> {
 
 		// Save
-		const confirm = await this.fileDialogService.showSaveConfirm(modifiedWorkingCopies.map(workingCopy => workingCopy.name));
+		// Facade Code: each named with its place, a window having several folders (`unsavedNamesOf`)
+		const confirm = await this.fileDialogService.showSaveConfirm(unsavedNamesOf(modifiedWorkingCopies));
 		if (confirm === ConfirmResult.SAVE) {
 			const modifiedCountBeforeSave = this.workingCopyService.modifiedCount;
 

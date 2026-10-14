@@ -998,10 +998,14 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	protected async _showTerminalCloseConfirmation(singleTerminal?: boolean): Promise<boolean> {
 		let message: string;
-		// Facade Code: background terminals counted, and what would stop named (`terminalShutdownQuestion`)
+		// Facade Code: background terminals counted, what would stop listed, and agents counted apart from terminals
+		// (`terminalShutdownQuestion`)
 		const question = singleTerminal ? undefined : terminalShutdownQuestion();
 		const foregroundInstances = question ? this.instances : this.foregroundInstances;
-		if (foregroundInstances.length === 1 || singleTerminal) {
+		const told = question?.describe(foregroundInstances);
+		if (told?.message) {
+			message = told.message;
+		} else if (foregroundInstances.length === 1 || singleTerminal) {
 			message = nls.localize('terminalService.terminalCloseConfirmationSingular', "Do you want to terminate the active terminal session?");
 		} else {
 			message = nls.localize('terminalService.terminalCloseConfirmationPlural', "Do you want to terminate the {0} active terminal sessions?", foregroundInstances.length);
@@ -1009,7 +1013,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 		const { confirmed } = await this._dialogService.confirm({
 			type: 'warning',
 			message,
-			detail: question?.describe(foregroundInstances),
+			detail: told?.detail,
 			primaryButton: nls.localize({ key: 'terminate', comment: ['&& denotes a mnemonic'] }, "&&Terminate")
 		});
 		return !confirmed;

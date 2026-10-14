@@ -70,9 +70,6 @@ export function isCoveredBy(loss: IRemovalLoss, agreed: IRemovalLoss | undefined
 	return loss.work.every(item => work.has(item.id)) && loss.unsaved.every(workingCopy => unsaved.has(workingCopy));
 }
 
-/** How many names a sentence of the confirmation lists before it counts the rest. */
-const LISTED = 5;
-
 /** The person's answer: remove and discard unsaved changes, or just remove. */
 type Answer = 'discard' | 'remove';
 
@@ -303,49 +300,4 @@ export class WorkspaceBarRemoval {
 	private isMember(uri: URI): boolean {
 		return this.contextService.getWorkspace().folders.some(folder => this.uriIdentityService.extUri.isEqual(folder.uri, uri));
 	}
-}
-
-/** Joins `names` into a sentence, counting those past `LISTED`. */
-export function listNames(names: readonly string[]): string {
-	if (names.length > LISTED) {
-		return localize('workspaceBar.andMore', "{0}, and {1} more", names.slice(0, LISTED).join(', '), names.length - LISTED);
-	}
-	if (names.length === 2) {
-		return localize('workspaceBar.twoNames', "{0} and {1}", names[0], names[1]);
-	}
-	return names.length > 2
-		? localize('workspaceBar.namesAnd', "{0}, and {1}", names.slice(0, -1).join(', '), names[names.length - 1])
-		: names.join('');
-}
-
-/** What stops, in a sentence: agents by name, then terminals by title, those sharing a name counted once. `atStart` capitalizes it. */
-export function stoppingNames(work: readonly IRunningWork[], atStart = false, folderOf?: (item: IRunningWork) => string | undefined): string {
-	const groups = new Map<string, { readonly kind: IRunningWork['kind']; readonly name: string; readonly folder: string | undefined; count: number }>();
-	for (const item of work) {
-		const folder = folderOf?.(item);
-		const key = JSON.stringify([item.kind, item.name, folder ?? '']);
-		const group = groups.get(key);
-		if (group) {
-			group.count++;
-		} else {
-			groups.set(key, { kind: item.kind, name: item.name, folder, count: 1 });
-		}
-	}
-	const agents = [...groups.values()].filter(group => group.kind === 'agent');
-	const terminals = [...groups.values()].filter(group => group.kind === 'terminal');
-	const where = (text: string, folder: string | undefined) => folder ? localize('workspaceBar.inFolder', "{0} in folder '{1}'", text, folder) : text;
-	return listNames([
-		...agents.map(group => where(group.count > 1 ? localize('workspaceBar.agentsNamed', "{0} '{1}' agents", group.count, group.name) : group.name, group.folder)),
-		...terminals.map((group, at) => {
-			const first = atStart && at === 0 && !agents.length;
-			const text = group.count > 1
-				? first
-					? localize('workspaceBar.terminalsNamedFirst', "{0} '{1}' terminals", group.count, group.name)
-					: localize('workspaceBar.terminalsNamed', "{0} '{1}' terminals", group.count, group.name)
-				: first
-					? localize('workspaceBar.terminalNamedFirst', "Terminal '{0}'", group.name)
-					: localize('workspaceBar.terminalNamed', "terminal '{0}'", group.name);
-			return where(text, group.folder);
-		})
-	]);
 }
