@@ -204,9 +204,6 @@ function toOsPath(uri: URI, windows: boolean): string {
  */
 const GIT_AVAILABLE = ContextKeyExpr.and(ContextKeyExpr.notEquals('config.git.enabled', false), ContextKeyExpr.not('git.missing'));
 
-/** How long to wait for the switch to put the new worktree's editors up before running setup anyway. */
-const RESTORE_TIMEOUT = 5000;
-
 /**
  * How long the git extension is given to register its commands once trust starts it - the time the
  * command service gives extensions starting up before it calls a command missing.
@@ -546,7 +543,11 @@ export class WorktreeService implements IWorktreeService {
 			return undefined;
 		}
 
-		await this.afterCreate(main, created.worktree, trustEnabled, true);
+		const after = await this.afterCreate(main, created.worktree, trustEnabled, true);
+		if (after !== 'shown' && after !== 'not asked') {
+			this.reportCreatedNotOpened(main, created.worktree, after);
+			return undefined;
+		}
 		return created.worktree;
 	}
 
@@ -601,7 +602,11 @@ export class WorktreeService implements IWorktreeService {
 			throw new Error(created.unreachable ?? this.createFailureMessage(main, branch, created.worktree, created.result));
 		}
 
-		await this.afterCreate(main, created.worktree, trustEnabled, options.show === true);
+		// The worktree is made either way: what failed after is said, and the agent gets it (WT-5.7)
+		const after = await this.afterCreate(main, created.worktree, trustEnabled, options.show === true);
+		if (after !== 'shown' && after !== 'not asked') {
+			this.notificationService.warn(localize('worktrees.createdForAgent', "Worktree was created at '{0}', but {1} failed: {2}", this.labelService.getUriLabel(created.worktree), after.step, after.reason));
+		}
 		return created.worktree;
 	}
 
@@ -653,32 +658,51 @@ export class WorktreeService implements IWorktreeService {
 		return { kind: 'created', worktree, result };
 	}
 
-	/** WT-5.6 after git made it: trusted, listed, its repository open - and the window on it, if `show`. */
-	private async afterCreate(main: URI, worktree: URI, trustEnabled: boolean, show: boolean): Promise<void> {
-		if (trustEnabled) {
-			await this.workspaceTrustManagementService.setUrisTrust([worktree], true);
+	/**
+	 * Trusts, lists and opens a worktree git made, and shows it if `show` (WT-5.6). Returns the step that
+	 * failed instead; the worktree is kept either way (WT-5.7).
+	 */
+	private async afterCreate(main: URI, worktree: URI, trustEnabled: boolean, show: boolean): Promise<'shown' | 'not asked' | { readonly step: string; readonly reason: string }> {
+		try {
+			if (trustEnabled) {
+				await this.workspaceTrustManagementService.setUrisTrust([worktree], true);
+			}
+		} catch (err) {
+			return { step: localize('worktrees.stepTrust', "trusting the worktree"), reason: toErrorMessage(err) };
 		}
 
-		// Its record read before its folder joins the workspace: its row is then under its repository
-		// from the start, not at the end of the list for a moment (WT-3.6), and the repository can open.
-		await this.workspaceBarService.whenListed(worktree);
+		try {
+			// Listed before it joins the workspace, so that its row is under its repository from the start (WT-3.6)
+			await this.workspaceBarService.whenListed(worktree);
+		} catch (err) {
+			return { step: localize('worktrees.stepRecord', "reading Git worktree metadata"), reason: toErrorMessage(err) };
+		}
 
 		// So the row the window is about to go to - or that just appeared - can be seen.
 		this.workspaceBarService.setExpanded(main, true);
 
 		if (!show) {
-			return;
+			return 'not asked';
 		}
 
-		// WT-5.7: setup waits for the switch to restore the worktree's editors, which closes whatever
-		// else is in the editor area. Subscribed before the switch; cancelled however it ends.
-		const restored = Event.toPromise(this.workspaceBarService.onDidRestoreEditors);
-		try {
-			await this.workspaceBarService.show(worktree);
-			await raceTimeout(restored, RESTORE_TIMEOUT);
-		} finally {
-			restored.cancel();
-		}
+		// Awaited: setup opened before the restore settles would be closed by it
+		const shown = await this.workspaceBarService.show(worktree);
+		return shown.kind === 'shown' ? 'shown'
+			: { step: localize('worktrees.stepOpen', "opening the worktree"), reason: shown.kind === 'failed' ? shown.reason : localize('worktrees.superseded', "a folder switch was requested before opening completed") };
+	}
+
+	/** Says a worktree was made but not opened, offering to open it; setup waits for that (WT-5.7). */
+	private reportCreatedNotOpened(main: URI, worktree: URI, failure: { readonly step: string; readonly reason: string }): void {
+		this.notificationService.prompt(Severity.Warning,
+			localize('worktrees.createdNotOpened', "Worktree was created at '{0}', but {1} failed: {2}", this.labelService.getUriLabel(worktree), failure.step, failure.reason),
+			[{
+				label: localize('worktrees.openWorktree', "Open Worktree"),
+				run: async () => {
+					if ((await this.workspaceBarService.show(worktree)).kind === 'shown') {
+						this.runSetup(main, worktree).catch(onUnexpectedError);
+					}
+				}
+			}]);
 	}
 
 	/** WT-5.3 and WT-5.5: git's errors are the checks, each said in the product's words. */

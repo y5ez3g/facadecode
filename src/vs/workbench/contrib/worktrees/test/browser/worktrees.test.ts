@@ -143,6 +143,9 @@ suite('Worktrees - making and deleting one', () => {
 	/** Whether trust is on, the workspace trusted, trust given when asked, and the repository trusted where that differs. */
 	let trust: { enabled: boolean; trusted: boolean; granted: boolean; repositoryTrusted?: boolean };
 	let instantiationService: TestInstantiationService;
+	/** The folder the window is on, which `show` moves - unless the window is `stuck` where it is. */
+	let active: URI;
+	let stuck: boolean;
 
 	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean }): ITerminalInstance {
 		return upcastPartial<ITerminalInstance>({
@@ -243,6 +246,8 @@ suite('Worktrees - making and deleting one', () => {
 		editorAreaTerminals = [];
 		trust = { enabled: false, trusted: true, granted: false };
 		repository = { kind: 'repository', main, folder: undefined, branch: 'main', members: [], worktrees: [{ uri: w2, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
+		active = w2;
+		stuck = false;
 
 		const restored = store.add(new Emitter<void>());
 		instantiationService = store.add(new TestInstantiationService());
@@ -252,6 +257,10 @@ suite('Worktrees - making and deleting one', () => {
 			repositoryFor: () => repository,
 			show: async uri => {
 				steps.push(`show ${uri.path}`);
+				if (stuck) {
+					return { kind: 'failed', reason: 'the window stayed where it was' };
+				}
+				active = uri;
 				restored.fire();
 				return { kind: 'shown' };
 			},
@@ -281,7 +290,7 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(IConfigurationService, {
 			getValue: ((key: string) => key === TerminalSettingId.ShellIntegrationTimeout ? shellIntegrationTimeout : undefined) as IConfigurationService['getValue']
 		});
-		instantiationService.stub(IActiveFolderService, { activeFolder: upcastPartial<IWorkspaceFolder>({ uri: w2 }) });
+		instantiationService.stub(IActiveFolderService, { activeFolder: upcastPartial<IWorkspaceFolder>({ get uri() { return active; } }) });
 		instantiationService.stub(ICommandService, {
 			executeCommand: async <T>(id: string, ...args: unknown[]) => {
 				steps.push(describeCommand(id, args));
@@ -373,6 +382,34 @@ suite('Worktrees - making and deleting one', () => {
 			'open /lab',
 			'show /home/me/.facade/worktrees/lab/w3',
 		]);
+	});
+
+	test('WTA-34 git made it but the window could not get there: said with its path and Open Worktree, and setup waits for that to work', async () => {
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		answer = { branch: 'w3', customization: {} };
+		files.set(`${w3.path}/.facade/worktrees.json`, '{ "setup-worktree": ["npm ci"] }');
+		stuck = true;
+
+		await instantiationService.createInstance(WorktreeService).createWorktree(main);
+		await timeout(0);
+		const before = { said: steps.filter(step => step.startsWith('prompt:')), setup: setupShell.isSettled };
+		stuck = false;
+		await prompted.find(choice => choice.label === 'Open Worktree')!.run();
+		const shell = await setupShell.p;
+		shell.integrate();
+		await shell.whenSent(1);
+		shell.finish(shell.sent[0].id);
+		await timeout(0);
+
+		assert.deepStrictEqual({ before, opened: steps.filter(step => step === `show ${w3.path}`).length, setup: setupShell.isSettled }, {
+			before: {
+				said: [`prompt: Worktree was created at '${w3.path}', but opening the worktree failed: the window stayed where it was`],
+				setup: false
+			},
+			opened: 2,
+			setup: true
+		});
 	});
 
 	test('WTA-18 made without asking, for an agent: no dialog, from the commit it is given, its row there, and the window left where it is', async () => {
