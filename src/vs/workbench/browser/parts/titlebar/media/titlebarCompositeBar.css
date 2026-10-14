@@ -28,6 +28,38 @@
 }
 
 /*
+ * An extension's icon is an image, not a glyph: a 16px mask (paneCompositeBar.ts), and nothing in its label to give the
+ * label a size. Left to its padding the label was 6px square and showed only the middle of the image, 8px lower than
+ * the glyphs - measured. The glyphs' 16px, as the side bar's own bar gives its images (paneCompositePart.css).
+ */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container .monaco-action-bar .action-item .action-label.uri-icon {
+	width: 16px;
+	height: 16px;
+}
+
+/*
+ * Nor can the tool bar's hover show on that label. It paints `toolbar.hoverBackground` on the label (style.css), and an
+ * image's mask is coloured by the label's own background: the hover is cut to the image, under the colour the image is
+ * drawn in, and the square the glyphs get never appears. It is drawn behind the label instead, on the item's indicator,
+ * as the bar at the top of the side bar draws its own (modernUI's tabs.css) - one size and corner with the glyphs'.
+ */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container .monaco-action-bar .action-item > .action-label.uri-icon {
+	position: relative;
+	z-index: 1;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container .monaco-action-bar .action-item > .action-label.uri-icon ~ .active-item-indicator {
+	position: absolute;
+	inset: 0;
+	border-radius: var(--vscode-cornerRadius-medium);
+	pointer-events: none;
+}
+
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container > .titlebar-composite-bar-container .monaco-action-bar .action-item:hover > .action-label.uri-icon:not(.disabled) ~ .active-item-indicator {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+/*
  * The same 4px the tool bar puts between its own items, so one row of icons has one pitch.
  * Without it these sit flush - measured, 22px apart against 26 for everything to their right, so
  * the join between the two groups was the one place in the row where the rhythm changed.

@@ -32,7 +32,7 @@ AGENT-ORCHESTRATION.md's beyond how they are made (WT-5.11).
 | location | `~/.facade/worktrees/<repo>/<name>`, on every OS |
 | creating | `git worktree add -b <branch> -- <path> <start point>`, HEAD unless given |
 | Git LFS | the smudge skipped while creating, then `git lfs checkout`: local objects only |
-| trust | a worktree of a trusted repository is trusted |
+| trust | a worktree's is its repository's, however it reaches a window (WT-3.9) |
 | small ignored files | `.worktreeinclude` at the repository root, in gitignore syntax |
 | dependencies | not installed for you; a repository's setup commands do it |
 | setup | `.facade/worktrees.json`, with per-OS keys, run in a visible terminal |
@@ -243,6 +243,20 @@ window changes folder, and a list built on it would flicker on every switch.
   that is gone - is a plain row in its place, marked as not on disk when its directory
   is gone (W9.3). Facade never takes it out of `folders[]` by itself, as VS Code leaves
   a folder that is gone.
+- **WT-3.9** A worktree's trust is its repository's. A folder is a worktree of a
+  repository only when git's files say so both ways: its `.git` names a record of the
+  repository's own, `<common>/worktrees/<name>`, and that record's `gitdir` names the
+  folder back. A folder can name any repository in a `.git` of its own; it cannot write
+  itself into the records of a repository it has no hold on. Whatever trusts the common
+  directory trusts the worktree - the main checkout or a folder above it, or a bare
+  repository's own directory - however the worktree reaches a window: the bar, Add
+  Folder to Workspace..., `facade --add`, a workspace opened with it in. Untrusting the
+  repository untrusts its worktrees, and nothing is recorded for a worktree itself.
+  Workspace trust reads these files as it decides, with no git. Two cases stay as VS
+  Code leaves them: a repository whose git directory is kept apart from its checkout
+  (`--separate-git-dir`) has its worktrees asked about as that directory, not as the
+  checkout; and a trust entry and git's files that spell one folder two ways - through a
+  symbolic link - do not meet, as VS Code's own entries do not.
 
 ## WT-4. Git command contracts
 
@@ -329,7 +343,7 @@ palette (New Worktree...).
   for the extension to start. VS Code's question, with two of its buttons: Trust
   Workspace & Continue (Trust Folder & Continue in a window of one folder) and
   Cancel - not Manage, which leads away from the worktree. A repository that is not
-  trusted is asked for first: a worktree of it would be trusted as it is made.
+  trusted is asked for first: a worktree has its repository's trust (WT-3.9).
 - **WT-5.2** A dialog, "New Worktree in `<repository>`", asks for the branch, a new
   one. Under it: that the worktree starts at the main checkout's current HEAD, and the
   folder it will go in - or, in the error colour, why the name cannot be used. Create
@@ -347,7 +361,8 @@ palette (New Worktree...).
   1. Take the branch and choose an available destination. Prepare its
      display name and color. Preparation does not itself grant trust or run setup.
   2. Create through `_git.createWorktreeAt` under the progress notification.
-  3. After confirmed creation, apply inherited trust and refresh its Git record.
+  3. After confirmed creation, refresh its Git record. Its trust is its repository's
+     (WT-3.9): nothing is recorded for it.
   4. For a human creation, open the repository row and add/show the new worktree.
      Await that worktree's completed activation, including editor restoration.
   5. Start setup in its own terminal after activation succeeds. Creation completes
@@ -506,8 +521,9 @@ Prepare and perform a deletion in this order:
   Retain the branch. On detached HEAD, do not claim a branch preserves its commits.
   No preference disables this confirmation.
 - **WT-8.2** Show up to ten changed/untracked file names, then the remaining count.
-  Separately show dirty editor names and ignored paths; summarize whole ignored
-  directories instead of listing every dependency file. Warn that submodules and
+  Separately show dirty editor names and ignored paths, ten of each likewise, and the
+  agents and terminals that will stop, as WORKSPACE.md W10.7 lists them; summarize whole
+  ignored directories instead of listing every dependency file. Warn that submodules and
   their local data are removed. Use Delete and Discard Changes when unsaved or
   changed content is involved, otherwise Delete. Do not offer Save and Delete as a
   way to preserve a file inside the directory: saving it there would still delete
@@ -523,9 +539,9 @@ Prepare and perform a deletion in this order:
   deletion to bypass a Git refusal while its worktree record remains.
 - **WT-8.6** Report one of these outcomes:
   - Removed: Git no longer lists it and the directory is gone. Clear customization,
-    saved order and the explicit trust grant for that path.
+    saved order and any trust an earlier build recorded for that path.
   - Removal failed with the worktree still registered: restore its ordinary row and
-    retained customization/trust. Membership may already have been removed and
+    retained customization. Membership may already have been removed and
     processes stopped; say so rather than pretending those effects were undone.
   - Git record removed, directory left behind: an error notification names the exact
     path, why it could not be deleted and the steps that completed, with Reveal in
@@ -651,9 +667,9 @@ injection and integrated gate.
 | WTA-19 | U | `_git.createWorktreeAt` with LFS objects present and missing, a failing post-checkout hook, a failure after `-b`, an existing branch | WT-4: LFS skipped then checked out from local objects; the hook warning keeps the worktree; only its own branch deleted; failures returned, never thrown |
 | WTA-20 | U | `.worktreeinclude` with files, a wholly ignored directory, tracked and unignored files, a link, a file git checked out, an unreadable file | WT-6: only ignored and included paths copied; nothing overwritten; links skipped; one warning counting failures |
 | WTA-21 | U, I | `worktrees.json` with each OS key, only the common key, an empty list, invalid JSON, a non-string; in the worktree and only in the main checkout; with and without shell integration; close the terminal midway | WT-7: the right lines, in order, in one revealed "Worktree Setup" terminal with `ROOT_WORKTREE_PATH`; one warning and nothing run when invalid; no terminal for an empty list; the rest stop when closed |
-| WTA-22 | U, I | Delete a clean worktree, one with eleven changed files, one with submodules, one on a detached HEAD, one with a running terminal, while the window is on it | WT-8 order and dialog: always asked; ten files then "and 1 more"; submodule and running warnings; no branch line on a detached HEAD; the window goes to the repository's row, not the next folder |
+| WTA-22 | U, I | Delete a clean worktree, one with eleven changed files, one with submodules, one on a detached HEAD, one with a running terminal, while the window is on it | WT-8 order and dialog: always asked; ten files then "...1 additional file not shown"; the submodule warning, and the running terminal listed as stopping (WORKSPACE.md W10.7); no branch line on a detached HEAD; the window goes to the repository's row, not the next folder |
 | WTA-23 | I | On Windows, hold a file/directory open; make Git drop its record before cleanup fails; also request a never-listed path | Owned terminals close before removal; eventual cleanup success, or WT-8.6's notification naming the leftover path; a never-listed path is refused |
-| WTA-24 | U, I | Delete a locked worktree, fail removal while registered, then perform a successful delete | Reject a known lock before stopping work. Other failure restores a registered row with customization/trust and reports prior effects; success removes the row and directory and retains the branch |
+| WTA-24 | U, I | Delete a locked worktree, fail removal while registered, then perform a successful delete | Reject a known lock before stopping work. Other failure restores a registered row with its customization and reports prior effects; success removes the row and directory and retains the branch |
 | WTA-25 | U, I | Remove Folder on a repository row whose worktrees are in `folders[]` | WT-8.8: they leave `folders[]` and stay on disk and in git |
 | WTA-26 | I | A worktree on a remote, with a terminal working inside it | The terminal is found by its path there, said to be running, and closed first |
 | WTA-27 | U, I | Turn `facade.workspaceBar.worktrees` off and on with repositories, an active worktree, running agents and worktree commands bound to keys; repeat during accepted creation/deletion | WT-9: flat `folders[]`; no automatic worktree reads/watchers or new management operations; accepted operations settle truthfully without replay; agents remain reachable; on again, grouped from a fresh read; the toggle alone never changes the active folder |
@@ -663,11 +679,12 @@ injection and integrated gate.
 | WTA-31 | U, I | Include one file inside a wholly ignored directory; exclude a descendant; place source/destination ancestor links | Correct per-file selection; excluded files and paths through links are never copied; tracked files are never overwritten |
 | WTA-32 | U, I | Delete an ignored-only .env worktree, and one with dirty editors visible in another folder context; cancel first | Confirmation covers disk and editor losses despite an empty Git status; cancellation preserves them; no misleading Save and Delete path |
 | WTA-33 | U, I | Fail directory cleanup after Git removes its record; press Retry; replace the path before a second Retry | A notification names the leftover path with Reveal in File Explorer and Retry; Retry deletes the same verified target or refuses a replacement; no false registered row |
-| WTA-34 | U, I | Git creation succeeds but trust, record refresh, add/show or restore fails; lose the create response | Report the existing worktree and failed step; no duplicate create, branch deletion or premature setup; unknown effects are inspected |
+| WTA-34 | U, I | Git creation succeeds but record refresh, add/show or restore fails; lose the create response | Report the existing worktree and failed step; no duplicate create, branch deletion or premature setup; unknown effects are inspected |
 | WTA-35 | U, I | Change the affected work while delete confirmation is open; attempt a new agent start during deletion; fail the switch to main or membership removal; introduce loss after stopping | Revalidate authorization; block new starts until the operation settles; failed prerequisites preserve processes and dirty contents; recheck loss before discarding/removing; late refusal reports completed effects |
 | WTA-36 | U, I | Reload before/after setup submission and lose its response; revisit or rediscover the worktree | No automatic duplicate setup submission; uncertain execution is reported for inspection and explicit retry |
 | WTA-37 | U, I | Collapse the active repository while main is missing, and while it is untrusted with its admission cancelled; separately, make main's editor restoration fail | Missing or cancelled: the worktree stays active and its repository open, with the reason. Failed restoration: the window is on main and says why, and the repository closes |
 | WTA-38 | U, I | Race branch creation/ref changes with failed checkout; an identical path was already registered before the request | Cleanup never deletes another operation's branch; an existing worktree is not falsely reported as a newly created hook-failure success |
+| WTA-39 | U, I | With its repository trusted and the worktree's path not, add a worktree through the bar, Add Folder to Workspace... and `facade --add`, and open a workspace that has it; untrust the repository; give another folder a `.git` naming that worktree's record; add a worktree of a repository that is not trusted | WT-3.9: no question and a trusted window each time, and nothing recorded for the worktree; untrusted, a window holding the worktree is in Restricted Mode; the impostor is not trusted; the question names the repository's folder, and Trust and Add trusts it and every worktree of it |
 
 ## WT-13. Scope limits
 

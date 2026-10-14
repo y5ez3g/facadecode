@@ -9,13 +9,13 @@ import { compareFileNames } from '../../../../base/common/comparers.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore } from '../../../../base/common/lifecycle.js';
-import { Schemas } from '../../../../base/common/network.js';
 import { basename, dirname, IExtUri, joinPath } from '../../../../base/common/resources.js';
 import { isBoolean, isObject, isString } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
+import { gitPathToUri, IGitLocation, locateGitDirectories, readGitFile } from '../../../services/workspaces/common/gitFiles.js';
 import { canonicalUri, FolderKey } from './workspaceBar.js';
 
 /** A linked worktree of a repository, as git records it. */
@@ -240,16 +240,6 @@ export class WorkspaceBarGit extends Disposable {
 	}
 }
 
-/** Where a folder's repository keeps its git directory, when the folder has one of its own. */
-interface IGitLocation {
-	/** The shared git directory. */
-	readonly commonDir: URI;
-	/** This folder's own git directory: the common one for a main checkout. */
-	readonly gitDir: URI;
-	/** A main checkout, rather than a linked worktree. */
-	readonly isMain: boolean;
-}
-
 interface IHead {
 	readonly branch: string | undefined;
 	/** The branch, or the start of the commit HEAD is detached at; undefined when the file does not say. */
@@ -268,32 +258,8 @@ const READ_FILES = new Set(['HEAD', 'gitdir', 'commondir', 'worktrees']);
  */
 const REFTABLE_HEAD = 'refs/heads/.invalid';
 
-async function readText(fileService: IFileService, uri: URI): Promise<string | undefined> {
-	try {
-		return (await fileService.readFile(uri)).value.toString().trim();
-	} catch {
-		return undefined;
-	}
-}
-
-/**
- * A path git wrote into one of its files, as a URI next to `base`.
- *
- * Absolute, or with `worktree.useRelativePaths` relative to the file's directory. Absolute is judged
- * by the path's shape, not this machine's `path` module: a remote may run another OS. `joinPath`, not
- * `resolvePath`, which would give a `file:` path a drive letter on Windows.
- */
-function toUri(base: URI, path: string): URI {
-	if (!/^(?:[a-zA-Z]:)?[\\/]/.test(path)) {
-		return joinPath(base, path.replace(/\\/g, '/'));
-	}
-
-	const file = URI.file(path);
-	return base.scheme === Schemas.file ? file : base.with({ path: file.path });
-}
-
 async function readHead(fileService: IFileService, gitDir: URI): Promise<IHead | undefined> {
-	const content = await readText(fileService, joinPath(gitDir, 'HEAD'));
+	const content = await readGitFile(fileService, joinPath(gitDir, 'HEAD'));
 	if (!content) {
 		return undefined;
 	}
@@ -310,38 +276,6 @@ async function readHead(fileService: IFileService, gitDir: URI): Promise<IHead |
 	// The prefix comes off here, once, so branch names compare the same everywhere.
 	const branch = /^refs\/heads\/(?<branch>.+)$/.exec(ref)?.groups?.branch;
 	return { branch, label: branch ?? ref };
-}
-
-async function locate(fileService: IFileService, folder: URI): Promise<IGitLocation | undefined> {
-	const dotGit = joinPath(folder, '.git');
-
-	let isDirectory: boolean;
-	try {
-		isDirectory = (await fileService.stat(dotGit)).isDirectory;
-	} catch {
-		return undefined;
-	}
-
-	if (isDirectory) {
-		return { commonDir: dotGit, gitDir: dotGit, isMain: true };
-	}
-
-	const content = await readText(fileService, dotGit);
-	const target = content && /^gitdir:\s*(?<path>.+)$/m.exec(content)?.groups?.path;
-	if (!target) {
-		return undefined;
-	}
-
-	const gitDir = toUri(folder, target.trim());
-	const common = await readText(fileService, joinPath(gitDir, 'commondir'));
-	if (common) {
-		return { commonDir: toUri(gitDir, common), gitDir, isMain: false };
-	}
-
-	// No `commondir`: a main checkout whose git directory lives elsewhere (`--separate-git-dir`) - or a
-	// git directory that is gone, the repository moved or the worktree's record pruned, and then no
-	// repository at all.
-	return await fileService.exists(joinPath(gitDir, 'HEAD')) ? { commonDir: gitDir, gitDir, isMain: true } : undefined;
 }
 
 interface IRecordedWorktree {
@@ -372,13 +306,13 @@ async function readRecordedWorktrees(fileService: IFileService, commonDir: URI):
 	const records = children.filter(child => child.isDirectory);
 	const read = await Promise.all(records.map(async (record): Promise<IRecordedWorktree | undefined> => {
 		const admin = record.resource;
-		const gitdir = await readText(fileService, joinPath(admin, 'gitdir'));
+		const gitdir = await readGitFile(fileService, joinPath(admin, 'gitdir'));
 		const head = await readHead(fileService, admin);
 		if (!gitdir || !head) {
 			return undefined;
 		}
 
-		const uri = toUri(admin, gitdir.replace(/[\\/]\.git$/, ''));
+		const uri = gitPathToUri(admin, gitdir.replace(/[\\/]\.git$/, ''));
 		return { uri, branch: head.branch, label: head.label ?? basename(uri), exists: await fileService.exists(uri), made: record.ctime };
 	}));
 
@@ -397,7 +331,7 @@ interface IRepositoryDraft {
 /** The groups for `folders`, and the directories to watch to know when they change. */
 async function readGroups(fileService: IFileService, key: FolderKey, folders: readonly IWorkspaceFolder[]): Promise<{ groups: WorkspaceBarGroup[]; watch: URI[] }> {
 	const canonicalKey = async (uri: URI) => key(await canonicalUri(fileService, uri));
-	const locations = await Promise.all(folders.map(folder => locate(fileService, folder.uri)));
+	const locations = await Promise.all(folders.map(folder => locateGitDirectories(fileService, folder.uri)));
 	const commonKeys = await Promise.all(locations.map(location => location && canonicalKey(location.commonDir)));
 
 	// First pass, in folders[] order: a plain folder is its own row, and every folder of one

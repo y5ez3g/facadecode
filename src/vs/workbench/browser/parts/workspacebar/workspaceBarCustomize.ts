@@ -44,7 +44,7 @@ export interface IBranchDescription {
 
 /**
  * What has to happen to the folder first, when it has no commit to start from (WORKTREE.md WT-5.8):
- * said at the top of the New Worktree dialog, one sentence to a line, and the button named for doing it.
+ * said at the top of the New Worktree dialog, a paragraph to each entry, and the button named for doing it.
  */
 export interface INewWorktreePreparation {
 	readonly notice: readonly string[];

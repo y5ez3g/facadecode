@@ -6,11 +6,17 @@
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
 import { Emitter } from '../../../../../base/common/event.js';
+import { extUri } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { IConfirmation, IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
+import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
+import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import type { IWorkspaceBarRepository, IWorkspaceBarWorktree } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
+import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { ILifecycleService, ShutdownReason } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
 import { TestLifecycleService, workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
@@ -25,28 +31,51 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	const terminal = (instanceId: number, title: string, state: { exitCode?: number; hasChildProcesses?: boolean } = {}) =>
-		upcastPartial<ITerminalInstance>({ instanceId, title, exitCode: state.exitCode, hasChildProcesses: !!state.hasChildProcesses, isDisposed: false });
+	const terminal = (instanceId: number, title: string, state: { exitCode?: number; hasChildProcesses?: boolean; agent?: string; workspaceFolder?: IWorkspaceFolder } = {}) =>
+		upcastPartial<ITerminalInstance>({ instanceId, title, exitCode: state.exitCode, hasChildProcesses: !!state.hasChildProcesses, isDisposed: false, shellLaunchConfig: { name: state.agent }, workspaceFolder: state.workspaceFolder });
 
-	/** Claude, at work in `api` - a folder the window is not on - and a dev server in the panel. */
-	const claude = terminal(1, 'Claude Code', { hasChildProcesses: true });
-	const server = terminal(2, 'npm run dev', { hasChildProcesses: true });
-	const folders = new Map<ITerminalInstance, URI>([[claude, URI.file('/w/api')]]);
+	/** `api`, its row named API Server, and its worktree `fix-login`, as the bar shows them. */
+	const api = upcastPartial<IWorkspaceFolder>({ uri: URI.file('/w/api'), name: 'API Server' });
+	const fix = upcastPartial<IWorkspaceFolder>({ uri: URI.file('/w/.wt/api/fix'), name: 'fix-login' });
+	const repository = upcastPartial<IWorkspaceBarRepository>({ main: api.uri, folder: api, worktrees: [upcastPartial<IWorkspaceBarWorktree>({ uri: fix.uri, label: 'fix-login', folder: fix })] });
 
-	test('WS-49 VS Code\'s question is told what would stop - each agent and terminal running a process, by name, with its folder - while the agent menu is there', () => {
+	/** Claude at work in `api` - a folder the window is not on - Codex in its worktree, a dev server in the panel, Muse ended. */
+	const claude = terminal(1, 'Claude Code', { hasChildProcesses: true, agent: '@claude #a1' });
+	const codex = terminal(2, 'Codex', { hasChildProcesses: true, agent: '@codex #a2' });
+	const muse = terminal(3, '@muse #a3', { exitCode: 0, agent: '@muse #a3' });
+	const server = terminal(4, 'npm run dev', { hasChildProcesses: true, workspaceFolder: api });
+	const pwsh = terminal(5, 'pwsh');
+	const folders = new Map<ITerminalInstance, URI>([[claude, api.uri], [codex, fix.uri], [muse, api.uri]]);
+
+	test('WS-49 VS Code\'s question is told what would stop - every agent and terminal, one to a line, agents first, each by kind and name, then its place as the bar names it - and counts agents apart from terminals; with no agent it is VS Code\'s question, and past ten lines it counts the rest', () => {
 		const contribution = new RunningWorkShutdownQuestion(
-			upcastPartial<ITerminalLauncherService>({ agentTerminals: [claude] }),
-			upcastPartial<IFolderTerminalsService>({ folderOf: instance => folders.get(instance) })
+			upcastPartial<ITerminalLauncherService>({ agentTerminals: [claude, codex, muse] }),
+			upcastPartial<IFolderTerminalsService>({ folderOf: instance => folders.get(instance) }),
+			upcastPartial<IWorkspaceContextService>({ getWorkspace: () => upcastPartial<IWorkspace>({ folders: [api, fix] }) }),
+			upcastPartial<IWorkspaceBarService>({ repositoryFor: () => repository }),
+			upcastPartial<IWorkspaceBarCustomizationService>({ nameFor: folder => folder.name, get: () => undefined }),
+			upcastPartial<IUriIdentityService>({ extUri })
 		);
 		const told = {
-			running: terminalShutdownQuestion()?.describe([claude, server]),
-			idle: terminalShutdownQuestion()?.describe([terminal(3, 'pwsh')]),
+			everything: terminalShutdownQuestion()?.describe([pwsh, server, muse, codex, claude]),
+			terminals: terminalShutdownQuestion()?.describe([pwsh]),
+			many: terminalShutdownQuestion()?.describe(Array.from({ length: 12 }, (_, at) => terminal(10 + at, `zsh ${at + 1}`))).detail.split('\n').slice(-2),
 		};
 		contribution.dispose();
 
 		assert.deepStrictEqual({ ...told, afterwards: terminalShutdownQuestion() }, {
-			running: 'Claude Code in folder \'api\' and terminal \'npm run dev\' will be terminated.',
-			idle: undefined,
+			everything: {
+				message: 'Do you want to terminate 2 agents and 3 terminals?',
+				detail: [
+					'Agent @claude #a1 · API Server',
+					'Agent @codex #a2 · API Server (worktree: fix-login)',
+					'Terminal (@muse #a3) · API Server',
+					'Terminal (npm run dev) · API Server',
+					'Terminal (pwsh)',
+				].join('\n')
+			},
+			terminals: { message: undefined, detail: 'Terminal (pwsh)' },
+			many: ['Terminal (zsh 10)', '...2 additional sessions not shown'],
 			afterwards: undefined,
 		});
 	});
@@ -54,7 +83,8 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 	suite('in VS Code\'s terminal service', () => {
 
 		/** What closing for `reason` asked with a busy terminal in the background, and whether the window stayed. */
-		async function close(reason: ShutdownReason, told: boolean) {
+		/** `told`: what Facade tells the question - nothing, what would stop, or that and its own message as well. */
+		async function close(reason: ShutdownReason, told: boolean | string) {
 			const asked: IConfirmation[] = [];
 			const configurationService = new TestConfigurationService({ files: {}, terminal: { integrated: { confirmOnExit: 'hasChildProcesses', enablePersistentSessions: true } } });
 			const instantiationService = workbenchInstantiationService({ configurationService: () => configurationService }, store);
@@ -74,7 +104,7 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 			await timeout(0);
 			terminalService.registerProcessSupport(true);
 			await terminalService.createTerminal({ config: { hideFromUser: true }, skipContributedProfileCheck: true });
-			const question = told ? setTerminalShutdownQuestion({ describe: terminals => `${terminals.length} named` }) : undefined;
+			const question = told ? setTerminalShutdownQuestion({ describe: terminals => ({ message: told === true ? undefined : told, detail: `${terminals.length} named` }) }) : undefined;
 
 			const vetoes: (boolean | Promise<boolean>)[] = [];
 			(instantiationService.get(ILifecycleService) as TestLifecycleService).fireBeforeShutdown({ reason, veto: value => { vetoes.push(value); }, finalVeto: () => { } });
@@ -87,13 +117,15 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 
 		const question = { message: 'Do you want to terminate the active terminal session?', detail: '1 named', primaryButton: '&&Terminate' };
 
-		test('WS-49 closing or quitting asks VS Code\'s own question about a terminal kept in the background, with what Facade names under it; Cancel keeps the window', async () => {
+		test('WS-49 closing or quitting asks VS Code\'s own question about a terminal kept in the background, with what Facade names under it - and its message where Facade has one; Cancel keeps the window', async () => {
 			assert.deepStrictEqual({
 				close: await close(ShutdownReason.CLOSE, true),
 				quit: await close(ShutdownReason.QUIT, true),
+				agents: await close(ShutdownReason.CLOSE, 'Do you want to terminate 1 agent?'),
 			}, {
 				close: { asked: [question], kept: true },
 				quit: { asked: [question], kept: true },
+				agents: { asked: [{ ...question, message: 'Do you want to terminate 1 agent?' }], kept: true },
 			});
 		});
 

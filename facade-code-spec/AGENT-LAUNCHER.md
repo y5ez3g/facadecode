@@ -114,8 +114,10 @@ In Restricted Mode, use VS Code's Workspace Trust request, then continue the sam
 start if trust is granted. A denied request creates no agent.
 
 Before the CLI supplies a title, the terminal reads `@claude #a1`. Afterwards it
-reads, for example, `Fix the login bug · @claude #a1`. A user-renamed terminal keeps
-the agent suffix; renaming its display title does not change the agent's identity.
+reads, for example, `Fix the login bug - @claude #a1`: the CLI's title, then the agent,
+joined as every terminal tab joins its parts (`terminal.integrated.tabs.separator`,
+` - ` by default). A user-renamed terminal keeps the agent suffix; renaming its display
+title does not change the agent's identity.
 A built-in agent uses its CLI's logo; every custom agent uses the standard robot icon,
 whatever program it runs.
 

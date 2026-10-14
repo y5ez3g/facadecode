@@ -28,6 +28,7 @@ import { Schemas } from '../../../../base/common/network.js';
 import { WorkspaceWatcher } from './workspaceWatcher.js';
 import { editorConfigurationBaseNode } from '../../../../editor/common/config/editorConfigurationSchema.js';
 import { DirtyFilesIndicator } from '../common/dirtyFilesIndicator.js';
+import { UnsavedFileNames } from './unsavedFileNames.js';
 import { UndoCommand, RedoCommand } from '../../../../editor/browser/editorExtensions.js';
 import { IUndoRedoService } from '../../../../platform/undoRedo/common/undoRedo.js';
 import { IExplorerService } from './files.js';
@@ -116,6 +117,9 @@ registerWorkbenchContribution2(WorkspaceWatcher.ID, WorkspaceWatcher, WorkbenchP
 
 // Register Dirty Files Indicator
 registerWorkbenchContribution2(DirtyFilesIndicator.ID, DirtyFilesIndicator, WorkbenchPhase.BlockStartup);
+
+// Facade Code: each file VS Code's dialogs before shutdown list named with its folder
+registerWorkbenchContribution2(UnsavedFileNames.ID, UnsavedFileNames, WorkbenchPhase.AfterRestored);
 
 // Configuration
 const configurationRegistry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);

@@ -48,11 +48,6 @@
 	margin: 0 0 2px;
 }
 
-.workspacebar-customize-notice p:first-child {
-	font-weight: var(--vscode-fontWeight-semiBold);
-	color: var(--vscode-foreground);
-}
-
 .workspacebar-customize-notice p:last-child {
 	margin-bottom: 0;
 }

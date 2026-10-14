@@ -4,12 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter } from '../../../../../base/common/event.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { extUri } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IDialogService, IPrompt } from '../../../../../platform/dialogs/common/dialogs.js';
+import { FileService } from '../../../../../platform/files/common/fileService.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
@@ -44,6 +49,10 @@ suite('Workspace bar - a folder not trusted, on its way into a trusted window', 
 		const steps: string[] = [];
 		const asked: { message: string; details: string[]; box: string | undefined; icon: string | undefined }[] = [];
 		const instantiationService = store.add(new TestInstantiationService());
+		// Where git's files are read, to know a worktree's repository
+		const fileService = store.add(new FileService(new NullLogService()));
+		store.add(fileService.registerProvider(Schemas.file, store.add(new InMemoryFileSystemProvider())));
+		instantiationService.stub(IFileService, fileService);
 		instantiationService.stub(IWorkspaceTrustEnablementService, { isWorkspaceTrustEnabled: () => window.enabled });
 		instantiationService.stub(IWorkspaceTrustManagementService, {
 			isWorkspaceTrusted: () => window.trusted,
@@ -81,7 +90,7 @@ suite('Workspace bar - a folder not trusted, on its way into a trusted window', 
 		});
 		instantiationService.stub(ILabelService, { getUriLabel: (uri: URI) => uri.path });
 		instantiationService.stub(ILogService, new NullLogService());
-		return { instantiationService, steps, asked };
+		return { instantiationService, steps, asked, fileService };
 	}
 
 	async function admit(paths: string[], window: IWindow) {
@@ -157,6 +166,29 @@ suite('Workspace bar - a folder not trusted, on its way into a trusted window', 
 			restricted: (await admit(['/tmp/a'], { ...trustedWindow(), trusted: false })).steps,
 			off: (await admit(['/tmp/a'], { ...trustedWindow(), enabled: false })).steps,
 		}, { trusted: [], restricted: [], off: [] });
+	});
+
+	test('a worktree of a repository that is not trusted is asked about as that repository, and Trust and Add trusts the repository - and with it the worktree and every other of it (WORKTREE.md)', async () => {
+		// /wt/web-fix is a worktree of /code/web, which is not trusted; /tmp/a is a folder of its own
+		const window = trustedWindow('Trust and Add');
+		const { instantiationService, steps, asked, fileService } = services(window);
+		const files: Record<string, string> = {
+			'/code/web/.git/HEAD': 'ref: refs/heads/main',
+			'/code/web/.git/worktrees/web-fix/commondir': '../..',
+			'/code/web/.git/worktrees/web-fix/gitdir': '/wt/web-fix/.git',
+			'/wt/web-fix/.git': 'gitdir: /code/web/.git/worktrees/web-fix',
+		};
+		for (const [path, content] of Object.entries(files)) {
+			await fileService.writeFile(URI.file(path), VSBuffer.fromString(content));
+		}
+
+		const admission = await instantiationService.createInstance(WorkspaceBarTrustGate).admit([URI.file('/wt/web-fix'), URI.file('/tmp/a')]);
+
+		assert.deepStrictEqual({ here: admission?.here.map(uri => uri.path), steps, listed: asked[0].details[0] }, {
+			here: ['/wt/web-fix', '/tmp/a'],
+			steps: ['ask: Do you trust the authors of the files in these 2 folders? [Trust and Add]', 'trust /code/web /tmp/a true'],
+			listed: '`/code/web`  \n`/tmp/a`',
+		});
 	});
 
 	/** A folder added where nothing could ask first, with VS Code's own question answered as `trusted` says. */

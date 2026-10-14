@@ -28,17 +28,21 @@ are for the exact bytes they were made over. Rebuild and both are gone.
 ```
 1  find the signing identity      before the build, so a missing one fails in seconds
 2  npm run gulp vscode-darwin-<arch>-min          ~8 min
-3  build/darwin/sign.ts           hardened runtime, per-helper entitlements
-4  codesign --verify --deep --strict
-5  build/darwin/create-dmg.ts
-6  codesign the .dmg itself
-7  notarytool submit, then ask every 60 s until Apple answers
-8  stapler staple
-9  spctl --assess                 the same check Gatekeeper makes on another Mac
+3  check the app has a commit     without one it loads no terminal and no syntax highlighting
+4  build/darwin/sign.ts           hardened runtime, per-helper entitlements
+5  codesign --verify --deep --strict
+6  build/darwin/create-dmg.ts
+7  codesign the .dmg itself
+8  notarytool submit, then ask every 60 s until Apple answers
+9  stapler staple
+10 spctl --assess                 the same check Gatekeeper makes on another Mac
 ```
 
-Steps 3, 5 and the entitlements are the ones CI uses; the script only runs them on a
-developer's Mac instead of a build agent.
+Steps 4, 6 and the entitlements are the ones CI uses; the script only runs them on a
+developer's Mac instead of a build agent. Step 3 is there because nothing else gives a
+missing commit away: the build reads it from git's files, and an app without one takes
+itself for one run from the sources. A build in a worktree of git's once made such an
+app, before `build/lib/git.ts` read worktrees.
 
 ## Options
 

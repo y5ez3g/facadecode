@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { distinct } from '../../../../base/common/arrays.js';
 import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
@@ -11,6 +12,7 @@ import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { openLinkFromMarkdown } from '../../../../platform/markdown/browser/markdownRenderer.js';
@@ -21,6 +23,7 @@ import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { repositoryFolderOf, worktreeRepositoryOf } from '../../../services/workspaces/common/gitFiles.js';
 import { IWorkspaceBarService } from './workspaceBarService.js';
 
 /** The folders to add here after the trust question: all of them, or none when they went to a new window (WORKSPACE.md W5). */
@@ -52,6 +55,7 @@ export class WorkspaceBarTrustGate {
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IOpenerService private readonly openerService: IOpenerService,
 		@IHostService private readonly hostService: IHostService,
+		@IFileService private readonly fileService: IFileService,
 	) { }
 
 	async admit(uris: readonly URI[]): Promise<IAdmission | undefined> {
@@ -66,8 +70,9 @@ export class WorkspaceBarTrustGate {
 			return { here: uris };
 		}
 
-		const answer = await this.ask(untrusted, uris.length);
-		this.logService.trace(`[workspaceBar] ${untrusted.length} folder(s) untrusted: ${answer?.kind ?? 'cancelled'}`);
+		const asked = await this.askedFor(untrusted);
+		const answer = await this.ask(asked, uris.length);
+		this.logService.trace(`[workspaceBar] ${asked.length} folder(s) untrusted: ${answer?.kind ?? 'cancelled'}`);
 		if (!answer) {
 			return undefined;
 		}
@@ -77,8 +82,21 @@ export class WorkspaceBarTrustGate {
 			return { here: [] };
 		}
 
-		await this.trustService.setUrisTrust(answer.parent ? [answer.parent] : untrusted, true);
+		await this.trustService.setUrisTrust(answer.parent ? [answer.parent] : asked, true);
 		return { here: uris };
+	}
+
+	/**
+	 * What the question asks about for `untrusted`: each folder, but for a worktree its repository's folder - a worktree's
+	 * trust is its repository's (WORKTREE.md), so trusting the repository trusts it and every other worktree of it. Each once.
+	 */
+	private async askedFor(untrusted: readonly URI[]): Promise<URI[]> {
+		const extUri = this.uriIdentityService.extUri;
+		const asked = await Promise.all(untrusted.map(async uri => {
+			const repository = await worktreeRepositoryOf(this.fileService, extUri, uri);
+			return repository ? repositoryFolderOf(repository) : uri;
+		}));
+		return distinct(asked, uri => extUri.getComparisonKey(uri));
 	}
 
 	private async ask(untrusted: readonly URI[], adding: number): Promise<TrustAnswer | undefined> {
