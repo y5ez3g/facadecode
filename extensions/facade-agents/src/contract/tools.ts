@@ -88,7 +88,7 @@ export class Contract {
 	 */
 	async call(caller: Caller, name: string, args: unknown, progress: Progress, whenWritten: (listener: ResultListener) => void = () => undefined): Promise<ToolResult> {
 		if (!this.facade.frameworkOn()) {
-			return { text: 'Facade\'s tools are off: the person turned the agent framework off (facade.orchestration.enabled). Nothing was done; the agents running run on.', isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
+			return { text: 'Facade tools are disabled by facade.orchestration.enabled. This call had no effect; existing agents keep running.', isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
 		}
 		// What this machine has now, as a terminal finds it: a CLI the person installed, or took away, since
 		await this.facade.refreshClis();
@@ -97,9 +97,9 @@ export class Contract {
 		try {
 			const tool = TOOLS.find(each => each.definition.name === name);
 			if (!tool) {
-				throw new FacadeError('INVALID', `Unknown tool ${name}. The tools: ${TOOLS.map(each => each.definition.name).join(', ')}.`);
+				throw new FacadeError('INVALID', `Unknown tool '${name}'. Available tools: ${TOOLS.map(each => each.definition.name).join(', ')}.`);
 			}
-			const going = setInterval(() => progress(`${name} is still going.`), STILL_GOING_MS);
+			const going = setInterval(() => progress(`${name} is still running.`), STILL_GOING_MS);
 			try {
 				result = await tool.call(this.facade, caller, args, progress, listener => listeners.push(listener));
 			} finally {

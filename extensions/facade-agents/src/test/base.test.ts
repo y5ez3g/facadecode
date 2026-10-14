@@ -416,6 +416,6 @@ suite('Base: a lock windows take turns at', () => {
 		fs.utimesSync(lock, secondsAgo(40), secondsAgo(40));
 		const abandoned = withFileLock(file, () => 'took');
 
-		assert.deepStrictEqual({ slow, left, abandoned }, { slow: `${file} stayed locked by another window for 5 seconds.`, left: held, abandoned: 'took' });
+		assert.deepStrictEqual({ slow, left, abandoned }, { slow: `Timed out after 5 seconds waiting for another window to release the lock on '${file}'.`, left: held, abandoned: 'took' });
 	});
 });

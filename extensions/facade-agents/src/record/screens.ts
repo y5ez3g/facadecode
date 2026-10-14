@@ -71,12 +71,12 @@ export function parseFinalScreen(text: string): FinalScreen {
 	try {
 		value = JSON.parse(text);
 	} catch {
-		throw new FinalScreenError('it is not JSON');
+		throw new FinalScreenError('the file is not valid JSON');
 	}
 	const final = isJsonObject(value) ? value.final : undefined;
 	if (!isJsonObject(value) || !isJsonObject(final) || (final.buffer !== 'normal' && final.buffer !== 'alternate') || !isStringArray(final.lines) || (value.frame !== undefined && !isStringArray(value.frame))
 		|| !isOptional(final.older, 'boolean') || !isOptional(final.trimmed, 'boolean') || !isOptional(value.capturedAt, 'number') || !isOptional(value.lastOutput, 'number')) {
-		throw new FinalScreenError('it is not a final screen as the window writes one');
+		throw new FinalScreenError('the file does not match Facade\'s saved final-screen format');
 	}
 	return {
 		final: { buffer: final.buffer, lines: final.lines, ...(typeof final.older === 'boolean' ? { older: final.older } : {}), ...(typeof final.trimmed === 'boolean' ? { trimmed: final.trimmed } : {}) },

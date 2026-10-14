@@ -24,7 +24,7 @@ export const MOST_KEYS = 50;
 /** How long after the last input the screen is read for the answer. */
 export const ANSWER_DELAY_MS = 2_000;
 /** How many lines of the screen an answer to an input, or a failure, gives. */
-const ANSWER_LINES = 20;
+export const ANSWER_LINES = 20;
 /** How long an agent that just ended has for its final screen to be written: the window writes it as the terminal goes. */
 const FINAL_SCREEN_WAIT_MS = 2_000;
 /** How often a final screen still to be written is looked for. */
@@ -38,16 +38,16 @@ const INTERRUPT_KNOWN_MS = 10_000;
  */
 export function excerptText(id: number, lines: string): string {
 	return lines
-		? `The last lines of its screen, as they were (read_screen #a${id} gives up to ${MOST_LINES} of them):\n${lines}`
-		: 'Its last screen was blank: nothing was on it as its terminal ended.';
+		? `Screen excerpt for #a${id}. Use read_screen for up to ${MOST_LINES} lines:\n${lines}`
+		: 'The final screen was blank.';
 }
 /** How many characters of a text typed the log says. */
 const LOGGED_CHARS = 40;
 /** What a final screen read, and its file as text, give before each part, where they give the frame (D6). */
-const FRAME_HEADING = '[the last full-screen frame it drew before it left it]';
-const FINAL_HEADING = '[its screen as its terminal ended]';
+const FRAME_HEADING = '[last full-screen frame before the CLI left full-screen mode]';
+const FINAL_HEADING = '[screen at terminal end]';
 /** The heading of the screen as its terminal ended, where nothing was on it. */
-const BLANK_FINAL_HEADING = '[its screen as its terminal ended: blank]';
+const BLANK_FINAL_HEADING = '[screen at terminal end: blank]';
 
 /** What the core gives the screens it reads, and the terminals it types into. */
 export interface ScreensContext {
@@ -178,7 +178,7 @@ export class Screens {
 	async type(caller: Caller, target: string, text: string, enter: boolean): Promise<InputResult> {
 		const chars = [...text];
 		const shown = chars.length > LOGGED_CHARS ? `${chars.slice(0, LOGGED_CHARS).join('')}...` : text;
-		const doing = `typing ${chars.length} ${chars.length === 1 ? 'character' : 'characters'}, ${JSON.stringify(shown)}${enter ? ', and Enter,' : ''} into`;
+		const doing = `pasting ${chars.length} ${chars.length === 1 ? 'character' : 'characters'}, ${JSON.stringify(shown)}${enter ? ', then sending Enter,' : ''} into`;
 		const agent = this.inputTarget(caller, target, doing);
 		const timing = this.context.timing();
 		return this.input(caller, agent, doing, timing, id => this.context.ports.terminals.type(id, text, {
@@ -190,7 +190,7 @@ export class Screens {
 
 	/** Presses `keys`, as `keyOf` names them, in the terminal of the agent `target` names. */
 	async press(caller: Caller, target: string, keys: readonly string[]): Promise<InputResult> {
-		const doing = `pressing ${keys.join(', ')} in`;
+		const doing = `sending keys ${keys.join(', ')} to`;
 		const agent = this.inputTarget(caller, target, doing);
 		const timing = this.context.timing();
 		// Known before the keys go in: a CLI that exits on Ctrl+C at once has its end told before the keys' answer - the
@@ -233,7 +233,7 @@ export class Screens {
 				: await this.screenOf(now, ANSWER_LINES);
 			return read.selected || read.source === 'final' ? read : undefined;
 		} catch (err) {
-			this.context.log(`The last lines of ${describe(agent)}'s screen could not be read: ${messageOf(err)}`);
+			this.context.log(`Could not read the screen excerpt for ${describe(agent)}: ${messageOf(err)}`);
 			return undefined;
 		}
 	}
@@ -251,10 +251,10 @@ export class Screens {
 		try {
 			const discarded = discardScreens(this.context.dir, ids);
 			if (discarded) {
-				this.context.log(`Deleted ${discarded} screen files of agents that ended before Facade started again.`);
+				this.context.log(`Deleted ${discarded} saved screen files for agents that ended before this fresh Facade session.`);
 			}
 		} catch (err) {
-			this.context.log(`The screens of agents that ended before could not be deleted: ${messageOf(err)}`);
+			this.context.log(`Could not delete saved screens for previously ended agents: ${messageOf(err)}`);
 		}
 	}
 
@@ -266,14 +266,14 @@ export class Screens {
 		try {
 			const agent = this.context.agentNamed(target, caller);
 			if (agent.end) {
-				throw new FacadeError('REFUSED', `${describe(agent)} ended (${agent.end.kind}: ${agent.end.reason}): its terminal takes nothing more. read_screen shows its last screen.`, { outcome: 'not_applied', reason: 'ended' });
+				throw new FacadeError('REFUSED', `${describe(agent)} has ended (${agent.end.kind}: ${agent.end.reason}) and cannot receive terminal input. Use read_screen to inspect its final screen.`, { outcome: 'not_applied', reason: 'ended' });
 			}
 			if (agent.state === 'stopping') {
-				throw new FacadeError('REFUSED', `${describe(agent)} is being stopped: its terminal takes nothing more.`, { outcome: 'not_applied', reason: 'ended' });
+				throw new FacadeError('REFUSED', `${describe(agent)} is stopping and cannot receive terminal input.`, { outcome: 'not_applied', reason: 'ended' });
 			}
 			return agent;
 		} catch (err) {
-			this.context.log(`${describe(caller)} was refused ${doing} ${JSON.stringify(target)}'s terminal: ${messageOf(err)}`);
+			this.context.log(`Refused input from ${describe(caller)}: ${doing} ${JSON.stringify(target)}'s terminal. Reason: ${messageOf(err)}`);
 			throw err;
 		}
 	}
@@ -295,31 +295,31 @@ export class Screens {
 			// One the window says outright, nothing gone in; any other leaves what went in unknown
 			if (err instanceof FacadeError) {
 				this.context.log(`${who}: ${err.message}`);
-				this.context.audit(`${who}: nothing went in - ${err.message}`);
+				this.context.audit(`${who}: no input was written - ${err.message}`);
 				throw err;
 			}
-			this.context.log(`${who}: what went in is not known: ${messageOf(err)}`);
-			this.context.audit(`${who}: what went in is not known`);
-			throw new FacadeError('UNAVAILABLE', `Whether it went into ${describe(agent)}'s terminal is not known: ${messageOf(err)}. Read its screen before you type or press anything again.`, { outcome: 'unknown' });
+			this.context.log(`${who}: input outcome unknown: ${messageOf(err)}`);
+			this.context.audit(`${who}: input outcome unknown`);
+			throw new FacadeError('UNAVAILABLE', `Terminal input outcome is unknown for ${describe(agent)}. Call read_screen before sending any more text or keys. Reason: ${messageOf(err)}`, { outcome: 'unknown' });
 		}
 		if (!effect) {
-			this.context.log(`${who}: nothing went in, its terminal not there.`);
-			this.context.audit(`${who}: nothing went in, its terminal not there`);
+			this.context.log(`${who}: no input was written; terminal unavailable.`);
+			this.context.audit(`${who}: no input was written; terminal unavailable`);
 			throw this.context.table.get(agent.id)?.state === 'starting'
-				? new FacadeError('REFUSED', `${describe(agent)} has no terminal yet: it is still starting. Nothing was typed.`, { outcome: 'not_applied' })
-				: new FacadeError('UNAVAILABLE', `${describe(agent)}'s terminal is not there now: the window may still be giving its terminals back after a reload. Nothing was typed; try again in a moment.`, { outcome: 'not_applied' });
+				? new FacadeError('REFUSED', `${describe(agent)} is still starting and has no terminal yet. No input was written.`, { outcome: 'not_applied' })
+				: new FacadeError('UNAVAILABLE', `${describe(agent)}'s terminal is temporarily unavailable; the window may still be restoring terminals after a reload. No input was written. Retry once the terminal is available.`, { outcome: 'not_applied' });
 		}
 		this.context.log(`${who}: ${effectText(effect)}.`);
-		this.context.audit(`${who}: ${effectText(effect)}${effect.reason === 'timeout' ? ', its turn not come in time' : effect.reason === 'ended' && effect.outcome !== 'applied' ? ', its terminal ended' : ''}`);
+		this.context.audit(`${who}: ${effectText(effect)}${effect.reason === 'timeout' ? '; timed out waiting for its turn' : effect.reason === 'ended' && effect.outcome !== 'applied' ? '; terminal ended' : ''}`);
 		if (effect.outcome === 'not_applied') {
 			const facts = { ...effect, outcome: effect.outcome };
 			throw effect.reason === 'timeout'
-				? new FacadeError('UNAVAILABLE', `Nothing went into ${describe(agent)}'s terminal: it waited ${Math.round(timing.startTimeoutMs / 1000)} seconds for its turn, behind what the person was typing there or what Facade typed before. Read its screen, then try again.`, facts)
-				: new FacadeError('REFUSED', `Nothing went into ${describe(agent)}'s terminal: it ended first. read_screen shows its last screen.`, facts);
+				? new FacadeError('UNAVAILABLE', `No input was written to ${describe(agent)}'s terminal. It waited ${Math.round(timing.startTimeoutMs / 1000)} seconds behind human typing or earlier Facade input. Call read_screen before retrying.`, facts)
+				: new FacadeError('REFUSED', `No input was written to ${describe(agent)}'s terminal because it ended first. Use read_screen to inspect its final screen.`, facts);
 		}
 		if (effect.outcome === 'partial') {
 			const excerpt = await this.excerptOf(agent, true);
-			throw new FacadeError('FAILED', `${describe(agent)}'s terminal ended partway: ${effectText(effect)}.${excerpt ? ` Its last lines:\n${excerpt.text}` : ''}`, { ...effect, outcome: effect.outcome, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
+			throw new FacadeError('FAILED', `${describe(agent)}'s terminal ended during input: ${effectText(effect)}.${excerpt ? ` Final screen excerpt:\n${excerpt.text}` : ''}`, { ...effect, outcome: effect.outcome, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
 		}
 		await timeout(ANSWER_DELAY_MS);
 		try {
@@ -346,7 +346,7 @@ export class Screens {
 		if (now.state === 'starting' && now.processId === undefined) {
 			return { ...this.base(now, lines), ...(now.phase !== undefined ? { phase: now.phase } : {}), source: 'none', empty: 'not_created', selected: 0, older: false, text: '' };
 		}
-		throw new FacadeError('UNAVAILABLE', `${describe(now)}'s terminal is not there now: the window may still be giving its terminals back after a reload. Try again in a moment.`);
+		throw new FacadeError('UNAVAILABLE', `${describe(now)}'s terminal is temporarily unavailable; the window may still be restoring terminals after a reload. Retry once the terminal is available.`);
 	}
 
 	/** A screen read from a terminal that runs: past {@link MOST_INLINE_CHARS}, every line in a file of its own too. */
@@ -424,7 +424,7 @@ export class Screens {
 		try {
 			return writeFinalScreenText(this.context.dir, agent.id, frame ? [FRAME_HEADING, ...frame, finalHeading(final.lines), ...final.lines] : final.lines);
 		} catch (err) {
-			this.context.log(`The final screen of ${describe(agent)} could not be written as text: ${messageOf(err)}`);
+			this.context.log(`Could not write ${describe(agent)}'s final screen to a text file: ${messageOf(err)}`);
 			return undefined;
 		}
 	}
@@ -448,7 +448,7 @@ export class Screens {
 				}
 			} catch (err) {
 				if (!(err instanceof FinalScreenError) || Date.now() >= until) {
-					this.context.log(`The final screen of ${describe(agent)} could not be read from ${file}: ${messageOf(err)}`);
+					this.context.log(`Could not read ${describe(agent)}'s final screen from ${file}: ${messageOf(err)}`);
 					return { missing: 'unreadable', problem: messageOf(err) };
 				}
 			}
@@ -504,9 +504,9 @@ function inlinePart(lines: readonly string[]): { readonly text: string; readonly
 function effectText(effect: InputEffect): string {
 	if (effect.keysSent !== undefined) {
 		if (effect.outcome === 'applied') {
-			return effect.keysSent === 1 ? 'the key went in' : `all ${effect.keysSent} keys went in`;
+			return effect.keysSent === 1 ? 'the key was sent' : `all ${effect.keysSent} keys were sent`;
 		}
-		return `${effect.keysSent} of its keys went in`;
+		return `sent ${effect.keysSent} of the requested keys`;
 	}
-	return effect.entered ? 'the text went in, and Enter' : effect.pasted ? 'the text went in, without Enter' : 'nothing went in';
+	return effect.entered ? 'the text was pasted and Enter was sent' : effect.pasted ? 'the text was pasted without Enter' : 'no input was written';
 }

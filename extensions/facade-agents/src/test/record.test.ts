@@ -46,7 +46,7 @@ function outcome(call: () => unknown): string {
 
 /** What a window is told once another window took the ledger in `dir`. */
 function takenFrom(dir: string): string {
-	return `Another Facade window took this workspace's agents: the ledger in ${dir} takes no event more from this one.`;
+	return `Another Facade window has taken over this workspace's agents. The ledger in '${dir}' is locked.`;
 }
 
 /** Makes reading `file` fail with `code` while `failing` says so; returns what puts reading back. */
@@ -254,7 +254,7 @@ suite('Record: agents, their numbers, names and tokens', () => {
 			tasks: [[1, 4], [2, 5]],
 			texts: ['Add clamp.', 'm5.txt', 8_001, 8_001],
 			lastMessage: '6',
-			notTheCreators: 'Facade did not record message.sent: its ledger could not read it back.',
+			notTheCreators: 'Failed to record event message.sent in the ledger: the written data could not be verified by reading it back.',
 			agent: [],
 			types: ['agent.started', 'agent.started', 'message.sent', 'message.sent']
 		});
@@ -299,13 +299,13 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		}, {
 			named: ['clamp', 'slug.2_x'],
 			refused: [
-				'"@clamp" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
-				'"Clamp" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
-				'"human" is reserved: choose another name.',
-				'"you" is reserved: choose another name.',
-				'"-x" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
-				'"a b" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.',
-				`"${'x'.repeat(41)}" is not a name: use up to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.`
+				'Invalid agent name \'@clamp\'. Use 1-40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.',
+				'Invalid agent name \'Clamp\'. Use 1-40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.',
+				'Agent name \'human\' is reserved. Choose another name.',
+				'Agent name \'you\' is reserved. Choose another name.',
+				'Invalid agent name \'-x\'. Use 1-40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.',
+				'Invalid agent name \'a b\'. Use 1-40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.',
+				`Invalid agent name '${'x'.repeat(41)}'. Use 1-40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.`
 			],
 			ofWorktrees: ['feature-clamp-it', 'main', 'agent', 'agent', 'agent']
 		});
@@ -315,7 +315,7 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		const reserved = ['human', 'you', 'me', 'facade', 'all', 'everyone', 'init', 'kernel'];
 
 		assert.deepStrictEqual({ named: reserved.map(nameOrRefusal), ofWorktrees: reserved.map(nameOfWorktree) }, {
-			named: reserved.map(name => `"${name}" is reserved: choose another name.`),
+			named: reserved.map(name => `Agent name '${name}' is reserved. Choose another name.`),
 			ofWorktrees: reserved.map(() => 'agent')
 		});
 	});
@@ -563,7 +563,7 @@ suite('Record: the ledger on disk', () => {
 
 		assert.deepStrictEqual({ failed, refused, lock, seq: reopened.state.seq, lines: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8').split('\n').length }, {
 			failed: 'ENOSPC',
-			refused: `The ledger in ${temp.dir} is closed.`,
+			refused: `The agent ledger in '${temp.dir}' is closed.`,
 			lock: 'released',
 			seq: 1,
 			lines: 2
@@ -591,10 +591,10 @@ suite('Record: the ledger on disk', () => {
 		const started = (fields: object) => JSON.stringify({ v: 4, seq: 2, time: 1, type: 'agent.started', id: 2, name: 'clamp', creator: 1, cli: 'arg', model: 'small', effort: 'high', worktree: 'clamp', folder: '/lab', task: 'pending', tokenHash: 'ab'.repeat(32), ...fields });
 		const worktree = (fields: object) => JSON.stringify({ v: 4, seq: 2, time: 1, type: 'worktree.made', name: 'clamp', folder: '/lab-clamp', repository: '/lab', commit: 'c0ffee', madeBy: 1, ...fields });
 		const event = (fields: object) => JSON.stringify({ v: 4, seq: 2, time: 1, id: 1, ...fields });
-		const said = `Line 2 of ${file} is not an event Facade can read, so this window starts and stops no agent of this workspace while an agent of it may still run. Its next start with none running begins a new list.`;
+		const said = `Line 2 of ${file} is not a readable Facade event. This window cannot start or stop workspace agents while any may still be running. When the workspace next opens with no agents running, Facade will begin a new agent list.`;
 
 		assert.deepStrictEqual({
-			asWritten: [broken(started({})), broken(worktree({})), broken(event({ type: 'agent.stopping', by: 'human', reason: 'its tab was closed' })), broken(event({ type: 'agent.ended', kind: 'exited', reason: 'its CLI ended', exitCode: 3 })), broken(event({ type: 'agent.launched', processId: 42 })), broken(event({ type: 'list.cleared', id: undefined }))],
+			asWritten: [broken(started({})), broken(worktree({})), broken(event({ type: 'agent.stopping', by: 'human', reason: 'its terminal tab was closed' })), broken(event({ type: 'agent.ended', kind: 'exited', reason: 'its CLI ended', exitCode: 3 })), broken(event({ type: 'agent.launched', processId: 42 })), broken(event({ type: 'list.cleared', id: undefined }))],
 			thePersons: [broken(started({ creator: undefined })), broken(worktree({ madeBy: undefined }))],
 			noEffort: broken(started({ effort: undefined })),
 			anEmptyEffort: broken(started({ effort: '' })),
@@ -687,7 +687,7 @@ suite('Record: the ledger on disk', () => {
 		const kept = fs.readdirSync(temp.dir).filter(name => /^ledger\.v3\.\d+\.jsonl$/.test(name));
 
 		assert.deepStrictEqual({ whileTheyMayRun, untouched, fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === old }, {
-			whileTheyMayRun: `${file} is a ledger of version 3, which this Facade does not read, so this window starts and stops no agent of this workspace while an agent of it may still run. Its next start with none running begins a new list.`,
+			whileTheyMayRun: `${file} uses ledger version 3, which this version of Facade cannot read. This window cannot start or stop workspace agents while any may still be running. When the workspace next opens with no agents running, Facade will begin a new agent list.`,
 			untouched: true,
 			fresh: { agents: 0, id: 7 },
 			kept: 1,
@@ -709,7 +709,7 @@ suite('Record: the ledger on disk', () => {
 		reopened.dispose();
 		const kept = fs.readdirSync(temp.dir).filter(name => /^ledger\.unreadable\.\d+\.jsonl$/.test(name));
 
-		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === broken, told }, { fresh: { agents: 0, id: 2 }, kept: 1, same: true, told: ['Line 2 of LEDGER is not an event Facade can read - ledger.unreadable.TIME.jsonl'] });
+		assert.deepStrictEqual({ fresh, kept: kept.length, same: kept.length === 1 && fs.readFileSync(path.join(temp.dir, kept[0]), 'utf8') === broken, told }, { fresh: { agents: 0, id: 2 }, kept: 1, same: true, told: ['Line 2 of LEDGER is not a readable Facade event - ledger.unreadable.TIME.jsonl'] });
 	});
 
 	test('a new list drops the agents that ended before it, but for the chains of creators and the tree roots of the agents it keeps, and stays so through a reopening: numbers go on', () => {
@@ -777,18 +777,18 @@ suite('Record: the ledger on disk', () => {
 		fs.appendFileSync(path.join(temp.dir, LEDGER), '{"v":4,"seq":97}\n{"v":4,"seq":98}\n');
 		table = AgentTable.open({ dir: temp.dir, mayMoveAside: () => true });
 		const next = table.start(newAgent('next')).agent;
-		table.end(next.id, 'stopped', 'its tab was closed', { by: 'human' });
+		table.end(next.id, 'stopped', 'its terminal tab was closed', { by: 'human' });
 		table.dispose();
 		const lines = fs.readFileSync(path.join(temp.dir, AGENTS_LOG), 'utf8').split('\n');
 
 		assert.deepStrictEqual({ lines: lines.map(line => line.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d {2}/, '')), timed: lines.slice(0, -1).every(line => /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d {2}/.test(line)) }, {
 			lines: [
-				'started  @lead #a1  arg small high  YOLO on  by @human  in /lab',
-				'started  @child #a2  arg small high  YOLO on  by @lead #a1  in /lab',
+				'recorded @lead #a1  arg small high  YOLO on  creator @human  folder /lab',
+				'recorded @child #a2  arg small high  YOLO on  creator @lead #a1  folder /lab',
 				'ended    @child #a2  stopped by @lead #a1: with stop_agent',
 				'ended    @lead #a1  exited: its CLI ended with exit code 1',
-				'started  @next #a3  arg small high  YOLO on  by @human  in /lab',
-				'ended    @next #a3  stopped by @human: its tab was closed',
+				'recorded @next #a3  arg small high  YOLO on  creator @human  folder /lab',
+				'ended    @next #a3  stopped by @human: its terminal tab was closed',
 				''
 			],
 			timed: true
@@ -815,7 +815,7 @@ suite('Record: the ledger on disk', () => {
 		next.close();
 
 		assert.deepStrictEqual({ refused, unchanged: fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8') === written, seq: ledger.state.seq }, {
-			refused: `The ledger in ${temp.dir} is closed.`,
+			refused: `The agent ledger in '${temp.dir}' is closed.`,
 			unchanged: true,
 			seq: 1
 		});
@@ -838,7 +838,7 @@ suite('Record: the ledger on disk', () => {
 		fs.utimesSync(lock, longAgo, longAgo);
 
 		assert.deepStrictEqual({ refused, touchedAt, lock: fs.readFileSync(lock, 'utf8'), heldAfterClosing, heldAMinuteOn: isLedgerHeld(temp.dir, () => true) }, {
-			refused: 'Another Facade window (process 424242) has this workspace\'s agents.',
+			refused: 'Another Facade window (process 424242) manages this workspace\'s agents.',
 			touchedAt: true,
 			lock: 'closed',
 			heldAfterClosing: true,
@@ -873,7 +873,7 @@ suite('Record: the ledger on disk', () => {
 			const refused = outcome(() => Ledger.open(temp.dir));
 
 			assert.deepStrictEqual({ refused, held: isLedgerHeld(temp.dir), lock: fs.readFileSync(lock, 'utf8') }, {
-				refused: `Another Facade window (process ${still.pid}) has this workspace's agents.`,
+				refused: `Another Facade window (process ${still.pid}) manages this workspace's agents.`,
 				held: true,
 				lock: `${still.pid} 0123456789ab`
 			});
@@ -940,11 +940,11 @@ suite('Record: the ledger on disk', () => {
 
 		assert.deepStrictEqual({ closedBy, refused, touchedAt, reloaded, releasedBy, releasedRefused, turnedOnAgain, aMinuteOn: outcome(() => Ledger.open(temp.dir, { owner: 'notes' }).close()), lock: fs.readFileSync(lock, 'utf8') }, {
 			closedBy: 'closed lab',
-			refused: 'undefined: Another Facade window has this workspace\'s agents: it closed them a moment ago, as it reloads.',
+			refused: 'undefined: Another Facade window is reloading and has just released this workspace\'s agent ledger. Management is still reserved for that window.',
 			touchedAt: true,
 			reloaded: 'done',
 			releasedBy: 'released lab',
-			releasedRefused: 'Another Facade window has this workspace\'s agents: Facade there let go of them a moment ago.',
+			releasedRefused: 'Facade in another window has just released this workspace\'s agent ledger. Management is still reserved for that window.',
 			turnedOnAgain: 'done',
 			aMinuteOn: 'done',
 			lock: 'closed notes'
@@ -1157,7 +1157,7 @@ suite('Record: where a workspace\'s record is', () => {
 
 		assert.deepStrictEqual({ same: lowered.dir === w2.dir, unreadable, records: fs.readdirSync(root).length - before }, {
 			same: process.platform === 'darwin' || process.platform === 'win32',
-			unreadable: `${path.join(w2.dir, 'identity.json')} cannot be read, so Facade cannot tell whose record ${w2.dir} is: put the file right - it names the workspace, as {"workspace": "<its URI>"} - or move the record aside, and reload the window.`,
+			unreadable: `Cannot read ${path.join(w2.dir, 'identity.json')}, so Facade cannot identify the workspace that owns the record in ${w2.dir}. Correct the identity file to contain {"workspace": "<workspace URI>"}, or move the record aside, then reload the window.`,
 			records: 0
 		});
 	});

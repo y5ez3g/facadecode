@@ -34,7 +34,7 @@ export const antigravityCli: AgentCli = {
 				// Its first conversation, during which it connects its MCP servers; that conversation goes on
 				// without them, and the next one has them. Its first line, typed by its doorbell once Facade's
 				// server said hello, waits behind this one and is that next conversation (AGENT-MESSAGES.md, M7).
-				warmUp: ['-i', 'Reply with the single word ready, and nothing else.'],
+				warmUp: ['-i', 'Reply only with ready.'],
 				// The files of its messages and of agents' screens, outside its folder: else it asks whether to read
 				// one there, and the next doorbell's Enter would answer for the person. One folder an option.
 				messages: ['--add-dir', '${messagesDir}', '--add-dir', '${screensDir}'],
@@ -55,7 +55,7 @@ export const antigravityCli: AgentCli = {
 				arguments: {
 					// Its first conversation tells it what it must not do while nobody may be watching: no tool of its
 					// takes its question tool away, and its model may not be given its server's instructions (L4; N-71)
-					warmUp: ['-i', 'Reply with the single word ready, and nothing else. Nobody may be watching this terminal. ${opening}']
+					warmUp: ['-i', 'Reply only with ready. Your terminal may be unattended. ${opening}']
 				},
 				// Only the literal true turns its background update off.
 				environment: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' }

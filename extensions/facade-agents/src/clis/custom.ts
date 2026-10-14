@@ -33,19 +33,19 @@ export function customAgentOf(name: string, value: unknown, nameProblem: string 
 	const wrong: string[] = nameProblem ? [`${setting}: ${nameProblem}`] : [];
 	const set = isJsonObject(value) ? value : {};
 	if (!isJsonObject(value)) {
-		wrong.push(`${setting} is ${shown(value)}, which is no object: a custom agent is { "path": ..., "launch": { ... } }`);
+		wrong.push(`${setting} must be an object such as { "path": ..., "launch": { ... } }; received ${shown(value)}`);
 	}
 	for (const key of Object.keys(set)) {
 		if (key !== 'path' && key !== 'launch') {
-			wrong.push(`${setting} has ${key}, which a custom agent does not have: it has path and launch`);
+			wrong.push(`Unknown field '${key}' in ${setting}. A custom agent accepts path and launch`);
 		}
 	}
 	const program = typeof set.path === 'string' ? set.path.trim() : '';
 	if (!program) {
-		wrong.push(`${setting}.path is ${set.path === undefined ? 'not set' : shown(set.path)}: a custom agent needs the program to start`);
+		wrong.push(`${setting}.path is ${set.path === undefined ? 'missing' : shown(set.path)}. Specify the program to launch`);
 	}
 	if (set.launch !== undefined && !isJsonObject(set.launch)) {
-		wrong.push(`${setting}.launch is ${shown(set.launch)}, which is no object`);
+		wrong.push(`${setting}.launch must be an object; received ${shown(set.launch)}`);
 	}
 	const blank: AgentCli = {
 		id: name,

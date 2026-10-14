@@ -51,10 +51,10 @@ suite('Record: agents\' screens', () => {
 			alternateOnly: { final: { buffer: 'alternate', lines: ['menu'] } },
 			nothingOnIt: { final: { buffer: 'normal', lines: [] } },
 			withFacts: { final: { buffer: 'normal', lines: ['$'], older: true, trimmed: false }, capturedAt: 9000, lastOutput: 4000 },
-			notJson: 'it is not JSON',
-			notOne: 'it is not a final screen as the window writes one',
-			badFrame: 'it is not a final screen as the window writes one',
-			badFacts: ['it is not a final screen as the window writes one', 'it is not a final screen as the window writes one'],
+			notJson: 'the file is not valid JSON',
+			notOne: 'the file does not match Facade\'s saved final-screen format',
+			badFrame: 'the file does not match Facade\'s saved final-screen format',
+			badFacts: ['the file does not match Facade\'s saved final-screen format', 'the file does not match Facade\'s saved final-screen format'],
 			noFile: undefined
 		});
 	});

@@ -71,7 +71,7 @@ export interface FileStamp {
 /** A file another program wrote between its read and the write that was to replace it: nothing was written. */
 export class FileChangedError extends Error {
 	constructor(file: string) {
-		super(`${file} was written by another program while Facade wrote it, so Facade wrote nothing.`);
+		super(`Another process changed '${file}' while Facade was preparing to write it. Facade wrote nothing.`);
 		this.name = 'FileChangedError';
 	}
 }
@@ -213,7 +213,7 @@ export function readJsonFile(file: string): JsonFile {
 			if (attempt < CHANGED_ATTEMPTS) {
 				continue;
 			}
-			return { kind: 'other', why: 'kept changing as it was read' };
+			return { kind: 'other', why: 'kept changing during the read' };
 		}
 		let tree: JsonNode;
 		try {
@@ -222,7 +222,7 @@ export function readJsonFile(file: string): JsonFile {
 			return { kind: 'other', why: `is not valid JSON: ${messageOf(err)}` };
 		}
 		const value = nodeValue(tree);
-		return tree.kind === 'object' && isJsonObject(value) ? { kind: 'object', value, text, tree, layout: jsonLayoutOf(text), stamp: before } : { kind: 'other', why: `holds ${Array.isArray(value) ? 'a list' : value === null ? 'null' : `a ${typeof value}`}, not a JSON object` };
+		return tree.kind === 'object' && isJsonObject(value) ? { kind: 'object', value, text, tree, layout: jsonLayoutOf(text), stamp: before } : { kind: 'other', why: `contains ${Array.isArray(value) ? 'an array' : value === null ? 'null' : `a ${typeof value}`}; expected a JSON object` };
 	}
 }
 

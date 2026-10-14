@@ -91,8 +91,8 @@ suite('Transport: MCP over stdio', () => {
 			{ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'slow', title: 'Slow', description: 'Waits.', inputSchema: { type: 'object' } }, { name: 'boom', description: 'Fails.', inputSchema: { type: 'object' } }] } },
 			{ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'done' }], structuredContent: { ok: true } } },
 			{ jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', text: 'it broke' }], isError: true } },
-			{ jsonrpc: '2.0', id: 5, error: { code: -32602, message: 'Unknown tool: missing' } },
-			{ jsonrpc: '2.0', id: 6, error: { code: -32601, message: 'Method not found: server/discover' } }
+			{ jsonrpc: '2.0', id: 5, error: { code: -32602, message: 'Unknown tool: missing.' } },
+			{ jsonrpc: '2.0', id: 6, error: { code: -32601, message: 'Method not found: server/discover.' } }
 		]);
 	});
 
@@ -202,7 +202,7 @@ suite('Transport: MCP over stdio', () => {
 
 		assert.deepStrictEqual({ response: await mcp.response(5), logged: mcp.logged.map(line => line.split('\n')[0]) }, {
 			response: { jsonrpc: '2.0', id: 5, error: { code: -32603, message: 'The window broke.' } },
-			logged: ['A line that is not JSON came in, and was answered with a parse error.', 'tools/list failed: Error: The window broke.']
+			logged: ['Received a line that is not valid JSON; returned a parse error.', 'tools/list failed: Error: The window broke.']
 		});
 	});
 
@@ -250,7 +250,7 @@ suite('Transport: MCP over stdio', () => {
 		await sleep(10);
 		mcp.write(bytes.subarray(inside));
 
-		assert.deepStrictEqual(await mcp.response(4), { jsonrpc: '2.0', id: 4, error: { code: -32602, message: `Unknown tool: ${name}` } });
+		assert.deepStrictEqual(await mcp.response(4), { jsonrpc: '2.0', id: 4, error: { code: -32602, message: `Unknown tool: ${name}.` } });
 	});
 });
 
@@ -349,7 +349,7 @@ suite('Transport: the pipe', () => {
 				failed: 'FAILED: it broke',
 				throwing: 'throwing',
 				told: ['quick: true', 'slow: false', 'fail: false', 'throwing: true'],
-				logged: ['A listener to a call\'s result on the pipe failed: Error: the listener broke']
+				logged: ['A pipe result-delivery listener failed: Error: the listener broke']
 			});
 		} finally {
 			server.dispose();
@@ -425,8 +425,8 @@ suite('Transport: the pipe', () => {
 				failed: 'FAILED: it broke',
 				plain: 'FAILED: it broke, with no code',
 				windowCodes: ['FAILED FAILED', 'FAILED INTERNAL', 'FAILED UNREACHABLE'],
-				refused: 'UNAUTHORIZED: Facade refused the connection (401).',
-				refusedCall: 'UNAUTHORIZED: Facade refused the call (401).',
+				refused: 'UNAUTHORIZED: Facade IPC request \'connection\' was rejected (status 401).',
+				refusedCall: 'UNAUTHORIZED: Facade IPC request \'call\' was rejected (status 401).',
 				nobody: 'UNREACHABLE'
 			});
 		} finally {
@@ -460,7 +460,7 @@ suite('Transport: the pipe', () => {
 
 			assert.deepStrictEqual({ statuses, notSent, calls }, {
 				statuses: [400, 400, 400, 404, 404, 413, 200],
-				notSent: 'TOO_LARGE: The call is over the 1048576 bytes a call may carry.',
+				notSent: 'TOO_LARGE: Request payload exceeds the IPC limit of 1048576 bytes.',
 				calls: 0
 			});
 		} finally {
@@ -483,8 +483,8 @@ suite('Transport: the pipe', () => {
 			const notALine = await outcomeOf(client.call('echo', {}, message => progress.push(message)));
 
 			assert.deepStrictEqual({ notJson, notALine, progress }, {
-				notJson: 'FAILED: Facade answered the call with a line that could not be read.',
-				notALine: 'FAILED: Facade answered the call with a line that could not be read.',
+				notJson: 'FAILED: Facade IPC returned a malformed response.',
+				notALine: 'FAILED: Facade IPC returned a malformed response.',
 				progress: ['halfway', 'halfway']
 			});
 		} finally {
@@ -540,8 +540,8 @@ suite('Transport: the pipe', () => {
 				call: 'FAILED: The record cannot be read.',
 				then: { caller: 'someone' },
 				logged: [
-					'The window failed saying hello on its pipe: Error: Another Facade window took this workspace\'s agents.',
-					'The window failed telling who called on its pipe: Error: The record cannot be read.'
+					'IPC failure while completing the handshake: Error: Another Facade window took this workspace\'s agents.',
+					'IPC failure while identifying the caller: Error: The record cannot be read.'
 				]
 			});
 		} finally {
@@ -579,7 +579,7 @@ suite('Transport: the pipe', () => {
 		});
 		await new Promise<void>(resolve => server.listen(pipe, resolve));
 		try {
-			assert.strictEqual(await outcomeOf(new PipeClient(pipe, 'any').hello()), 'NOT_CONNECTED: Facade closed the connection before it said hello.');
+			assert.strictEqual(await outcomeOf(new PipeClient(pipe, 'any').hello()), 'NOT_CONNECTED: Facade closed the connection before the handshake completed.');
 		} finally {
 			server.close();
 		}
@@ -838,7 +838,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 
 		const refused = await main.call('echo', { text: 'still me?' });
 
-		assert.deepStrictEqual([refused.isError, refused.data?.code, refused.text], [true, 'REFUSED', 'Facade no longer accepts @main: it was stopped, or exited. Stop working.']);
+		assert.deepStrictEqual([refused.isError, refused.data?.code, refused.text], [true, 'REFUSED', 'This Facade session has ended; @main is no longer accepted. Stop working.']);
 	});
 
 	test('a call made while the window\'s end is away waits for it and runs once it is back; one cut off halfway says so, and is not made again - naming the run it made, where the window had said', async () => {
@@ -861,14 +861,14 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		const named = await cutAfter;
 		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
 
-		assert.deepStrictEqual({ back: back.text, waiting: main.progress.includes('Waiting for Facade\'s window to come back.'), cut: cut.isError && cut.text.replace(/\(.*?\)/, '(...)'), code: cut.data?.code, outcome: cut.data?.outcome, named: { text: named.text.replace(/\(.*?\)/, '(...)'), data: named.data }, hanging }, {
+		assert.deepStrictEqual({ back: back.text, waiting: main.progress.includes('Waiting for the Facade window to reconnect.'), cut: cut.isError && cut.text.replace(/\(.*?\)/, '(...)'), code: cut.data?.code, outcome: cut.data?.outcome, named: { text: named.text.replace(/\(.*?\)/, '(...)'), data: named.data }, hanging }, {
 			back: '@main said anyone? to echo',
 			waiting: true,
-			cut: 'Facade\'s window went away during hang (...), as it does while it reloads, so hang may have run. Look with list_agents before you call it again.',
+			cut: 'The Facade window disconnected during hang (...). The call may have taken effect. Retry after the Facade window reconnects.',
 			code: 'UNAVAILABLE',
 			outcome: 'unknown',
 			named: {
-				text: 'Facade\'s window went away during hang (...), as it does while it reloads, so hang may have run - it made the run #a7. Look with list_agents before you call it again.',
+				text: 'The Facade window disconnected during hang (...). The call may have taken effect. Recorded run: #a7. Retry after the Facade window reconnects.',
 				data: { code: 'UNAVAILABLE', outcome: 'unknown', agent: 7 }
 			},
 			hanging: 2
@@ -882,8 +882,8 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		const failed = await main.call('echo', { fail: 'the disk is full' });
 
 		assert.deepStrictEqual({ tooLarge: [tooLarge.isError, tooLarge.data?.code, tooLarge.text], failed: [failed.isError, failed.data?.code, failed.text] }, {
-			tooLarge: [true, 'INVALID', 'Facade did not take echo: its arguments are over the 1 MB a call may carry. Put what is long in a file, and give its path instead.'],
-			failed: [true, 'FAILED', 'echo failed in Facade\'s window: the disk is full']
+			tooLarge: [true, 'INVALID', 'echo was rejected before execution: the encoded request exceeds 1 MiB. Put large content in a file and send the file path.'],
+			failed: [true, 'FAILED', 'echo failed in the Facade window: the disk is full']
 		});
 	});
 
@@ -902,7 +902,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
 		const [fromAgent, fromScript] = await Promise.all(calls);
 
-		assert.deepStrictEqual({ agent: fromAgent.text, script: fromScript.data?.code, gone: /did not come back/.test(fromScript.text) }, { agent: '@slugify said anyone? to echo', script: 'UNAVAILABLE', gone: true });
+		assert.deepStrictEqual({ agent: fromAgent.text, script: fromScript.data?.code, gone: /did not reconnect/.test(fromScript.text) }, { agent: '@slugify said anyone? to echo', script: 'UNAVAILABLE', gone: true });
 	});
 
 	/** An agent's MCP server as its launch starts it, with `env` over its environment. */
@@ -963,7 +963,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		await main.initialize();
 		const cut = await main.call('hang', {});
 
-		assert.deepStrictEqual({ code: cut.data?.code, outcome: cut.data?.outcome, mayHaveRun: /may have run/.test(cut.text), hanging }, { code: 'UNAVAILABLE', outcome: 'unknown', mayHaveRun: true, hanging: 1 });
+		assert.deepStrictEqual({ code: cut.data?.code, outcome: cut.data?.outcome, mayHaveRun: /may have taken effect/.test(cut.text), hanging }, { code: 'UNAVAILABLE', outcome: 'unknown', mayHaveRun: true, hanging: 1 });
 	});
 
 	test('a window that does not read its pipe - its extension host stopped in a debugger - takes no call: one is tried each second up to the agent\'s wait, then said not to have run, and the next said so at once; the window, back, runs none of the calls it reads too late (N-43)', async () => {
@@ -1018,7 +1018,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 
 		assert.deepStrictEqual({ before, away: [away.isError, away.data?.code, away.text.replace(/\(.*\)/, '(...)')], back: back.text, changed: late.notifications.includes('notifications/tools/list_changed'), after }, {
 			before: ['echo', 'hang'],
-			away: [true, 'UNAVAILABLE', 'Facade\'s tools are not available, so echo did not run: Facade is not reachable (...). Call it again once Facade\'s window is there.'],
+			away: [true, 'UNAVAILABLE', 'echo did not run: Facade is unavailable (...). Retry after the Facade window reconnects.'],
 			back: '@late said back to echo',
 			changed: true,
 			after: ['echo', 'hang']
@@ -1043,7 +1043,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		}, {
 			names: ['start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'],
 			tools: JSON.parse(JSON.stringify(toolDefinitions().map(shown))),
-			away: [true, 'UNAVAILABLE', 'Facade\'s tools are not available, so send_message did not run: Facade is not reachable (...). Call it again once Facade\'s window is there.']
+			away: [true, 'UNAVAILABLE', 'send_message did not run: Facade is unavailable (...). Retry after the Facade window reconnects.']
 		});
 	});
 
@@ -1089,7 +1089,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 			agent: await tokenless.tools(),
 			isError: refused.isError,
 			code: refused.data?.code,
-			why: refused.text.includes(`echo did not run: the token file ${gone} cannot be read`)
+			why: refused.text.includes(`echo did not run: Facade is unavailable (could not read token file ${gone}`)
 		}, { byHand: [[], [], []], agent: ['echo', 'hang'], isError: true, code: 'UNAVAILABLE', why: true });
 	});
 
@@ -1100,7 +1100,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		await you.initialize();
 		const told = await you.call('echo', { text: 'hello?' });
 
-		assert.deepStrictEqual({ tools: await you.tools(), why: told.text.includes('Facade\'s window failed to say hello (Another Facade window took this workspace\'s agents.)') }, { tools: ['echo', 'hang'], why: true });
+		assert.deepStrictEqual({ tools: await you.tools(), why: told.text.includes('the Facade window\'s handshake failed (Another Facade window took this workspace\'s agents.)') }, { tools: ['echo', 'hang'], why: true });
 	});
 
 	test('an endpoint that cannot record where it listens does not listen: its pipe is left for the next try', async () => {
@@ -1148,10 +1148,10 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 			const told = await later.call('echo');
 
 			assert.deepStrictEqual({ refused: [refused.data?.code, refused.text], unreadable: [unreadable.data?.code, unreadable.text], tools: await later.tools(), told: told.text }, {
-				refused: ['INVALID', 'Facade could not read the call to echo, so it did not run. Facade refused the call (400).'],
-				unreadable: ['FAILED', 'Facade answered echo with something this version cannot read.'],
+				refused: ['INVALID', 'echo did not run: Facade could not read the request (Facade IPC request \'call\' was rejected (status 400).).'],
+				unreadable: ['FAILED', 'Facade returned an unreadable result for echo. The call may have taken effect; its outcome is unknown.'],
 				tools: ['echo', 'hang'],
-				told: 'Facade\'s tools are not available, so echo did not run: Facade said hello with something this version cannot read.'
+				told: 'echo did not run: Facade is unavailable (Facade returned a handshake that this version cannot read).'
 			});
 		} finally {
 			server.close();
@@ -1182,7 +1182,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 			const failed = await main.call('echo');
 			await sleep(1_500);
 
-			assert.deepStrictEqual({ calls, failed: [failed.data?.code, failed.text] }, { calls: 1, failed: ['FAILED', 'echo failed in Facade\'s window: it could not reach something of its own'] });
+			assert.deepStrictEqual({ calls, failed: [failed.data?.code, failed.text] }, { calls: 1, failed: ['FAILED', 'echo failed in the Facade window: it could not reach something of its own'] });
 		} finally {
 			server.close();
 		}
@@ -1215,7 +1215,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		await stranger.initialize();
 		const told = await stranger.call('echo', { text: 'me?' });
 
-		assert.deepStrictEqual({ tools: await stranger.tools(), told: [told.data?.code, told.text] }, { tools: ['echo', 'hang'], told: ['UNAVAILABLE', 'Facade\'s tools are not available, so echo did not run: Facade no longer accepts this session\'s token.'] });
+		assert.deepStrictEqual({ tools: await stranger.tools(), told: [told.data?.code, told.text] }, { tools: ['echo', 'hang'], told: ['UNAVAILABLE', 'echo did not run: Facade is unavailable (Facade no longer accepts this session\'s token).'] });
 	});
 
 	test('a window that is not there is waited for once: after that, listing the tools or calling one says it is away at once', async () => {
@@ -1226,7 +1226,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		const tools = await away.tools();
 		const told = await away.call('echo', { text: 'anyone?' });
 
-		assert.deepStrictEqual({ tools, why: told.text.includes('Facade is not reachable ('), atOnce: Date.now() - start < 500 }, { tools: ['echo', 'hang'], why: true, atOnce: true });
+		assert.deepStrictEqual({ tools, why: told.text.includes('cannot reach Facade ('), atOnce: Date.now() - start < 500 }, { tools: ['echo', 'hang'], why: true, atOnce: true });
 	});
 
 	test('an agent\'s MCP server whose CLI quits while it waits for the window stops waiting, and exits by itself', async () => {
@@ -1252,7 +1252,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		const waited = Date.now() - start;
 		const told = await waiting.call('echo', { text: 'anyone?' });
 
-		assert.deepStrictEqual({ waited: waited >= 600 && waited < 10_000, why: told.text.includes('Facade is not reachable (') }, { waited: true, why: true });
+		assert.deepStrictEqual({ waited: waited >= 600 && waited < 10_000, why: told.text.includes('cannot reach Facade (') }, { waited: true, why: true });
 	});
 
 	test('a window that does not answer its hello - stopped in a debugger, say - is waited for no longer than one that is not there', async () => {
@@ -1266,7 +1266,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 			await you.initialize();
 			const told = await you.call('echo', { text: 'anyone?' });
 
-			assert.strictEqual(told.text.includes('Facade is not reachable (Facade did not say hello in time.)'), true);
+			assert.strictEqual(told.text.includes('cannot reach Facade (The Facade handshake timed out.)'), true);
 		} finally {
 			server.close();
 		}

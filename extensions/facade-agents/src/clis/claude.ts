@@ -14,7 +14,7 @@ import { HOME_VARIABLE, homeOf } from './executable';
 const PLUGIN = {
 	name: 'facade',
 	version: '1.0.0',
-	description: 'How to work in Facade Code with other agents and the person.',
+	description: 'Coordinate agents and communicate with the person in Facade Code.',
 	author: { name: 'Facade Code' }
 };
 
@@ -227,7 +227,7 @@ export const claudeCli: AgentCli = {
 	trustValues: ({ folder, repository }, env) => ({ configFile: claudeConfigFile(env), folder: claudeProjectKey(folder), repository: claudeProjectKey(repository) }),
 	exemptionOverride: (config, env, folder) => {
 		const deny = claudeDenyOf(config, env, folder);
-		return deny && `${deny.where} denies ${deny.rule}, which wins over Facade's allow`;
+		return deny && `${deny.where} blocks ${deny.rule}, overriding Facade's allow rule`;
 	},
 	projectServersOff: projectServersTurnedOff,
 	task: 'argument',

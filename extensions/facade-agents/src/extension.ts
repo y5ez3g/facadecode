@@ -38,7 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	let deactivated = false;
 	const start = async () => {
 		if (!context.storageUri) {
-			log.info('Facade agents need a folder or workspace open; nothing started.');
+			log.info('Facade agents require an open folder or workspace. Nothing was started.');
 			none = 'noFolder';
 			return;
 		}
@@ -54,7 +54,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		} catch (err) {
 			created.dispose('facade');
 			none = 'failed';
-			log.error(`Facade agents could not start: ${stackOf(err)}`);
+			log.error(`Could not start Facade agents: ${stackOf(err)}`);
 			void vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start: {0}", messageOf(err)));
 		} finally {
 			creating = undefined;

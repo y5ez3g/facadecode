@@ -52,7 +52,7 @@ export class HostPerson implements Person {
 		if (key !== undefined) {
 			this.shownWith.set(key, shown);
 		}
-		void this.show(text, agent, severity, key !== undefined ? { key, shown } : undefined).catch(err => this.log(`A notice could not be shown, or its terminal put in front: ${messageOf(err)}`));
+		void this.show(text, agent, severity, key !== undefined ? { key, shown } : undefined).catch(err => this.log(`Could not show a notification or bring its agent's terminal to the foreground: ${messageOf(err)}`));
 	}
 
 	close(key: string, text: string): void {
@@ -60,11 +60,11 @@ export class HostPerson implements Person {
 			return;
 		}
 		this.shownWith.delete(key);
-		void this.closeKept(key).catch(err => this.log(`A notice could not be closed: ${messageOf(err)}`));
+		void this.closeKept(key).catch(err => this.log(`Could not close a notification: ${messageOf(err)}`));
 	}
 
 	tellEnded(batch: string, ends: readonly EndTold[]): void {
-		void this.showEnds(batch, ends).catch(err => this.log(`The ends of the person's agents could not be shown, or their terminals put in front: ${messageOf(err)}`));
+		void this.showEnds(batch, ends).catch(err => this.log(`Could not show notifications about the person's ended agents or bring their terminals to the foreground: ${messageOf(err)}`));
 	}
 
 	async notify({ key, text, buttons, quietIn }: Notification): Promise<string | undefined> {
@@ -91,7 +91,7 @@ export class HostPerson implements Person {
 	 * showed as it ended, often the reason, where `agent` ended with a terminal.
 	 */
 	tellNotStarted(text: string, agent: EndedAgent | undefined): void {
-		void this.showNotStarted(text, agent).catch(err => this.log(`The last screen of the agent that did not start could not be shown: ${messageOf(err)}`));
+		void this.showNotStarted(text, agent).catch(err => this.log(`Could not show the final screen of the agent whose launch failed: ${messageOf(err)}`));
 	}
 
 	/**
@@ -115,7 +115,7 @@ export class HostPerson implements Person {
 		if (ended) {
 			await this.screens.open(ended);
 		} else {
-			this.log(`${agentRef(agent)}'s terminal could not be put in front: it is gone, or the window did not go to it.`);
+			this.log(`Could not bring ${agentRef(agent)}'s terminal to the foreground: it no longer exists, or the window did not switch to it.`);
 		}
 	}
 

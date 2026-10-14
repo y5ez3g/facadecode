@@ -35,10 +35,10 @@ export const START_TIMEOUT_MS = 120_000;
  */
 export function customAgentNameProblem(name: string, builtIns: ReadonlySet<string>): string | undefined {
 	if (builtIns.has(name)) {
-		return `${name} is a built-in's id, by which agents start it: give the custom agent another name`;
+		return `'${name}' is a built-in CLI ID. Choose a different name for the custom agent`;
 	}
 	try {
-		return agentName(name) === name ? undefined : `"${name}" is not a name as an agent's is`;
+		return agentName(name) === name ? undefined : `'${name}' is not a valid agent name`;
 	} catch (err) {
 		// The name's own refusal is a sentence; in the list it is one clause among others (N-56)
 		return clauseOf(messageOf(err));
@@ -239,7 +239,7 @@ export class Launcher implements Disposable {
 		this.disposed = true;
 		for (const [id, startup] of this.startups) {
 			clearTimeout(startup.timer);
-			startup.up.error(new FacadeError('UNAVAILABLE', 'The window closed meanwhile: whether the agent came up is not known. list_agents says, once the window is back.', { outcome: 'unknown', agent: id }));
+			startup.up.error(new FacadeError('UNAVAILABLE', 'The window closed during startup, so the launch outcome is unknown. After the window reconnects, inspect the run with list_agents before starting another.', { outcome: 'unknown', agent: id }));
 		}
 		this.startups.clear();
 	}
@@ -279,11 +279,11 @@ export class Launcher implements Disposable {
 			conflict = installed.cli.conflict?.(spec.args, run.folder, env);
 			injected = spec.injected;
 		} catch (err) {
-			throw new FacadeError('UNAVAILABLE', `${installed.cli.displayName} cannot be started as its settings are: ${messageOf(err)}`);
+			throw new FacadeError('UNAVAILABLE', `Cannot start ${installed.cli.displayName} with its current settings: ${messageOf(err)}`);
 		}
 		// The person's own configuration of it, which the launch would mix Facade's into (X-47)
 		if (conflict) {
-			throw new FacadeError('UNAVAILABLE', `${installed.cli.displayName} cannot be started: ${conflict}`);
+			throw new FacadeError('UNAVAILABLE', `Cannot start ${installed.cli.displayName}: ${conflict}`);
 		}
 		return injected;
 	}
@@ -314,7 +314,7 @@ export class Launcher implements Disposable {
 		for (const file of files) {
 			const committed = await this.context.ports.git.fileAt(main, commit, file.path);
 			if (committed !== undefined && file.merge?.(committed) === undefined) {
-				throw new FacadeError('REFUSED', `${installed.cli.displayName} is not started: ${path.join(folder, file.path)}, in the commit its worktree would start at, ${whyNotMerged(committed, file)}. Nothing was made.`);
+				throw new FacadeError('REFUSED', `Cannot start ${installed.cli.displayName}: in the worktree's source commit, ${path.join(folder, file.path)} ${whyNotMerged(committed, file)}. Nothing was created.`);
 			}
 		}
 	}
@@ -360,7 +360,7 @@ export class Launcher implements Disposable {
 			try {
 				task = this.context.sendTask(caller, agent, run.task);
 			} catch (err) {
-				await this.context.fail(agent, `its task could not be recorded: ${messageOf(err)}`);
+				await this.context.fail(agent, `Facade could not record its task: ${messageOf(err)}`);
 				throw this.failureOf(err, cli, agent);
 			}
 		}
@@ -370,7 +370,7 @@ export class Launcher implements Disposable {
 			run.notes.forEach(note => this.context.log(`${describe(agent)}: ${note}`));
 		}
 		options.onRecorded?.(agent.id);
-		options.progress?.(`${describe(agent)} is recorded, and starting.`, agent.id);
+		options.progress?.(`Recorded ${describe(agent)}; starting the run.`, agent.id);
 		const startup = this.watch(agent, run.integration, options.acceptedAt);
 		// Prepared and opened on its own: the caller hears whichever comes first - its time over, unconfirmed in
 		// whatever phase it is, its start failing, or its terminal open.
@@ -396,7 +396,7 @@ export class Launcher implements Disposable {
 			startup.answered = false;
 			return { agent: now, status: 'started', notes: this.notes.get(agent.id) ?? [], ...taskOf };
 		}
-		options.progress?.(`Waiting for @${agent.name} to start.`);
+		options.progress?.(`Waiting for @${agent.name} to confirm launch readiness.`);
 		let up: Up;
 		try {
 			up = await startup.up.p;
@@ -485,10 +485,10 @@ export class Launcher implements Disposable {
 				const env = cli.sharedServer && run.integration ? { ...spec.env, ...setup.agentEnv(started.tokenFile) } : spec.env;
 				// A stop that came meanwhile ends the start here, before it has a terminal.
 				this.assertStarting(agent);
-				this.context.log(`Starting ${label} (${cli.displayName}) in ${folder}, ${run.outsideGit ? 'in no Git repository' : `the worktree ${run.worktree}`}, YOLO ${run.yolo ? 'on' : 'off'}${run.integration ? '' : ', without Facade\'s tools'}${throughCmd ? ', through cmd.exe' : ''}.`);
+				this.context.log(`Starting ${label} (${cli.displayName}) in ${folder}, ${run.outsideGit ? 'not a Git repository' : `worktree ${run.worktree}`}, YOLO ${run.yolo ? 'on' : 'off'}${run.integration ? '' : ', without Facade tools'}${throughCmd ? ', through cmd.exe' : ''}.`);
 				// The person's history says what it runs: its command line and the settings it is given (UI-14)
 				table.launching(agent.id, { program: spec.executable, args, environment: spec.env, files: spec.files.filter(file => args.some(arg => arg.includes(file.path))) });
-				options.progress?.(`Starting ${label}.`);
+				options.progress?.(`Launching ${label}.`);
 				const { processId } = await ports.terminals.launch({ id: agent.id, name: label, command: cli.custom ? spec.executable : cli.command, ...(cli.custom ? { custom: true } : {}), executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined && !options.wait, finalScreen: this.context.finalScreenOf(agent) });
 				// Its first line, its launch argument, rang for its task: a doorbell does not name the task again (M7)
 				if (task && argument !== undefined) {
@@ -496,7 +496,7 @@ export class Launcher implements Disposable {
 						this.context.firstRing(agent, task.id);
 					} catch (err) {
 						// Its doorbell types its first line again: a line twice is no harm
-						this.context.log(`That ${label} was given its first line could not be recorded: ${messageOf(err)}`);
+						this.context.log(`Could not record delivery of ${label}'s first line: ${messageOf(err)}`);
 					}
 				}
 				if (processId !== undefined) {
@@ -505,7 +505,7 @@ export class Launcher implements Disposable {
 						this.context.injections.launched(user, processId);
 					}
 				} else if (spec.injected.length) {
-					this.context.log(`${label}'s process has not said its id: what Facade put into ${folder} for it stays while its window is open.`);
+					this.context.log(`No process ID was reported for ${label}. Facade's injected files in ${folder} will remain while its window is open.`);
 				}
 			} finally {
 				this.opening.delete(agent.id);
@@ -555,7 +555,7 @@ export class Launcher implements Disposable {
 	/** Throws where `agent` is no longer starting: stopped meanwhile, its start goes no further. */
 	private assertStarting(agent: Agent): void {
 		if (this.context.table.get(agent.id)?.state !== 'starting') {
-			throw new Error('it was stopped before its CLI was launched');
+			throw new Error('startup was stopped before the CLI launched');
 		}
 	}
 
@@ -579,7 +579,7 @@ export class Launcher implements Disposable {
 			return;
 		}
 		this.context.table.connected(agent.id);
-		this.context.log(`${describe(agent)} is connected: its MCP server said hello.`);
+		this.context.log(`${describe(agent)} connected to Facade: its MCP handshake completed.`);
 		this.isUp(agent);
 	}
 
@@ -629,7 +629,7 @@ export class Launcher implements Disposable {
 		const args = [...target.args, ...spec.args];
 		const unsafe = target.throughCmd ? args.find(unsafeForCmd) : undefined;
 		if (unsafe !== undefined) {
-			throw new Error(`${cli.displayName} is ${spec.executable} on this machine, which Windows starts through cmd.exe, and ${JSON.stringify(unsafe)} would not reach it as it is. Install it with its own installer, which puts an .exe on PATH.`);
+			throw new Error(`Windows starts ${cli.displayName} (${spec.executable}) through cmd.exe, which cannot pass ${JSON.stringify(unsafe)} unchanged. Use the CLI's own installer to put its .exe on PATH.`);
 		}
 		return { spec, args, throughCmd: target.throughCmd };
 	}
@@ -688,7 +688,7 @@ export class Launcher implements Disposable {
 		}
 		this.startups.delete(agent.id);
 		clearTimeout(startup.timer);
-		this.context.log(`${describe(agent)} is not confirmed to have started: ${why}.`);
+		this.context.log(`Start unconfirmed for ${describe(agent)}: ${why}.`);
 		if (!startup.answered && this.isRunning(agent)) {
 			// One nonmodal notice for the person's own: its terminal stays theirs to use (AGENT-LAUNCHER.md, L5).
 			this.tellUnconfirmed(agent, notConnectedNotice(agent));
@@ -708,7 +708,7 @@ export class Launcher implements Disposable {
 		try {
 			return await this.context.ports.git.setupState(folder);
 		} catch (err) {
-			this.context.log(`Where the setup of ${folder} is could not be told: ${messageOf(err)}`);
+			this.context.log(`Could not determine worktree setup progress for ${folder}: ${messageOf(err)}`);
 			return undefined;
 		}
 	}
@@ -796,12 +796,12 @@ export function inBackground(what: string, work: Promise<unknown>, log: (message
 function notStartedWhy(phase: StartPhase | undefined, integration: boolean, ms: number): string {
 	const seconds = Math.round(ms / 1000);
 	switch (phase) {
-		case 'creating_worktree': return `it has not started within ${seconds} seconds: its worktree is still being made`;
-		case 'running_setup': return `it has not started within ${seconds} seconds: its worktree's setup is still running`;
-		case 'launching_cli': return `it has not started within ${seconds} seconds: its CLI is still being launched`;
+		case 'creating_worktree': return `after ${seconds} seconds, worktree creation is still in progress`;
+		case 'running_setup': return `after ${seconds} seconds, worktree setup is still running`;
+		case 'launching_cli': return `after ${seconds} seconds, the CLI is still launching`;
 		default: return integration
-			? `it has not started within ${seconds} seconds: its CLI is open but has not connected to Facade, and may be slow, or waiting for an answer on its screen`
-			: `its process has not started within ${seconds} seconds`;
+			? `after ${seconds} seconds, the CLI is open but has not connected to Facade; it may be slow or waiting at a prompt`
+			: `the CLI process has not started after ${seconds} seconds`;
 	}
 }
 
@@ -815,7 +815,7 @@ export function notConnectedNotice(agent: Agent): string {
 
 /** What a call answers once the window closed under it: it does nothing more. */
 export function windowClosed(): FacadeError {
-	return new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
+	return new FacadeError('UNAVAILABLE', 'The window closed during this call; the call will do no further work. Earlier effects may already have occurred. After the window reconnects, inspect the state before retrying.');
 }
 
 /**
@@ -834,7 +834,7 @@ function applied(run: Pick<Run, 'model' | 'effort' | 'unattended'>, installed: I
 export function delaysOf(file: string): LaunchDelays {
 	const plan: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
 	if (!isJsonObject(plan) || typeof plan.enterDelay !== 'number' || typeof plan.taskDelay !== 'number') {
-		throw new Error(`${file} holds no plan of a launch`);
+		throw new Error(`${file} does not contain a valid launch plan`);
 	}
 	return { enterDelay: plan.enterDelay, taskDelay: plan.taskDelay };
 }

@@ -29,7 +29,7 @@ export class JsonFileState implements StateStore {
 		let why: string | undefined;
 		try {
 			read = JSON.parse(fs.readFileSync(file, 'utf8'));
-			why = isJsonObject(read) ? undefined : 'it holds no JSON object';
+			why = isJsonObject(read) ? undefined : 'it does not contain a JSON object';
 		} catch (err) {
 			// Missing: a new window's. Unreadable: started anew all the same, and said.
 			why = codeOf(err) === 'ENOENT' ? undefined : messageOf(err);

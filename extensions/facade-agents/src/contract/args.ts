@@ -17,12 +17,12 @@ export class Args {
 	/** `params` as the model is told them: `?` marks one it may leave out. */
 	constructor(tool: string, params: readonly string[], input: unknown) {
 		if (!isJsonObject(input)) {
-			throw invalid(`${tool} takes an object of arguments: ${params.join(', ')}.`);
+			throw invalid(`Provide a JSON arguments object for ${tool}. Accepted arguments (? = optional): ${params.join(', ')}.`);
 		}
 		const known = params.map(param => param.replace(/\?$/, ''));
 		const unknown = Object.keys(input).filter(key => !known.includes(key));
 		if (unknown.length) {
-			throw invalid(`${tool} takes ${params.join(', ') || 'no arguments'}; not ${unknown.join(', ')}.`);
+			throw invalid(`Unknown arguments for ${tool}: ${unknown.join(', ')}. Accepted arguments (? = optional): ${params.join(', ') || 'none'}.`);
 		}
 		this.values = input;
 	}
@@ -31,7 +31,7 @@ export class Args {
 	text(name: string): string {
 		const value = this.string(name);
 		if (!value.trim()) {
-			throw invalid(`${name} must not be empty.`);
+			throw invalid(`Argument '${name}' must not be empty.`);
 		}
 		return value.trim();
 	}
@@ -40,10 +40,10 @@ export class Args {
 	string(name: string): string {
 		const value = this.values[name];
 		if (value === undefined) {
-			throw invalid(`${name} is required.`);
+			throw invalid(`Argument '${name}' is required.`);
 		}
 		if (typeof value !== 'string') {
-			throw invalid(`${name} must be a string.`);
+			throw invalid(`Argument '${name}' must be a string.`);
 		}
 		return value;
 	}
@@ -52,13 +52,13 @@ export class Args {
 	strings(name: string): string[] {
 		const value = this.values[name];
 		if (value === undefined) {
-			throw invalid(`${name} is required.`);
+			throw invalid(`Argument '${name}' is required.`);
 		}
 		if (typeof value === 'string') {
 			return [value];
 		}
 		if (!isStringArray(value)) {
-			throw invalid(`${name} must be a list of strings.`);
+			throw invalid(`Argument '${name}' must be a string or an array of strings.`);
 		}
 		return [...value];
 	}
@@ -70,7 +70,7 @@ export class Args {
 		}
 		const value = this.strings(name);
 		if (!value.length) {
-			throw invalid(`${name} must have one at least, or be left out.`);
+			throw invalid(`Argument '${name}' must contain at least one item. Omit it if no selection is needed.`);
 		}
 		return value;
 	}
@@ -95,7 +95,7 @@ export class Args {
 		if (value === undefined || typeof value === 'boolean') {
 			return value;
 		}
-		throw invalid(`${name} must be true or false.`);
+		throw invalid(`Argument '${name}' must be a boolean.`);
 	}
 
 	/** A whole number from `min` to `max`, if it is given. */
@@ -105,7 +105,7 @@ export class Args {
 			return undefined;
 		}
 		if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
-			throw invalid(`${name} must be a whole number from ${min} to ${max}.`);
+			throw invalid(`Argument '${name}' must be an integer between ${min} and ${max}.`);
 		}
 		return value;
 	}
@@ -114,13 +114,13 @@ export class Args {
 	exactText(name: string): string {
 		const value = this.values[name];
 		if (value === undefined) {
-			throw invalid(`${name} is required.`);
+			throw invalid(`Argument '${name}' is required.`);
 		}
 		if (typeof value !== 'string') {
-			throw invalid(`${name} must be a string.`);
+			throw invalid(`Argument '${name}' must be a string.`);
 		}
 		if (!value) {
-			throw invalid(`${name} must not be empty.`);
+			throw invalid(`Argument '${name}' must not be empty.`);
 		}
 		return value;
 	}

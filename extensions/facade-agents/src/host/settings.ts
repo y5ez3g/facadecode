@@ -50,7 +50,7 @@ export function timeoutMs(): number {
 export function yolo(): boolean {
 	const value = vscode.workspace.getConfiguration('facade.agents').get<unknown>('yolo');
 	if (value !== undefined && typeof value !== 'boolean') {
-		throw new Error(`facade.agents.yolo is ${JSON.stringify(value)}, which is neither true nor false`);
+		throw new Error(`facade.agents.yolo must be true or false; received ${JSON.stringify(value)}`);
 	}
 	return value ?? true;
 }
@@ -69,7 +69,7 @@ export function settingsProblems(): string[] {
 	const problems: string[] = [];
 	const framework = vscode.workspace.getConfiguration().get<unknown>(FRAMEWORK_SETTING);
 	if (framework !== undefined && typeof framework !== 'boolean') {
-		problems.push(`${FRAMEWORK_SETTING} is ${JSON.stringify(framework)}, which is neither true nor false: on, its default, is used`);
+		problems.push(`${FRAMEWORK_SETTING} must be true or false; received ${JSON.stringify(framework)}. Using the default: true (enabled)`);
 	}
 	const timeout = readSeconds('facade.agents.timeout', vscode.workspace.getConfiguration('facade.agents').get<unknown>('timeout'), START_TIMEOUT_MS);
 	if (timeout.wrong) {

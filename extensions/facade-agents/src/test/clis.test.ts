@@ -122,7 +122,7 @@ suite('CLIs: each launch, argument by argument', () => {
 			],
 			config: { mcpServers: { facade: { type: 'stdio', ...MCP } } },
 			settings: { disabledMcpjsonServers: ['facade'], spinnerTipsEnabled: false, emojiCompletionEnabled: false, skipDangerousModePermissionPrompt: true, ...sandboxOff },
-			plugin: { name: 'facade', version: '1.0.0', description: 'How to work in Facade Code with other agents and the person.', author: { name: 'Facade Code' } },
+			plugin: { name: 'facade', version: '1.0.0', description: 'Coordinate agents and communicate with the person in Facade Code.', author: { name: 'Facade Code' } },
 			skill: SKILL_MD,
 			injected: [],
 			persons: {
@@ -380,7 +380,7 @@ suite('CLIs: each launch, argument by argument', () => {
 
 		assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files, injected, task: antigravityCli.task, persons: { args: persons.args, env: persons.env } }, {
 			executable: '/bin/agy.exe',
-			args: ['-i', `Reply with the single word ready, and nothing else. Nobody may be watching this terminal. ${OPENING}`, '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
+			args: ['-i', `Reply only with ready. Your terminal may be unattended. ${OPENING}`, '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash', '--effort', 'medium'],
 			env: { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
 			cwd: '/lab',
 			files: [],
@@ -390,7 +390,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				'.agents/plugins/facade/skills/facade/SKILL.md': SKILL_MD
 			},
 			task: 'terminal',
-			persons: { args: ['-i', 'Reply with the single word ready, and nothing else.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions'], env: {} }
+			persons: { args: ['-i', 'Reply only with ready.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions'], env: {} }
 		});
 	});
 });
@@ -466,18 +466,18 @@ suite('CLIs: how the person has Facade start each one', () => {
 				enabled: true,
 				launch: { ...defaults, arguments: Object.fromEntries(Object.entries({ ...defaults.arguments, quiet: [] }).filter(([group]) => group !== 'task')) },
 				wrong: [
-					'facade.agents.codex.launch has sandbox, which Codex\'s launch does not have: it has arguments, environment, trust, enterDelay, taskDelay, unattended',
-					`facade.agents.codex.launch.arguments has warmup, which is no group of Codex's arguments: it has ${groups}`,
-					'facade.agents.codex.launch.arguments.connect is "--no-daemon", which is neither a list of text nor null',
-					'facade.agents.codex.launch.arguments.model is ["-m",4], which is neither a list of text nor null',
-					'facade.agents.codex.launch.environment.CODEX_HOME is 7, which is neither text nor null',
-					'facade.agents.codex.launch.trust.arguments is "x", which is no list of text',
-					`facade.agents.codex.launch.enterDelay is -5, which is no whole number of milliseconds from 0 to ${MAX_DELAY_MS}`,
-					`facade.agents.codex.launch.taskDelay is 1000000000000, which is no whole number of milliseconds from 0 to ${MAX_DELAY_MS}`
+					'Unknown field \'sandbox\' in facade.agents.codex.launch. Codex\'s launch accepts: arguments, environment, trust, enterDelay, taskDelay, unattended',
+					`Unknown argument group 'warmup' in facade.agents.codex.launch.arguments. Codex accepts: ${groups}`,
+					'facade.agents.codex.launch.arguments.connect must be an array of strings or null; received "--no-daemon"',
+					'facade.agents.codex.launch.arguments.model must be an array of strings or null; received ["-m",4]',
+					'facade.agents.codex.launch.environment.CODEX_HOME must be a string or null; received 7',
+					'facade.agents.codex.launch.trust.arguments must be an array of strings; received "x"',
+					`facade.agents.codex.launch.enterDelay must be an integer from 0 to ${MAX_DELAY_MS} milliseconds; received -5`,
+					`facade.agents.codex.launch.taskDelay must be an integer from 0 to ${MAX_DELAY_MS} milliseconds; received 1000000000000`
 				]
 			},
 			path: '/opt/codex/codex',
-			notAnObject: { ...codexCli.defaults, wrong: ['facade.agents.codex.enabled is 7, which is neither true nor false', 'facade.agents.codex.path is 7, which is no text', 'facade.agents.codex.launch is ["--verbose"], which is no object'] },
+			notAnObject: { ...codexCli.defaults, wrong: ['facade.agents.codex.enabled must be true or false; received 7', 'facade.agents.codex.path must be a string; received 7', 'facade.agents.codex.launch must be an object; received ["--verbose"]'] },
 			unset: codexCli.defaults
 		});
 	});
@@ -497,11 +497,11 @@ suite('CLIs: how the person has Facade start each one', () => {
 
 	test('a `${name}` a launch has no value for - whatever is written between the braces - refuses the launch, naming the setting and the values there are', () => {
 		const refused = (launch: unknown) => outcome(() => claudeCli.launch(inputFor(claudeCli, { config: readCliConfig(claudeCli, name => name === 'launch' ? launch : undefined) }), '/bin/claude'));
-		const values = 'it has ${folder}, ${repository}, ${home}, ${messagesDir}, ${screensDir}, ${model}, ${effort}, ${executable}, ${shimFile}, ${pipe}, ${recordDir}, ${tokenFile}, ${waitMs}, ${mcpConfig}, ${settingsFile}, ${pluginDir}.';
+		const values = 'Supported variables: ${folder}, ${repository}, ${home}, ${messagesDir}, ${screensDir}, ${model}, ${effort}, ${executable}, ${shimFile}, ${pipe}, ${recordDir}, ${tokenFile}, ${waitMs}, ${mcpConfig}, ${settingsFile}, ${pluginDir}.';
 
 		assert.deepStrictEqual([refused({ arguments: { extra: ['--add-dir', '${hostname}'] } }), refused({ arguments: { model: ['--model', '${model_name}'] } })], [
-			`facade.agents.claude.launch.arguments.extra has \${hostname}, for which Facade has no value: ${values}`,
-			`facade.agents.claude.launch.arguments.model has \${model_name}, for which Facade has no value: ${values}`
+			`Setting 'facade.agents.claude.launch.arguments.extra' contains an unknown variable '\${hostname}'. ${values}`,
+			`Setting 'facade.agents.claude.launch.arguments.model' contains an unknown variable '\${model_name}'. ${values}`
 		]);
 	});
 
@@ -564,7 +564,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 
 	test('a time the person sets in seconds is a whole number of them, from one to an hour; any other value is not made into one - its default is used, and that is said, naming the setting (X-59)', () => {
 		const read = (value: unknown) => readSeconds('facade.agents.timeout', value, 120_000);
-		const wrong = (shown: string) => ({ ms: 120_000, wrong: `facade.agents.timeout is ${shown}, which is no whole number of seconds from 1 to ${MAX_TIME_S}: 120 s, its default, is used` });
+		const wrong = (shown: string) => ({ ms: 120_000, wrong: `facade.agents.timeout must be an integer from 1 to ${MAX_TIME_S} seconds; received ${shown}. Using the default of 120 seconds` });
 
 		assert.deepStrictEqual([read(undefined), read(30), read(MAX_TIME_S), read(0), read(3601), read(1.5), read('30'), read(Number.NaN)], [
 			{ ms: 120_000 }, { ms: 30_000 }, { ms: MAX_TIME_S * 1000 }, wrong('0'), wrong('3601'), wrong('1.5'), wrong('"30"'), wrong('null')
@@ -659,7 +659,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 				{ cli: claudeCli, config, yours, program: { target: { executable: 'C:/tools/claude.cmd', args: [], throughCmd: true } }, trust: { kind: 'file', file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } } }, overridden: '/home/.claude/settings.json denies mcp__facade' },
 				{ cli: codexCli, config: codexCli.defaults, yours: undefined, program: { target: { executable: 'C:/node/node.exe', args: ['C:/npm/codex.js'], throughCmd: false } }, trust: { kind: 'arguments', arguments: ['-c', 'projects={ ${folder} = { trust_level = "trusted" } }'] } },
 				{ cli: museCli, config: museCli.defaults, yours: {}, program: { target: { executable: 'C:/muse/muse.exe', args: [], throughCmd: false } }, trust: { kind: 'none' } },
-				{ cli: antigravityCli, config: antigravityCli.defaults, yours: undefined, program: { missing: 'agy is not on the PATH a terminal there has' }, trust: { kind: 'cannot', why: 'the file is no absolute path' } }
+				{ cli: antigravityCli, config: antigravityCli.defaults, yours: undefined, program: { missing: 'agy is not on the PATH used by a terminal in that folder' }, trust: { kind: 'cannot', why: 'the file is no absolute path' } }
 			]
 		});
 		const parts = (document: string) => {
@@ -672,7 +672,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 		// Codex whose connect group the person wrote without Facade's approval line, and what would refuse its start (X-38)
 		const connect = codexCli.defaults.launch.arguments.connect?.filter(arg => !arg.includes('default_tools_approval_mode')).filter((arg, i, all) => !(arg === '-c' && (all[i + 1] === '-c' || all[i + 1] === '--no-daemon')));
 		const theirConnect = readCliConfig(codexCli, name => name === 'launch' ? { arguments: { connect } } : undefined);
-		const problems = ['Codex cannot be started: /home/.codex/config.toml has an MCP server of its own named facade, which Facade\'s server would be merged into. Rename that server there, or take it out.'];
+		const problems = ['Cannot start Codex: /home/.codex/config.toml already defines an MCP server named facade. Codex would merge Facade\'s server into that entry. Rename or remove the existing entry.'];
 		const theirs = parts(launchDocument({ folder: '/lab', yolo: false, framework: true, clis: [{ cli: codexCli, config: theirConnect, yours: { arguments: { connect } }, program: { target: { executable: '/bin/codex', args: [], throughCmd: false } }, trust: { kind: 'none' }, problems }] })).shown.codex;
 		const sandboxOff = process.platform === 'win32' ? 'unavailable' : 'on';
 		const yoursToAnswer = 'kept: it can put up a question for you to answer, as it does outside Facade';
@@ -690,7 +690,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 					program: 'C:/tools/claude.cmd', throughCmd: true, offered: true, task: 'argument',
 					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
 					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'its edits in its folder unasked; anything else that would ask is refused unasked', questions: 'taken away by its launch\'s questions group: it asks through Facade messages', projectMcpServers: 'with YOLO off, those of its folder\'s .mcp.json you have not approved for its project are turned off for the run, so that it does not stop to ask about them' },
-					trust: { file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } }, kept: 'for good: Facade never takes it back' }, wrongSettings: ['facade.agents.claude.launch has extra, which Claude Code\'s launch does not have: it has arguments, environment, trust, settings, enterDelay, taskDelay, unattended'], verified: '2.1.296', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours
+					trust: { file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } }, kept: 'for good: Facade never takes it back' }, wrongSettings: ['Unknown field \'extra\' in facade.agents.claude.launch. Claude Code\'s launch accepts: arguments, environment, trust, settings, enterDelay, taskDelay, unattended'], verified: '2.1.296', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours
 				},
 				codex: {
 					program: 'C:/node/node.exe', script: 'C:/npm/codex.js', offered: true, task: 'argument',
@@ -705,7 +705,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 					trust: 'none: the CLI asks whether you trust the folder', verified: '1.4.4', launch: launch(museCli), yourChanges: {}
 				},
 				antigravity: {
-					program: 'not found: agy is not on the PATH a terminal there has', offered: true, task: 'typed',
+					program: 'not found: agy is not on the PATH used by a terminal in that folder', offered: true, task: 'typed',
 					whenYouStartIt: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: yoursToAnswer },
 					throughStartAgent: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: toldInWords },
 					trust: 'cannot be given: the file is no absolute path', verified: '1.3.2', launch: launch(antigravityCli), yourChanges: {}
@@ -763,7 +763,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 				both: shown.trust
 			}, {
 				whenYouStartIt: ['never asked: its launch lets Facade\'s server through alone', path.join(home, '.claude.json')],
-				throughStartAgent: [`refused: ${path.join(bots, 'settings.json')} denies mcp__facade, which wins over Facade's allow: with YOLO off, Claude Code refuses Facade's tools`, path.join(bots, '.claude.json')],
+				throughStartAgent: [`refused: ${path.join(bots, 'settings.json')} blocks mcp__facade, overriding Facade's allow rule: with YOLO off, Claude Code refuses Facade's tools`, path.join(bots, '.claude.json')],
 				both: undefined
 			});
 		} finally {
@@ -775,7 +775,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 		const config = readCliConfig(antigravityCli, name => name === 'launch' ? { arguments: { task: ['--prompt', '${task}'] } } : undefined);
 
 		assert.deepStrictEqual({ wrong: config.wrong, given: antigravityCli.launch(inputFor(antigravityCli, { config, task: 'Plan.' }), '/bin/agy').args.includes('--prompt') }, {
-			wrong: ['facade.agents.antigravity.launch.arguments has task, which is no group of Antigravity\'s arguments: it has warmUp, connect, quiet, questions, messages, yoloOn, yoloOff, model, effort, extra'],
+			wrong: ['Unknown argument group \'task\' in facade.agents.antigravity.launch.arguments. Antigravity accepts: warmUp, connect, quiet, questions, messages, yoloOn, yoloOff, model, effort, extra'],
 			given: false
 		});
 	});
@@ -797,7 +797,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			'model_reasoning_effort="high\\" sandbox_mode = \\"danger"',
 			'model_reasoning_effort="two\\nlines"',
 			'model_reasoning_effort="a\\\\b\\u0001\\u007Fé"',
-			'"x\\ud800" has half of a character in it, which Codex\'s configuration cannot hold.'
+			'"x\\ud800" contains an unpaired UTF-16 surrogate and cannot be stored in Codex\'s TOML configuration.'
 		]);
 	});
 });
@@ -872,9 +872,9 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 		const entry = JSON.stringify({ projects: { [claudeKey(repository)]: { hasTrustDialogAccepted: true } } });
 
 		assert.deepStrictEqual({ first, made, merged, after: JSON.parse(after.slice(1)), layout: [after.startsWith(`${BOM}{\r\n  "theme": "dark",\r\n`), after.endsWith('}\r\n')], locked }, {
-			first: [`Facade merged ${entry} into ${config}: Claude Code trusts ${worktree.folder} now.`, `${config} has ${entry} already: Claude Code trusted ${worktree.folder} before.`],
+			first: [`Merged trust entry ${entry} into ${config}; Claude Code is now configured to trust ${worktree.folder}.`, `Trust entry ${entry} already exists in ${config}; Claude Code was already configured to trust ${worktree.folder}.`],
 			made: { projects: { [claudeKey(repository)]: { hasTrustDialogAccepted: true } } },
-			merged: `Facade merged ${entry} into ${config}: Claude Code trusts ${worktree.folder} now.`,
+			merged: `Merged trust entry ${entry} into ${config}; Claude Code is now configured to trust ${worktree.folder}.`,
 			after: { theme: 'dark', projects: { 'C:/Other': { allowedTools: [] }, [claudeKey(repository)]: { hasTrustDialogAccepted: true } } },
 			layout: [true, true],
 			locked: [config, config, config]
@@ -917,17 +917,17 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 			restore();
 		}
 
-		const otherKind = (keys: string) => `${file} has ${JSON.stringify(keys)} as another kind of value than Antigravity writes there`;
+		const otherKind = (keys: string) => `${file} contains an incompatible value at ${JSON.stringify(keys)}; Antigravity expects a different type there. Facade cannot configure Antigravity to trust ${repository}. Correct the file, or set facade.agents.antigravity.launch.trust to null so Antigravity can ask for trust itself.`;
 		assert.deepStrictEqual({ table, changing }, {
 			table: [
-				['unreadable', true, `${file} is not valid JSON: A key was expected at offset 2`],
-				['unreadable', true, `${file} holds a list, not a JSON object`],
+				['unreadable', true, `${file} is not valid JSON: Expected a key at offset 2. Facade cannot configure Antigravity to trust ${repository}. Correct the file, or set facade.agents.antigravity.launch.trust to null so Antigravity can ask for trust itself.`],
+				['unreadable', true, `${file} contains an array; expected a JSON object. Facade cannot configure Antigravity to trust ${repository}. Correct the file, or set facade.agents.antigravity.launch.trust to null so Antigravity can ask for trust itself.`],
 				['unreadable', true, otherKind('projects')],
 				['unreadable', true, otherKind('projects.C:/Lab')],
 				['unreadable', true, otherKind('trustedWorkspaces')],
 				['unreadable', true, otherKind('trustedWorkspaces')]
 			],
-			changing: ['unreadable', `${file} kept changing as it was read`]
+			changing: ['unreadable', `${file} kept changing during the read. Facade cannot configure Antigravity to trust ${repository}. Correct the file, or set facade.agents.antigravity.launch.trust to null so Antigravity can ask for trust itself.`]
 		});
 	});
 
@@ -1024,11 +1024,11 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 		const throughLink = JSON.parse(fs.readFileSync(settings, 'utf8'));
 
 		assert.deepStrictEqual({ outcomes, first, after, listed, linked, throughLink, locked: locked.length }, {
-			outcomes: [`Facade merged ${entry} into ${settings}: Antigravity trusts ${worktree} now.`, `${settings} has ${entry} already: Antigravity trusted ${worktree} before.`],
+			outcomes: [`Merged trust entry ${entry} into ${settings}; Antigravity is now configured to trust ${worktree}.`, `Trust entry ${entry} already exists in ${settings}; Antigravity was already configured to trust ${worktree}.`],
 			first: { trustedWorkspaces: [path.resolve(worktree)] },
 			after: `{\n\t"model": "gemini-3.8-flash-high",\n\t"trustedWorkspaces": [\n\t\t"C:\\\\Users\\\\me",\n\t\t${JSON.stringify(path.resolve(worktree))}\n\t]\n}`,
-			listed: `${settings} has ${entry} already: Antigravity trusted ${worktree} before.`,
-			linked: `Facade merged ${entry} into ${settings}: Antigravity trusts ${worktree} now.`,
+			listed: `Trust entry ${entry} already exists in ${settings}; Antigravity was already configured to trust ${worktree}.`,
+			linked: `Merged trust entry ${entry} into ${settings}; Antigravity is now configured to trust ${worktree}.`,
 			throughLink: { trustedWorkspaces: [fs.realpathSync.native(worktree), link] },
 			locked: 6
 		});
@@ -1064,7 +1064,7 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 			older: legacy,
 			elsewhere: path.join(temp.dir, 'qclaude', '.claude.json'),
 			// Its specific problem said (L11)
-			unreadable: `${path.join(temp.dir, 'qclaude', '.claude.json')} could not be read: EISDIR: illegal operation on a directory, read, so Facade left it alone and cannot give Claude Code the person's trust in ${repository}: put the file right, or set facade.agents.claude.launch.trust to null for Claude Code to ask.`,
+			unreadable: `${path.join(temp.dir, 'qclaude', '.claude.json')} could not be read: EISDIR: illegal operation on a directory, read. Facade left the file unchanged and could not configure Claude Code to trust ${repository}. Correct the file, or set facade.agents.claude.launch.trust to null so Claude Code can ask for trust itself.`,
 			nothingWritten: ['.claude']
 		});
 	});
@@ -1084,9 +1084,9 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 			unknown: outcome(() => writeTrust(antigravityCli, unknown, worktree, lock, env)?.text),
 			none: writeTrust(antigravityCli, none, worktree, lock, env)?.text
 		}, {
-			moved: `Facade merged ${JSON.stringify({ trustedWorkspaces: [fs.realpathSync.native(repository)] })} into ${path.join(home, 'agy', 'trusted.json')}: Antigravity trusts ${repository} now.`,
+			moved: `Merged trust entry ${JSON.stringify({ trustedWorkspaces: [fs.realpathSync.native(repository)] })} into ${path.join(home, 'agy', 'trusted.json')}; Antigravity is now configured to trust ${repository}.`,
 			content: { trustedWorkspaces: [fs.realpathSync.native(repository)] },
-			unknown: 'facade.agents.antigravity.launch.trust.merge has ${repo}, for which Facade has no value: it has ${home}, ${folder}, ${repository}.',
+			unknown: 'Setting \'facade.agents.antigravity.launch.trust.merge\' contains an unknown variable \'${repo}\'. Supported variables: ${home}, ${folder}, ${repository}.',
 			none: undefined
 		});
 	});
@@ -1128,8 +1128,8 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 
 		assert.deepStrictEqual([file('~/agy/trusted.json'), file('agy/trusted.json'), file('~agy/trusted.json')], [
 			'done',
-			'facade.agents.antigravity.launch.trust.file is "agy/trusted.json", which is no absolute path: start it with ${home}.',
-			'facade.agents.antigravity.launch.trust.file is "~agy/trusted.json", which is no absolute path: start it with ${home}.'
+			'Setting \'facade.agents.antigravity.launch.trust.file\' must be an absolute path; received \'agy/trusted.json\'. For example, use a path under ${home}.',
+			'Setting \'facade.agents.antigravity.launch.trust.file\' must be an absolute path; received \'~agy/trusted.json\'. For example, use a path under ${home}.'
 		]);
 	});
 });
@@ -1208,7 +1208,7 @@ suite('CLIs: the person\'s own configuration a launch would mix Facade\'s into',
 
 		assert.deepStrictEqual({ conflicts, project }, {
 			conflicts: { table: true, subtable: true, dotted: true, underServers: true, inline: true, arrayOfTables: true, likeIt: false, inAString: false, noToml: false, frameworkOff: false },
-			project: `${path.join(repository, '.codex', 'config.toml')} has an MCP server of its own named facade, which Facade's server would be merged into. Rename that server there, or take it out.`
+			project: `${path.join(repository, '.codex', 'config.toml')} already defines an MCP server named facade. Codex would merge Facade's server into that entry. Rename or remove the existing entry.`
 		});
 	});
 });
@@ -1402,7 +1402,7 @@ suite('CLIs: which of them this machine has', () => {
 			tilde: inHome,
 			relative: inFolder,
 			relativeNowhere: undefined,
-			spaces: ['facade.agents.claude.path is "   ", only spaces, which name no file: give the file, or leave it empty for the claude PATH finds']
+			spaces: ['facade.agents.claude.path contains only spaces ("   "). Provide an executable path, or use an empty string to find claude on PATH']
 		});
 	});
 

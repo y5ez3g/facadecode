@@ -193,7 +193,7 @@ export interface ToolsExemption {
 
 /** That the person changed the groups of Facade's launch that let its server through, `changed`, as a clause (L4, rule 4). */
 export function exemptionChangedText(changed: ToolsExemption['changed']): string {
-	return `its launch's ${changed.join(' and ')} ${changed.length > 1 ? 'groups are' : 'group is'} changed from Facade's, which lets its server through`;
+	return `the launch's ${changed.join(' and ')} ${changed.length > 1 ? 'groups differ' : 'group differs'} from Facade's defaults for allowing tools without approval`;
 }
 
 /**
@@ -392,7 +392,7 @@ export class Facade implements Disposable {
 			return;
 		}
 		this.disposed = true;
-		disposeAll(this.disposables.splice(0), err => this.log(`Stopping Facade agents: ${messageOf(err)}`));
+		disposeAll(this.disposables.splice(0), err => this.log(`Error while shutting down Facade agents: ${messageOf(err)}`));
 		clearTimeout(this.takingBack);
 		this.takingBack = undefined;
 		this.personDeletions.splice(0).forEach(each => clearTimeout(each.timer));
@@ -482,7 +482,7 @@ export class Facade implements Disposable {
 				this.customFound = new Set(this.options.clis.custom().filter(({ cli, config }) => this.options.clis.locate(cli, config, { ...env, ...config.launch.environment }, folder)).map(({ cli }) => cli.id));
 			}
 		} catch (err) {
-			this.log(`The CLIs could not be looked for again: ${messageOf(err)}`);
+			this.log(`Could not refresh available CLIs; keeping the last result: ${messageOf(err)}`);
 		}
 	}
 
@@ -601,8 +601,8 @@ export class Facade implements Disposable {
 		// refuses them, the second may have them asked for - each said as it is (N-45)
 		const { refused, changed } = exemption;
 		return [
-			...refused !== undefined ? [`With YOLO off, ${installed.cli.displayName} refuses Facade's tools: ${refused}.`] : [],
-			...changed.length ? [`With YOLO off, ${installed.cli.displayName} may ask for approval before Facade's tools: ${exemptionChangedText(changed)}.`] : []
+			...refused !== undefined ? [`With YOLO off, ${installed.cli.displayName} denies Facade tools: ${refused}.`] : [],
+			...changed.length ? [`With YOLO off, ${installed.cli.displayName} may require approval to use Facade tools: ${exemptionChangedText(changed)}.`] : []
 		];
 	}
 
@@ -630,7 +630,7 @@ export class Facade implements Disposable {
 		// said with the names each has - the agent's, which uses every group the person's does, first
 		const problems = new Map<string, string>();
 		const add = (message: string) => {
-			const key = message.replace(/, for which Facade has no value: it has [^]*$/, '');
+			const key = message.replace(/\. Supported variables: [^]*$/, '');
 			if (!problems.has(key)) {
 				problems.set(key, message);
 			}
@@ -724,7 +724,7 @@ export class Facade implements Disposable {
 		const yolo = this.yolo(caller);
 		const name = this.nameOf(request.name);
 		// Nothing is made for it while it is checked, which can take a while - git asked, its CLI looked for (O4)
-		progress?.(`Validating the start of @${name}: nothing is made for it until it is recorded.`);
+		progress?.(`Validating @${name}; no run has been recorded yet.`);
 		const model = request.model?.trim() || undefined;
 		const effort = request.effort?.trim() || undefined;
 		const task = request.task?.trim() ? request.task : undefined;
@@ -744,8 +744,8 @@ export class Facade implements Disposable {
 				// Its cause named: the framework off, or the person's launch without the group a task needs (X-55)
 				const name = installed.cli.custom ? installed.cli.id : installed.cli.displayName;
 				throw new FacadeError('REFUSED', !this.options.clis.framework()
-					? `${name} cannot be given a task while the agent framework is off.`
-					: `${name} cannot be given a task: its launch in ${installed.cli.setting}.launch has ${capabilities.integration ? 'no task group' : 'no connect group, so it cannot read Facade\'s messages'}. Start it without a task, or ask the person to fill that in.`);
+					? `Cannot assign a task to ${name} while the agent framework is disabled.`
+					: `Cannot assign a task to ${name}: ${installed.cli.setting}.launch has ${capabilities.integration ? 'no task group' : 'no connect group, so the agent cannot read Facade messages'}. Start without a task, or ask the person to configure the missing group.`);
 			}
 			// What its launch has no group for is left out, and recorded unknown (O3)
 			const withheld: Ignored[] = [...model !== undefined && !capabilities.model ? ['model' as const] : [], ...effort !== undefined && !capabilities.effort ? ['effort' as const] : []];
@@ -760,10 +760,10 @@ export class Facade implements Disposable {
 					continue;
 				}
 				if (value.includes('\0') || LONE_SURROGATE.test(value)) {
-					throw new FacadeError('INVALID', `The ${what} has a character no CLI can be given as it is - a NUL, or half of one written as two: give it as plain text.`);
+					throw new FacadeError('INVALID', `The ${what} contains a NUL character or an unpaired UTF-16 surrogate, which cannot be passed intact to the CLI. Provide valid plain text.`);
 				}
 				if (value.startsWith('-') && (launch.launch.arguments[what] ?? []).includes(`\${${what}}`)) {
-					throw new FacadeError('INVALID', `The ${what} ${value} starts with a dash: ${installed.cli.displayName} would read it as an option of its own, not as the ${what}. Give it without the leading dash.`);
+					throw new FacadeError('INVALID', `The ${what} '${value}' starts with a dash, so ${installed.cli.displayName} would treat it as an option instead of the ${what}. Remove the leading dash.`);
 				}
 			}
 			const env = await this.environmentOf(installed, home, true);
@@ -804,7 +804,7 @@ export class Facade implements Disposable {
 			// can be listed and stopped all along, and an interruption leaves a run that says how far it came.
 			let made: string | undefined;
 			const prepare = async (agent: Agent): Promise<Prepared> => {
-				progress?.(`Making the worktree ${place.branch} for ${describe(agent)}.`);
+				progress?.(`Creating worktree ${place.branch} for ${describe(agent)}.`);
 				let worktree: MadeWorktreeFolder;
 				// Where git makes it is known once it has: a stop that deletes it meanwhile waits for that (O4)
 				const making = new DeferredPromise<string | undefined>();
@@ -813,7 +813,7 @@ export class Facade implements Disposable {
 					worktree = await this.ports.git.makeWorktree(place.repository.main, place.branch, place.head);
 				} catch (err) {
 					making.complete(undefined);
-					throw new FacadeError('FAILED', `The worktree ${place.branch} could not be made: ${messageOf(err)}`, { outcome: 'failed', agent: agent.id });
+					throw new FacadeError('FAILED', `Could not create worktree ${place.branch}: ${messageOf(err)}`, { outcome: 'failed', agent: agent.id });
 				} finally {
 					// Made, git has the branch; not made, it is free again
 					reserved?.dispose();
@@ -826,36 +826,36 @@ export class Facade implements Disposable {
 					// Its run is where git made the worktree, not at the folder planned for it - taken, maybe (O4; OR-05)
 					this.table.recordWorktreeFolder(agent.id, folder);
 					this.ports.git.stopSetup(folder);
-					throw new Error('it was stopped as its worktree was made');
+					throw new Error('startup was stopped during worktree creation');
 				}
 				this.table.phase(agent.id, 'running_setup', folder);
 				const notes = [
 					// The branch is the name asked for; the folder, where its own was taken, gets a suffix - said, not silent (WT-2.3; O3)
-					...!isEqualPath(folder, planned) ? [`Its worktree is at ${folder}: ${planned} was taken.`] : [],
-					...worktree.copyFailures.length ? [`What .worktreeinclude names could not all be copied into its worktree: ${worktree.copyFailures.join(', ')}.`] : [],
-					...worktree.hookFailure ? [`A git hook failed as its worktree was made: ${worktree.hookFailure}`] : [],
+					...!isEqualPath(folder, planned) ? [`Worktree created at ${folder}: ${planned} was already in use.`] : [],
+					...worktree.copyFailures.length ? [`Some files listed in .worktreeinclude could not be copied into the worktree: ${worktree.copyFailures.join(', ')}.`] : [],
+					...worktree.hookFailure ? [`A Git hook failed during worktree creation: ${worktree.hookFailure}`] : [],
 					...serversOffNotes(installed, { folder, repository }, homeOf(env), yolo)
 				];
-				progress?.(`Setting up the worktree ${place.branch}.`);
+				progress?.(`Running setup for worktree ${place.branch}.`);
 				const setup = await this.ports.git.setupOutcome(folder);
 				if (!this.isStarting(agent)) {
-					throw new Error('it was stopped as its worktree was set up');
+					throw new Error('startup was stopped during worktree setup');
 				}
 				let startNote: string | undefined;
 				switch (setup.kind) {
 					case 'failed':
-						throw new FacadeError('FAILED', `its worktree's setup failed - \`${setup.line}\` exited with code ${setup.exitCode}${setup.output ? `: ${setup.output.trim()}` : ''}`, { outcome: 'failed', agent: agent.id });
+						throw new FacadeError('FAILED', `worktree setup failed: \`${setup.line}\` exited with code ${setup.exitCode}${setup.output ? `: ${setup.output.trim()}` : ''}`, { outcome: 'failed', agent: agent.id });
 					case 'stopped':
-						throw new FacadeError('FAILED', 'its worktree\'s setup ended before it finished: its terminal was closed', { outcome: 'failed', agent: agent.id });
+						throw new FacadeError('FAILED', 'worktree setup was interrupted when its terminal closed', { outcome: 'failed', agent: agent.id });
 					case 'succeeded':
-						notes.push('Its worktree\'s setup ran, and succeeded.');
+						notes.push('Worktree setup completed successfully.');
 						break;
 					case 'submitted':
-						notes.push('Its worktree\'s setup was sent without shell integration: whether it finished, or how, is not known.');
-						startNote = 'Your worktree\'s setup was sent without shell integration: whether it finished is not known - check before you rely on it.';
+						notes.push('Worktree setup was submitted without shell integration; its completion and result are unknown.');
+						startNote = 'Worktree setup was submitted without shell integration. Its completion and result are unknown; check the setup before relying on it.';
 						break;
 					case 'invalid':
-						notes.push('Its repository\'s .facade/worktrees.json could not be read: no setup was run.');
+						notes.push('The repository\'s .facade/worktrees.json could not be read; no setup ran.');
 						break;
 				}
 				try {
@@ -871,7 +871,7 @@ export class Facade implements Disposable {
 			} catch (err) {
 				// A worktree made for a start that fails stays, its branch with it: the answer says where (O4).
 				if (made !== undefined && err instanceof FacadeError && err.code === 'FAILED') {
-					throw new FacadeError(err.code, `${err.message}. The worktree ${place.branch} was made for it, at ${made}, and stays, with its branch: start an agent there by its folder, or delete it.`, { ...err.outcome ?? { outcome: 'failed' }, worktree: made });
+					throw new FacadeError(err.code, `${err.message}\nWorktree ${place.branch} was created at ${made}; the worktree and branch have been kept. To reuse it, start an agent with folder set to this path. Delete it only if it is no longer needed.`, { ...err.outcome ?? { outcome: 'failed' }, worktree: made });
 				}
 				throw err;
 			}
@@ -941,14 +941,14 @@ export class Facade implements Disposable {
 		this.deletionOver(folder);
 		if (this.table.madeWorktree(folder) && !fs.existsSync(folder)) {
 			this.table.forgetWorktree(folder);
-			this.log(`${folder} was deleted.`);
+			this.log(`Deleted worktree ${folder}.`);
 		}
 	}
 
 	/** The person's deletion of the worktree `folder` failed in the window: agents can start there again (O5; OR-10). */
 	worktreeDeleteFailed(folder: string): void {
 		if (this.deletionOver(folder)) {
-			this.log(`${folder} was not deleted: agents can start there again.`);
+			this.log(`Worktree ${folder} was not deleted. Agents can start there again.`);
 		}
 	}
 
@@ -976,7 +976,7 @@ export class Facade implements Disposable {
 		const timer = setTimeout(() => this.deletionOver(folder), this.timing().startTimeoutMs);
 		this.personDeletions.push({ folder, timer });
 		const starting = this.liveAgents().filter(agent => agent.state === 'starting' && isEqualPath(agent.folder, folder));
-		await Promise.all(starting.map(agent => this.stopOne(agent, 'human', 'as its worktree was deleted').catch(err => this.log(`Stopping ${describe(agent)} as its worktree is deleted: ${messageOf(err)}`))));
+		await Promise.all(starting.map(agent => this.stopOne(agent, 'human', 'as its worktree was being deleted').catch(err => this.log(`Could not stop ${describe(agent)} during worktree deletion: ${messageOf(err)}`))));
 	}
 
 	/**
@@ -989,7 +989,7 @@ export class Facade implements Disposable {
 	async stopAgent(caller: Caller, target: string, options: { readonly deleteWorktree?: boolean; readonly discardChanges?: boolean } = {}): Promise<Stopped> {
 		this.stillOpen();
 		if (options.discardChanges && !options.deleteWorktree) {
-			throw new FacadeError('INVALID', 'discard_changes says what to do with the changes in a worktree being deleted: give it with delete_worktree.');
+			throw new FacadeError('INVALID', 'discard_changes:true requires delete_worktree:true; it controls whether worktree deletion may discard changes.');
 		}
 		const agent = this.agentNamed(target, caller);
 		this.assertReaches(caller, agent);
@@ -1022,12 +1022,12 @@ export class Facade implements Disposable {
 			const made = await Promise.race([making.then(result => ({ folder: result })), timeout(this.timing().startTimeoutMs, over.signal).then(() => undefined, () => undefined)]);
 			over.abort();
 			if (!made) {
-				throw new FacadeError('UNAVAILABLE', `${describe(agent)} ${ended && !alreadyEnded ? 'was stopped, but its' : 'ended, and its'} worktree ${agent.worktree} is still being made, so it was not deleted: git may still make it, and it would stay, with its branch. Call stop_agent with delete_worktree again later.`, { outcome: 'pending', agent: agent.id });
+				throw new FacadeError('UNAVAILABLE', `${describe(agent)} ${ended && !alreadyEnded ? 'was stopped, but its' : 'ended, and its'} worktree ${agent.worktree} is still being created. It was not deleted. Git may finish creating it; the worktree and branch will be kept. Call stop_agent again with delete_worktree:true after creation ends.`, { outcome: 'pending', agent: agent.id });
 			}
 			if (made.folder === undefined) {
 				// Git made none: nothing of its to delete - never the folder that was planned for it, which may be another's
 				const now = this.factsOf(this.table.get(agent.id) ?? agent);
-				return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: 'git made no worktree for it: there is nothing to delete' } };
+				return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: 'Git did not create a worktree, so there is nothing to delete' } };
 			}
 			folder = made.folder;
 		}
@@ -1051,7 +1051,7 @@ export class Facade implements Disposable {
 				this.table.forgetWorktree(folder);
 			}
 			const now = this.factsOf(this.table.get(agent.id) ?? agent);
-			return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: 'its folder is gone already: there is nothing left to delete' } };
+			return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: 'the folder no longer exists, so there is nothing to delete' } };
 		}
 		// A main checkout - or a folder in one - or a folder outside git, is never deleted: the agent alone is stopped.
 		// What a deletion left of a worktree Facade made - a folder git no longer lists, whose files could not all
@@ -1063,7 +1063,7 @@ export class Facade implements Disposable {
 				await this.stopOne(agent, by, 'with stop_agent');
 			}
 			const now = this.factsOf(this.table.get(agent.id) ?? agent);
-			return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: repository ? 'it is its repository\'s main checkout, which is never deleted' : 'it is in no git repository: there is no worktree to delete' } };
+			return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: repository ? 'it is the repository\'s main checkout, which cannot be deleted' : 'the folder is not in a Git repository, so there is no worktree to delete' } };
 		}
 		// An agent's folder inside a worktree is not the worktree: the worktree is what is deleted, its top level - with
 		// every agent in it, by the same preflight (AGENT-ORCHESTRATION.md, O5 step 1; OR-09)
@@ -1112,13 +1112,13 @@ export class Facade implements Disposable {
 		// X-74). One the window holds for another record is no agent of this list to stop.
 		const terminals = await this.ports.terminals.inside(folder);
 		if (terminals.others) {
-			throw new FacadeError('REFUSED', `${folder} has ${terminals.others === 1 ? 'an agent' : `${terminals.others} agents`} working in it that ${terminals.others === 1 ? 'is' : 'are'} not of this window's list, which deleting it would end unasked. Nothing was stopped. Stop ${terminals.others === 1 ? 'it' : 'them'} first.`);
+			throw new FacadeError('REFUSED', `Cannot delete ${folder}: ${terminals.others === 1 ? 'an agent' : `${terminals.others} agents`} working there ${terminals.others === 1 ? 'is' : 'are'} missing from this window's agent list. Deleting the worktree would end ${terminals.others === 1 ? 'it' : 'them'} without an explicit stop. Nothing was stopped. Stop the unlisted agents first.`);
 		}
 		// Another window's agents there are its to stop: the window sees their terminals - the pty host holds every
 		// window's - and what Facade put there for them says so too. Refused before anything is stopped (X-10; N-53).
-		const elsewhere = terminals.elsewhere.length ? terminals.elsewhere : this.othersUsing(folder).map(user => `#a${user.id} of its list`);
+		const elsewhere = terminals.elsewhere.length ? terminals.elsewhere : this.othersUsing(folder).map(user => `#a${user.id} in that window's agent list`);
 		if (elsewhere.length) {
-			throw new FacadeError('REFUSED', `${folder} has ${elsewhere.length === 1 ? 'an agent' : `${elsewhere.length} agents`} of another window working in it - ${elsewhere.join(', ')} - which this call does not stop. Nothing was stopped. Stop ${elsewhere.length === 1 ? 'it' : 'them'} in that window first.`);
+			throw new FacadeError('REFUSED', `Cannot delete ${folder}: it is in use by ${elsewhere.length === 1 ? 'an agent' : `${elsewhere.length} agents`} from another window (${elsewhere.join(', ')}). This call cannot stop ${elsewhere.length === 1 ? 'it' : 'them'}. Nothing was stopped. Stop the agents in their own window first.`);
 		}
 		const live = this.liveAgents();
 		// Its terminal the window cannot see go there - the CLI itself, or a shell it runs, cd'd - its processes say
@@ -1130,7 +1130,7 @@ export class Facade implements Disposable {
 		const inside = live.filter(each => isEqualPath(each.folder, folder) || isInsideFolder(each.folder, folder) || terminals.agents.includes(each.id) || (each.processId !== undefined && wentThere(each)));
 		const outOfReach = inside.filter(each => !this.reaches(caller, each));
 		if (outOfReach.length) {
-			throw new FacadeError('REFUSED', `${folder} has ${outOfReach.map(each => `${describe(each)}${isEqualPath(each.folder, folder) ? '' : ` (started in ${each.folder})`}`).join(', ')} working in it, outside your tree: your YOLO is off, and you reach only your own tree. Nothing was stopped.`);
+			throw new FacadeError('REFUSED', `Cannot delete ${folder}: agents working there are outside your tree: ${outOfReach.map(each => `${describe(each)}${isEqualPath(each.folder, folder) ? '' : ` (started in ${each.folder})`}`).join(', ')}. With YOLO off, you can reach only your own tree. Nothing was stopped.`);
 		}
 		// The terminals the deletion may close: those of the agents it stops, the ones started elsewhere included
 		const agents = [...new Set([...inside.map(each => each.id), ...terminals.agents])];
@@ -1139,9 +1139,9 @@ export class Facade implements Disposable {
 		// (O5 step 2; O8; OR-19; OR-04)
 		const changes = options.discardChanges ? undefined : await this.lossIn(folder, target, agents);
 		if (changes) {
-			throw new FacadeError('REFUSED', `${folder} has work that deleting it would lose: ${changes}. Nothing was stopped. Commit what should stay, or call again with discard_changes: true to lose it.`);
+			throw new FacadeError('REFUSED', `Cannot delete ${folder} without losing work: ${changes}. Nothing was stopped. Commit work you need to keep, or retry with discard_changes:true to discard it.`);
 		}
-		const results = await Promise.allSettled(inside.map(each => this.stopOne(each, by, 'with stop_agent, its worktree being deleted')));
+		const results = await Promise.allSettled(inside.map(each => this.stopOne(each, by, 'with stop_agent to delete its worktree')));
 		const stopped = inside.map(each => this.factsOf(this.table.get(each.id) ?? each));
 		if (results.some(result => result.status === 'rejected')) {
 			// What happened all the same, said and given as the same facts: the agents it stopped, and those whose stops
@@ -1156,7 +1156,7 @@ export class Facade implements Disposable {
 		this.stillOpen();
 		if (since) {
 			// Refused, as an error: what happened all the same - the agents stopped - said with it (X-23)
-			throw new FacadeError('REFUSED', `${folder} was not deleted: work came into it as its agents stopped, which deleting it would lose: ${since}. Stopped meanwhile: ${stopped.map(each => describe(each)).join(', ')}. Commit what should stay, or call again with discard_changes: true to lose it.`, { agent: agent.id, worktree: folder, stopped: stopped.map(each => each.id) });
+			throw new FacadeError('REFUSED', `${folder} was not deleted: work appeared while its agents were stopping and would be lost: ${since}. Agents already stopped: ${stopped.map(each => describe(each)).join(', ')}. Commit work you need to keep, or retry with discard_changes:true to discard it.`, { agent: agent.id, worktree: folder, stopped: stopped.map(each => each.id) });
 		}
 		try {
 			await this.ports.git.deleteWorktree(folder, {
@@ -1169,7 +1169,7 @@ export class Facade implements Disposable {
 		} catch (err) {
 			// Said in the log as well as to the caller, and kept in the record - the ledger and the person's history - where
 			// the caller and the person can read what came of the removal, a call cut as it went too (O5, O11; OR-15)
-			this.log(`${folder} could not be deleted with stop_agent by ${this.whoIs(by)}: ${messageOf(err)}`);
+			this.log(`Failed to delete ${folder} through stop_agent requested by ${this.whoIs(by)}: ${messageOf(err)}`);
 			// With what a retry needs to finish what is left once git forgot the worktree, whoever made it (OR-08)
 			const branch = target.leftover ?? target.branch;
 			this.recordRemoval({ folder, by, deleted: false, reason: messageOf(err), main: target.main, ...(branch !== undefined ? { branch } : {}) });
@@ -1177,7 +1177,7 @@ export class Facade implements Disposable {
 		}
 		this.recordRemoval({ folder, by, deleted: true });
 		this.table.forgetWorktree(folder);
-		this.log(`${folder} was deleted with stop_agent by ${this.whoIs(by)}.`);
+		this.log(`Deleted ${folder} through stop_agent requested by ${this.whoIs(by)}.`);
 		return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped, worktree: { folder, deleted: true } };
 	}
 
@@ -1228,12 +1228,12 @@ export class Facade implements Disposable {
 			} else {
 				// One whose terminal the window does not answer for keeps neither the others nor Facade from
 				// coming back: it is asked after again, a while on.
-				this.log(`Coming back to ${describe(agent)} failed: ${messageOf(alive.reason)}. Facade asks again in a while.`);
+				this.log(`Could not recover ${describe(agent)}: ${messageOf(alive.reason)}. Facade will check again later.`);
 				untold.push(agent);
 			}
 		});
 		if (untold.length) {
-			this.background('Finding the agents the window could not tell of', this.findAgain(untold));
+			this.background('Rechecking agents whose process state is unknown', this.findAgain(untold));
 		}
 		// The window before was closed: another workspace's, or this workspace's and not reloaded - not this
 		// very window, whose extension host started again, and not Facade letting go of its agents
@@ -1258,7 +1258,7 @@ export class Facade implements Disposable {
 				// terminal's going sent it: nobody can reach it now, so it is ended by its process, and its end is
 				// recorded once it is gone, not before (AGENT-LAUNCHER.md, LA-15; N-24)
 				if (this.runningProcessOf(agent) !== undefined) {
-					this.background(`Ending ${describe(agent)}, cut off from its terminal`, this.endCutOff(agent, closedByThePerson));
+					this.background(`Ending ${describe(agent)} after losing its terminal`, this.endCutOff(agent, closedByThePerson));
 					continue;
 				}
 				this.endedUnseen(agent, closedByThePerson);
@@ -1322,16 +1322,16 @@ export class Facade implements Disposable {
 							? table.end(agent.id, 'failed', cutReason(agent, !!table.madeWorktree(agent.folder) && fs.existsSync(agent.folder), false))
 							: agent.state === 'stopping'
 								? table.end(agent.id, 'stopped', agent.stopping?.reason ?? 'with stop_agent', { ...(agent.stopping?.by !== undefined ? { by: agent.stopping.by } : {}) })
-								: table.end(agent.id, 'stopped', 'its window went');
+								: table.end(agent.id, 'stopped', 'its window closed');
 						if (end) {
-							this.log(`${describe(agent)} of the untitled workspace whose record is ${dir} ended (${end.kind}): ${end.reason}`);
+							this.log(`Recorded ${describe(agent)} as ended (${end.kind}) in the untitled workspace record ${dir}: ${end.reason}`);
 						}
 					}
 				} finally {
 					table.dispose('window');
 				}
 			} catch (err) {
-				this.log(`The agents of the untitled workspace whose record is ${dir}, whose window went, could not be recorded as ended: ${messageOf(err)}`);
+				this.log(`Could not record agents as ended after their untitled workspace's window closed (record ${dir}): ${messageOf(err)}`);
 			}
 		}
 	}
@@ -1366,23 +1366,23 @@ export class Facade implements Disposable {
 		} else if (end?.byThePerson || end?.reason === 'folderGone') {
 			this.ended(agent, 'stopped', closedBecause(end), { ...(end.byThePerson ? { by: 'human' as const } : {}), ...(end.exitCode !== undefined ? { exitCode: end.exitCode } : {}), quiet: end.byThePerson || closedByThePerson });
 		} else if (end?.exitCode !== undefined && end.exitCode >= 0 && signalOf(end.exitCode) === undefined) {
-			this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', `${exitedWith(end.exitCode)} while Facade was away`, { exitCode: end.exitCode, quiet: closedByThePerson });
+			this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', `${exitedWith(end.exitCode)} while Facade was not running`, { exitCode: end.exitCode, quiet: closedByThePerson });
 		} else if (end?.exitCode !== undefined) {
 			// Killed, which Facade did not see - no exit of its CLI's own: lost, saying what is known (D11)
 			const signal = signalOf(end.exitCode);
-			this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', signal !== undefined ? `its CLI was killed (signal ${signal}) while Facade was away` : HOST_RESTARTED, { quiet: true });
+			this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', signal !== undefined ? `its CLI was killed by signal ${signal} while Facade was not running` : HOST_RESTARTED, { quiet: true });
 		} else if (closedByThePerson) {
 			// The whole window went: nobody is told of the end (M8) - what it had not fetched goes back all the same (M6)
-			this.ended(agent, 'stopped', 'its window went', { quiet: true, windowWent: true });
+			this.ended(agent, 'stopped', 'its window closed', { quiet: true, windowWent: true });
 		} else {
-			this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', 'its terminal was gone when Facade came back', { quiet: true });
+			this.ended(agent, agent.state === 'starting' ? 'failed' : 'lost', 'its terminal was missing when Facade restarted', { quiet: true });
 		}
 	}
 
 	/** An agent found again as Facade came back: one set out to be stopped is stopped again; any other goes on as it was. */
 	private goOn(agent: LiveAgent): void {
 		if (agent.state === 'stopping') {
-			this.background(`Stopping ${describe(agent)} again`, this.stopOne(agent, agent.stopping?.by, agent.stopping?.reason ?? 'with stop_agent'));
+			this.background(`Resuming the stop of ${describe(agent)}`, this.stopOne(agent, agent.stopping?.by, agent.stopping?.reason ?? 'with stop_agent'));
 		} else {
 			this.launcher.resume(agent);
 		}
@@ -1401,9 +1401,9 @@ export class Facade implements Disposable {
 			}
 		}
 		// The window gave its terminal back knowing nothing of where its final screen goes (D6)
-		this.background(`Telling the window where the final screen of ${describe(agent)} goes`, this.ports.terminals.register(agent.id, this.screens.finalScreenOf(agent)).then(found => {
+		this.background(`Registering the final-screen save location for ${describe(agent)}`, this.ports.terminals.register(agent.id, this.screens.finalScreenOf(agent)).then(found => {
 			if (!found) {
-				this.log(`${describe(agent)} came back, but the window could not be told where its final screen goes: it will not be kept.`);
+				this.log(`Recovered ${describe(agent)}, but could not register its final-screen save location. Its final screen will not be saved.`);
 			}
 		}));
 		const now = this.table.get(agent.id);
@@ -1449,7 +1449,7 @@ export class Facade implements Disposable {
 		}
 		for (const agent of left) {
 			// The window watches it still, and says its end once it can tell (LB-05)
-			this.log(`Whether ${describe(agent)} still runs is not known: the window could not tell. It stays as it was, and its end is recorded once the window tells of it.`);
+			this.log(`The window could not determine whether ${describe(agent)} is still running. Its recorded state is unchanged; Facade will record its end when the window reports it.`);
 		}
 	}
 
@@ -1487,7 +1487,7 @@ export class Facade implements Disposable {
 		const pending = (cause: string) => {
 			this.log(`${describe(agent)} has not ended yet: ${cause}`);
 			this.keepStopping(agent, stopBy, why);
-			return new FacadeError('UNAVAILABLE', `${describe(agent)} is still stopping: its process has not ended within ${Math.round(ms / 1000)} seconds. Facade goes on stopping it; list_agents shows when it has ended.`, { outcome: 'pending', agent: agent.id });
+			return new FacadeError('UNAVAILABLE', `${describe(agent)} is still stopping: its process has not exited after ${Math.round(ms / 1000)} seconds. Facade will continue trying to stop it; list_agents shows whether it has ended.`, { outcome: 'pending', agent: agent.id });
 		};
 		// A launch under way opens its terminal first, or gives up seeing the stop: never one afterwards (O9).
 		const over = new AbortController();
@@ -1502,7 +1502,7 @@ export class Facade implements Disposable {
 				exitCode = (await this.ports.terminals.stop(agent.id)).exitCode;
 				// The window says it is gone; its process says so too, or it is not (N-24)
 				if (this.runningProcessOf(agent) !== undefined) {
-					throw new Error('the window has no terminal for it, and its process still runs');
+					throw new Error('the window cannot find its terminal, but its process is still running');
 				}
 				break;
 			} catch (err) {
@@ -1545,7 +1545,7 @@ export class Facade implements Disposable {
 			}
 		}
 		if (this.runningProcessOf(agent) !== undefined) {
-			this.log(`${describe(agent)} runs on, cut off from its terminal, even killed: it stays as it is.`);
+			this.log(`${describe(agent)} is still running without its terminal after termination and kill attempts. Its recorded state is unchanged.`);
 			return;
 		}
 		const now = this.table.get(agent.id);
@@ -1637,7 +1637,7 @@ export class Facade implements Disposable {
 				}
 				return;
 			}
-			this.log(`${describe(agent)} has not ended, even killed: its terminal shows what holds it.`);
+			this.log(`${describe(agent)} is still running after termination and kill attempts. Inspect its terminal for the cause.`);
 		})());
 	}
 
@@ -1656,7 +1656,7 @@ export class Facade implements Disposable {
 		try {
 			this.table.recordWorktreeRemoval(removal);
 		} catch (err) {
-			this.log(`How the removal of ${removal.folder} went could not be recorded: ${messageOf(err)}`);
+			this.log(`Could not record the removal outcome for ${removal.folder}: ${messageOf(err)}`);
 		}
 	}
 
@@ -1664,7 +1664,7 @@ export class Facade implements Disposable {
 	private pendingDeletionText(folder: string, facts: PendingDeletion): string {
 		const named = (ids: readonly number[]) => ids.map(id => this.whoIs(id)).join(', ');
 		const one = facts.stopping.length === 1;
-		return `Not every agent in ${folder} has ended yet, so it was not deleted: ${named(facts.stopping)} ${one ? 'is' : 'are'} still stopping${facts.stopped.length ? `; ${named(facts.stopped)} stopped` : ''}. Call stop_agent with delete_worktree again once ${one ? 'it has' : 'they have'} ended.`;
+		return `${folder} was not deleted: ${named(facts.stopping)} ${one ? 'is' : 'are'} still stopping${facts.stopped.length ? `; ${named(facts.stopped)} stopped` : ''}. Once ${one ? 'it has' : 'they have'} ended, call stop_agent again with delete_worktree:true.`;
 	}
 
 	/**
@@ -1682,7 +1682,7 @@ export class Facade implements Disposable {
 		try {
 			shared = await this.ports.git.deletionLoss(folder, { discardChanges: false, ownFiles: leftover === undefined ? await this.ownFilesIn(folder, repository) : [], main: repository.main, agents, ...(leftover !== undefined ? { leftover: true } : {}) });
 		} catch (err) {
-			throw new FacadeError('FAILED', `${folder} could not be checked for work that deleting it would lose: ${messageOf(err)}. Nothing was stopped.`);
+			throw new FacadeError('FAILED', `Could not check ${folder} for work that deletion would lose. Nothing was stopped. Reason: ${messageOf(err)}`);
 		}
 		// What a deletion left holds no git to ask: what of it the branch does not hold as it is, is work
 		const work = leftover !== undefined ? await this.ports.git.leftoverWorkIn(repository.main, leftover, folder) : [];
@@ -1695,8 +1695,8 @@ export class Facade implements Disposable {
 		}
 		return [
 			...changes.length ? [named(changes)] : [],
-			...work.length ? [`what a deletion left of it holds ${work.length} ${work.length === 1 ? 'file' : 'files'} its branch ${leftover} does not hold as ${work.length === 1 ? 'it is' : 'they are'} (${named(work)})`] : [],
-			...submodules.length ? [`${submodules.length} ${submodules.length === 1 ? 'submodule' : 'submodules'} (${named(submodules)}), with any of ${submodules.length === 1 ? 'its' : 'their'} commits not pushed`] : []
+			...work.length ? [`${work.length} ${work.length === 1 ? 'file' : 'files'} remaining after an earlier deletion (${named(work)}); branch ${leftover} does not preserve ${work.length === 1 ? 'it in its current state' : 'them in their current states'}`] : [],
+			...submodules.length ? [`${submodules.length} ${submodules.length === 1 ? 'submodule' : 'submodules'} (${named(submodules)}), including any unpushed commits in ${submodules.length === 1 ? 'it' : 'them'}`] : []
 		].join(' and ');
 	}
 
@@ -1708,7 +1708,7 @@ export class Facade implements Disposable {
 		try {
 			return this.injections.othersUsing(folder, this.table.dir);
 		} catch (err) {
-			throw new FacadeError('UNAVAILABLE', `Whether agents of another window work in ${folder} cannot be told: what Facade put into folders could not be read (${messageOf(err)}). Nothing was stopped.`);
+			throw new FacadeError('UNAVAILABLE', `Cannot determine whether agents from another window use ${folder}: Facade's record of injected files could not be read (${messageOf(err)}). Nothing was stopped.`);
 		}
 	}
 
@@ -1723,7 +1723,7 @@ export class Facade implements Disposable {
 		try {
 			unchanged = this.injections.ownedUnchanged(folder);
 		} catch (err) {
-			this.log(`What Facade put into ${folder} could not be read: ${messageOf(err)}`);
+			this.log(`Could not read Facade's injected-file record for ${folder}: ${messageOf(err)}`);
 			return [];
 		}
 		const owned: OwnedFile[] = [];
@@ -1733,7 +1733,7 @@ export class Facade implements Disposable {
 				try {
 					committed = repository.head === undefined ? undefined : await this.ports.git.fileAt(repository.main, repository.head, file.path);
 				} catch (err) {
-					this.log(`What ${file.path} holds at ${repository.head} could not be read: ${messageOf(err)}`);
+					this.log(`Could not read ${file.path} at commit ${repository.head}: ${messageOf(err)}`);
 					committed = undefined;
 				}
 				if (committed === undefined || committed !== Buffer.from(file.theirs, 'base64').toString('utf8')) {
@@ -1750,7 +1750,7 @@ export class Facade implements Disposable {
 		try {
 			return this.injections.editedSince(folder);
 		} catch (err) {
-			throw new FacadeError('UNAVAILABLE', `What was changed of what Facade put into ${folder} cannot be told: what Facade put into folders could not be read (${messageOf(err)}). Nothing was stopped.`);
+			throw new FacadeError('UNAVAILABLE', `Cannot determine whether Facade's injected files in ${folder} were edited: their record could not be read (${messageOf(err)}). Nothing was stopped.`);
 		}
 	}
 
@@ -1771,7 +1771,7 @@ export class Facade implements Disposable {
 	/** Refuses a start in a worktree being deleted: by an agent's `stop_agent`, or by the person in the window. */
 	private assertNotDeleting(folder: string): void {
 		if ([...this.deletions, ...this.personDeletions].some(each => isEqualPath(each.folder, folder))) {
-			throw new FacadeError('REFUSED', `${folder} is being deleted: no agent starts there.`);
+			throw new FacadeError('REFUSED', `Cannot start an agent in ${folder} while the folder is being deleted.`);
 		}
 	}
 
@@ -1790,40 +1790,40 @@ export class Facade implements Disposable {
 		const wanted = named?.trim();
 		const folder = !wanted ? here : path.isAbsolute(wanted) ? await this.windowFolderAt(wanted) : await this.worktreeOnBranch(here, wanted);
 		if (folder === undefined) {
-			throw new FacadeError('INVALID', 'folder is required here: the person has no folder on screen. Name a folder of the window by its absolute path.');
+			throw new FacadeError('INVALID', 'Argument \'folder\' is required because the person has no selected folder. Provide the absolute path of a folder in this window.');
 		}
 		this.assertNotDeleting(folder);
 		if (!fs.existsSync(folder)) {
-			throw new FacadeError('NOT_FOUND', `${folder} is not on the disk any more: no agent starts there. Name a folder of the window by its absolute path.`);
+			throw new FacadeError('NOT_FOUND', `Cannot start an agent in ${folder}: it no longer exists on disk. Provide the absolute path of an existing folder in this window.`);
 		}
 		const repository = await this.ports.git.repositoryOf(folder);
 		if (!newWorktree) {
 			return { kind: 'folder', folder, worktree: repository?.worktree ?? path.basename(folder), main: repository?.main ?? folder, outsideGit: !repository };
 		}
 		if (!repository) {
-			throw new FacadeError('REFUSED', `${folder} is in no git repository, so no worktree of it can be made: start the child in the folder itself, without new_worktree.`);
+			throw new FacadeError('REFUSED', `Cannot create a worktree from ${folder}: it is not in a Git repository. Start the child in this folder without new_worktree:true.`);
 		}
 		// At the caller's commit in its own repository - the person's checkout being the folder on their screen (O3;
 		// N-06) - and in another at its main checkout's.
 		const ownRepository = here === undefined || !fs.existsSync(here) ? undefined : await this.ports.git.repositoryOf(here);
 		const from = ownRepository && isEqualPath(ownRepository.main, repository.main) ? { folder: here, head: ownRepository.head } : { folder: repository.main, head: (await this.ports.git.repositoryOf(repository.main))?.head };
 		if (from.head === undefined) {
-			throw new FacadeError('REFUSED', `${from.folder} has no commit for a new worktree to start at: it is on a branch with no commit yet, or one git cannot read.`);
+			throw new FacadeError('REFUSED', `Cannot create a worktree from ${from.folder}: its branch has no commit yet, or Git cannot read its commit.`);
 		}
 		let notABranch: string | undefined;
 		try {
 			notABranch = await this.ports.git.whyNotBranchName(repository.main, name);
 		} catch (err) {
-			throw new FacadeError('UNAVAILABLE', `git did not say whether ${name} can be a branch: ${messageOf(err)}. Nothing was made; try again.`);
+			throw new FacadeError('UNAVAILABLE', `Git could not check whether '${name}' is a valid branch name. Nothing was created; retry the request. Reason: ${messageOf(err)}`);
 		}
 		if (notABranch !== undefined) {
-			throw new FacadeError('REFUSED', `${name} cannot be the branch of a new worktree: ${notABranch}. Give the child another name.`);
+			throw new FacadeError('REFUSED', `Cannot use '${name}' for the new worktree's branch: ${notABranch}. Choose another agent name.`);
 		}
 		if (await this.ports.git.hasBranch(repository.main, name)) {
-			throw new FacadeError('REFUSED', `${path.basename(repository.main)} has a branch called ${name} already, and a new worktree is on a new branch, named after the child: give the child another name, or start it in the worktree of ${name} by its folder.`);
+			throw new FacadeError('REFUSED', `Branch '${name}' already exists in ${path.basename(repository.main)}. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for '${name}'.`);
 		}
 		if (this.branchesBeingMade.some(each => isEqualPath(each.main, repository.main) && each.branch === name)) {
-			throw new FacadeError('REFUSED', `${path.basename(repository.main)} has a branch called ${name} being made already, for another start: give the child another name.`);
+			throw new FacadeError('REFUSED', `Branch '${name}' is already being created in ${path.basename(repository.main)} for another start. Choose another agent name.`);
 		}
 		return { kind: 'new', repository, head: from.head, branch: name };
 	}
@@ -1837,14 +1837,14 @@ export class Facade implements Disposable {
 		const folders = await this.windowFolders();
 		const found = folders.find(each => isEqualPath(each.folder, folder));
 		if (!found) {
-			const listed = `Its folders: ${folders.map(each => each.folder).join(', ')}.`;
+			const listed = `Window folders: ${folders.map(each => each.folder).join(', ')}.`;
 			if (this.ports.workspace.folders().some(each => isEqualPath(each, folder)) && !fs.existsSync(folder)) {
-				throw new FacadeError('NOT_FOUND', `${folder} is a folder of this window that is not on the disk any more: no agent starts there. ${listed}`);
+				throw new FacadeError('NOT_FOUND', `Cannot start an agent in ${folder}: this window's folder no longer exists on disk. ${listed}`);
 			}
 			if (fs.existsSync(folder)) {
-				throw new FacadeError('REFUSED', `${folder} is ${fs.statSync(folder).isDirectory() ? 'a folder' : 'a file'} this window does not have: an agent starts in a folder of the window, a worktree of one, or a new worktree. ${listed}`);
+				throw new FacadeError('REFUSED', `${folder} is ${fs.statSync(folder).isDirectory() ? 'a folder' : 'a file'} outside this window. Start in a window folder, one of its worktrees, or a new worktree. ${listed}`);
 			}
-			throw new FacadeError('NOT_FOUND', `${folder} is no folder of this window. ${listed}`);
+			throw new FacadeError('NOT_FOUND', `${folder} does not identify a folder in this window. ${listed}`);
 		}
 		return found.folder;
 	}
@@ -1856,15 +1856,15 @@ export class Facade implements Disposable {
 	private async worktreeOnBranch(own: string | undefined, branch: string): Promise<string> {
 		const repository = own === undefined ? undefined : await this.ports.git.repositoryOf(own);
 		if (!repository) {
-			throw new FacadeError('INVALID', `${branch} is no absolute path, and ${own === undefined ? 'the person has no folder on screen' : `${own} is in no repository`} for it to be a branch of. Name a folder of the window by its absolute path.`);
+			throw new FacadeError('INVALID', `'${branch}' is not an absolute path, and no repository is available to resolve it as a branch: ${own === undefined ? 'the person has no selected folder' : `${own} is not in a repository`}. Provide the absolute path of a folder in this window.`);
 		}
 		const listed = await this.ports.git.worktreesOf(repository.main);
 		const on = listed.filter(each => each.branch === branch);
 		if (on.length > 1) {
-			throw new FacadeError('INVALID', `${branch} is checked out in ${on.length} worktrees of ${path.basename(repository.main)}: ${on.map(each => each.folder).join(', ')}. Name the one you mean by its folder.`);
+			throw new FacadeError('INVALID', `Branch '${branch}' is checked out in ${on.length} worktrees of ${path.basename(repository.main)}: ${on.map(each => each.folder).join(', ')}. Select a worktree by its absolute folder path.`);
 		}
 		if (!on.length) {
-			throw new FacadeError('NOT_FOUND', `No worktree of ${path.basename(repository.main)} has ${branch} checked out. Its worktrees: ${listed.map(each => `${each.name} at ${each.folder}`).join(', ')}. A folder is named by its absolute path; a worktree on a detached HEAD, by its folder.`);
+			throw new FacadeError('NOT_FOUND', `No worktree of ${path.basename(repository.main)} has branch '${branch}' checked out. Available worktrees: ${listed.map(each => `${each.name} at ${each.folder}`).join(', ')}. Use an absolute folder path to select a folder or a worktree with a detached HEAD.`);
 		}
 		return on[0].folder;
 	}
@@ -1883,7 +1883,7 @@ export class Facade implements Disposable {
 		// A closed terminal is a stop, the person's own, which finishes once the process has ended (AGENT-LAUNCHER.md:
 		// "Terminal close is the human stop action"; O-stop): a CLI that ignores the hang-up is ended by its process
 		if (this.runningProcessOf(found) !== undefined) {
-			this.background(`Ending ${describe(found)}, its terminal closed`, this.endOnceGone(found, now => this.terminalEndRecorded(now, end)));
+			this.background(`Recording the end of ${describe(found)} after its terminal closed`, this.endOnceGone(found, now => this.terminalEndRecorded(now, end)));
 			return;
 		}
 		this.terminalEndRecorded(found, end);
@@ -1904,11 +1904,11 @@ export class Facade implements Disposable {
 			} else {
 				// An exit code 130 just after an agent pressed Ctrl+C there is its doing, and said so (L6)
 				const interrupter = end.exitCode === INTERRUPTED ? this.screens.interruptedBy(agent.id) : undefined;
-				const reason = end.exitCode === undefined ? 'its terminal closed' : `${exitedWith(end.exitCode)}${interrupter !== undefined ? `, after ${this.whoIs(interrupter)} pressed Ctrl+C there` : ''}`;
+				const reason = end.exitCode === undefined ? 'its terminal closed' : `${exitedWith(end.exitCode)}${interrupter !== undefined ? `, after ${this.whoIs(interrupter)} sent Ctrl+C to its terminal` : ''}`;
 				this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', reason, { ...end.exitCode !== undefined ? { exitCode: end.exitCode } : {}, ...interrupter !== undefined ? { interruptedByAgent: true } : {} });
 			}
 		} catch (err) {
-			this.log(`Recording that ${describe(agent)} ended failed: ${messageOf(err)}`);
+			this.log(`Could not record the end of ${describe(agent)}: ${messageOf(err)}`);
 		}
 	}
 
@@ -1969,7 +1969,7 @@ export class Facade implements Disposable {
 		try {
 			this.mail.ended(this.table.get(agent.id) ?? agent, notice.how, notice.tell, notice.told);
 		} catch (err) {
-			this.log(`The unread messages of ${describe(agent)}, and its creator's notice, could not all be recorded: ${messageOf(err)}`);
+			this.log(`Could not record all returned unread messages and the creator's end notice for ${describe(agent)}: ${messageOf(err)}`);
 		}
 	}
 
@@ -1981,7 +1981,7 @@ export class Facade implements Disposable {
 		try {
 			await this.ports.terminals.stop(agent.id);
 		} catch (err) {
-			this.log(`${describe(agent)}'s terminal could not be closed: ${messageOf(err)}`);
+			this.log(`Could not close ${describe(agent)}'s terminal: ${messageOf(err)}`);
 		}
 	}
 
@@ -1997,7 +1997,7 @@ export class Facade implements Disposable {
 			// Under a lock every window takes: two windows trusting folders at once each keep the other's.
 			done = writeTrust(cli, config, trusted, withFileLock, env);
 		} catch (err) {
-			throw new FacadeError('FAILED', `${cli.displayName}'s trust in ${trusted.folder} could not be given: ${messageOf(err)}`);
+			throw new FacadeError('FAILED', `Could not configure ${cli.displayName} to trust ${trusted.folder}: ${messageOf(err)}`);
 		}
 		if (done) {
 			this.log(done.text);
@@ -2014,7 +2014,7 @@ export class Facade implements Disposable {
 				this.takeBackLater();
 			}
 		} catch (err) {
-			this.log(`What Facade put into ${agent.folder} could not be taken back: ${messageOf(err)}`);
+			this.log(`Could not remove Facade's injected files and entries from ${agent.folder}: ${messageOf(err)}`);
 		}
 	}
 
@@ -2023,7 +2023,7 @@ export class Facade implements Disposable {
 		try {
 			return this.injections.sweep();
 		} catch (err) {
-			this.log(`What agents that ended left in folders could not be taken back: ${messageOf(err)}. The next window tries again.`);
+			this.log(`Could not finish removing injected files and entries left by ended agents. Cleanup will retry when the next window opens. Reason: ${messageOf(err)}`);
 			return false;
 		}
 	}
@@ -2072,21 +2072,21 @@ export class Facade implements Disposable {
 		const found = this.cliOf(id, custom);
 		const startable = () => this.startable().map(each => each.id).join(', ') || 'none';
 		if (!found) {
-			throw new FacadeError('INVALID', `${id} is neither a CLI Facade starts nor a custom agent of the person's. It starts: ${startable()}.`);
+			throw new FacadeError('INVALID', `Unknown CLI or custom agent '${id}'. Available to start: ${startable()}.`);
 		}
 		const { cli, config } = found;
 		if (!config.enabled) {
-			throw new FacadeError('UNAVAILABLE', `${cli.displayName} is turned off: ${cli.setting}.enabled. It starts: ${startable()}.`);
+			throw new FacadeError('UNAVAILABLE', `${cli.displayName} is disabled by ${cli.setting}.enabled. Available to start: ${startable()}.`);
 		}
 		if (config.wrong) {
-			throw new FacadeError('UNAVAILABLE', `Facade cannot start ${cli.displayName} until the person puts its settings right: ${config.wrong.join('; ')}. Show Agent Launch shows them.`);
+			throw new FacadeError('UNAVAILABLE', `Cannot start ${cli.displayName} until the person corrects its settings: ${config.wrong.join('; ')}. Open Show Agent Launch to inspect them.`);
 		}
 		const env = { ...await this.options.clis.environment(folder), ...launchFor(config, unattended).launch.environment };
 		this.stillOpen();
 		// Found as its terminal will find it: in the environment a terminal there has, with its starter's launch's (L10).
 		const installed = this.options.clis.locate(cli, config, env, folder);
 		if (!installed) {
-			throw new FacadeError('UNAVAILABLE', `Facade cannot start ${cli.displayName} in ${folder}: ${whyNotInstalled(cli, config, 'the PATH a terminal there has')}.`);
+			throw new FacadeError('UNAVAILABLE', `Cannot start ${cli.displayName} in ${folder}: ${whyNotInstalled(cli, config, 'the PATH used by a terminal in that folder')}.`);
 		}
 		return { installed, config };
 	}
@@ -2109,7 +2109,7 @@ export class Facade implements Disposable {
 		try {
 			return this.options.clis.yolo();
 		} catch (err) {
-			throw new FacadeError('UNAVAILABLE', `Facade starts no agent until the person puts this setting right: ${messageOf(err)}.`);
+			throw new FacadeError('UNAVAILABLE', `Cannot start an agent until the person corrects this setting: ${messageOf(err)}`);
 		}
 	}
 
@@ -2125,7 +2125,7 @@ export class Facade implements Disposable {
 	private assertReaches(caller: Caller, agent: Agent): void {
 		if (!this.reaches(caller, agent)) {
 			// By the number the caller gave alone: what is out of its reach it does not learn of (X-54)
-			throw new FacadeError('REFUSED', `${agentRef(agent.id)} is outside your tree: your YOLO is off, and you reach only your own tree - the agents that come from the agent the person started that you come from.`);
+			throw new FacadeError('REFUSED', `${agentRef(agent.id)} is outside your tree. With YOLO off, you can reach only your tree: your human-started root and all its descendants.`);
 		}
 	}
 
@@ -2150,39 +2150,39 @@ export class Facade implements Disposable {
 		const reference = parseAgentReference(target);
 		const reach = [...this.table.state.agents.values()].filter(agent => this.reaches(caller, agent));
 		if (reference.kind === 'other') {
-			throw new FacadeError('INVALID', `${reference.text} is not an agent's number${/^#m/i.test(reference.text) ? ' but a message\'s' : ''}: agents are numbered #a1, #a2 and on.`);
+			throw new FacadeError('INVALID', `'${reference.text}' is not an agent ID${/^#m/i.test(reference.text) ? '; it is a message ID' : ''}. Use an agent ID such as #a1 or #a2.`);
 		}
 		if (reference.kind === 'number') {
 			if (reference.bare) {
 				const named = AgentTable.liveNamedIn(reach, target.trim().toLowerCase());
 				if (named.length) {
-					throw new FacadeError('INVALID', `${target.trim()} could be ${agentRef(reference.id)} or the name of ${named.map(describe).join(', ')}: write ${agentRef(reference.id)}, or the name with its number.`);
+					throw new FacadeError('INVALID', `'${target.trim()}' is ambiguous: it may mean ${agentRef(reference.id)} or the name of ${named.map(describe).join(', ')}. Use ${agentRef(reference.id)} for the ID, or a name followed by its ID.`);
 				}
 			}
 			const agent = this.table.get(reference.id);
 			if (!agent) {
-				throw new FacadeError('NOT_FOUND', `No agent is ${agentRef(reference.id)}: list_agents with all lists every agent you reach.`);
+				throw new FacadeError('NOT_FOUND', `No agent has ID ${agentRef(reference.id)}. Call list_agents with all:true to see every reachable run.`);
 			}
 			// One out of reach is refused before its name could be said (X-54)
 			this.assertReaches(caller, agent);
 			if (reference.name !== undefined && reference.name !== agent.name) {
 				// No agent is both: the one named is not there (O2)
-				throw new FacadeError('NOT_FOUND', `No agent is both @${reference.name} and ${agentRef(agent.id)}: ${agentRef(agent.id)} is @${agent.name}. Name it by its number alone, or by its name.`);
+				throw new FacadeError('NOT_FOUND', `Name and ID do not match: @${reference.name} is not ${agentRef(agent.id)}; ${agentRef(agent.id)} is @${agent.name}. Use the ID alone or the correct name.`);
 			}
 			return agent;
 		}
 		if (reference.name === PERSON.name) {
-			throw new FacadeError('REFUSED', `${describe(PERSON)} is the person, not an agent: they have no run to stop, read or type into. send_message reaches them.`);
+			throw new FacadeError('REFUSED', `${describe(PERSON)} is the person and has no agent run to stop, read, or type into. Use send_message to contact them.`);
 		}
 		const named = AgentTable.liveNamedIn(reach, reference.name);
 		if (named.length > 1) {
-			throw new FacadeError('INVALID', `${named.length} agents that have not ended are called @${reference.name}: ${named.map(describe).join(', ')}. Name one by its number.`);
+			throw new FacadeError('INVALID', `${named.length} active runs are named @${reference.name}: ${named.map(describe).join(', ')}. Select one by its agent ID.`);
 		}
 		if (!named.length) {
 			const ended = reach.filter(agent => agent.name === reference.name);
 			throw new FacadeError('NOT_FOUND', ended.length
-				? `Every agent called @${reference.name} has ended: ${ended.map(describe).join(', ')}. Name the one you mean by its number.`
-				: `No agent you reach is called @${reference.name}: list_agents with all lists them.`);
+				? `All runs named @${reference.name} have ended: ${ended.map(describe).join(', ')}. Select one by its agent ID.`
+				: `No reachable agent is named @${reference.name}. Call list_agents with all:true to see reachable runs.`);
 		}
 		return named[0];
 	}
@@ -2293,7 +2293,7 @@ export class Facade implements Disposable {
  */
 function serversOffNotes(installed: InstalledCli, place: { readonly folder: string; readonly repository: string }, home: string, yolo: boolean): string[] {
 	const off = installed.cli.projectServersOff?.(launchFor(installed.config, true), place, home, yolo, true) ?? [];
-	return off.length ? [`With YOLO off, ${installed.cli.displayName} runs without the MCP servers of ${place.folder}'s project the person has not approved for it, so that it does not stop to ask about them: ${off.join(', ')}.`] : [];
+	return off.length ? [`With YOLO off, ${installed.cli.displayName} skips project MCP servers in ${place.folder} that the person has not approved, avoiding a blocking approval prompt: ${off.join(', ')}.`] : [];
 }
 
 /** A sandbox as Facade's words say it. */
@@ -2314,7 +2314,7 @@ function signalOf(exitCode: number): number | undefined {
 }
 
 /** Why an agent whose process the window has no exit code for - its terminal host restarted, which says -1 - is lost (TM-17). */
-const HOST_RESTARTED = 'the window\'s terminal host restarted, ending its process';
+const HOST_RESTARTED = 'the window\'s terminal host restarted and ended the agent\'s process';
 
 /** Why an agent ended whose CLI exited with `exitCode`, where nothing more is known of it. */
 function exitedWith(exitCode: number): string {
@@ -2330,8 +2330,8 @@ function closedBecause(end: TerminalEnd): string {
 	switch (end.reason) {
 		case 'worktreeDeleted': return 'its worktree was deleted';
 		case 'folderRemoved': return 'its folder was removed from the workspace';
-		case 'folderGone': return 'its folder is gone from the disk';
-		default: return 'its tab was closed';
+		case 'folderGone': return 'its folder no longer exists on disk';
+		default: return 'its terminal tab was closed';
 	}
 }
 
@@ -2344,10 +2344,10 @@ function cutBeforeLaunch(agent: LiveAgent): boolean {
  * `hostOnly` - as Facade started again in this very window; and where its worktree stays, where `made` (O11; OR-14).
  */
 function cutReason(agent: LiveAgent, made: boolean, hostOnly: boolean): string {
-	const cut = hostOnly ? 'as Facade started again in this window' : 'as the window went';
-	const where = agent.phase === 'creating_worktree' ? 'as its worktree was made' : agent.phase === 'running_setup' ? 'as its worktree was set up' : 'as its CLI was being launched';
-	const left = made ? `; its worktree stays, at ${agent.folder}${hostOnly && agent.phase === 'running_setup' ? ', its setup going on in its terminal' : ''}` : '';
-	return `its start was cut ${cut}, ${where}, before its CLI ${agent.phase === 'launching_cli' ? 'ran' : 'was launched'}${left}`;
+	const cut = hostOnly ? 'when Facade restarted in this window' : 'when the window closed';
+	const where = agent.phase === 'creating_worktree' ? 'during worktree creation' : agent.phase === 'running_setup' ? 'during worktree setup' : 'during CLI launch';
+	const left = made ? `; its worktree remains at ${agent.folder}${hostOnly && agent.phase === 'running_setup' ? ', and setup continues in its terminal' : ''}` : '';
+	return `startup was interrupted ${cut}, ${where}, before its CLI ${agent.phase === 'launching_cli' ? 'ran' : 'was launched'}${left}`;
 }
 
 /**
@@ -2359,12 +2359,12 @@ function howItEnded(end: End, stopper: string, withExitCode = false): string {
 	switch (end.kind) {
 		case 'stopped': {
 			// Its exit code where the window saw one, for the notice of its end (AGENT-MESSAGES.md, M8)
-			const code = withExitCode && end.exitCode !== undefined ? `, its CLI ending with exit code ${end.exitCode}` : '';
+			const code = withExitCode && end.exitCode !== undefined ? `, with CLI exit code ${end.exitCode}` : '';
 			return end.by === undefined ? `stopped: ${end.reason}${code}` : /^(with|as) /.test(end.reason) ? `stopped by ${stopper} ${end.reason}${code}` : `stopped by ${stopper}: ${end.reason}${code}`;
 		}
 		case 'exited':
 			// Its reason, where it says more than its code: which agent pressed Ctrl+C there, Facade away (M8; L6)
-			return end.exitCode === undefined ? `it ended: ${end.reason}` : end.reason === exitedWith(end.exitCode) ? `it exited, with exit code ${end.exitCode}` : `it exited: ${end.reason}`;
+			return end.exitCode === undefined ? `it ended: ${end.reason}` : end.reason === exitedWith(end.exitCode) ? `it exited with code ${end.exitCode}` : `it exited: ${end.reason}`;
 		case 'failed':
 			return `it did not start: ${end.reason}`;
 		case 'lost':

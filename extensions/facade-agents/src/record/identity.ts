@@ -98,7 +98,7 @@ export function isSameWorkspace(a: string, b: string): boolean {
 function assertIdentityReadable(dir: string): void {
 	const file = path.join(dir, IDENTITY_FILE);
 	if (fs.existsSync(file) && identityOf(dir) === undefined) {
-		throw new Error(`${file} cannot be read, so Facade cannot tell whose record ${dir} is: put the file right - it names the workspace, as {"workspace": "<its URI>"} - or move the record aside, and reload the window.`);
+		throw new Error(`Cannot read ${file}, so Facade cannot identify the workspace that owns the record in ${dir}. Correct the identity file to contain {"workspace": "<workspace URI>"}, or move the record aside, then reload the window.`);
 	}
 }
 

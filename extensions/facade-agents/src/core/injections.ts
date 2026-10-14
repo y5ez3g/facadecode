@@ -327,7 +327,7 @@ export class Injections {
 					// A file of the project's, as any program there makes one - not Facade's own, kept to the user (X-65)
 					replaceFile(write.target, write.content, undefined, 0o666);
 					if (write.theirs !== undefined) {
-						this.log(`${write.target} is the person's: Facade's part is added to it while agents use it.`);
+						this.log(`Added Facade's temporary entries to the person's file ${write.target} while agents use it.`);
 					}
 				}
 				if (exclude && missing.length) {
@@ -336,14 +336,14 @@ export class Injections {
 			} catch (err) {
 				this.rollBack(record, key);
 				this.write(record);
-				throw new Error(`${cli} is not started: what Facade puts into ${folder} could not be written, and what was is taken back: ${messageOf(err)}`);
+				throw new Error(`Cannot start ${cli}: Facade could not write its configuration and skill files into ${folder}. Cleanup was attempted for any files already written: ${messageOf(err)}`);
 			}
 			delete entry.writing;
 			entry.users.push(user);
 			this.write(record);
 			for (const { target, theirs } of deleted) {
 				const kept = this.keep(target, theirs);
-				this.log(`${target} was gone when Facade's part went into it again: what it held before Facade's part first went in is kept at ${kept}.`);
+				this.log(`${target} was missing when Facade added its entries again. Content from before the first addition was preserved at ${kept}.`);
 				this.tell(l10n.t("{0} was gone when another agent started there: what it held before Facade's part went in is kept at {1}.", target, kept));
 			}
 		});
@@ -457,19 +457,19 @@ export class Injections {
 		return files.map(file => {
 			const target = path.join(folder, file.path);
 			if (!isInsideFolder(target, folder)) {
-				throw new Error(`${cli} is not started: ${file.path} leads out of ${folder}, where Facade puts nothing.`);
+				throw new Error(`Cannot start ${cli}: ${file.path} resolves outside ${folder}. Facade will not write outside the launch folder.`);
 			}
 			// Written through, a link would take Facade's files where it points - out of the folder, maybe - and
 			// replaced, it would be lost: one on the way is refused, named, and left as it is (X-63)
 			const link = linkOnTheWay(folder, target);
 			if (link !== undefined) {
-				throw new Error(`${cli} is not started: ${link} is a symbolic link, and Facade writes nothing through one, nor over it.`);
+				throw new Error(`Cannot start ${cli}: ${link} is a symbolic link. Facade will neither write through it nor overwrite it.`);
 			}
 			let current: Buffer | undefined;
 			try {
 				current = readBytes(target);
 			} catch (err) {
-				throw new Error(`${cli} is not started: ${target} could not be read (${messageOf(err)}), and Facade does not write over what it cannot read.`);
+				throw new Error(`Cannot start ${cli}: ${target} could not be read (${messageOf(err)}). Facade will not overwrite an unreadable file.`);
 			}
 			const written = entry?.files[file.path];
 			const isOurs = current !== undefined && written !== undefined && hashOf(current) === written.hash;
@@ -489,11 +489,11 @@ export class Injections {
 			const theirText = theirs === undefined ? undefined : Buffer.from(theirs, 'base64').toString('utf8');
 			const content = theirText === undefined ? file.content : file.merge?.(theirText);
 			if (content === undefined) {
-				throw new Error(`${cli} is not started: ${target} ${whyNotMerged(theirText ?? '', file)}.`);
+				throw new Error(`Cannot start ${cli}: ${target} ${whyNotMerged(theirText ?? '', file)}.`);
 			}
 			const same = isOurs && hashOf(Buffer.from(content)) === written.hash;
 			if (isOurs && used && !same) {
-				throw new Error(`${cli} is not started: ${target} holds what Facade put there for other agents, which use it, and this one needs other content in it.`);
+				throw new Error(`Cannot start ${cli}: ${target} contains Facade configuration still used by other agents, and this launch requires different content.`);
 			}
 			return { file: file.path, target, content, ...(theirs !== undefined ? { theirs } : {}), ...(same ? { there: true } : {}) };
 		});
@@ -510,7 +510,7 @@ export class Injections {
 				continue;
 			}
 			if (git.untracked.has(file.path)) {
-				this.log(`${path.join(folder, file.path)}: a worktree of this repository has a file of the person's at ${relative.split(path.sep).join('/')} that git neither tracks nor ignores, so Facade adds no line for it to info/exclude, which would let git write over theirs.`);
+				this.log(`Not adding ${path.join(folder, file.path)} to info/exclude: another worktree has an untracked, non-ignored user file at ${relative.split(path.sep).join('/')}. Ignoring that path could let Git overwrite the user's file.`);
 				continue;
 			}
 			// info/exclude is every worktree's of the repository: a line for a name of the person's - `.mcp.json` -
@@ -532,7 +532,7 @@ export class Injections {
 		let changed = false;
 		for (const [key, entry] of Object.entries(record.folders)) {
 			if (entry.writing) {
-				this.log(`What Facade was putting into ${key} as its window went is taken back.`);
+				this.log(`Rolling back incomplete Facade file writes in ${key} after its window closed.`);
 				this.rollBack(record, key);
 				changed = true;
 			}
@@ -572,14 +572,14 @@ export class Injections {
 					let kept = false;
 					if (now !== undefined && before !== undefined && hashOf(now) !== wrote.hash && !now.equals(Buffer.from(before, 'base64'))) {
 						const at = this.keep(target, before);
-						this.log(`${target} changed after Facade's part went in, as its window went: what it held before is kept at ${at}.`);
+						this.log(`${target} changed after Facade wrote its entries and before rollback following window closure. The previous content was preserved at ${at}.`);
 						this.tell(l10n.t("{0} changed after Facade's part went in, as its window went: what it held before is kept at {1}.", target, at));
 						kept = true;
 					}
 					this.takeBackFile(target, { hash: wrote.hash, ...(wrote.ours !== undefined ? { ours: wrote.ours } : {}), ...(before !== undefined ? { theirs: before } : {}) }, kept);
 				}
 			} catch (err) {
-				this.log(`${target} could not be put back as it was: ${messageOf(err)}`);
+				this.log(`Could not restore ${target} to its previous content: ${messageOf(err)}`);
 			}
 			if (previous) {
 				entry.files[file] = previous;
@@ -618,7 +618,7 @@ export class Injections {
 				this.takeBackFile(target, written);
 			} catch (err) {
 				left[file] = written;
-				this.log(`${target} could not be taken back yet, and is tried again later: ${messageOf(err)}`);
+				this.log(`Could not clean up ${target}; Facade will retry later: ${messageOf(err)}`);
 			}
 		}
 		// Innermost first. One with a file of Facade's left in it, or one a process has in use, is tried
@@ -642,7 +642,7 @@ export class Injections {
 		delete record.folders[key];
 		if (Object.keys(left).length || leftMade.length) {
 			if (leftMade.length && !Object.keys(left).length) {
-				this.log(`${path.join(key, leftMade[0])} is still in use by a process of an agent that ended: Facade removes it once it is not.`);
+				this.log(`${path.join(key, leftMade[0])} is still in use by a process belonging to an ended agent. Facade will remove it when it is no longer in use.`);
 			}
 			record.folders[key] = { users: [], files: left, made: leftMade, ...(entry.exclude !== undefined ? { exclude: entry.exclude } : {}), lines: Object.keys(left).length ? entry.lines : [] };
 		}
@@ -662,7 +662,7 @@ export class Injections {
 		if (current === undefined) {
 			if (written.theirs !== undefined) {
 				const at = this.keep(target, written.theirs);
-				this.log(`${target} was gone when its agents ended: what it held before Facade's part went in is kept at ${at}.`);
+				this.log(`${target} was missing when its agents ended. Content from before Facade's entries were added was preserved at ${at}.`);
 				this.tell(l10n.t("{0} was gone when its agents ended: what it held before Facade's part went in is kept at {1}.", target, at));
 			}
 			return;
@@ -682,10 +682,10 @@ export class Injections {
 		if (withoutFacade === 'changed') {
 			// Facade's own entry changed: left as it is, a copy kept, said once (AGENT-ORCHESTRATION.md, O10; X-29)
 			if (kept) {
-				this.log(`${target}: Facade's own entry in it was changed, so it is left as it is.`);
+				this.log(`Leaving ${target} unchanged because Facade's own entry was edited.`);
 			} else {
 				const at = this.keep(target, written.theirs ?? written.ours!);
-				this.log(`${target}: Facade's own entry in it was changed while agents used it, so it is left as it is; ${before !== undefined ? 'what it held before Facade\'s part went in' : 'what Facade wrote'} is kept at ${at}.`);
+				this.log(`Leaving ${target} unchanged because Facade's own entry was edited while agents used it. Preserved ${before !== undefined ? 'the content from before Facade added its entry' : 'the content Facade wrote'} at ${at}.`);
 			}
 		} else if (withoutFacade !== undefined) {
 			// Facade's part out, the change kept; a file Facade made that holds nothing else goes (X-28)
@@ -694,13 +694,13 @@ export class Injections {
 			} else {
 				replaceFile(target, withoutFacade.text);
 			}
-			this.log(`${target} changed while Facade's part was in it: the change is kept, and Facade's part taken out.`);
+			this.log(`${target} changed while Facade's entries were present. Kept those edits and removed only Facade's entries.`);
 		} else if (written.theirs !== undefined && !kept) {
 			const at = this.keep(target, written.theirs);
-			this.log(`${target} changed while agents used it and holds nothing of Facade's: it is left as it is, and what it held before is kept at ${at}.`);
+			this.log(`${target} changed while agents used it and no longer contains Facade's entries. Left it unchanged and preserved its previous content at ${at}.`);
 			this.tell(l10n.t("{0} changed while agents used it and holds nothing of Facade's: it is left as it is, and what it held before is kept at {1}.", target, at));
 		} else {
-			this.log(`${target} changed since Facade put it there: it is left as it is.`);
+			this.log(`Leaving ${target} unchanged because it was edited after Facade created it.`);
 		}
 	}
 
@@ -726,7 +726,7 @@ export class Injections {
 				replaceFile(exclude, now.slice(0, -1));
 			}
 		} catch (err) {
-			this.log(`${exclude} could not be put back as it was before Facade's lines: ${messageOf(err)}`);
+			this.log(`Could not restore ${exclude} to its state before Facade added lines: ${messageOf(err)}`);
 		}
 	}
 
@@ -741,7 +741,7 @@ export class Injections {
 		try {
 			removeLines(exclude, gone);
 		} catch (err) {
-			this.log(`${exclude} could not be changed: Facade's lines ${gone.join(', ')} stay in it. ${messageOf(err)}`);
+			this.log(`Could not update ${exclude}; Facade's lines remain: ${gone.join(', ')}. Reason: ${messageOf(err)}`);
 		}
 		const kept = record.added[key].filter(line => !gone.includes(line));
 		if (kept.length) {
@@ -784,10 +784,10 @@ export class Injections {
 		}
 		const record = injectedRecordOf(value);
 		if (!record) {
-			this.setAside('holds no record Facade can read', true);
+			this.setAside('does not contain a readable Facade record', true);
 		} else if (isJsonObject(value) && isJsonObject(value.folders) && Object.values(value.folders).some(entry => isJsonObject(entry) && entry.users === undefined)) {
 			// Kept as it was, then written as this build's, once
-			this.setAside('is an earlier build\'s record, read as this one\'s', false);
+			this.setAside('contains an older build\'s record, which is being read in the current format', false);
 			this.write(record);
 		}
 		return record ?? { folders: {}, added: {} };
@@ -805,9 +805,9 @@ export class Injections {
 			} else {
 				fs.copyFileSync(this.file, aside, fs.constants.COPYFILE_EXCL);
 			}
-			this.log(`${this.file} ${why}: it is kept at ${aside}${anew ? ', and Facade starts its record anew' : ''}.`);
+			this.log(`${this.file} ${why}. Preserved it at ${aside}${anew ? '; starting a new Facade record' : ''}.`);
 		} catch (err) {
-			this.log(`${this.file} ${why}, and could not be kept aside (${messageOf(err)})${anew ? ': Facade starts its record anew' : ''}.`);
+			this.log(`${this.file} ${why}. Could not preserve a copy (${messageOf(err)})${anew ? '; starting a new Facade record' : ''}.`);
 		}
 	}
 
@@ -828,16 +828,16 @@ export class Injections {
  */
 export function whyNotMerged(theirs: string, file: Injected): string {
 	if (!file.merge) {
-		return 'is there already, and Facade does not write over it';
+		return 'already exists and will not be overwritten by Facade';
 	}
 	let parsed: unknown;
 	try {
 		parsed = parseJson(theirs);
 	} catch (err) {
-		return `is not JSON that Facade can add its part to (${messageOf(err)}). Take out what is not JSON - a comment, say - or start the agent in another folder`;
+		return `is not valid JSON for adding Facade's configuration (${messageOf(err)}). Correct the JSON, removing unsupported content such as comments, or start the agent in another folder`;
 	}
 	if (!isJsonObject(parsed)) {
-		return 'holds no JSON object for Facade\'s part to go in. Make it one, or start the agent in another folder';
+		return 'does not contain a JSON object for Facade\'s configuration. Change it to a JSON object, or start the agent in another folder';
 	}
 	let ours: unknown;
 	try {
@@ -847,8 +847,8 @@ export function whyNotMerged(theirs: string, file: Injected): string {
 	}
 	const clash = isJsonObject(ours) ? clashOf(parsed, ours) : undefined;
 	return clash !== undefined
-		? `has an entry of its own at ${clash.join('.')}, where Facade's goes, and Facade does not write over it. Rename that entry, or start the agent in another folder`
-		: 'cannot take Facade\'s part beside what it holds, and Facade does not write over it. Start the agent in another folder';
+		? `already has an entry at ${clash.join('.')}, where Facade needs to add its configuration. Facade will not overwrite that entry. Rename it, or start the agent in another folder`
+		: 'cannot accept Facade\'s configuration alongside its existing content. Facade will not overwrite it. Start the agent in another folder';
 }
 
 /**

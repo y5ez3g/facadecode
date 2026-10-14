@@ -30,7 +30,7 @@ const TOML_ESCAPES: { readonly [char: string]: string } = { '"': '\\"', '\\': '\
  */
 function tomlString(text: string): string {
 	if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)) {
-		throw new Error(`${JSON.stringify(text)} has half of a character in it, which Codex's configuration cannot hold.`);
+		throw new Error(`${JSON.stringify(text)} contains an unpaired UTF-16 surrogate and cannot be stored in Codex's TOML configuration.`);
 	}
 	return `"${text.replace(/["\\\u0000-\u001F\u007F]/g, char => TOML_ESCAPES[char] ?? `\\u${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`)}"`;
 }
@@ -65,7 +65,7 @@ function codexConfigFiles(folder: string, env: Environment): string[] {
  */
 function tomlDefines(text: string, target: readonly string[]): boolean {
 	let at = 0;
-	const fail = (): never => { throw new SyntaxError(`not TOML at ${at}`); };
+	const fail = (): never => { throw new SyntaxError(`invalid TOML at offset ${at}`); };
 	const under = (key: readonly string[]) => key.length >= target.length && target.every((part, i) => key[i] === part);
 	const leadsTo = (key: readonly string[]) => key.length < target.length && key.every((part, i) => target[i] === part);
 	const blank = (lines: boolean) => {
@@ -315,7 +315,7 @@ export const codexCli: AgentCli = {
 				continue;
 			}
 			if (tomlDefines(text, SERVER_TABLE)) {
-				return `${file} has an MCP server of its own named facade, which Facade's server would be merged into. Rename that server there, or take it out.`;
+				return `${file} already defines an MCP server named facade. Codex would merge Facade's server into that entry. Rename or remove the existing entry.`;
 			}
 		}
 		return undefined;

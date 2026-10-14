@@ -108,7 +108,7 @@ export class AgentsService implements vscode.Disposable {
 	async start(): Promise<void> {
 		const folders = (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file');
 		if (!folders.length) {
-			this.log.info('Facade agents need a folder on this machine in the workspace; nothing started.');
+			this.log.info('Facade agents require a local folder in the workspace. Nothing was started.');
 			this.noCore = 'noFolder';
 			return;
 		}
@@ -129,7 +129,7 @@ export class AgentsService implements vscode.Disposable {
 		this.recordDir = dir;
 		await this.workspaceState.update(WORKSPACE_ID_KEY, id);
 		if (isNew) {
-			this.log.info(`The workspace ${workspace} has a new record, ${dir}.`);
+			this.log.info(`Created a new record for workspace ${workspace} at ${dir}.`);
 			// The record a build before workspace ids kept of it: its agents' numbers are never given again
 			// (AGENT-LAUNCHER.md, L2; X-49)
 			const earlier = earlierRecordOf(workspacesRoot(), this.workspaceState.get(EARLIER_RECORD_KEY), folders[0].uri.fsPath);
@@ -137,7 +137,7 @@ export class AgentsService implements vscode.Disposable {
 			const reached = earlier === undefined ? undefined : numberedUpTo(earlier);
 			if (earlier !== undefined && reached && (reached.agents > 0 || reached.messages > 0)) {
 				countOnFrom(dir, reached);
-				this.log.info(`${earlier}, the record an earlier build kept of the workspace, numbered its agents up to #a${reached.agents} and its messages up to #m${reached.messages}: this record's go on from #a${reached.agents + 1} and #m${reached.messages + 1}.`);
+				this.log.info(`Previous-build record ${earlier} used agent IDs through #a${reached.agents} and message IDs through #m${reached.messages}. This record continues from #a${reached.agents + 1} and #m${reached.messages + 1}.`);
 			}
 		}
 		// The same window, its extension host started again: who it is to its ledger goes on too, and the
@@ -154,7 +154,7 @@ export class AgentsService implements vscode.Disposable {
 					// Reported, not dropped quietly: only a last line a crash cut short is (L12; N-31)
 					return this.openTable(dir, owner, load.id, () => true, (why, keptAs) => {
 						const history = path.join(dir, AGENTS_LOG);
-						this.log.error(`${why}. It is kept as ${keptAs}, and a new list of agents begins; agents.log keeps their history, and their numbers go on.`);
+						this.log.error(`${why}. Preserved the previous record as ${keptAs} and started a new agent list. agents.log retains the history; agent IDs continue without reuse.`);
 						// What happened, and what the person is to do about it - nothing, but where to look (L12; N-31)
 						void vscode.window.showErrorMessage(vscode.l10n.t("Facade could not read this workspace's record of its agents ({0}), so it began a new list. Nothing needs doing: agents start as before, and their numbers go on. Their history is in {1}; the unreadable record is kept as {2} - delete it once you no longer need it.", why, history, keptAs));
 					});
@@ -293,7 +293,7 @@ export class AgentsService implements vscode.Disposable {
 				try {
 					facade.frameworkChanged();
 				} catch (err) {
-					this.say(`The agents' doorbells could not be ${frameworkOn() ? 'started again' : 'stopped'} with the agent framework: ${messageOf(err)}`);
+					this.say(`Could not ${frameworkOn() ? 'resume' : 'pause'} agent doorbells after the framework setting changed: ${messageOf(err)}`);
 				}
 			}
 		}));
@@ -311,7 +311,7 @@ export class AgentsService implements vscode.Disposable {
 			return;
 		}
 		this.facade = facade;
-		this.log.info(`Facade agents are ready for ${folders[0].uri.fsPath}. Record ${dir}; pipe ${endpoint.pipe}; agents: ${facade.startable().map(each => each.id).join(', ') || 'none'}; the agent framework ${frameworkOn() ? 'on' : 'off'}.`);
+		this.log.info(`Facade agents are ready for ${folders[0].uri.fsPath}. Record: ${dir}; pipe: ${endpoint.pipe}; available CLIs: ${facade.startable().map(each => each.id).join(', ') || 'none'}; agent framework: ${frameworkOn() ? 'on' : 'off'}.`);
 	}
 
 	/**
@@ -324,7 +324,7 @@ export class AgentsService implements vscode.Disposable {
 		this.facade = undefined;
 		this.person = undefined;
 		this.endpoint = undefined;
-		disposeAll(this.disposables.reverse(), err => this.warn(`Stopping Facade agents: ${messageOf(err)}`));
+		disposeAll(this.disposables.reverse(), err => this.warn(`Error while shutting down Facade agents: ${messageOf(err)}`));
 		this.disposables.length = 0;
 		// The core does nothing more, but what a call under way already did - a worktree git finished making -
 		// is recorded before the ledger closes, so that the next window knows of it (AGENT-LAUNCHER.md, L12).
@@ -337,7 +337,7 @@ export class AgentsService implements vscode.Disposable {
 			try {
 				table.dispose(this.stoppedBy);
 			} catch (err) {
-				this.warn(`Stopping Facade agents: ${messageOf(err)}`);
+				this.warn(`Error while shutting down Facade agents: ${messageOf(err)}`);
 			}
 		};
 		if (!this.underWay.size) {
@@ -371,7 +371,7 @@ export class AgentsService implements vscode.Disposable {
 			try {
 				await this.facade.stopAgent(PERSON, agentRef(id));
 			} catch (err) {
-				this.say(`Stopping ${agentRef(id)} failed: ${messageOf(err)}`);
+				this.say(`Failed to stop ${agentRef(id)}: ${messageOf(err)}`);
 			}
 		}
 	}
@@ -429,7 +429,7 @@ export class AgentsService implements vscode.Disposable {
 			const started = await this.whileUnderWay(facade.startForPerson(picked.id, folder, picked.custom));
 			return { id: started.id, name: started.name };
 		} catch (err) {
-			this.log.error(`Starting ${picked.id} failed: ${stackOf(err)}`);
+			this.log.error(`Failed to start ${picked.id}: ${stackOf(err)}`);
 			// Its Show goes to what its CLI showed as it ended, where it had a terminal (AGENT-DEBUGGING.md, D6)
 			const agent = err instanceof FacadeError ? err.outcome?.agent : undefined;
 			const ended = agent === undefined ? undefined : facade.endedAgent(agent);
@@ -446,7 +446,7 @@ export class AgentsService implements vscode.Disposable {
 	async openChatRoomCommand(): Promise<void> {
 		const facade = this.facade;
 		if (!facade) {
-			this.tellNoCore(vscode.l10n.t("Another Facade window has this workspace's agents: open their chat rooms in that window."));
+			this.tellNoCore(vscode.l10n.t("Agents for this workspace are managed in another window. Open chat rooms in that window."));
 			return;
 		}
 		await pickRoom(facade.mail.rooms.list());
@@ -455,7 +455,7 @@ export class AgentsService implements vscode.Disposable {
 	/** Agents: Delete Chat Rooms...: once the person said so, the rooms and the files of long messages are gone for good (M9). */
 	async deleteChatRoomsCommand(): Promise<void> {
 		if (!this.facade) {
-			this.tellNoCore(vscode.l10n.t("Another Facade window has this workspace's agents: delete their chat rooms in that window."));
+			this.tellNoCore(vscode.l10n.t("Agents for this workspace are managed in another window. Delete chat rooms in that window."));
 			return;
 		}
 		if (!await confirmDeleteRooms()) {
@@ -464,12 +464,12 @@ export class AgentsService implements vscode.Disposable {
 		try {
 			// The window may have gone meanwhile
 			if (!this.facade) {
-				throw new Error(vscode.l10n.t("Facade agents stopped in this window."));
+				throw new Error(vscode.l10n.t("Facade Agents stopped in this window."));
 			}
 			this.facade.mail.deleteRooms();
 		} catch (err) {
-			this.log.error(`Deleting the chat rooms failed: ${stackOf(err)}`);
-			void vscode.window.showErrorMessage(vscode.l10n.t("The chat rooms could not all be deleted: {0}", messageOf(err)));
+			this.log.error(`Failed to delete chat rooms: ${stackOf(err)}`);
+			void vscode.window.showErrorMessage(vscode.l10n.t("Could not delete all chat rooms: {0}", messageOf(err)));
 		}
 	}
 
@@ -510,7 +510,7 @@ export class AgentsService implements vscode.Disposable {
 		return this.retried(() => AgentTable.open({ dir, owner, session, mayMoveAside, onMovedAside, onTaken: () => setImmediate(() => this.taken()) }), err => {
 			if (err instanceof LedgerLockedError && !told) {
 				told = true;
-				this.log.info(`${err.message} Its lock is waited for while the window before lets go of it, or while nobody touches it.`);
+				this.log.info(`${err.message} Waiting for the previous window to release the ledger lock or for an untouched lock to expire.`);
 			}
 			return locked(err);
 		});
@@ -537,8 +537,8 @@ export class AgentsService implements vscode.Disposable {
 		if (this.stopped) {
 			return;
 		}
-		this.log.warn('Another Facade window took this workspace\'s agents, this one standing still too long: they are that window\'s now.');
-		void vscode.window.showWarningMessage(vscode.l10n.t("Another Facade window took this workspace's agents: they are that window's now."));
+		this.log.warn('Another Facade window took over this workspace\'s agents after this window stopped responding for too long. That window now manages them.');
+		void vscode.window.showWarningMessage(vscode.l10n.t("Agent management for this workspace has been transferred to another Facade window."));
 		this.noCore = 'otherWindow';
 		this.dispose();
 	}
@@ -546,7 +546,7 @@ export class AgentsService implements vscode.Disposable {
 	/** The endpoint the agents' MCP servers call, once it listens. */
 	private listening(): PipeEndpoint<Caller> {
 		if (!this.endpoint) {
-			throw new Error('Facade does not listen for its agents in this window.');
+			throw new Error('The Facade agent service is not listening in this window.');
 		}
 		return this.endpoint;
 	}
@@ -584,7 +584,7 @@ export class AgentsService implements vscode.Disposable {
 		// The file that names the pipe could not be read: the agents running call a pipe this window cannot know -
 		// said once, loud, not lost quietly (C-REC-19)
 		if (unreadable !== undefined) {
-			this.log.error(`${path.join(dir, WINDOW_STATE_FILE)} could not be read (${unreadable}): Facade listens on a new pipe.`);
+			this.log.error(`Could not read ${path.join(dir, WINDOW_STATE_FILE)} (${unreadable}). Facade is opening a new pipe.`);
 			if (agentsRun) {
 				void vscode.window.showErrorMessage(vscode.l10n.t("Facade could not read {0}, which names the pipe its agents call: the agents still running from before cannot use Facade's tools any more. Agents started from now on can.", path.join(dir, WINDOW_STATE_FILE)));
 			}
@@ -599,9 +599,9 @@ export class AgentsService implements vscode.Disposable {
 					throw err;
 				}
 			}
-			this.log.warn(`The pipe ${pipePath(kept)} is still taken; Facade listens on a new one.`);
+			this.log.warn(`Pipe ${pipePath(kept)} is still in use. Facade is opening a new pipe.`);
 			if (agentsRun) {
-				void vscode.window.showWarningMessage(vscode.l10n.t("Facade could not take back the pipe its agents call: the agents still running from before cannot use Facade's tools any more. Agents started from now on can."));
+				void vscode.window.showWarningMessage(vscode.l10n.t("Could not reconnect to the agents that were already running. They cannot use Facade's tools, but agents started from now on work normally."));
 			}
 		}
 		const pipeId = crypto.randomBytes(8).toString('hex');

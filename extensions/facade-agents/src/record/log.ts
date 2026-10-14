@@ -38,7 +38,7 @@ function keysOf(content: string): string {
 	try {
 		value = JSON.parse(content);
 	} catch {
-		return 'not JSON: its content is not written here';
+		return 'invalid JSON; file contents omitted';
 	}
 	const keys: string[] = [];
 	const walk = (at: unknown, under: string) => {
@@ -53,7 +53,7 @@ function keysOf(content: string): string {
 		}
 	};
 	walk(value, '');
-	return `keys ${keys.length ? keys.join(', ') : 'none'}`;
+	return `keys: ${keys.length ? keys.join(', ') : 'none'}`;
 }
 
 /** A time as the log writes it: the date and time of day, on this machine's clock. */
@@ -80,7 +80,7 @@ export class AgentLog {
 
 	/** An agent started, by `creator`, as Facade's words name it. */
 	started(agent: Agent, creator: string): void {
-		this.write(`${logTime(agent.startTime)}  started  ${describe(agent)}  ${agent.cli} ${agent.model ?? 'its own model'} ${agent.effort ?? 'its own effort'}  YOLO ${agent.yolo ? 'on' : 'off'}  by ${creator}  in ${agent.folder}`);
+		this.write(`${logTime(agent.startTime)}  recorded ${describe(agent)}  ${agent.cli} ${agent.model ?? 'CLI default model'} ${agent.effort ?? 'CLI default effort'}  YOLO ${agent.yolo ? 'on' : 'off'}  creator ${creator}  folder ${agent.folder}`);
 	}
 
 	/**
@@ -92,7 +92,7 @@ export class AgentLog {
 		const environment = Object.keys(launch.environment);
 		this.write([
 			`${logTime(time)}  launched ${describe(agent)}  ${[launch.program, ...launch.args].map(shown).join(' ')}`,
-			...environment.length ? [`environment ${environment.join(' ')}`] : [],
+			...environment.length ? [`environment: ${environment.join(' ')}`] : [],
 			...launch.files.map(file => `${file.path} ${keysOf(file.content)}`)
 		].join('  '));
 	}

@@ -30,7 +30,7 @@ export async function openRoom(file: string, message?: number): Promise<void> {
  */
 export async function pickRoom(rooms: readonly ChatRoom[]): Promise<void> {
 	if (!rooms.length) {
-		void vscode.window.showInformationMessage(vscode.l10n.t("No chat room has a message yet: each agent you start has one, from its task on."));
+		void vscode.window.showInformationMessage(vscode.l10n.t("No chat rooms have messages yet. A chat room is created when an agent is started."));
 		return;
 	}
 	const picked = await vscode.window.showQuickPick(rooms.map(room => {
@@ -43,7 +43,7 @@ export async function pickRoom(rooms: readonly ChatRoom[]): Promise<void> {
 				: vscode.l10n.t("{0} messages, the last at {1}", room.messages, time),
 			room
 		};
-	}), { title: vscode.l10n.t("Open Chat Room"), placeHolder: vscode.l10n.t("The chat room of an agent you started: every message of it and the agents it started") });
+	}), { title: vscode.l10n.t("Open Chat Room"), placeHolder: vscode.l10n.t("Every message of an agent you started, and of the agents it started") });
 	if (picked) {
 		await openRoom(picked.room.file);
 	}
@@ -55,9 +55,10 @@ export async function pickRoom(rooms: readonly ChatRoom[]): Promise<void> {
  */
 export async function confirmDeleteRooms(): Promise<boolean> {
 	const remove = vscode.l10n.t("Delete");
+	// As VS Code asks before deleting what cannot be restored: a question, then what goes and that it is for good
 	const answer = await vscode.window.showWarningMessage(
-		vscode.l10n.t("Delete the chat rooms of this workspace?"),
-		{ modal: true, detail: vscode.l10n.t("They are the record of every message between your agents and you, and go for good, with the files of long messages only they still need. The agents keep the messages of this session: they can still fetch them. This cannot be undone.") },
+		vscode.l10n.t("Are you sure you want to delete the chat rooms of this workspace?"),
+		{ modal: true, detail: vscode.l10n.t("All messages between you and your agents in this workspace will be deleted. This action cannot be undone.") },
 		remove
 	);
 	return answer === remove;

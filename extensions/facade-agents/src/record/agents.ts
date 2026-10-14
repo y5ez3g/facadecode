@@ -32,10 +32,10 @@ export function agentName(text: string): string {
 	// Taken as it is given: one that is no name is refused, rather than made one
 	const name = text.trim();
 	if (RESERVED_NAMES.has(name)) {
-		throw new Error(`"${name}" is reserved: choose another name.`);
+		throw new Error(`Agent name '${name}' is reserved. Choose another name.`);
 	}
 	if (!isAgentName(name)) {
-		throw new Error(`"${text}" is not a name: use up to ${MAX_NAME_LENGTH} lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.`);
+		throw new Error(`Invalid agent name '${text}'. Use 1-${MAX_NAME_LENGTH} lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.`);
 	}
 	return name;
 }
@@ -256,7 +256,7 @@ export class AgentTable {
 		}
 		const started = this.state.agents.get(id);
 		if (!started) {
-			throw new Error(`The ledger did not record ${agentRef(id)}.`);
+			throw new Error(`Failed to record agent ${agentRef(id)} in the ledger.`);
 		}
 		this.log.started(started, this.whoIs(started.creator));
 		return { agent: started, token, tokenFile };

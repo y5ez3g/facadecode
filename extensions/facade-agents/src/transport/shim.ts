@@ -69,7 +69,7 @@ function tokenFrom(value: string): string | string[] {
 		try {
 			return fs.readFileSync(value, 'utf8').trim();
 		} catch (err) {
-			return [`the token file ${value} cannot be read (${messageOf(err)})`];
+			return [`could not read token file ${value} (${messageOf(err)})`];
 		}
 	}
 	return value;
@@ -105,11 +105,11 @@ function recordedTools(args: readonly string[]): readonly McpTool[] {
 	try {
 		const tools = toolsOf(JSON.parse(fs.readFileSync(file, 'utf8')));
 		if (!tools) {
-			log(`${file} holds no tools this version can read: none are listed until the window answers.`);
+			log(`${file} contains no tool definitions this version can read. No tools will be listed until the window responds.`);
 		}
 		return tools ?? [];
 	} catch (err) {
-		log(`${file} could not be read (${messageOf(err)}): no tools are listed until the window answers.`);
+		log(`Could not read ${file} (${messageOf(err)}). No tools will be listed until the window responds.`);
 		return [];
 	}
 }
@@ -128,7 +128,7 @@ function connectionOf(args: readonly string[]): Connection | string {
 	const launchedPipe = fromArgs ? argumentAfter(args, '--pipe') : given(envPipe);
 	const tokenValue = fromArgs ? tokenFile : given(envToken);
 	if (!tokenValue || (!record && !launchedPipe)) {
-		return 'it was started without a pipe and a token';
+		return 'the MCP server was started without the required pipe or token';
 	}
 	const token = fromArgs ? tokenFrom(path.resolve(tokenValue)) : tokenFrom(tokenValue);
 	if (Array.isArray(token)) {
@@ -137,7 +137,7 @@ function connectionOf(args: readonly string[]): Connection | string {
 	const window = record ? windowOf(record) : undefined;
 	const pipe = window?.pipe ?? launchedPipe;
 	if (!pipe) {
-		return `the window of the record ${record} has not said where it listens`;
+		return `the window has not recorded a listening address in ${record}`;
 	}
 	return { pipe, token, disabled: window?.enabled === false, ...(window ? { window: window.id } : {}) };
 }
@@ -158,6 +158,36 @@ function isConfigured(args: readonly string[]): boolean {
 function waitFromEnv(name: string, ms: number): number {
 	const value = Number(process.env[name]);
 	return Math.min(Number.isFinite(value) && value > 0 ? value : ms, MAX_TIMER_MS);
+}
+
+/** Whether a call's `agent` names a run by its number, as `#a7` or `@name #a7`, not by a name alone. */
+function namesRun(toolArgs: unknown): boolean {
+	const agent = isJsonObject(toolArgs) ? toolArgs.agent : undefined;
+	return typeof agent === 'string' && /(^|\s)#a\d+$/i.test(agent.trim());
+}
+
+/**
+ * What a caller does next after a call whose outcome is not known, as its tool needs it: look before anything goes
+ * in twice - never run again by itself (AGENT-DEBUGGING.md, D5; AGENT-MESSAGES.md, M11). `made`, the run a start made;
+ * `away`, whether the window went, so that a call that changes nothing waits for it to come back - else it has nothing to do.
+ */
+function recoveryOf(name: string, toolArgs: unknown, made: number | undefined, away: boolean): string | undefined {
+	switch (name) {
+		case 'type_text':
+		case 'press_keys':
+			return namesRun(toolArgs)
+				? 'Input may already have been written. Call read_screen for the target before sending more text or keys.'
+				: 'Input may already have been written. Identify the original target run, then call read_screen before sending more input.';
+		case 'send_message':
+			return 'Messages may already have been recorded. Resend only if you establish that they were not recorded.';
+		case 'read_messages':
+			return 'Messages from this fetch may already be marked delivered. Use read_messages with ids to recover known messages, or all:true for your inbox history. Message IDs remain stable.';
+		case 'start_agent':
+		case 'stop_agent':
+			return made !== undefined || (name === 'stop_agent' && namesRun(toolArgs)) ? 'Inspect the existing run with list_agents before retrying the action.' : 'Inspect list_agents before retrying the action.';
+		default:
+			return away ? 'Retry after the Facade window reconnects.' : undefined;
+	}
 }
 
 async function serveMcp(args: readonly string[]): Promise<void> {
@@ -210,7 +240,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 				const received = helloOf(await client.hello(answered));
 				awaySince = undefined;
 				if (!received) {
-					unavailable = 'Facade said hello with something this version cannot read';
+					unavailable = 'Facade returned a handshake that this version cannot read';
 					refused = true;
 					return undefined;
 				}
@@ -224,7 +254,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 					return undefined;
 				}
 				awaySince ??= Date.now();
-				unavailable = code === 'UNREACHABLE' || code === 'NOT_CONNECTED' ? `Facade is not reachable (${messageOf(err)})` : `Facade's window failed to say hello (${messageOf(err)})`;
+				unavailable = code === 'UNREACHABLE' || code === 'NOT_CONNECTED' ? `cannot reach Facade (${messageOf(err)})` : `the Facade window's handshake failed (${messageOf(err)})`;
 			}
 			if (Date.now() >= deadline) {
 				return undefined;
@@ -279,7 +309,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 			} catch (err) {
 				// Cancelled, its CLI closed it: nothing more to look for. Whatever else ends the looking is said
 				if (!(err instanceof CancelledError)) {
-					log(`Looking for Facade's window failed: ${stackOf(err)}`);
+					log(`Could not find the Facade window: ${stackOf(err)}`);
 				}
 			} finally {
 				discovering = false;
@@ -340,7 +370,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 			} catch (err) {
 				// Cancelled, its CLI closed it: nothing more to look for. Whatever else ends the watching is said
 				if (!(err instanceof CancelledError)) {
-					log(`Watching for a window back from a reload failed: ${stackOf(err)}`);
+					log(`Could not watch for the window to return after a reload: ${stackOf(err)}`);
 				}
 			}
 		})();
@@ -351,7 +381,7 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 			// The window may have come since the client listed the tools: said hello to now, the call goes to it
 			await tools(0);
 			if (!hello) {
-				return { text: `Facade's tools are not available, so ${name} did not run: ${unavailable || 'the reason is not known'}.${refused ? '' : ' Call it again once Facade\'s window is there.'}`, isError: true, data: { code: 'UNAVAILABLE' } };
+				return { text: `${name} did not run: Facade is unavailable (${unavailable || 'reason unknown'}).${refused ? '' : ' Retry after the Facade window reconnects.'}`, isError: true, data: { code: 'UNAVAILABLE' } };
 			}
 		}
 		// A call that finds no window has not run: it waits for the window, as through a reload - for what is
@@ -359,13 +389,17 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 		let waiting = false;
 		// The run the call made, once the window said: what a call cut after names.
 		let made: number | undefined;
-		const madeText = () => made !== undefined ? ` - it made the run #a${made}` : '';
+		// What may have happened, and what to do about it, for a call whose outcome is not known
+		const afterUnknown = (away: boolean) => {
+			const recovery = recoveryOf(name, toolArgs, made, away);
+			return `${made !== undefined ? ` Recorded run: #a${made}.` : ''}${recovery ? ` ${recovery}` : ''}`;
+		};
 		const madeData = () => made !== undefined ? { agent: made } : {};
 		for (; ;) {
 			const tried = Date.now();
 			const connection = connectionOf(args);
 			if (typeof connection === 'string') {
-				return { text: `Facade's tools are not available: ${connection}.`, isError: true, data: { code: 'UNAVAILABLE' } };
+				return { text: `${name} did not run: Facade is unavailable (${connection}).`, isError: true, data: { code: 'UNAVAILABLE' } };
 			}
 			// A window back from a reload is told which process serves the agent before the call goes to it
 			await helloAgain(connection);
@@ -382,46 +416,44 @@ async function serveMcp(args: readonly string[]): Promise<void> {
 			try {
 				const result = toolResultOf(await client.call(name, toolArgs, progress, AbortSignal.any([context.signal, silence.signal])));
 				awaySince = undefined;
-				return result ?? { text: `Facade answered ${name} with something this version cannot read.`, isError: true, data: { code: 'FAILED' } };
+				return result ?? { text: `Facade returned an unreadable result for ${name}. The call may have taken effect; its outcome is unknown.${afterUnknown(false)}`, isError: true, data: { code: 'FAILED' } };
 			} catch (err) {
 				const code = err instanceof PipeClientError ? err.code : undefined;
 				if (silence.signal.aborted && !context.signal.aborted) {
-					return { text: `Facade's window said nothing about ${name} for ${Math.round(silenceMs / 1000)} s after taking it, so ${name} may have run${madeText()}. Look with list_agents before you call it again.`, isError: true, data: { code: 'UNAVAILABLE', outcome: 'unknown', ...madeData() } };
+					return { text: `${name} was accepted, but no result or progress arrived for ${Math.round(silenceMs / 1000)} seconds. The call may have taken effect.${afterUnknown(true)}`, isError: true, data: { code: 'UNAVAILABLE', outcome: 'unknown', ...madeData() } };
 				}
 				if (code === 'CANCELLED' || context.signal.aborted) {
 					throw err;
 				}
 				if (code === 'UNAUTHORIZED') {
-					return { text: `Facade no longer accepts ${hello ? `@${hello.name}` : 'this session'}: it was stopped, or exited. Stop working.`, isError: true, data: { code: 'REFUSED' } };
+					return { text: `This Facade session has ended; ${hello ? `@${hello.name}` : 'this session'} is no longer accepted. Stop working.`, isError: true, data: { code: 'REFUSED' } };
 				}
 				if (code === 'UNREACHABLE') {
 					if (connection.disabled) {
-						return { text: `Facade's tools are off: the person turned the agent framework off (facade.orchestration.enabled), so ${name} did not run.`, isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
+						return { text: `Facade tools are disabled by facade.orchestration.enabled. ${name} did not run.`, isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
 					}
 					awaySince ??= Date.now();
 					if (outageLeft() > 0) {
 						if (!waiting) {
 							waiting = true;
-							context.progress('Waiting for Facade\'s window to come back.');
+							context.progress('Waiting for the Facade window to reconnect.');
 						}
 						// Tried each second: a try the window did not take in time has had its second already (N-43)
 						await timeout(Math.min(Math.max(RETRY_MS - (Date.now() - tried), 0), outageLeft()), context.signal);
 						continue;
 					}
-					return { text: `Facade's window did not come back, so ${name} did not run (${clauseOf(messageOf(err))}). Call it again once the window is there.`, isError: true, data: { code: 'UNAVAILABLE' } };
+					return { text: `${name} did not run: the Facade window did not reconnect (${clauseOf(messageOf(err))}). Retry after the window reconnects.`, isError: true, data: { code: 'UNAVAILABLE' } };
 				}
 				if (code === 'TOO_LARGE') {
-					return { text: `Facade did not take ${name}: its arguments are over the 1 MB a call may carry. Put what is long in a file, and give its path instead.`, isError: true, data: { code: 'INVALID' } };
+					return { text: `${name} was rejected before execution: the encoded request exceeds 1 MiB. Put large content in a file and send the file path.`, isError: true, data: { code: 'INVALID' } };
 				}
 				if (code === 'REJECTED') {
-					return { text: `Facade could not read the call to ${name}, so it did not run. ${messageOf(err)}`, isError: true, data: { code: 'INVALID' } };
+					return { text: `${name} did not run: Facade could not read the request (${messageOf(err)}).`, isError: true, data: { code: 'INVALID' } };
 				}
 				if (code === 'NOT_CONNECTED') {
-					// Never run again by itself: what went in is not known (AGENT-DEBUGGING.md, D5; AGENT-MESSAGES.md, M11)
-					const look = name === 'type_text' || name === 'press_keys' ? 'Read its screen with read_screen before you type or press anything again.' : name === 'send_message' ? 'Do not send it again unless you find it was not sent.' : 'Look with list_agents before you call it again.';
-					return { text: `Facade's window went away during ${name} (${messageOf(err)}), as it does while it reloads, so ${name} may have run${madeText()}. ${look}`, isError: true, data: { code: 'UNAVAILABLE', outcome: 'unknown', ...madeData() } };
+					return { text: `The Facade window disconnected during ${name} (${messageOf(err)}). The call may have taken effect.${afterUnknown(true)}`, isError: true, data: { code: 'UNAVAILABLE', outcome: 'unknown', ...madeData() } };
 				}
-				return { text: `${name} failed in Facade's window: ${messageOf(err)}`, isError: true, data: { code: 'FAILED' } };
+				return { text: `${name} failed in the Facade window: ${messageOf(err)}`, isError: true, data: { code: 'FAILED' } };
 			} finally {
 				clearTimeout(silenceTimer);
 			}
