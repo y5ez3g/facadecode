@@ -272,6 +272,36 @@ suite('worktreeAt', () => {
 		}, { underLink: true, theLinkItself: true, underRealDirectory: false, notThereYet: false });
 	});
 
+	test('WTA-38 a create that fails keeps a branch that moved meanwhile, and says so; a path already registered is not taken for one this request made', async () => {
+		const start = run(main, 'rev-parse', 'HEAD');
+		write(path.join(main, 'other.txt'), 'other\n');
+		run(main, 'add', 'other.txt');
+		run(main, '-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '-m', 'other');
+		const other = run(main, 'rev-parse', 'HEAD');
+		// Git makes the branch, somebody moves it, then the checkout fails.
+		const racing: IWorktreeGit = {
+			exec: async (cwd, args, options) => {
+				if (args[0] === 'worktree' && args[1] === 'add') {
+					run(main, 'branch', 'moved', start);
+					run(main, 'update-ref', 'refs/heads/moved', other);
+					throw Object.assign(new Error('failed'), { stderr: 'fatal: could not check out', exitCode: 128 });
+				}
+				return git.exec(cwd, args, options);
+			}
+		};
+		const taken = path.join(dir, 'worktrees', 'taken');
+		await createWorktreeAt(git, main, taken, 'taken');
+
+		const moved = await createWorktreeAt(racing, main, path.join(dir, 'worktrees', 'moved'), 'moved', start);
+		const again = await createWorktreeAt(git, main, taken, 'another');
+
+		assert.deepStrictEqual({
+			moved: moved.kind === 'error' && moved.message.endsWith('The branch \'moved\' was preserved.'),
+			kept: run(main, 'rev-parse', 'refs/heads/moved') === other,
+			again: again.kind
+		}, { moved: true, kept: true, again: 'error' });
+	});
+
 	test('WTA-19 git lfs checkout runs in the new worktree, and no Git LFS is no failure', async () => {
 		const worktree = path.join(dir, 'worktrees', 'lfs');
 		const lfs: string[][] = [];

@@ -153,6 +153,49 @@ function isCommitId(value: unknown): value is string {
 	return typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
 }
 
+/** The commit `ref` names, or undefined when it names none; git's other failures are thrown. */
+async function resolveCommit(git: IWorktreeGit, root: string, ref: string): Promise<string | undefined> {
+	if (!ref || ref.startsWith('-')) {
+		return undefined;
+	}
+
+	try {
+		const { stdout } = await git.exec(root, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+		return stdout.trim() || undefined;
+	} catch (err) {
+		// With --quiet, git says "no such commit" by exit code 1 and no output
+		const failure = err as { exitCode?: number; stderr?: string };
+		if (failure.exitCode === 1 && !failure.stderr?.trim()) {
+			return undefined;
+		}
+		throw err;
+	}
+}
+
+/**
+ * Deletes the branch a failed create made, unless it is checked out or has moved from `expected`.
+ * Returns its name when it is kept.
+ */
+async function dropBranchMadeHere(git: IWorktreeGit, root: string, branch: string, expected: string | undefined): Promise<string | undefined> {
+	try {
+		if (!(await hasBranch(git, root, branch))) {
+			return undefined;
+		}
+
+		const { stdout } = await git.exec(root, ['worktree', 'list', '--porcelain']);
+		const checkedOut = stdout.split(/\r?\n/).some(line => line === `branch refs/heads/${branch}`);
+		if (checkedOut || !expected) {
+			return branch;
+		}
+
+		await git.exec(root, ['update-ref', '-d', `refs/heads/${branch}`, expected]);
+		return undefined;
+	} catch {
+		// Moved meanwhile, or git cannot say: kept.
+		return branch;
+	}
+}
+
 /**
  * How a directory is deleted: whole, and retried while something still has a file in it open - for
  * about five and a half seconds, a tenth of a second longer each time.
@@ -408,32 +451,38 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 		return invalidArgument(`Not a commit id: ${String(startPoint)}`);
 	}
 
-	// `worktree add -b` makes the branch before it checks the path and checks out, and a failure after
-	// that leaves the branch - which the next try, with the same name, is refused for.
+	// Read first: a failed create deletes the branch only while it is still at this commit
+	let startCommit: string | undefined;
+	try {
+		startCommit = await resolveCommit(git, root, startPoint ?? 'HEAD');
+	} catch (err) {
+		return toError(err);
+	}
+	if (!startCommit) {
+		return invalidArgument(`Not a commit: ${startPoint ?? 'HEAD'}`);
+	}
+
+	// `worktree add -b` makes the branch before it checks out, so a failure can leave the branch behind
 	let existed: boolean;
+	let listedBefore: boolean | undefined;
 	try {
 		existed = await hasBranch(git, root, branch);
+		listedBefore = await isListed(git, root, worktreePath);
 	} catch (err) {
 		return toError(err);
 	}
 
 	let hookFailure: string | undefined;
 	try {
-		await git.exec(root, ['worktree', 'add', '-b', branch, '--', worktreePath, startPoint ?? 'HEAD'], { env: { GIT_LFS_SKIP_SMUDGE: '1' } });
+		await git.exec(root, ['worktree', 'add', '-b', branch, '--', worktreePath, startCommit], { env: { GIT_LFS_SKIP_SMUDGE: '1' } });
 	} catch (err) {
-		// A failed checkout takes the half-made worktree away with it; only the post-checkout hook runs
-		// after git has kept it. Listed now, it was made, and the hook's failure is said as a warning.
-		if (await isListed(git, root, worktreePath) === true) {
+		// Only the post-checkout hook fails after git keeps a worktree: listed now and not before, it was made
+		if (listedBefore === false && await isListed(git, root, worktreePath) === true) {
 			hookFailure = toError(err).message;
 		} else {
-			try {
-				if (!existed && await hasBranch(git, root, branch)) {
-					await git.exec(root, ['branch', '-d', '--', branch]);
-				}
-			} catch {
-				// Checked out after all, not merged, or git cannot say: kept, and the failure above is the one reported.
-			}
-			return toError(err);
+			const failure = toError(err);
+			const kept = !existed ? await dropBranchMadeHere(git, root, branch, startCommit) : undefined;
+			return kept ? { ...failure, message: `${failure.message} The branch '${kept}' was preserved.` } : failure;
 		}
 	}
 
