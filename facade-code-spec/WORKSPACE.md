@@ -513,7 +513,9 @@ The title bar's first button collapses the bar to a column of icons and opens it
 again. Collapsed, it is the same tree without its words (WT-1.10): each row keeps its
 icon in its colour - the one chosen for it, else the folder icon - and a worktree its
 dot. Pointing at a row names it at once, in a card to the right of the icon. The state and the open width are kept per profile. A profile that has never
-touched the toggle starts open.
+touched the toggle starts open. Dragging its edge resizes the bar alone: the side bar keeps
+its width, and the editor area gives or takes the difference, as it does when the bar is
+collapsed or opened.
 
 ### W9.10 Zen Mode
 

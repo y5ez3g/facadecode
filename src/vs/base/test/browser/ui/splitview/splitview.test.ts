@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { Sash, SashState } from '../../../../browser/ui/sash/sash.js';
 import { IView, LayoutPriority, Sizing, SplitView } from '../../../../browser/ui/splitview/splitview.js';
+import { mainWindow } from '../../../../browser/window.js';
 import { Emitter } from '../../../../common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../common/utils.js';
 
@@ -38,6 +39,9 @@ class TestView implements IView<number> {
 
 	private readonly _onDidSetVisible = new Emitter<boolean>();
 	readonly onDidSetVisible = this._onDidSetVisible.event;
+
+	sashResizesByPriority = false;
+	snap = false;
 
 	constructor(
 		private _minimumSize: number,
@@ -472,6 +476,56 @@ suite('Splitview', () => {
 
 		splitview.layout(200);
 		assert.deepStrictEqual([view1.size, view2.size, view3.size], [20, 160, 20]);
+	});
+
+	test('a sash dragged next to a view that resizes by priority takes the room from the view of highest priority across it, not from its neighbour, and snaps no view shut or open', () => {
+		// Mirrors the workbench: Facade's workspace bar, the activity bar hidden, the side bar - which snaps - and the editor
+		function drag(sashResizesByPriority: boolean, sash: number, by: number, sideBarHidden = false) {
+			const parent = document.createElement('div');
+			const bar = store.add(new TestView(50, 150, LayoutPriority.Low));
+			bar.sashResizesByPriority = sashResizesByPriority;
+			const activityBar = store.add(new TestView(10, 10));
+			const sideBar = store.add(new TestView(20, Number.POSITIVE_INFINITY, LayoutPriority.Low));
+			sideBar.snap = true;
+			const editor = store.add(new TestView(20, Number.POSITIVE_INFINITY, LayoutPriority.High));
+			const splitview = store.add(new SplitView(parent, { proportionalLayout: false }));
+			splitview.layout(300);
+			splitview.addView(bar, 50);
+			splitview.addView(activityBar, 10);
+			splitview.addView(sideBar, 70);
+			splitview.addView(editor, 170);
+
+			// The activity bar's two sashes then lie on the bar's edge, and either takes the drag - the side bar's
+			// as well, while it is hidden
+			splitview.setViewVisible(1, false);
+			if (sideBarHidden) {
+				splitview.setViewVisible(2, false);
+			}
+
+			// `addView` distributes, so set a known starting point
+			splitview.resizeView(0, 50);
+			if (!sideBarHidden) {
+				splitview.resizeView(2, 70);
+			}
+			const before = [bar.size, sideBar.size, editor.size];
+
+			parent.querySelectorAll<HTMLElement>('.monaco-sash')[sash].dispatchEvent(new MouseEvent('mousedown', { clientY: 50 }));
+			mainWindow.dispatchEvent(new MouseEvent('mousemove', { clientY: 50 + by }));
+			mainWindow.dispatchEvent(new MouseEvent('mouseup', { clientY: 50 + by }));
+			return { before, after: [bar.size, sideBar.size, editor.size] };
+		}
+
+		assert.deepStrictEqual({
+			byPriority: [drag(true, 0, 30), drag(true, 1, 30)],
+			pastTheBarsMaximum: drag(true, 1, 400),
+			sideBarHidden: drag(true, 2, 30, true),
+			nearestFirst: drag(false, 1, 30)
+		}, {
+			byPriority: [{ before: [50, 70, 180], after: [80, 70, 150] }, { before: [50, 70, 180], after: [80, 70, 150] }],
+			pastTheBarsMaximum: { before: [50, 70, 180], after: [150, 70, 80] },
+			sideBarHidden: { before: [50, 0, 250], after: [80, 0, 220] },
+			nearestFirst: { before: [50, 70, 180], after: [80, 40, 180] }
+		});
 	});
 
 	test('view changing its size constraints while a sibling is toggled does not squeeze that sibling (#334167)', () => {

@@ -124,6 +124,9 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	/** Low, like the side bar and the auxiliary bar: the editor takes what the window gains or loses. */
 	readonly priority: LayoutPriority = LayoutPriority.Low;
 
+	/** Its edge dragged, the editor gives or takes the room and the side bar keeps its width (WORKSPACE.md W9.9). */
+	readonly sashResizesByPriority = true;
+
 	private content: HTMLElement | undefined;
 
 	private _collapsed = false;
