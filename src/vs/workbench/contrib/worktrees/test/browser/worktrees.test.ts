@@ -44,7 +44,7 @@ import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWo
 import '../../../../browser/actions/listCommands.js';
 import { WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
-import { INewWorktreeAnswer, IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
+import { IBranchDescription, INewWorktreeAnswer, INewWorktreePreparation, IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IEditorIdentifier } from '../../../../common/editor.js';
@@ -531,6 +531,51 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(IFacadeRunsService, { closingBecause: (instance, reason) => { closing.push(`${instance.title} ${reason}`); } });
 		// As the launcher counts them without the agents' record: the runs whose CLIs have not ended
 		instantiationService.stub(ITerminalLauncherService, { get agentTerminals() { return terminals.filter(instance => facadeRunOf(instance) !== undefined && instance.exitCode === undefined); } });
+	});
+
+	test('WT-5.2 WT-5.8 New Worktree says where the branch starts and the folder it goes in; a folder to prepare is told in one notice what continuing does, by its case and its number of files, and why it cannot while git has no author', async () => {
+		const shown: { origin: string; paths: string[]; notice: string | undefined; blocked: string | undefined }[] = [];
+		instantiationService.stub(IWorkspaceBarDialogService, {
+			showNewWorktreeDialog: async (_repository: string, origin: string, describe: (branch: string) => IBranchDescription, prepare: INewWorktreePreparation | undefined) => {
+				shown.push({ origin, paths: [describe('').message, describe('w9').message], notice: prepare?.notice.join('\n'), blocked: prepare?.blocked });
+				return undefined;
+			}
+		});
+		const bases = [
+			{ kind: 'ready' },
+			...[0, 1, 3].map(files => ({ kind: 'uninitialized', files, identity: true, enclosing: undefined })),
+			...[0, 1, 3].map(files => ({ kind: 'uninitialized', files, identity: true, enclosing: '/code/outer' })),
+			...[0, 1, 3].map(files => ({ kind: 'unborn', files, identity: true })),
+			{ kind: 'unborn', files: 1, identity: false },
+		];
+		for (const base of bases) {
+			answers.set('_git.prepareWorktreeBaseAt inspect', base);
+			await instantiationService.createInstance(WorktreeService).createWorktree(main);
+		}
+
+		const [ready, ...prepared] = shown;
+		assert.deepStrictEqual({
+			ready,
+			preparedStartsAt: [...new Set(prepared.map(each => each.origin))],
+			notices: prepared.map(each => each.notice),
+			blocked: prepared.map(each => each.blocked),
+		}, {
+			ready: { origin: 'Created from HEAD of \'lab\'.', paths: ['Path: ~/.facade/worktrees/lab/', 'Path: ~/.facade/worktrees/lab/w9'], notice: undefined, blocked: undefined },
+			preparedStartsAt: ['Created from the initial commit.'],
+			notices: [
+				'This folder is not a Git repository. Continuing will initialize it (\'git init\') and create an empty initial commit.',
+				'This folder is not a Git repository. Continuing will initialize it (\'git init\') and create an initial commit with 1 file.',
+				'This folder is not a Git repository. Continuing will initialize it (\'git init\') and create an initial commit with 3 files.',
+				'This folder is inside the \'outer\' Git repository, but is not its root. Continuing will initialize a separate repository here (\'git init\') and create an empty initial commit.',
+				'This folder is inside the \'outer\' Git repository, but is not its root. Continuing will initialize a separate repository here (\'git init\') and create an initial commit with 1 file.',
+				'This folder is inside the \'outer\' Git repository, but is not its root. Continuing will initialize a separate repository here (\'git init\') and create an initial commit with 3 files.',
+				'This repository has no commits yet. Continuing will create an empty initial commit.',
+				'This repository has no commits yet. Continuing will create an initial commit with 1 file.',
+				'This repository has no commits yet. Continuing will create an initial commit with 3 files.',
+				'This repository has no commits yet. Continuing will create an initial commit with 1 file.',
+			],
+			blocked: [...new Array(9).fill(undefined), 'Git author identity is not configured. Set \'user.name\' and \'user.email\' via \'git config --global\', then try again.'],
+		});
 	});
 
 	test('WTA-14 making one: named and coloured before its row is drawn, trusted, its record read, its repository opened, and the window taken to it', async () => {

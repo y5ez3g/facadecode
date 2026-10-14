@@ -156,6 +156,36 @@ type WorktreeBaseAtResult =
 	| { readonly kind: 'unborn'; readonly files: number; readonly identity: boolean }
 	| WorktreeAtError;
 
+/**
+ * WT-5.8's notice, one paragraph: what the folder is, and what continuing - Initialize and Create - does to it: `git init`,
+ * and an initial commit with the number of its files. A folder inside another repository is told so, by that repository's
+ * name: "not a Git repository" would not be true of it.
+ */
+function prepareNotice(base: Exclude<WorktreeBaseAtResult, { readonly kind: 'ready' } | WorktreeAtError>): string {
+	if (base.kind === 'unborn') {
+		return base.files === 0
+			? localize('worktrees.prepare.unbornEmpty', "This repository has no commits yet. Continuing will create an empty initial commit.")
+			: base.files === 1
+				? localize('worktrees.prepare.unbornOne', "This repository has no commits yet. Continuing will create an initial commit with 1 file.")
+				: localize('worktrees.prepare.unbornMany', "This repository has no commits yet. Continuing will create an initial commit with {0} files.", base.files);
+	}
+
+	if (base.enclosing) {
+		const enclosing = basename(URI.file(base.enclosing));
+		return base.files === 0
+			? localize('worktrees.prepare.insideEmpty', "This folder is inside the '{0}' Git repository, but is not its root. Continuing will initialize a separate repository here ('git init') and create an empty initial commit.", enclosing)
+			: base.files === 1
+				? localize('worktrees.prepare.insideOne', "This folder is inside the '{0}' Git repository, but is not its root. Continuing will initialize a separate repository here ('git init') and create an initial commit with 1 file.", enclosing)
+				: localize('worktrees.prepare.insideMany', "This folder is inside the '{0}' Git repository, but is not its root. Continuing will initialize a separate repository here ('git init') and create an initial commit with {1} files.", enclosing, base.files);
+	}
+
+	return base.files === 0
+		? localize('worktrees.prepare.folderEmpty', "This folder is not a Git repository. Continuing will initialize it ('git init') and create an empty initial commit.")
+		: base.files === 1
+			? localize('worktrees.prepare.folderOne', "This folder is not a Git repository. Continuing will initialize it ('git init') and create an initial commit with 1 file.")
+			: localize('worktrees.prepare.folderMany', "This folder is not a Git repository. Continuing will initialize it ('git init') and create an initial commit with {0} files.", base.files);
+}
+
 /** Why a worktree could not be looked at before it is deleted: as `explainFailure` says it, else in Git's words. */
 function checkFailure(error: WorktreeAtError | undefined, main: URI): string {
 	return explainFailure(error, main) ?? localize('worktrees.checkFailed', "Failed to verify worktree state before deletion: {0}", gitMessage(error));
@@ -219,7 +249,7 @@ function restrictedUnasked(): string {
 }
 
 function noIdentityMessage(): string {
-	return localize('worktrees.noIdentity', "Git author identity (user.name and user.email) is not configured. Run '{0}' and '{1}', then try again.", 'git config --global user.name', 'git config --global user.email');
+	return localize('worktrees.noIdentity', "Git author identity is not configured. Set '{0}' and '{1}' via '{2}', then try again.", 'user.name', 'user.email', 'git config --global');
 }
 
 /** A path spelled for the OS the folder is on - the remote's, for a folder on a remote. */
@@ -853,19 +883,7 @@ export class WorktreeService implements IWorktreeService {
 		}
 
 		const prepare = base.kind === 'ready' ? undefined : {
-			notice: [
-				// A folder inside another repository is told so: "not a Git repository" would not be true of it.
-				base.kind === 'uninitialized' && base.enclosing
-					? localize('worktrees.insideRepository', "Folder '{0}' is inside the Git repository '{1}'. A new repository will be initialized.", basename(main), base.enclosing)
-					: base.kind === 'uninitialized'
-						? localize('worktrees.notRepositoryYet', "Folder '{0}' is not a Git repository. It will be initialized with 'git init'.", basename(main))
-						: localize('worktrees.noCommitsYet', "Repository '{0}' contains no commits. An initial commit is required to branch off.", basename(main)),
-				base.files === 0
-					? localize('worktrees.firstCommitEmpty', "An empty initial commit will be created for the new worktree.")
-					: base.files === 1
-						? localize('worktrees.firstCommitOne', "An initial commit containing 1 file (excluding files ignored by Git) will be created.")
-						: localize('worktrees.firstCommitMany', "An initial commit containing {0} files (excluding files ignored by Git) will be created.", base.files)
-			],
+			notice: [prepareNotice(base)],
 			action: localize('worktrees.initializeAndCreate', "Initialize and Create"),
 			// Said before anything is done: without a name and an email, git refuses the commit. Not when
 			// that is for the new repository to decide, as `includeIf` can; then the commit says so.
@@ -878,7 +896,7 @@ export class WorktreeService implements IWorktreeService {
 		const separator = this.labelService.getSeparator(parent.scheme, parent.authority);
 		const parentLabel = ['~', ...WORKTREES, basename(main)].join(separator) + separator;
 
-		// The names already taken, so the Location line shows the `-1` the worktree will get.
+		// The names already taken, so the Path line shows the `-1` the worktree will get.
 		const caseSensitive = this.fileService.hasCapability(parent, FileSystemProviderCapabilities.PathCaseSensitive);
 		const nameKey = (candidate: string) => caseSensitive ? candidate : candidate.toLowerCase();
 		const taken = new Set<string>();
@@ -890,15 +908,16 @@ export class WorktreeService implements IWorktreeService {
 			// No folder yet for this repository's worktrees: nothing in it is taken.
 		}
 
-		// WT-5.2: the branch, where it starts and the folder it goes in, with the name and colour beside it.
+		// WT-5.2: the branch, where it starts and the folder it goes in, with the name and colour beside it. Prepared,
+		// it starts from the initial commit the notice above says continuing creates.
 		const origin = prepare
-			? localize('worktrees.startsAtFirst', "The branch starts from the initial commit.")
-			: localize('worktrees.startsAt', "The branch starts from HEAD of '{0}'.", basename(main));
+			? localize('worktrees.startsAtFirst', "Created from the initial commit.")
+			: localize('worktrees.startsAt', "Created from HEAD of '{0}'.", basename(main));
 		const answer = await this.workspaceBarDialogService.showNewWorktreeDialog(basename(main), origin, value => {
 			const trimmed = value.trim();
 			if (!trimmed) {
 				// The folder it will be made in, waiting for the branch to finish its name.
-				return { message: localize('worktrees.folder', "Location: {0}", parentLabel), valid: false };
+				return { message: localize('worktrees.folder', "Path: {0}", parentLabel), valid: false };
 			}
 
 			const folder = worktreeFolderName(trimmed);
@@ -906,7 +925,7 @@ export class WorktreeService implements IWorktreeService {
 				return { message: localize('worktrees.badName', "'{0}' is not a valid folder name on Windows.", trimmed), valid: false, error: true };
 			}
 
-			return { message: localize('worktrees.folder', "Location: {0}", parentLabel + freeWorktreeName(folder, candidate => taken.has(nameKey(candidate)))), valid: true };
+			return { message: localize('worktrees.folder', "Path: {0}", parentLabel + freeWorktreeName(folder, candidate => taken.has(nameKey(candidate)))), valid: true };
 		}, prepare);
 
 		const branch = answer?.branch;
