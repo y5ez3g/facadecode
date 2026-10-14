@@ -191,9 +191,9 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// ⚠️ Read here, before the grid asks what this column's width may be. Restored in `layout`
 		// instead, the first layout happens at the open width and the column snaps a frame later.
 		//
-		// Collapsed until somebody opens it: a profile that has never touched the toggle starts with
-		// the column of icons, and the choice is remembered from the first time it is made.
-		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, true);
+		// Open until somebody collapses it: a profile that has never touched the toggle starts with the
+		// whole bar, and the choice is remembered from the first time it is made.
+		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, false);
 		this.recent = readRecent(this.storageService.get(RECENT_STORAGE_KEY, StorageScope.WORKSPACE));
 		this.collapsedContext = WorkspaceBarCollapsedContext.bindTo(contextKeyService);
 		this.collapsedContext.set(this._collapsed);
