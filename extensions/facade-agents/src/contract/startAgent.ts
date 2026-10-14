@@ -90,7 +90,7 @@ export const startAgentTool: ContractTool = {
 				effort: { type: 'string', description: 'CLI reasoning effort, such as low, medium, or high. Omit to use its default. Does not require model.' },
 				task: { type: 'string', description: 'Nonempty task text, preserved exactly and sent from you to the child\'s mailbox. Omit to start without a task, waiting at the CLI prompt for input or mail.' },
 				folder: { type: 'string', description: 'Absolute path of a window folder or worktree, or a checked-out branch in your repository. Defaults to your launch folder; @human uses the selected folder.' },
-				new_worktree: { type: 'boolean', description: 'Create a worktree and branch using the name argument. Uses your HEAD in your repository, otherwise the target main checkout\'s HEAD. Uncommitted edits are excluded; required work must be in that commit.' }
+				new_worktree: { type: 'boolean', default: false, description: 'Create a worktree and branch using the name argument. Uses your HEAD in your repository, otherwise the target main checkout\'s HEAD. Uncommitted edits are excluded; required work must be in that commit.' }
 			},
 			required: ['name', 'cli'],
 			additionalProperties: false

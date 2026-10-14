@@ -204,6 +204,18 @@ suite('Contract: messages', () => {
 		});
 	});
 
+	test('a list sent as a string holding JSON - as a client offered a string or a list may send it (Muse Code) - is that list, for to and ids; a string that holds no list is one value still', async () => {
+		const sent = await call(lead, 'send_message', { to: '["@lint", "@human"]', text: 'Both.' });
+		const fetched = await call(lint, 'read_messages', { ids: '["#m1", "#m2"]' });
+		const odd = await call(lead, 'send_message', { to: '[@lint]', text: 'Hm.' });
+
+		assert.deepStrictEqual({ sent: sent.data, fetched: (fetched.data as { messages: { id: number }[] }).messages.map(message => message.id), odd: [odd.isError, (odd.data as { code: string }).code] }, {
+			sent: { messages: [{ id: 2, to: '@lint #a2' }, { id: 3, to: '@human' }] },
+			fetched: [1, 2],
+			odd: [true, 'NOT_FOUND']
+		});
+	});
+
 	test('with its YOLO off, an agent sees in list_agents its own tree only, every agent with all too', async () => {
 		world.switches.yolo = false;
 		await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'quiet', folder: lab });

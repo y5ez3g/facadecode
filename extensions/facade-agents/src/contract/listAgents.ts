@@ -97,7 +97,7 @@ export const listAgentsTool: ContractTool = {
 		inputSchema: {
 			type: 'object',
 			properties: {
-				all: { type: 'boolean', description: 'Include every reachable run.' }
+				all: { type: 'boolean', default: false, description: 'Include every reachable run.' }
 			},
 			additionalProperties: false
 		}

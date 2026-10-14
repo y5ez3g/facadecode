@@ -48,14 +48,17 @@ export class Args {
 		return value;
 	}
 
-	/** A list of strings, each as it is given; a string alone is a list of one, as a model may give it. */
+	/**
+	 * A list of strings, each as it is given; a string alone is a list of one, as a model may give it. A string holding
+	 * a JSON list of strings is that list: offered a string or a list, a client may send a list so (Muse Code).
+	 */
 	strings(name: string): string[] {
 		const value = this.values[name];
 		if (value === undefined) {
 			throw invalid(`Argument '${name}' is required.`);
 		}
 		if (typeof value === 'string') {
-			return [value];
+			return listIn(value) ?? [value];
 		}
 		if (!isStringArray(value)) {
 			throw invalid(`Argument '${name}' must be a string or an array of strings.`);
@@ -123,6 +126,19 @@ export class Args {
 			throw invalid(`Argument '${name}' must not be empty.`);
 		}
 		return value;
+	}
+}
+
+/** The strings a JSON list in `value` holds - `["#a1", "#a2"]` - or undefined where it holds none. */
+function listIn(value: string): string[] | undefined {
+	if (!value.trimStart().startsWith('[')) {
+		return undefined;
+	}
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return isStringArray(parsed) ? [...parsed] : undefined;
+	} catch {
+		return undefined;
 	}
 }
 

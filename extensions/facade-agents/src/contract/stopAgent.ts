@@ -31,8 +31,8 @@ export const stopAgentTool: ContractTool = {
 			type: 'object',
 			properties: {
 				agent: { type: 'string', description: 'Run ID (#a7) or unique active @name. Use IDs for ended runs. @human has no run.' },
-				delete_worktree: { type: 'boolean', description: 'Also stop agents in the target worktree, then delete its folder and keep its branch.' },
-				discard_changes: { type: 'boolean', description: 'With delete_worktree:true, allow discarding uncommitted/untracked work and unsaved edits. Otherwise refuse deletion that would lose work. True requires delete_worktree:true.' }
+				delete_worktree: { type: 'boolean', default: false, description: 'Also stop agents in the target worktree, then delete its folder and keep its branch.' },
+				discard_changes: { type: 'boolean', default: false, description: 'With delete_worktree:true, allow discarding uncommitted/untracked work and unsaved edits. Otherwise refuse deletion that would lose work. True requires delete_worktree:true.' }
 			},
 			required: ['agent'],
 			additionalProperties: false

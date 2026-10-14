@@ -24,7 +24,7 @@ export const pressKeysTool: ContractTool = {
 			type: 'object',
 			properties: {
 				agent: { type: 'string', description: 'Run ID (#a7) or unique active @name. You may target yourself; Escape or Ctrl+C can interrupt this caller.' },
-				keys: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: MOST_KEYS, description: `1-${MOST_KEYS} keys: Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up/Down/Left/Right, Home, End, PageUp/PageDown, Space, Ctrl+A..Z, or one printable character. Names ignore case and spaces between components. Aliases: Return, Esc, ArrowUp/Down/Left/Right, ^A..Z. A single key may be a string.` }
+				keys: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: MOST_KEYS }], description: `1-${MOST_KEYS} keys: Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up/Down/Left/Right, Home, End, PageUp/PageDown, Space, Ctrl+A..Z, or one printable character. Names ignore case and spaces between components. Aliases: Return, Esc, ArrowUp/Down/Left/Right, ^A..Z. A single key may be a string.` }
 			},
 			required: ['agent', 'keys'],
 			additionalProperties: false

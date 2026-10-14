@@ -57,8 +57,8 @@ export const readMessagesTool: ContractTool = {
 		inputSchema: {
 			type: 'object',
 			properties: {
-				ids: { type: 'array', items: { type: 'string' }, description: 'Message ID or nonempty list, such as #m42. Can include others\' messages within reach; with YOLO off, a sender or recipient must be in your tree. Cannot be combined with all:true.' },
-				all: { type: 'boolean', description: 'Retrieve your entire current-session inbox, including fetched and returned messages. all:true cannot be combined with ids.' }
+				ids: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, minItems: 1 }], description: 'Message ID or nonempty list, such as #m42. Can include others\' messages within reach; with YOLO off, a sender or recipient must be in your tree. Cannot be combined with all:true.' },
+				all: { type: 'boolean', default: false, description: 'Retrieve your entire current-session inbox, including fetched and returned messages. all:true cannot be combined with ids.' }
 			},
 			additionalProperties: false
 		}

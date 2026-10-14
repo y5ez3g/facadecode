@@ -82,11 +82,11 @@ suite('Contract: agents\' screens, typing and keys', () => {
 				required: ['agent'],
 				properties: {
 					agent: { type: 'string', description: 'Run ID (#a7) or unique active @name. Use IDs for ended runs. @human has no run.' },
-					lines: { type: 'integer', minimum: 1, maximum: 2000, description: 'Number of bottom logical lines; wrapped rows count as one. Default 50, maximum 2000.' }
+					lines: { type: 'integer', minimum: 1, maximum: 2000, default: 50, description: 'Number of bottom logical lines; wrapped rows count as one. Default 50, maximum 2000.' }
 				}
 			},
 			type: ['agent', 'text'],
-			keys: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 50, description: '1-50 keys: Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up/Down/Left/Right, Home, End, PageUp/PageDown, Space, Ctrl+A..Z, or one printable character. Names ignore case and spaces between components. Aliases: Return, Esc, ArrowUp/Down/Left/Right, ^A..Z. A single key may be a string.' }
+			keys: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 50 }], description: '1-50 keys: Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up/Down/Left/Right, Home, End, PageUp/PageDown, Space, Ctrl+A..Z, or one printable character. Names ignore case and spaces between components. Aliases: Return, Esc, ArrowUp/Down/Left/Right, ^A..Z. A single key may be a string.' }
 		});
 	});
 

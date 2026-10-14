@@ -24,7 +24,7 @@ export const typeTextTool: ContractTool = {
 			properties: {
 				agent: { type: 'string', description: 'Run ID (#a7) or unique active @name. You may target yourself; Escape or Ctrl+C can interrupt this caller.' },
 				text: { type: 'string', description: `One nonempty line, at most ${MOST_TYPED} Unicode code points; spaces are preserved. No newlines, tabs, Escape, or other control characters. Use press_keys for keys or a file path for longer content.` },
-				enter: { type: 'boolean', description: 'Send Enter after the CLI\'s configured paste delay. This does not guarantee acceptance. Default false leaves the text in the input.' }
+				enter: { type: 'boolean', default: false, description: 'Send Enter after the CLI\'s configured paste delay. This does not guarantee acceptance. Default false leaves the text in the input.' }
 			},
 			required: ['agent', 'text'],
 			additionalProperties: false

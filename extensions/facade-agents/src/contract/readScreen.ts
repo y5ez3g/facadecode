@@ -106,7 +106,7 @@ export const readScreenTool: ContractTool = {
 			type: 'object',
 			properties: {
 				agent: { type: 'string', description: 'Run ID (#a7) or unique active @name. Use IDs for ended runs. @human has no run.' },
-				lines: { type: 'integer', minimum: 1, maximum: MOST_LINES, description: `Number of bottom logical lines; wrapped rows count as one. Default ${DEFAULT_LINES}, maximum ${MOST_LINES}.` }
+				lines: { type: 'integer', minimum: 1, maximum: MOST_LINES, default: DEFAULT_LINES, description: `Number of bottom logical lines; wrapped rows count as one. Default ${DEFAULT_LINES}, maximum ${MOST_LINES}.` }
 			},
 			required: ['agent'],
 			additionalProperties: false

@@ -50,7 +50,7 @@ export const sendMessageTool: ContractTool = {
 		inputSchema: {
 			type: 'object',
 			properties: {
-				to: { type: 'array', items: { type: 'string' }, description: `Recipient or nonempty list: #a7, @name, @name #a7, or ${describe(PERSON)}. Duplicate recipients receive only one message.` },
+				to: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, minItems: 1 }], description: `Recipient or nonempty list: #a7, @name, @name #a7, or ${describe(PERSON)}. Duplicate recipients receive only one message.` },
 				text: { type: 'string', description: 'Nonempty plain text, preserved exactly. Message bodies over 8,000 characters use a file. Encoded requests are limited to 1 MiB; share larger content by file path.' },
 				reply_to: { type: 'string', description: 'ID of the message being answered, such as #m40. It must be addressed to you.' }
 			},
