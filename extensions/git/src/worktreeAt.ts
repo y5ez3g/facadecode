@@ -33,7 +33,8 @@ type WorktreeAtErrorCode =
 	| 'UnreadableGitDirectory'
 	| 'InitialBranch'
 	| 'UnbornBranch'
-	| 'NoIdentity';
+	| 'NoIdentity'
+	| 'NotTheLeftover';
 
 /** A failure, in git's words, with a code when one is known. */
 interface IWorktreeAtError {
@@ -67,7 +68,8 @@ export type WorktreeBaseAtResult =
 	| { readonly kind: 'unborn'; readonly files: number; readonly identity: boolean }
 	| IWorktreeAtError;
 
-export type DeleteWorktreeMode = 'check' | 'remove' | 'force';
+/** `check` reads what a removal would lose; `cleanup` deletes what a `remove` or `force` left behind. */
+export type DeleteWorktreeMode = 'check' | 'remove' | 'force' | 'cleanup';
 
 /** A lock git holds a removal back for, with its reason. */
 interface IWorktreeRestriction {
@@ -76,11 +78,13 @@ interface IWorktreeRestriction {
 }
 
 /**
- * What `check` finds a removal would lose, or how a removal ended (WORKTREE.md WT-8.1).
+ * What `check` finds a removal would lose, or how a removal ended (WORKTREE.md WT-8.1, WT-8.6).
+ * `incomplete` carries the `recovery` that `cleanup` needs to delete what was left.
  */
 export type DeleteWorktreeAtResult =
 	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly ignoredPaths: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly IWorktreeRestriction[] }
 	| { readonly kind: 'removed' }
+	| { readonly kind: 'incomplete'; readonly path: string; readonly gitRecord: 'present' | 'absent' | 'unknown'; readonly recovery: string; readonly message: string }
 	| IWorktreeAtError;
 
 /**
@@ -507,17 +511,29 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 	return { kind: 'created', copyFailures, hookFailure };
 }
 
-/**
- * Removes a worktree, or with `check`, lists the files with changes that removing it would lose.
- * `remove` and `force` run `git worktree remove`, without and with `--force`.
- */
-export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, mode: DeleteWorktreeMode): Promise<DeleteWorktreeAtResult> {
+/** A directory a removal left behind, as identified before it, so that `cleanup` deletes nothing else. */
+interface ILeftover {
+	readonly root: string;
+	readonly directory: string;
+	readonly device: number;
+	readonly inode: number;
+}
+
+const leftovers = new Map<string, ILeftover>();
+let nextLeftover = 0;
+
+/** Removes a worktree, reads what removing it would lose, or deletes what a removal left behind. */
+export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, mode: DeleteWorktreeMode, recovery?: string): Promise<DeleteWorktreeAtResult> {
 	const refused = validateArguments([root, worktreePath]);
 	if (refused) {
 		return refused;
 	}
-	if (mode !== 'check' && mode !== 'remove' && mode !== 'force') {
+	if (mode !== 'check' && mode !== 'remove' && mode !== 'force' && mode !== 'cleanup') {
 		return invalidArgument(`Not a mode: ${String(mode)}`);
+	}
+
+	if (mode === 'cleanup') {
+		return cleanupLeftover(git, root, worktreePath, recovery);
 	}
 
 	const present = await exists(worktreePath);
@@ -570,6 +586,9 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 		// Taken as given.
 	}
 
+	// Identified before git touches it, so that a retry deletes this directory and no other (WT-4.5)
+	const identity = await fs.stat(directory).catch(() => undefined);
+
 	const listed = await isListed(git, root, worktreePath);
 	try {
 		await git.exec(root, remove);
@@ -589,10 +608,57 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 		try {
 			await fs.rm(directory, REMOVE_OPTIONS);
 		} catch (err) {
-			return toError(err);
+			// Still held: left behind rather than failed, as git's record may be gone already (WT-8.6)
+			const after = await isListed(git, root, worktreePath);
+			const token = `leftover-${++nextLeftover}`;
+			if (identity) {
+				leftovers.set(token, { root, directory, device: identity.dev, inode: identity.ino });
+			}
+			return { kind: 'incomplete', path: directory, gitRecord: after === false ? 'absent' : after === true ? 'present' : 'unknown', recovery: token, message: toError(err).message };
 		}
 	}
 
+	return { kind: 'removed' };
+}
+
+/** Deletes the directory an `incomplete` removal left, and refuses any other (WT-4.5). */
+async function cleanupLeftover(git: IWorktreeGit, root: string, worktreePath: string, recovery: string | undefined): Promise<DeleteWorktreeAtResult> {
+	const leftover = recovery !== undefined ? leftovers.get(recovery) : undefined;
+	const notTheLeftover = (why: string): IWorktreeAtError => ({ kind: 'error', code: 'NotTheLeftover', message: why });
+	if (recovery === undefined || !leftover || await comparablePath(leftover.root) !== await comparablePath(root)) {
+		return notTheLeftover(`No record of a worktree folder left at '${worktreePath}'.`);
+	}
+
+	if (!(await exists(leftover.directory))) {
+		leftovers.delete(recovery);
+		return { kind: 'removed' };
+	}
+
+	let directory: string;
+	let stat;
+	try {
+		directory = await fs.realpath(worktreePath);
+		stat = await fs.lstat(leftover.directory);
+	} catch (err) {
+		return toError(err);
+	}
+
+	const top = await getTopLevel(git, root).catch(() => undefined);
+	const [wanted, actual, topLevel] = await Promise.all([comparablePath(leftover.directory), comparablePath(directory), top ? comparablePath(top) : Promise.resolve(undefined)]);
+	if (wanted !== actual || stat.isSymbolicLink() || stat.dev !== leftover.device || stat.ino !== leftover.inode) {
+		return notTheLeftover(`Path '${worktreePath}' does not match the expected worktree folder. No files were deleted.`);
+	}
+	if (actual === topLevel || (await isListed(git, root, worktreePath)) !== false) {
+		return notTheLeftover(`'${worktreePath}' is tracked as an active Git worktree or the repository root, so nothing was deleted.`);
+	}
+
+	try {
+		await fs.rm(leftover.directory, REMOVE_OPTIONS);
+	} catch (err) {
+		return { kind: 'incomplete', path: leftover.directory, gitRecord: 'absent', recovery, message: toError(err).message };
+	}
+
+	leftovers.delete(recovery);
 	return { kind: 'removed' };
 }
 

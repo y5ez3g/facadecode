@@ -231,6 +231,7 @@ const LISTED_COPY_FAILURES = 3;
 type DeleteWorktreeAtResult =
 	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly ignoredPaths: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly { readonly kind: 'locked'; readonly reason: string }[] }
 	| { readonly kind: 'removed' }
+	| { readonly kind: 'incomplete'; readonly path: string; readonly gitRecord: 'present' | 'absent' | 'unknown'; readonly recovery: string; readonly message: string }
 	| WorktreeAtError;
 
 /** What deleting a worktree would lose, as its confirmation names it. */
@@ -1008,6 +1009,13 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
+		if (result?.kind === 'incomplete') {
+			// Git's record is gone, and so is the worktree as far as anybody can use it.
+			await this.forgetWorktree(main, worktree);
+			this.reportLeftover(main, worktree, result);
+			return;
+		}
+
 		this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} ended as ${result?.kind ?? 'unknown'}`);
 		if (result?.kind === 'stayed') {
 			this.notificationService.error(localize('worktrees.couldNotLeave', "Could not switch to '{0}'; worktree '{1}' was not deleted.", basename(main), name));
@@ -1039,6 +1047,32 @@ export class WorktreeService implements IWorktreeService {
 		if (this.workspaceTrustEnablementService.isWorkspaceTrustEnabled()) {
 			await this.workspaceTrustManagementService.setUrisTrust([worktree], false);
 		}
+	}
+
+	/** Reports a directory a removal left behind, with a way to see it and to retry (WT-8.6). */
+	private reportLeftover(main: URI, worktree: URI, leftover: { readonly path: string; readonly recovery: string; readonly message: string }): void {
+		this.notificationService.prompt(Severity.Error,
+			localize('worktrees.leftover', "Worktree was removed from Git, but its folder could not be deleted: {0}. {1}", leftover.path, leftover.message),
+			[
+				// Kept open, so that Retry is still there after a look at the folder
+				{ label: revealLabel(), keepOpen: true, run: () => this.commandService.executeCommand('revealFileInOS', worktree) },
+				{
+					label: localize('worktrees.retry', "Retry"),
+					run: async () => {
+						let again: DeleteWorktreeAtResult | undefined;
+						try {
+							again = await this.commandService.executeCommand<DeleteWorktreeAtResult>('_git.deleteWorktreeAt', main, worktree, 'cleanup', leftover.recovery);
+						} catch (err) {
+							again = { kind: 'error', code: undefined, message: toErrorMessage(err) };
+						}
+						if (again?.kind === 'incomplete') {
+							this.reportLeftover(main, worktree, again);
+						} else if (again?.kind !== 'removed') {
+							this.notificationService.error(localize('worktrees.leftoverRefused', "Failed to delete folder: {0}", gitMessage(again?.kind === 'error' ? again : undefined)));
+						}
+					}
+				}
+			]);
 	}
 
 	/** The working copies with unsaved changes to files inside `worktree`, open on screen or put away. */

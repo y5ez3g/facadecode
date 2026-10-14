@@ -12,7 +12,7 @@ import { KeyCode, KeyMod } from '../../../../../base/common/keyCodes.js';
 import { decodeKeybinding } from '../../../../../base/common/keybindings.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { posix } from '../../../../../base/common/path.js';
-import { OS } from '../../../../../base/common/platform.js';
+import { isMacintosh, isWindows, OS } from '../../../../../base/common/platform.js';
 import { extUri } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
@@ -973,6 +973,30 @@ suite('Worktrees - making and deleting one', () => {
 			'show /lab',
 			'error: Could not switch to \'lab\'; worktree \'w2\' was not deleted.',
 		]);
+	});
+
+	test('WTA-23 WTA-33 a folder left behind is said with its path, a way to see it that keeps the notification open, and Retry, which deletes it by what the remove gave', async () => {
+		answers.set('_git.deleteWorktreeAt check', checked());
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'incomplete', path: 'C:\\left\\w2', gitRecord: 'absent', recovery: 'leftover-1', message: 'EBUSY: resource busy or locked' });
+		answers.set('_git.deleteWorktreeAt cleanup', { kind: 'removed' });
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+		await prompted.find(choice => choice.label === 'Retry')!.run();
+
+		assert.deepStrictEqual({
+			said: steps.filter(step => step.startsWith('prompt:')),
+			choices: prompted.map(choice => ({ label: choice.label, keepOpen: !!choice.keepOpen })).slice(0, 2),
+			forgotten: steps.includes(`customize ${w2.path} {}`),
+			retried: steps[steps.length - 1]
+		}, {
+			said: ['prompt: Worktree was removed from Git, but its folder could not be deleted: C:\\left\\w2. EBUSY: resource busy or locked'],
+			choices: [
+				{ label: isWindows ? 'Reveal in File Explorer' : isMacintosh ? 'Reveal in Finder' : 'Open Containing Folder', keepOpen: true },
+				{ label: 'Retry', keepOpen: false }
+			],
+			forgotten: true,
+			retried: '_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 cleanup leftover-1'
+		});
 	});
 
 	test('a clean worktree with submodules checked out is warned about them, and deleted with force - git takes it no other way', async () => {

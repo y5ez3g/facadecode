@@ -524,6 +524,75 @@ suite('worktreeAt', () => {
 		});
 	});
 
+	/** Keeps `directory` from being deleted until the returned function is called. */
+	function holdOpen(directory: string): () => Promise<void> {
+		if (process.platform === 'win32') {
+			const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: directory });
+			const exited = new Promise<void>(resolve => holder.on('exit', () => resolve()));
+			return () => {
+				holder.kill();
+				return exited;
+			};
+		}
+
+		const parent = path.dirname(directory);
+		chmodSync(parent, 0o555);
+		return async () => chmodSync(parent, 0o755);
+	}
+
+	test('WTA-23 WTA-33 a directory still held after git dropped its record is incomplete, not an error; cleanup deletes that directory once it is let go', async () => {
+		const worktree = path.join(dir, 'worktrees', 'stuck');
+		await createWorktreeAt(git, main, worktree, 'stuck');
+		const release = holdOpen(worktree);
+
+		let result;
+		try {
+			result = await deleteWorktreeAt(git, main, worktree, 'remove');
+		} finally {
+			await release();
+		}
+		const recovery = result.kind === 'incomplete' ? result.recovery : undefined;
+		const forged = await deleteWorktreeAt(git, main, worktree, 'cleanup', 'leftover-forged');
+		const cleanup = await deleteWorktreeAt(git, main, worktree, 'cleanup', recovery);
+
+		assert.deepStrictEqual({
+			result: result.kind === 'incomplete' && { path: realpathSync.native(path.dirname(worktree)) === path.dirname(result.path), gitRecord: result.gitRecord },
+			forged: forged.kind === 'error' && forged.code,
+			cleanup,
+			folder: existsSync(worktree),
+			listed: run(main, 'worktree', 'list').includes('stuck')
+		}, {
+			result: { path: true, gitRecord: 'absent' },
+			forged: 'NotTheLeftover',
+			cleanup: { kind: 'removed' },
+			folder: false,
+			listed: false
+		});
+	});
+
+	test('WTA-33 cleanup refuses a directory that has taken the leftover\'s place, and deletes nothing', async () => {
+		const worktree = path.join(dir, 'worktrees', 'replaced');
+		await createWorktreeAt(git, main, worktree, 'replaced');
+		const release = holdOpen(worktree);
+
+		let result;
+		try {
+			result = await deleteWorktreeAt(git, main, worktree, 'remove');
+		} finally {
+			await release();
+		}
+		// Somebody's own folder, made where the leftover was.
+		rmSync(worktree, { recursive: true, force: true });
+		write(path.join(worktree, 'mine.txt'), 'mine\n');
+		const cleanup = await deleteWorktreeAt(git, main, worktree, 'cleanup', result.kind === 'incomplete' ? result.recovery : undefined);
+
+		assert.deepStrictEqual({ result: result.kind, cleanup: cleanup.kind === 'error' && cleanup.code, mine: existsSync(path.join(worktree, 'mine.txt')) }, {
+			result: 'incomplete',
+			cleanup: 'NotTheLeftover',
+			mine: true
+		});
+	});
+
 	suite('a folder with nothing to start a worktree from', () => {
 
 		// The first commit is made in the person's name, which a machine running tests may not have:
