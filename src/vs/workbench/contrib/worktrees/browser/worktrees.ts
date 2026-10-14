@@ -143,22 +143,22 @@ function explainFailure(error: WorktreeAtError | undefined, main: URI, branch?: 
 	switch (error?.code) {
 		// What reaches the extension as other than a folder on disk: a virtual file system's, say.
 		case 'InvalidArgument':
-			return localize('worktrees.notOnDisk', "\"{0}\" is not a folder on disk, which is where Git works.", basename(main));
+			return localize('worktrees.notOnDisk', "'{0}' is not a valid folder on disk.", basename(main));
 		case 'UnreadableGitDirectory':
-			return localize('worktrees.notARepository', "\"{0}\" has a .git folder that Git cannot read as a repository.", basename(main));
+			return localize('worktrees.notARepository', "'{0}' contains a .git folder that cannot be read as a valid Git repository.", basename(main));
 		// Git's own words for it end with the way out, which a notification of its first line would lose.
 		case 'NotASafeGitRepository':
-			return localize('worktrees.unsafeRepository', "Git does not open \"{0}\", which is owned by another user. To trust it, run {1}, then try again.", basename(main), `git config --global --add safe.directory ${main.scheme === Schemas.file ? main.fsPath : main.path}`);
+			return localize('worktrees.unsafeRepository', "Git cannot open '{0}' because it is owned by another user. Run '{1}' to mark it safe, then try again.", basename(main), `git config --global --add safe.directory ${main.scheme === Schemas.file ? main.fsPath : main.path}`);
 		case 'InheritedGitEnvironment':
-			return localize('worktrees.inheritedEnvironment', "This window was started with GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE set, which points Git at another repository. Open the folder in a new window.");
+			return localize('worktrees.inheritedEnvironment', "This window was started with GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE set, redirecting Git to another repository. Please open the folder in a new window.");
 		case 'InvalidBranchName':
-			return localize('worktrees.invalidBranchName', "\"{0}\" is not a valid branch name.", branch ?? '');
+			return localize('worktrees.invalidBranchName', "'{0}' is not a valid branch name.", branch ?? '');
 		case 'InitialBranch':
-			return localize('worktrees.initialBranch', "The initial commit goes on \"{0}\", so the worktree needs a branch with another name.", branch ?? '');
+			return localize('worktrees.initialBranch', "The initial commit is on '{0}'. Please choose a different branch name for the new worktree.", branch ?? '');
 		case 'UnbornBranch':
-			return localize('worktrees.unbornBranch', "\"{0}\" is on a branch with no commits yet. Switch to a branch with commits, or commit on this one, and try again.", basename(main));
+			return localize('worktrees.unbornBranch', "Repository '{0}' has no commits on the current branch. Create a commit or switch branches first.", basename(main));
 		case 'WorktreeContainsChanges':
-			return localize('worktrees.changedSinceCheck', "Files in the worktree changed after it was checked. Try again to see what would be lost.");
+			return localize('worktrees.changedSinceCheck', "Files in the worktree were modified after verification. Please review changes and try again.");
 		case 'NoIdentity':
 			return noIdentityMessage();
 		default:
@@ -168,7 +168,7 @@ function explainFailure(error: WorktreeAtError | undefined, main: URI, branch?: 
 
 /** A failure in git's words. */
 function gitMessage(error: WorktreeAtError | undefined): string {
-	return error?.message ?? localize('worktrees.noAnswer', "Git did not answer.");
+	return error?.message ?? localize('worktrees.noAnswer', "Git process did not respond.");
 }
 
 /**
@@ -177,16 +177,16 @@ function gitMessage(error: WorktreeAtError | undefined): string {
  */
 function gitUnreachable(command: string, err: unknown): string {
 	return CommandsRegistry.getCommand(command)
-		? localize('worktrees.noGit', "Git could not be reached to make the worktree: {0}", toErrorMessage(err))
+		? localize('worktrees.noGit', "Failed to execute the Git command to create the worktree: {0}", toErrorMessage(err))
 		: gitExtensionNotRunning();
 }
 
 function gitExtensionNotRunning(): string {
-	return localize('worktrees.noGitExtension', "Worktrees are made and deleted with the Git extension, which is not running in this window.");
+	return localize('worktrees.noGitExtension', "Worktree operations require the built-in Git extension, which is not active in this window.");
 }
 
 function noIdentityMessage(): string {
-	return localize('worktrees.noIdentity', "Git user name and email are not configured, and a commit requires them. Set them with {0} and {1}, then try again.", 'git config --global user.name', 'git config --global user.email');
+	return localize('worktrees.noIdentity', "Git user name and email are not configured. Run '{0}' and '{1}', then try again.", 'git config --global user.name', 'git config --global user.email');
 }
 
 /** A path spelled for the OS the folder is on - the remote's, for a folder on a remote. */
@@ -340,7 +340,7 @@ export class WorktreeService implements IWorktreeService {
 		const repository = this.workspaceBarService.repositoryFor(target);
 		const worktree = findWorktree(repository, target, this.uriIdentityService.extUri);
 		if (!repository || !worktree) {
-			this.notificationService.info(localize('worktrees.notWorktree', "{0} is not a worktree the workspace knows.", this.labelService.getUriLabel(target)));
+			this.notificationService.info(localize('worktrees.notWorktree', "'{0}' is not a recognized worktree in this workspace.", this.labelService.getUriLabel(target)));
 			return;
 		}
 
@@ -403,7 +403,7 @@ export class WorktreeService implements IWorktreeService {
 			return true;
 		}
 
-		if (!await this.workspaceTrustRequestService.requestWorkspaceTrust({ message: localize('worktrees.restricted', "Worktrees are made and deleted with Git, which does not run in Restricted Mode.") })) {
+		if (!await this.workspaceTrustRequestService.requestWorkspaceTrust({ message: localize('worktrees.restricted', "Worktrees require Git operations, which are disabled in Restricted Mode.") })) {
 			return false;
 		}
 
@@ -428,7 +428,7 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-5.1: an untrusted repository gets no worktree - a new one would be trusted as it is made.
 		if (trustEnabled && !(await this.workspaceTrustManagementService.getUriTrustInfo(main)).trusted
-			&& !await this.workspaceTrustRequestService.requestResourcesTrust({ uri: main, message: localize('worktrees.untrusted', "A worktree of {0} is trusted as it is made. Trust {0} first.", this.labelService.getUriLabel(main)) })) {
+			&& !await this.workspaceTrustRequestService.requestResourcesTrust({ uri: main, message: localize('worktrees.untrusted', "A worktree inherits trust from its parent repository '{0}'. Please trust the repository first.", this.labelService.getUriLabel(main)) })) {
 			return undefined;
 		}
 
@@ -437,7 +437,7 @@ export class WorktreeService implements IWorktreeService {
 		let base: WorktreeBaseAtResult | undefined;
 		try {
 			base = await this.progressService.withProgress(
-				{ location: ProgressLocation.Window, title: localize('worktrees.inspecting', "Reading {0}...", basename(main)) },
+				{ location: ProgressLocation.Window, title: localize('worktrees.inspecting', "Reading repository '{0}'...", basename(main)) },
 				() => this.commandService.executeCommand<WorktreeBaseAtResult>('_git.prepareWorktreeBaseAt', main, 'inspect'));
 		} catch (err) {
 			this.notificationService.error(gitUnreachable('_git.prepareWorktreeBaseAt', err));
@@ -446,7 +446,7 @@ export class WorktreeService implements IWorktreeService {
 
 		if (!base || base.kind === 'error') {
 			this.notificationService.error(explainFailure(base, main)
-				?? localize('worktrees.inspectFailed', "Git could not read {0}: {1}", this.labelService.getUriLabel(main), gitMessage(base)));
+				?? localize('worktrees.inspectFailed', "Git failed to read repository '{0}': {1}", this.labelService.getUriLabel(main), gitMessage(base)));
 			return undefined;
 		}
 
@@ -454,15 +454,15 @@ export class WorktreeService implements IWorktreeService {
 			notice: [
 				// A folder inside another repository is told so: "not a Git repository" would not be true of it.
 				base.kind === 'uninitialized' && base.enclosing
-					? localize('worktrees.insideRepository', "\"{0}\" is inside the Git repository \"{1}\". It will get a repository of its own, initialized using git init.", basename(main), base.enclosing)
+					? localize('worktrees.insideRepository', "Folder '{0}' is inside the Git repository '{1}'. A new repository will be initialized.", basename(main), base.enclosing)
 					: base.kind === 'uninitialized'
-						? localize('worktrees.notRepositoryYet', "\"{0}\" is not a Git repository. It will be initialized using git init.", basename(main))
-						: localize('worktrees.noCommitsYet', "\"{0}\" has no commits for a worktree to branch off from.", basename(main)),
+						? localize('worktrees.notRepositoryYet', "Folder '{0}' is not a Git repository. It will be initialized with 'git init'.", basename(main))
+						: localize('worktrees.noCommitsYet', "Repository '{0}' contains no commits. An initial commit is required to branch off.", basename(main)),
 				base.files === 0
-					? localize('worktrees.firstCommitEmpty', "An empty initial commit will be created as the base for the new worktree.")
+					? localize('worktrees.firstCommitEmpty', "An empty initial commit will be created for the new worktree.")
 					: base.files === 1
-						? localize('worktrees.firstCommitOne', "An initial commit of the 1 file not excluded by .gitignore will be created as the base for the new worktree.")
-						: localize('worktrees.firstCommitMany', "An initial commit of the {0} files not excluded by .gitignore will be created as the base for the new worktree.", base.files)
+						? localize('worktrees.firstCommitOne', "An initial commit containing 1 file (excluding files ignored by Git) will be created.")
+						: localize('worktrees.firstCommitMany', "An initial commit containing {0} files (excluding files ignored by Git) will be created.", base.files)
 			],
 			action: localize('worktrees.initializeAndCreate', "Initialize and Create"),
 			// Said before anything is done: without a name and an email, git refuses the commit. Not when
@@ -490,8 +490,8 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-5.2: the branch, where it starts and the folder it goes in, with the name and colour beside it.
 		const origin = prepare
-			? localize('worktrees.startsAtFirst', "Branches off from the initial commit.")
-			: localize('worktrees.startsAt', "Branches off from HEAD of \"{0}\".", basename(main));
+			? localize('worktrees.startsAtFirst', "Branches off the initial commit.")
+			: localize('worktrees.startsAt', "Branches off HEAD of '{0}'.", basename(main));
 		const answer = await this.workspaceBarDialogService.showNewWorktreeDialog(basename(main), origin, value => {
 			const trimmed = value.trim();
 			if (!trimmed) {
@@ -501,7 +501,7 @@ export class WorktreeService implements IWorktreeService {
 
 			const folder = worktreeFolderName(trimmed);
 			if (!folder) {
-				return { message: localize('worktrees.badName', "\"{0}\" cannot be the name of a folder on Windows.", trimmed), valid: false, error: true };
+				return { message: localize('worktrees.badName', "'{0}' is not a valid folder name on Windows.", trimmed), valid: false, error: true };
 			}
 
 			return { message: localize('worktrees.folder', "Location: {0}", parentLabel + freeWorktreeName(folder, candidate => taken.has(nameKey(candidate)))), valid: true };
@@ -518,7 +518,7 @@ export class WorktreeService implements IWorktreeService {
 			let prepared: WorktreeBaseAtResult | undefined;
 			try {
 				prepared = await this.progressService.withProgress(
-					{ location: ProgressLocation.Notification, title: localize('worktrees.preparing', "Creating the initial commit of \"{0}\"...", basename(main)) },
+					{ location: ProgressLocation.Notification, title: localize('worktrees.preparing', "Creating initial commit in '{0}'...", basename(main)) },
 					// With the branch, so a name git refuses is caught before anything changes.
 					() => this.commandService.executeCommand<WorktreeBaseAtResult>('_git.prepareWorktreeBaseAt', main, 'initialize', branch));
 			} catch (err) {
@@ -531,7 +531,7 @@ export class WorktreeService implements IWorktreeService {
 				const message = gitMessage(error);
 				this.logService.warn(`[worktrees] preparing ${main.toString(true)} failed: ${message}`);
 				this.notificationService.error(explainFailure(error, main, branch)
-					?? localize('worktrees.prepareFailed', "Could not create the initial commit of \"{0}\": {1}", basename(main), message));
+					?? localize('worktrees.prepareFailed', "Failed to create the initial commit for '{0}': {1}", basename(main), message));
 				return undefined;
 			}
 		}
@@ -557,21 +557,21 @@ export class WorktreeService implements IWorktreeService {
 	 */
 	private async doMakeWorktree(main: URI, branch: string, options: IMakeWorktreeOptions): Promise<URI> {
 		if (!branch) {
-			throw new Error(localize('worktrees.noBranch', "A worktree needs the name of its branch."));
+			throw new Error(localize('worktrees.noBranch', "A branch name is required to create a worktree."));
 		}
 
 		const name = worktreeFolderName(branch);
 		if (!name) {
-			throw new Error(localize('worktrees.badName', "\"{0}\" cannot be the name of a folder on Windows.", branch));
+			throw new Error(localize('worktrees.badName', "'{0}' is not a valid folder name on Windows.", branch));
 		}
 
 		const trustEnabled = this.workspaceTrustEnablementService.isWorkspaceTrustEnabled();
 		if (trustEnabled && !this.workspaceTrustManagementService.isWorkspaceTrusted()) {
-			throw new Error(localize('worktrees.restrictedUnasked', "The workspace is in Restricted Mode, where Git does not run. Trust the workspace first."));
+			throw new Error(localize('worktrees.restrictedUnasked', "The workspace is in Restricted Mode. Please trust the workspace to run Git operations."));
 		}
 
 		if (trustEnabled && !(await this.workspaceTrustManagementService.getUriTrustInfo(main)).trusted) {
-			throw new Error(localize('worktrees.untrustedUnasked', "{0} is not trusted, and a worktree of it would be. Trust {0} first.", this.labelService.getUriLabel(main)));
+			throw new Error(localize('worktrees.untrustedUnasked', "Repository '{0}' is untrusted. Please trust the repository before creating a worktree.", this.labelService.getUriLabel(main)));
 		}
 
 		await whenRegistered('_git.prepareWorktreeBaseAt', GIT_START_TIMEOUT);
@@ -584,15 +584,15 @@ export class WorktreeService implements IWorktreeService {
 
 		if (!base || base.kind === 'error') {
 			throw new Error(explainFailure(base, main)
-				?? localize('worktrees.inspectFailed', "Git could not read {0}: {1}", this.labelService.getUriLabel(main), gitMessage(base)));
+				?? localize('worktrees.inspectFailed', "Git failed to read repository '{0}': {1}", this.labelService.getUriLabel(main), gitMessage(base)));
 		}
 
 		if (base.kind === 'uninitialized') {
-			throw new Error(localize('worktrees.notRepositoryUnasked', "\"{0}\" is not a Git repository. Make it one first.", basename(main)));
+			throw new Error(localize('worktrees.notRepositoryUnasked', "Folder '{0}' is not a Git repository. Initialize the repository first.", basename(main)));
 		}
 
 		if (base.kind === 'unborn') {
-			throw new Error(localize('worktrees.noBaseUnasked', "\"{0}\" has no commit for a worktree to branch off from. Make its first commit first.", basename(main)));
+			throw new Error(localize('worktrees.noBaseUnasked', "Repository '{0}' contains no commits. Create an initial commit first.", basename(main)));
 		}
 
 		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES, basename(main));
@@ -622,7 +622,7 @@ export class WorktreeService implements IWorktreeService {
 		let result: CreateWorktreeAtResult | undefined;
 		try {
 			result = await this.progressService.withProgress(
-				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree {0}...", customization.name || branch) },
+				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree '{0}'...", customization.name || branch) },
 				() => this.commandService.executeCommand<CreateWorktreeAtResult>('_git.createWorktreeAt', main, worktree, branch, ...(startPoint ? [startPoint] : [])));
 		} catch (err) {
 			this.customizationService.set(worktree, {});
@@ -637,12 +637,12 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-6.4: a file that did not copy is said once, and stops nothing.
 		if (result.copyFailures.length > 0) {
-			this.notificationService.warn(localize('worktrees.copyFailed', "{0} of what .worktreeinclude names could not be copied into the worktree: {1}", result.copyFailures.length, result.copyFailures.slice(0, LISTED_COPY_FAILURES).join(', ')));
+			this.notificationService.warn(localize('worktrees.copyFailed', "Failed to copy {0} files specified in .worktreeinclude into the worktree: {1}", result.copyFailures.length, result.copyFailures.slice(0, LISTED_COPY_FAILURES).join(', ')));
 		}
 
 		// Nor does a hook that failed: git kept the worktree, and so does this.
 		if (result.hookFailure) {
-			this.notificationService.warn(localize('worktrees.hookFailed', "The worktree was created, but a Git hook failed: {0}", result.hookFailure));
+			this.notificationService.warn(localize('worktrees.hookFailed', "Worktree created successfully, but a Git hook failed: {0}", result.hookFailure));
 		}
 
 		return { kind: 'created', worktree, result };
@@ -680,14 +680,14 @@ export class WorktreeService implements IWorktreeService {
 	private createFailureMessage(main: URI, branch: string, worktree: URI, result: CreateWorktreeAtResult | undefined): string {
 		const error = result?.kind === 'error' ? result : undefined;
 		if (error?.code === 'BranchAlreadyExists') {
-			return localize('worktrees.branchExists', "A branch named {0} already exists. Choose another name.", branch);
+			return localize('worktrees.branchExists', "A branch named '{0}' already exists. Please choose a different name.", branch);
 		}
 
 		if (error?.code === 'WorktreeAlreadyExists') {
-			return localize('worktrees.pathExists', "Something is already at {0}.", this.labelService.getUriLabel(worktree));
+			return localize('worktrees.pathExists', "A file or folder already exists at '{0}'.", this.labelService.getUriLabel(worktree));
 		}
 
-		return explainFailure(error, main, branch) ?? localize('worktrees.createFailed', "The worktree could not be made: {0}", gitMessage(error));
+		return explainFailure(error, main, branch) ?? localize('worktrees.createFailed', "Failed to create worktree: {0}", gitMessage(error));
 	}
 
 	/** Says on screen why New Worktree could not make its worktree; a branch a checkout has is offered to go to. */
@@ -700,8 +700,8 @@ export class WorktreeService implements IWorktreeService {
 				: repository?.worktrees.find(candidate => candidate.branch === branch)?.uri;
 		if (holder) {
 			this.notificationService.prompt(Severity.Info,
-				localize('worktrees.branchCheckedOut', "Branch {0} is already checked out in {1}.", branch, this.labelService.getUriLabel(holder)),
-				[{ label: localize('worktrees.goThere', "Go There"), run: () => this.workspaceBarService.show(holder) }]);
+				localize('worktrees.branchCheckedOut', "Branch '{0}' is already checked out in '{1}'.", branch, this.labelService.getUriLabel(holder)),
+				[{ label: localize('worktrees.goThere', "Switch to Worktree"), run: () => this.workspaceBarService.show(holder) }]);
 			return;
 		}
 
@@ -726,7 +726,7 @@ export class WorktreeService implements IWorktreeService {
 		}
 
 		if (setup.kind === 'invalid') {
-			this.notificationService.warn(localize('worktrees.badSetup', ".facade/worktrees.json could not be read: each setup key has to be a list of command lines. Nothing was run."));
+			this.notificationService.warn(localize('worktrees.badSetup', "Failed to parse .facade/worktrees.json: setup keys must contain an array of command strings. No commands were executed."));
 			return;
 		}
 
@@ -799,14 +799,14 @@ export class WorktreeService implements IWorktreeService {
 		try {
 			check = await run('check');
 		} catch (err) {
-			this.notificationService.error(CommandsRegistry.getCommand('_git.deleteWorktreeAt') ? localize('worktrees.noGitDelete', "Git could not be reached to delete the worktree: {0}", toErrorMessage(err)) : gitExtensionNotRunning());
+			this.notificationService.error(CommandsRegistry.getCommand('_git.deleteWorktreeAt') ? localize('worktrees.noGitDelete', "Failed to execute the Git command to delete the worktree: {0}", toErrorMessage(err)) : gitExtensionNotRunning());
 			return;
 		}
 
 		if (!check || check.kind !== 'checked') {
 			const error = check?.kind === 'error' ? check : undefined;
 			this.notificationService.error(explainFailure(error, main)
-				?? localize('worktrees.checkFailed', "The worktree could not be checked before deleting it: {0}", gitMessage(error)));
+				?? localize('worktrees.checkFailed', "Failed to verify worktree state before deletion: {0}", gitMessage(error)));
 			return;
 		}
 
@@ -820,7 +820,7 @@ export class WorktreeService implements IWorktreeService {
 		// 3 to 6 under one progress: a large tree takes a while to delete.
 		const force = check.files.length > 0 || check.submodules;
 		const result = await this.progressService.withProgress(
-			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree {0}...", name) },
+			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree '{0}'...", name) },
 			async (): Promise<DeleteWorktreeAtResult | undefined> => {
 				// 3  move off, to the repository's own row rather than whichever folder is next in the list (WT-8.3).
 				const active = this.activeFolderService.activeFolder;
@@ -857,7 +857,7 @@ export class WorktreeService implements IWorktreeService {
 			const error = result?.kind === 'error' ? result : undefined;
 			const message = gitMessage(error);
 			this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} failed: ${message}`);
-			this.notificationService.error(explainFailure(error, main) ?? localize('worktrees.deleteFailed', "The worktree could not be deleted: {0}", message));
+			this.notificationService.error(explainFailure(error, main) ?? localize('worktrees.deleteFailed', "Failed to delete worktree: {0}", message));
 			return;
 		}
 
@@ -908,7 +908,7 @@ export class WorktreeService implements IWorktreeService {
 		detail.appendMarkdown(`${asCodeSpan(this.labelService.getUriLabel(worktree))}\n\n`);
 
 		if (files.length > 0) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.loses', "These changes have not been committed and will be lost:")));
+			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.loses', "The following uncommitted changes will be lost:")));
 			detail.appendMarkdown('\n\n');
 			for (const file of files.slice(0, LISTED_FILES)) {
 				detail.appendMarkdown(`- ${asCodeSpan(file)}\n`);

@@ -421,14 +421,14 @@ suite('Worktrees - making and deleting one', () => {
 		const folderTaken = await attempt('w5');
 
 		assert.deepStrictEqual({ noBranch, notAFolder, restricted, untrusted, notARepository, unborn, branchTaken, folderTaken, asked: steps.filter(step => step === 'ask' || step === 'ask for trust' || step.startsWith('prompt')) }, {
-			noBranch: 'A worktree needs the name of its branch.',
-			notAFolder: '"con" cannot be the name of a folder on Windows.',
-			restricted: 'The workspace is in Restricted Mode, where Git does not run. Trust the workspace first.',
-			untrusted: '/lab is not trusted, and a worktree of it would be. Trust /lab first.',
-			notARepository: '"lab" is not a Git repository. Make it one first.',
-			unborn: '"lab" has no commit for a worktree to branch off from. Make its first commit first.',
-			branchTaken: 'A branch named w2 already exists. Choose another name.',
-			folderTaken: 'Something is already at /home/me/.facade/worktrees/lab/w5.',
+			noBranch: 'A branch name is required to create a worktree.',
+			notAFolder: '\'con\' is not a valid folder name on Windows.',
+			restricted: 'The workspace is in Restricted Mode. Please trust the workspace to run Git operations.',
+			untrusted: 'Repository \'/lab\' is untrusted. Please trust the repository before creating a worktree.',
+			notARepository: 'Folder \'lab\' is not a Git repository. Initialize the repository first.',
+			unborn: 'Repository \'lab\' contains no commits. Create an initial commit first.',
+			branchTaken: 'A branch named \'w2\' already exists. Please choose a different name.',
+			folderTaken: 'A file or folder already exists at \'/home/me/.facade/worktrees/lab/w5\'.',
 			asked: [],
 		});
 	});
@@ -451,7 +451,7 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual({ made: made.path, whileStarting, notRunning }, {
 			made: '/home/me/.facade/worktrees/lab/w3',
 			whileStarting: ['git registers its commands', '_git.prepareWorktreeBaseAt /lab inspect'],
-			notRunning: 'Worktrees are made and deleted with the Git extension, which is not running in this window.',
+			notRunning: 'Worktree operations require the built-in Git extension, which is not active in this window.',
 		});
 	}));
 
@@ -622,7 +622,7 @@ suite('Worktrees - making and deleting one', () => {
 		await instantiationService.createInstance(WorktreeService).createWorktree(main);
 
 		assert.deepStrictEqual(steps.filter(step => step.startsWith('warn') || step.startsWith('show')), [
-			'warn: The worktree was created, but a Git hook failed: the hook says no',
+			'warn: Worktree created successfully, but a Git hook failed: the hook says no',
 			'show /home/me/.facade/worktrees/lab/w3',
 		]);
 	});
@@ -643,10 +643,10 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 w2',
 				// Nothing was made at that path: the name given for it is taken back.
 				'customize /home/me/.facade/worktrees/lab/w2 {}',
-				'prompt: Branch w2 is already checked out in /home/me/.facade/worktrees/lab/w2.',
+				'prompt: Branch \'w2\' is already checked out in \'/home/me/.facade/worktrees/lab/w2\'.',
 				'show /home/me/.facade/worktrees/lab/w2',
 			],
-			choices: ['Go There'],
+			choices: ['Switch to Worktree'],
 		});
 	});
 
@@ -669,8 +669,8 @@ suite('Worktrees - making and deleting one', () => {
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 
 		assert.deepStrictEqual(steps.filter(step => step.startsWith('error: ')), [
-			'error: The initial commit goes on "main", so the worktree needs a branch with another name.',
-			'error: The worktree could not be checked before deleting it: fatal from git',
+			'error: The initial commit is on \'main\'. Please choose a different branch name for the new worktree.',
+			'error: Failed to verify worktree state before deletion: fatal from git',
 		]);
 	});
 
@@ -683,9 +683,9 @@ suite('Worktrees - making and deleting one', () => {
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 
 		assert.deepStrictEqual(steps.filter(step => step.startsWith('error: ')), [
-			'error: "lab" is not a folder on disk, which is where Git works.',
-			`error: Git does not open "lab", which is owned by another user. To trust it, run git config --global --add safe.directory ${main.fsPath}, then try again.`,
-			'error: Worktrees are made and deleted with the Git extension, which is not running in this window.',
+			'error: \'lab\' is not a valid folder on disk.',
+			`error: Git cannot open 'lab' because it is owned by another user. Run 'git config --global --add safe.directory ${main.fsPath}' to mark it safe, then try again.`,
+			'error: Worktree operations require the built-in Git extension, which is not active in this window.',
 		]);
 	});
 
@@ -729,7 +729,7 @@ suite('Worktrees - making and deleting one', () => {
 			'close its terminal',
 			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
 			'unhide /home/me/.facade/worktrees/lab/w2',
-			'error: The worktree could not be deleted: fatal: the directory is busy',
+			'error: Failed to delete worktree: fatal: the directory is busy',
 		]);
 	});
 

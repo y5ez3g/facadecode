@@ -213,7 +213,7 @@ Code's (IDENTITY.md).
 | `facade --add <folder>` | added; the window stays, as the flag means in stock |
 | `facade --remove <folder>` | removed as W9.6 says, its confirmation included |
 | Git: Clone, Git: Initialize Repository | a clone is shown in this window, nothing asked: Facade's default for `git.openAfterClone` is `always`, as Open Folder replaces nothing here. Where git still asks - `prompt`, or a repository initialized outside the workspace - it asks VS Code's question: Open and Open in New Window, and Add to Workspace when the window has folders. Open adds the folder to this window and shows it; Add to Workspace adds it and leaves the window on its folder |
-| Go There, for a branch checked out in another worktree (WT-5.3) | shown |
+| Switch to Worktree, for a branch checked out in another worktree (WT-5.3) | shown |
 | an extension's `vscode.openFolder` on a folder without asking for a new window - git's Open Worktree in Current Window among them | shown, as Open Folder: the stock call would replace the window's whole list |
 | an extension's `vscode.openFolder` on a workspace or asking for a new window; New Window; Duplicate Workspace | a new window |
 | a folder on a remote this window is not connected to | a window that can reach it |

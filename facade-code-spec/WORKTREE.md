@@ -338,8 +338,8 @@ palette (New Worktree...).
   to pick: one field to fill, the branch's name.
 - **WT-5.3** No checks of our own before creating beyond the name's shape: git's
   errors are the checks, since branches and paths can change while the dialog is open.
-  A branch checked out in another worktree offers only Go There; a path that exists is
-  said; anything else shows git's own message.
+  A branch checked out in another worktree offers only Switch to Worktree; a path that
+  exists is said; anything else shows git's own message.
 - **WT-5.4** Creating shows a progress notification. It cannot be cancelled: a
   half-made worktree is worse than waiting.
 - **WT-5.5** A failure is always said on screen, never only logged.
@@ -588,7 +588,7 @@ injection and integrated gate.
 | WTA-02 | U, I | Open the window with worktrees not in `folders[]`; go to one; go to it again | Listing adds nothing to the file; the first visit adds it once and shows it; the second only switches |
 | WTA-03 | U | A repository added under two spellings; `worktree.useRelativePaths`; reftable; detached HEAD; a recorded worktree whose folder is gone; a `.git` naming a gone git directory | WT-3.1, WT-3.3, WT-1.9, WT-3.8 |
 | WTA-04 | U, I | Worktrees made in the order w10, w2, w1 with one tie; move one up and down; make another; reload; switch profile | Oldest first, ties numeric; a move keeps the whole order in the profile; a new one goes after; the order follows the profile |
-| WTA-05 | U, I | Close and open a repository by its triangle, Left/Right and the menu; collapse the bar; reload; reach a worktree of a closed repository by Open Recent, `facade <path>`, Go There and Switch Folder... | The closed set is kept per workspace across reloads; collapsing the bar changes nothing; each arrival opens the repository first, so the marked row is in sight |
+| WTA-05 | U, I | Close and open a repository by its triangle, Left/Right and the menu; collapse the bar; reload; reach a worktree of a closed repository by Open Recent, `facade <path>`, Switch to Worktree and Switch Folder... | The closed set is kept per workspace across reloads; collapsing the bar changes nothing; each arrival opens the repository first, so the marked row is in sight |
 | WTA-06 | U, I | Collapse the active worktree's repository with and without the main checkout in the workspace; collapse another repository; expand again | WT-1.5: successful switch to main before collapse; add it when needed; unrelated collapse and expansion do not switch folders |
 | WTA-07 | U, I | Move Folder Up/Down a repository whose worktrees are in `folders[]`; add a worktree to `folders[]`; a repository only a worktree of which is in `folders[]` | WT-1.6: the row moves with its folders; an added worktree never moves a folder row; the repository sits where its first member is |
 | WTA-08 | I, H | Point at rows and read them: the triangle, the `+`, the count badge, agent logos with four agents, the collapsed dot, hover, screen reader labels; with reduced motion | WT-1.12-1.15 and WT-1.14 |
@@ -598,7 +598,7 @@ injection and integrated gate.
 | WTA-12 | U | Branch names with `/`, each forbidden character, leading and trailing spaces, device names, an empty name; a taken path; a case-insensitive disk | WT-2.2, WT-2.3: one folder name on every OS, device names refused with a reason, `-1` and `-2` |
 | WTA-13 | I, H | Type in the New Worktree dialog: an empty name, a valid one, a taken one, a forbidden one; add a name and a colour | WT-5.2: one field for the branch and no start point to choose; the location line follows the typing; errors in the error colour; Create disabled until the name can be made |
 | WTA-14 | U, I | Create from the row button, repository menu and palette, including a focused worktree and a plain folder | WT-5.6 order; record read before membership, name/color present on first row, setup waits for this worktree's completed activation |
-| WTA-15 | U, I | Branch exists; branch checked out in another worktree; path exists; invalid branch name; unsafe repository; inherited `GIT_DIR`; git extension not running; Restricted Mode; an untrusted repository | WT-5.1, WT-5.3, WT-5.5: each said on screen in the product's words; Go There only for a checked-out branch; trust asked before git runs; nothing runs without it |
+| WTA-15 | U, I | Branch exists; branch checked out in another worktree; path exists; invalid branch name; unsafe repository; inherited `GIT_DIR`; git extension not running; Restricted Mode; an untrusted repository | WT-5.1, WT-5.3, WT-5.5: each said on screen in the product's words; Switch to Worktree only for a checked-out branch; trust asked before git runs; nothing runs without it |
 | WTA-16 | U, I | The first worktree of a plain folder, of a repository with no commit, of a folder inside another repository; without a git identity; with an `includeIf` identity; a branch git refuses | WT-5.8: Initialize and Create with the file count; nothing changes before it is pressed; disabled with how-to without an identity; the refused branch is said before anything changes |
 | WTA-17 | U, I | Two New Worktree clicks; two agents asking at once; New Worktree while an agent's is being made | WT-5.10 |
 | WTA-18 | U, I | An agent's worktree from a given commit; with a start point that is not a full id; untrusted workspace; untrusted repository; no commit; `show` true and false | WT-5.11 and WT-4: no dialog; refused with reasons; the window stays unless asked; setup in its own revealed terminal |
