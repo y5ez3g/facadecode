@@ -578,7 +578,7 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
-	test('WTA-14 making one: named and coloured before its row is drawn, trusted, its record read, its repository opened, and the window taken to it', async () => {
+	test('WTA-14 making one: named and coloured before its row is drawn, its record read, its repository opened, and the window taken to it - trusted as its repository is, with nothing recorded for it', async () => {
 		trust.enabled = true;
 		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
 		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
@@ -591,7 +591,6 @@ suite('Worktrees - making and deleting one', () => {
 			'ask',
 			'customize /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"red"}',
 			'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
-			'trust /home/me/.facade/worktrees/lab/w3',
 			'listed /home/me/.facade/worktrees/lab/w3',
 			'open /lab',
 			'show /home/me/.facade/worktrees/lab/w3',
@@ -714,7 +713,6 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.prepareWorktreeBaseAt /lab inspect',
 				'customize /home/me/.facade/worktrees/lab/w3 {"color":"red"}',
 				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
-				'trust /home/me/.facade/worktrees/lab/w3',
 				'listed /home/me/.facade/worktrees/lab/w3',
 			],
 		});

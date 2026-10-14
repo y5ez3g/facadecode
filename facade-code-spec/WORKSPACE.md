@@ -234,7 +234,11 @@ trusted, ten of them named and the rest counted; why it asks; Trust and Add or C
 the box VS Code's question has to trust their parent folder whole, when they share one;
 and a link to open everything being added in a new window instead, where only that
 window is restricted. What is added together goes together: all of it here, all of it
-in the new window, or none of it. A folder that arrives where
+in the new window, or none of it. A worktree is trusted as its repository is
+(WORKTREE.md WT-3.9): one of a trusted repository is not asked about, and one of a
+repository that is not trusted is asked about as that repository - the question names
+the repository's folder, and Trust and Add trusts it and every worktree of it. A
+folder that arrives where
 nothing can ask first - the file edited by hand, an extension - meets VS Code's own
 trust question; answered No, the folder is taken back out of the list, and a
 notification offers to open it in a new window. The default workspace's own file is

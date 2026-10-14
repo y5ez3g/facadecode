@@ -27,6 +27,7 @@ import { isWeb } from '../../../../base/common/platform.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { promiseWithResolvers } from '../../../../base/common/async.js';
 import { ResourceMap } from '../../../../base/common/map.js';
+import { worktreeRepositoryOf } from './gitFiles.js';
 
 export const WORKSPACE_TRUST_ENABLED = 'security.workspace.trust.enabled';
 export const WORKSPACE_TRUST_STARTUP_PROMPT = 'security.workspace.trust.startupPrompt';
@@ -116,6 +117,12 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 	private readonly _storedTrustState: WorkspaceTrustMemento;
 	private readonly _trustTransitionManager: WorkspaceTrustTransitionManager;
 
+	/**
+	 * Facade Code: the folders whose trust was asked for that are linked worktrees, each with its repository's shared
+	 * git directory - read ahead, as `doGetUriTrustInfo` cannot wait for git's files (WORKTREE.md).
+	 */
+	private readonly _worktreeRepositories: ResourceMap<URI>;
+
 	constructor(
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IRemoteAuthorityResolverService private readonly remoteAuthorityResolverService: IRemoteAuthorityResolverService,
@@ -128,6 +135,7 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 	) {
 		super();
 
+		this._worktreeRepositories = new ResourceMap<URI>(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 		this._canonicalUrisResolved = false;
 		this._canonicalWorkspace = this.workspaceService.getWorkspace();
 
@@ -241,6 +249,9 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 		// Workspace
 		const workspaceUris = this.workspaceService.getWorkspace().folders.map(f => f.uri);
 		const canonicalWorkspaceFolders = await Promise.all(workspaceUris.map(uri => this.getCanonicalUri(uri)));
+
+		// Facade Code: which of them are worktrees, and of which repository, before their trust is calculated
+		await Promise.all(canonicalWorkspaceFolders.map(uri => this.resolveWorktreeRepository(uri)));
 
 		let canonicalWorkspaceConfiguration = this.workspaceService.getWorkspace().configuration;
 		if (canonicalWorkspaceConfiguration && isSavedWorkspace(canonicalWorkspaceConfiguration, this.environmentService)) {
@@ -389,6 +400,26 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 			return { trusted: true, uri };
 		}
 
+		const own = this.doGetTrustInfoFromStorage(uri);
+
+		// Facade Code: a worktree's trust is its repository's (WORKTREE.md): whatever trusts the repository's git
+		// directory trusts it, however it reached the window, with nothing recorded for it
+		const repository = own.trusted ? undefined : this._worktreeRepositories.get(uri);
+		if (repository) {
+			const inherited = this.doGetTrustInfoFromStorage(repository);
+			if (inherited.trusted) {
+				return inherited;
+			}
+		}
+
+		return own;
+	}
+
+	/**
+	 * What the trusted folders say of `uri`: the entry nearest it, from it up. Facade Code: drawn out of
+	 * `doGetUriTrustInfo`, which asks it of a worktree's repository too.
+	 */
+	private doGetTrustInfoFromStorage(uri: URI): IWorkspaceTrustUriInfo {
 		let resultState = false;
 		let maxLength = -1;
 
@@ -406,6 +437,16 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 		}
 
 		return { trusted: resultState, uri: resultUri };
+	}
+
+	/** Facade Code: reads whether `uri` is a linked worktree, and of which repository, for `doGetUriTrustInfo`. */
+	private async resolveWorktreeRepository(uri: URI): Promise<void> {
+		const repository = await worktreeRepositoryOf(this.fileService, this.uriIdentityService.extUri, uri);
+		if (repository) {
+			this._worktreeRepositories.set(uri, repository);
+		} else {
+			this._worktreeRepositories.delete(uri);
+		}
 	}
 
 	private async doSetUrisTrust(uris: URI[], trusted: boolean): Promise<void> {
@@ -628,7 +669,10 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 			return { trusted: true, uri };
 		}
 
-		return this.doGetUriTrustInfo(await this.getCanonicalUri(uri));
+		// Facade Code: a folder that is a worktree is read as one first, as the workspace's folders are
+		const canonicalUri = await this.getCanonicalUri(uri);
+		await this.resolveWorktreeRepository(canonicalUri);
+		return this.doGetUriTrustInfo(canonicalUri);
 	}
 
 	async setUrisTrust(uris: URI[], trusted: boolean): Promise<void> {

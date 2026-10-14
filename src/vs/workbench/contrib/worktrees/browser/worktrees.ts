@@ -969,7 +969,7 @@ export class WorktreeService implements IWorktreeService {
 			return undefined;
 		}
 
-		const after = await this.afterCreate(main, created.worktree, trustEnabled, true);
+		const after = await this.afterCreate(main, created.worktree, true);
 		if (after !== 'shown' && after !== 'not asked') {
 			this.reportCreatedNotOpened(main, created.worktree, after);
 			return undefined;
@@ -1030,7 +1030,7 @@ export class WorktreeService implements IWorktreeService {
 		}
 
 		// The worktree is made either way: what failed after is said, and the agent gets it (WT-5.7)
-		const after = await this.afterCreate(main, created.worktree, trustEnabled, options.show === true);
+		const after = await this.afterCreate(main, created.worktree, options.show === true);
 		if (after !== 'shown' && after !== 'not asked') {
 			this.notificationService.warn(localize('worktrees.createdForAgent', "Worktree was created at '{0}', but {1} failed: {2}", this.labelService.getUriLabel(created.worktree), after.step, after.reason));
 		}
@@ -1107,18 +1107,11 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	/**
-	 * Trusts, lists and opens a worktree git made, and shows it if `show` (WT-5.6). Returns the step that
-	 * failed instead; the worktree is kept either way (WT-5.7).
+	 * Lists and opens a worktree git made, and shows it if `show` (WT-5.6) - trusted as its repository is, with
+	 * nothing to record for it (WORKTREE.md). Returns the step that failed instead; the worktree is kept either
+	 * way (WT-5.7).
 	 */
-	private async afterCreate(main: URI, worktree: URI, trustEnabled: boolean, show: boolean): Promise<'shown' | 'not asked' | { readonly step: string; readonly reason: string }> {
-		try {
-			if (trustEnabled) {
-				await this.workspaceTrustManagementService.setUrisTrust([worktree], true);
-			}
-		} catch (err) {
-			return { step: localize('worktrees.stepTrust', "trusting the worktree"), reason: toErrorMessage(err) };
-		}
-
+	private async afterCreate(main: URI, worktree: URI, show: boolean): Promise<'shown' | 'not asked' | { readonly step: string; readonly reason: string }> {
 		try {
 			// Listed before it joins the workspace, so that its row is under its repository from the start (WT-3.6)
 			await this.workspaceBarService.whenListed(worktree);
@@ -1927,7 +1920,10 @@ export class WorktreeService implements IWorktreeService {
 		return [why, ...done].join('\n');
 	}
 
-	/** Forgets a deleted worktree's name, colour, place and trust, which are kept by path. */
+	/**
+	 * Forgets a deleted worktree's name, colour and place, which are kept by path, and any trust an earlier build
+	 * recorded for that path: a worktree's own is its repository's now (WORKTREE.md).
+	 */
 	private async forgetWorktree(main: URI, worktree: URI): Promise<void> {
 		this.customizationService.set(worktree, {});
 		const order = this.customizationService.worktreeOrder(main);

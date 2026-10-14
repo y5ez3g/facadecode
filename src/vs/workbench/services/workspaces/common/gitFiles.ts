@@ -4,13 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Schemas } from '../../../../base/common/network.js';
-import { joinPath } from '../../../../base/common/resources.js';
+import { basename, dirname, IExtUri, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 
 /*
- * Facade Code: git's own files, read as git writes them, for the workspace bar's rows (WORKTREE.md WT-3). The renderer
- * cannot run git.
+ * Facade Code: git's own files, read as git writes them, for the workspace bar's rows (WORKTREE.md WT-3) and for the
+ * trust a worktree has from its repository. The renderer cannot run git.
  *
  * <folder>/.git                       a directory: a main checkout. A file "gitdir: X": see X
  * <git dir>/commondir                 in a linked worktree's git dir: the shared git directory
@@ -83,4 +83,46 @@ export async function locateGitDirectories(fileService: IFileService, folder: UR
 	// git directory that is gone, the repository moved or the worktree's record pruned, and then no
 	// repository at all.
 	return await fileService.exists(joinPath(gitDir, 'HEAD')) ? { commonDir: gitDir, gitDir, isMain: true } : undefined;
+}
+
+/**
+ * The shared git directory of the repository `folder` is a linked worktree of, when git's files say so both ways:
+ * the folder's `.git` names a record of the repository's own, `<common>/worktrees/<name>`, and that record names the
+ * folder back. Undefined for anything else - a main checkout, a submodule, a folder in no repository - and for a
+ * `.git` its repository does not record: a folder can name any repository in a `.git` of its own, but cannot write
+ * itself into the records of a repository it has no hold on.
+ */
+export async function worktreeRepositoryOf(fileService: IFileService, extUri: IExtUri, folder: URI): Promise<URI | undefined> {
+	try {
+		const location = await locateGitDirectories(fileService, folder);
+		if (!location || location.isMain || !extUri.isEqual(dirname(location.gitDir), joinPath(location.commonDir, 'worktrees'))) {
+			return undefined;
+		}
+
+		const recorded = await readGitFile(fileService, joinPath(location.gitDir, 'gitdir'));
+		if (!recorded) {
+			return undefined;
+		}
+
+		// The folders compared, as real paths, and not their `.git`s: a folder whose `.git` is a link to a worktree's
+		// would pass for that worktree.
+		const [recordedFolder, ownFolder] = await Promise.all([realpathOf(fileService, dirname(gitPathToUri(location.gitDir, recorded))), realpathOf(fileService, folder)]);
+		return extUri.isEqual(recordedFolder, ownFolder) ? location.commonDir : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The folder a repository is: the main checkout around a `.git` directory, else a bare repository's own. */
+export function repositoryFolderOf(commonDir: URI): URI {
+	return basename(commonDir) === '.git' ? dirname(commonDir) : commonDir;
+}
+
+/** Where `uri` is with its links followed; `uri` itself where that cannot be told. */
+async function realpathOf(fileService: IFileService, uri: URI): Promise<URI> {
+	try {
+		return await fileService.realpath(uri) ?? uri;
+	} catch {
+		return uri;
+	}
 }
