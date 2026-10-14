@@ -9,12 +9,16 @@ import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
-import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { parse, ParseError } from '../../../../base/common/json.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { ResourceMap } from '../../../../base/common/map.js';
 import { basename, joinPath, toLocalResource } from '../../../../base/common/resources.js';
 import Severity from '../../../../base/common/severity.js';
+import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
+import { EditorsOrder } from '../../../common/editor.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IWorkingCopy } from '../../../services/workingCopy/common/workingCopy.js';
+import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
 import { isObject } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
@@ -33,9 +37,11 @@ import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextke
 import { ICommandDetectionCapability, TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
 import { TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
+import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, WorkspaceTrustRequestButton } from '../../../../platform/workspace/common/workspaceTrust.js';
+import { IWorkspaceContextService, isSingleFolderWorkspaceIdentifier, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
+import { unreachable } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
-import { IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
@@ -44,9 +50,11 @@ import { IPathService } from '../../../services/path/common/pathService.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { getShellIntegrationTimeout } from '../../terminal/common/terminalEnvironment.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { IWorkbenchContribution } from '../../../common/contributions.js';
 
 /*
- * Making and deleting worktrees from the workspace bar (WORKTREE.md sections 7 to 10). A contribution
+ * Making and deleting worktrees from the workspace bar (WORKTREE.md WT-5 to WT-8). A contribution
  * rather than part of the bar, because setup runs in a terminal and `vs/workbench/browser` may not
  * import `contrib/terminal`.
  */
@@ -143,22 +151,22 @@ function explainFailure(error: WorktreeAtError | undefined, main: URI, branch?: 
 	switch (error?.code) {
 		// What reaches the extension as other than a folder on disk: a virtual file system's, say.
 		case 'InvalidArgument':
-			return localize('worktrees.notOnDisk', "\"{0}\" is not a folder on disk, which is where Git works.", basename(main));
+			return localize('worktrees.notOnDisk', "'{0}' is not a valid folder on disk.", basename(main));
 		case 'UnreadableGitDirectory':
-			return localize('worktrees.notARepository', "\"{0}\" has a .git folder that Git cannot read as a repository.", basename(main));
+			return localize('worktrees.notARepository', "'{0}' contains a .git folder that cannot be read as a valid Git repository.", basename(main));
 		// Git's own words for it end with the way out, which a notification of its first line would lose.
 		case 'NotASafeGitRepository':
-			return localize('worktrees.unsafeRepository', "Git does not open \"{0}\", which is owned by another user. To trust it, run {1}, then try again.", basename(main), `git config --global --add safe.directory ${main.scheme === Schemas.file ? main.fsPath : main.path}`);
+			return localize('worktrees.unsafeRepository', "Git cannot open '{0}' because it is owned by another user. Run '{1}' to mark it safe, then try again.", basename(main), `git config --global --add safe.directory ${main.scheme === Schemas.file ? main.fsPath : main.path}`);
 		case 'InheritedGitEnvironment':
-			return localize('worktrees.inheritedEnvironment', "This window was started with GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE set, which points Git at another repository. Open the folder in a new window.");
+			return localize('worktrees.inheritedEnvironment', "This window was started with GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE set, redirecting Git to another repository. Please open the folder in a new window.");
 		case 'InvalidBranchName':
-			return localize('worktrees.invalidBranchName', "\"{0}\" is not a valid branch name.", branch ?? '');
+			return localize('worktrees.invalidBranchName', "'{0}' is not a valid branch name.", branch ?? '');
 		case 'InitialBranch':
-			return localize('worktrees.initialBranch', "The initial commit goes on \"{0}\", so the worktree needs a branch with another name.", branch ?? '');
+			return localize('worktrees.initialBranch', "The initial commit is on '{0}'. Please choose a different branch name for the new worktree.", branch ?? '');
 		case 'UnbornBranch':
-			return localize('worktrees.unbornBranch', "\"{0}\" is on a branch with no commits yet. Switch to a branch with commits, or commit on this one, and try again.", basename(main));
+			return localize('worktrees.unbornBranch', "Repository '{0}' has no commits on the current branch. Create a commit or switch branches first.", basename(main));
 		case 'WorktreeContainsChanges':
-			return localize('worktrees.changedSinceCheck', "Files in the worktree changed after it was checked. Try again to see what would be lost.");
+			return localize('worktrees.changedSinceCheck', "Files in the worktree were modified after verification. Please review changes and try again.");
 		case 'NoIdentity':
 			return noIdentityMessage();
 		default:
@@ -168,7 +176,7 @@ function explainFailure(error: WorktreeAtError | undefined, main: URI, branch?: 
 
 /** A failure in git's words. */
 function gitMessage(error: WorktreeAtError | undefined): string {
-	return error?.message ?? localize('worktrees.noAnswer', "Git did not answer.");
+	return error?.message ?? localize('worktrees.noAnswer', "Git process did not respond.");
 }
 
 /**
@@ -177,16 +185,16 @@ function gitMessage(error: WorktreeAtError | undefined): string {
  */
 function gitUnreachable(command: string, err: unknown): string {
 	return CommandsRegistry.getCommand(command)
-		? localize('worktrees.noGit', "Git could not be reached to make the worktree: {0}", toErrorMessage(err))
+		? localize('worktrees.noGit', "Failed to execute the Git command to create the worktree: {0}", toErrorMessage(err))
 		: gitExtensionNotRunning();
 }
 
 function gitExtensionNotRunning(): string {
-	return localize('worktrees.noGitExtension', "Worktrees are made and deleted with the Git extension, which is not running in this window.");
+	return localize('worktrees.noGitExtension', "Worktree operations require the built-in Git extension, which is not active in this window.");
 }
 
 function noIdentityMessage(): string {
-	return localize('worktrees.noIdentity', "Git user name and email are not configured, and a commit requires them. Set them with {0} and {1}, then try again.", 'git config --global user.name', 'git config --global user.email');
+	return localize('worktrees.noIdentity', "Git user name and email are not configured. Run '{0}' and '{1}', then try again.", 'git config --global user.name', 'git config --global user.email');
 }
 
 /** A path spelled for the OS the folder is on - the remote's, for a folder on a remote. */
@@ -204,9 +212,6 @@ function toOsPath(uri: URI, windows: boolean): string {
  */
 const GIT_AVAILABLE = ContextKeyExpr.and(ContextKeyExpr.notEquals('config.git.enabled', false), ContextKeyExpr.not('git.missing'));
 
-/** How long to wait for the switch to put the new worktree's editors up before running setup anyway. */
-const RESTORE_TIMEOUT = 5000;
-
 /**
  * How long the git extension is given to register its commands once trust starts it - the time the
  * command service gives extensions starting up before it calls a command missing.
@@ -216,32 +221,31 @@ const GIT_START_TIMEOUT = 30000;
 /** How many files a confirmation names before it says how many more there are. */
 const LISTED_FILES = 10;
 
+/** How many ignored paths a confirmation names before it says how many more there are. */
+const LISTED_IGNORED = 5;
+
 /** How many of the files `.worktreeinclude` could not copy a notification names. */
 const LISTED_COPY_FAILURES = 3;
 
-/**
- * What `_git.deleteWorktreeAt` returns. `checked`, for `check`: the files whose changes would be lost,
- * and whether it has submodules checked out, which git deletes only by force.
- */
+/** What `_git.deleteWorktreeAt` returns (WT-8.6). */
 type DeleteWorktreeAtResult =
-	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean }
+	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly ignoredPaths: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly { readonly kind: 'locked'; readonly reason: string }[] }
 	| { readonly kind: 'removed' }
+	| { readonly kind: 'incomplete'; readonly path: string; readonly gitRecord: 'present' | 'absent' | 'unknown'; readonly recovery: string; readonly message: string }
 	| WorktreeAtError;
 
-/** `text` as a markdown code span, fenced by more backticks than it holds in a row. */
-function asCodeSpan(text: string): string {
-	const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
-	const fence = '`'.repeat(longestRun + 1);
-
-	// A span drops one space at each end, which keeps a backtick at either end off the fence
-	const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-
-	return `${fence}${pad}${text}${pad}${fence}`;
+/** What deleting a worktree would lose, as its confirmation names it. */
+interface IDeletionLoss {
+	readonly files: readonly string[];
+	readonly ignoredPaths: readonly string[];
+	readonly submodules: boolean;
+	/** Unsaved editors of files inside it, wherever they are open or put away. */
+	readonly unsaved: readonly string[];
 }
 
 export const IWorktreeService = createDecorator<IWorktreeService>('worktreeService');
 
-/** Making and deleting the workspace bar's worktrees (WORKTREE.md sections 7 to 10). */
+/** Making and deleting the workspace bar's worktrees (WORKTREE.md WT-5 to WT-8). */
 export interface IWorktreeService {
 	readonly _serviceBrand: undefined;
 
@@ -264,7 +268,13 @@ export interface IWorktreeService {
 	 * is not trusted, or a folder with no commit yet, is refused rather than trusted or given one.
 	 */
 	makeWorktree(main: URI, branch: string, options?: IMakeWorktreeOptions): Promise<URI>;
+
+	/** Says which worktrees' setup a window that closed was still sending, without sending it again (WT-7.7). */
+	reportUnfinishedSetup(): Promise<void>;
 }
+
+/** Where a window notes the setup it is still sending, for the next window to report (WT-7.7). */
+const SETUP_IN_FLIGHT_KEY = 'facade.worktrees.setupInFlight';
 
 /** How `makeWorktree` makes a worktree. */
 export interface IMakeWorktreeOptions {
@@ -290,6 +300,9 @@ export class WorktreeService implements IWorktreeService {
 	 */
 	private readonly running: ResourceMap<{ readonly done: Promise<void>; readonly waitedFor: boolean }>;
 
+	/** Worktrees whose setup this window has started, so that none is sent twice (WT-7.7). */
+	private readonly setupStarted: ResourceMap<true>;
+
 	constructor(
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
@@ -310,8 +323,13 @@ export class WorktreeService implements IWorktreeService {
 		@ILabelService private readonly labelService: ILabelService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@ILogService private readonly logService: ILogService,
+		@IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
+		@IEditorService private readonly editorService: IEditorService,
+		@IStorageService private readonly storageService: IStorageService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 	) {
 		this.running = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
+		this.setupStarted = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 	}
 
 	async createWorktree(target: URI | undefined): Promise<void> {
@@ -340,7 +358,7 @@ export class WorktreeService implements IWorktreeService {
 		const repository = this.workspaceBarService.repositoryFor(target);
 		const worktree = findWorktree(repository, target, this.uriIdentityService.extUri);
 		if (!repository || !worktree) {
-			this.notificationService.info(localize('worktrees.notWorktree', "{0} is not a worktree the workspace knows.", this.labelService.getUriLabel(target)));
+			this.notificationService.info(localize('worktrees.notWorktree', "'{0}' is not a recognized worktree in this workspace.", this.labelService.getUriLabel(target)));
 			return;
 		}
 
@@ -403,7 +421,17 @@ export class WorktreeService implements IWorktreeService {
 			return true;
 		}
 
-		if (!await this.workspaceTrustRequestService.requestWorkspaceTrust({ message: localize('worktrees.restricted', "Worktrees are made and deleted with Git, which does not run in Restricted Mode.") })) {
+		// No Manage button: it would leave the worktree being made or deleted for the trust editor
+		const trustAndContinue: WorkspaceTrustRequestButton = {
+			label: isSingleFolderWorkspaceIdentifier(toWorkspaceIdentifier(this.contextService.getWorkspace()))
+				? localize({ key: 'worktrees.trustFolder', comment: ['&& denotes a mnemonic'] }, "&&Trust Folder & Continue")
+				: localize({ key: 'worktrees.trustWorkspace', comment: ['&& denotes a mnemonic'] }, "&&Trust Workspace & Continue"),
+			type: 'ContinueWithTrust'
+		};
+		if (!await this.workspaceTrustRequestService.requestWorkspaceTrust({
+			message: localize('worktrees.restricted', "Worktrees require Git operations, which are disabled in Restricted Mode."),
+			buttons: [trustAndContinue]
+		})) {
 			return false;
 		}
 
@@ -428,7 +456,7 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-5.1: an untrusted repository gets no worktree - a new one would be trusted as it is made.
 		if (trustEnabled && !(await this.workspaceTrustManagementService.getUriTrustInfo(main)).trusted
-			&& !await this.workspaceTrustRequestService.requestResourcesTrust({ uri: main, message: localize('worktrees.untrusted', "A worktree of {0} is trusted as it is made. Trust {0} first.", this.labelService.getUriLabel(main)) })) {
+			&& !await this.workspaceTrustRequestService.requestResourcesTrust({ uri: main, message: localize('worktrees.untrusted', "A worktree inherits trust from its parent repository '{0}'. Please trust the repository first.", this.labelService.getUriLabel(main)) })) {
 			return undefined;
 		}
 
@@ -437,7 +465,7 @@ export class WorktreeService implements IWorktreeService {
 		let base: WorktreeBaseAtResult | undefined;
 		try {
 			base = await this.progressService.withProgress(
-				{ location: ProgressLocation.Window, title: localize('worktrees.inspecting', "Reading {0}...", basename(main)) },
+				{ location: ProgressLocation.Window, title: localize('worktrees.inspecting', "Reading repository '{0}'...", basename(main)) },
 				() => this.commandService.executeCommand<WorktreeBaseAtResult>('_git.prepareWorktreeBaseAt', main, 'inspect'));
 		} catch (err) {
 			this.notificationService.error(gitUnreachable('_git.prepareWorktreeBaseAt', err));
@@ -446,7 +474,7 @@ export class WorktreeService implements IWorktreeService {
 
 		if (!base || base.kind === 'error') {
 			this.notificationService.error(explainFailure(base, main)
-				?? localize('worktrees.inspectFailed', "Git could not read {0}: {1}", this.labelService.getUriLabel(main), gitMessage(base)));
+				?? localize('worktrees.inspectFailed', "Git failed to read repository '{0}': {1}", this.labelService.getUriLabel(main), gitMessage(base)));
 			return undefined;
 		}
 
@@ -454,15 +482,15 @@ export class WorktreeService implements IWorktreeService {
 			notice: [
 				// A folder inside another repository is told so: "not a Git repository" would not be true of it.
 				base.kind === 'uninitialized' && base.enclosing
-					? localize('worktrees.insideRepository', "\"{0}\" is inside the Git repository \"{1}\". It will get a repository of its own, initialized using git init.", basename(main), base.enclosing)
+					? localize('worktrees.insideRepository', "Folder '{0}' is inside the Git repository '{1}'. A new repository will be initialized.", basename(main), base.enclosing)
 					: base.kind === 'uninitialized'
-						? localize('worktrees.notRepositoryYet', "\"{0}\" is not a Git repository. It will be initialized using git init.", basename(main))
-						: localize('worktrees.noCommitsYet', "\"{0}\" has no commits for a worktree to branch off from.", basename(main)),
+						? localize('worktrees.notRepositoryYet', "Folder '{0}' is not a Git repository. It will be initialized with 'git init'.", basename(main))
+						: localize('worktrees.noCommitsYet', "Repository '{0}' contains no commits. An initial commit is required to branch off.", basename(main)),
 				base.files === 0
-					? localize('worktrees.firstCommitEmpty', "An empty initial commit will be created as the base for the new worktree.")
+					? localize('worktrees.firstCommitEmpty', "An empty initial commit will be created for the new worktree.")
 					: base.files === 1
-						? localize('worktrees.firstCommitOne', "An initial commit of the 1 file not excluded by .gitignore will be created as the base for the new worktree.")
-						: localize('worktrees.firstCommitMany', "An initial commit of the {0} files not excluded by .gitignore will be created as the base for the new worktree.", base.files)
+						? localize('worktrees.firstCommitOne', "An initial commit containing 1 file (excluding files ignored by Git) will be created.")
+						: localize('worktrees.firstCommitMany', "An initial commit containing {0} files (excluding files ignored by Git) will be created.", base.files)
 			],
 			action: localize('worktrees.initializeAndCreate', "Initialize and Create"),
 			// Said before anything is done: without a name and an email, git refuses the commit. Not when
@@ -490,8 +518,8 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-5.2: the branch, where it starts and the folder it goes in, with the name and colour beside it.
 		const origin = prepare
-			? localize('worktrees.startsAtFirst', "Branches off from the initial commit.")
-			: localize('worktrees.startsAt', "Branches off from HEAD of \"{0}\".", basename(main));
+			? localize('worktrees.startsAtFirst', "Branches off the initial commit.")
+			: localize('worktrees.startsAt', "Branches off HEAD of '{0}'.", basename(main));
 		const answer = await this.workspaceBarDialogService.showNewWorktreeDialog(basename(main), origin, value => {
 			const trimmed = value.trim();
 			if (!trimmed) {
@@ -501,7 +529,7 @@ export class WorktreeService implements IWorktreeService {
 
 			const folder = worktreeFolderName(trimmed);
 			if (!folder) {
-				return { message: localize('worktrees.badName', "\"{0}\" cannot be the name of a folder on Windows.", trimmed), valid: false, error: true };
+				return { message: localize('worktrees.badName', "'{0}' is not a valid folder name on Windows.", trimmed), valid: false, error: true };
 			}
 
 			return { message: localize('worktrees.folder', "Location: {0}", parentLabel + freeWorktreeName(folder, candidate => taken.has(nameKey(candidate)))), valid: true };
@@ -518,7 +546,7 @@ export class WorktreeService implements IWorktreeService {
 			let prepared: WorktreeBaseAtResult | undefined;
 			try {
 				prepared = await this.progressService.withProgress(
-					{ location: ProgressLocation.Notification, title: localize('worktrees.preparing', "Creating the initial commit of \"{0}\"...", basename(main)) },
+					{ location: ProgressLocation.Notification, title: localize('worktrees.preparing', "Creating initial commit in '{0}'...", basename(main)) },
 					// With the branch, so a name git refuses is caught before anything changes.
 					() => this.commandService.executeCommand<WorktreeBaseAtResult>('_git.prepareWorktreeBaseAt', main, 'initialize', branch));
 			} catch (err) {
@@ -531,7 +559,7 @@ export class WorktreeService implements IWorktreeService {
 				const message = gitMessage(error);
 				this.logService.warn(`[worktrees] preparing ${main.toString(true)} failed: ${message}`);
 				this.notificationService.error(explainFailure(error, main, branch)
-					?? localize('worktrees.prepareFailed', "Could not create the initial commit of \"{0}\": {1}", basename(main), message));
+					?? localize('worktrees.prepareFailed', "Failed to create the initial commit for '{0}': {1}", basename(main), message));
 				return undefined;
 			}
 		}
@@ -546,7 +574,11 @@ export class WorktreeService implements IWorktreeService {
 			return undefined;
 		}
 
-		await this.afterCreate(main, created.worktree, trustEnabled, true);
+		const after = await this.afterCreate(main, created.worktree, trustEnabled, true);
+		if (after !== 'shown' && after !== 'not asked') {
+			this.reportCreatedNotOpened(main, created.worktree, after);
+			return undefined;
+		}
 		return created.worktree;
 	}
 
@@ -557,21 +589,21 @@ export class WorktreeService implements IWorktreeService {
 	 */
 	private async doMakeWorktree(main: URI, branch: string, options: IMakeWorktreeOptions): Promise<URI> {
 		if (!branch) {
-			throw new Error(localize('worktrees.noBranch', "A worktree needs the name of its branch."));
+			throw new Error(localize('worktrees.noBranch', "A branch name is required to create a worktree."));
 		}
 
 		const name = worktreeFolderName(branch);
 		if (!name) {
-			throw new Error(localize('worktrees.badName', "\"{0}\" cannot be the name of a folder on Windows.", branch));
+			throw new Error(localize('worktrees.badName', "'{0}' is not a valid folder name on Windows.", branch));
 		}
 
 		const trustEnabled = this.workspaceTrustEnablementService.isWorkspaceTrustEnabled();
 		if (trustEnabled && !this.workspaceTrustManagementService.isWorkspaceTrusted()) {
-			throw new Error(localize('worktrees.restrictedUnasked', "The workspace is in Restricted Mode, where Git does not run. Trust the workspace first."));
+			throw new Error(localize('worktrees.restrictedUnasked', "The workspace is in Restricted Mode. Please trust the workspace to run Git operations."));
 		}
 
 		if (trustEnabled && !(await this.workspaceTrustManagementService.getUriTrustInfo(main)).trusted) {
-			throw new Error(localize('worktrees.untrustedUnasked', "{0} is not trusted, and a worktree of it would be. Trust {0} first.", this.labelService.getUriLabel(main)));
+			throw new Error(localize('worktrees.untrustedUnasked', "Repository '{0}' is untrusted. Please trust the repository before creating a worktree.", this.labelService.getUriLabel(main)));
 		}
 
 		await whenRegistered('_git.prepareWorktreeBaseAt', GIT_START_TIMEOUT);
@@ -584,15 +616,15 @@ export class WorktreeService implements IWorktreeService {
 
 		if (!base || base.kind === 'error') {
 			throw new Error(explainFailure(base, main)
-				?? localize('worktrees.inspectFailed', "Git could not read {0}: {1}", this.labelService.getUriLabel(main), gitMessage(base)));
+				?? localize('worktrees.inspectFailed', "Git failed to read repository '{0}': {1}", this.labelService.getUriLabel(main), gitMessage(base)));
 		}
 
 		if (base.kind === 'uninitialized') {
-			throw new Error(localize('worktrees.notRepositoryUnasked', "\"{0}\" is not a Git repository. Make it one first.", basename(main)));
+			throw new Error(localize('worktrees.notRepositoryUnasked', "Folder '{0}' is not a Git repository. Initialize the repository first.", basename(main)));
 		}
 
 		if (base.kind === 'unborn') {
-			throw new Error(localize('worktrees.noBaseUnasked', "\"{0}\" has no commit for a worktree to branch off from. Make its first commit first.", basename(main)));
+			throw new Error(localize('worktrees.noBaseUnasked', "Repository '{0}' contains no commits. Create an initial commit first.", basename(main)));
 		}
 
 		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES, basename(main));
@@ -601,7 +633,11 @@ export class WorktreeService implements IWorktreeService {
 			throw new Error(created.unreachable ?? this.createFailureMessage(main, branch, created.worktree, created.result));
 		}
 
-		await this.afterCreate(main, created.worktree, trustEnabled, options.show === true);
+		// The worktree is made either way: what failed after is said, and the agent gets it (WT-5.7)
+		const after = await this.afterCreate(main, created.worktree, trustEnabled, options.show === true);
+		if (after !== 'shown' && after !== 'not asked') {
+			this.notificationService.warn(localize('worktrees.createdForAgent', "Worktree was created at '{0}', but {1} failed: {2}", this.labelService.getUriLabel(created.worktree), after.step, after.reason));
+		}
 		return created.worktree;
 	}
 
@@ -609,8 +645,13 @@ export class WorktreeService implements IWorktreeService {
 	 * WT-5.4 once the branch is decided: the folder, its customization, and git's worktree. Failures
 	 * are returned, for New Worktree to say on screen and `makeWorktree` to throw.
 	 */
-	private async createDecided(main: URI, branch: string, name: string, parent: URI, customization: IFolderCustomization, startPoint: string | undefined): Promise<CreateOutcome> {
+	private async createDecided(main: URI, branch: string, name: string, parent: URI, given: IFolderCustomization, startPoint: string | undefined): Promise<CreateOutcome> {
 		const worktree = await freeWorktreeUri(parent, name, candidate => this.fileService.exists(candidate));
+
+		// A colour none of the repository's other worktrees has, unless one was chosen (WT-1.12)
+		const siblings = this.workspaceBarService.repositoryFor(main)?.worktrees ?? [];
+		const color = given.color ?? freeWorktreeColor(siblings.map(sibling => this.customizationService.get(sibling.uri)?.color));
+		const customization: IFolderCustomization = color ? { ...given, color } : given;
 
 		// Before git writes its record, which the bar reads a row from while the files are still being
 		// checked out. Written even when nothing was chosen: customizations are kept by path, and one left
@@ -622,7 +663,7 @@ export class WorktreeService implements IWorktreeService {
 		let result: CreateWorktreeAtResult | undefined;
 		try {
 			result = await this.progressService.withProgress(
-				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree {0}...", customization.name || branch) },
+				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree '{0}'...", customization.name || branch) },
 				() => this.commandService.executeCommand<CreateWorktreeAtResult>('_git.createWorktreeAt', main, worktree, branch, ...(startPoint ? [startPoint] : [])));
 		} catch (err) {
 			this.customizationService.set(worktree, {});
@@ -637,57 +678,76 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-6.4: a file that did not copy is said once, and stops nothing.
 		if (result.copyFailures.length > 0) {
-			this.notificationService.warn(localize('worktrees.copyFailed', "{0} of what .worktreeinclude names could not be copied into the worktree: {1}", result.copyFailures.length, result.copyFailures.slice(0, LISTED_COPY_FAILURES).join(', ')));
+			this.notificationService.warn(localize('worktrees.copyFailed', "Failed to copy {0} files specified in .worktreeinclude into the worktree: {1}", result.copyFailures.length, result.copyFailures.slice(0, LISTED_COPY_FAILURES).join(', ')));
 		}
 
 		// Nor does a hook that failed: git kept the worktree, and so does this.
 		if (result.hookFailure) {
-			this.notificationService.warn(localize('worktrees.hookFailed', "The worktree was created, but a Git hook failed: {0}", result.hookFailure));
+			this.notificationService.warn(localize('worktrees.hookFailed', "Worktree created successfully, but a Git hook failed: {0}", result.hookFailure));
 		}
 
 		return { kind: 'created', worktree, result };
 	}
 
-	/** WT-5.6 after git made it: trusted, listed, its repository open - and the window on it, if `show`. */
-	private async afterCreate(main: URI, worktree: URI, trustEnabled: boolean, show: boolean): Promise<void> {
-		if (trustEnabled) {
-			await this.workspaceTrustManagementService.setUrisTrust([worktree], true);
+	/**
+	 * Trusts, lists and opens a worktree git made, and shows it if `show` (WT-5.6). Returns the step that
+	 * failed instead; the worktree is kept either way (WT-5.7).
+	 */
+	private async afterCreate(main: URI, worktree: URI, trustEnabled: boolean, show: boolean): Promise<'shown' | 'not asked' | { readonly step: string; readonly reason: string }> {
+		try {
+			if (trustEnabled) {
+				await this.workspaceTrustManagementService.setUrisTrust([worktree], true);
+			}
+		} catch (err) {
+			return { step: localize('worktrees.stepTrust', "trusting the worktree"), reason: toErrorMessage(err) };
 		}
 
-		// Its record read before its folder joins the workspace: its row is then under its repository
-		// from the start, not at the end of the list for a moment (WT-3.6), and the repository can open.
-		await this.workspaceBarService.whenListed(worktree);
+		try {
+			// Listed before it joins the workspace, so that its row is under its repository from the start (WT-3.6)
+			await this.workspaceBarService.whenListed(worktree);
+		} catch (err) {
+			return { step: localize('worktrees.stepRecord', "reading Git worktree metadata"), reason: toErrorMessage(err) };
+		}
 
 		// So the row the window is about to go to - or that just appeared - can be seen.
 		this.workspaceBarService.setExpanded(main, true);
 
 		if (!show) {
-			return;
+			return 'not asked';
 		}
 
-		// WT-5.7: setup waits for the switch to restore the worktree's editors, which closes whatever
-		// else is in the editor area. Subscribed before the switch; cancelled however it ends.
-		const restored = Event.toPromise(this.workspaceBarService.onDidRestoreEditors);
-		try {
-			await this.workspaceBarService.show(worktree);
-			await raceTimeout(restored, RESTORE_TIMEOUT);
-		} finally {
-			restored.cancel();
-		}
+		// Awaited: setup opened before the restore settles would be closed by it
+		const shown = await this.workspaceBarService.show(worktree);
+		return shown.kind === 'shown' ? 'shown'
+			: { step: localize('worktrees.stepOpen', "opening the worktree"), reason: shown.kind === 'failed' ? shown.reason : localize('worktrees.superseded', "a folder switch was requested before opening completed") };
+	}
+
+	/** Says a worktree was made but not opened, offering to open it; setup waits for that (WT-5.7). */
+	private reportCreatedNotOpened(main: URI, worktree: URI, failure: { readonly step: string; readonly reason: string }): void {
+		this.notificationService.prompt(Severity.Warning,
+			localize('worktrees.createdNotOpened', "Worktree was created at '{0}', but {1} failed: {2}", this.labelService.getUriLabel(worktree), failure.step, failure.reason),
+			[{
+				label: localize('worktrees.openWorktree', "Open Worktree"),
+				run: async () => {
+					if ((await this.workspaceBarService.show(worktree)).kind === 'shown') {
+						this.runSetup(main, worktree).catch(onUnexpectedError);
+					}
+				}
+			}]);
 	}
 
 	/** WT-5.3 and WT-5.5: git's errors are the checks, each said in the product's words. */
 	private createFailureMessage(main: URI, branch: string, worktree: URI, result: CreateWorktreeAtResult | undefined): string {
 		const error = result?.kind === 'error' ? result : undefined;
 		if (error?.code === 'BranchAlreadyExists') {
-			return localize('worktrees.branchExists', "A branch named {0} already exists. Choose another name.", branch);
+			return localize('worktrees.branchExists', "A branch named '{0}' already exists. Please choose a different name.", branch);
 		}
 
 		if (error?.code === 'WorktreeAlreadyExists') {
-			return localize('worktrees.pathExists', "Something is already at {0}.", this.labelService.getUriLabel(worktree));
+			return localize('worktrees.pathExists', "A file or folder already exists at '{0}'.", this.labelService.getUriLabel(worktree));
 		}
 
-		return explainFailure(error, main, branch) ?? localize('worktrees.createFailed', "The worktree could not be made: {0}", gitMessage(error));
+		return explainFailure(error, main, branch) ?? localize('worktrees.createFailed', "Failed to create worktree: {0}", gitMessage(error));
 	}
 
 	/** Says on screen why New Worktree could not make its worktree; a branch a checkout has is offered to go to. */
@@ -700,8 +760,8 @@ export class WorktreeService implements IWorktreeService {
 				: repository?.worktrees.find(candidate => candidate.branch === branch)?.uri;
 		if (holder) {
 			this.notificationService.prompt(Severity.Info,
-				localize('worktrees.branchCheckedOut', "Branch {0} is already checked out in {1}.", branch, this.labelService.getUriLabel(holder)),
-				[{ label: localize('worktrees.goThere', "Go There"), run: () => this.workspaceBarService.show(holder) }]);
+				localize('worktrees.branchCheckedOut', "Branch '{0}' is already checked out in '{1}'.", branch, this.labelService.getUriLabel(holder)),
+				[{ label: localize('worktrees.goThere', "Switch to Worktree"), run: () => this.workspaceBarService.show(holder) }]);
 			return;
 		}
 
@@ -713,6 +773,11 @@ export class WorktreeService implements IWorktreeService {
 	 * own shell, with the output on screen. A failing line leaves the worktree usable.
 	 */
 	private async runSetup(main: URI, worktree: URI): Promise<void> {
+		if (this.setupStarted.has(worktree)) {
+			return;
+		}
+		this.setupStarted.set(worktree, true);
+
 		const content = await this.readFirst([joinPath(worktree, '.facade', 'worktrees.json'), joinPath(main, '.facade', 'worktrees.json')]);
 		if (content === undefined) {
 			return;
@@ -726,28 +791,80 @@ export class WorktreeService implements IWorktreeService {
 		}
 
 		if (setup.kind === 'invalid') {
-			this.notificationService.warn(localize('worktrees.badSetup', ".facade/worktrees.json could not be read: each setup key has to be a list of command lines. Nothing was run."));
+			this.notificationService.warn(localize('worktrees.badSetup', "Failed to parse .facade/worktrees.json: setup keys must contain an array of command strings. No commands were executed."));
 			return;
 		}
 
-		const terminal = await this.terminalService.createTerminal({
-			config: {
-				name: localize('worktrees.setupTerminal', "Worktree Setup"),
-				cwd: worktree,
-				// Cursor's name for it, so a script written for Cursor's worktrees.json works here.
-				env: { ROOT_WORKTREE_PATH: toOsPath(main, windows) }
-			}
-		});
-		this.terminalService.setActiveInstance(terminal);
-		await this.terminalService.revealTerminal(terminal);
+		// Noted until the last line is sent, so that a window closed meanwhile leaves the note for the next (WT-7.7)
+		this.noteSetup(main, worktree, true);
+		try {
+			const terminal = await this.terminalService.createTerminal({
+				config: {
+					name: localize('worktrees.setupTerminal', "Worktree Setup"),
+					cwd: worktree,
+					// Cursor's name for it, so a script written for Cursor's worktrees.json works here.
+					env: { ROOT_WORKTREE_PATH: toOsPath(main, windows) }
+				}
+			});
+			this.terminalService.setActiveInstance(terminal);
+			await this.terminalService.revealTerminal(terminal);
 
-		// WT-7.4: each line whatever the one before did, one at a time: the next is sent once shell
-		// integration says the last finished, or straight after it without shell integration.
-		const detection = await this.commandDetection(terminal);
-		for (const line of setup.lines) {
-			if (!await runSetupLine(terminal, detection, line)) {
-				return;
+			// One line at a time, each once shell integration says the last finished (WT-7.4)
+			const detection = await this.commandDetection(terminal);
+			for (const line of setup.lines) {
+				if (!await runSetupLine(terminal, detection, line)) {
+					return;
+				}
 			}
+		} finally {
+			this.noteSetup(main, worktree, false);
+		}
+	}
+
+	async reportUnfinishedSetup(): Promise<void> {
+		const notes = this.setupNotes();
+		this.storageService.remove(SETUP_IN_FLIGHT_KEY, StorageScope.WORKSPACE);
+
+		for (const { main, worktree } of notes) {
+			// Passed over only when deleted: one on a drive not there yet still had its setup cut short (WORKSPACE.md WS-63)
+			if ((await unreachable(this.fileService, worktree))?.kind === 'missing') {
+				continue;
+			}
+
+			this.notificationService.prompt(Severity.Warning,
+				localize('worktrees.setupUnfinished', "Setup script for worktree '{0}' may have been interrupted by a window reload or close. Check its terminal output before retrying.", this.labelService.getUriLabel(worktree)),
+				[{
+					label: localize('worktrees.runSetupAgain', "Rerun Setup"),
+					// The only way setup runs twice for a worktree
+					run: () => {
+						this.setupStarted.delete(worktree);
+						return this.runSetup(main, worktree);
+					}
+				}]);
+		}
+	}
+
+	/** Notes that the setup of `worktree` is being sent, or takes the note back. */
+	private noteSetup(main: URI, worktree: URI, inFlight: boolean): void {
+		const notes = this.setupNotes().filter(note => !this.uriIdentityService.extUri.isEqual(note.worktree, worktree));
+		if (inFlight) {
+			notes.push({ main, worktree });
+		}
+
+		if (notes.length) {
+			this.storageService.store(SETUP_IN_FLIGHT_KEY, JSON.stringify(notes.map(note => ({ main: note.main.toString(), worktree: note.worktree.toString() }))), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this.storageService.remove(SETUP_IN_FLIGHT_KEY, StorageScope.WORKSPACE);
+		}
+	}
+
+	private setupNotes(): { readonly main: URI; readonly worktree: URI }[] {
+		try {
+			const raw = this.storageService.get(SETUP_IN_FLIGHT_KEY, StorageScope.WORKSPACE);
+			return raw ? (JSON.parse(raw) as { main: string; worktree: string }[]).map(note => ({ main: URI.parse(note.main), worktree: URI.parse(note.worktree) })) : [];
+		} catch {
+			// A note that cannot be read is no setup half sent.
+			return [];
 		}
 	}
 
@@ -799,49 +916,83 @@ export class WorktreeService implements IWorktreeService {
 		try {
 			check = await run('check');
 		} catch (err) {
-			this.notificationService.error(CommandsRegistry.getCommand('_git.deleteWorktreeAt') ? localize('worktrees.noGitDelete', "Git could not be reached to delete the worktree: {0}", toErrorMessage(err)) : gitExtensionNotRunning());
+			this.notificationService.error(CommandsRegistry.getCommand('_git.deleteWorktreeAt') ? localize('worktrees.noGitDelete', "Failed to execute the Git command to delete the worktree: {0}", toErrorMessage(err)) : gitExtensionNotRunning());
 			return;
 		}
 
 		if (!check || check.kind !== 'checked') {
 			const error = check?.kind === 'error' ? check : undefined;
 			this.notificationService.error(explainFailure(error, main)
-				?? localize('worktrees.checkFailed', "The worktree could not be checked before deleting it: {0}", gitMessage(error)));
+				?? localize('worktrees.checkFailed', "Failed to verify worktree state before deletion: {0}", gitMessage(error)));
 			return;
 		}
 
-		// 2  confirm: always, naming what would be lost (WT-8.1, WT-8.2) - and anything running in a terminal
-		//    that goes with it: one working inside it, or one of its editor area whatever it started in.
+		// Refused before anything is asked or stopped, rather than found out at the end (WT-8, step 1)
+		const lock = check.restrictions.find(restriction => restriction.kind === 'locked');
+		if (lock) {
+			this.notificationService.error(lock.reason
+				? localize('worktrees.lockedBecause', "Worktree '{0}' is locked: {1}. Run 'git worktree unlock' to allow deletion.", name, lock.reason)
+				: localize('worktrees.locked', "Worktree '{0}' is locked. Run 'git worktree unlock' to allow deletion.", name));
+			return;
+		}
+
+		// 2  confirm, naming all that would be lost, unsaved editors and running terminals too (WT-8.1, WT-8.2)
+		const unsaved = this.unsavedInside(worktree);
+		const loss: IDeletionLoss = { ...check, unsaved: unsaved.map(workingCopy => this.uriIdentityService.extUri.relativePath(worktree, workingCopy.resource) ?? basename(workingCopy.resource)) };
 		const running = [...await this.terminalsInside(worktree), ...this.folderTerminalsService.terminalsOf(worktree)].some(instance => instance.hasChildProcesses);
-		if (!(await this.confirmDelete(worktree, branch, check, running))) {
+		if (!(await this.confirmDelete(name, branch, loss, running, false))) {
 			return;
 		}
 
-		// 3 to 6 under one progress: a large tree takes a while to delete.
-		const force = check.files.length > 0 || check.submodules;
+		// 3 to 7 under one progress: a large tree takes a while to delete.
+		type Outcome = DeleteWorktreeAtResult | { readonly kind: 'stayed' } | { readonly kind: 'kept' } | { readonly kind: 'notRemoved'; readonly discarded: boolean } | undefined;
 		const result = await this.progressService.withProgress(
-			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree {0}...", name) },
-			async (): Promise<DeleteWorktreeAtResult | undefined> => {
-				// 3  move off, to the repository's own row rather than whichever folder is next in the list (WT-8.3).
-				const active = this.activeFolderService.activeFolder;
-				if (active && this.uriIdentityService.extUri.isEqual(active.uri, worktree)) {
+			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree '{0}'...", name) },
+			async (): Promise<Outcome> => {
+				// 3  move off, to the repository's own row (WT-8.3); a window that cannot stops the deletion
+				const isOn = () => this.uriIdentityService.extUri.isEqual(this.activeFolderService.activeFolder?.uri, worktree);
+				if (isOn()) {
 					await this.workspaceBarService.show(main);
+					if (isOn()) {
+						return { kind: 'stayed' };
+					}
 				}
 
 				// Its row goes with the window off it, rather than once git has deleted it - which takes
 				// seconds for a large worktree - and comes back if the deletion fails (WT-8.9).
 				const hidden = this.workspaceBarService.hideWorktree(worktree);
 				try {
-					// 4  leave folders[] - which also makes folderTerminals dispose what it parked for it (WT-8.4).
-					await this.workspaceBarService.remove([worktree], { confirmed: true });
+					// 4  discard what the confirmation named: unsaved changes and their editors
+					await this.discardInside(worktree, unsaved);
 
-					// 5  close whatever else works inside it - the panel's terminals, say. A shell can take a moment
-					//    to let go of the folder after its terminal is disposed; the git extension's delete allows for that.
+					// 5  leave folders[] without asking again (WT-8.4); a workspace that refuses stops the deletion here
+					const removal = await this.workspaceBarService.remove([worktree], { confirmed: true });
+					if (removal.kind !== 'removed') {
+						return { kind: 'notRemoved', discarded: unsaved.length > 0 };
+					}
+
+					// 6  close the terminals still inside it; git's delete waits for their shells to let go
 					for (const instance of await this.terminalsInside(worktree)) {
 						instance.dispose(TerminalExitReason.User);
 					}
 
-					// 6  delete. `force` only when the confirmation named what it throws away.
+					// Read again: what was running may have written more since the confirmation
+					let now: DeleteWorktreeAtResult | undefined;
+					try {
+						now = await run('check');
+					} catch (err) {
+						return { kind: 'error', code: undefined, message: toErrorMessage(err) };
+					}
+					if (now?.kind !== 'checked') {
+						return now;
+					}
+					const more = newLoss(loss, now);
+					if (more && !(await this.confirmDelete(name, branch, more, false, true))) {
+						return { kind: 'kept' };
+					}
+
+					// 7  delete. `force` only when a confirmation named what it throws away.
+					const force = now.files.length > 0 || now.submodules;
 					try {
 						return await run(force ? 'force' : 'remove');
 					} catch (err) {
@@ -852,17 +1003,42 @@ export class WorktreeService implements IWorktreeService {
 				}
 			});
 
-		// 7  nothing to refresh: letting the row go read git's records again (WT-8.9, and WT-8.6 when it went wrong).
-		if (result?.kind !== 'removed') {
-			const error = result?.kind === 'error' ? result : undefined;
-			const message = gitMessage(error);
-			this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} failed: ${message}`);
-			this.notificationService.error(explainFailure(error, main) ?? localize('worktrees.deleteFailed', "The worktree could not be deleted: {0}", message));
+		// Letting the row go reads git's records again: gone after a removal, back after a failure (WT-8.9).
+		if (result?.kind === 'removed') {
+			await this.forgetWorktree(main, worktree);
 			return;
 		}
 
-		// Its name, colour, place and the trust it was given go with it: they are kept by path, and the next
-		// worktree of the same branch lands on the same path.
+		if (result?.kind === 'incomplete') {
+			// Git's record is gone, and so is the worktree as far as anybody can use it.
+			await this.forgetWorktree(main, worktree);
+			this.reportLeftover(main, worktree, result);
+			return;
+		}
+
+		this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} ended as ${result?.kind ?? 'unknown'}`);
+		if (result?.kind === 'stayed') {
+			this.notificationService.error(localize('worktrees.couldNotLeave', "Could not switch to '{0}'; worktree '{1}' was not deleted.", basename(main), name));
+		} else if (result?.kind === 'kept') {
+			this.notificationService.info(localize('worktrees.kept', "Worktree '{0}' was not deleted from disk. It has been removed from the workspace. Click its row to add it back.", name));
+		} else if (result?.kind === 'notRemoved') {
+			// The workspace has said why; what was done before it is said as done (WT-8, step 5)
+			this.notificationService.error(result.discarded
+				? localize('worktrees.notOutDiscarded', "Worktree '{0}' was not deleted and could not be removed from the workspace. Unsaved changes were discarded.", name)
+				: localize('worktrees.notOut', "Worktree '{0}' was not deleted and could not be removed from the workspace.", name));
+		} else if (result?.kind === 'error') {
+			// Still registered, so its row comes back; what was done already is said (WT-8.6)
+			const failure = explainFailure(result, main) ?? localize('worktrees.deleteFailed', "Failed to delete worktree: {0}", gitMessage(result));
+			this.notificationService.error(localize('worktrees.alreadyOut', "{0} It was removed from the workspace, and its running terminals were terminated.", /[.!?]$/.test(failure) ? failure : `${failure}.`));
+		} else {
+			// No answer at all: nothing is said to have happened that cannot be seen to have.
+			this.notificationService.prompt(Severity.Error, localize('worktrees.deleteUnknown', "Unable to confirm deletion of worktree '{0}'. The workspace bar reflects the current Git status.", name),
+				[{ label: revealLabel(), run: () => this.commandService.executeCommand('revealFileInOS', worktree) }]);
+		}
+	}
+
+	/** Forgets a deleted worktree's name, colour, place and trust, which are kept by path. */
+	private async forgetWorktree(main: URI, worktree: URI): Promise<void> {
 		this.customizationService.set(worktree, {});
 		const order = this.customizationService.worktreeOrder(main);
 		if (order) {
@@ -870,6 +1046,48 @@ export class WorktreeService implements IWorktreeService {
 		}
 		if (this.workspaceTrustEnablementService.isWorkspaceTrustEnabled()) {
 			await this.workspaceTrustManagementService.setUrisTrust([worktree], false);
+		}
+	}
+
+	/** Reports a directory a removal left behind, with a way to see it and to retry (WT-8.6). */
+	private reportLeftover(main: URI, worktree: URI, leftover: { readonly path: string; readonly recovery: string; readonly message: string }): void {
+		this.notificationService.prompt(Severity.Error,
+			localize('worktrees.leftover', "Worktree was removed from Git, but its folder could not be deleted: {0}. {1}", leftover.path, leftover.message),
+			[
+				// Kept open, so that Retry is still there after a look at the folder
+				{ label: revealLabel(), keepOpen: true, run: () => this.commandService.executeCommand('revealFileInOS', worktree) },
+				{
+					label: localize('worktrees.retry', "Retry"),
+					run: async () => {
+						let again: DeleteWorktreeAtResult | undefined;
+						try {
+							again = await this.commandService.executeCommand<DeleteWorktreeAtResult>('_git.deleteWorktreeAt', main, worktree, 'cleanup', leftover.recovery);
+						} catch (err) {
+							again = { kind: 'error', code: undefined, message: toErrorMessage(err) };
+						}
+						if (again?.kind === 'incomplete') {
+							this.reportLeftover(main, worktree, again);
+						} else if (again?.kind !== 'removed') {
+							this.notificationService.error(localize('worktrees.leftoverRefused', "Failed to delete folder: {0}", gitMessage(again?.kind === 'error' ? again : undefined)));
+						}
+					}
+				}
+			]);
+	}
+
+	/** The working copies with unsaved changes to files inside `worktree`, open on screen or put away. */
+	private unsavedInside(worktree: URI): IWorkingCopy[] {
+		return this.workingCopyService.dirtyWorkingCopies.filter(workingCopy => this.uriIdentityService.extUri.isEqualOrParent(workingCopy.resource, worktree));
+	}
+
+	/** Discards the unsaved changes inside `worktree` and closes the editors of its files. */
+	private async discardInside(worktree: URI, unsaved: readonly IWorkingCopy[]): Promise<void> {
+		for (const workingCopy of unsaved) {
+			await workingCopy.revert({ soft: true });
+		}
+		const inside = this.editorService.getEditors(EditorsOrder.SEQUENTIAL).filter(({ editor }) => editor.resource && this.uriIdentityService.extUri.isEqualOrParent(editor.resource, worktree));
+		if (inside.length) {
+			await this.editorService.closeEditors(inside, { preserveFocus: true });
 		}
 	}
 
@@ -902,53 +1120,83 @@ export class WorktreeService implements IWorktreeService {
 		return inside;
 	}
 
-	private async confirmDelete(worktree: URI, branch: string | undefined, check: { readonly files: readonly string[]; readonly submodules: boolean }, running: boolean): Promise<boolean> {
-		const { files, submodules } = check;
-		const detail = new MarkdownString();
-		detail.appendMarkdown(`${asCodeSpan(this.labelService.getUriLabel(worktree))}\n\n`);
+	/**
+	 * Asks once, naming everything deleting the worktree loses (WT-8.1, WT-8.2). With `again`, asks only
+	 * about what appeared since the first time.
+	 */
+	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: boolean, again: boolean): Promise<boolean> {
+		const { files, ignoredPaths, submodules, unsaved } = loss;
 
-		if (files.length > 0) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.loses', "These changes have not been committed and will be lost:")));
-			detail.appendMarkdown('\n\n');
-			for (const file of files.slice(0, LISTED_FILES)) {
-				detail.appendMarkdown(`- ${asCodeSpan(file)}\n`);
+		// Laid out as VS Code's own delete confirmation: lists first, then one paragraph (WORKSPACE.md W10.7)
+		const paragraphs: string[] = [];
+		const list = (heading: string, entries: readonly string[], limit: number) => {
+			if (!entries.length) {
+				return;
 			}
-			if (files.length > LISTED_FILES) {
-				detail.appendMarkdown(`- ${escapeMarkdownSyntaxTokens(localize('worktrees.andMore', "and {0} more", files.length - LISTED_FILES))}\n`);
+			const lines = [heading, ...entries.slice(0, limit)];
+			if (entries.length > limit) {
+				lines.push(localize('worktrees.andMore', "and {0} more", entries.length - limit));
 			}
-			detail.appendMarkdown('\n');
+			paragraphs.push(lines.join('\n'));
+		};
+
+		list(localize('worktrees.loses', "The following uncommitted changes will be lost:"), files, LISTED_FILES);
+		list(localize('worktrees.unsaved', "The following editors have unsaved changes that will be discarded:"), unsaved, LISTED_FILES);
+		list(localize('worktrees.ignored', "The following files ignored by Git will be deleted:"), ignoredPaths, LISTED_IGNORED);
+
+		const sentences: string[] = [];
+		if (again) {
+			if (paragraphs.length) {
+				sentences.push(localize('worktrees.sinceAsked', "Additional files were modified since this prompt opened and will also be lost."));
+			}
+			if (submodules) {
+				sentences.push(localize('worktrees.submodulesSince', "Submodules and any unpushed commits will also be deleted."));
+			}
+		} else {
+			// Deleted for good, not moved to the Recycle Bin, so in VS Code's words for that
+			sentences.push(submodules
+				? localize('worktrees.folderAndSubmodulesDeleted', "The worktree folder, including its submodules and unpushed commits, will be deleted. This action cannot be undone.")
+				: localize('worktrees.folderDeleted', "The worktree folder will be deleted from disk. This action cannot be undone."));
+			if (running) {
+				sentences.push(localize('worktrees.runningStops', "A process running in one of its terminals will be terminated."));
+			}
+			// A worktree on a detached HEAD has no branch to keep, and is not told it has one.
+			if (branch) {
+				sentences.push(localize('worktrees.branchKeptQuoted', "The branch '{0}' will be preserved.", branch));
+			}
+		}
+		if (sentences.length) {
+			paragraphs.push(sentences.join(' '));
 		}
 
-		// A worktree's submodules keep their git directories in its own, which goes with it.
-		if (submodules) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.submodules', "Its submodules will be deleted with it, including any of their commits that have not been pushed.")));
-			detail.appendMarkdown('\n\n');
-		}
-
-		if (running) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.running', "Something is running in one of its terminals; it will be stopped.")));
-			detail.appendMarkdown('\n\n');
-		}
-
-		// A worktree on a detached HEAD has no branch to keep, and is not told it has one.
-		if (branch) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.branchKept', "The associated branch \"{0}\" will not be deleted.", branch)));
-		}
-
+		// No Save and Delete: a file saved there would be deleted all the same
+		const discards = files.length > 0 || unsaved.length > 0;
 		const { confirmed } = await this.dialogService.confirm({
-			type: files.length > 0 || submodules ? 'warning' : 'none',
-			message: localize('worktrees.deleteMessage', "Delete Worktree?"),
-			detail,
-			primaryButton: files.length > 0
+			type: 'warning',
+			message: localize('worktrees.deleteQuestion', "Are you sure you want to delete the worktree '{0}'?", name),
+			detail: paragraphs.join('\n\n'),
+			primaryButton: discards
 				? localize({ key: 'worktrees.deleteDiscardButton', comment: ['&& denotes a mnemonic'] }, "&&Delete and Discard Changes")
-				: localize({ key: 'worktrees.deleteButton', comment: ['&& denotes a mnemonic'] }, "&&Delete"),
-			custom: {
-				classes: ['facade-dialog', 'workspacebar-confirm']
-			}
+				: localize({ key: 'worktrees.deleteButton', comment: ['&& denotes a mnemonic'] }, "&&Delete")
 		});
 
 		return confirmed;
 	}
+}
+
+/** What a second check finds that the first did not, or undefined when nothing new would be lost. */
+function newLoss(confirmed: IDeletionLoss, now: { readonly files: readonly string[]; readonly ignoredPaths: readonly string[]; readonly submodules: boolean }): IDeletionLoss | undefined {
+	const files = now.files.filter(file => !confirmed.files.includes(file));
+	const ignoredPaths = now.ignoredPaths.filter(ignored => !confirmed.ignoredPaths.includes(ignored));
+	const submodules = now.submodules && !confirmed.submodules;
+	return files.length || ignoredPaths.length || submodules ? { files, ignoredPaths, submodules, unsaved: [] } : undefined;
+}
+
+/** The platform's own words for showing a folder where it lives, as the bar's menu has them. */
+function revealLabel(): string {
+	return isWindows ? localize('worktrees.revealInWindows', "Reveal in File Explorer")
+		: isMacintosh ? localize('worktrees.revealInMac', "Reveal in Finder")
+			: localize('worktrees.revealInLinux', "Open Containing Folder");
 }
 
 /**
@@ -994,6 +1242,16 @@ async function whenRegistered(command: string, timeoutMs: number): Promise<void>
 	}
 }
 
+/** Reports, once the window is up, the setup a previous window left half sent (WT-7.7). */
+export class UnfinishedWorktreeSetup implements IWorkbenchContribution {
+
+	static readonly ID = 'workbench.contrib.unfinishedWorktreeSetup';
+
+	constructor(@IWorktreeService worktreeService: IWorktreeService) {
+		worktreeService.reportUnfinishedSetup().then(undefined, onUnexpectedError);
+	}
+}
+
 export class NewWorktreeAction extends Action2 {
 
 	constructor() {
@@ -1003,7 +1261,7 @@ export class NewWorktreeAction extends Action2 {
 			category: WORKSPACE_BAR_CATEGORY,
 			icon: Codicon.add,
 			f1: true,
-			// Off in the palette too while the bar lists no worktrees (WORKTREE.md section 11).
+			// Off in the palette too while the bar lists no worktrees (WORKTREE.md WT-9).
 			precondition: ContextKeyExpr.and(WORKTREES_SHOWN, GIT_AVAILABLE),
 			menu: [{
 				// First in the menu, as the explorer puts New File first. On every folder's row: a folder

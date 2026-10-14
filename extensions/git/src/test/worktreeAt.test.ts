@@ -6,10 +6,10 @@
 import 'mocha';
 import * as assert from 'assert';
 import { execFile, execFileSync, spawn } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createWorktreeAt, deleteWorktreeAt, folderPath, isWorktreeIncluded, IWorktreeGit, parseWorktreeInclude, prepareWorktreeBaseAt } from '../worktreeAt';
+import { createWorktreeAt, deleteWorktreeAt, folderPath, isWorktreeIncluded, IWorktreeGit, parseWorktreeInclude, prepareWorktreeBaseAt, reachesThroughLink } from '../worktreeAt';
 
 /**
  * What every git in these tests runs with: none of this machine's own configuration - a global
@@ -76,7 +76,7 @@ suite('worktreeAt', () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	test('.worktreeinclude is read the way gitignore reads a pattern file', () => {
+	test('WTA-20 .worktreeinclude is read the way gitignore reads a pattern file', () => {
 		const rules = parseWorktreeInclude('# local config\n.env\n*.local.json\nsecrets/\n/build/cache\n!keep.local.json\n');
 		const cases: [string, boolean][] = [['.env', false], ['apps/web/.env', false], ['a/b/app.local.json', false], ['keep.local.json', false], ['secrets', true], ['secrets', false], ['build/cache', true], ['src/build/cache', true], ['secrets/key.txt', false], ['README.md', false]];
 
@@ -94,7 +94,7 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('creates the worktree on a new branch and copies what is both ignored and included', async () => {
+	test('WTA-20 creates the worktree on a new branch and copies what is both ignored and included', async () => {
 		write(path.join(main, '.worktreeinclude'), '.env\n*.local.json\nsecrets/\n');
 		const worktree = path.join(dir, 'worktrees', 'main', 'feat-a');
 
@@ -120,7 +120,54 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('creates the worktree at a given commit, and refuses a start point that is not a full commit id', async () => {
+	test('WTA-28 making a worktree adds no ignore entry and no setting, to the checkout or the worktree: only git\'s own record of it changes', async () => {
+		write(path.join(main, '.worktreeinclude'), '.env\n');
+		const read = (file: string) => existsSync(file) ? readFileSync(file, 'utf8') : undefined;
+		// Every file in the checkout, ignored ones included
+		const checkout = () => ({
+			gitignore: read(path.join(main, '.gitignore')),
+			exclude: read(path.join(main, '.git', 'info', 'exclude')),
+			files: run(main, 'status', '--porcelain', '--ignored', '--untracked-files=all')
+		});
+		const before = checkout();
+		const worktree = path.join(dir, 'worktrees', 'main', 'feat-a');
+
+		const result = await createWorktreeAt(git, main, worktree, 'feat/a');
+
+		assert.deepStrictEqual({
+			result: result.kind,
+			checkout: checkout(),
+			worktree: run(worktree, 'status', '--porcelain', '--untracked-files=all'),
+			settings: [main, worktree].map(folder => existsSync(path.join(folder, '.vscode'))),
+			recorded: existsSync(path.join(main, '.git', 'worktrees', 'feat-a'))
+		}, {
+			result: 'created',
+			checkout: before,
+			worktree: '',
+			settings: [false, false],
+			recorded: true
+		});
+	});
+
+	test('WTA-28 a worktree whose paths are longer than this machine\'s git can write is made, or fails in git\'s words - never taken for made', async () => {
+		// With no system or global configuration (`environment`), so `core.longpaths` is git's own default
+		const deep = path.join('a'.repeat(60), 'b'.repeat(60), 'c'.repeat(60), 'file.txt');
+		write(path.join(main, deep), 'deep\n');
+		run(main, 'add', '--', deep);
+		run(main, '-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '-m', 'deep');
+		const worktree = path.join(dir, 'worktrees', 'w'.repeat(60));
+		const recorded = `${run(main, 'version')}, ${os.platform()}, core.longpaths ${run(main, 'config', '--default', 'unset', 'core.longpaths')}, longest path ${path.join(worktree, deep).length} characters`;
+
+		const result = await createWorktreeAt(git, main, worktree, 'feat/long');
+
+		if (result.kind === 'created') {
+			assert.ok(existsSync(path.join(worktree, deep)), `made, but its deepest file is not there (${recorded})`);
+		} else {
+			assert.match(result.message, /too long/i, `failed, but not in git's words about the path (${recorded}): ${result.message}`);
+		}
+	});
+
+	test('WTA-18 creates the worktree at a given commit, and refuses a start point that is not a full commit id', async () => {
 		const first = run(main, 'rev-parse', 'HEAD');
 		write(path.join(main, 'later.txt'), 'later\n');
 		run(main, 'add', 'later.txt');
@@ -143,7 +190,7 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('.worktreeinclude never copies through a link: not one it names, nor one inside a folder it names', async () => {
+	test('WTA-20 WTA-31 .worktreeinclude never copies through a link: not one it names, nor one inside a folder it names', async () => {
 		// Junctions on Windows, which need no privilege to make; links elsewhere.
 		const outside = path.join(dir, 'outside');
 		write(path.join(outside, 'private.txt'), 'private\n');
@@ -164,7 +211,98 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('git lfs checkout runs in the new worktree, and no Git LFS is no failure', async () => {
+	test('WTA-31 a file .worktreeinclude names inside a wholly ignored directory is copied, and nothing else there', async () => {
+		write(path.join(main, '.gitignore'), 'node_modules/\nlocal/\n');
+		write(path.join(main, 'local', 'settings.json'), '{}\n');
+		write(path.join(main, 'local', 'other.json'), '{}\n');
+		write(path.join(main, '.worktreeinclude'), 'local/settings.json\n');
+		const worktree = path.join(dir, 'worktrees', 'one-file');
+
+		const result = await createWorktreeAt(git, main, worktree, 'one-file');
+
+		assert.deepStrictEqual({
+			result,
+			files: Object.fromEntries(['local/settings.json', 'local/other.json', 'node_modules/dep/index.js'].map(file => [file, existsSync(path.join(worktree, file))]))
+		}, {
+			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
+			files: { 'local/settings.json': true, 'local/other.json': false, 'node_modules/dep/index.js': false }
+		});
+	});
+
+	test('WTA-31 an exclusion inside an included directory holds', async () => {
+		write(path.join(main, '.gitignore'), 'node_modules/\nlocal/\n');
+		write(path.join(main, 'local', 'a.json'), '{}\n');
+		write(path.join(main, 'local', 'private', 'key.txt'), 'key\n');
+		write(path.join(main, '.worktreeinclude'), 'local/\n!local/private/\n');
+		const worktree = path.join(dir, 'worktrees', 'excluded');
+
+		const result = await createWorktreeAt(git, main, worktree, 'excluded');
+
+		assert.deepStrictEqual({
+			result,
+			files: Object.fromEntries(['local/a.json', 'local/private/key.txt'].map(file => [file, existsSync(path.join(worktree, file))]))
+		}, {
+			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
+			files: { 'local/a.json': true, 'local/private/key.txt': false }
+		});
+	});
+
+	test('WTA-20 a .worktreeinclude that cannot be read is said, not taken for none', async () => {
+		mkdirSync(path.join(main, '.worktreeinclude'));
+		const worktree = path.join(dir, 'worktrees', 'unreadable');
+
+		const result = await createWorktreeAt(git, main, worktree, 'unreadable');
+
+		assert.deepStrictEqual(result.kind === 'created' ? result.copyFailures.map(failure => failure.split(':')[0]) : result, ['.worktreeinclude']);
+	});
+
+	test('WTA-31 a path that passes through a link is a path through a link, on either side', async () => {
+		// A junction stands for a link git checked out in the new worktree
+		const base = path.join(dir, 'base');
+		const outside = path.join(dir, 'elsewhere');
+		mkdirSync(path.join(base, 'real'), { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		symlinkSync(outside, path.join(base, 'link'), 'junction');
+
+		assert.deepStrictEqual({
+			underLink: await reachesThroughLink(base, 'link/settings.json', false),
+			theLinkItself: await reachesThroughLink(base, 'link', true),
+			underRealDirectory: await reachesThroughLink(base, 'real/settings.json', false),
+			notThereYet: await reachesThroughLink(base, 'missing/deeper/settings.json', false)
+		}, { underLink: true, theLinkItself: true, underRealDirectory: false, notThereYet: false });
+	});
+
+	test('WTA-38 a create that fails keeps a branch that moved meanwhile, and says so; a path already registered is not taken for one this request made', async () => {
+		const start = run(main, 'rev-parse', 'HEAD');
+		write(path.join(main, 'other.txt'), 'other\n');
+		run(main, 'add', 'other.txt');
+		run(main, '-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '-m', 'other');
+		const other = run(main, 'rev-parse', 'HEAD');
+		// Git makes the branch, somebody moves it, then the checkout fails.
+		const racing: IWorktreeGit = {
+			exec: async (cwd, args, options) => {
+				if (args[0] === 'worktree' && args[1] === 'add') {
+					run(main, 'branch', 'moved', start);
+					run(main, 'update-ref', 'refs/heads/moved', other);
+					throw Object.assign(new Error('failed'), { stderr: 'fatal: could not check out', exitCode: 128 });
+				}
+				return git.exec(cwd, args, options);
+			}
+		};
+		const taken = path.join(dir, 'worktrees', 'taken');
+		await createWorktreeAt(git, main, taken, 'taken');
+
+		const moved = await createWorktreeAt(racing, main, path.join(dir, 'worktrees', 'moved'), 'moved', start);
+		const again = await createWorktreeAt(git, main, taken, 'another');
+
+		assert.deepStrictEqual({
+			moved: moved.kind === 'error' && moved.message.endsWith('The branch \'moved\' was preserved.'),
+			kept: run(main, 'rev-parse', 'refs/heads/moved') === other,
+			again: again.kind
+		}, { moved: true, kept: true, again: 'error' });
+	});
+
+	test('WTA-19 git lfs checkout runs in the new worktree, and no Git LFS is no failure', async () => {
 		const worktree = path.join(dir, 'worktrees', 'lfs');
 		const lfs: string[][] = [];
 		// Git without Git LFS installed: `git lfs` is not a command it knows.
@@ -186,7 +324,7 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('a create that fails takes the branch it made with it, so the same name can be tried again', async () => {
+	test('WTA-19 a create that fails takes the branch it made with it, so the same name can be tried again', async () => {
 		// A folder already at the path: git makes the branch, then refuses the path.
 		const taken = path.join(dir, 'worktrees', 'taken');
 		write(path.join(taken, 'keep.txt'), 'keep\n');
@@ -203,7 +341,7 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('a worktree whose post-checkout hook failed is made all the same, as git keeps it, and the hook\'s failure said', async () => {
+	test('WTA-19 a worktree whose post-checkout hook failed is made all the same, as git keeps it, and the hook\'s failure said', async () => {
 		const hook = path.join(main, '.git', 'hooks', 'post-checkout');
 		write(hook, '#!/bin/sh\necho "the hook says no" >&2\nexit 3\n');
 		chmodSync(hook, 0o755);
@@ -224,7 +362,7 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('a create that fails leaves alone a branch that was there before it', async () => {
+	test('WTA-19 a create that fails leaves alone a branch that was there before it', async () => {
 		// Not checked out anywhere, and merged: `branch -d` would take it.
 		run(main, 'branch', 'kept');
 		const taken = path.join(dir, 'worktrees', 'taken');
@@ -238,7 +376,7 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('a branch that already exists is returned as an error, not thrown', async () => {
+	test('WTA-19 a branch that already exists is returned as an error, not thrown', async () => {
 		await createWorktreeAt(git, main, path.join(dir, 'worktrees', 'one'), 'taken');
 
 		const result = await createWorktreeAt(git, main, path.join(dir, 'worktrees', 'two'), 'taken');
@@ -363,6 +501,98 @@ suite('worktreeAt', () => {
 		});
 	});
 
+	test('WTA-32 WTA-24 check names the ignored files a removal deletes without a word from git - a wholly ignored directory as one - and git\'s lock', async () => {
+		const worktree = path.join(dir, 'worktrees', 'local');
+		await createWorktreeAt(git, main, worktree, 'local');
+		write(path.join(worktree, '.env'), 'SECRET=1\n');
+		write(path.join(worktree, 'node_modules', 'dep', 'index.js'), 'dep\n');
+		const clean = await deleteWorktreeAt(git, main, worktree, 'check');
+		run(main, 'worktree', 'lock', '--reason', 'on a USB disk', worktree);
+
+		const locked = await deleteWorktreeAt(git, main, worktree, 'check');
+
+		assert.deepStrictEqual({
+			files: clean.kind === 'checked' && clean.files,
+			ignored: clean.kind === 'checked' && [...clean.ignoredPaths].sort(),
+			unlocked: clean.kind === 'checked' && clean.restrictions,
+			locked: locked.kind === 'checked' && locked.restrictions
+		}, {
+			files: [],
+			ignored: ['.env', 'node_modules/'],
+			unlocked: [],
+			locked: [{ kind: 'locked', reason: 'on a USB disk' }]
+		});
+	});
+
+	/** Keeps `directory` from being deleted until the returned function is called. */
+	function holdOpen(directory: string): () => Promise<void> {
+		if (process.platform === 'win32') {
+			const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { cwd: directory });
+			const exited = new Promise<void>(resolve => holder.on('exit', () => resolve()));
+			return () => {
+				holder.kill();
+				return exited;
+			};
+		}
+
+		const parent = path.dirname(directory);
+		chmodSync(parent, 0o555);
+		return async () => chmodSync(parent, 0o755);
+	}
+
+	test('WTA-23 WTA-33 a directory still held after git dropped its record is incomplete, not an error; cleanup deletes that directory once it is let go', async () => {
+		const worktree = path.join(dir, 'worktrees', 'stuck');
+		await createWorktreeAt(git, main, worktree, 'stuck');
+		const release = holdOpen(worktree);
+
+		let result;
+		try {
+			result = await deleteWorktreeAt(git, main, worktree, 'remove');
+		} finally {
+			await release();
+		}
+		const recovery = result.kind === 'incomplete' ? result.recovery : undefined;
+		const forged = await deleteWorktreeAt(git, main, worktree, 'cleanup', 'leftover-forged');
+		const cleanup = await deleteWorktreeAt(git, main, worktree, 'cleanup', recovery);
+
+		assert.deepStrictEqual({
+			result: result.kind === 'incomplete' && { path: realpathSync.native(path.dirname(worktree)) === path.dirname(result.path), gitRecord: result.gitRecord },
+			forged: forged.kind === 'error' && forged.code,
+			cleanup,
+			folder: existsSync(worktree),
+			listed: run(main, 'worktree', 'list').includes('stuck')
+		}, {
+			result: { path: true, gitRecord: 'absent' },
+			forged: 'NotTheLeftover',
+			cleanup: { kind: 'removed' },
+			folder: false,
+			listed: false
+		});
+	});
+
+	test('WTA-33 cleanup refuses a directory that has taken the leftover\'s place, and deletes nothing', async () => {
+		const worktree = path.join(dir, 'worktrees', 'replaced');
+		await createWorktreeAt(git, main, worktree, 'replaced');
+		const release = holdOpen(worktree);
+
+		let result;
+		try {
+			result = await deleteWorktreeAt(git, main, worktree, 'remove');
+		} finally {
+			await release();
+		}
+		// Somebody's own folder, made where the leftover was.
+		rmSync(worktree, { recursive: true, force: true });
+		write(path.join(worktree, 'mine.txt'), 'mine\n');
+		const cleanup = await deleteWorktreeAt(git, main, worktree, 'cleanup', result.kind === 'incomplete' ? result.recovery : undefined);
+
+		assert.deepStrictEqual({ result: result.kind, cleanup: cleanup.kind === 'error' && cleanup.code, mine: existsSync(path.join(worktree, 'mine.txt')) }, {
+			result: 'incomplete',
+			cleanup: 'NotTheLeftover',
+			mine: true
+		});
+	});
+
 	suite('a folder with nothing to start a worktree from', () => {
 
 		// The first commit is made in the person's name, which a machine running tests may not have:
@@ -370,7 +600,7 @@ suite('worktreeAt', () => {
 		const identity = { GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test' };
 		const named: IWorktreeGit = { exec: (cwd, args, options) => git.exec(cwd, args, { ...options, env: { ...identity, ...options?.env } }) };
 
-		test('no repository: counted without being touched, then its files are the first commit, and a worktree can be made', async () => {
+		test('WTA-16 no repository: counted without being touched, then its files are the first commit, and a worktree can be made', async () => {
 			const folder = path.join(dir, 'plain');
 			write(path.join(folder, '.gitignore'), 'node_modules/\n.env\n');
 			write(path.join(folder, 'index.js'), 'index\n');
@@ -394,7 +624,7 @@ suite('worktreeAt', () => {
 			});
 		});
 
-		test('a repository with no commit is unborn until its files are committed; one with a commit is ready', async () => {
+		test('WTA-16 a repository with no commit is unborn until its files are committed; one with a commit is ready', async () => {
 			const folder = path.join(dir, 'unborn');
 			write(path.join(folder, 'readme.md'), 'readme\n');
 			run(folder, 'init', '-q', '-b', 'main');
@@ -410,7 +640,7 @@ suite('worktreeAt', () => {
 			});
 		});
 
-		test('a repository with history whose HEAD is on a branch without commits is refused, not given a first commit', async () => {
+		test('WTA-16 a repository with history whose HEAD is on a branch without commits is refused, not given a first commit', async () => {
 			run(main, 'checkout', '-q', '--orphan', 'pages');
 
 			const inspected = await prepareWorktreeBaseAt(named, main, 'inspect');
@@ -427,7 +657,7 @@ suite('worktreeAt', () => {
 			});
 		});
 
-		test('without a name and email to commit with, it is said while nothing has changed yet', async () => {
+		test('WTA-16 without a name and email to commit with, it is said while nothing has changed yet', async () => {
 			// Git with no identity to give: `git var` fails as it does on a machine with none configured.
 			const nameless: IWorktreeGit = { exec: (cwd, args, options) => args[0] === 'var' ? Promise.reject(new Error('unable to auto-detect email address')) : named.exec(cwd, args, options) };
 			const folder = path.join(dir, 'nameless');
@@ -443,7 +673,7 @@ suite('worktreeAt', () => {
 			});
 		});
 
-		test('a name and email that an includeIf gives only once there is a repository do not stop it, and the first commit is theirs', async () => {
+		test('WTA-16 a name and email that an includeIf gives only once there is a repository do not stop it, and the first commit is theirs', async () => {
 			const folder = path.join(dir, 'conditional');
 			write(path.join(folder, 'index.js'), 'index\n');
 			const identity = path.join(dir, 'identity.gitconfig');
@@ -463,7 +693,7 @@ suite('worktreeAt', () => {
 			});
 		});
 
-		test('a branch git would refuse, or the one the first commit goes on, is said before anything changes', async () => {
+		test('WTA-16 a branch git would refuse, or the one the first commit goes on, is said before anything changes', async () => {
 			// `main` straight after `git init -b main` made it: the worktree's `-b` would find it taken.
 			const initial: IWorktreeGit = { exec: (cwd, args, options) => named.exec(cwd, args[0] === 'init' ? [...args, '-b', 'main'] : args, options) };
 			const folder = path.join(dir, 'names');
@@ -477,7 +707,7 @@ suite('worktreeAt', () => {
 			});
 		});
 
-		test('a commit that fails takes the new repository with it; one that was there keeps what it had', async () => {
+		test('WTA-16 a commit that fails takes the new repository with it; one that was there keeps what it had', async () => {
 			// A hook that refuses, a key that is not there: the commit fails after `init` and `add`.
 			const refusing: IWorktreeGit = { exec: (cwd, args, options) => args[0] === 'commit' ? Promise.reject(Object.assign(new Error('hook refused'), { stderr: 'error: hook refused' })) : named.exec(cwd, args, options) };
 			const fresh = path.join(dir, 'fresh');
@@ -495,7 +725,7 @@ suite('worktreeAt', () => {
 			});
 		});
 
-		test('inside another repository: said to be, and counted without being touched; a .git git cannot read is refused', async () => {
+		test('WTA-16 inside another repository: said to be, and counted without being touched; a .git git cannot read is refused', async () => {
 			const nested = path.join(main, 'packages', 'app');
 			write(path.join(nested, 'index.js'), 'index\n');
 			const broken = path.join(main, 'packages', 'broken');
@@ -575,7 +805,7 @@ suite('worktreeAt', () => {
 		const listed = run(main, 'worktree', 'list');
 
 		assert.deepStrictEqual({ check, remove, removes, gone: listed.includes('gone'), unmounted: listed.includes('unmounted') }, {
-			check: { kind: 'checked', files: [], submodules: false },
+			check: { kind: 'checked', files: [], ignoredPaths: [], submodules: false, restrictions: [] },
 			remove: { kind: 'removed' },
 			removes: [['worktree', 'remove', '--']],
 			gone: false,
@@ -602,8 +832,8 @@ suite('worktreeAt', () => {
 		const force = await deleteWorktreeAt(git, main, worktree, 'force');
 
 		assert.deepStrictEqual({ declared, checkedOut, remove: remove.kind, force, folder: existsSync(worktree) }, {
-			declared: { kind: 'checked', files: [], submodules: false },
-			checkedOut: { kind: 'checked', files: [], submodules: true },
+			declared: { kind: 'checked', files: [], ignoredPaths: [], submodules: false, restrictions: [] },
+			checkedOut: { kind: 'checked', files: [], ignoredPaths: [], submodules: true, restrictions: [] },
 			remove: 'error',
 			force: { kind: 'removed' },
 			folder: false,

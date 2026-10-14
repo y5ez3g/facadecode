@@ -3813,8 +3813,8 @@ export class CommandCenter {
 	}
 
 	@command('_git.deleteWorktreeAt')
-	async deleteWorktreeAt(root: Uri, worktree: Uri, mode: worktreeAt.DeleteWorktreeMode): Promise<worktreeAt.DeleteWorktreeAtResult> {
-		return worktreeAt.deleteWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), mode);
+	async deleteWorktreeAt(root: Uri, worktree: Uri, mode: worktreeAt.DeleteWorktreeMode, recovery?: string): Promise<worktreeAt.DeleteWorktreeAtResult> {
+		return worktreeAt.deleteWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), mode, recovery);
 	}
 
 	@command('_git.prepareWorktreeBaseAt')
