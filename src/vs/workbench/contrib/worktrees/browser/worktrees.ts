@@ -9,12 +9,15 @@ import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
-import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { parse, ParseError } from '../../../../base/common/json.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { ResourceMap } from '../../../../base/common/map.js';
 import { basename, joinPath, toLocalResource } from '../../../../base/common/resources.js';
 import Severity from '../../../../base/common/severity.js';
+import { EditorsOrder } from '../../../common/editor.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IWorkingCopy } from '../../../services/workingCopy/common/workingCopy.js';
+import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
 import { isObject } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
@@ -217,24 +220,25 @@ const GIT_START_TIMEOUT = 30000;
 /** How many files a confirmation names before it says how many more there are. */
 const LISTED_FILES = 10;
 
+/** How many ignored paths a confirmation names before it says how many more there are. */
+const LISTED_IGNORED = 5;
+
 /** How many of the files `.worktreeinclude` could not copy a notification names. */
 const LISTED_COPY_FAILURES = 3;
 
 /** What `_git.deleteWorktreeAt` returns (WT-8.6). */
 type DeleteWorktreeAtResult =
-	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly { readonly kind: 'locked'; readonly reason: string }[] }
+	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly ignoredPaths: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly { readonly kind: 'locked'; readonly reason: string }[] }
 	| { readonly kind: 'removed' }
 	| WorktreeAtError;
 
-/** `text` as a markdown code span, fenced by more backticks than it holds in a row. */
-function asCodeSpan(text: string): string {
-	const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
-	const fence = '`'.repeat(longestRun + 1);
-
-	// A span drops one space at each end, which keeps a backtick at either end off the fence
-	const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-
-	return `${fence}${pad}${text}${pad}${fence}`;
+/** What deleting a worktree would lose, as its confirmation names it. */
+interface IDeletionLoss {
+	readonly files: readonly string[];
+	readonly ignoredPaths: readonly string[];
+	readonly submodules: boolean;
+	/** Unsaved editors of files inside it, wherever they are open or put away. */
+	readonly unsaved: readonly string[];
 }
 
 export const IWorktreeService = createDecorator<IWorktreeService>('worktreeService');
@@ -317,6 +321,8 @@ export class WorktreeService implements IWorktreeService {
 		@ILabelService private readonly labelService: ILabelService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@ILogService private readonly logService: ILogService,
+		@IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
+		@IEditorService private readonly editorService: IEditorService,
 		@IStorageService private readonly storageService: IStorageService,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 	) {
@@ -928,14 +934,15 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
-		// 2  confirm: always, naming what would be lost (WT-8.1, WT-8.2) - and anything running in a terminal
-		//    that goes with it: one working inside it, or one of its editor area whatever it started in.
+		// 2  confirm, naming all that would be lost, unsaved editors and running terminals too (WT-8.1, WT-8.2)
+		const unsaved = this.unsavedInside(worktree);
+		const loss: IDeletionLoss = { ...check, unsaved: unsaved.map(workingCopy => this.uriIdentityService.extUri.relativePath(worktree, workingCopy.resource) ?? basename(workingCopy.resource)) };
 		const running = [...await this.terminalsInside(worktree), ...this.folderTerminalsService.terminalsOf(worktree)].some(instance => instance.hasChildProcesses);
-		if (!(await this.confirmDelete(worktree, branch, check, running))) {
+		if (!(await this.confirmDelete(name, branch, loss, running))) {
 			return;
 		}
 
-		// 3 to 6 under one progress: a large tree takes a while to delete.
+		// 3 to 7 under one progress: a large tree takes a while to delete.
 		const force = check.files.length > 0 || check.submodules;
 		const result = await this.progressService.withProgress(
 			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree '{0}'...", name) },
@@ -950,16 +957,18 @@ export class WorktreeService implements IWorktreeService {
 				// seconds for a large worktree - and comes back if the deletion fails (WT-8.9).
 				const hidden = this.workspaceBarService.hideWorktree(worktree);
 				try {
-					// 4  leave folders[] - which also makes folderTerminals dispose what it parked for it (WT-8.4).
+					// 4  discard what the confirmation named: unsaved changes and their editors
+					await this.discardInside(worktree, unsaved);
+
+					// 5  leave folders[] without asking again (WT-8.4)
 					await this.workspaceBarService.remove([worktree], { confirmed: true });
 
-					// 5  close whatever else works inside it - the panel's terminals, say. A shell can take a moment
-					//    to let go of the folder after its terminal is disposed; the git extension's delete allows for that.
+					// 6  close the terminals still inside it; git's delete waits for their shells to let go
 					for (const instance of await this.terminalsInside(worktree)) {
 						instance.dispose(TerminalExitReason.User);
 					}
 
-					// 6  delete. `force` only when the confirmation named what it throws away.
+					// 7  delete. `force` only when the confirmation named what it throws away.
 					try {
 						return await run(force ? 'force' : 'remove');
 					} catch (err) {
@@ -970,7 +979,7 @@ export class WorktreeService implements IWorktreeService {
 				}
 			});
 
-		// 7  nothing to refresh: letting the row go read git's records again (WT-8.9, and WT-8.6 when it went wrong).
+		// 8  nothing to refresh: letting the row go read git's records again (WT-8.9, and WT-8.6 when it went wrong).
 		if (result?.kind !== 'removed') {
 			const error = result?.kind === 'error' ? result : undefined;
 			const message = gitMessage(error);
@@ -988,6 +997,22 @@ export class WorktreeService implements IWorktreeService {
 		}
 		if (this.workspaceTrustEnablementService.isWorkspaceTrustEnabled()) {
 			await this.workspaceTrustManagementService.setUrisTrust([worktree], false);
+		}
+	}
+
+	/** The working copies with unsaved changes to files inside `worktree`, open on screen or put away. */
+	private unsavedInside(worktree: URI): IWorkingCopy[] {
+		return this.workingCopyService.dirtyWorkingCopies.filter(workingCopy => this.uriIdentityService.extUri.isEqualOrParent(workingCopy.resource, worktree));
+	}
+
+	/** Discards the unsaved changes inside `worktree` and closes the editors of its files. */
+	private async discardInside(worktree: URI, unsaved: readonly IWorkingCopy[]): Promise<void> {
+		for (const workingCopy of unsaved) {
+			await workingCopy.revert({ soft: true });
+		}
+		const inside = this.editorService.getEditors(EditorsOrder.SEQUENTIAL).filter(({ editor }) => editor.resource && this.uriIdentityService.extUri.isEqualOrParent(editor.resource, worktree));
+		if (inside.length) {
+			await this.editorService.closeEditors(inside, { preserveFocus: true });
 		}
 	}
 
@@ -1020,49 +1045,50 @@ export class WorktreeService implements IWorktreeService {
 		return inside;
 	}
 
-	private async confirmDelete(worktree: URI, branch: string | undefined, check: { readonly files: readonly string[]; readonly submodules: boolean }, running: boolean): Promise<boolean> {
-		const { files, submodules } = check;
-		const detail = new MarkdownString();
-		detail.appendMarkdown(`${asCodeSpan(this.labelService.getUriLabel(worktree))}\n\n`);
+	/** Asks once, naming everything deleting the worktree loses (WT-8.1, WT-8.2). */
+	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: boolean): Promise<boolean> {
+		const { files, ignoredPaths, submodules, unsaved } = loss;
 
-		if (files.length > 0) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.loses', "The following uncommitted changes will be lost:")));
-			detail.appendMarkdown('\n\n');
-			for (const file of files.slice(0, LISTED_FILES)) {
-				detail.appendMarkdown(`- ${asCodeSpan(file)}\n`);
+		// Laid out as VS Code's own delete confirmation: lists first, then one paragraph (WORKSPACE.md W10.7)
+		const paragraphs: string[] = [];
+		const list = (heading: string, entries: readonly string[], limit: number) => {
+			if (!entries.length) {
+				return;
 			}
-			if (files.length > LISTED_FILES) {
-				detail.appendMarkdown(`- ${escapeMarkdownSyntaxTokens(localize('worktrees.andMore', "and {0} more", files.length - LISTED_FILES))}\n`);
+			const lines = [heading, ...entries.slice(0, limit)];
+			if (entries.length > limit) {
+				lines.push(localize('worktrees.andMore', "and {0} more", entries.length - limit));
 			}
-			detail.appendMarkdown('\n');
-		}
+			paragraphs.push(lines.join('\n'));
+		};
 
-		// A worktree's submodules keep their git directories in its own, which goes with it.
-		if (submodules) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.submodules', "Its submodules will be deleted with it, including any of their commits that have not been pushed.")));
-			detail.appendMarkdown('\n\n');
-		}
+		list(localize('worktrees.loses', "The following uncommitted changes will be lost:"), files, LISTED_FILES);
+		list(localize('worktrees.unsaved', "The following editors have unsaved changes that will be discarded:"), unsaved, LISTED_FILES);
+		list(localize('worktrees.ignored', "The following files ignored by Git will be deleted:"), ignoredPaths, LISTED_IGNORED);
 
+		const sentences: string[] = [];
+		// Deleted for good, not moved to the Recycle Bin, so in VS Code's words for that
+		sentences.push(submodules
+			? localize('worktrees.folderAndSubmodulesDeleted', "The worktree folder, including its submodules and unpushed commits, will be deleted. This action cannot be undone.")
+			: localize('worktrees.folderDeleted', "The worktree folder will be deleted from disk. This action cannot be undone."));
 		if (running) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.running', "Something is running in one of its terminals; it will be stopped.")));
-			detail.appendMarkdown('\n\n');
+			sentences.push(localize('worktrees.runningStops', "A process running in one of its terminals will be terminated."));
 		}
-
 		// A worktree on a detached HEAD has no branch to keep, and is not told it has one.
 		if (branch) {
-			detail.appendMarkdown(escapeMarkdownSyntaxTokens(localize('worktrees.branchKept', "The associated branch \"{0}\" will not be deleted.", branch)));
+			sentences.push(localize('worktrees.branchKeptQuoted', "The branch '{0}' will be preserved.", branch));
 		}
+		paragraphs.push(sentences.join(' '));
 
+		// No Save and Delete: a file saved there would be deleted all the same
+		const discards = files.length > 0 || unsaved.length > 0;
 		const { confirmed } = await this.dialogService.confirm({
-			type: files.length > 0 || submodules ? 'warning' : 'none',
-			message: localize('worktrees.deleteMessage', "Delete Worktree?"),
-			detail,
-			primaryButton: files.length > 0
+			type: 'warning',
+			message: localize('worktrees.deleteQuestion', "Are you sure you want to delete the worktree '{0}'?", name),
+			detail: paragraphs.join('\n\n'),
+			primaryButton: discards
 				? localize({ key: 'worktrees.deleteDiscardButton', comment: ['&& denotes a mnemonic'] }, "&&Delete and Discard Changes")
-				: localize({ key: 'worktrees.deleteButton', comment: ['&& denotes a mnemonic'] }, "&&Delete"),
-			custom: {
-				classes: ['facade-dialog', 'workspacebar-confirm']
-			}
+				: localize({ key: 'worktrees.deleteButton', comment: ['&& denotes a mnemonic'] }, "&&Delete")
 		});
 
 		return confirmed;

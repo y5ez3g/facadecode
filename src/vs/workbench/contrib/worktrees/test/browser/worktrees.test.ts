@@ -8,7 +8,6 @@ import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { toDisposable } from '../../../../../base/common/lifecycle.js';
-import { IMarkdownString } from '../../../../../base/common/htmlContent.js';
 import { KeyCode, KeyMod } from '../../../../../base/common/keyCodes.js';
 import { decodeKeybinding } from '../../../../../base/common/keybindings.js';
 import { Schemas } from '../../../../../base/common/network.js';
@@ -45,7 +44,12 @@ import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/wor
 import { INewWorktreeAnswer, IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IEditorIdentifier } from '../../../../common/editor.js';
+import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { IEditorService } from '../../../../services/editor/common/editorService.js';
+import { IWorkingCopy } from '../../../../services/workingCopy/common/workingCopy.js';
+import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
@@ -147,6 +151,9 @@ suite('Worktrees - making and deleting one', () => {
 	/** The folder the window is on, which `show` moves - unless the window is `stuck` where it is. */
 	let active: URI;
 	let stuck: boolean;
+	/** The working copies with unsaved changes, and the editors open: filled in place by a test. */
+	const dirty: IWorkingCopy[] = [];
+	const openEditors: IEditorIdentifier[] = [];
 
 	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean }): ITerminalInstance {
 		return upcastPartial<ITerminalInstance>({
@@ -249,6 +256,8 @@ suite('Worktrees - making and deleting one', () => {
 		repository = { kind: 'repository', main, folder: undefined, branch: 'main', members: [], worktrees: [{ uri: w2, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
 		active = w2;
 		stuck = false;
+		dirty.length = 0;
+		openEditors.length = 0;
 
 		const restored = store.add(new Emitter<void>());
 		instantiationService = store.add(new TestInstantiationService());
@@ -299,6 +308,13 @@ suite('Worktrees - making and deleting one', () => {
 					throw new Error(`command '${id}' not found`);
 				}
 				return answers.get(`${id} ${args.find(arg => typeof arg === 'string')}`) as T;
+			}
+		});
+		instantiationService.stub(IWorkingCopyService, { dirtyWorkingCopies: dirty });
+		instantiationService.stub(IEditorService, {
+			getEditors: () => openEditors,
+			closeEditors: async editors => {
+				steps.push(`close editors ${(editors as IEditorIdentifier[]).map(({ editor }) => editor.resource?.path).join(', ')}`);
 			}
 		});
 		instantiationService.stub(IDialogService, {
@@ -810,9 +826,9 @@ suite('Worktrees - making and deleting one', () => {
 	});
 
 	/** What `check` answers for a worktree with nothing in it beyond `changes`. */
-	function checked(changes: { files?: string[]; submodules?: boolean; locked?: string } = {}) {
+	function checked(changes: { files?: string[]; ignoredPaths?: string[]; submodules?: boolean; locked?: string } = {}) {
 		return {
-			kind: 'checked', files: changes.files ?? [], submodules: !!changes.submodules,
+			kind: 'checked', files: changes.files ?? [], ignoredPaths: changes.ignoredPaths ?? [], submodules: !!changes.submodules,
 			restrictions: changes.locked !== undefined ? [{ kind: 'locked', reason: changes.locked }] : []
 		};
 	}
@@ -825,7 +841,7 @@ suite('Worktrees - making and deleting one', () => {
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 
-		assert.deepStrictEqual({ steps, type: confirmations[0].type, detail: (confirmations[0].detail as IMarkdownString).value.includes('`a.txt`') }, {
+		assert.deepStrictEqual({ steps, type: confirmations[0].type, detail: (confirmations[0].detail as string).split('\n').includes('a.txt') }, {
 			steps: [
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'confirm',
@@ -872,6 +888,34 @@ suite('Worktrees - making and deleting one', () => {
 		]);
 	});
 
+	test('WTA-32 the confirmation names the ignored files and the unsaved editors inside, and discards what it named', async () => {
+		answers.set('_git.deleteWorktreeAt check', checked({ ignoredPaths: ['.env', 'node_modules/'] }));
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const reverted: string[] = [];
+		const unsavedInside = upcastPartial<IWorkingCopy>({ resource: URI.file(`${w2.path}/src/app.ts`), revert: async () => { reverted.push('app.ts'); } });
+		const unsavedElsewhere = upcastPartial<IWorkingCopy>({ resource: URI.file('/lab/readme.md'), revert: async () => { reverted.push('readme.md'); } });
+		dirty.push(unsavedInside, unsavedElsewhere);
+		openEditors.push({ groupId: 1, editor: upcastPartial<EditorInput>({ resource: URI.file(`${w2.path}/src/app.ts`) }) }, { groupId: 1, editor: upcastPartial<EditorInput>({ resource: URI.file('/lab/readme.md') }) });
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+
+		const detail = (confirmations[0].detail as string).split('\n');
+		assert.deepStrictEqual({
+			ignored: detail.includes('.env') && detail.includes('node_modules/'),
+			// By its path inside the worktree, as the changed files are named
+			unsaved: detail.includes('src/app.ts'),
+			button: confirmations[0].primaryButton,
+			reverted,
+			closed: steps.filter(step => step.startsWith('close editors'))
+		}, {
+			ignored: true,
+			unsaved: true,
+			button: '&&Delete and Discard Changes',
+			reverted: ['app.ts'],
+			closed: [`close editors ${w2.path}/src/app.ts`]
+		});
+	});
+
 	test('a clean worktree with submodules checked out is warned about them, and deleted with force - git takes it no other way', async () => {
 		answers.set('_git.deleteWorktreeAt check', checked({ submodules: true }));
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
@@ -880,7 +924,7 @@ suite('Worktrees - making and deleting one', () => {
 
 		assert.deepStrictEqual({
 			type: confirmations[0].type,
-			said: (confirmations[0].detail as IMarkdownString).value.includes('submodules will be deleted with it'),
+			said: (confirmations[0].detail as string).includes('including its submodules and unpushed commits'),
 			deleted: steps.filter(step => step.startsWith('_git.deleteWorktreeAt'))
 		}, {
 			type: 'warning',
@@ -906,7 +950,7 @@ suite('Worktrees - making and deleting one', () => {
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(worktree);
 
 		assert.deepStrictEqual({
-			running: (confirmations[0].detail as IMarkdownString).value.includes('Something is running'),
+			running: (confirmations[0].detail as string).includes('A process running in one of its terminals will be terminated.'),
 			closed: steps.filter(step => step.startsWith('close '))
 		}, {
 			running: true,
@@ -921,15 +965,13 @@ suite('Worktrees - making and deleting one', () => {
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 
-		assert.deepStrictEqual((confirmations[0].detail as IMarkdownString).value.split('\n').filter(line => line.startsWith('Something')), [
-			'Something is running in one of its terminals; it will be stopped.',
-		]);
+		assert.deepStrictEqual((confirmations[0].detail as string).includes('A process running in one of its terminals will be terminated.'), true);
 	});
 
 	test('a worktree on a detached HEAD is not told it has a branch to keep', async () => {
 		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
-		const lastLine = () => (confirmations[confirmations.length - 1].detail as IMarkdownString).value.trim().split('\n').pop();
+		const lastLine = () => (confirmations[confirmations.length - 1].detail as string).trim().split('\n').pop();
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 		const onBranch = lastLine();
@@ -937,8 +979,8 @@ suite('Worktrees - making and deleting one', () => {
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 
 		assert.deepStrictEqual({ onBranch, detached: lastLine() }, {
-			onBranch: 'The associated branch "w2" will not be deleted.',
-			detached: '`/home/me/.facade/worktrees/lab/w2`',
+			onBranch: 'The worktree folder will be deleted from disk. This action cannot be undone. The branch \'w2\' will be preserved.',
+			detached: 'The worktree folder will be deleted from disk. This action cannot be undone.',
 		});
 	});
 });

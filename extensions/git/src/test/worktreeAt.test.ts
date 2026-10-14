@@ -501,18 +501,24 @@ suite('worktreeAt', () => {
 		});
 	});
 
-	test('WTA-24 check names the lock git holds on a worktree', async () => {
+	test('WTA-32 WTA-24 check names the ignored files a removal deletes without a word from git - a wholly ignored directory as one - and git\'s lock', async () => {
 		const worktree = path.join(dir, 'worktrees', 'local');
 		await createWorktreeAt(git, main, worktree, 'local');
+		write(path.join(worktree, '.env'), 'SECRET=1\n');
+		write(path.join(worktree, 'node_modules', 'dep', 'index.js'), 'dep\n');
 		const clean = await deleteWorktreeAt(git, main, worktree, 'check');
 		run(main, 'worktree', 'lock', '--reason', 'on a USB disk', worktree);
 
 		const locked = await deleteWorktreeAt(git, main, worktree, 'check');
 
 		assert.deepStrictEqual({
+			files: clean.kind === 'checked' && clean.files,
+			ignored: clean.kind === 'checked' && [...clean.ignoredPaths].sort(),
 			unlocked: clean.kind === 'checked' && clean.restrictions,
 			locked: locked.kind === 'checked' && locked.restrictions
 		}, {
+			files: [],
+			ignored: ['.env', 'node_modules/'],
 			unlocked: [],
 			locked: [{ kind: 'locked', reason: 'on a USB disk' }]
 		});
@@ -730,7 +736,7 @@ suite('worktreeAt', () => {
 		const listed = run(main, 'worktree', 'list');
 
 		assert.deepStrictEqual({ check, remove, removes, gone: listed.includes('gone'), unmounted: listed.includes('unmounted') }, {
-			check: { kind: 'checked', files: [], submodules: false, restrictions: [] },
+			check: { kind: 'checked', files: [], ignoredPaths: [], submodules: false, restrictions: [] },
 			remove: { kind: 'removed' },
 			removes: [['worktree', 'remove', '--']],
 			gone: false,
@@ -757,8 +763,8 @@ suite('worktreeAt', () => {
 		const force = await deleteWorktreeAt(git, main, worktree, 'force');
 
 		assert.deepStrictEqual({ declared, checkedOut, remove: remove.kind, force, folder: existsSync(worktree) }, {
-			declared: { kind: 'checked', files: [], submodules: false, restrictions: [] },
-			checkedOut: { kind: 'checked', files: [], submodules: true, restrictions: [] },
+			declared: { kind: 'checked', files: [], ignoredPaths: [], submodules: false, restrictions: [] },
+			checkedOut: { kind: 'checked', files: [], ignoredPaths: [], submodules: true, restrictions: [] },
 			remove: 'error',
 			force: { kind: 'removed' },
 			folder: false,

@@ -79,7 +79,7 @@ interface IWorktreeRestriction {
  * What `check` finds a removal would lose, or how a removal ended (WORKTREE.md WT-8.1).
  */
 export type DeleteWorktreeAtResult =
-	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly IWorktreeRestriction[] }
+	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly ignoredPaths: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly IWorktreeRestriction[] }
 	| { readonly kind: 'removed' }
 	| IWorktreeAtError;
 
@@ -526,12 +526,21 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 		try {
 			const restrictions = await restrictionsOf(git, root, worktreePath);
 			if (!present) {
-				return { kind: 'checked', files: [], submodules: false, restrictions };
+				return { kind: 'checked', files: [], ignoredPaths: [], submodules: false, restrictions };
 			}
 
 			// Read only, so without the index lock - as the extension's own status runs.
-			const { stdout } = await git.exec(worktreePath, ['status', '--porcelain', '-z', '--untracked-files=all'], { env: { GIT_OPTIONAL_LOCKS: '0' } });
-			return { kind: 'checked', files: parsePorcelain(stdout), submodules: await hasSubmodules(git, worktreePath), restrictions };
+			const readOnly = { env: { GIT_OPTIONAL_LOCKS: '0' } };
+			const { stdout } = await git.exec(worktreePath, ['status', '--porcelain', '-z', '--untracked-files=all'], readOnly);
+			// Ignored files go with the directory; a wholly ignored directory is one entry (WT-8.2)
+			const ignored = await git.exec(worktreePath, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], readOnly);
+			return {
+				kind: 'checked',
+				files: parsePorcelain(stdout),
+				ignoredPaths: ignored.stdout.split('\0').filter(entry => entry.length > 0),
+				submodules: await hasSubmodules(git, worktreePath),
+				restrictions
+			};
 		} catch (err) {
 			return toError(err);
 		}
