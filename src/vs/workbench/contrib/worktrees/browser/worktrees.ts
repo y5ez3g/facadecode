@@ -33,7 +33,8 @@ import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextke
 import { ICommandDetectionCapability, TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
 import { TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
+import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, WorkspaceTrustRequestButton } from '../../../../platform/workspace/common/workspaceTrust.js';
+import { IWorkspaceContextService, isSingleFolderWorkspaceIdentifier, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
 import { unreachable } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
@@ -320,6 +321,7 @@ export class WorktreeService implements IWorktreeService {
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@ILogService private readonly logService: ILogService,
 		@IStorageService private readonly storageService: IStorageService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 	) {
 		this.running = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 		this.setupStarted = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
@@ -414,7 +416,17 @@ export class WorktreeService implements IWorktreeService {
 			return true;
 		}
 
-		if (!await this.workspaceTrustRequestService.requestWorkspaceTrust({ message: localize('worktrees.restricted', "Worktrees require Git operations, which are disabled in Restricted Mode.") })) {
+		// No Manage button: it would leave the worktree being made or deleted for the trust editor
+		const trustAndContinue: WorkspaceTrustRequestButton = {
+			label: isSingleFolderWorkspaceIdentifier(toWorkspaceIdentifier(this.contextService.getWorkspace()))
+				? localize({ key: 'worktrees.trustFolder', comment: ['&& denotes a mnemonic'] }, "&&Trust Folder & Continue")
+				: localize({ key: 'worktrees.trustWorkspace', comment: ['&& denotes a mnemonic'] }, "&&Trust Workspace & Continue"),
+			type: 'ContinueWithTrust'
+		};
+		if (!await this.workspaceTrustRequestService.requestWorkspaceTrust({
+			message: localize('worktrees.restricted', "Worktrees require Git operations, which are disabled in Restricted Mode."),
+			buttons: [trustAndContinue]
+		})) {
 			return false;
 		}
 

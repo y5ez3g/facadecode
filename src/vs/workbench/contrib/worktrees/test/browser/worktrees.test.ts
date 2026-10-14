@@ -36,7 +36,7 @@ import { IProgressService } from '../../../../../platform/progress/common/progre
 import { ICommandDetectionCapability, ITerminalCapabilityStore, ITerminalCommand } from '../../../../../platform/terminal/common/capabilities/capabilities.js';
 import { TerminalSettingId } from '../../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, IWorkspaceTrustUriInfo } from '../../../../../platform/workspace/common/workspaceTrust.js';
 // For the keys every focused list has, which the bar's own have to win over.
 import '../../../../browser/actions/listCommands.js';
@@ -141,8 +141,8 @@ suite('Worktrees - making and deleting one', () => {
 	let terminals: ITerminalInstance[];
 	/** The terminals of the worktree's editor area, whatever they started in (`IFolderTerminalsService`). */
 	let editorAreaTerminals: ITerminalInstance[];
-	/** Whether trust is on, the workspace trusted, trust given when asked, and the repository trusted where that differs. */
-	let trust: { enabled: boolean; trusted: boolean; granted: boolean; repositoryTrusted?: boolean };
+	/** Workspace trust as the test sets it, and the buttons each trust question offered, as `type label`. */
+	let trust: { enabled: boolean; trusted: boolean; granted: boolean; repositoryTrusted?: boolean; buttons?: string[][] };
 	let instantiationService: TestInstantiationService;
 	/** The folder the window is on, which `show` moves - unless the window is `stuck` where it is. */
 	let active: URI;
@@ -354,9 +354,13 @@ suite('Worktrees - making and deleting one', () => {
 			getUriTrustInfo: async uri => upcastPartial<IWorkspaceTrustUriInfo>({ uri, trusted: trust.repositoryTrusted ?? trust.trusted }),
 			setUrisTrust: async (uris, trusted) => { steps.push(`${trusted ? 'trust' : 'untrust'} ${uris.map(uri => uri.path).join(', ')}`); }
 		});
+		instantiationService.stub(IWorkspaceContextService, {
+			getWorkspace: () => upcastPartial<IWorkspace>({ id: 'lab', folders: [], configuration: URI.file('/lab.code-workspace') })
+		});
 		instantiationService.stub(IWorkspaceTrustRequestService, {
-			requestWorkspaceTrust: async () => {
+			requestWorkspaceTrust: async options => {
 				steps.push('ask for trust');
+				(trust.buttons ??= []).push((options?.buttons ?? []).map(button => `${button.type} ${button.label}`));
 				trust.trusted ||= trust.granted;
 				return trust.granted;
 			}
@@ -762,13 +766,17 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
-	test('WTA-15 in Restricted Mode, trust is asked for before git is, and nothing runs without it', async () => {
+	test('WTA-15 in Restricted Mode, trust is asked for before git is, and nothing runs without it; the question offers trust and nothing but Cancel besides', async () => {
 		trust = { enabled: true, trusted: false, granted: false };
 
 		await instantiationService.createInstance(WorktreeService).createWorktree(main);
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 
-		assert.deepStrictEqual(steps, ['ask for trust', 'ask for trust']);
+		// Upstream adds Cancel to what it is given; not given Manage, it has none
+		assert.deepStrictEqual({ steps, buttons: trust.buttons }, {
+			steps: ['ask for trust', 'ask for trust'],
+			buttons: [['ContinueWithTrust &&Trust Workspace & Continue'], ['ContinueWithTrust &&Trust Workspace & Continue']]
+		});
 	});
 
 	test('WTA-15 a failure the git extension gave a code of the product\'s own is said in the product\'s words, and git\'s own in git\'s', async () => {
