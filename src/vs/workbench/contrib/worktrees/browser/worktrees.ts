@@ -26,7 +26,7 @@ import { Action2 } from '../../../../platform/actions/common/actions.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
-import { FileSystemProviderCapabilities, IFileService } from '../../../../platform/files/common/files.js';
+import { FileSystemProviderCapabilities, IFileService, IFileStat } from '../../../../platform/files/common/files.js';
 import { createDecorator, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -249,6 +249,12 @@ const LISTED_FILES = 10;
 /** How many ignored paths a confirmation names before it says how many more there are. */
 const LISTED_IGNORED = 5;
 
+/**
+ * How many files of a folder git ignores whole a caller's deletion compares with the main checkout's, to tell copies -
+ * what .worktreeinclude copied - from work: a folder holding more is work, uncompared, as a dependency folder is.
+ */
+const COMPARED_IGNORED_FILES = 200;
+
 /** How many of the files `.worktreeinclude` could not copy a notification names. */
 const LISTED_COPY_FAILURES = 3;
 
@@ -392,14 +398,15 @@ export interface IOwnedWorktreeFile {
 }
 
 /**
- * What deleting a worktree would lose that its caller did not decide on: what its confirmation would name, but what
- * git ignores, which a caller's deletion takes with it as git does (WT-8.10).
+ * The files `loss` names, as a caller's refusal lists them: those git keeps no copy of, what git ignores, then the
+ * editors with unsaved changes.
  */
-type UndecidedLoss = Omit<IDeletionLoss, 'ignoredPaths'>;
-
-/** The files `loss` names, as its refusal lists them: those git keeps no copy of, then the editors with unsaved changes. */
-function lostFiles(loss: UndecidedLoss): string[] {
-	return [...loss.files, ...loss.unsaved.map(file => localize('worktrees.unsavedFile', "{0} (unsaved)", file))];
+function lostFiles(loss: IDeletionLoss): string[] {
+	return [
+		...loss.files,
+		...loss.ignoredPaths.map(path => localize('worktrees.ignoredFile', "{0} (ignored by Git)", path)),
+		...loss.unsaved.map(file => localize('worktrees.unsavedFile', "{0} (unsaved)", file))
+	];
 }
 
 /** A deletion a caller decided on, nothing asked (WT-8.10). */
@@ -705,7 +712,7 @@ export class WorktreeService implements IWorktreeService {
 	async removalLoss(target: URI, options: IRemoveWorktreeOptions = {}): Promise<readonly string[]> {
 		const { main, worktree, name } = this.toRemove(target, options);
 		// The deletion's own first look, the caller's own files applied as it applies them (O5)
-		const loss = await this.undecidedLoss(worktree, await this.checkToRemove(main, worktree, name, options), options);
+		const loss = await this.undecidedLoss(main, worktree, await this.checkToRemove(main, worktree, name, options), options);
 		return loss ? [...lostFiles(loss), ...(loss.submodules ? [localize('worktrees.submodulesLost', "its submodules (with any of their commits not pushed)")] : [])] : [];
 	}
 
@@ -1391,7 +1398,7 @@ export class WorktreeService implements IWorktreeService {
 		const check = await this.checkToRemove(main, worktree, name, options);
 
 		// Changes the caller did not decide on - come since it looked, say - are not deleted unasked (WT-8.10)
-		const loss = options.discardChanges ? undefined : await this.undecidedLoss(worktree, check, options);
+		const loss = options.discardChanges ? undefined : await this.undecidedLoss(main, worktree, check, options);
 		if (loss) {
 			throw new Error(this.describeLoss(worktree, loss, false));
 		}
@@ -1411,7 +1418,7 @@ export class WorktreeService implements IWorktreeService {
 				if (isString(again)) {
 					return again;
 				}
-				const late = await this.undecidedLoss(worktree, again, options);
+				const late = await this.undecidedLoss(main, worktree, again, options);
 				return late && this.describeLoss(worktree, late, true);
 			}
 		}, recovery));
@@ -1468,21 +1475,63 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	/**
-	 * What deleting `worktree` would lose that `options` does not say goes: the files `check` found but those
-	 * the caller put there - unchanged since, by their hash - its editors with unsaved changes, and its
-	 * submodules. Undefined for nothing.
+	 * What deleting `worktree`, of the main checkout `main`, would lose that `options` does not say goes: the files `check`
+	 * found, and what git ignores there, but those the caller put there - unchanged since, by their hash - and, of what
+	 * git ignores, what the main checkout holds as it is, as what .worktreeinclude copied does (WT-6); its editors with
+	 * unsaved changes; and its submodules (AGENT-ORCHESTRATION.md, O5). Undefined for nothing.
 	 */
-	private async undecidedLoss(worktree: URI, check: WorktreeCheck, options: IRemoveWorktreeOptions): Promise<UndecidedLoss | undefined> {
+	private async undecidedLoss(main: URI, worktree: URI, check: WorktreeCheck, options: IRemoveWorktreeOptions): Promise<IDeletionLoss | undefined> {
 		const owned = new Map((options.ownFiles ?? []).map(file => [file.path, file.sha256]));
+		const isOwned = async (file: string) => {
+			const sha256 = owned.get(file);
+			return sha256 !== undefined && await this.sha256Of(joinPath(worktree, ...file.split('/'))) === sha256;
+		};
 		const files: string[] = [];
 		for (const file of check.files) {
-			const sha256 = owned.get(file);
-			if (sha256 === undefined || await this.sha256Of(joinPath(worktree, ...file.split('/'))) !== sha256) {
+			if (!await isOwned(file)) {
 				files.push(file);
 			}
 		}
+		// The same in the main checkout: deleting this copy loses nothing
+		const isCopy = async (file: string) => {
+			const sha256 = await this.sha256Of(joinPath(worktree, ...file.split('/')));
+			return sha256 !== undefined && await this.sha256Of(joinPath(main, ...file.split('/'))) === sha256;
+		};
+		// A wholly ignored folder is one path, ending with a slash: lost unless each file in it is the caller's or such a copy
+		const ignoredPaths: string[] = [];
+		for (const ignored of check.ignoredPaths) {
+			const inside = ignored.endsWith('/') ? await this.filesUnder(worktree, ignored, COMPARED_IGNORED_FILES) : [ignored];
+			if (!inside || !(await Promise.all(inside.map(async file => await isOwned(file) || await isCopy(file)))).every(Boolean)) {
+				ignoredPaths.push(ignored);
+			}
+		}
 		const unsaved = (await this.unsavedIn(worktree)).map(each => each.path);
-		return files.length || unsaved.length || check.submodules ? { files, unsaved, submodules: check.submodules } : undefined;
+		return files.length || ignoredPaths.length || unsaved.length || check.submodules ? { files, ignoredPaths, unsaved, submodules: check.submodules } : undefined;
+	}
+
+	/**
+	 * The files in the folder `path` of `worktree` - a path relative to it, ending with a slash - and in its folders, each
+	 * by its path relative to the worktree; undefined where they cannot all be read, or there are more than `most`.
+	 */
+	private async filesUnder(worktree: URI, path: string, most: number): Promise<string[] | undefined> {
+		const files: string[] = [];
+		const folders = [path];
+		for (let folder = folders.shift(); folder !== undefined; folder = folders.shift()) {
+			let children: readonly IFileStat[];
+			try {
+				children = (await this.fileService.resolve(joinPath(worktree, ...folder.split('/').filter(Boolean)))).children ?? [];
+			} catch {
+				return undefined;
+			}
+			for (const child of children) {
+				if (child.isDirectory) {
+					folders.push(`${folder}${child.name}/`);
+				} else if (files.push(`${folder}${child.name}`) > most) {
+					return undefined;
+				}
+			}
+		}
+		return files;
 	}
 
 	/** The SHA-256 of what `file` holds, in hex; undefined where it cannot be read. */
@@ -1534,7 +1583,7 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	/** Why `loss` refuses deleting `worktree`, in the product's words: found first, or `late`, as it was being deleted. */
-	private describeLoss(worktree: URI, loss: UndecidedLoss, late: boolean): string {
+	private describeLoss(worktree: URI, loss: IDeletionLoss, late: boolean): string {
 		const label = this.labelService.getUriLabel(worktree);
 		const listed = lostFiles(loss);
 		const named = listed.length > LISTED_FILES

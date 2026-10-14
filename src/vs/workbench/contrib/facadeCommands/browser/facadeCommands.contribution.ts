@@ -234,7 +234,7 @@ CommandsRegistry.registerCommand('_facade.worktree.stopSetup', (accessor, ...arg
 
 // `(worktree, options?)`: deletes the worktree as Delete Worktree does, with nothing asked, its branch
 // kept, for an agent's stop_agent, which stops the agents in it in the same order (`IWorktreeService.removeWorktree`):
-// changes git would lose, unsaved editors and submodules refuse it unless `options.discardChanges` -
+// changes git would lose, what git ignores, unsaved editors and submodules refuse it unless `options.discardChanges` -
 // all but `options.ownFiles`, what Facade put there and nobody changed, by hash. `options.main` is its main checkout,
 // for a bar that lists no worktrees; `options.runs` the agents' runs working in it that the caller looked at, the only
 // agents' terminals it closes; `options.leftover` says it is what a deletion in this window left of one, which git no

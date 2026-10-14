@@ -1772,7 +1772,13 @@ export class Facade implements Disposable {
 		}
 		// What a deletion left holds no git to ask: what of it the branch does not hold as it is, is work
 		const work = leftover !== undefined ? await this.ports.git.leftoverWorkIn(repository.main, leftover, folder) : [];
-		const changes = leftover === undefined ? [...shared, ...this.editedIn(folder).filter(file => !shared.includes(file))] : shared;
+		// What of Facade's own someone changed, once each: the window names it too where git shows it - by itself, or in a
+		// folder git ignores whole - in its words, a word on what it is after it
+		const listed = (file: string) => shared.some(each => {
+			const shown = each.replace(/ \([^)]*\)$/, '');
+			return shown === file || (shown.endsWith('/') && file.startsWith(shown));
+		});
+		const changes = leftover === undefined ? [...shared, ...this.editedIn(folder).filter(file => !listed(file))] : shared;
 		// Git keeps no copy of a submodule's commits in the repository: those not pushed go with it (X-14) - which the
 		// window's check names in no list
 		const submodules = leftover === undefined ? (await this.ports.git.changesIn(folder)).submodules : [];

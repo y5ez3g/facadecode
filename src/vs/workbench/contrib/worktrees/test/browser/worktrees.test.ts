@@ -15,7 +15,7 @@ import { decodeKeybinding } from '../../../../../base/common/keybindings.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { posix } from '../../../../../base/common/path.js';
 import { isMacintosh, isWindows, OS } from '../../../../../base/common/platform.js';
-import { extUri } from '../../../../../base/common/resources.js';
+import { extUri, joinPath } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
@@ -28,7 +28,7 @@ import { ContextKeyService } from '../../../../../platform/contextkey/browser/co
 import { KeybindingsRegistry } from '../../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { RawWorkbenchListFocusContextKey } from '../../../../../platform/list/browser/listService.js';
 import { IConfirmation, IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
-import { createFileSystemProviderError, FileSystemProviderErrorCode, IFileContent, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderErrorCode, IFileContent, IFileService, IFileStat, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
@@ -464,7 +464,15 @@ suite('Worktrees - making and deleting one', () => {
 		});
 		instantiationService.stub(IFileService, {
 			hasCapability: () => true,
-			resolve: (() => Promise.reject(new Error('not there'))) as IFileService['resolve'],
+			resolve: (async (uri: URI) => {
+				// A folder whose files a test sets: theirs; anything else is not there
+				const inside = [...files.keys()].filter(file => file.startsWith(`${uri.path}/`));
+				if (!inside.length) {
+					throw new Error('not there');
+				}
+				const names = [...new Set(inside.map(file => file.slice(uri.path.length + 1).split('/')[0]))];
+				return upcastPartial<IFileStat>({ resource: uri, isDirectory: true, children: names.map(name => upcastPartial<IFileStat>({ name, resource: joinPath(uri, name), isDirectory: !files.has(`${uri.path}/${name}`) })) });
+			}) as IFileService['resolve'],
 			exists: async (uri: URI) => onDisk.has(uri.path),
 			realpath: async (uri: URI) => {
 				const link = [...links.keys()].find(each => uri.path.startsWith(`${each}/`));
@@ -1326,6 +1334,33 @@ suite('Worktrees - making and deleting one', () => {
 			// Its first look, and the last one before anything moves: none after
 			git: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check', '_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
 			closed: false
+		});
+	});
+
+	test('deleted without asking, what git ignores there is work too, and refuses it, listed - a wholly ignored folder as one - unless discarded; a folder holding only the caller\'s own files as it wrote them goes with it, and so does a copy of what the main checkout holds as it is, as .worktreeinclude copies it (AGENT-ORCHESTRATION.md, O5; WT-6; OR-19)', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', checked({ ignoredPaths: ['node_modules/', '.claude/', '.env', 'secrets/'] }));
+		files.set('/home/me/.facade/worktrees/lab/w2/.claude/settings.local.json', '{}');
+		// What .worktreeinclude copied, as the main checkout has it: .env as it is, secrets/ changed since
+		files.set('/lab/.env', 'TOKEN=1');
+		files.set('/home/me/.facade/worktrees/lab/w2/.env', 'TOKEN=1');
+		files.set('/lab/secrets/key', 'a');
+		files.set('/home/me/.facade/worktrees/lab/w2/secrets/key', 'b');
+		const ownFiles = [{ path: '.claude/settings.local.json', sha256: SHA256_OF_EMPTY_OBJECT }];
+		const service = instantiationService.createInstance(WorktreeService);
+		const loss = await service.removalLoss(w2, { ownFiles });
+		files.set('/home/me/.facade/worktrees/lab/w2/.env', 'TOKEN=2');
+		files.set('/home/me/.facade/worktrees/lab/w2/.claude/notes.md', 'mine');
+		const withTheirs = await service.removalLoss(w2, { ownFiles });
+		const refused = await service.removeWorktree(w2, { ownFiles }).then(() => 'deleted', (err: Error) => err.message);
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const discarded = await service.removeWorktree(w2, { ownFiles, discardChanges: true }).then(() => 'deleted', (err: Error) => err.message);
+
+		assert.deepStrictEqual({ loss, withTheirs, refused, discarded }, {
+			loss: ['node_modules/ (ignored by Git)', 'secrets/ (ignored by Git)'],
+			withTheirs: ['node_modules/ (ignored by Git)', '.claude/ (ignored by Git)', '.env (ignored by Git)', 'secrets/ (ignored by Git)'],
+			refused: '/home/me/.facade/worktrees/lab/w2 has changes that deleting it would lose: node_modules/ (ignored by Git), .claude/ (ignored by Git), .env (ignored by Git), secrets/ (ignored by Git). Nothing was deleted.',
+			discarded: 'deleted'
 		});
 	});
 
