@@ -42,6 +42,21 @@ export function activate(context: vscode.ExtensionContext): void {
 			none = 'noFolder';
 			return;
 		}
+		if (!hasLocalFolder()) {
+			// The workspace can open with no folder on this machine - the default workspace, the first time - and a
+			// folder added to it starts no extension host again (WORKSPACE.md WS-29): the agents start with the first.
+			log.info('Facade agents require a local folder in the workspace. They start once one is added.');
+			none = 'noFolder';
+			const added = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+				if (hasLocalFolder() && !deactivated) {
+					added.dispose();
+					none = undefined;
+					ready = start();
+				}
+			});
+			context.subscriptions.push(added);
+			return;
+		}
 		const created = creating = new AgentsService(log, context.workspaceState, screens.documents);
 		try {
 			await created.start();
@@ -60,8 +75,9 @@ export function activate(context: vscode.ExtensionContext): void {
 			creating = undefined;
 		}
 	};
-	// Settles once the service has started, or could not: it rejects nothing.
-	const ready = start();
+	// Settles once the service has started, or could not: it rejects nothing. Started again as the first local
+	// folder comes, it is that start a command waits for.
+	let ready = start();
 	// The record this window has, as its service knows it - which follows the window through its folder
 	// becoming a workspace - and else the one this workspace's storage names (X-67)
 	context.subscriptions.push(vscode.commands.registerCommand('facade.agents.showLog', () => showAgentsLog(service?.agentsLog ?? creating?.agentsLog ?? agentsLogOf(context.workspaceState))), registerShowLaunch(async (installed, folder) => {
@@ -145,6 +161,11 @@ export function activate(context: vscode.ExtensionContext): void {
 		await service?.dispose();
 		log.dispose();
 	})();
+}
+
+/** Whether a folder of the workspace is on this machine: the agents' core works in those alone. */
+function hasLocalFolder(): boolean {
+	return (vscode.workspace.workspaceFolders ?? []).some(folder => folder.uri.scheme === 'file');
 }
 
 /**
