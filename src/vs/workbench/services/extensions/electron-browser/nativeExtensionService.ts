@@ -58,6 +58,7 @@ import { ILifecycleService, LifecyclePhase } from '../../lifecycle/common/lifecy
 import { IRemoteAgentService } from '../../remote/common/remoteAgentService.js';
 import { IRemoteExplorerService } from '../../remote/common/remoteExplorerService.js';
 import { AsyncIterableEmitter, AsyncIterableProducer } from '../../../../base/common/async.js';
+import product from '../../../../platform/product/common/product.js';
 
 export class NativeExtensionService extends AbstractExtensionService implements IExtensionService {
 
@@ -165,7 +166,7 @@ export class NativeExtensionService extends AbstractExtensionService implements 
 					Severity.Error,
 					nls.localize('extensionService.versionMismatchCrash', "Extension host cannot start: version mismatch."),
 					[{
-						label: nls.localize('relaunch', "Relaunch VS Code"),
+						label: nls.localize('relaunch', "Relaunch {0}", product.nameLong),
 						run: () => {
 							this._instantiationService.invokeFunction((accessor) => {
 								const hostService = accessor.get(IHostService);

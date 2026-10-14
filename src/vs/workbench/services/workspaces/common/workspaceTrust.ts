@@ -21,7 +21,8 @@ import { WorkspaceTrustRequestOptions, IWorkspaceTrustManagementService, IWorksp
 import { Memento } from '../../../common/memento.js';
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { isEqualAuthority } from '../../../../base/common/resources.js';
+import { isEqualAuthority, joinPath } from '../../../../base/common/resources.js';
+import { DEFAULT_WORKSPACE_FILE_NAME } from '../../../../platform/workspaces/common/defaultWorkspace.js';
 import { isWeb } from '../../../../base/common/platform.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { promiseWithResolvers } from '../../../../base/common/async.js';
@@ -285,11 +286,17 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 	private getWorkspaceUris(): URI[] {
 		const workspaceUris = this._canonicalWorkspace.folders.map(f => f.uri);
 		const workspaceConfiguration = this._canonicalWorkspace.configuration;
-		if (workspaceConfiguration && isSavedWorkspace(workspaceConfiguration, this.environmentService)) {
+		if (workspaceConfiguration && isSavedWorkspace(workspaceConfiguration, this.environmentService) && !this.isDefaultWorkspace(workspaceConfiguration)) {
 			workspaceUris.push(workspaceConfiguration);
 		}
 
 		return workspaceUris;
+	}
+
+	/** Facade Code: whether `configuration` is the default workspace's file, trusted as an untitled workspace's is (WORKSPACE.md W5). */
+	private isDefaultWorkspace(configuration: URI): boolean {
+		const defaultWorkspace = joinPath(this.environmentService.userRoamingDataHome, DEFAULT_WORKSPACE_FILE_NAME).with({ scheme: Schemas.file });
+		return this.uriIdentityService.extUri.isEqual(configuration, defaultWorkspace);
 	}
 
 	private calculateWorkspaceTrust(): boolean {

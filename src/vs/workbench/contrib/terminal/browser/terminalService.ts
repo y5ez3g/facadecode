@@ -45,6 +45,7 @@ import { IExtensionService } from '../../../services/extensions/common/extension
 import { ILifecycleService, ShutdownReason, StartupKind, WillShutdownEvent } from '../../../services/lifecycle/common/lifecycle.js';
 import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+import { terminalShutdownQuestion } from '../../terminalLaunchers/common/terminalShutdownQuestion.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { XtermTerminal } from './xterm/xtermTerminal.js';
 import { TerminalInstance } from './terminalInstance.js';
@@ -704,9 +705,11 @@ export class TerminalService extends Disposable implements ITerminalService {
 			// Persist terminal _processes_
 			const shouldPersistProcesses = this._terminalConfigurationService.config.enablePersistentSessions && reason === ShutdownReason.RELOAD;
 			if (!shouldPersistProcesses) {
+				// Facade Code: background terminals count too (`terminalShutdownQuestion`)
+				const askedAbout = terminalShutdownQuestion() ? this.instances : this.foregroundInstances;
 				const hasDirtyInstances = (
-					(this._terminalConfigurationService.config.confirmOnExit === 'always' && this.foregroundInstances.length > 0) ||
-					(this._terminalConfigurationService.config.confirmOnExit === 'hasChildProcesses' && this.foregroundInstances.some(e => e.hasChildProcesses))
+					(this._terminalConfigurationService.config.confirmOnExit === 'always' && askedAbout.length > 0) ||
+					(this._terminalConfigurationService.config.confirmOnExit === 'hasChildProcesses' && askedAbout.some(e => e.hasChildProcesses))
 				);
 				if (hasDirtyInstances) {
 					return this._onBeforeShutdownConfirmation(reason);
@@ -995,7 +998,9 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	protected async _showTerminalCloseConfirmation(singleTerminal?: boolean): Promise<boolean> {
 		let message: string;
-		const foregroundInstances = this.foregroundInstances;
+		// Facade Code: background terminals counted, and what would stop named (`terminalShutdownQuestion`)
+		const question = singleTerminal ? undefined : terminalShutdownQuestion();
+		const foregroundInstances = question ? this.instances : this.foregroundInstances;
 		if (foregroundInstances.length === 1 || singleTerminal) {
 			message = nls.localize('terminalService.terminalCloseConfirmationSingular', "Do you want to terminate the active terminal session?");
 		} else {
@@ -1004,6 +1009,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 		const { confirmed } = await this._dialogService.confirm({
 			type: 'warning',
 			message,
+			detail: question?.describe(foregroundInstances),
 			primaryButton: nls.localize({ key: 'terminate', comment: ['&& denotes a mnemonic'] }, "&&Terminate")
 		});
 		return !confirmed;

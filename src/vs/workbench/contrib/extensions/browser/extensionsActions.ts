@@ -76,6 +76,7 @@ import { IExtensionGalleryManifestService } from '../../../../platform/extension
 import { IWorkbenchIssueService } from '../../issue/common/issue.js';
 import { IUserDataProfilesService } from '../../../../platform/userDataProfile/common/userDataProfile.js';
 import { getWorkbenchMenuMotionContextMenuOptions } from '../../../browser/actions/menuMotion.js';
+import product from '../../../../platform/product/common/product.js';
 
 export class PromptExtensionInstallFailureAction extends Action {
 
@@ -552,7 +553,7 @@ export class InstallAction extends ExtensionAction {
 					}
 				});
 			} else if (this.extension.deprecationInfo.settings) {
-				detail = localize('deprecated with alternate settings message', "This extension is deprecated as this functionality is now built-in to VS Code.");
+				detail = localize('deprecated with alternate settings message', "This extension is deprecated as this functionality is now built-in to {0}.", product.nameLong);
 
 				const settings = this.extension.deprecationInfo.settings;
 				buttons.push({
@@ -1658,7 +1659,8 @@ export class EnableForWorkspaceAction extends ExtensionAction {
 		@IProductService private readonly productService: IProductService,
 	) {
 		super(EnableForWorkspaceAction.ID, EnableForWorkspaceAction.LABEL, ExtensionAction.LABEL_ACTION_CLASS);
-		this.tooltip = localize('enableForWorkspaceActionToolTip', "Enable this extension only in this workspace");
+		// Facade Code: a workspace here is every folder of the window, not the one on screen (WORKSPACE.md W7)
+		this.tooltip = localize('enableForWorkspaceActionToolTip', "Enable this extension only in this workspace. It applies to all folders in this window.");
 		this.update();
 	}
 
@@ -1730,7 +1732,8 @@ export class DisableForWorkspaceAction extends ExtensionAction {
 		@IProductService private readonly productService: IProductService,
 	) {
 		super(DisableForWorkspaceAction.ID, DisableForWorkspaceAction.LABEL, ExtensionAction.LABEL_ACTION_CLASS);
-		this.tooltip = localize('disableForWorkspaceActionToolTip', "Disable this extension only in this workspace");
+		// Facade Code: a workspace here is every folder of the window, not the one on screen (WORKSPACE.md W7)
+		this.tooltip = localize('disableForWorkspaceActionToolTip', "Disable this extension only in this workspace. It applies to all folders in this window.");
 		this.update();
 		this._register(this.extensionService.onDidChangeExtensions(() => this.update()));
 	}
@@ -2820,7 +2823,7 @@ export class ExtensionStatusAction extends ExtensionAction {
 				this.updateStatus({ icon: warningIcon, message: new MarkdownString(localize('deprecated with alternate extension tooltip', "This extension is deprecated. Use the {0} extension instead.", link)) }, true);
 			} else if (this.extension.deprecationInfo.settings) {
 				const link = `[${localize('settings', "settings")}](${createCommandUri('workbench.action.openSettings', this.extension.deprecationInfo.settings.map(setting => `@id:${setting}`).join(' '))}})`;
-				this.updateStatus({ icon: warningIcon, message: new MarkdownString(localize('deprecated with alternate settings tooltip', "This extension is deprecated as this functionality is now built-in to VS Code. Configure these {0} to use this functionality.", link)) }, true);
+				this.updateStatus({ icon: warningIcon, message: new MarkdownString(localize('deprecated with alternate settings tooltip', "This extension is deprecated as this functionality is now built-in to {1}. Configure these {0} to use this functionality.", link, product.nameLong)) }, true);
 			} else {
 				const message = new MarkdownString(localize('deprecated tooltip', "This extension is deprecated as it is no longer being maintained."));
 				if (this.extension.deprecationInfo.additionalInfo) {

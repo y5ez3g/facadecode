@@ -25,6 +25,9 @@ import { IFileToOpen, IFolderToOpen, IOpenEmptyWindowOptions, IOpenWindowOptions
 import { IRecent, IWorkspacesService } from '../../../platform/workspaces/common/workspaces.js';
 import { IPathService } from '../../services/path/common/pathService.js';
 import { ILocalizedString } from '../../../platform/action/common/action.js';
+import { IWorkbenchEnvironmentService } from '../../services/environment/common/environmentService.js';
+import { IEditorService } from '../../services/editor/common/editorService.js';
+import { IWorkspaceBarService, reaches } from '../parts/workspacebar/workspaceBarService.js';
 
 export const ADD_ROOT_FOLDER_COMMAND_ID = 'addRootFolder';
 export const ADD_ROOT_FOLDER_LABEL: ILocalizedString = localize2('addFolderToWorkspace', 'Add Folder to Workspace...');
@@ -32,13 +35,6 @@ export const ADD_ROOT_FOLDER_LABEL: ILocalizedString = localize2('addFolderToWor
 export const SET_ROOT_FOLDER_COMMAND_ID = 'setRootFolder';
 
 export const PICK_WORKSPACE_FOLDER_COMMAND_ID = '_workbench.pickWorkspaceFolder';
-
-/**
- * Facade Code: the workspace bar's Remove Folder, `(folder?)` - where it stops agents or terminates processes in the
- * folder's terminals it asks first, naming the folder and what it stops (D30) - which every way of taking a folder out
- * of the workspace goes through (WORKSPACE.md, section 3.8; N-65).
- */
-export const REMOVE_FOLDER_ASKED_COMMAND_ID = 'facade.workspaceBar.removeFolder';
 
 // Command registration
 
@@ -212,6 +208,20 @@ CommandsRegistry.registerCommand({
 
 		const workspaceToOpen: IWorkspaceToOpen | IFolderToOpen = (hasWorkspaceFileExtension(uri) || uri.scheme === Schemas.untitled) ? { workspaceUri: uri } : { folderUri: uri };
 		const filesToOpen: IFileToOpen[] = arg?.filesToOpen?.map(file => ({ fileUri: URI.from(file, true) })) ?? [];
+
+		// Facade Code: a folder joins this window and is shown, as Open Folder does, instead of replacing its list (W5)
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
+		if (!hasWorkspaceFileExtension(uri) && uri.scheme !== Schemas.untitled && !options.forceNewWindow && reaches(uri, environmentService) && !environmentService.isSessionsWindow) {
+			const workspaceBarService = accessor.get(IWorkspaceBarService);
+			const editorService = accessor.get(IEditorService);
+			return (async () => {
+				const shown = await workspaceBarService.show(uri);
+				if (shown.kind === 'shown' && filesToOpen.length) {
+					await editorService.openEditors(filesToOpen.map(file => ({ resource: file.fileUri })));
+				}
+			})();
+		}
+
 		return commandService.executeCommand('_files.windowOpen', [workspaceToOpen, ...filesToOpen], options);
 	},
 	metadata: {

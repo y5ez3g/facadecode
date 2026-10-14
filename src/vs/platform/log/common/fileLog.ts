@@ -9,6 +9,8 @@ import { basename, dirname, joinPath } from '../../../base/common/resources.js';
 import { URI } from '../../../base/common/uri.js';
 import { ByteSize, FileOperationError, FileOperationResult, IFileService, whenProviderRegistered } from '../../files/common/files.js';
 import { BufferLogger } from './bufferLog.js';
+import product from '../../product/common/product.js';
+import { logHeader } from '../../product/common/releaseVersion.js';
 import { AbstractLoggerService, AbstractMessageLogger, ILogger, ILoggerOptions, ILoggerService, LogLevel } from './log.js';
 
 const MAX_FILE_SIZE = 5 * ByteSize.MB;
@@ -30,6 +32,11 @@ class FileLogger extends AbstractMessageLogger implements ILogger {
 		this.setLevel(level);
 		this.flushDelayer = new ThrottledDelayer<void>(100 /* buffer saves over a short time */);
 		this.initializePromise = this.initialize();
+		// Facade Code: which build wrote the log, first and whatever the level (IDENTITY.md I7); not into
+		// output that is not a log
+		if (!donotUseFormatters) {
+			this.log(LogLevel.Info, logHeader(product));
+		}
 	}
 
 	override async flush(): Promise<void> {

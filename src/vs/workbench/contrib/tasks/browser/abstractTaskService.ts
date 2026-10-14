@@ -93,6 +93,7 @@ import { configureTaskIcon, isWorkspaceFolder, ITaskQuickPickEntry, QUICKOPEN_DE
 import { IHostService } from '../../../services/host/browser/host.js';
 import * as dom from '../../../../base/browser/dom.js';
 import { FocusMode } from '../../../../platform/native/common/native.js';
+import product from '../../../../platform/product/common/product.js';
 
 const QUICKOPEN_HISTORY_LIMIT_CONFIG = 'task.quickOpen.history';
 const PROBLEM_MATCHER_NEVER_CONFIG = 'task.problemMatchers.neverPrompt';
@@ -3494,7 +3495,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 							return;
 						}
 						if (response.code && response.code === TerminateResponseCode.ProcessNotFound) {
-							this._notificationService.error(nls.localize('TerminateAction.noProcess', 'The launched process doesn\'t exist anymore. If the task spawned background tasks exiting VS Code might result in orphaned processes.'));
+							this._notificationService.error(nls.localize('TerminateAction.noProcess', 'The launched process doesn\'t exist anymore. If the task spawned background tasks exiting {0} might result in orphaned processes.', product.nameLong));
 						} else {
 							this._notificationService.error(nls.localize('TerminateAction.failed', 'Failed to terminate running task'));
 						}

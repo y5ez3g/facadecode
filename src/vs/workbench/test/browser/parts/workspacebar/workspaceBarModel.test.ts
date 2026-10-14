@@ -6,9 +6,9 @@
 import assert from 'assert';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { mock } from '../../../../../base/test/common/mock.js';
+import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { FileSystemProviderCapabilities, IFileService } from '../../../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderCapabilities, FileSystemProviderErrorCode, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
@@ -28,12 +28,26 @@ class TestFileService extends mock<IFileService>() {
 	/** Paths that are not on disk. Everything else is. */
 	readonly missing = new Set<string>();
 
+	/** Paths whose read fails, with what it fails with: a remote that lost its connection, say. */
+	readonly unreadable = new Map<string, Error>();
+
 	constructor(private readonly links = new Map<string, string>()) {
 		super();
 	}
 
 	override async exists(resource: URI): Promise<boolean> {
 		return !this.missing.has(resource.path);
+	}
+
+	override async stat(resource: URI): Promise<IFileStatWithPartialMetadata> {
+		const failure = this.unreadable.get(resource.path);
+		if (failure) {
+			throw failure;
+		}
+		if (this.missing.has(resource.path)) {
+			throw createFileSystemProviderError(`ENOENT: ${resource.path}`, FileSystemProviderErrorCode.FileNotFound);
+		}
+		return upcastPartial<IFileStatWithPartialMetadata>({ resource, isDirectory: true });
 	}
 
 	override hasProvider(): boolean { return true; }
@@ -76,12 +90,21 @@ class TestContextService extends mock<IWorkspaceContextService>() {
 	}
 
 	setPaths(paths: string[]): void {
-		this.folders = paths.map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) }));
+		this.setUris(paths.map(path => URI.file(path)));
+	}
+
+	/** For folders that are not on this machine: `setPaths` makes local ones. */
+	setUris(uris: URI[]): void {
+		this.folders = uris.map((uri, index) => new WorkspaceFolder({ uri, index, name: uri.path.slice(uri.path.lastIndexOf('/') + 1) }));
 		this._onDidChangeWorkspaceFolders.fire(undefined as never);
 	}
 
 	get paths(): string[] {
 		return this.folders.map(folder => folder.uri.path);
+	}
+
+	get uris(): URI[] {
+		return this.folders.map(folder => folder.uri);
 	}
 
 	dispose(): void {
@@ -105,14 +128,15 @@ class TestWorkspaceEditingService extends mock<IWorkspaceEditingService>() {
 
 	override async addFolders(folders: { uri: URI }[]): Promise<void> {
 		this.calls++;
-		const paths = this.workspace.paths;
-		this.workspace.setPaths([...paths, ...folders.map(folder => folder.uri.path).filter(path => !paths.includes(path))]);
+		const uris = this.workspace.uris;
+		const listed = new Set(uris.map(uri => uri.toString()));
+		this.workspace.setUris([...uris, ...folders.map(folder => folder.uri).filter(uri => !listed.has(uri.toString()))]);
 	}
 
 	override async removeFolders(folders: URI[]): Promise<void> {
 		this.calls++;
-		const leaving = new Set(folders.map(folder => folder.path));
-		this.workspace.setPaths(this.workspace.paths.filter(path => !leaving.has(path)));
+		const leaving = new Set(folders.map(folder => folder.toString()));
+		this.workspace.setUris(this.workspace.uris.filter(uri => !leaving.has(uri.toString())));
 	}
 }
 
@@ -156,7 +180,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.deepStrictEqual(paths(modelWith({ paths: ['/w/api', '/w/web'] })), ['/w/api', '/w/web']);
 	});
 
-	test('folders arrive in the order they were given', async () => {
+	test('WS-06 folders arrive in the order they were given', async () => {
 		const model = modelWith();
 
 		await model.add([URI.file('/w/api'), URI.file('/w/web'), URI.file('/w/notes')]);
@@ -164,7 +188,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.deepStrictEqual(paths(model), ['/w/api', '/w/web', '/w/notes']);
 	});
 
-	test('several at once is one edit to the workspace', async () => {
+	test('WS-03 several at once is one edit to the workspace', async () => {
 		const { model, editing } = buildModel();
 
 		await model.add([...Array(9)].map((_, i) => URI.file(`/w/p${i}`)));
@@ -173,7 +197,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.strictEqual(editing.calls, 1);
 	});
 
-	test('the same directory under two spellings is one row', async () => {
+	test('WS-30 the same directory under two spellings is one row', async () => {
 		// macOS: /tmp is a symlink to /private/tmp.
 		const model = modelWith({ links: new Map([['/tmp', '/private/tmp']]) });
 
@@ -183,7 +207,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.deepStrictEqual(paths(model), ['/tmp/api']);
 	});
 
-	test('and the row keeps the spelling it was asked for, whichever way round', async () => {
+	test('WS-30 and the row keeps the spelling it was asked for, whichever way round', async () => {
 		const model = modelWith({ links: new Map([['/tmp', '/private/tmp']]) });
 
 		await model.add([URI.file('/private/tmp/api')]);
@@ -215,7 +239,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.deepStrictEqual(paths(model), ['/tmp/api']);
 	});
 
-	test('and `resolve` answers with that row, not with the spelling it was asked about', async () => {
+	test('WS-03 and `resolve` answers with that row, not with the spelling it was asked about', async () => {
 		const model = modelWith({ paths: ['/tmp/api'], links: new Map([['/tmp', '/private/tmp']]) });
 
 		assert.strictEqual((await model.resolve(URI.file('/private/tmp/api')))?.uri.path, '/tmp/api');
@@ -231,7 +255,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.deepStrictEqual(paths(model), ['/w/API']);
 	});
 
-	test('the same folder twice in one batch is one row', async () => {
+	test('WS-30 the same folder twice in one batch is one row', async () => {
 		// ⚠️ Ours to prevent: upstream compares each folder against the workspace as it was before
 		// the call, so a batch carrying one folder twice writes it twice.
 		const model = modelWith();
@@ -251,7 +275,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.strictEqual(editing.calls, 0);
 	});
 
-	test('a folder that is not on disk is marked, not dropped', async () => {
+	test('WS-31 a folder that is not on disk is marked, not dropped', async () => {
 		const model = modelWith({ missing: ['/w/gone'] });
 		await model.add([URI.file('/w/here'), URI.file('/w/gone')]);
 		await model.refreshAvailability();
@@ -261,7 +285,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.strictEqual(model.isUnavailable(model.folders[1]), true);
 	});
 
-	test('a folder that comes back stops being marked', async () => {
+	test('WS-31 a folder that comes back stops being marked', async () => {
 		const { model, disk } = buildModel({ missing: ['/w/gone'] });
 		await model.add([URI.file('/w/gone')]);
 		await model.refreshAvailability();
@@ -272,6 +296,38 @@ suite('Workspace bar - the folder list', () => {
 		await model.refreshAvailability();
 
 		assert.strictEqual(model.isUnavailable(model.folders[0]), false);
+	});
+
+	test('WS-63 a folder that cannot be read is marked as one that cannot be read, not as one that is gone', async () => {
+		const { model, disk } = buildModel({ paths: ['/w/api', '/w/web'], missing: ['/w/web'] });
+		disk.unreadable.set('/w/api', createFileSystemProviderError('connection lost', FileSystemProviderErrorCode.Unavailable));
+		await model.refreshAvailability();
+
+		const [api, web] = model.folders;
+		assert.deepStrictEqual({
+			api: { unavailable: model.isUnavailable(api), unreadable: model.isUnreadable(api) },
+			web: { unavailable: model.isUnavailable(web), unreadable: model.isUnreadable(web) }
+		}, {
+			api: { unavailable: true, unreadable: true },
+			web: { unavailable: true, unreadable: false }
+		});
+	});
+
+	test('WS-63 the same path on two remotes is two rows, and each is found under its own authority', async () => {
+		const { model } = buildModel();
+		const onA = URI.from({ scheme: 'vscode-remote', authority: 'ssh-remote+a', path: '/home/me/api' });
+		const onB = onA.with({ authority: 'ssh-remote+b' });
+
+		await model.add([onA, onB]);
+		await model.add([onB]);
+
+		assert.deepStrictEqual({
+			rows: model.folders.map(folder => folder.uri.toString()),
+			b: (await model.resolve(onB))?.uri.toString()
+		}, {
+			rows: [onA.toString(), onB.toString()],
+			b: onB.toString()
+		});
 	});
 
 	test('a removed folder leaves the workspace and the rest keep their order', async () => {
@@ -299,7 +355,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.strictEqual(editing.calls, 0);
 	});
 
-	test('a folder that comes back is not still marked from last time', async () => {
+	test('WS-31 a folder that comes back is not still marked from last time', async () => {
 		const model = modelWith({ missing: ['/w/gone'] });
 		await model.add([URI.file('/w/gone')]);
 		await model.refreshAvailability();
@@ -311,7 +367,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.strictEqual(model.isUnavailable(model.folders[0]), false);
 	});
 
-	test('a folder that is not there yet still goes in under the name it was given', async () => {
+	test('WS-30 a folder that is not there yet still goes in under the name it was given', async () => {
 		const model = modelWith({ links: new Map([['/tmp', '/private/tmp']]), missing: ['/tmp/later'] });
 
 		await model.add([URI.file('/tmp/later')]);
@@ -319,7 +375,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.deepStrictEqual(paths(model), ['/tmp/later']);
 	});
 
-	test('and once it exists, its other spelling still finds it', async () => {
+	test('WS-30 and once it exists, its other spelling still finds it', async () => {
 		// ⚠️ A `.code-workspace` can list folders nobody has cloned yet. The row is compared as it
 		// stands each time, so the day the folder appears is the day the symlink starts resolving -
 		// nothing was frozen on the way in.
@@ -340,7 +396,7 @@ suite('Workspace bar - the folder list', () => {
 		assert.deepStrictEqual(paths(model), ['/gone/deeper/here']);
 	});
 
-	test('an edit made anywhere else redraws the bar', async () => {
+	test('WS-06 an edit made anywhere else redraws the bar', async () => {
 		// The extension API, or someone typing in the `.code-workspace` file.
 		const { model, workspace } = buildModel({ paths: ['/w/api'] });
 		let changes = 0;

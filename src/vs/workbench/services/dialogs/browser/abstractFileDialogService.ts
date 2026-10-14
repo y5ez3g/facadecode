@@ -326,7 +326,7 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 		// where to put a new workspace file, and the bar asks `IWorkspaceEditingService` to change the
 		// folder list - taking the bar in the constructor closes that ring, and a window whose
 		// services cannot be built shows nothing at all.
-		return this.instantiationService.invokeFunction(accessor => accessor.get(IWorkspaceBarService).addAndShow(uris));
+		await this.instantiationService.invokeFunction(accessor => accessor.get(IWorkspaceBarService).addAndShow(uris));
 	}
 
 	protected async pickFolderAndOpenSimplified(schema: string, options: IPickAndOpenOptions): Promise<void> {

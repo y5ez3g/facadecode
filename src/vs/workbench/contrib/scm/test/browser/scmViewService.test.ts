@@ -161,14 +161,14 @@ suite('SCM view service - which repositories the window shows', () => {
 		return (state?.visible ?? []).map(index => state!.all[index].split(':')[1]).sort();
 	}
 
-	test('the views show the repositories of the folder the window is on', async () => {
+	test('WS-27 the views show the repositories of the folder the window is on', async () => {
 		const window = openWindow();
 		await window.go(window.folders[0]);
 
 		assert.deepStrictEqual(window.onScreen(), ['api']);
 	});
 
-	test('a switch changes what they show', async () => {
+	test('WS-27 a switch changes what they show', async () => {
 		const window = openWindow();
 		await window.go(window.folders[0]);
 		await window.go(window.folders[1]);
@@ -190,7 +190,7 @@ suite('SCM view service - which repositories the window shows', () => {
 		assert.deepStrictEqual([...events[0].removed].map(r => r.provider.name), ['api']);
 	});
 
-	test('a folder with no repository in it shows nothing, and loses nothing', async () => {
+	test('WS-27 a folder with no repository in it shows nothing, and loses nothing', async () => {
 		const window = openWindow();
 		await window.go(window.folders[2]);
 
@@ -198,14 +198,14 @@ suite('SCM view service - which repositories the window shows', () => {
 		assert.deepStrictEqual(window.chosen(), ['api', 'web']);
 	});
 
-	test('the active repository is the one in the folder the window is on', async () => {
+	test('WS-27 the active repository is the one in the folder the window is on', async () => {
 		const window = openWindow();
 		await window.go(window.folders[1]);
 
 		assert.strictEqual(window.view.activeRepository.get()?.repository.provider.name, 'web');
 	});
 
-	test('and there is none while the window is on a folder without one', async () => {
+	test('WS-27 and there is none while the window is on a folder without one', async () => {
 		// ⚠️ What the Graph and the status bar follow. Left defined, they go on drawing the folder
 		// the window has left.
 		const window = openWindow();
@@ -215,7 +215,7 @@ suite('SCM view service - which repositories the window shows', () => {
 		assert.strictEqual(window.view.activeRepository.get(), undefined);
 	});
 
-	test('a switch does not change what the person has chosen', async () => {
+	test('WS-27 a switch does not change what the person has chosen', async () => {
 		const window = openWindow();
 		await window.go(window.folders[0]);
 
@@ -231,7 +231,7 @@ suite('SCM view service - which repositories the window shows', () => {
 		assert.deepStrictEqual(rememberedAsChosen(window.remember()), ['api', 'web']);
 	});
 
-	test('so a window that comes back still has the folders it was not on', async () => {
+	test('WS-27 so a window that comes back still has the folders it was not on', async () => {
 		const first = openWindow();
 		await first.go(first.folders[1]);
 		first.remember();
@@ -326,7 +326,7 @@ suite('SCM view service - which repositories the window shows', () => {
 		assert.deepStrictEqual(window.onScreen(), ['web']);
 	});
 
-	test('and the folder it left keeps what was chosen there', async () => {
+	test('WS-27 and the folder it left keeps what was chosen there', async () => {
 		const window = openWindow();
 		await window.go(window.folders[0]);
 

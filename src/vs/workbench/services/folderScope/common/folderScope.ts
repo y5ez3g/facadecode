@@ -17,7 +17,7 @@ import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspac
 export const IFolderScopeService = createDecorator<IFolderScopeService>('folderScopeService');
 
 export const FolderScopeContext = new RawContextKey<string>('facadeFolderScope', 'folder',
-	localize('facadeFolderScope', "How wide the window's views are looking: the folder it is on, or the whole workspace"));
+	localize('facadeFolderScope', "Whether views are scoped to the current folder or the entire workspace"));
 
 export const enum FolderScope {
 	/** The folder the window is on. */
@@ -98,8 +98,8 @@ export function addFolderScopeToggle(picker: IScopedPicker, folderScopeService: 
 		ours = {
 			iconClass: ThemeIcon.asClassName(widened ? Codicon.folderLibrary : Codicon.folder),
 			tooltip: widened
-				? localize('folderScope.searchingAll', "Searching all folders - click to search only the folder this window is on")
-				: localize('folderScope.searchingFolder', "Searching the folder this window is on - click to search all folders")
+				? localize('folderScope.searchingAll', "Searching all folders. Click to search only the current folder.")
+				: localize('folderScope.searchingFolder', "Searching the current folder. Click to search all workspace folders.")
 		};
 		picker.buttons = [...theirs, ours];
 	};

@@ -249,6 +249,23 @@ suite('Workspace Trust', () => {
 			});
 		});
 
+		test('WS-48 the default workspace\'s own file is trusted, as an untitled workspace\'s is; its folders are not, and any other workspace file is asked about as before', async () => {
+			await configurationService.setUserConfiguration('security', getUserSettings(true, true));
+			environmentService.userRoamingDataHome = URI.from({ scheme: 'vscode-userdata', path: '/u/User' });
+			environmentService.untitledWorkspacesHome = URI.file('/u/Workspaces');
+			instantiationService.stub(IWorkbenchEnvironmentService, { ...environmentService });
+			const trusted = async (workspace: Workspace) => {
+				workspaceService.setWorkspace(workspace);
+				return (await initializeTestObject()).isWorkspaceTrusted();
+			};
+
+			assert.deepStrictEqual({
+				empty: await trusted(new Workspace('default', [], URI.file('/u/User/Default.code-workspace'))),
+				withAFolder: await trusted(new Workspace('default', [toWorkspaceFolder(URI.file('/code/api'))], URI.file('/u/User/Default.code-workspace'))),
+				another: await trusted(new Workspace('team', [], URI.file('/code/team.code-workspace'))),
+			}, { empty: true, withAFolder: false, another: false });
+		});
+
 		async function initializeTestObject(): Promise<WorkspaceTrustManagementService> {
 			const workspaceTrustManagementService = store.add(instantiationService.createInstance(WorkspaceTrustManagementService));
 			await workspaceTrustManagementService.workspaceTrustInitialized;

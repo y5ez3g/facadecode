@@ -83,14 +83,14 @@ suite('Folder scope - how wide the window is looking', () => {
 		};
 	}
 
-	test('a search covers the folder the window is on', async () => {
+	test('WS-25 a search covers the folder the window is on', async () => {
 		const window = openWindow();
 		await window.activeFolder.setActiveFolder(window.folders[1]);
 
 		assert.deepStrictEqual(window.covered(), ['web']);
 	});
 
-	test('and follows the window to another folder', async () => {
+	test('WS-25 and follows the window to another folder', async () => {
 		const window = openWindow();
 		await window.activeFolder.setActiveFolder(window.folders[1]);
 		await window.activeFolder.setActiveFolder(window.folders[0]);
@@ -98,7 +98,7 @@ suite('Folder scope - how wide the window is looking', () => {
 		assert.deepStrictEqual(window.covered(), ['api']);
 	});
 
-	test('widened, it covers every folder the workspace holds', async () => {
+	test('WS-25 widened, it covers every folder the workspace holds', async () => {
 		const window = openWindow();
 		await window.activeFolder.setActiveFolder(window.folders[0]);
 		window.scope.setScope(FolderScope.Workspace);
@@ -151,7 +151,7 @@ suite('Folder scope - how wide the window is looking', () => {
 		assert.strictEqual(changes, 2);
 	});
 
-	test('a widening outlives the window that made it', async () => {
+	test('WS-25 a widening outlives the window that made it', async () => {
 		// ⭐ A scope that resets on the next run is a scope nobody can use.
 		const first = openWindow();
 		first.scope.setScope(FolderScope.Workspace);
@@ -189,7 +189,7 @@ suite('Folder scope - how wide the window is looking', () => {
 		assert.strictEqual(window.scope.covers(URI.file('/w/web/src/index.ts')), true);
 	});
 
-	test('a file the workspace does not hold at all is covered either way', async () => {
+	test('WS-25 a file the workspace does not hold at all is covered either way', async () => {
 		// ⭐ Nothing can be narrowed away by a folder it was never in, and widening would not bring
 		// it back - widening only ever reaches the folders the workspace has.
 		const window = openWindow();

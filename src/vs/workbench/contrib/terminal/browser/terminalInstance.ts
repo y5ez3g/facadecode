@@ -74,6 +74,7 @@ import { TERMINAL_BACKGROUND_COLOR } from '../common/terminalColorRegistry.js';
 import { TerminalContextKeys } from '../common/terminalContextKey.js';
 import { getUriLabelForShell, getShellIntegrationTimeout, getWorkspaceForTerminal, preparePathForShell } from '../common/terminalEnvironment.js';
 import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+import { onDidChangeTerminalSoleFolder, terminalSoleFolder } from '../../folderTerminals/common/terminalSoleFolder.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -625,6 +626,9 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 			}
 		}));
 		this._register(this._workspaceContextService.onDidChangeWorkspaceFolders(() => this._labelComputer?.refreshLabel(this)));
+		// Facade Code: moving between the editor area and the panel decides whether its folder is named (`terminalSoleFolder`)
+		this._register(this.onDidChangeTarget(() => this._labelComputer?.refreshLabel(this)));
+		this._register(onDidChangeTerminalSoleFolder(() => this._labelComputer?.refreshLabel(this)));
 
 		// Clear out initial data events after 10 seconds, hopefully extension hosts are up and
 		// running at that point.
@@ -2857,7 +2861,12 @@ export class TerminalLabelComputer extends Disposable {
 			// Multi-root workspaces always show cwdFolder to disambiguate them, otherwise only show
 			// when it differs from the workspace folder in which it was launched from
 			let showCwd = false;
-			if (multiRootWorkspace) {
+			// Facade Code: a folder's own terminal reads as in a window on that folder alone (`terminalSoleFolder`)
+			const soleFolder = terminalSoleFolder(instance);
+			if (soleFolder) {
+				const caseSensitive = this._fileService.hasCapability(soleFolder, FileSystemProviderCapabilities.PathCaseSensitive);
+				showCwd = cwdUri.fsPath.localeCompare(soleFolder.fsPath, undefined, { sensitivity: caseSensitive ? 'case' : 'base' }) !== 0;
+			} else if (multiRootWorkspace) {
 				showCwd = true;
 			} else if (instance.workspaceFolder?.uri) {
 				const caseSensitive = this._fileService.hasCapability(instance.workspaceFolder.uri, FileSystemProviderCapabilities.PathCaseSensitive);

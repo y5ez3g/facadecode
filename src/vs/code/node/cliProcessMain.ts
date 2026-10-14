@@ -76,7 +76,7 @@ import { McpGalleryService } from '../../platform/mcp/common/mcpGalleryService.j
 import { AllowedMcpServersService } from '../../platform/mcp/common/allowedMcpServersService.js';
 import { IMcpGalleryManifestService } from '../../platform/mcp/common/mcpGalleryManifest.js';
 import { McpGalleryManifestService } from '../../platform/mcp/common/mcpGalleryManifestService.js';
-import { LINUX_SYSTEM_POLICY_FILE_PATH } from '../../base/common/policy.js';
+import { linuxSystemPolicyFilePath } from '../../base/common/policy.js';
 
 class CliMain extends Disposable {
 
@@ -184,7 +184,7 @@ class CliMain extends Disposable {
 		} else if (isMacintosh && productService.darwinBundleIdentifier) {
 			policyService = this._register(new NativePolicyService(logService, productService.darwinBundleIdentifier));
 		} else if (isLinux) {
-			policyService = this._register(new FilePolicyService(URI.file(LINUX_SYSTEM_POLICY_FILE_PATH), fileService, logService));
+			policyService = this._register(new FilePolicyService(URI.file(linuxSystemPolicyFilePath(productService.applicationName)), fileService, logService));
 		} else if (environmentService.policyFile) {
 			policyService = this._register(new FilePolicyService(environmentService.policyFile, fileService, logService));
 		} else {

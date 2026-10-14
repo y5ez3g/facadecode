@@ -26,14 +26,16 @@ import { IStorageService } from '../../../../../platform/storage/common/storage.
 import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { NEW_WORKTREE_COMMAND, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
-import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { IFolderCustomization, IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { moveRow, orderWorktrees, rowsOfFolders } from '../../../../browser/parts/workspacebar/workspaceBar.js';
 import { WorkspaceBarModel } from '../../../../browser/parts/workspacebar/workspaceBarModel.js';
 import { WorkspaceBarSwitcher } from '../../../../browser/parts/workspacebar/workspaceBarSwitcher.js';
 import { carriesMark, isOnWorktreeOf, WorkspaceBarIdentityProvider, workspaceBarRows, WorkspaceBarRow, WorkspaceBarView } from '../../../../browser/parts/workspacebar/workspaceBarView.js';
-import { TestStorageService } from '../../../common/workbenchTestServices.js';
+import { TestStorageService, TestWorkingCopy } from '../../../common/workbenchTestServices.js';
 import { workbenchInstantiationService } from '../../workbenchTestServices.js';
+import { IPutAwayEditorsService } from '../../../../services/putAwayEditors/common/putAwayEditors.js';
+import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
 
 suite('Workspace bar - the rows it draws', () => {
 
@@ -143,7 +145,7 @@ suite('Workspace bar - the rows it draws', () => {
 		assert.deepStrictEqual(summary(rows), ['repository /lab +']);
 	});
 
-	test('switched off, or before git has been read, the bar is folders[] exactly, and offers none', () => {
+	test('WTA-27 switched off, or before git has been read, the bar is folders[] exactly, and offers none', () => {
 		const rows = workspaceBarRows({ folders: [notes, lab, w2], groups, worktrees: false, key });
 
 		assert.deepStrictEqual(summary(rows), [
@@ -236,7 +238,7 @@ suite('Workspace bar - the rows it draws', () => {
 		});
 	});
 
-	test('worktrees are in the order they were made until somebody moves one; then theirs come first, and new ones after', () => {
+	test('WTA-04 worktrees are in the order they were made until somebody moves one; then theirs come first, and new ones after', () => {
 		const [w2, w10, fix, fresh] = ['/wt/w2', '/wt/w10', '/wt/fix', '/wt/new'].map(path => URI.file(path));
 		const made = [fix, w2, w10];   // as the reader gives them, oldest first
 		const moved = [w10, fix, w2];
@@ -295,7 +297,7 @@ suite('Workspace bar - the view', () => {
 	 * The bar's view over `groups`, with the window on `active` and `contextKeys` set: what it asked the
 	 * commands and the switcher to do, and its rows as a screen reader hears them.
 	 */
-	function view(folders: IWorkspaceFolder[], groups: WorkspaceBarGroup[], active: URI, names = new Map<string, string>(), contextKeys: Record<string, ContextKeyValue> = {}, storage?: IStorageService, agents = new Map<string, readonly ThemeIcon[]>()) {
+	function view(folders: IWorkspaceFolder[], groups: WorkspaceBarGroup[], active: URI, names = new Map<string, string>(), contextKeys: Record<string, ContextKeyValue> = {}, storage?: IStorageService, agents = new Map<string, readonly ThemeIcon[]>(), look: { collapsed?: boolean; customizations?: Map<string, IFolderCustomization>; unavailable?: Map<string, 'missing' | 'unreadable'> } = {}) {
 		// Real context keys and menus: what a row's toolbar offers is decided by them.
 		const instantiationService = workbenchInstantiationService({ contextKeyService: () => store.add(new ContextKeyService(new TestConfigurationService())) }, store);
 		if (storage) {
@@ -316,7 +318,7 @@ suite('Workspace bar - the view', () => {
 		instantiationService.stub(IMenuService, store.add(instantiationService.createInstance(MenuService)));
 		instantiationService.stub(IWorkspaceBarCustomizationService, {
 			onDidChange: Event.None,
-			get: uri => names.has(uri.path) ? { name: names.get(uri.path) } : undefined,
+			get: uri => look.customizations?.get(uri.path) ?? (names.has(uri.path) ? { name: names.get(uri.path) } : undefined),
 			nameFor: folder => names.get(folder.uri.path) ?? folder.name,
 			worktreeOrder: () => undefined
 		});
@@ -340,17 +342,38 @@ suite('Workspace bar - the view', () => {
 				return read.p;
 			}
 		});
-		const model = upcastPartial<WorkspaceBarModel>({ folders, key, onDidChange: Event.None, isUnavailable: () => false });
-		const switcher = upcastPartial<WorkspaceBarSwitcher>({ active, onDidChangeActive: Event.None, switchTo: async uri => { asked.push(`switch to ${uri.path}`); } });
+		const model = upcastPartial<WorkspaceBarModel>({
+			folders, key, onDidChange: Event.None,
+			isUnavailable: folder => !!look.unavailable?.has(folder.uri.path),
+			isUnreadable: folder => look.unavailable?.get(folder.uri.path) === 'unreadable'
+		});
+		let now = active;
+		/** The folders the window cannot get to: gone from disk, say. */
+		const refusing = new Set<string>();
+		const activeChanged = store.add(new Emitter<void>());
+		const switcher = upcastPartial<WorkspaceBarSwitcher>({
+			get active() { return now; },
+			onDidChangeActive: activeChanged.event,
+			switchTo: async uri => {
+				asked.push(`switch to ${uri.path}`);
+				if (refusing.has(uri.path)) {
+					return { kind: 'failed', reason: `${uri.path} is gone` } as const;
+				}
+				now = uri;
+				activeChanged.fire();
+				return { kind: 'shown' } as const;
+			}
+		});
 
 		const container = mainWindow.document.body.appendChild(mainWindow.document.createElement('div'));
 		store.add(toDisposable(() => container.remove()));
-		const barView = store.add(instantiationService.createInstance(WorkspaceBarView, container, model, git, switcher, () => false, Event.None, async (uri: URI) => { asked.push(`show ${uri.path}`); }));
+		const barView = store.add(instantiationService.createInstance(WorkspaceBarView, container, model, git, switcher, () => !!look.collapsed, Event.None, async (uri: URI) => { asked.push(`show ${uri.path}`); }));
 		barView.layout(300, 400);
 
 		return {
 			asked,
 			barView,
+			instantiationService,
 			// As a keybinding sees it: in the list's own context.
 			rowKind: () => contextKeyService.getContext(container.querySelector<HTMLElement>('.monaco-list')).getValue(WorkspaceBarRowKindContext.key),
 			rows: () => [...container.querySelectorAll<HTMLElement>('.monaco-list-row')]
@@ -366,6 +389,12 @@ suite('Workspace bar - the view', () => {
 			runs: (folder: string, icons: readonly ThemeIcon[]) => {
 				agents.set(folder, icons);
 				agentsChanged.fire();
+			},
+			refusing,
+			/** The window on `uri` now, however it got there, as the switcher says once it has. */
+			arrive: (uri: URI) => {
+				now = uri;
+				activeChanged.fire();
 			},
 			/** Finishes the reads of git's files asked for so far, which found `groups`. */
 			read: async (groups: WorkspaceBarGroup[]) => {
@@ -389,6 +418,62 @@ suite('Workspace bar - the view', () => {
 		click(element, 2);
 		element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }));
 	}
+
+	test('WS-63 a folder that cannot be read says so, and only one that is not there says "not on disk"', () => {
+		const bar = view([lab, notes], [{ kind: 'folder', folder: lab }, { kind: 'folder', folder: notes }], lab.uri, undefined, undefined, undefined, undefined, {
+			unavailable: new Map([['/lab', 'unreadable'], ['/notes', 'missing']])
+		});
+
+		assert.deepStrictEqual(bar.rows(), ['lab, folder cannot be read', 'notes, folder does not exist on disk']);
+	});
+
+	test('WS-17 a folder holding unsaved editors out of sight looks and reads as any other: no mark at its row\'s end, nothing more read out', () => {
+		const bar = view([lab, notes], [], lab.uri);
+		const draft = store.add(new TestWorkingCopy(URI.file('/lab/draft.ts'), true));
+		store.add(bar.instantiationService.get(IWorkingCopyService).registerWorkingCopy(draft));
+		bar.instantiationService.get(IPutAwayEditorsService).set(notes.uri, [draft.resource]);
+
+		assert.deepStrictEqual({ marks: [bar.has('.workspacebar-unsaved', 1), bar.has('.codicon-circle-filled', 1)], aria: bar.rows() }, {
+			marks: [false, false],
+			aria: ['lab', 'notes']
+		});
+	});
+
+	test('WTA-05 the window arriving at a worktree of a closed repository, whichever way it came, opens the repository first, and it stays open', () => {
+		const storage = store.add(new TestStorageService());
+		const bar = view([lab, notes, w2], [repository(w2)], notes.uri, new Map([['/wt/w2', 'Payments']]), {}, storage);
+		click(bar.find('.workspacebar-twistie'));
+		const closed = bar.rows();
+
+		bar.arrive(w2.uri);
+
+		assert.deepStrictEqual({ closed, arrived: bar.rows(), afterReload: view([lab, notes, w2], [repository(w2)], notes.uri, new Map([['/wt/w2', 'Payments']]), {}, storage).rows().slice(0, 2) }, {
+			closed: ['lab, 1 worktree', 'notes'],
+			arrived: ['lab', 'Payments, worktree', 'notes'],
+			afterReload: ['lab', 'Payments, worktree'],
+		});
+	});
+
+	test('WS-35 collapsed, every row keeps its icon in its colour: the one chosen for it, else the folder icon, and a worktree its dot', () => {
+		const customizations = new Map<string, IFolderCustomization>([['/notes', { color: 'teal' }], ['/lab', { icon: 'rocket' }]]);
+		const bar = view([lab, notes, w2], [repository(w2)], lab.uri, new Map(), {}, undefined, undefined, { collapsed: true, customizations });
+		const glyph = (index: number) => {
+			const icon = bar.find('.workspacebar-icon', index);
+			return `${icon.textContent}|${['codicon-folder', 'codicon-rocket', 'workspacebar-worktree', 'workspacebar-icon-teal'].filter(name => icon.classList.contains(name)).join(' ')}`;
+		};
+
+		assert.deepStrictEqual([glyph(0), glyph(1), glyph(2)], ['|codicon-rocket', '|workspacebar-worktree', '|codicon-folder workspacebar-icon-teal']);
+	});
+
+	test('WS-15 a click on a row takes the window there, once; a double click is one move', () => {
+		const bar = view([lab, notes], [], lab.uri);
+
+		click(bar.find('.workspacebar-row', 1));
+		const clicked = [...bar.asked];
+		doubleClick(bar.find('.workspacebar-row', 1));
+
+		assert.deepStrictEqual({ clicked, doubleClicked: bar.asked.slice(clicked.length) }, { clicked: ['switch to /notes'], doubleClicked: ['switch to /notes'] });
+	});
 
 	test('the triangle opens and closes a repository, and a double-click on it is one click', () => {
 		const bar = view([lab], [repository(undefined)], lab.uri, new Map([['/wt/w2', 'Payments']]));
@@ -581,12 +666,23 @@ suite('Workspace bar - the view', () => {
 		});
 	});
 
-	test('closing a repository while the window is on one of its worktrees takes the window to the repository', () => {
+	test('WTA-06 closing a repository while the window is on one of its worktrees takes the window to the repository first, and closes it once it is there', async () => {
 		const bar = view([lab, w2], [repository(w2)], w2.uri);
 
 		click(bar.find('.workspacebar-twistie'));
+		await timeout(0);
 
-		assert.deepStrictEqual(bar.asked, ['switch to /lab']);
+		assert.deepStrictEqual({ asked: bar.asked, rows: bar.rows() }, { asked: ['switch to /lab'], rows: ['lab, 1 worktree'] });
+	});
+
+	test('WTA-37 a window that cannot get to the repository stays on the worktree, the repository open', async () => {
+		const bar = view([lab, w2], [repository(w2)], w2.uri);
+		bar.refusing.add('/lab');
+
+		click(bar.find('.workspacebar-twistie'));
+		await timeout(0);
+
+		assert.deepStrictEqual({ asked: bar.asked, rows: bar.rows() }, { asked: ['switch to /lab'], rows: ['lab', 'w2, worktree'] });
 	});
 
 	test('a worktree being deleted loses its row at once, and gets it back only if git still lists it when its files are next read', async () => {

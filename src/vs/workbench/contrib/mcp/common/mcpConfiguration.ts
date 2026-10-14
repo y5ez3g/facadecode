@@ -64,7 +64,7 @@ export const mcpServerCollisionBehaviorSection = 'chat.mcp.collisionBehavior';
  * registered with `included: false` so it is hidden from the Settings UI and
  * settings.json IntelliSense; it is intended to be delivered through enterprise
  * policy (Windows Group Policy / macOS managed preferences / Linux
- * `/etc/vscode/policy.json`), with hand-editing of `settings.json` as a
+ * `/etc/facade/policy.json`), with hand-editing of `settings.json` as a
  * developer escape hatch.
  */
 export const mcpEnterpriseManagedAuthIdpSection = 'mcp.enterpriseManagedAuth.idp';

@@ -55,7 +55,7 @@ export namespace TerminalContextKeys {
 	 * which terminals those are. Declared here so that the menus reading it do not have to reach
 	 * across into another contribution for a key.
 	 */
-	export const agentTerminal = new RawContextKey<boolean>('facadeAgentTerminal', false, localize('facadeAgentTerminalContextKey', "Whether the active terminal editor was started from the agent menu."));
+	export const agentTerminal = new RawContextKey<boolean>('facadeAgentTerminal', false, localize('facadeAgentTerminalContextKey', "Whether the active terminal editor was started from the agent menu"));
 
 	/**
 	 * Whether the active terminal is an agent's run's, which stays in its window and is never relaunched.

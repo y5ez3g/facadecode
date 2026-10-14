@@ -9,7 +9,7 @@ import { IWorkspaceContextService, WorkbenchState, IWorkspaceFolder, hasWorkspac
 import { IWorkspaceEditingService } from '../../services/workspaces/common/workspaceEditing.js';
 import { IEditorService } from '../../services/editor/common/editorService.js';
 import { ICommandService } from '../../../platform/commands/common/commands.js';
-import { ADD_ROOT_FOLDER_COMMAND_ID, ADD_ROOT_FOLDER_LABEL, PICK_WORKSPACE_FOLDER_COMMAND_ID, REMOVE_FOLDER_ASKED_COMMAND_ID, SET_ROOT_FOLDER_COMMAND_ID } from './workspaceCommands.js';
+import { ADD_ROOT_FOLDER_COMMAND_ID, ADD_ROOT_FOLDER_LABEL, PICK_WORKSPACE_FOLDER_COMMAND_ID, SET_ROOT_FOLDER_COMMAND_ID } from './workspaceCommands.js';
 import { IFileDialogService } from '../../../platform/dialogs/common/dialogs.js';
 import { MenuRegistry, MenuId, Action2, registerAction2 } from '../../../platform/actions/common/actions.js';
 import { EmptyWorkspaceSupportContext, EnterMultiRootWorkspaceSupportContext, IsSessionsWindowContext, OpenFolderWorkspaceSupportContext, WorkbenchStateContext, WorkspaceFolderCountContext } from '../../common/contextkeys.js';
@@ -18,6 +18,7 @@ import { IHostService } from '../../services/host/browser/host.js';
 import { KeyChord, KeyCode, KeyMod } from '../../../base/common/keyCodes.js';
 import { ContextKeyExpr } from '../../../platform/contextkey/common/contextkey.js';
 import { IWorkbenchEnvironmentService } from '../../services/environment/common/environmentService.js';
+import { IWorkspaceBarService } from '../parts/workspacebar/workspaceBarService.js';
 import { IWorkspacesService } from '../../../platform/workspaces/common/workspaces.js';
 import { KeybindingWeight } from '../../../platform/keybinding/common/keybindingsRegistry.js';
 import { IsMacNativeContext } from '../../../platform/contextkey/common/contextkeys.js';
@@ -247,11 +248,12 @@ export class RemoveRootFolderAction extends Action2 {
 
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		const commandService = accessor.get(ICommandService);
+		// Facade Code: through the bar, which asks first when something would be lost (WORKSPACE.md W9.6)
+		const workspaceBarService = accessor.get(IWorkspaceBarService);
 
 		const folder = await commandService.executeCommand<IWorkspaceFolder>(PICK_WORKSPACE_FOLDER_COMMAND_ID);
 		if (folder) {
-			// Facade Code: through the workspace bar's Remove Folder (N-65; D30)
-			await commandService.executeCommand(REMOVE_FOLDER_ASKED_COMMAND_ID, folder.uri);
+			await workspaceBarService.remove([folder.uri]);
 		}
 	}
 }

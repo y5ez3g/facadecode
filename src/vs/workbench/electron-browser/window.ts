@@ -21,8 +21,8 @@ import { setFullscreen, getZoomLevel, onDidChangeZoomLevel, getZoomFactor } from
 import { ICommandService, CommandsRegistry } from '../../platform/commands/common/commands.js';
 import { IResourceEditorInput } from '../../platform/editor/common/editor.js';
 import { ipcRenderer, process } from '../../base/parts/sandbox/electron-browser/globals.js';
-import { IWorkspaceEditingService } from '../services/workspaces/common/workspaceEditing.js';
 import { IWorkspaceBarService } from '../browser/parts/workspacebar/workspaceBarService.js';
+import { IHeldEditorsService } from '../services/heldEditors/common/heldEditors.js';
 import { IMenuService, MenuId, IMenu, MenuItemAction, MenuRegistry } from '../../platform/actions/common/actions.js';
 import { ICommandAction } from '../../platform/action/common/action.js';
 import { getFlatActionBarActions } from '../../platform/actions/browser/menuEntryActionViewItem.js';
@@ -88,9 +88,11 @@ export class NativeWindow extends BaseWindow {
 
 	private readonly addRemoveFoldersScheduler = this._register(new RunOnceScheduler(() => this.doAddRemoveFolders(), 100));
 	private pendingFoldersToAdd: URI[] = [];
+	/** Facade Code: folders to add and show (`facade <folder>`); `pendingFoldersToAdd` are only added (`--add`). */
+	private pendingFoldersToShow: URI[] = [];
 
-	/** Settles when folders that have arrived are in the workspace and the window has moved onto them. */
-	private foldersArriving: DeferredPromise<void> | undefined;
+	/** Settles once arriving folders are in the workspace, with whether the window got onto those to show. */
+	private foldersArriving: DeferredPromise<boolean> | undefined;
 	private pendingFoldersToRemove: URI[] = [];
 
 	private isDocumentedEdited = false;
@@ -105,8 +107,8 @@ export class NativeWindow extends BaseWindow {
 		@ICommandService private readonly commandService: ICommandService,
 		@IKeybindingService private readonly keybindingService: IKeybindingService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
-		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
+		@IHeldEditorsService private readonly heldEditorsService: IHeldEditorsService,
 		@IFileService private readonly fileService: IFileService,
 		@IMenuService private readonly menuService: IMenuService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
@@ -1007,11 +1009,11 @@ export class NativeWindow extends BaseWindow {
 	private onAddRemoveFoldersRequest(request: IAddRemoveFoldersRequest): void {
 
 		// Buffer all pending requests
-		this.pendingFoldersToAdd.push(...request.foldersToAdd.map(folder => URI.revive(folder)));
+		(request.show ? this.pendingFoldersToShow : this.pendingFoldersToAdd).push(...request.foldersToAdd.map(folder => URI.revive(folder)));
 		this.pendingFoldersToRemove.push(...request.foldersToRemove.map(folder => URI.revive(folder)));
 
 		if (!this.foldersArriving) {
-			this.foldersArriving = new DeferredPromise<void>();
+			this.foldersArriving = new DeferredPromise<boolean>();
 		}
 
 		// Delay the adding of folders a bit to buffer in case more requests are coming
@@ -1022,45 +1024,51 @@ export class NativeWindow extends BaseWindow {
 
 	private async doAddRemoveFolders(): Promise<void> {
 		const foldersToAdd: IWorkspaceFolderCreationData[] = this.pendingFoldersToAdd.map(folder => ({ uri: folder }));
+		const foldersToShow = this.pendingFoldersToShow.slice(0);
 		const foldersToRemove = this.pendingFoldersToRemove.slice(0);
 
 		this.pendingFoldersToAdd = [];
+		this.pendingFoldersToShow = [];
 		this.pendingFoldersToRemove = [];
 
 		const arrived = this.foldersArriving;
 		this.foldersArriving = undefined;
 
+		let shown = foldersToShow.length === 0;
 		try {
-			await this.doAddRemove(foldersToAdd, foldersToRemove);
+			shown = await this.doAddRemove(foldersToAdd, foldersToShow, foldersToRemove);
 		} finally {
-			arrived?.complete();
+			arrived?.complete(shown);
 		}
 	}
 
-	private async doAddRemove(foldersToAdd: IWorkspaceFolderCreationData[], foldersToRemove: URI[]): Promise<void> {
+	/** Facade Code: says whether the window got onto `foldersToShow`, true when there are none. */
+	private async doAddRemove(foldersToAdd: IWorkspaceFolderCreationData[], foldersToShow: URI[], foldersToRemove: URI[]): Promise<boolean> {
+		// Facade Code: `--add` adds through the bar and the window stays, as in stock (WORKSPACE.md W5)
 		if (foldersToAdd.length) {
-			// ⚠️ Through the bar, which adds and then moves the window onto it. `code <folder>` and a
-			// folder dropped on the dock both mean "show me this", and a row that arrives without the
-			// window going to it is a request half answered. `code --add` lands here too and switches
-			// as well: upstream had no folder for a window to be on, so "add without switching" was
-			// not a thing anybody could have asked for.
-			//
-			await this.workspaceBarService.addAndShow(foldersToAdd.map(folder => folder.uri));
+			await this.workspaceBarService.add(foldersToAdd.map(folder => folder.uri));
+		}
+
+		// Facade Code: `facade <folder>` and a folder dropped on the dock also move the window onto it
+		let shown = true;
+		if (foldersToShow.length) {
+			shown = (await this.workspaceBarService.addAndShow(foldersToShow)).kind === 'shown';
 		}
 
 		if (foldersToRemove.length) {
-			await this.workspaceEditingService.removeFolders(foldersToRemove);
+			// Facade Code: through the bar, which asks first when something would be lost (WORKSPACE.md W9.6)
+			await this.workspaceBarService.remove(foldersToRemove);
 		}
+
+		return shown;
 	}
 
 	private async onOpenFiles(request: INativeOpenFileRequest): Promise<void> {
 
-		// ⚠️ Behind any folders that arrived in the same breath. Their request is buffered on a
-		// scheduler while this one is answered at once, so `code <folder> <file>` opened the file, then
-		// moved the window onto the folder - and the move captured the file into the editors of the
-		// folder the window was leaving. The person asked for a folder and a file and got the folder,
-		// with the file filed away under somewhere they were not.
-		await this.foldersArriving?.p;
+		// Facade Code: after the folders that came with the files, and not if the window did not get onto them (WORKSPACE.md W5)
+		if ((await this.foldersArriving?.p) === false) {
+			return this.notOpened(request);
+		}
 
 		const diffMode = !!(request.filesToDiff && (request.filesToDiff.length === 2));
 		const mergeMode = !!(request.filesToMerge && (request.filesToMerge.length === 4));
@@ -1068,6 +1076,12 @@ export class NativeWindow extends BaseWindow {
 		const inputs = coalesce(await pathsToEditors(mergeMode ? request.filesToMerge : diffMode ? request.filesToDiff : request.filesToOpenOrCreate, this.fileService, this.logService));
 		if (inputs.length) {
 			const openedEditorPanes = await this.openResources(inputs, diffMode, mergeMode);
+
+			// Facade Code: a diff or merge from the command line stays through folder switches until closed (WORKSPACE.md W6.2)
+			if ((diffMode || mergeMode) && !request.filesToWait && openedEditorPanes.length) {
+				const resources = coalesce(inputs.map(input => input.resource));
+				this.heldEditorsService.hold(resources, this.instantiationService.invokeFunction(accessor => whenEditorClosed(accessor, resources)));
+			}
 
 			if (request.filesToWait) {
 
@@ -1087,10 +1101,26 @@ export class NativeWindow extends BaseWindow {
 		}
 	}
 
+	/** Facade Code: says which files were not opened and why, and lets a program waiting on them go. */
+	private async notOpened(request: INativeOpenFileRequest): Promise<void> {
+		const files = coalesce([...request.filesToOpenOrCreate ?? [], ...request.filesToDiff ?? [], ...request.filesToMerge ?? []].map(path => path.fileUri && URI.revive(path.fileUri)));
+		const labels = files.map(file => this.labelService.getUriLabel(file)).join(', ');
+		this.logService.warn(`[window] not opened, as the window did not get to the folder they came with: ${labels}`);
+		this.notificationService.warn(localize('notOpenedWithoutFolder', "Could not open files because the folder containing them could not be switched to: {0}.", labels));
+
+		if (request.filesToWait) {
+			await this.fileService.del(URI.revive(request.filesToWait.waitMarkerFileUri));
+		}
+	}
+
 	private async trackClosedWaitFiles(waitMarkerFile: URI, resourcesToWaitFor: URI[]): Promise<void> {
 
 		// Wait for the resources to be closed in the text editor...
-		await this.instantiationService.invokeFunction(accessor => whenEditorClosed(accessor, resourcesToWaitFor));
+		const closed = this.instantiationService.invokeFunction(accessor => whenEditorClosed(accessor, resourcesToWaitFor));
+
+		// Facade Code: held on screen until then, so a folder switch cannot close them (WORKSPACE.md W6.2)
+		this.heldEditorsService.hold(resourcesToWaitFor, closed);
+		await closed;
 
 		// ...before deleting the wait marker file
 		await this.fileService.del(waitMarkerFile);

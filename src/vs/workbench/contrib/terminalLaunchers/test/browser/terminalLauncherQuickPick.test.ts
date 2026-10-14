@@ -294,7 +294,14 @@ suite('Agent picker - every agent open, in one list', () => {
 			safeDisposeTerminal: async instance => { steps.push(`kill ${instance.title}${open()}`); }
 		});
 		instantiationService.stub(IFolderTerminalsService, { folderOf: agent => folders.get(agent as TestAgent) });
-		instantiationService.stub(IWorkspaceBarService, { rowOrder: () => rows, repositoryFor: () => undefined, show: async folder => { steps.push(`go to ${folder.path}`); } });
+		instantiationService.stub(IWorkspaceBarService, {
+			rowOrder: () => rows,
+			repositoryFor: () => undefined,
+			show: async folder => {
+				steps.push(`go to ${folder.path}`);
+				return { kind: 'shown' };
+			}
+		});
 		instantiationService.stub(IWorkspaceBarCustomizationService, { onDidChange: Event.None, get: () => undefined });
 		instantiationService.stub(IUriIdentityService, { extUri: extUriBiasedIgnorePathCase });
 		instantiationService.stub(IEditorService, {

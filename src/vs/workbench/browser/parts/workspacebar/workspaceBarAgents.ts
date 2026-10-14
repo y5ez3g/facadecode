@@ -18,14 +18,22 @@ export interface IFolderAgents {
 	readonly icons: readonly ThemeIcon[];
 }
 
-/**
- * What runs in each folder of the bar, so that its row can show it (WORKTREE.md WT-1.15) - and, as a folder
- * is about to be removed, whether that terminates a process in its terminals (D30).
- *
- * ⚠️ The bar lives in `vs/workbench/browser`, below the terminals, and cannot reach them; the agent
- * launchers reach both. Its agents are told: the launchers say what runs where, and the bar draws it.
- * Its processes are asked, through the check the launchers register ({@link registerProcessCheck}).
- */
+/** Something running in a folder that taking the folder out of the workspace stops (WORKSPACE.md W9.6). */
+export interface IRunningWork {
+	/** The same for as long as it runs: what a confirmation named is told apart from what started since. */
+	readonly id: number;
+	readonly kind: 'agent' | 'terminal';
+	/** What its tab is called. */
+	readonly name: string;
+}
+
+/** Says what runs in a folder now (`IWorkspaceBarAgentsService.registerWorkProvider`). */
+export interface IRunningWorkProvider {
+	/** The agents running in `folder`, and its terminals running a process, oldest first. */
+	workIn(folder: URI): readonly IRunningWork[];
+}
+
+/** What runs in each folder, told by the agent launchers, which reach the terminals the bar cannot (WORKTREE.md WT-1.15). */
 export interface IWorkspaceBarAgentsService {
 	readonly _serviceBrand: undefined;
 
@@ -38,19 +46,11 @@ export interface IWorkspaceBarAgentsService {
 	/** Says what runs in every folder, replacing what was said before: a folder left out runs none. */
 	set(agents: readonly IFolderAgents[]): void;
 
-	/**
-	 * Whether taking `folder` out of the workspace terminates a process in one of its terminals that is no agent's, which
-	 * VS Code would ask about before terminating it - "Do you want to terminate running processes?" - as the terminals
-	 * answer: `false` until they have said how to know.
-	 */
-	terminatesProcessesIn(folder: URI): boolean;
+	/** What runs in `folder` now, for a confirmation to name before stopping it. */
+	workIn(folder: URI): readonly IRunningWork[];
 
-	/**
-	 * Says how to know {@link terminatesProcessesIn}, until the returned disposable is disposed. ⚠️ Asked, not told: a
-	 * terminal's processes come and go without anything a row draws changing, and matter only when someone is about
-	 * to remove a folder.
-	 */
-	registerProcessCheck(check: (folder: URI) => boolean): IDisposable;
+	/** Answers `workIn` from now on, until disposed. */
+	registerWorkProvider(provider: IRunningWorkProvider): IDisposable;
 }
 
 export const IWorkspaceBarAgentsService = createDecorator<IWorkspaceBarAgentsService>('workspaceBarAgentsService');
@@ -64,7 +64,7 @@ export class WorkspaceBarAgentsService extends Disposable implements IWorkspaceB
 
 	private agents = new Map<string, readonly ThemeIcon[]>();
 
-	private processCheck: ((folder: URI) => boolean) | undefined;
+	private provider: IRunningWorkProvider | undefined;
 
 	constructor(@IUriIdentityService private readonly uriIdentityService: IUriIdentityService) {
 		super();
@@ -72,6 +72,19 @@ export class WorkspaceBarAgentsService extends Disposable implements IWorkspaceB
 
 	agentsIn(folder: URI): readonly ThemeIcon[] {
 		return this.agents.get(this.uriIdentityService.extUri.getComparisonKey(folder)) ?? [];
+	}
+
+	workIn(folder: URI): readonly IRunningWork[] {
+		return this.provider?.workIn(folder) ?? [];
+	}
+
+	registerWorkProvider(provider: IRunningWorkProvider): IDisposable {
+		this.provider = provider;
+		return toDisposable(() => {
+			if (this.provider === provider) {
+				this.provider = undefined;
+			}
+		});
 	}
 
 	set(agents: readonly IFolderAgents[]): void {
@@ -87,19 +100,6 @@ export class WorkspaceBarAgentsService extends Disposable implements IWorkspaceB
 			this.agents = next;
 			this._onDidChange.fire();
 		}
-	}
-
-	terminatesProcessesIn(folder: URI): boolean {
-		return this.processCheck?.(folder) ?? false;
-	}
-
-	registerProcessCheck(check: (folder: URI) => boolean): IDisposable {
-		this.processCheck = check;
-		return toDisposable(() => {
-			if (this.processCheck === check) {
-				this.processCheck = undefined;
-			}
-		});
 	}
 }
 

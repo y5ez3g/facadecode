@@ -14,6 +14,7 @@ import * as DOM from '../../../../../base/browser/dom.js';
 import { IWorkbenchLayoutService } from '../../../../services/layout/browser/layoutService.js';
 import { isUntitledWorkspace, IWorkspace, IWorkspaceContextService, WorkbenchState } from '../../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IConfigurationService, IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
 import { IKeybindingService } from '../../../../../platform/keybinding/common/keybinding.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../../platform/instantiation/common/instantiation.js';
@@ -241,7 +242,8 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 		@IOpenerService openerService: IOpenerService,
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
 		@IEnvironmentService private readonly environmentService: IEnvironmentService,
-		@IActiveFolderService private readonly activeFolderService: IActiveFolderService
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
+		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 
@@ -278,7 +280,8 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 		// root's files, so naming the workspace here says the one thing they are not.
 		const activeFolder = this.activeFolderService.activeFolder;
 
-		return activeFolder ? activeFolder.name : this.labelService.getWorkspaceLabel(this.contextService.getWorkspace());
+		// And by the name the bar and the title call it (WORKSPACE.md W9.8).
+		return activeFolder ? this.customizationService.nameFor(activeFolder) : this.labelService.getWorkspaceLabel(this.contextService.getWorkspace());
 	}
 
 	override get title(): string {
@@ -339,6 +342,10 @@ export class ExplorerView extends ViewPane implements IExplorerView {
 			this.updateWorkspaceTitleCase();
 		}));
 		this._register(this.activeFolderService.onDidChangeActiveFolder(() => {
+			setHeader();
+			this._onDidChangeTitleArea.fire();
+		}));
+		this._register(this.customizationService.onDidChange(() => {
 			setHeader();
 			this._onDidChangeTitleArea.fire();
 		}));

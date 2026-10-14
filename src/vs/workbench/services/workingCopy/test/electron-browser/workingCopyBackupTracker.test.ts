@@ -45,6 +45,7 @@ import { joinPath } from '../../../../../base/common/resources.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { TestServiceAccessor, workbenchInstantiationService } from '../../../../test/electron-browser/workbenchTestServices.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
+import { IPutAwayEditorsService } from '../../../putAwayEditors/common/putAwayEditors.js';
 
 suite('WorkingCopyBackupTracker (native)', function () {
 
@@ -64,8 +65,9 @@ suite('WorkingCopyBackupTracker (native)', function () {
 			@IEnvironmentService environmentService: IEnvironmentService,
 			@IProgressService progressService: IProgressService,
 			@IWorkingCopyEditorService workingCopyEditorService: IWorkingCopyEditorService,
+			@IPutAwayEditorsService putAwayEditorsService: IPutAwayEditorsService,
 		) {
-			super(workingCopyBackupService, filesConfigurationService, workingCopyService, lifecycleService, fileDialogService, dialogService, contextService, nativeHostService, logService, environmentService, progressService, workingCopyEditorService, editorService);
+			super(workingCopyBackupService, filesConfigurationService, workingCopyService, lifecycleService, fileDialogService, dialogService, contextService, nativeHostService, logService, environmentService, progressService, workingCopyEditorService, editorService, putAwayEditorsService);
 		}
 
 		protected override getBackupScheduleDelay(): number {

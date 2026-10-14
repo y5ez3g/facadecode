@@ -231,7 +231,10 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 					id: CHAT_SETUP_ACTION_ID,
 					title: ChatSetupTriggerAction.CHAT_SETUP_ACTION_LABEL,
 					category: CHAT_CATEGORY,
-					f1: true,
+					// Facade Code: not in the command palette while AI features are off - no visible control leads to
+					// what is hidden; `chat.disableAIFeatures` set to false brings it back (IDENTITY.md I11)
+					f1: false,
+					menu: { id: MenuId.CommandPalette, when: ContextKeyExpr.equals(`config.${ChatAIDisabledSettingId}`, false) },
 					precondition: ContextKeyExpr.or(
 						ChatContextKeys.Setup.hidden,
 						ChatContextKeys.Setup.disabledInWorkspace,

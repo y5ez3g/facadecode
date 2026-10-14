@@ -8,15 +8,13 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { TerminalLocation, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import { IFolderAgents, IWorkspaceBarAgentsService } from '../../../browser/parts/workspacebar/workspaceBarAgents.js';
+import { IFolderAgents, IRunningWork, IWorkspaceBarAgentsService } from '../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { FOLLOW_FOLDER, IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance } from '../../terminal/browser/terminal.js';
-import { ConfirmOnKill } from '../../terminal/common/terminal.js';
 import { AGENT_TERMINAL_ICON } from '../common/terminalLaunchers.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
@@ -42,22 +40,17 @@ export function agentsByFolder(agents: readonly ITerminalInstance[], folderOf: (
 	return [...byFolder.values()];
 }
 
-/**
- * Whether VS Code asks before terminating `instance` - "Do you want to terminate running processes?": it runs a process
- * besides its shell, and `terminal.integrated.confirmOnKill` asks for where it is - the editor area, as its tab's close
- * does (`TerminalEditorInput.showConfirm`), or the panel (`TerminalService.safeDisposeTerminal`). One put away for a
- * folder keeps where it was.
- */
-function asksToTerminate(instance: ITerminalInstance, confirmOnKill: ConfirmOnKill | undefined): boolean {
-	return instance.hasChildProcesses && (confirmOnKill === 'always' || confirmOnKill === (instance.target === TerminalLocation.Editor ? 'editor' : 'panel'));
+/** The running agents, by the name they started under, and the busy terminals, by title, among `terminals`, oldest first. */
+export function runningWork(terminals: readonly ITerminalInstance[], agents: ReadonlySet<ITerminalInstance>): IRunningWork[] {
+	return [...terminals]
+		.filter(instance => !instance.isDisposed && (agents.has(instance) ? instance.exitCode === undefined : instance.hasChildProcesses))
+		.sort((a, b) => a.instanceId - b.instanceId)
+		.map(instance => agents.has(instance)
+			? { id: instance.instanceId, kind: 'agent', name: instance.shellLaunchConfig?.name || instance.title }
+			: { id: instance.instanceId, kind: 'terminal', name: instance.title });
 }
 
-/**
- * Tells the workspace bar which agents run in which folder, for each row to show its own (WORKTREE.md
- * WT-1.15), and answers it, as a folder is about to be removed, whether that terminates a process in the
- * folder's terminals that VS Code would ask about (D30). The agent menu knows which terminals are agents,
- * and the folder terminals where each one is; the bar, below both, knows neither.
- */
+/** Tells the workspace bar which agents run in each folder (WORKTREE.md WT-1.15), and what removing a folder would stop (W9.6). */
 export class TerminalLauncherWorkspaceBar extends Disposable implements IWorkbenchContribution {
 
 	static readonly ID = 'workbench.contrib.terminalLauncherWorkspaceBar';
@@ -93,15 +86,11 @@ export class TerminalLauncherWorkspaceBar extends Disposable implements IWorkben
 		this._register(workspaceBarService.onDidRestoreEditors(schedule));
 		this._register(contextService.onDidChangeWorkspaceFolders(schedule));
 
-		// What removing a folder terminates besides its agents, which the bar says before it asks (D30): a process in one of
-		// the terminals that go with the folder that VS Code would ask about before terminating it
-		this._register(barAgentsService.registerProcessCheck(folder => {
-			const confirmOnKill = configurationService.getValue<ConfirmOnKill>(TerminalSettingId.ConfirmOnKill);
-			const agents = launcherService.agentTerminals;
-			return folderTerminalsService.terminalsOf(folder).some(instance => !agents.includes(instance) && asksToTerminate(instance, confirmOnKill));
-		}));
-
 		this.tellBar();
+
+		this._register(barAgentsService.registerWorkProvider({
+			workIn: folder => runningWork(this.folderTerminalsService.terminalsOf(folder), new Set(launcherService.agentTerminals))
+		}));
 	}
 
 	private tellBar(): void {

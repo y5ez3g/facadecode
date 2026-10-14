@@ -16,6 +16,7 @@ import { Promises } from '../../../../base/common/async.js';
 import { IEditorService } from '../../editor/common/editorService.js';
 import { EditorsOrder } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
+import { IPutAwayEditorsService } from '../../putAwayEditors/common/putAwayEditors.js';
 
 /**
  * The working copy backup tracker deals with:
@@ -34,6 +35,7 @@ export abstract class WorkingCopyBackupTracker extends Disposable {
 		protected readonly filesConfigurationService: IFilesConfigurationService,
 		private readonly workingCopyEditorService: IWorkingCopyEditorService,
 		protected readonly editorService: IEditorService,
+		private readonly putAwayEditorsService: IPutAwayEditorsService,
 	) {
 		super();
 
@@ -362,6 +364,7 @@ export abstract class WorkingCopyBackupTracker extends Disposable {
 		// non-opened.
 		const openedEditorsForBackups = new Set<EditorInput>();
 		const nonOpenedEditorsForBackups = new Set<EditorInput>();
+		const putAwayEditorsForBackups = new Set<EditorInput>();
 
 		// Ensure each backup that can be handled has an
 		// associated editor.
@@ -382,9 +385,14 @@ export abstract class WorkingCopyBackupTracker extends Disposable {
 				}
 			}
 
+			// Facade Code: a put-away editor comes back with its folder, not into the one on screen (WORKSPACE.md W6.2)
+			if (!hasOpenedEditorForBackup && this.putAwayEditorsService.isPutAway(unrestoredBackup.resource)) {
+				putAwayEditorsForBackups.add(await handler.createEditor(unrestoredBackup));
+			}
+
 			// Otherwise, make sure to create at least one editor
 			// for the backup to show
-			if (!hasOpenedEditorForBackup) {
+			else if (!hasOpenedEditorForBackup) {
 				nonOpenedEditorsForBackups.add(await handler.createEditor(unrestoredBackup));
 			}
 
@@ -419,6 +427,15 @@ export abstract class WorkingCopyBackupTracker extends Disposable {
 			}
 
 			return openedEditorForBackup.resolve();
+		}));
+
+		// Facade Code: put-away working copies are loaded without an editor, for Save All, auto save and shutdown
+		await Promises.settled([...putAwayEditorsForBackups].map(async putAwayEditorForBackup => {
+			try {
+				await putAwayEditorForBackup.resolve();
+			} finally {
+				putAwayEditorForBackup.dispose();
+			}
 		}));
 
 		// Finally, remove all handled backups from the list

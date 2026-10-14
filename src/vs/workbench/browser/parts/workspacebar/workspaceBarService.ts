@@ -14,6 +14,26 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import type { IWorkspaceBarRepository } from './workspaceBarGit.js';
 
 /**
+ * How `show` ended (WORKSPACE.md W6.2). Work that depends on the folder being shown goes on only after `shown`;
+ * a failure has already been reported, and `added` says whether the folder joined the workspace regardless.
+ */
+export type ShowResult =
+	| { readonly kind: 'shown' }
+	| { readonly kind: 'cancelled' }
+	| { readonly kind: 'failed'; readonly reason: string; readonly added?: boolean };
+
+/** How `remove` ended (WORKSPACE.md W9.6); a failure has already been reported. */
+export type RemoveResult =
+	| { readonly kind: 'removed'; readonly folders: readonly URI[] }
+	| { readonly kind: 'cancelled' }
+	| { readonly kind: 'failed'; readonly reason: string };
+
+export interface IRemoveOptions {
+	/** The caller has already asked about what would be lost, as deleting a worktree does. */
+	readonly confirmed?: boolean;
+}
+
+/**
  * What the bar offers the rest of the workbench.
  *
  * In its own file so that an action can reach the bar without importing the part that registers it:
@@ -57,13 +77,19 @@ export interface IWorkspaceBarService {
 	 * three, and walking the window through the first two on the way to the third is a switch nobody
 	 * asked for. The last one, because that is the one somebody's hand let go of.
 	 */
-	addAndShow(uris: readonly URI[]): Promise<void>;
+	addAndShow(uris: readonly URI[]): Promise<ShowResult>;
 
 	/** Collapses the bar to a column of icons, or opens it again. */
 	toggleCollapsed(): void;
 
-	/** Takes folders out of the workspace, leaving them where they are on disk. */
-	remove(uris: readonly URI[]): Promise<void>;
+	/**
+	 * Takes folders out of the workspace for every caller, leaving them on disk; asks first only when
+	 * something would be lost (W9.6).
+	 */
+	remove(uris: readonly URI[], options?: IRemoveOptions): Promise<RemoveResult>;
+
+	/** Whether `folder` is leaving through `remove`, so what runs in it stops rather than moves to the panel. */
+	isRemoving(folder: URI): boolean;
 
 	/**
 	 * Moves the row `uri` is - a folder's, or a repository's with its worktrees in the workspace -
@@ -81,7 +107,7 @@ export interface IWorkspaceBarService {
 	 * makes rather than a default it inherits. "in New Window", the modifier in Open Recent and an
 	 * extension calling `vscode.openFolder` all still mean a window.
 	 */
-	show(uri: URI): Promise<void>;
+	show(uri: URI): Promise<ShowResult>;
 
 	/**
 	 * What a command that was invoked without a folder should act on: the row the list has focus
@@ -91,7 +117,7 @@ export interface IWorkspaceBarService {
 
 	/**
 	 * The repository `uri` belongs to - as its main checkout or as one of its worktrees - the way the
-	 * bar last read it from git's own files (WORKTREE.md section 5). Undefined for a folder the bar
+	 * bar last read it from git's own files (WORKTREE.md WT-3). Undefined for a folder the bar
 	 * does not know as part of a repository, and for every folder while the bar lists no worktrees.
 	 */
 	repositoryFor(uri: URI): IWorkspaceBarRepository | undefined;
@@ -102,6 +128,9 @@ export interface IWorkspaceBarService {
 	 * that live in folders is sorted by, to read in the bar's order.
 	 */
 	rowOrder(): readonly URI[];
+
+	/** Every row, most recently visited first, for Switch Folder (WORKSPACE.md W9.11). */
+	recentRows(): readonly URI[];
 
 	/**
 	 * Opens or closes a repository's row onto its worktrees (WORKTREE.md WT-1.10). The state is the
@@ -158,7 +187,8 @@ export async function openOrShow(
 	options?: IOpenWindowOptions
 ): Promise<void> {
 	if (isFolderToOpen(toOpen) && reaches(toOpen.folderUri, environmentService) && !options?.forceNewWindow) {
-		return workspaceBarService.show(toOpen.folderUri);
+		await workspaceBarService.show(toOpen.folderUri);
+		return;
 	}
 
 	return hostService.openWindow([toOpen], options);

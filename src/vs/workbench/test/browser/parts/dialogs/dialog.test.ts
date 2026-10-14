@@ -9,14 +9,14 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { IKeybindingService } from '../../../../../platform/keybinding/common/keybinding.js';
 import { ILayoutService } from '../../../../../platform/layout/browser/layoutService.js';
 import { defaultButtonStyles, defaultDialogStyles, defaultInputBoxStyles } from '../../../../../platform/theme/browser/defaultStyles.js';
-import { createWorkbenchDialogOptions, facadeDialogButtonStyles, facadeDialogInputBoxStyles } from '../../../../browser/parts/dialogs/dialog.js';
+import { createWorkbenchDialogOptions } from '../../../../browser/parts/dialogs/dialog.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
 
 suite('Workbench dialogs - the options they are built with', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('a facade dialog gets its own styles, button order, keyboard walk and overlay; any other is built as upstream builds it', () => {
+	test('a facade dialog gets its own box, button order, keyboard walk and overlay, and the buttons and inputs every VS Code dialog has; any other is built as upstream builds it', () => {
 		const describe = (extraClasses: string[]) => {
 			const options = createWorkbenchDialogOptions(
 				{ extraClasses, modalBlockExtraClasses: ['theirs'] },
@@ -25,8 +25,8 @@ suite('Workbench dialogs - the options they are built with', () => {
 				upcastPartial<IHostService>({ setWindowDimmed: async () => { } })
 			);
 			return {
-				buttonStyles: options.buttonStyles === facadeDialogButtonStyles ? 'facade' : options.buttonStyles === defaultButtonStyles ? 'default' : 'other',
-				inputBoxStyles: options.inputBoxStyles === facadeDialogInputBoxStyles ? 'facade' : options.inputBoxStyles === defaultInputBoxStyles ? 'default' : 'other',
+				buttonStyles: options.buttonStyles === defaultButtonStyles ? 'default' : 'other',
+				inputBoxStyles: options.inputBoxStyles === defaultInputBoxStyles ? 'default' : 'other',
 				dialogStyles: options.dialogStyles === defaultDialogStyles ? 'default' : { shadow: options.dialogStyles.dialogShadow, border: options.dialogStyles.dialogBorder },
 				primaryButtonLast: !!options.primaryButtonLast,
 				navigateBody: !!options.navigateBody,
@@ -36,7 +36,7 @@ suite('Workbench dialogs - the options they are built with', () => {
 		};
 
 		assert.deepStrictEqual({ facade: describe(['facade-dialog', 'mine']), upstream: describe(['theirs']) }, {
-			facade: { buttonStyles: 'facade', inputBoxStyles: 'facade', dialogStyles: { shadow: undefined, border: 'var(--vscode-facadeDialog-border)' }, primaryButtonLast: true, navigateBody: true, dimsWindowControls: false, modalBlockExtraClasses: ['theirs', 'facade-dialog-block'] },
+			facade: { buttonStyles: 'default', inputBoxStyles: 'default', dialogStyles: { shadow: undefined, border: undefined }, primaryButtonLast: true, navigateBody: true, dimsWindowControls: false, modalBlockExtraClasses: ['theirs', 'facade-dialog-block'] },
 			upstream: { buttonStyles: 'default', inputBoxStyles: 'default', dialogStyles: 'default', primaryButtonLast: false, navigateBody: false, dimsWindowControls: true, modalBlockExtraClasses: ['theirs'] },
 		});
 	});

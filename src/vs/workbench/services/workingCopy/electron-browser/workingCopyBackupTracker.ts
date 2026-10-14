@@ -24,6 +24,7 @@ import { CancellationToken, CancellationTokenSource } from '../../../../base/com
 import { IProgressService, ProgressLocation } from '../../../../platform/progress/common/progress.js';
 import { Promises, raceCancellation } from '../../../../base/common/async.js';
 import { IWorkingCopyEditorService } from '../common/workingCopyEditorService.js';
+import { IPutAwayEditorsService } from '../../putAwayEditors/common/putAwayEditors.js';
 
 export class NativeWorkingCopyBackupTracker extends WorkingCopyBackupTracker implements IWorkbenchContribution {
 
@@ -43,8 +44,9 @@ export class NativeWorkingCopyBackupTracker extends WorkingCopyBackupTracker imp
 		@IProgressService private readonly progressService: IProgressService,
 		@IWorkingCopyEditorService workingCopyEditorService: IWorkingCopyEditorService,
 		@IEditorService editorService: IEditorService,
+		@IPutAwayEditorsService putAwayEditorsService: IPutAwayEditorsService,
 	) {
-		super(workingCopyBackupService, workingCopyService, logService, lifecycleService, filesConfigurationService, workingCopyEditorService, editorService);
+		super(workingCopyBackupService, workingCopyService, logService, lifecycleService, filesConfigurationService, workingCopyEditorService, editorService, putAwayEditorsService);
 	}
 
 	protected async onFinalBeforeShutdown(reason: ShutdownReason): Promise<boolean> {

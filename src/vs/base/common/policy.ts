@@ -8,8 +8,13 @@ import { IPolicyData } from './defaultAccount.js';
 
 /**
  * System-wide policy file path for Linux systems.
+ *
+ * Facade Code: named after the product, `/etc/facade/policy.json` - upstream hard-codes VS Code's own folder
+ * under /etc, which would make VS Code's policy this product's too (IDENTITY.md I5).
  */
-export const LINUX_SYSTEM_POLICY_FILE_PATH = '/etc/vscode/policy.json';
+export function linuxSystemPolicyFilePath(applicationName: string): string {
+	return `/etc/${applicationName}/policy.json`;
+}
 
 export type PolicyName = string;
 export type LocalizedValue = {

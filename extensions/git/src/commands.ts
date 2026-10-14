@@ -1191,11 +1191,8 @@ export class CommandCenter {
 
 		const addToWorkspace = l10n.t('Add to Workspace');
 		if (workspace.workspaceFolders) {
-			message = l10n.t('Would you like to add the initialized repository to this workspace, or open it on its own?');
-			// ⚠️ First, so it is the one offered. This window holds a list of folders and a new
-			// repository joining it is the ordinary thing to want; opening it on its own, in a window
-			// with nothing else in it, is the exception. Both are still here.
-			choices.unshift(addToWorkspace);
+			message = l10n.t('Would you like to open the initialized repository, or add it to the current workspace?');
+			choices.push(addToWorkspace);
 		}
 
 		const result = await window.showInformationMessage(message, ...choices);
@@ -3819,8 +3816,8 @@ export class CommandCenter {
 	}
 
 	@command('_git.deleteWorktreeAt')
-	async deleteWorktreeAt(root: Uri, worktree: Uri, mode: worktreeAt.DeleteWorktreeMode): Promise<worktreeAt.DeleteWorktreeAtResult> {
-		return worktreeAt.deleteWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), mode);
+	async deleteWorktreeAt(root: Uri, worktree: Uri, mode: worktreeAt.DeleteWorktreeMode, recovery?: string): Promise<worktreeAt.DeleteWorktreeAtResult> {
+		return worktreeAt.deleteWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), mode, recovery);
 	}
 
 	@command('_git.prepareWorktreeBaseAt')

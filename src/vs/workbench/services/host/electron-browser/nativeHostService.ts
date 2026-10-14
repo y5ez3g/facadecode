@@ -21,6 +21,7 @@ import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { showBrowserToast } from '../browser/toasts.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
+import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 
 class WorkbenchNativeHostService extends NativeHostService {
 
@@ -39,7 +40,8 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	constructor(
 		@INativeHostService private readonly nativeHostService: INativeHostService,
 		@ILabelService private readonly labelService: ILabelService,
-		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService
 	) {
 		super();
 
@@ -126,6 +128,11 @@ class WorkbenchHostService extends Disposable implements IHostService {
 	}
 
 	private doOpenWindow(toOpen: IWindowOpenable[], options?: IOpenWindowOptions): Promise<void> {
+		// Facade Code: a workspace opened from a window with folders opens in a new one, unless told otherwise (WORKSPACE.md W4)
+		if (toOpen.some(isWorkspaceToOpen) && !options?.forceReuseWindow && this.contextService.getWorkbenchState() !== WorkbenchState.EMPTY) {
+			options = { ...options, forceNewWindow: true };
+		}
+
 		const remoteAuthority = this.environmentService.remoteAuthority;
 		if (remoteAuthority) {
 			toOpen.forEach(openable => openable.label = openable.label || this.getRecentLabel(openable));

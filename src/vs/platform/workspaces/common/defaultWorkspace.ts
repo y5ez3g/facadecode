@@ -3,8 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { VSBuffer } from '../../../base/common/buffer.js';
 import { joinPath } from '../../../base/common/resources.js';
 import { URI } from '../../../base/common/uri.js';
+import { FileOperationResult, IFileService, toFileOperationResult } from '../../files/common/files.js';
+import { ILogService } from '../../log/common/log.js';
 
 /**
  * The one workspace a window falls back to when it was asked to open nothing at all.
@@ -35,3 +38,31 @@ export function defaultWorkspaceUri(userDataPath: string): URI {
 
 /** What the file is created with when it is not there yet: a workspace with no folders in it. */
 export const DEFAULT_WORKSPACE_CONTENT = JSON.stringify({ folders: [] }, undefined, '\t');
+
+/**
+ * The default workspace's file, written when missing. Undefined, with the reason logged, when it cannot be read
+ * or written or a directory is in its place; the caller then opens an empty window (WORKSPACE.md WS-02).
+ */
+export async function ensureDefaultWorkspace(fileService: IFileService, logService: ILogService, userDataPath: string): Promise<URI | undefined> {
+	const uri = defaultWorkspaceUri(userDataPath);
+	try {
+		if (!(await fileService.stat(uri)).isDirectory) {
+			return uri;
+		}
+		logService.warn(`[defaultWorkspace] ${uri.fsPath} is a directory, not a workspace file: an empty window opens instead`);
+		return undefined;
+	} catch (error) {
+		if (toFileOperationResult(error) !== FileOperationResult.FILE_NOT_FOUND) {
+			logService.warn(`[defaultWorkspace] ${uri.fsPath} could not be read: an empty window opens instead`, error);
+			return undefined;
+		}
+	}
+
+	try {
+		await fileService.writeFile(uri, VSBuffer.fromString(DEFAULT_WORKSPACE_CONTENT));
+		return uri;
+	} catch (error) {
+		logService.warn(`[defaultWorkspace] ${uri.fsPath} could not be written: an empty window opens instead`, error);
+		return undefined;
+	}
+}

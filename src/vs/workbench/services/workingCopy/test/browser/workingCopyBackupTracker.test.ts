@@ -29,6 +29,7 @@ import { IWorkingCopyEditorHandler, IWorkingCopyEditorService } from '../../comm
 import { bufferToReadable, VSBuffer } from '../../../../../base/common/buffer.js';
 import { isWindows } from '../../../../../base/common/platform.js';
 import { Schemas } from '../../../../../base/common/network.js';
+import { IPutAwayEditorsService } from '../../../putAwayEditors/common/putAwayEditors.js';
 
 suite('WorkingCopyBackupTracker (browser)', function () {
 	let accessor: TestServiceAccessor;
@@ -54,8 +55,9 @@ suite('WorkingCopyBackupTracker (browser)', function () {
 			@ILogService logService: ILogService,
 			@IWorkingCopyEditorService workingCopyEditorService: IWorkingCopyEditorService,
 			@IEditorService editorService: IEditorService,
+			@IPutAwayEditorsService putAwayEditorsService: IPutAwayEditorsService,
 		) {
-			super(workingCopyBackupService, filesConfigurationService, workingCopyService, lifecycleService, logService, workingCopyEditorService, editorService);
+			super(workingCopyBackupService, filesConfigurationService, workingCopyService, lifecycleService, logService, workingCopyEditorService, editorService, putAwayEditorsService);
 		}
 
 		protected override getBackupScheduleDelay(): number {
@@ -182,7 +184,7 @@ suite('WorkingCopyBackupTracker (browser)', function () {
 		assert.strictEqual(workingCopyBackupService.hasBackupSync(customWorkingCopy), false);
 	});
 
-	async function restoreBackupsInit(): Promise<[TestWorkingCopyBackupTracker, TestServiceAccessor]> {
+	async function restoreBackupsInit(putAway: URI[] = []): Promise<[TestWorkingCopyBackupTracker, TestServiceAccessor]> {
 		const fooFile = URI.file(isWindows ? 'c:\\Foo' : '/Foo');
 		const barFile = URI.file(isWindows ? 'c:\\Bar' : '/Bar');
 		const untitledFile1 = URI.from({ scheme: Schemas.untitled, path: 'Untitled-1' });
@@ -210,6 +212,9 @@ suite('WorkingCopyBackupTracker (browser)', function () {
 		const barFileWorkingCopyId = toTypedWorkingCopyId(barFile);
 		await workingCopyBackupService.backup(fooFileWorkingCopyId, bufferToReadable(VSBuffer.fromString('fooFile')));
 		await workingCopyBackupService.backup(barFileWorkingCopyId, bufferToReadable(VSBuffer.fromString('barFile')));
+
+		// Facade Code: put away with a folder the window is not on, as the last window left them
+		instantiationService.invokeFunction(accessor => accessor.get(IPutAwayEditorsService)).set(URI.file(isWindows ? 'c:\\elsewhere' : '/elsewhere'), putAway);
 
 		const tracker = disposables.add(instantiationService.createInstance(TestWorkingCopyBackupTracker));
 
@@ -257,6 +262,32 @@ suite('WorkingCopyBackupTracker (browser)', function () {
 			assert.ok(editor instanceof TestUntitledTextEditorInput);
 			assert.strictEqual(editor.resolved, true);
 		}
+	});
+
+	test('Restore backups (WS-17: one put away with a folder the window is not on is loaded, without an editor on screen)', async function () {
+		const untitledFile1 = URI.from({ scheme: Schemas.untitled, path: 'Untitled-1' });
+		const [tracker, accessor] = await restoreBackupsInit([untitledFile1]);
+
+		const created: { resource: string; editor: TestUntitledTextEditorInput }[] = [];
+		await tracker.testRestoreBackups({
+			handles: workingCopy => workingCopy.typeId === '',
+			isOpen: () => false,
+			createEditor: workingCopy => {
+				const editor = disposables.add(accessor.instantiationService.createInstance(TestUntitledTextEditorInput, accessor.untitledTextEditorService.create({ initialValue: 'foo' })));
+				created.push({ resource: workingCopy.resource.toString(), editor });
+				return editor;
+			}
+		});
+
+		const putAway = created.find(({ resource }) => resource === untitledFile1.toString())?.editor;
+		assert.deepStrictEqual({
+			created: created.length,
+			onScreen: accessor.editorService.editors.length,
+			putAwayOnScreen: accessor.editorService.editors.some(editor => editor === putAway),
+			putAwayLoaded: putAway?.resolved,
+			putAwayEditorGone: putAway?.isDisposed(),
+			unrestored: tracker.getUnrestoredBackups().size
+		}, { created: 2, onScreen: 1, putAwayOnScreen: false, putAwayLoaded: true, putAwayEditorGone: true, unrestored: 2 });
 	});
 
 	test('Restore backups (basics, none handled)', async function () {

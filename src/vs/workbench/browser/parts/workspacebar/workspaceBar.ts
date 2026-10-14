@@ -3,13 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { parse, ParseError } from '../../../../base/common/json.js';
-import { basename, dirname, IExtUri, isEqual, joinPath } from '../../../../base/common/resources.js';
-import { isObject } from '../../../../base/common/types.js';
+import { toErrorMessage } from '../../../../base/common/errorMessage.js';
+import { basename, dirname, isEqual, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
-import { IFileService } from '../../../../platform/files/common/files.js';
+import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { isStoredWorkspaceFolder, toWorkspaceFolders } from '../../../../platform/workspaces/common/workspaces.js';
 
 /**
  * Whether two paths name one folder. ⚠️ Not `uri.toString()`: a file system that ignores case gives
@@ -87,6 +85,28 @@ export function moveRow(rows: readonly IRowOfFolders[], uri: URI, offset: number
 /** Deep enough for any path, and a stop if a file system answers a parent with itself. */
 const MAX_CANONICAL_DEPTH = 32;
 
+/** Why a folder cannot be reached: nothing is there, or the read itself failed. */
+export type Unreachable =
+	| { readonly kind: 'missing' }
+	| { readonly kind: 'unreadable'; readonly reason: string };
+
+/** Why `uri` cannot be reached, telling a missing folder from one that cannot be read (WORKSPACE.md WS-63). */
+export async function unreachable(fileService: IFileService, uri: URI): Promise<Unreachable | undefined> {
+	try {
+		await fileService.stat(uri);
+		return undefined;
+	} catch (error) {
+		return toFileOperationResult(error) === FileOperationResult.FILE_NOT_FOUND
+			? { kind: 'missing' }
+			: { kind: 'unreadable', reason: toErrorMessage(error) };
+	}
+}
+
+/** `uri` as a person reads it in a message: a path on this machine, the whole URI anywhere else. */
+export function pathOf(uri: URI): string {
+	return uri.scheme === 'file' ? uri.fsPath : uri.toString(true);
+}
+
 /**
  * One spelling per directory, resolved once when a folder enters the workspace.
  *
@@ -124,36 +144,5 @@ export async function canonicalUri(fileService: IFileService, uri: URI): Promise
 	// Nothing on the way up could be resolved. The uri as given still makes a row, and a folder that
 	// is gone shows as one that is gone.
 	return uri;
-}
-
-/**
- * The folders a `.code-workspace` lists, resolved against where the file is. ⚠️ Read, never entered:
- * entering replaces this window's workspace identity, which every folder's editors are stored
- * under. Throws rather than answering with an empty list, so the caller can open the file instead.
- */
-export function foldersInWorkspaceFile(contents: string, resource: URI, extUri: IExtUri): URI[] {
-	const errors: ParseError[] = [];
-	const stored: { folders?: unknown } | undefined = parse(contents, errors);
-	if (errors.length || !isObject(stored) || !Array.isArray(stored.folders)) {
-		throw new Error(`Not a workspace file: ${resource.toString(true)}`);
-	}
-
-	return toWorkspaceFolders(stored.folders.filter(isStoredWorkspaceFolder), resource, extUri).map(folder => folder.uri);
-}
-
-/**
- * `text` as a markdown code span. ⚠️ Not `escapeMarkdownSyntaxTokens`: inside a span a backslash is
- * a literal, so escaping there prints them - `ios_app` renders as `ios\_app`. Only a backtick ends
- * a span, and it is carried by a longer fence.
- */
-export function asCodeSpan(text: string): string {
-	const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
-	const fence = '`'.repeat(longestRun + 1);
-
-	// A span drops one leading and one trailing space when it has both, which is how a backtick is
-	// kept off the fence.
-	const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-
-	return `${fence}${pad}${text}${pad}${fence}`;
 }
 

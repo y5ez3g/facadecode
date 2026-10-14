@@ -20,9 +20,10 @@ import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+import { defaultInputBoxStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkbenchLayoutService } from '../../../services/layout/browser/layoutService.js';
-import { createWorkbenchDialogOptions, facadeDialogInputBoxStyles } from '../dialogs/dialog.js';
+import { createWorkbenchDialogOptions } from '../dialogs/dialog.js';
 import { FOLDER_COLORS, FOLDER_ICONS, FolderColor, FolderIcon, IFolderCustomization } from './workspaceBarCustomization.js';
 
 interface IDialogServices {
@@ -110,7 +111,11 @@ export class WorkspaceBarDialogService implements IWorkspaceBarDialogService {
 		const answer = await showRowDialog({
 			defaultName: '',
 			worktree: true,
-			create: { title: localize('workspaceBar.newWorktreeTitle', "New Worktree in {0}", repository), origin, describe, notice: prepare?.notice, action: prepare?.action, blocked: prepare?.blocked }
+			create: {
+				title: localize('workspaceBar.newWorktreeTitle', "New Worktree in '{0}'", repository),
+				description: localize('workspaceBar.newWorktreeAbout', "Create a new Git worktree and branch for '{0}'.", repository),
+				origin, describe, notice: prepare?.notice, action: prepare?.action, blocked: prepare?.blocked
+			}
 		}, undefined, this.services());
 
 		return answer?.branch ? { branch: answer.branch, customization: answer.customization } : undefined;
@@ -134,6 +139,8 @@ async function showRowDialog(
 		/** Makes it the New Worktree dialog: a branch asked first, and a button that makes it. */
 		readonly create?: {
 			readonly title: string;
+			/** The sentence under the title: what the dialog makes. */
+			readonly description: string;
 			/** Where the branch starts: said under it, and the same whatever is typed. */
 			readonly origin: string;
 			readonly describe: (branch: string) => IBranchDescription;
@@ -177,10 +184,10 @@ async function showRowDialog(
 			extraClasses: ['facade-dialog', 'workspacebar-customize'],
 			// The sentence under the title, in the quiet ink (`facadedialog.css`): what this dialog is for.
 			detail: create
-				? localize('workspaceBar.newWorktreeDescription', "Create a dedicated branch and folder for isolated work.")
+				? create.description
 				: target.worktree
-					? localize('workspaceBar.customizeWorktreeDescription', "Customize worktree appearance in the workspace. The underlying branch and folder remain unchanged.")
-					: localize('workspaceBar.customizeDescription', "Customize folder appearance in the workspace. The underlying directory remains unchanged."),
+					? localize('workspaceBar.customizeWorktreeAbout', "Configure the display name and color for '{0}'. The branch and folder on disk are not renamed.", current?.name || target.defaultName)
+					: localize('workspaceBar.customizeAbout', "Configure the display name, color, and icon for '{0}'. The folder on disk is not renamed.", current?.name || target.defaultName),
 			cancelId: 1,
 			buttonOptions: [{
 				styleButton: button => {
@@ -221,7 +228,7 @@ async function showRowDialog(
 					append(container, $('.workspacebar-customize-label', undefined, localize('workspaceBar.branch', "Branch")));
 
 					branchBox = disposables.add(new InputBox(append(container, $('.workspacebar-customize-input')), services.contextViewService, {
-						inputBoxStyles: facadeDialogInputBoxStyles,
+						inputBoxStyles: defaultInputBoxStyles,
 						placeholder: localize('workspaceBar.branchPlaceholder', "Branch name"),
 						ariaLabel: localize('workspaceBar.branchAria', "Branch for the new worktree")
 					}));
@@ -259,7 +266,7 @@ async function showRowDialog(
 				append(container, $('.workspacebar-customize-label', undefined, localize('workspaceBar.displayName', "Display Name")));
 
 				const nameBox = disposables.add(new InputBox(append(container, $('.workspacebar-customize-input')), services.contextViewService, {
-					inputBoxStyles: facadeDialogInputBoxStyles,
+					inputBoxStyles: defaultInputBoxStyles,
 					// ⚠️ The folder's real name, greyed, so the field shows what leaving it blank gets you
 					// without spending a line on it. The line under it is still there for a screen reader,
 					// which does not read a placeholder as an answer.
@@ -280,7 +287,7 @@ async function showRowDialog(
 				const sayDefault = (defaultName: string) => {
 					nameBox.setPlaceHolder(defaultName);
 					nameHint.textContent = defaultName
-						? localize('workspaceBar.displayNameHint', "Leave empty to use default name (\"{0}\").", defaultName)
+						? localize('workspaceBar.displayNameDefault', "Leave empty to use the default name '{0}'.", defaultName)
 						: localize('workspaceBar.displayNameHintBranch', "Leave empty to use the branch name.");
 				};
 				sayDefault(target.defaultName);
@@ -363,7 +370,7 @@ async function showRowDialog(
 					}));
 				};
 
-				addSwatch(undefined, localize('workspaceBar.colorNone', "No color"));
+				addSwatch(undefined, localize('workspaceBar.colorNone', "No Color"));
 				for (const value of FOLDER_COLORS) {
 					addSwatch(value, colorLabel(value));
 				}

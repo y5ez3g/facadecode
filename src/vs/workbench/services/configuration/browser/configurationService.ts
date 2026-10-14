@@ -256,6 +256,40 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
 		return this.workspaceEditingQueue.queue(() => this.doReorderFolders(reorder));
 	}
 
+	/**
+	 * Facade Code: sets or, with `undefined`, removes the `name` of one folder in the workspace file, leaving every
+	 * path as written (WORKSPACE.md W9.7). Queued with the other folder edits, as `reorderFolders` is.
+	 */
+	renameFolder(folder: URI, name: string | undefined): Promise<void> {
+		return this.workspaceEditingQueue.queue(() => this.doRenameFolder(folder, name));
+	}
+
+	private async doRenameFolder(folder: URI, name: string | undefined): Promise<void> {
+		if (this.getWorkbenchState() !== WorkbenchState.WORKSPACE) {
+			return;
+		}
+
+		const folders = this.getWorkspace().folders;
+		const index = folders.findIndex(candidate => this.uriIdentityService.extUri.isEqual(candidate.uri, folder));
+		const stored = folders.map(candidate => candidate.raw).filter(isStoredWorkspaceFolder);
+		if (index === -1 || stored.length !== folders.length) {
+			return;
+		}
+
+		const trimmed = name?.trim() || undefined;
+		if ((stored[index].name || undefined) === trimmed) {
+			return;
+		}
+
+		const renamed: IStoredWorkspaceFolder = { ...stored[index] };
+		if (trimmed) {
+			renamed.name = trimmed;
+		} else {
+			delete renamed.name;
+		}
+		return this.setFolders(stored.map((candidate, at) => at === index ? renamed : candidate));
+	}
+
 	private async doReorderFolders(reorder: FolderReorder): Promise<void> {
 		if (this.getWorkbenchState() !== WorkbenchState.WORKSPACE) {
 			return;

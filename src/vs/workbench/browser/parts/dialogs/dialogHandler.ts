@@ -133,7 +133,6 @@ export class BrowserDialogHandler extends AbstractDialogHandler {
 				icon: customOptions?.icon,
 				alignment: customOptions?.alignment === 'vertical' ? DialogContentsAlignment.Vertical : DialogContentsAlignment.Horizontal,
 				disableCloseAction: customOptions?.disableCloseAction,
-				disableCloseButton: customOptions?.disableCloseButton,
 				buttonOptions: customOptions?.buttonDetails?.map(detail => ({ sublabel: detail })),
 				checkboxLabel: checkbox?.label,
 				checkboxChecked: checkbox?.checked,

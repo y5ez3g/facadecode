@@ -9,7 +9,8 @@ import { Codicon } from '../../../../../base/common/codicons.js';
 import { isWindows } from '../../../../../base/common/platform.js';
 import { IShellLaunchConfig, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
 import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
-import { AGENT_TERMINAL_ICON, agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
+import { ShutdownReason, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
+import { AGENT_TERMINAL_ICON, agentIcon, agentLaunchOf, AGENT_TITLE_TEMPLATE, BUILT_IN_LAUNCHERS, commandExecutable, executableFileNames, isAgentGoneAtStartup, isPathLike, readAgentNames, restoreAgentLaunch, searchPathEntries } from '../../common/terminalLaunchers.js';
 
 suite('Terminal launchers - what to look for', () => {
 
@@ -163,6 +164,18 @@ suite('Terminal launchers - an agent across a reload', () => {
 			['unnamed', undefined],
 			['reconnecting', undefined],
 		]);
+	});
+
+	test('WS-38 after a restart an agent is gone - what would come back in its tab is a new shell under its old output - and after a reload, or a crash, it is still running; a plain terminal, or one only drawn as an agent\'s, comes back either way', () => {
+		const agent = { reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) };
+		const restarted = { startupKind: StartupKind.ReopenedWindow, lastShutdownReason: ShutdownReason.QUIT };
+
+		assert.deepStrictEqual({
+			restarted: isAgentGoneAtStartup(agent, restarted),
+			reloaded: isAgentGoneAtStartup(agent, { startupKind: StartupKind.ReloadedWindow, lastShutdownReason: ShutdownReason.RELOAD }),
+			crashed: isAgentGoneAtStartup(agent, { startupKind: StartupKind.ReopenedWindow, lastShutdownReason: undefined }),
+			plain: isAgentGoneAtStartup({}, restarted)
+		}, { restarted: true, reloaded: false, crashed: false, plain: false });
 	});
 
 	test('a reconnecting agent terminal - its run\'s, by its mark, whatever its icon - gets back its name and title template, found by its nonce, and nothing else does, an ordinary terminal drawn with the robot included (VC-06)', () => {

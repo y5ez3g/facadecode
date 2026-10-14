@@ -237,8 +237,8 @@ CommandsRegistry.registerCommand('_facade.worktree.stopSetup', (accessor, ...arg
 // unsaved editors and submodules refuse it unless `options.discardChanges` - all but `options.ownFiles`, what
 // Facade put there and nobody changed, by hash. `options.main` is its main checkout, for a bar that lists no
 // worktrees; `options.runs` the agents' runs stopped in it, the only agents' terminals it closes;
-// `options.leftover` says it is what a deletion left of one, which git no longer lists. Rejects with why it could
-// not, in the product's words: a main checkout is never deleted.
+// `options.leftover` says it is what a deletion in this window left of one, which git no longer lists. Rejects with
+// why it could not, in the product's words: a main checkout is never deleted.
 CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...args) => {
 	const [worktree, options] = args;
 	assertType(URI.isUri(worktree), 'URI');

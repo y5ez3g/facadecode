@@ -40,7 +40,13 @@ export const FACADE_CONFIGURATION_DEFAULTS: Readonly<Record<string, string>> = O
 	 * own default for this setting, `readOnly` and next to upstream's, and the secondary side bar
 	 * is part of what it is for.
 	 */
-	'workbench.secondarySideBar.defaultVisibility': 'hidden'
+	'workbench.secondarySideBar.defaultVisibility': 'hidden',
+
+	// Ask before closing stops a running agent or terminal, in any folder (WORKSPACE.md W11)
+	'terminal.integrated.confirmOnExit': 'hasChildProcesses',
+
+	// A clone joins this window without a question: nothing in the window is replaced (WORKSPACE.md W5)
+	'git.openAfterClone': 'always'
 });
 
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration)

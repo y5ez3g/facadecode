@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { Event } from '../../../../../base/common/event.js';
+import { timeout } from '../../../../../base/common/async.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
@@ -12,8 +13,9 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { InMemoryStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
-import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
-import { FOLDER_COLORS, FOLDER_ICONS, WorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { IWorkspaceContextService, IWorkspaceFolder, IWorkspaceFoldersChangeEvent, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
+import { FOLDER_COLORS, FOLDER_ICONS, freeWorktreeColor, WorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 
 const STORAGE_KEY = 'facade.workspaceBar.customization';
 
@@ -34,6 +36,11 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		readonly folder: IWorkspaceFolder;
 		/** Builds a second service over the same storage - what a reload is. */
 		readonly reopen: () => WorkspaceBarCustomizationService;
+		/** Folders joining the workspace, as the workspace file or the bar adds them. */
+		readonly join: (...folders: IWorkspaceFolder[]) => void;
+		/** Every `renameFolder` asked of the workspace file, as path and name. */
+		readonly renamed: [string, string | undefined][];
+		state: WorkbenchState;
 	}
 
 	function setup(stored?: string): ISetup {
@@ -44,14 +51,21 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		}
 
 		const uriIdentityService = store.add(new UriIdentityService(new TestFileService()));
-		const build = () => store.add(new WorkspaceBarCustomizationService(storage, uriIdentityService));
+		const joining = store.add(new Emitter<IWorkspaceFoldersChangeEvent>());
+		const renamed: [string, string | undefined][] = [];
+		const result = { state: WorkbenchState.WORKSPACE } as ISetup;
+		const contextService = { onDidChangeWorkspaceFolders: joining.event, getWorkbenchState: () => result.state } as unknown as IWorkspaceContextService;
+		const workspaceEditingService = { renameFolder: async (uri: URI, name: string | undefined) => { renamed.push([uri.path, name]); } } as unknown as IWorkspaceEditingService;
+		const build = () => store.add(new WorkspaceBarCustomizationService(storage, uriIdentityService, contextService, workspaceEditingService));
 
-		return {
+		return Object.assign(result, {
 			service: build(),
 			storage,
 			folder: new WorkspaceFolder({ uri: URI.file('/w/api'), index: 0, name: 'api' }),
-			reopen: build
-		};
+			reopen: build,
+			join: (...folders: IWorkspaceFolder[]) => joining.fire({ added: folders, removed: [], changed: [] }),
+			renamed
+		});
 	}
 
 	test('⭐ every field survives a reload, not just the ones somebody remembered', async () => {
@@ -139,6 +153,47 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		});
 	});
 
+	test('WS-22 WS-34 the name in the workspace file is the name; one kept here stands in only where the file has none', () => {
+		const { service } = setup();
+		const named = new WorkspaceFolder({ uri: URI.file('/w/api'), index: 0, name: 'API' });
+		const unnamed = new WorkspaceFolder({ uri: URI.file('/w/web'), index: 1, name: 'web' });
+
+		service.set(named.uri, { name: 'Kept here' });
+		service.set(unnamed.uri, { name: 'Frontend' });
+		service.setDefaultNames([{ uri: named.uri, name: 'feature/login' }]);
+
+		assert.deepStrictEqual({ named: service.nameFor(named), unnamed: service.nameFor(unnamed) }, { named: 'API', unnamed: 'Frontend' });
+	});
+
+	test('WS-34 a row named while it was not in the list takes its name into folders[].name when its folder joins', async () => {
+		const setupResult = setup();
+		const { service, folder } = setupResult;
+		service.set(folder.uri, { name: 'Login', color: 'teal' });
+
+		setupResult.join(folder);
+		await timeout(0);
+
+		assert.deepStrictEqual({ renamed: setupResult.renamed, kept: service.get(folder.uri) }, {
+			renamed: [['/w/api', 'Login']],
+			kept: { name: undefined, color: 'teal', icon: undefined }
+		});
+	});
+
+	test('WS-34 without a workspace file there is nowhere else to keep it, and a folder that joins named already keeps its own', async () => {
+		const setupResult = setup();
+		const { service, folder } = setupResult;
+		const named = new WorkspaceFolder({ uri: URI.file('/w/web'), index: 1, name: 'Web App' });
+		service.set(folder.uri, { name: 'Login' });
+		service.set(named.uri, { name: 'Frontend' });
+
+		setupResult.join(named);
+		setupResult.state = WorkbenchState.FOLDER;
+		setupResult.join(folder);
+		await timeout(0);
+
+		assert.deepStrictEqual({ renamed: setupResult.renamed, stillHere: service.get(folder.uri)?.name }, { renamed: [], stillHere: 'Login' });
+	});
+
 	test('a change is announced once, for the folder that changed', () => {
 		const { service, folder } = setup();
 
@@ -151,7 +206,7 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		assert.deepStrictEqual(heard, [folder.uri.toString()], 'a no-op was announced');
 	});
 
-	test('a repository\'s worktree order survives a reload, is announced once, and a record it cannot read is dropped', () => {
+	test('WTA-04 a repository\'s worktree order survives a reload, is announced once, and a record it cannot read is dropped', () => {
 		const { service, storage, reopen } = setup();
 		const repository = URI.file('/w/api');
 		const [a, b, c] = ['/wt/a', '/wt/b', '/wt/c'].map(path => URI.file(path));
@@ -183,7 +238,7 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		});
 	});
 
-	test('⭐ the palettes and their labels cannot drift apart', () => {
+	test('WS-43 ⭐ the palettes and their labels cannot drift apart', () => {
 		// ⚠️ `colorLabel` and `iconLabel` are exhaustive switches over these two lists, so a value
 		// added here without a label fails the build. This asserts the shape the dialog lays out for:
 		// ten of each, `folder` first because it is what an untagged row already draws.
@@ -192,5 +247,14 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		assert.strictEqual(FOLDER_ICONS[0], 'folder');
 		assert.strictEqual(new Set(FOLDER_COLORS).size, FOLDER_COLORS.length, 'a colour is in the list twice');
 		assert.strictEqual(new Set(FOLDER_ICONS).size, FOLDER_ICONS.length, 'an icon is in the list twice');
+	});
+
+	test('WTA-29 a new worktree takes the first colour its repository\'s others do not have, and none once all are taken', () => {
+		assert.deepStrictEqual({
+			first: freeWorktreeColor([]),
+			next: freeWorktreeColor(['red', undefined, 'orange']),
+			last: freeWorktreeColor(FOLDER_COLORS.filter(color => color !== 'pink')),
+			none: freeWorktreeColor([...FOLDER_COLORS]),
+		}, { first: 'red', next: 'yellow', last: 'pink', none: undefined });
 	});
 });

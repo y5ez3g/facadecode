@@ -11,6 +11,7 @@ import { registerTerminalLauncherActions } from './terminalLauncherActions.js';
 import './terminalLauncherService.js';
 import { TerminalLauncherMenu } from './terminalLauncherMenu.js';
 import { TerminalLauncherWorkspaceBar } from './terminalLauncherWorkspaceBar.js';
+import { RunningWorkShutdownQuestion } from './terminalLauncherShutdown.js';
 
 registerTerminalLauncherActions();
 
@@ -18,8 +19,9 @@ registerTerminalLauncherActions();
 // This is what puts the agents beside it, and it runs early so the first opening is the real list.
 registerWorkbenchContribution2(TerminalLauncherMenu.ID, TerminalLauncherMenu, WorkbenchPhase.BlockRestore);
 
-// After the folder terminals, which it asks where each agent is and which start `AfterRestored`.
-registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.Eventually);
+// With the folder terminals they ask, which start `AfterRestored`
+registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.AfterRestored);
+registerWorkbenchContribution2(RunningWorkShutdownQuestion.ID, RunningWorkShutdownQuestion, WorkbenchPhase.AfterRestored);
 
 // The agent menu once kept a list of agents of its own under `facade.agents`, which is where the agents'
 // settings are now (AGENT-LAUNCHER.md, L7): the built-ins are found as the menu opens, and a list left

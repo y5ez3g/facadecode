@@ -14,8 +14,9 @@ import * as processes from '../../../base/node/processes.js';
 import * as nls from '../../../nls.js';
 import { DEFAULT_TERMINAL_OSX, IExternalTerminalService, IExternalTerminalSettings, ITerminalForPlatform } from '../common/externalTerminal.js';
 import { ITerminalEnvironment } from '../../terminal/common/terminal.js';
+import product from '../../product/common/product.js';
 
-const TERMINAL_TITLE = nls.localize('console.title', "VS Code Console");
+const TERMINAL_TITLE = nls.localize('console.title', "{0} Console", product.nameLong);
 
 abstract class ExternalTerminalService {
 	public _serviceBrand: undefined;

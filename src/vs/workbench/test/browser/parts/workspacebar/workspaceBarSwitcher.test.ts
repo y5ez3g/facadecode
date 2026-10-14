@@ -8,9 +8,9 @@ import { DeferredPromise } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { mock } from '../../../../../base/test/common/mock.js';
+import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderErrorCode, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
 import { IHistoryService } from '../../../../services/history/common/history.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -23,6 +23,13 @@ import { WorkspaceBarModel } from '../../../../browser/parts/workspacebar/worksp
 import { WorkspaceBarSwitcher } from '../../../../browser/parts/workspacebar/workspaceBarSwitcher.js';
 import { ActiveFolderService } from '../../../../services/activeFolder/browser/activeFolderService.js';
 import { IEditorGroupsService, IEditorWorkingSet, IEditorWorkingSetOptions } from '../../../../services/editor/common/editorGroupsService.js';
+import { IHeldEditorsService } from '../../../../services/heldEditors/common/heldEditors.js';
+import { IWorkbenchLayoutService, Parts } from '../../../../services/layout/browser/layoutService.js';
+import { mainWindow } from '../../../../../base/browser/window.js';
+import { IEditorService } from '../../../../services/editor/common/editorService.js';
+import { PutAwayEditorsService } from '../../../../services/putAwayEditors/browser/putAwayEditorsService.js';
+import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
+import { ITextModelService } from '../../../../../editor/common/services/resolverService.js';
 
 /**
  * The editor part, modelled far enough to tell a switch that went wrong from one that went right.
@@ -36,6 +43,7 @@ class TestEditorGroups {
 
 	private next = 0;
 	private onScreen: string = 'nothing';
+	readonly groups = [{ whenRestored: Promise.resolve() }];
 
 	readonly saved: { key: string; held: string }[] = [];
 	readonly applied: string[] = [];
@@ -43,9 +51,16 @@ class TestEditorGroups {
 	/** Set to hold a restore open, so a second switch can be made to overlap it. */
 	pending: DeferredPromise<void> | undefined;
 
+	/** Set to make the next capture throw, or the next restore be declined. */
+	failCapture = false;
+	declineRestore = false;
+
 	private readonly sets = new Map<string, IEditorWorkingSet>();
 
 	saveWorkingSet(name: string): IEditorWorkingSet {
+		if (this.failCapture) {
+			throw new Error('the editors could not be read');
+		}
 		const set = { id: `set-${this.next++}`, name };
 		this.sets.set(set.id, set);
 		this.saved.push({ key: name, held: this.onScreen });
@@ -59,6 +74,10 @@ class TestEditorGroups {
 	async applyWorkingSet(workingSet: IEditorWorkingSet | 'empty', _options?: IEditorWorkingSetOptions): Promise<boolean> {
 		if (this.pending) {
 			await this.pending.p;
+		}
+
+		if (this.declineRestore) {
+			return false;
 		}
 
 		const name = workingSet === 'empty' ? 'empty' : workingSet.name;
@@ -107,7 +126,16 @@ class TestContextService extends mock<IWorkspaceContextService>() {
 class TestFileService extends mock<IFileService>() {
 	override onDidChangeFileSystemProviderCapabilities = Event.None;
 	override onDidChangeFileSystemProviderRegistrations = Event.None;
+	/** Paths whose read fails, with what it fails with. Everything else is there. */
+	readonly failing = new Map<string, Error>();
 	override async exists(): Promise<boolean> { return true; }
+	override async stat(resource: URI): Promise<IFileStatWithPartialMetadata> {
+		const failure = this.failing.get(resource.path);
+		if (failure) {
+			throw failure;
+		}
+		return upcastPartial<IFileStatWithPartialMetadata>({ resource, isDirectory: true });
+	}
 	override hasProvider(): boolean { return true; }
 	override hasCapability(): boolean { return true; }
 	override async realpath(resource: URI): Promise<URI | undefined> { return resource; }
@@ -123,6 +151,13 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		readonly workspace: TestContextService;
 		readonly folders: readonly IWorkspaceFolder[];
 		readonly go: (folder: IWorkspaceFolder) => Promise<void>;
+		/** The parts the window was told to focus, in order. */
+		readonly focused: Parts[];
+		/** The element standing for each part where work is done, in the page so focus can reach it. */
+		readonly containers: Map<Parts, HTMLElement>;
+		/** What the window told the person, in order. */
+		readonly said: string[];
+		readonly disk: TestFileService;
 	}
 
 	function openWindow(paths: string[] = ['/w/a', '/w/b', '/w/c']): IWindow {
@@ -142,7 +177,8 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		const activeFolderService = store.add(new ActiveFolderService(workspace, storageService, uriIdentityService, historyService));
 
 		const groups = new TestEditorGroups();
-		const editors = store.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, logService));
+		const putAway = store.add(new PutAwayEditorsService(storageService, uriIdentityService));
+		const editors = store.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, logService, { isHeld: () => false } as unknown as IHeldEditorsService, putAway, { getEditors: () => [] } as unknown as IEditorService, { isDirty: () => false } as unknown as IWorkingCopyService, uriIdentityService, { createModelReference: async () => ({ object: {}, dispose: () => { } }) } as unknown as ITextModelService));
 
 		// ⚠️ The switcher only asks the model to re-read what is reachable, so nothing here edits the
 		// workspace; an editing service that is never called is the honest stand-in.
@@ -153,22 +189,152 @@ suite('Workspace bar - switching, as one piece of work', () => {
 			uriIdentityService
 		));
 
+		const focused: Parts[] = [];
+		const containers = new Map<Parts, HTMLElement>();
+		for (const part of [Parts.EDITOR_PART, Parts.PANEL_PART]) {
+			const element = mainWindow.document.createElement('div');
+			element.appendChild(mainWindow.document.createElement('input'));
+			mainWindow.document.body.appendChild(element);
+			containers.set(part, element);
+			store.add({ dispose: () => element.remove() });
+		}
+		const layoutService = new class extends mock<IWorkbenchLayoutService>() {
+			override getContainer(_window: Window, part?: Parts): HTMLElement {
+				return part ? containers.get(part)! : mainWindow.document.body;
+			}
+			override focusPart(part: Parts): void { focused.push(part); }
+		};
+
+		const said: string[] = [];
 		const switcher = store.add(new WorkspaceBarSwitcher(
 			model,
 			editors,
 			activeFolderService,
 			fileService,
-			new class extends mock<INotificationService>() { override error() { } } as INotificationService,
+			new class extends mock<INotificationService>() {
+				override error(message: string) { said.push(message); return undefined!; }
+				override info(message: string) { said.push(message); return undefined!; }
+			} as INotificationService,
 			logService,
-			uriIdentityService
+			uriIdentityService,
+			layoutService
 		));
 
 		return {
-			switcher, groups, workspace,
+			switcher, groups, workspace, focused, containers, said,
+			disk: fileService,
 			folders: workspace.getWorkspace().folders,
 			go: folder => activeFolderService.setActiveFolder(folder)
 		};
 	}
+
+	test('WS-57 the latest request wins: one still waiting is cancelled without running, one running finishes first, and the window ends on the last', async () => {
+		const window = openWindow(['/w/a', '/w/b', '/w/c', '/w/d']);
+		await window.go(window.folders[0]);
+
+		window.groups.pending = new DeferredPromise<void>();
+		const toB = window.switcher.switchTo(window.folders[1].uri);
+		await new Promise(resolve => setTimeout(resolve, 0));
+		const toC = window.switcher.switchTo(window.folders[2].uri);
+		const toD = window.switcher.switchTo(window.folders[3].uri);
+		window.groups.pending.complete();
+		window.groups.pending = undefined;
+
+		assert.deepStrictEqual({
+			results: [(await toB).kind, (await toC).kind, (await toD).kind],
+			ended: window.switcher.active?.path,
+			neverShown: window.groups.applied.some(applied => applied.endsWith('/w/c'))
+		}, { results: ['shown', 'cancelled', 'shown'], ended: '/w/d', neverShown: false });
+	});
+
+	test('WS-15 asking for the folder the window is on does nothing: nothing kept, nothing put back, nothing said', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		let changes = 0;
+		disposables.add(window.switcher.onDidChangeActive(() => changes++));
+		const before = { saved: window.groups.saved.length, applied: window.groups.applied.length };
+
+		const result = await window.switcher.switchTo(window.folders[0].uri);
+
+		assert.deepStrictEqual({ result: result.kind, saved: window.groups.saved.length - before.saved, applied: window.groups.applied.length - before.applied, changes }, { result: 'shown', saved: 0, applied: 0, changes: 0 });
+	});
+
+	test('WS-58 a capture that fails keeps the window where it was; a restore that fails stays on the folder asked for, and both say so', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+
+		window.groups.failCapture = true;
+		const capture = await window.switcher.switchTo(window.folders[1].uri);
+		const afterCapture = window.switcher.active?.path;
+		window.groups.failCapture = false;
+
+		window.groups.declineRestore = true;
+		const restore = await window.switcher.switchTo(window.folders[2].uri);
+		window.groups.declineRestore = false;
+
+		assert.deepStrictEqual({ capture: capture.kind, afterCapture, restore: restore.kind, afterRestore: window.switcher.active?.path }, {
+			capture: 'failed', afterCapture: '/w/a', restore: 'failed', afterRestore: '/w/c'
+		});
+	});
+
+	test('WS-61 a folder added for a switch that does not happen is said to be in the workspace, with its path; after a restore that fails the window is on it, and that is not said', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		const [, b, c] = window.folders.map(folder => folder.uri);
+
+		window.groups.failCapture = true;
+		const stayed = await window.switcher.switchTo(b, [b]);
+		window.groups.failCapture = false;
+
+		window.groups.declineRestore = true;
+		const moved = await window.switcher.switchTo(c, [c]);
+		window.groups.declineRestore = false;
+
+		assert.deepStrictEqual({ stayed: stayed.kind, moved: moved.kind, on: window.switcher.active?.path, added: window.said.filter(message => /added/i.test(message)) }, {
+			stayed: 'failed', moved: 'failed', on: '/w/c',
+			added: [`Folder '${b.fsPath}' was added to the workspace, but could not be switched to.`]
+		});
+	});
+
+	test('WS-61 several added for one switch are all named, with the folder the window could not get to', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		const [, b, c] = window.folders.map(folder => folder.uri);
+
+		window.groups.failCapture = true;
+		await window.switcher.switchTo(c, [b, c]);
+		window.groups.failCapture = false;
+
+		assert.deepStrictEqual(window.said.filter(message => /added/i.test(message)), [`Added folders to the workspace: ${b.fsPath}, ${c.fsPath}. Failed to switch to '${c.fsPath}'.`]);
+	});
+
+	test('WS-63 a folder that cannot be read is said to be unreadable, not gone, and one that is gone is said to be gone; the window stays where it was', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		const [, b, c] = window.folders.map(folder => folder.uri);
+		window.disk.failing.set(b.path, createFileSystemProviderError('connection lost', FileSystemProviderErrorCode.Unavailable));
+		window.disk.failing.set(c.path, createFileSystemProviderError('nothing there', FileSystemProviderErrorCode.FileNotFound));
+
+		const unreadable = await window.switcher.switchTo(b);
+		const gone = await window.switcher.switchTo(c);
+
+		assert.deepStrictEqual({ unreadable: unreadable.kind, gone: gone.kind, on: window.switcher.active?.path, said: window.said }, {
+			unreadable: 'failed', gone: 'failed', on: '/w/a',
+			said: [`Failed to read folder '${b.fsPath}': connection lost`, `Folder '${c.fsPath}' no longer exists on disk.`]
+		});
+	});
+
+	test('WS-52 the focus goes back where it was when the folder was left, and to the editor on a first visit', async () => {
+		const window = openWindow();
+		await window.go(window.folders[0]);
+		// What focusing a terminal sends; dispatched, as a test window need not have the system's focus.
+		window.containers.get(Parts.PANEL_PART)!.firstChild!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+
+		await window.switcher.switchTo(window.folders[1].uri);
+		await window.switcher.switchTo(window.folders[0].uri);
+
+		assert.deepStrictEqual(window.focused, [Parts.EDITOR_PART, Parts.PANEL_PART]);
+	});
 
 	test('⭐ renaming the folder the window is on does not put its old editors back', async () => {
 		// ⚠️ `reconcile` fires the same event for "the window moved" and "this root was renamed",

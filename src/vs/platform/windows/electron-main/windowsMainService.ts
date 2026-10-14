@@ -44,7 +44,7 @@ import { findWindowOnExtensionDevelopmentPath, findWindowOnFile, findWindowOnWor
 import { IWindowState, WindowsStateHandler } from './windowsStateHandler.js';
 import { IRecent } from '../../workspaces/common/workspaces.js';
 import { hasWorkspaceFileExtension, IAnyWorkspaceIdentifier, ISingleFolderWorkspaceIdentifier, isSingleFolderWorkspaceIdentifier, isWorkspaceIdentifier, IWorkspaceIdentifier, toWorkspaceIdentifier } from '../../workspace/common/workspace.js';
-import { DEFAULT_WORKSPACE_CONTENT, defaultWorkspaceUri } from '../../workspaces/common/defaultWorkspace.js';
+import { ensureDefaultWorkspace } from '../../workspaces/common/defaultWorkspace.js';
 import { createEmptyWorkspaceIdentifier, getSingleFolderWorkspaceIdentifier, getWorkspaceIdentifier } from '../../workspaces/node/workspaces.js';
 import { IWorkspacesHistoryMainService } from '../../workspaces/electron-main/workspacesHistoryMainService.js';
 import { IWorkspacesManagementMainService } from '../../workspaces/electron-main/workspacesManagementMainService.js';
@@ -377,8 +377,14 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		const pathsToOpen = await this.getPathsToOpen(openConfig);
 		this.logService.trace('windowsManager#open pathsToOpen', pathsToOpen);
 
-		if (this.joinsTheOpenWindow(openConfig, pathsToOpen.filter(isSingleFolderWorkspacePathToOpen))) {
+		const folderPaths = pathsToOpen.filter(isSingleFolderWorkspacePathToOpen);
+		if (this.joinsTheOpenWindow(openConfig, folderPaths)) {
 			openConfig.addMode = true;
+			openConfig.showAdded = true;
+		} else if (this.landsInDefaultWorkspace(openConfig, folderPaths)) {
+			openConfig.addMode = true;
+			openConfig.showAdded = true;
+			openConfig.intoDefaultWorkspace = true;
 		}
 
 		for (const path of pathsToOpen) {
@@ -587,12 +593,26 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// Settings can decide if files/folders open in new window or not
 		let { openFolderInNewWindow, openFilesInNewWindow } = this.shouldOpenNewWindow(openConfig);
 
+		// Facade Code: folders named with no window open join the default workspace, before any file named with them (WORKSPACE.md W5)
+		if (openConfig.intoDefaultWorkspace && foldersToAdd.length > 0) {
+			const defaultWorkspace = await this.resolveDefaultWorkspace();
+			if (defaultWorkspace) {
+				const window = await this.doOpenFolderOrWorkspace(openConfig, defaultWorkspace, openFolderInNewWindow, undefined);
+				addUsedWindow(window);
+				this.doAddRemoveFoldersInExistingWindow(window, foldersToAdd.map(folderToAdd => folderToAdd.workspace.uri), [], true);
+				openFolderInNewWindow = true;
+			} else {
+				// Without it, as stock opens them
+				foldersToOpen.push(...foldersToAdd);
+			}
+		}
+
 		// Handle folders to add/remove by looking for the last active workspace (not on initial startup)
-		if (!openConfig.initialStartup && (foldersToAdd.length > 0 || foldersToRemove.length > 0)) {
+		else if (!openConfig.initialStartup && (foldersToAdd.length > 0 || foldersToRemove.length > 0)) {
 			const authority = foldersToAdd.at(0)?.remoteAuthority ?? foldersToRemove.at(0)?.remoteAuthority;
 			const lastActiveWindow = this.getLastActiveWindowForAuthority(authority);
 			if (lastActiveWindow) {
-				addUsedWindow(this.doAddRemoveFoldersInExistingWindow(lastActiveWindow, foldersToAdd.map(folderToAdd => folderToAdd.workspace.uri), foldersToRemove.map(folderToRemove => folderToRemove.workspace.uri)));
+				addUsedWindow(this.doAddRemoveFoldersInExistingWindow(lastActiveWindow, foldersToAdd.map(folderToAdd => folderToAdd.workspace.uri), foldersToRemove.map(folderToRemove => folderToRemove.workspace.uri), !!openConfig.showAdded));
 			}
 		}
 
@@ -771,15 +791,16 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 	 * it was always going to open, which is the behaviour without this feature at all.
 	 */
 	private async resolveDefaultWorkspace(): Promise<IWorkspacePathToOpen | undefined> {
-		const configPath = defaultWorkspaceUri(this.environmentMainService.userDataPath);
 		try {
-			if (!(await this.fileService.exists(configPath))) {
-				await this.fileService.writeFile(configPath, VSBuffer.fromString(DEFAULT_WORKSPACE_CONTENT));
+			const configPath = await ensureDefaultWorkspace(this.fileService, this.logService, this.environmentMainService.userDataPath);
+			if (!configPath) {
+				return undefined;
 			}
 
+			// WS-02: a file that does not hold a workspace is said where it can be read, not only at trace level
 			const workspace = await this.workspacesManagementMainService.resolveLocalWorkspace(configPath);
-			this.logService.trace('windowsManager#resolveDefaultWorkspace', { configPath: configPath.toString(), resolved: !!workspace });
 			if (!workspace) {
+				this.logService.warn(`windowsManager#resolveDefaultWorkspace: ${configPath.fsPath} does not hold a workspace that can be opened: an empty window opens instead`);
 				return undefined;
 			}
 
@@ -822,12 +843,12 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		windowToFocus.focus();
 	}
 
-	private doAddRemoveFoldersInExistingWindow(window: ICodeWindow, foldersToAdd: URI[], foldersToRemove: URI[]): ICodeWindow {
-		this.logService.trace('windowsManager#doAddRemoveFoldersToExistingWindow', { foldersToAdd, foldersToRemove });
+	private doAddRemoveFoldersInExistingWindow(window: ICodeWindow, foldersToAdd: URI[], foldersToRemove: URI[], show: boolean): ICodeWindow {
+		this.logService.trace('windowsManager#doAddRemoveFoldersToExistingWindow', { foldersToAdd, foldersToRemove, show });
 
 		window.focus(); // make sure window has focus
 
-		const request: IAddRemoveFoldersRequest = { foldersToAdd, foldersToRemove };
+		const request: IAddRemoveFoldersRequest = { foldersToAdd, foldersToRemove, show };
 		window.sendWhenReady('vscode:addRemoveFolders', CancellationToken.None, request);
 
 		return window;
@@ -930,6 +951,26 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		return !folderPaths.some(folderPath => findWindowOnWorkspaceOrFolder(this.getWindows(), folderPath.workspace.uri));
 	}
 
+	/**
+	 * Facade Code: whether folders named with no window open go into the default workspace, as they would join an
+	 * open window (WORKSPACE.md W5). Only locally, and not while the last session's windows are being restored.
+	 */
+	private landsInDefaultWorkspace(openConfig: IOpenConfiguration, folderPaths: readonly ISingleFolderWorkspacePathToOpen[]): boolean {
+		const named = openConfig.context === OpenContext.CLI
+			|| openConfig.context === OpenContext.DOCK
+			|| openConfig.context === OpenContext.DESKTOP
+			|| openConfig.context === OpenContext.LINK;
+		if (!named || openConfig.addMode || openConfig.removeMode || openConfig.forceNewWindow || openConfig.forceEmpty || openConfig.remoteAuthority) {
+			return false;
+		}
+
+		if (folderPaths.length === 0 || folderPaths.some(folderPath => folderPath.remoteAuthority) || this.getWindows().length > 0) {
+			return false;
+		}
+
+		return !(openConfig.initialStartup && this.configurationService.getValue<IWindowSettings | undefined>('window')?.restoreWindows === 'preserve');
+	}
+
 	private async getPathsToOpen(openConfig: IOpenConfiguration): Promise<IPathToOpen[]> {
 		let pathsToOpen: IPathToOpen[];
 		let isCommandLineOrAPICall = false;
@@ -972,7 +1013,7 @@ export class WindowsMainService extends Disposable implements IWindowsMainServic
 		// - there is no existing workspace to open that matches these folders
 		if (!openConfig.addMode && !openConfig.removeMode && isCommandLineOrAPICall) {
 			const foldersToOpen = pathsToOpen.filter(path => isSingleFolderWorkspacePathToOpen(path));
-			if (foldersToOpen.length > 1 && !this.joinsTheOpenWindow(openConfig, foldersToOpen)) {
+			if (foldersToOpen.length > 1 && !this.joinsTheOpenWindow(openConfig, foldersToOpen) && !this.landsInDefaultWorkspace(openConfig, foldersToOpen)) {
 				const remoteAuthority = foldersToOpen[0].remoteAuthority;
 				if (foldersToOpen.every(folderToOpen => isEqualAuthority(folderToOpen.remoteAuthority, remoteAuthority))) {
 					let workspace: IWorkspaceIdentifier | undefined;

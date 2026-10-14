@@ -38,6 +38,8 @@ import globCallback from 'glob';
 import rceditCallback from 'rcedit';
 import { spawnTsgo } from './lib/tsgo.ts';
 import { runEsbuildTranspile, runEsbuildBundle } from './lib/esbuild.ts';
+import { releaseVersion, withBundleVersion } from './lib/facade/releaseVersion.ts';
+import { appVersionFields, bundleVersionFields, checkVersionFields, executableVersionFields } from './lib/facade/versionCheck.ts';
 
 
 const glob = promisify(globCallback);
@@ -310,12 +312,8 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 		const sources = es.merge(src, extensions)
 			.pipe(filter(sourceFilterPattern, { dot: true }));
 
-		let version = packageJson.version;
+		const version = packagedVersion();
 		const quality = (product as { quality?: string }).quality;
-
-		if (quality && quality !== 'stable') {
-			version += '-' + quality;
-		}
 
 		const name = product.nameShort;
 		const packageJsonUpdates: Record<string, unknown> = { name, version };
@@ -612,6 +610,18 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 	return task;
 }
 
+/** The engine version as the package carries it: `package.json`'s, with the quality after it but for stable. */
+function packagedVersion(): string {
+	let version = packageJson.version;
+	const quality = (product as { quality?: string }).quality;
+
+	if (quality && quality !== 'stable') {
+		version += '-' + quality;
+	}
+
+	return version;
+}
+
 function hasAuthenticodeSignature(filePath: string): Promise<boolean> {
 	return new Promise((resolve, reject) => {
 		const proc = cp.spawn('signtool.exe', ['verify', '/pa', filePath]);
@@ -644,22 +654,34 @@ async function stripAuthenticodeSignature(filePath: string): Promise<void> {
 	});
 }
 
-function patchWin32DependenciesTask(destinationFolderName: string) {
-	const cwd = path.join(path.dirname(root), destinationFolderName);
-
-	return async () => {
-		const versionedResourcesFolder = util.getVersionedResourcesFolder('win32', commit!);
-		const deps = (await Promise.all([
+/**
+ * Facade Code: the executables the package stamps as its own (IDENTITY.md I7), relative to its folder: the
+ * main one, on which the packager wrote the engine version from `package.json`, and the natives built
+ * with it. Electron's and Chromium's keep their own versions.
+ */
+async function win32OwnExecutables(cwd: string): Promise<string[]> {
+	return [
+		`${product.nameShort}.exe`,
+		...(await Promise.all([
 			glob('**/*.node', { cwd, ignore: 'extensions/node_modules/@parcel/watcher/**' }),
 			glob('**/rg.exe', { cwd }),
 			glob('**/tgrep.exe', { cwd }),
 			glob('**/*explorer_command*.dll', { cwd }),
 			// TODO@anthonykim1 Remove once @github/copilot ships OneAuthInterop.dll with complete version information.
 			glob('**/OneAuthInterop.dll', { cwd }),
-		])).flatMap(o => o);
-		const packageJson = JSON.parse(await fs.promises.readFile(path.join(cwd, versionedResourcesFolder, 'resources', 'app', 'package.json'), 'utf8'));
+		])).flatMap(o => o)
+	];
+}
+
+function patchWin32DependenciesTask(destinationFolderName: string) {
+	const cwd = path.join(path.dirname(root), destinationFolderName);
+
+	return async () => {
+		const versionedResourcesFolder = util.getVersionedResourcesFolder('win32', commit!);
+		const deps = await win32OwnExecutables(cwd);
 		const product = JSON.parse(await fs.promises.readFile(path.join(cwd, versionedResourcesFolder, 'resources', 'app', 'product.json'), 'utf8'));
-		const baseVersion = packageJson.version.replace(/-.*$/, '');
+		// Facade Code: the release version (IDENTITY.md I7)
+		const version = releaseVersion(product);
 
 		const patchPromises = deps.map<Promise<unknown>>(async dep => {
 			const basename = path.basename(dep);
@@ -667,21 +689,60 @@ function patchWin32DependenciesTask(destinationFolderName: string) {
 
 			await stripAuthenticodeSignature(fullPath);
 			await rcedit(fullPath, {
-				'file-version': baseVersion,
+				'file-version': version,
+				'product-version': version,
 				'version-string': {
-					'CompanyName': product.nameLong,
+					'CompanyName': product.publisher,
 					'FileDescription': product.nameLong,
-					'FileVersion': packageJson.version,
+					'FileVersion': version,
 					'InternalName': basename,
 					'LegalCopyright': `Copyright (C) 2026 Microsoft Corporation and ${product.nameLong} contributors. All rights reserved.`,
 					'OriginalFilename': basename,
 					'ProductName': product.nameLong,
-					'ProductVersion': packageJson.version,
+					'ProductVersion': version,
 				}
 			});
 		});
 
 		await Promise.all(patchPromises);
+	};
+}
+
+/**
+ * Facade Code: the release version in the bundle's `Info.plist`, which Finder and About This Mac show
+ * (IDENTITY.md I7). The packager wrote the engine's there, from the app's `package.json`.
+ */
+function stampDarwinReleaseVersionTask(destinationFolderName: string) {
+	return async () => {
+		const plist = path.join(path.dirname(root), destinationFolderName, `${product.nameLong}.app`, 'Contents', 'Info.plist');
+		await fs.promises.writeFile(plist, withBundleVersion(await fs.promises.readFile(plist, 'utf8'), releaseVersion(product)));
+	};
+}
+
+/**
+ * Facade Code: every version field of the package read back, once everything that writes one has run,
+ * against IDENTITY.md I7's table; a mismatch fails the build.
+ */
+function checkReleaseVersionTask(platform: string, destinationFolderName: string) {
+	const cwd = path.join(path.dirname(root), destinationFolderName);
+
+	return async () => {
+		const release = releaseVersion(product);
+		const bundle = path.join(cwd, `${product.nameLong}.app`, 'Contents');
+		const appRoot = platform === 'darwin'
+			? path.join(bundle, 'Resources', 'app')
+			: path.join(cwd, util.getVersionedResourcesFolder(platform, commit!), 'resources', 'app');
+		const fields = appVersionFields(appRoot, release, packagedVersion());
+
+		if (platform === 'win32') {
+			for (const executable of await win32OwnExecutables(cwd)) {
+				fields.push(...executableVersionFields(path.join(cwd, executable), release));
+			}
+		} else if (platform === 'darwin') {
+			fields.push(...bundleVersionFields(path.join(bundle, 'Info.plist'), release));
+		}
+
+		checkVersionFields(fields);
 	};
 }
 
@@ -733,6 +794,12 @@ BUILD_TARGETS.forEach(buildTarget => {
 		if (platform === 'win32') {
 			packageTasks.push(patchWin32DependenciesTask(destinationFolderName));
 		}
+
+		if (platform === 'darwin') {
+			packageTasks.push(stampDarwinReleaseVersionTask(destinationFolderName));
+		}
+
+		packageTasks.push(checkReleaseVersionTask(platform, destinationFolderName));
 
 		const vscodeTaskCI = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}-ci`, task.series(...packageTasks));
 		task.task(vscodeTaskCI);

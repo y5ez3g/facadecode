@@ -98,6 +98,11 @@ export interface IDictationRuntimeProductConfig {
 
 export interface IProductConfiguration {
 	readonly version: string;
+	/**
+	 * Facade Code: the product's own release version, `0.1.0` at its first release - beside `version`, the
+	 * engine's, which extensions are checked against and which stays upstream's (IDENTITY.md I7).
+	 */
+	readonly facadeVersion?: string;
 	readonly date?: string;
 	readonly quality?: string;
 	readonly commit?: string;

@@ -22,7 +22,6 @@ import { IExtensionService } from '../../../services/extensions/common/extension
 import { IHostService } from '../../../services/host/browser/host.js';
 import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { IUserDataSyncWorkbenchService } from '../../../services/userDataSync/common/userDataSync.js';
-import { IBackgroundFolderChangesService } from '../../../services/backgroundFolderChanges/common/backgroundFolderChanges.js';
 
 interface IConfiguration extends IWindowsConfiguration {
 	debug?: { console?: { wordWrap?: boolean } };
@@ -267,6 +266,9 @@ class ChangeObserver<T> {
 	}
 }
 
+/** Facade Code: no restart when the first folder changes, which bar edits often do; `rootPath` stays stale until reload (WORKSPACE.md W4). */
+const RESTART_ON_FIRST_FOLDER_CHANGE: boolean = false;
+
 export class WorkspaceChangeExtHostRelauncher extends Disposable implements IWorkbenchContribution {
 
 	private firstFolderResource?: URI;
@@ -279,7 +281,6 @@ export class WorkspaceChangeExtHostRelauncher extends Disposable implements IWor
 		@IExtensionService extensionService: IExtensionService,
 		@IHostService hostService: IHostService,
 		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
-		@IBackgroundFolderChangesService private readonly backgroundFolderChangesService: IBackgroundFolderChangesService,
 	) {
 		super();
 
@@ -342,14 +343,11 @@ export class WorkspaceChangeExtHostRelauncher extends Disposable implements IWor
 		// Restart extension host if first root folder changed (impact on deprecated workspace.rootPath API)
 		const newFirstFolderResource = workspace.folders.length > 0 ? workspace.folders[0].uri : undefined;
 		if (!isEqual(this.firstFolderResource, newFirstFolderResource)) {
-			// Facade Code: not for a folder added or taken out for an agent's work in the background (AGENT-LAUNCHER.md, L1)
-			const inBackground = [this.firstFolderResource, newFirstFolderResource].some(folder => folder !== undefined && this.backgroundFolderChangesService.isChanging(folder));
 			this.firstFolderResource = newFirstFolderResource;
-			if (inBackground) {
-				return;
-			}
 
-			this.extensionHostRestarter.schedule(); // buffer calls to extension host restart
+			if (RESTART_ON_FIRST_FOLDER_CHANGE) {
+				this.extensionHostRestarter.schedule(); // buffer calls to extension host restart
+			}
 		}
 	}
 }

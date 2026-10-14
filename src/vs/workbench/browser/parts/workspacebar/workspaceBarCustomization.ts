@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Codicon } from '../../../../base/common/codicons.js';
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { basename } from '../../../../base/common/resources.js';
+import { basename, basenameOrAuthority } from '../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
@@ -15,7 +16,8 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 
 /**
  * The colours a folder can be given.
@@ -35,6 +37,11 @@ export type FolderColor = typeof FOLDER_COLORS[number];
 
 export function isFolderColor(candidate: unknown): candidate is FolderColor {
 	return typeof candidate === 'string' && (FOLDER_COLORS as readonly string[]).includes(candidate);
+}
+
+/** The first of `FOLDER_COLORS` no other worktree of the repository has (WORKTREE.md WT-1.12). */
+export function freeWorktreeColor(taken: readonly (FolderColor | undefined)[]): FolderColor | undefined {
+	return FOLDER_COLORS.find(color => !taken.includes(color));
 }
 
 /**
@@ -75,13 +82,7 @@ export interface IWorkspaceBarCustomizationService {
 	/** What has been set for this folder, if anything. */
 	get(uri: URI): IFolderCustomization | undefined;
 
-	/**
-	 * The name to draw for a folder: the one somebody gave it, else its default name, else its own.
-	 *
-	 * ⚠️ The one place that decides it. The bar draws it and so does the window title, and a second
-	 * copy of `customization?.name ?? folder.name` is a second copy that stops agreeing with the
-	 * first - which is how the same folder ends up called two things in one window.
-	 */
+	/** The one name every surface draws for a folder: its `folders[].name`, else a customized or default one (WORKSPACE.md W9.8). */
 	nameFor(folder: IWorkspaceFolder): string;
 
 	/**
@@ -102,6 +103,11 @@ export interface IWorkspaceBarCustomizationService {
 
 	/** Keeps `worktrees` - the whole list, as it now stands - as a repository's order. */
 	setWorktreeOrder(repository: URI, worktrees: readonly URI[]): void;
+}
+
+/** The folder's `name` in the workspace file, which VS Code's own surfaces read too (WORKSPACE.md W9.7). */
+export function explicitNameOf(folder: IWorkspaceFolder): string | undefined {
+	return folder.name !== basenameOrAuthority(folder.uri) ? folder.name : undefined;
 }
 
 /**
@@ -154,18 +160,8 @@ const STORAGE_KEY = 'facade.workspaceBar.customization';
 const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
 
 /**
- * Display names and colours, per folder, and the order of each repository's worktrees, kept where the
- * person is rather than in their workspace file.
- *
- * ⚠️ `StorageScope.PROFILE`. A folder's colour is something about the folder, not about one window,
- * so it follows the person into every workspace that lists it. And it is deliberately **not** written
- * to the `.code-workspace`: that file belongs to whoever shares it, and a colour of mine has no
- * business travelling to them.
- *
- * ⚠️ Which means the display name reaches the bar and the window title and stops there. The explorer's
- * header, the folder pickers and `${workspaceFolderBasename}` all go on saying what the folder is
- * really called, because those read the workspace and the workspace was not told. That is the price
- * of keeping the file clean, and it is a boundary rather than an oversight.
+ * Each folder's colour and icon, the names of rows not in the list, and each repository's worktree order,
+ * kept per profile. A folder in the list is named by its `folders[].name` (WORKSPACE.md W9.7).
  */
 export class WorkspaceBarCustomizationService extends Disposable implements IWorkspaceBarCustomizationService {
 
@@ -182,10 +178,32 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
+		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
 	) {
 		super();
 		this.load();
 		this.loadWorktreeOrder();
+
+		this._register(this.contextService.onDidChangeWorkspaceFolders(e => this.moveNamesIntoWorkspace(e.added)));
+	}
+
+	/** Writes the names of rows that joined into their `folders[].name`, unless the file already names them. */
+	private moveNamesIntoWorkspace(added: readonly IWorkspaceFolder[]): void {
+		if (this.contextService.getWorkbenchState() !== WorkbenchState.WORKSPACE) {
+			return;
+		}
+
+		for (const folder of added) {
+			const customization = this.get(folder.uri);
+			if (!customization?.name || explicitNameOf(folder)) {
+				continue;
+			}
+
+			this.workspaceEditingService.renameFolder(folder.uri, customization.name, true).then(
+				() => this.set(folder.uri, { color: customization.color, icon: customization.icon }),
+				onUnexpectedError);
+		}
 	}
 
 	private key(uri: URI): string {
@@ -242,7 +260,7 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	}
 
 	nameFor(folder: IWorkspaceFolder): string {
-		return this.get(folder.uri)?.name || this.defaultNames.get(this.key(folder.uri))?.name || folder.name;
+		return explicitNameOf(folder) || this.get(folder.uri)?.name || this.defaultNames.get(this.key(folder.uri))?.name || folder.name;
 	}
 
 	setDefaultNames(names: readonly { readonly uri: URI; readonly name: string }[]): void {

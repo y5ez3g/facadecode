@@ -34,7 +34,7 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { ResultKind } from '../../../../platform/keybinding/common/keybindingResolver.js';
 import { IListService, IOpenEvent, IWorkbenchObjectTreeOptions, WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
-import { IMarkerService, MarkerSeverity } from '../../../../platform/markers/common/markers.js';
+import { IMarkerService } from '../../../../platform/markers/common/markers.js';
 import { IFolderScopeService } from '../../../services/folderScope/common/folderScope.js';
 import { IOpenerService, withSelection } from '../../../../platform/opener/common/opener.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -54,6 +54,7 @@ import { Markers, MarkersContextKeys, MarkersViewMode } from '../common/markers.
 import { IMarkersView } from './markers.js';
 import { FilterOptions } from './markersFilterOptions.js';
 import { compareMarkersByUri, Marker, MarkerChangesEvent, MarkerElement, MarkersModel, MarkerTableItem, RelatedInformation, ResourceMarkers } from './markersModel.js';
+import { scopedMarkers } from './markersScope.js';
 import { MarkersTable } from './markersTable.js';
 import { Filter, FilterData, MarkerRenderer, MarkersViewModel, MarkersWidgetAccessibilityProvider, RelatedInformationRenderer, ResourceMarkersRenderer, VirtualDelegate } from './markersTreeViewer.js';
 import { IMarkersFiltersChangeEvent, MarkersFilters } from './markersViewActions.js';
@@ -563,14 +564,8 @@ export class MarkersView extends FilterViewPane implements IMarkersView {
 	private reInitialize(): IDisposable[] {
 		const disposables = [];
 
-		// Markers Model
-		// ⚠️ Narrowed where the markers land rather than at the marker service, which every extension
-		// also reads and writes: a problem in a folder the window is not on is still a problem, it is
-		// just not one this window is showing. Switching back brings it straight up, because nothing
-		// was discarded - `markersModel` stores by resource, so this partitions rather than deletes.
-		const readMarkers = (resource?: URI) => this.markerService
-			.read({ resource, severities: MarkerSeverity.Error | MarkerSeverity.Warning | MarkerSeverity.Info })
-			.filter(marker => this.folderScopeService.covers(marker.resource));
+		// Markers Model, of the folder in scope only
+		const readMarkers = (resource?: URI) => scopedMarkers(this.markerService, this.folderScopeService, resource);
 		this.markersModel.setResourceMarkers(groupBy(readMarkers(), compareMarkersByUri).map(group => [group[0].resource, group]));
 		disposables.push(Event.debounce<readonly URI[], ResourceMap<URI>>(this.markerService.onMarkerChanged, (resourcesMap, resources) => {
 			resourcesMap = resourcesMap || new ResourceMap<URI>();

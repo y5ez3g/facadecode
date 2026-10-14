@@ -6,6 +6,7 @@
 import { isIOS, isLinux, isMacintosh, isMobile, isWeb, isWindows, isChromeOS } from '../../../base/common/platform.js';
 import { localize } from '../../../nls.js';
 import { RawContextKey } from './contextkey.js';
+import product from '../../product/common/product.js';
 
 export const IsMacContext = new RawContextKey<boolean>('isMac', isMacintosh, localize('isMac', "Whether the operating system is macOS"));
 export const IsLinuxContext = new RawContextKey<boolean>('isLinux', isLinux, localize('isLinux', "Whether the operating system is Linux"));
@@ -18,7 +19,7 @@ export const IsIOSContext = new RawContextKey<boolean>('isIOS', isIOS, localize(
 export const IsMobileContext = new RawContextKey<boolean>('isMobile', isMobile, localize('isMobile', "Whether the platform is a mobile web browser"));
 
 export const IsDevelopmentContext = new RawContextKey<boolean>('isDevelopment', false, true);
-export const ProductQualityContext = new RawContextKey<string>('productQualityType', '', localize('productQualityType', "Quality type of VS Code"));
+export const ProductQualityContext = new RawContextKey<string>('productQualityType', '', localize('productQualityType', "Quality type of {0}", product.nameLong));
 
 export const InputFocusedContextKey = 'inputFocus';
 export const InputFocusedContext = new RawContextKey<boolean>(InputFocusedContextKey, false, localize('inputFocus', "Whether keyboard focus is inside an input box"));

@@ -562,6 +562,8 @@ export const DEFAULT_COMMANDS_TO_SKIP_SHELL: string[] = [
 	'notifications.hideToasts',
 	'workbench.action.closeQuickOpen',
 	'workbench.action.quickOpen',
+	// Facade Code: Switch Folder, from a terminal where the person usually is (WORKSPACE.md W9.11)
+	'facade.workspaceBar.switchFolder',
 	'workbench.action.quickOpenPreviousEditor',
 	'workbench.action.showCommands',
 	'workbench.action.tasks.build',
