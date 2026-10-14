@@ -44,6 +44,7 @@ import { IRunningWork } from '../../../browser/parts/workspacebar/workspaceBarAg
 import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
+import { agentsFirst, discardedHeading, listedFiles, listedSessions, terminatedHeading, workLine } from '../../../browser/parts/workspacebar/workspaceBarQuestions.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { EditorResourceAccessor, EditorsOrder } from '../../../common/editor.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -273,11 +274,8 @@ const GIT_AVAILABLE = ContextKeyExpr.and(ContextKeyExpr.notEquals('config.git.en
  */
 const GIT_START_TIMEOUT = 30000;
 
-/** How many files a confirmation, or a deletion refused, names before it says how many more there are. */
+/** How many files a deletion refused names before it says how many more there are. */
 const LISTED_FILES = 10;
-
-/** How many ignored paths a confirmation names before it says how many more there are. */
-const LISTED_IGNORED = 5;
 
 /**
  * How many files of a folder git ignores whole a caller's deletion compares with the main checkout's, to tell copies -
@@ -1373,7 +1371,7 @@ export class WorktreeService implements IWorktreeService {
 		//    that goes with it, working inside it or one of its editor area whatever it started in
 		const unsaved = await this.unsavedIn(worktree);
 		const loss: IDeletionLoss = { ...check, unsaved: unsaved.map(each => each.path) };
-		const running = this.runningAmong(await this.terminalsGoingWith(worktree)).length > 0;
+		const running = this.runningAmong(await this.terminalsGoingWith(worktree));
 		if (!(await this.confirmDelete(name, branch, loss, running, false))) {
 			return;
 		}
@@ -1383,7 +1381,7 @@ export class WorktreeService implements IWorktreeService {
 			unsaved: unsaved.map(each => each.workingCopy),
 			confirmAgain: async now => {
 				const more = newLoss(loss, now);
-				return !more || await this.confirmDelete(name, branch, more, false, true);
+				return !more || await this.confirmDelete(name, branch, more, [], true);
 			}
 		});
 		this.reportDeletion(main, worktree, name, deletion);
@@ -2059,28 +2057,26 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	/**
-	 * Asks once, naming everything deleting the worktree loses (WT-8.1, WT-8.2). With `again`, asks only
-	 * about what appeared since the first time.
+	 * Asks once, naming everything deleting the worktree loses (WT-8.1, WT-8.2): the agents and terminals `running`, and
+	 * what is lost with its folder. With `again`, asks only about what appeared since the first time.
 	 */
-	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: boolean, again: boolean): Promise<boolean> {
+	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: readonly IRunningWork[], again: boolean): Promise<boolean> {
 		const { files, ignoredPaths, submodules, unsaved } = loss;
 
-		// Laid out as VS Code's own delete confirmation: lists first, then one paragraph (WORKSPACE.md W10.7)
+		// Laid out as VS Code's own delete confirmation: lists first, each under what becomes of it, one to a line, then
+		// one paragraph (WORKSPACE.md W10.7). All of it is the worktree's, which the question names, so no line says where.
 		const paragraphs: string[] = [];
-		const list = (heading: string, entries: readonly string[], limit: number) => {
-			if (!entries.length) {
-				return;
+		const list = (heading: string, lines: readonly string[]) => {
+			if (lines.length) {
+				paragraphs.push([heading, ...lines].join('\n'));
 			}
-			const lines = [heading, ...entries.slice(0, limit)];
-			if (entries.length > limit) {
-				lines.push(localize('worktrees.andMore', "and {0} more", entries.length - limit));
-			}
-			paragraphs.push(lines.join('\n'));
 		};
 
-		list(localize('worktrees.loses', "The following uncommitted changes will be lost:"), files, LISTED_FILES);
-		list(localize('worktrees.unsaved', "The following editors have unsaved changes that will be discarded:"), unsaved, LISTED_FILES);
-		list(localize('worktrees.ignored', "The following files ignored by Git will be deleted:"), ignoredPaths, LISTED_IGNORED);
+		const work = agentsFirst(running);
+		list(terminatedHeading(work), listedSessions(work.map(item => workLine(item, undefined))));
+		list(localize('worktrees.loses', "The following uncommitted changes will be lost:"), listedFiles(files));
+		list(discardedHeading(unsaved.length), listedFiles(unsaved));
+		list(localize('worktrees.ignored', "The following files ignored by Git will be deleted:"), listedFiles(ignoredPaths));
 
 		const sentences: string[] = [];
 		if (again) {
@@ -2095,9 +2091,6 @@ export class WorktreeService implements IWorktreeService {
 			sentences.push(submodules
 				? localize('worktrees.folderAndSubmodulesDeleted', "The worktree folder, including its submodules and unpushed commits, will be deleted. This action cannot be undone.")
 				: localize('worktrees.folderDeleted', "The worktree folder will be deleted from disk. This action cannot be undone."));
-			if (running) {
-				sentences.push(localize('worktrees.runningStops', "A process running in one of its terminals will be terminated."));
-			}
 			// A worktree on a detached HEAD has no branch to keep, and is not told it has one.
 			if (branch) {
 				sentences.push(localize('worktrees.branchKeptQuoted', "The branch '{0}' will be preserved.", branch));

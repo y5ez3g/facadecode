@@ -690,20 +690,30 @@ Every other dialog is a question, shown as VS Code shows its own: the operating 
 dialog, `window.dialogStyle` left at stock's `native`. VS Code's own questions - "Save
 changes?", deleting a file - and the questions Facade asks: Remove Folder, Delete
 Worktree, Delete Chat Rooms. Facade's are worded as VS Code words its own, in its shape:
-a question, then under it what it lists one to a line, when it lists anything, and one
-paragraph. The message is the question, naming what it is about in single quotes as its
-row names it, and what goes with it: "Are you sure you want to remove 'lab' and its
-worktree from the workspace?", "Are you sure you want to delete the worktree 'w2'?". The
-paragraph says what stops and what is lost - agents by name, terminals by title, files
-by name as VS Code names them - and then what is not, or that it cannot be undone:
-"Pinger and terminal 'PING' will be terminated, and unsaved changes in note.txt will be
-discarded. Files on disk will not be deleted." The primary button is the verb, beside Cancel.
-A question about losing something has the warning icon, whether or not anything is lost
-this time, as VS Code's delete does. It is plain text, so it reads the same in a system
-dialog. Facade does not ask what VS Code already asks: closing an agent's
-terminal from the list of active agents is VS Code's question for closing a terminal, and
-closing the window with work running is VS Code's question before shutdown (W11), which
-names an agent by the name it was started under, not by its terminal's title. What VS
+a question, then what it lists, then one paragraph. The message is the question, naming
+what it is about in single quotes as its row names it, and what goes with it: "Are you
+sure you want to remove 'lab' and its worktree from the workspace?", "Are you sure you
+want to delete the worktree 'w2'?". Under it is what would be lost, one to a line, as VS
+Code lists the files a close would lose: each list under a line saying what becomes of
+it - "The following agents and terminals will be terminated:", "The following files
+have unsaved changes that will be discarded:" - the agents and terminals first, as
+closing the window asks about them before the files. Every line is written one way: what
+it is, then ` · ` and where it is, by the names the bar gives its rows - `Agent @claude
+#a1 · lab`, `Terminal (npm run dev) · lab (worktree: w2)`, `notes.txt · docs`. An agent
+goes by the name it was started under, a terminal by its title, a file by the name its
+editor shows - a change git keeps no copy of by its path - and a worktree's place after
+its repository's. No line quotes a name: quotes mark a name inside a sentence. A line
+says where only where the question does not: under a question naming the one folder all
+of it is in, the lines leave it out. A list shows ten lines, then how many more, in VS
+Code's words: "...2 additional files not shown". The paragraph says what is not lost, or
+that it cannot be undone: "Files on disk will not be deleted." The primary button is the
+verb, beside Cancel. A question about losing something has the warning icon, whether or
+not anything is lost this time, as VS Code's delete does. It is plain text, so it reads
+the same in a system dialog. Facade does not ask what VS Code already asks: closing an
+agent's terminal from the list of active agents is VS Code's question for closing a
+terminal, and closing the window with work running is VS Code's question before shutdown
+(W11), which names an agent by the name it was started under, not by its terminal's
+title. What VS
 Code itself always draws in the window - its trust questions - stays so, and Facade's own
 trust question, for folders that are not trusted joining the window (W5), is drawn as
 those are: in the window, with the shield, its paths as code, VS Code's docs linked, and

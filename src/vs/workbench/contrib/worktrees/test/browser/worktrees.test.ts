@@ -194,6 +194,12 @@ suite('Worktrees - making and deleting one', () => {
 		TerminalCtor = (await importAMDNodeModule<typeof import('@xterm/xterm')>('@xterm/xterm', 'lib/xterm.js')).Terminal;
 	});
 
+	/** What the first question lists as stopping with the worktree, its first list; none where nothing stops. */
+	function stopping(): string | undefined {
+		const [first] = (confirmations[0].detail as string).split('\n\n');
+		return first.includes(' will be terminated:') ? first : undefined;
+	}
+
 	/** A terminal working in `cwd`; `options.closing` is what its process does as its terminal is closed. */
 	function terminal(name: string, cwd: string, options?: { readonly remoteAuthority?: string; readonly running?: boolean; readonly run?: IFacadeRun; readonly exitCode?: number; readonly closing?: () => void }): ITerminalInstance {
 		let closed = false;
@@ -1900,21 +1906,21 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual({ byThePerson, byACaller: closing }, { byThePerson: ['@clamp #a2 worktreeDeleted'], byACaller: [] });
 	});
 
-	test('an agent\'s terminal in the worktree is said to be running while its CLI runs, children or not - one still connecting has none; one that ended is not (WT-8.1; N-35)', async () => {
+	test('an agent\'s terminal in the worktree is named as stopping while its CLI runs, children or not - one still connecting has none; one that ended is not (WT-8.1; N-35)', async () => {
 		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
 		const said = async (agent: ITerminalInstance) => {
 			terminals = [agent];
 			confirmations.length = 0;
 			await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
-			return (confirmations[0].detail as string).includes('A process running in one of its terminals will be terminated.');
+			return stopping();
 		};
 
 		assert.deepStrictEqual({
 			connecting: await said(terminal('@late #a2', `${w2.path}`, { run: { workspace: 'record', id: 2 } })),
 			ended: await said(terminal('@done #a3', `${w2.path}`, { run: { workspace: 'record', id: 3 }, exitCode: 0 })),
 			shell: await said(terminal('zsh', `${w2.path}`))
-		}, { connecting: true, ended: false, shell: false });
+		}, { connecting: 'The following agent will be terminated:\nAgent @late #a2', ended: undefined, shell: undefined });
 	});
 
 	test('a worktree in which another window\'s agent works is not deleted - by the person or by a caller - before anything is closed: refused naming it (SP-18; N-37)', async () => {
@@ -1971,10 +1977,10 @@ suite('Worktrees - making and deleting one', () => {
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(worktree);
 
 		assert.deepStrictEqual({
-			running: (confirmations[0].detail as string).includes('A process running in one of its terminals will be terminated.'),
+			running: stopping(),
 			closed: steps.filter(step => step.startsWith('close '))
 		}, {
-			running: true,
+			running: 'The following terminal will be terminated:\nTerminal (the remote one)',
 			closed: ['close the remote one'],
 		});
 	});
@@ -1986,7 +1992,7 @@ suite('Worktrees - making and deleting one', () => {
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
 
-		assert.deepStrictEqual((confirmations[0].detail as string).includes('A process running in one of its terminals will be terminated.'), true);
+		assert.deepStrictEqual(stopping(), 'The following terminal will be terminated:\nTerminal (a server moved into its editor area)');
 	});
 
 	test('a worktree on a detached HEAD is not told it has a branch to keep', async () => {

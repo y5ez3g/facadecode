@@ -7,7 +7,6 @@ import { coalesce } from '../../../../base/common/arrays.js';
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { ResourceSet } from '../../../../base/common/map.js';
 import { Schemas } from '../../../../base/common/network.js';
-import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
@@ -23,6 +22,7 @@ import { IRunningWork, IWorkspaceBarAgentsService } from './workspaceBarAgents.j
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarRepository } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
+import { agentsFirst, discardedHeading, fileLine, listedFiles, listedSessions, placeNameFor, terminatedHeading, workLine } from './workspaceBarQuestions.js';
 import { IRemoveOptions, RemoveResult } from './workspaceBarService.js';
 import { IPutAwayEditorsService } from '../../../services/putAwayEditors/common/putAwayEditors.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -51,6 +51,9 @@ export interface IRemovalLoss {
 
 	/** The unsaved working copies of the folders, those put away with them, and untitled ones on screen when the active folder leaves. */
 	readonly unsaved: readonly IWorkingCopy[];
+
+	/** Where each of `work` runs, and each of `unsaved` goes from: a folder leaving, or a row leaving with it. */
+	readonly places: ReadonlyMap<IRunningWork | IWorkingCopy, URI>;
 }
 
 /** Whether `loss` loses nothing beyond what the person `agreed` to. */
@@ -192,51 +195,76 @@ export class WorkspaceBarRemoval {
 		const rows = [...repositories.values()].flatMap(repository => rowsLeavingWith(repository, uris, isEqual));
 
 		const work = new Map<number, IRunningWork>();
+		const places = new Map<IRunningWork | IWorkingCopy, URI>();
 		for (const uri of [...uris, ...rows]) {
 			for (const item of this.agentsService.workIn(uri)) {
-				work.set(item.id, item);
+				if (!work.has(item.id)) {
+					work.set(item.id, item);
+					places.set(item, uri);
+				}
 			}
 		}
 
 		// The workspace folder that contains a file owns it, so a file of a nested folder that stays is kept
 		const ofLeaving = (resource: URI) => {
 			const folder = this.contextService.getWorkspaceFolder(resource);
-			return !!folder && uris.some(uri => isEqual(uri, folder.uri));
+			return folder && uris.some(uri => isEqual(uri, folder.uri)) ? folder.uri : undefined;
 		};
 
 		// A put-away file is lost with its folder unless it is also on screen or held by a folder that stays
 		const holds = (folder: URI, resource: URI) => this.putAwayEditorsService.get(folder).some(held => isEqual(held, resource));
 		const onScreen = this.editorService.getEditors(EditorsOrder.SEQUENTIAL).flatMap(({ editor }) => editor.resource ? [editor.resource] : []);
 		const staying = this.putAwayEditorsService.folders().filter(folder => !uris.some(uri => isEqual(uri, folder)));
-		const putAwayInLeaving = (resource: URI) => uris.some(uri => holds(uri, resource))
-			&& !onScreen.some(shown => isEqual(shown, resource))
-			&& !staying.some(folder => holds(folder, resource));
+		const putAwayInLeaving = (resource: URI) => !onScreen.some(shown => isEqual(shown, resource)) && !staying.some(folder => holds(folder, resource))
+			? uris.find(uri => holds(uri, resource))
+			: undefined;
 
 		// An untitled file on screen belongs to the active folder, and leaves with it (WORKSPACE.md W6.2)
 		const active = this.activeFolderService.activeFolder?.uri;
 		const activeLeaves = !!active && uris.some(uri => isEqual(uri, active));
-		const newOnScreen = (resource: URI) => activeLeaves && resource.scheme === Schemas.untitled && onScreen.some(shown => isEqual(shown, resource));
+		const newOnScreen = (resource: URI) => activeLeaves && resource.scheme === Schemas.untitled && onScreen.some(shown => isEqual(shown, resource)) ? active : undefined;
 
-		const unsaved = this.workingCopyService.dirtyWorkingCopies.filter(workingCopy => ofLeaving(workingCopy.resource) || putAwayInLeaving(workingCopy.resource) || newOnScreen(workingCopy.resource));
+		const unsaved: IWorkingCopy[] = [];
+		for (const workingCopy of this.workingCopyService.dirtyWorkingCopies) {
+			const from = ofLeaving(workingCopy.resource) ?? putAwayInLeaving(workingCopy.resource) ?? newOnScreen(workingCopy.resource);
+			if (from) {
+				unsaved.push(workingCopy);
+				places.set(workingCopy, from);
+			}
+		}
 
-		return { work: [...work.values()].sort((a, b) => a.id - b.id), unsaved };
+		return { work: [...work.values()].sort((a, b) => a.id - b.id), unsaved, places };
 	}
 
 	/** Asks once, worded as VS Code's delete confirmation (WORKSPACE.md W10.7); undefined for Cancel. */
 	private async ask(requested: readonly IWorkspaceFolder[], leaving: readonly IWorkspaceFolder[], loss: IRemovalLoss): Promise<Answer | undefined> {
-		const isEqual = (a: URI, b: URI) => this.uriIdentityService.extUri.isEqual(a, b);
-		const worktrees = leaving.filter(folder => !requested.some(other => isEqual(other.uri, folder.uri))
-			&& !!this.repositoryFor(folder.uri)?.worktrees.some(worktree => isEqual(worktree.uri, folder.uri)));
+		const extUri = this.uriIdentityService.extUri;
+		const worktrees = leaving.filter(folder => !requested.some(other => extUri.isEqual(other.uri, folder.uri))
+			&& !!this.repositoryFor(folder.uri)?.worktrees.some(worktree => extUri.isEqual(worktree.uri, folder.uri)));
 		const names = [...requested, ...worktrees].map(folder => this.customizationService.nameFor(folder));
 
-		const stopping = loss.work.length ? stoppingNames(loss.work, true) : undefined;
-		const losing = loss.unsaved.length ? listNames(loss.unsaved.map(workingCopy => basename(workingCopy.resource))) : undefined;
-		const lost = stopping && losing
-			? localize('workspaceBar.removeStopsAndLoses', "{0} will be terminated, and unsaved changes in {1} will be discarded.", stopping, losing)
-			: stopping
-				? localize('workspaceBar.removeStops', "{0} will be terminated.", stopping)
-				: localize('workspaceBar.removeLoses', "Unsaved changes in {0} will be discarded.", losing ?? '');
-		const paragraph = [lost, localize('workspaceBar.removeKeepsDisk', "Files on disk will not be deleted.")].join(' ');
+		// Each line says where it is, but where the question names the one folder all of it is in
+		const named = requested.length === 1 && !worktrees.length ? requested[0].uri : undefined;
+		const placed = !named || [...loss.places.values()].some(uri => !extUri.isEqual(uri, named));
+		const placeOf = (item: IRunningWork | IWorkingCopy) => {
+			const uri = placed ? loss.places.get(item) : undefined;
+			const folder = uri && this.contextService.getWorkspace().folders.find(candidate => extUri.isEqual(candidate.uri, uri));
+			return uri && placeNameFor(this.customizationService, uri, folder, this.repositoryFor(uri), extUri);
+		};
+
+		// Each list under what becomes of it, then what does not (WORKSPACE.md W10.7)
+		const paragraphs: string[] = [];
+		if (requested.length > 1) {
+			paragraphs.push(names.join('\n'));
+		}
+		if (loss.work.length) {
+			const work = agentsFirst(loss.work);
+			paragraphs.push([terminatedHeading(work), ...listedSessions(work.map(item => workLine(item, placeOf(item))))].join('\n'));
+		}
+		if (loss.unsaved.length) {
+			paragraphs.push([discardedHeading(loss.unsaved.length), ...listedFiles(loss.unsaved.map(workingCopy => fileLine(workingCopy.name, placeOf(workingCopy))))].join('\n'));
+		}
+		paragraphs.push(localize('workspaceBar.removeKeepsDisk', "Files on disk will not be deleted."));
 
 		const { result } = await this.dialogService.prompt<Answer>({
 			type: 'warning',
@@ -247,7 +275,7 @@ export class WorkspaceBarRemoval {
 					: worktrees.length === 1
 						? localize('workspaceBar.removeFolderAndWorktree', "Are you sure you want to remove '{0}' and its worktree from the workspace?", names[0])
 						: localize('workspaceBar.removeFolderAndWorktrees', "Are you sure you want to remove '{0}' and its {1} worktrees from the workspace?", names[0], worktrees.length),
-			detail: requested.length > 1 ? `${names.join('\n')}\n\n${paragraph}` : paragraph,
+			detail: paragraphs.join('\n\n'),
 			buttons: loss.unsaved.length
 				? [{ label: localize({ key: 'workspaceBar.removeAndDiscard', comment: ['&& denotes a mnemonic'] }, "&&Remove and Discard Changes"), run: () => 'discard' }]
 				: [{ label: localize({ key: 'workspaceBar.removeFolderButton', comment: ['&& denotes a mnemonic'] }, "&&Remove"), run: () => 'remove' }],

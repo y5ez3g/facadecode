@@ -521,8 +521,9 @@ Prepare and perform a deletion in this order:
   Retain the branch. On detached HEAD, do not claim a branch preserves its commits.
   No preference disables this confirmation.
 - **WT-8.2** Show up to ten changed/untracked file names, then the remaining count.
-  Separately show dirty editor names and ignored paths; summarize whole ignored
-  directories instead of listing every dependency file. Warn that submodules and
+  Separately show dirty editor names and ignored paths, ten of each likewise, and the
+  agents and terminals that will stop, as WORKSPACE.md W10.7 lists them; summarize whole
+  ignored directories instead of listing every dependency file. Warn that submodules and
   their local data are removed. Use Delete and Discard Changes when unsaved or
   changed content is involved, otherwise Delete. Do not offer Save and Delete as a
   way to preserve a file inside the directory: saving it there would still delete
@@ -666,7 +667,7 @@ injection and integrated gate.
 | WTA-19 | U | `_git.createWorktreeAt` with LFS objects present and missing, a failing post-checkout hook, a failure after `-b`, an existing branch | WT-4: LFS skipped then checked out from local objects; the hook warning keeps the worktree; only its own branch deleted; failures returned, never thrown |
 | WTA-20 | U | `.worktreeinclude` with files, a wholly ignored directory, tracked and unignored files, a link, a file git checked out, an unreadable file | WT-6: only ignored and included paths copied; nothing overwritten; links skipped; one warning counting failures |
 | WTA-21 | U, I | `worktrees.json` with each OS key, only the common key, an empty list, invalid JSON, a non-string; in the worktree and only in the main checkout; with and without shell integration; close the terminal midway | WT-7: the right lines, in order, in one revealed "Worktree Setup" terminal with `ROOT_WORKTREE_PATH`; one warning and nothing run when invalid; no terminal for an empty list; the rest stop when closed |
-| WTA-22 | U, I | Delete a clean worktree, one with eleven changed files, one with submodules, one on a detached HEAD, one with a running terminal, while the window is on it | WT-8 order and dialog: always asked; ten files then "and 1 more"; submodule and running warnings; no branch line on a detached HEAD; the window goes to the repository's row, not the next folder |
+| WTA-22 | U, I | Delete a clean worktree, one with eleven changed files, one with submodules, one on a detached HEAD, one with a running terminal, while the window is on it | WT-8 order and dialog: always asked; ten files then "...1 additional file not shown"; the submodule warning, and the running terminal listed as stopping (WORKSPACE.md W10.7); no branch line on a detached HEAD; the window goes to the repository's row, not the next folder |
 | WTA-23 | I | On Windows, hold a file/directory open; make Git drop its record before cleanup fails; also request a never-listed path | Owned terminals close before removal; eventual cleanup success, or WT-8.6's notification naming the leftover path; a never-listed path is refused |
 | WTA-24 | U, I | Delete a locked worktree, fail removal while registered, then perform a successful delete | Reject a known lock before stopping work. Other failure restores a registered row with its customization and reports prior effects; success removes the row and directory and retains the branch |
 | WTA-25 | U, I | Remove Folder on a repository row whose worktrees are in `folders[]` | WT-8.8: they leave `folders[]` and stay on disk and in git |
