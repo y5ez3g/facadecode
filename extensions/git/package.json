@@ -1539,7 +1539,7 @@
         },
         {
           "command": "git.createWorktree",
-          "when": "config.git.enabled && !git.missing && gitOpenRepositoryCount != 0"
+          "when": "config.git.enabled && !git.missing && gitOpenRepositoryCount != 0 && !config.facade.workspaceBar.worktrees"
         },
         {
           "command": "git.openWorktree",
@@ -1551,7 +1551,7 @@
         },
         {
           "command": "git.deleteWorktree",
-          "when": "config.git.enabled && !git.missing && gitOpenRepositoryCount != 0"
+          "when": "config.git.enabled && !git.missing && gitOpenRepositoryCount != 0 && !config.facade.workspaceBar.worktrees"
         },
         {
           "command": "git.deleteWorktree2",
@@ -2107,7 +2107,7 @@
         {
           "command": "git.deleteWorktree2",
           "group": "2_worktree@1",
-          "when": "scmProvider == git && scmProviderContext == worktree"
+          "when": "scmProvider == git && scmProviderContext == worktree && !config.facade.workspaceBar.worktrees"
         }
       ],
       "scm/artifactGroup/context": [
@@ -2129,7 +2129,7 @@
         {
           "command": "git.repositories.createWorktree",
           "group": "inline@1",
-          "when": "scmProvider == git && scmArtifactGroup == worktrees"
+          "when": "scmProvider == git && scmArtifactGroup == worktrees && !config.facade.workspaceBar.worktrees"
         }
       ],
       "scm/artifact/context": [
@@ -2247,7 +2247,7 @@
         {
           "command": "git.repositories.deleteWorktree",
           "group": "2_modify@1",
-          "when": "scmProvider == git && scmArtifactGroupId == worktrees"
+          "when": "scmProvider == git && scmArtifactGroupId == worktrees && !config.facade.workspaceBar.worktrees"
         },
         {
           "command": "git.repositories.worktreeCopyCommitHash",
@@ -3230,12 +3230,12 @@
           "group": "openWorktrees@2"
         },
         {
-          "when": "scmProviderContext == repository",
+          "when": "scmProviderContext == repository && !config.facade.workspaceBar.worktrees",
           "command": "git.createWorktree",
           "group": "worktrees@1"
         },
         {
-          "when": "scmProviderContext == worktree",
+          "when": "scmProviderContext == worktree && !config.facade.workspaceBar.worktrees",
           "command": "git.deleteWorktree2",
           "group": "worktrees@2"
         }
