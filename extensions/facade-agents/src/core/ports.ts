@@ -342,12 +342,20 @@ export interface Git {
 	untrackedAnywhere(folder: string, files: readonly string[]): Promise<ReadonlySet<string>>;
 }
 
+/** Facade's worktree management, the window's setting: on unless switched off (WORKTREE.md, WT-9). */
+export const WORKTREES_SETTING = 'facade.workspaceBar.worktrees';
+
 /** The window's workspace. */
 export interface Workspace {
 	/** Its folders on this machine, by their paths. */
 	folders(): readonly string[];
 	/** The folder on the person's screen, as the workspace bar has it; none where there is none. */
 	activeFolder(): Promise<string | undefined>;
+	/**
+	 * Whether Facade manages worktrees, `WORKTREES_SETTING`: off, no worktree is made or deleted for an agent, and git
+	 * is not asked for worktrees outside the workspace (WT-9.1, WT-9.3).
+	 */
+	worktreesManaged(): boolean;
 }
 
 /** How much a notice matters to the person: news; something that did not go as it should, which may want them; a failure. */

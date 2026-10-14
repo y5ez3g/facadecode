@@ -806,7 +806,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const settings: { [section: string]: { [name: string]: unknown } } = {};
 	// The window writes no final screens here: none is waited for
 	const timing = { startTimeoutMs: options.startTimeoutMs ?? 120_000, finalScreenWaitMs: 0 };
-	const switches: { yolo: unknown; framework: boolean } = { yolo: true, framework: true };
+	const switches: { yolo: unknown; framework: boolean; worktrees: boolean } = { yolo: true, framework: true, worktrees: true };
 	/** The person's custom agents, `facade.agents.custom`, as a test sets them: by name, in order. */
 	const custom: { [name: string]: unknown } = {};
 	const arg = argCli(path.join(dir, 'arg-home'));
@@ -826,7 +826,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const facade = new Facade({
 		...(options.platform ? { platform: options.platform } : {}),
 		table,
-		ports: { terminals, git, workspace: { folders: () => [...options.firstFolders ?? [], ...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder }, person },
+		ports: { terminals, git, workspace: { folders: () => [...options.firstFolders ?? [], ...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder, worktreesManaged: () => switches.worktrees }, person },
 		clis: {
 			known,
 			custom: () => Object.entries(custom).map(([name, value]) => customAgentOf(name, value, customAgentNameProblem(name, new Set(known.map(cli => cli.id))))),
@@ -895,7 +895,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		settings,
 		/** How long the core waits, as the person set it: a test changes it as it goes. */
 		timing,
-		/** The person's switches: YOLO, on unless a test turns it off or sets it to what is no switch, and the agent framework, on. */
+		/** The person's switches: YOLO, on unless a test turns it off or sets it to what is no switch; the agent framework and worktree management, on. */
 		switches,
 		/** The person's custom agents, by name: a test adds them. */
 		custom,

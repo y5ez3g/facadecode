@@ -2537,6 +2537,77 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		});
 	});
 
+	test('with worktree management off, a new worktree and a deletion are refused whole, naming the setting - nothing made, stopped or deleted, a main checkout\'s deletion too; starts in known folders, the worktree an agent was started in among them, and stops without deletion go on (WT-9.3; O3, O5; OR-28)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		world.switches.worktrees = false;
+		const steps = world.git.steps.length;
+		const made = await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'fresh', newWorktree: true }));
+		const deleted = await outcomeOf(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true }));
+		const mainDeleted = await outcomeOf(world.facade.stopAgent(PERSON, '#a1', { deleteWorktree: true }));
+		const beside = await world.startUp(lead, { cli: 'arg', name: 'beside', folder: lab });
+		const again = await world.startUp(lead, { cli: 'arg', name: 'again', folder: clamp });
+		const stopped = await world.facade.stopAgent(lead, '#a3');
+
+		assert.deepStrictEqual({ made, deleted, mainDeleted, beside: beside.status, again: again.status, stopped: stopped.stopped.map(each => each.id), agents: agents(world), steps: world.git.steps.slice(steps), exists: fs.existsSync(clamp) }, {
+			made: 'UNAVAILABLE: Cannot use new_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was started. Start the agent in an existing folder without new_worktree, or ask the person to turn the setting on.',
+			deleted: 'UNAVAILABLE: Cannot use delete_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to turn the setting on.',
+			mainDeleted: 'UNAVAILABLE: Cannot use delete_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to turn the setting on.',
+			beside: 'started',
+			again: 'started',
+			stopped: [3],
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running', '#a3 @beside by #a1 stopped by #a1: with stop_agent', '#a4 @again by #a1 running'],
+			steps: [],
+			exists: true
+		});
+	});
+
+	test('a new worktree and a deletion accepted before worktree management is turned off settle as accepted: the worktree is made and its agent comes up, and the other deleted, nothing given up halfway (WT-9.4; WTA-27)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		let made = () => { };
+		world.git.making = new Promise<void>(resolve => made = resolve);
+		const starting = world.startUp(lead, { cli: 'arg', task: 'Vise.', name: 'vise', newWorktree: true });
+		await until(() => world.git.steps.some(step => step.startsWith('make vise')));
+		let deleted = () => { };
+		world.git.deleting = new Promise<void>(resolve => deleted = resolve);
+		const deleting = world.facade.stopAgent(lead, '#a2', { deleteWorktree: true });
+		await until(() => world.git.deletions.has(clamp));
+		world.switches.worktrees = false;
+		made();
+		deleted();
+
+		assert.deepStrictEqual({ started: (await starting).status, deleted: (await deleting).worktree, vise: fs.existsSync(worktreeFolder(lab, 'vise')) }, {
+			started: 'started',
+			deleted: { folder: clamp, deleted: true },
+			vise: true
+		});
+	});
+
+	test('with worktree management off, git is not asked for worktrees: a worktree no agent of the list was started in is refused by its path, naming the setting, and a branch is not resolved to its worktree; on again, both are found (WT-9.3; O3; OR-28)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		const other = path.join(temp.dir, 'other');
+		world.git.addWorktree(lab, 'other', other);
+		world.switches.worktrees = false;
+		const byPath = await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'path', folder: other }));
+		const byBranch = await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'branch', folder: 'other' }));
+		world.switches.worktrees = true;
+		const onByPath = await world.startUp(lead, { cli: 'arg', name: 'path', folder: other });
+		const onByBranch = await world.startUp(lead, { cli: 'arg', name: 'branch', folder: 'other' });
+
+		assert.deepStrictEqual({ byPath, byBranch, on: [onByPath.status, onByBranch.status], folders: [world.agent(2).folder, world.agent(3).folder] }, {
+			byPath: `REFUSED: ${other} is outside this window, and worktree management is turned off by the setting facade.workspaceBar.worktrees. Start in a window folder or in a folder where an agent in this window was started. Window folders: ${lab}.`,
+			byBranch: 'UNAVAILABLE: \'other\' is not an absolute path, and branches cannot be resolved to worktrees while worktree management is turned off by the setting facade.workspaceBar.worktrees. Provide the absolute path of a folder in this window.',
+			on: ['started', 'started'],
+			folders: [other, other]
+		});
+	});
+
 	test('a starting child that someone other than its creator stops is reported to its waiting creator once - its start\'s answer, its task given back - and by no notice of its end besides (M8; XS-09)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));

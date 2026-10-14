@@ -28,7 +28,7 @@ import { HostGit } from './git';
 import { HostPerson } from './person';
 import { confirmDeleteRooms, pickRoom } from './rooms';
 import { ScreenDocuments } from './screenDocuments';
-import { configFor, customAgents, frameworkOn, settingsProblems, timeoutMs, yolo } from './settings';
+import { configFor, customAgents, frameworkOn, settingsProblems, timeoutMs, worktreesManaged, yolo } from './settings';
 import { folderOnScreen, OfferedAgent, pickAgent, terminalPlace } from './startAgent';
 import { agentProcessesRun, HostTerminals, terminalEnvironment } from './terminals';
 import { JsonFileState, StateStore } from './windowState';
@@ -203,7 +203,8 @@ export class AgentsService implements vscode.Disposable {
 				git: new HostGit(id),
 				workspace: {
 					folders: () => (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath),
-					activeFolder: folderOnScreen
+					activeFolder: folderOnScreen,
+					worktreesManaged
 				},
 				person: this.person = new HostPerson(terminals, this.screenDocuments, agent => this.facade?.endedAgent(agent), message => this.say(message))
 			},
