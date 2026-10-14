@@ -504,6 +504,11 @@
 	width: 100%;
 	height: 100%;
 	z-index: 2;
+	/*
+	 * Facade Code: laid over the whole icon, it took the pointer from the label, and with it the hover the label is
+	 * painted with - an icon with a count lost its square. The click and the hover's text are the item's, under it.
+	 */
+	pointer-events: none;
 }
 
 .monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .action-toolbar-container .monaco-action-bar .action-item.icon .badge.compact .badge-content::before {
