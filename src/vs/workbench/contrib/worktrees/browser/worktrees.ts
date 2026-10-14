@@ -46,7 +46,7 @@ import { ITerminalInstance, ITerminalService } from '../../terminal/browser/term
 import { getShellIntegrationTimeout } from '../../terminal/common/terminalEnvironment.js';
 
 /*
- * Making and deleting worktrees from the workspace bar (WORKTREE.md sections 7 to 10). A contribution
+ * Making and deleting worktrees from the workspace bar (WORKTREE.md WT-5 to WT-8). A contribution
  * rather than part of the bar, because setup runs in a terminal and `vs/workbench/browser` may not
  * import `contrib/terminal`.
  */
@@ -241,7 +241,7 @@ function asCodeSpan(text: string): string {
 
 export const IWorktreeService = createDecorator<IWorktreeService>('worktreeService');
 
-/** Making and deleting the workspace bar's worktrees (WORKTREE.md sections 7 to 10). */
+/** Making and deleting the workspace bar's worktrees (WORKTREE.md WT-5 to WT-8). */
 export interface IWorktreeService {
 	readonly _serviceBrand: undefined;
 
@@ -1003,7 +1003,7 @@ export class NewWorktreeAction extends Action2 {
 			category: WORKSPACE_BAR_CATEGORY,
 			icon: Codicon.add,
 			f1: true,
-			// Off in the palette too while the bar lists no worktrees (WORKTREE.md section 11).
+			// Off in the palette too while the bar lists no worktrees (WORKTREE.md WT-9).
 			precondition: ContextKeyExpr.and(WORKTREES_SHOWN, GIT_AVAILABLE),
 			menu: [{
 				// First in the menu, as the explorer puts New File first. On every folder's row: a folder

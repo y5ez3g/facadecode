@@ -12,7 +12,7 @@ import { GitErrorCodes } from './api/git.constants';
 
 /*
  * Facade Code: non-interactive worktree commands for the workspace bar, which asks its own questions
- * (WORKTREE.md section 6). All the logic is here, so an upstream merge meets two hunks in `commands.ts`:
+ * (WORKTREE.md WT-4). All the logic is here, so an upstream merge meets two hunks in `commands.ts`:
  * the import, and the three commands.
  *
  * Nothing here needs `vscode` at runtime, so besides the extension host its tests also run under plain
@@ -393,7 +393,7 @@ async function hasCommits(git: IWorktreeGit, root: string): Promise<boolean> {
  * which starts at its parent worktree's HEAD (WORKTREE.md, WT-5.11).
  *
  * With `GIT_LFS_SKIP_SMUDGE=1`, so an LFS object that is missing does not fail the whole checkout
- * (WORKTREE.md section 2), then `git lfs checkout` to put back the objects that are here - it
+ * (WORKTREE.md WT-4), then `git lfs checkout` to put back the objects that are here - it
  * downloads nothing.
  */
 export async function createWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, branch: string, startPoint?: string): Promise<CreateWorktreeAtResult> {
@@ -512,8 +512,8 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 		await git.exec(root, remove);
 	} catch (err) {
 		// On Windows git can remove the files and the record, then fail on a directory something still
-		// has open - the shell of a terminal disposed a moment ago, still exiting (WORKTREE.md section
-		// 18.7). The directory is deleted below, waiting for it to be let go of - but only if this remove
+		// has open - the shell of a terminal disposed a moment ago, still exiting (WORKTREE.md
+		// WT-4.5). The directory is deleted below, waiting for it to be let go of - but only if this remove
 		// is what took it off git's list.
 		if (listed !== true || (await isListed(git, root, worktreePath)) !== false || !(await exists(directory))) {
 			return toError(err);

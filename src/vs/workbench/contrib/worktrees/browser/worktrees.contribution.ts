@@ -7,7 +7,7 @@ import { registerAction2 } from '../../../../platform/actions/common/actions.js'
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { DeleteWorktreeAction, IWorktreeService, NewWorktreeAction, WorktreeService } from './worktrees.js';
 
-// The workspace bar's worktrees: making one (WORKTREE.md section 7) and deleting one (section 10).
+// The workspace bar's worktrees: making one (WORKTREE.md WT-5) and deleting one (WT-8).
 registerSingleton(IWorktreeService, WorktreeService, InstantiationType.Delayed);
 registerAction2(NewWorktreeAction);
 registerAction2(DeleteWorktreeAction);
