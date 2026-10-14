@@ -20,7 +20,7 @@ import { IRunningWork, IWorkspaceBarAgentsService } from '../../../../browser/pa
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { WorkspaceBarModel } from '../../../../browser/parts/workspacebar/workspaceBarModel.js';
-import { foldersToRemove, rowsLeavingWith, stoppingNames, WorkspaceBarRemoval } from '../../../../browser/parts/workspacebar/workspaceBarRemoval.js';
+import { foldersToRemove, rowsLeavingWith, WorkspaceBarRemoval } from '../../../../browser/parts/workspacebar/workspaceBarRemoval.js';
 import { IRemoveOptions, RemoveResult } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
 import { IEditorIdentifier } from '../../../../common/editor.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
@@ -39,6 +39,8 @@ class TestWorkingCopy {
 	dirty = true;
 
 	constructor(readonly resource: URI, private readonly steps: string[]) { }
+
+	get name(): string { return basename(this.resource); }
 
 	isDirty(): boolean { return this.dirty; }
 
@@ -180,7 +182,7 @@ suite('Workspace bar - removing folders', () => {
 		instantiationService.stub(IActiveFolderService, {
 			get activeFolder() { return window.folders.find(folder => folder.uri.path === (options.active ?? options.folders[0])); }
 		});
-		instantiationService.stub(IWorkspaceBarCustomizationService, { nameFor: (folder: IWorkspaceFolder) => options.names?.get(folder.uri.path) ?? folder.name });
+		instantiationService.stub(IWorkspaceBarCustomizationService, { nameFor: (folder: IWorkspaceFolder) => options.names?.get(folder.uri.path) ?? folder.name, get: () => undefined });
 
 		const model = upcastPartial<WorkspaceBarModel>({
 			resolve: async (uri: URI) => window.folders.find(folder => isEqual(folder.uri, uri)),
@@ -194,7 +196,7 @@ suite('Workspace bar - removing folders', () => {
 			}
 		});
 		const repository = options.repository;
-		const removal = instantiationService.createInstance(WorkspaceBarRemoval, model, (uri: URI) => repository && (isEqual(repository.main, uri) || repository.members.some(folder => isEqual(folder.uri, uri))) ? repository : undefined);
+		const removal = instantiationService.createInstance(WorkspaceBarRemoval, model, (uri: URI) => repository && (isEqual(repository.main, uri) || repository.members.some(folder => isEqual(folder.uri, uri)) || repository.worktrees.some(worktree => isEqual(worktree.uri, uri))) ? repository : undefined);
 
 		const result = await removal.remove(paths.map(path => URI.file(path)), removeOptions);
 		return {
@@ -213,7 +215,7 @@ suite('Workspace bar - removing folders', () => {
 		});
 	});
 
-	test('WS-33 one question names the folder as its row does, and all that would be lost - agents, terminals running a process, unsaved files - and Remove and Discard Changes throws the changes away and closes their editors once the folder has left', async () => {
+	test('WS-33 one question names the folder as its row does, and all that would be lost - agents, terminals running a process, unsaved files - each list under what becomes of it, one to a line, no line repeating the folder the question names; Remove and Discard Changes throws the changes away and closes their editors once the folder has left', async () => {
 		const outcome = await remove(['/w/notes'], {
 			folders: ['/w/api', '/w/notes'],
 			names: new Map([['/w/notes', 'Notes']]),
@@ -228,7 +230,9 @@ suite('Workspace bar - removing folders', () => {
 			asked: [{
 				message: 'Are you sure you want to remove \'Notes\' from the workspace?',
 				detail: [
-					'Claude Code and terminal \'npm run dev\' will be terminated, and unsaved changes in todo.md will be discarded. Files on disk will not be deleted.'
+					'The following agents and terminals will be terminated:\nAgent Claude Code\nTerminal (npm run dev)',
+					'The following file has unsaved changes that will be discarded:\ntodo.md',
+					'Files on disk will not be deleted.'
 				],
 				buttons: ['Remove and Discard Changes']
 			}],
@@ -238,21 +242,7 @@ suite('Workspace bar - removing folders', () => {
 		});
 	});
 
-	test('WS-33 what stops, in a sentence: agents by name, terminals by title, those that share a name counted once', () => {
-		assert.deepStrictEqual({
-			mixed: stoppingNames([agent(1, 'Pinger'), terminal(2, 'PING'), terminal(3, 'PING'), terminal(4, 'npm test')], true),
-			terminalsFirst: stoppingNames([terminal(2, 'PING'), terminal(3, 'PING')], true),
-			oneTerminal: stoppingNames([terminal(2, 'PING')], true),
-			inFolders: stoppingNames([agent(1, 'Pinger'), terminal(2, 'PING')], true, item => item.kind === 'agent' ? 'alpha' : 'beta'),
-		}, {
-			mixed: 'Pinger, 2 \'PING\' terminals, and terminal \'npm test\'',
-			terminalsFirst: '2 \'PING\' terminals',
-			oneTerminal: 'Terminal \'PING\'',
-			inFolders: 'Pinger in folder \'alpha\' and terminal \'PING\' in folder \'beta\'',
-		});
-	});
-
-	test('WS-33 several folders at once: one question, which lists them one to a line', async () => {
+	test('WS-33 several folders at once: one question, which lists them one to a line, and says where each thing that would be lost is', async () => {
 		const outcome = await remove(['/w/notes', '/w/docs'], {
 			folders: ['/w/api', '/w/notes', '/w/docs'],
 			names: new Map([['/w/notes', 'Notes']]),
@@ -266,7 +256,8 @@ suite('Workspace bar - removing folders', () => {
 				message: 'Are you sure you want to remove the following 2 folders from the workspace?',
 				detail: [
 					'Notes\ndocs',
-					'Terminal \'npm run dev\' will be terminated. Files on disk will not be deleted.'
+					'The following terminal will be terminated:\nTerminal (npm run dev) · docs',
+					'Files on disk will not be deleted.'
 				],
 				buttons: ['Remove']
 			}]
@@ -282,9 +273,8 @@ suite('Workspace bar - removing folders', () => {
 			answers: ['Remove and Discard Changes']
 		});
 
-		// The unsaved files' paragraph is the one before the last, which says what is not lost
-		assert.deepStrictEqual({ unsaved: outcome.asked.map(question => question.detail.at(-1)), steps: outcome.steps }, {
-			unsaved: ['Unsaved changes in draft.ts will be discarded. Files on disk will not be deleted.'],
+		assert.deepStrictEqual({ asked: outcome.asked.map(question => question.detail), steps: outcome.steps }, {
+			asked: [['The following file has unsaved changes that will be discarded:\ndraft.ts', 'Files on disk will not be deleted.']],
 			steps: ['edit -/w/notes', 'revert /w/api/draft.ts']
 		});
 	});
@@ -296,15 +286,15 @@ suite('Workspace bar - removing folders', () => {
 		const another = await remove(['/w/api'], window);
 
 		assert.deepStrictEqual({
-			theOneItIsOn: { unsaved: theOneItIsOn.asked.map(question => question.detail.at(-1)), steps: theOneItIsOn.steps },
+			theOneItIsOn: { asked: theOneItIsOn.asked.map(question => question.detail), steps: theOneItIsOn.steps },
 			another: { asked: another.asked, steps: another.steps }
 		}, {
-			theOneItIsOn: { unsaved: ['Unsaved changes in Untitled-1 will be discarded. Files on disk will not be deleted.'], steps: ['edit -/w/notes', 'revert Untitled-1', 'close Untitled-1'] },
+			theOneItIsOn: { asked: [['The following file has unsaved changes that will be discarded:\nUntitled-1', 'Files on disk will not be deleted.']], steps: ['edit -/w/notes', 'revert Untitled-1', 'close Untitled-1'] },
 			another: { asked: [], steps: ['edit -/w/api'] }
 		});
 	});
 
-	test('WTA-25 WS-33 a repository takes its row\'s folders, and names the agents under its rows that never joined', async () => {
+	test('WTA-25 WS-33 a repository takes its row\'s folders, and names the agents under its rows that never joined - each line saying which row, as the bar names it', async () => {
 		const outcome = await remove(['/lab'], {
 			folders: ['/lab', '/link-lab', '/wt/w2', '/notes'],
 			repository: lab,
@@ -319,12 +309,29 @@ suite('Workspace bar - removing folders', () => {
 			asked: [[
 				// The checkout's other spelling, a link to it, is the same row and not counted as a worktree
 				'Are you sure you want to remove \'lab\' and its worktree from the workspace?',
-				'Codex will be terminated, and unsaved changes in app.ts will be discarded. Files on disk will not be deleted.'
+				'The following agent will be terminated:\nAgent Codex · lab (worktree: w10)',
+				'The following file has unsaved changes that will be discarded:\napp.ts · lab (worktree: w2)',
+				'Files on disk will not be deleted.'
 			]],
 			steps: ['edit -/lab -/link-lab -/wt/w2', 'revert /wt/w2/app.ts', 'close /wt/w2/app.ts'],
 			said: [],
 			folders: ['/notes']
 		});
+	});
+
+	test('WS-33 one folder whose repository has work under a row that never joined: the question names the folder, so each line says where it is', async () => {
+		const outcome = await remove(['/lab'], {
+			folders: ['/lab', '/notes'],
+			repository: { ...lab, members: [member('/lab')], worktrees: [lab.worktrees[1]] },
+			work: new Map([['/lab', [terminal(3, 'npm test')]], ['/wt/w10', [agent(7, 'Codex')]]]),
+			answers: ['Remove']
+		});
+
+		assert.deepStrictEqual(outcome.asked.map(question => [question.message, ...question.detail]), [[
+			'Are you sure you want to remove \'lab\' from the workspace?',
+			'The following agents and terminals will be terminated:\nAgent Codex · lab (worktree: w10)\nTerminal (npm test) · lab',
+			'Files on disk will not be deleted.'
+		]]);
 	});
 
 	test('WS-60 with unsaved files the question has two buttons, as Delete Worktree has; Cancel removes, stops and throws away nothing', async () => {
@@ -402,7 +409,10 @@ suite('Workspace bar - removing folders', () => {
 		}, {
 			again: {
 				result: 'removed /w/notes',
-				asked: [['Claude Code will be terminated. Files on disk will not be deleted.'], ['Claude Code and terminal \'npm test\' will be terminated. Files on disk will not be deleted.']],
+				asked: [
+					['The following agent will be terminated:\nAgent Claude Code', 'Files on disk will not be deleted.'],
+					['The following agents and terminals will be terminated:\nAgent Claude Code\nTerminal (npm test)', 'Files on disk will not be deleted.']
+				],
 				steps: ['edit -/w/notes']
 			},
 			gone: { result: 'removed ', steps: [] }

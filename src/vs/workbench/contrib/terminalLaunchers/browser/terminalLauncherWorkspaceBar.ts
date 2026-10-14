@@ -45,9 +45,14 @@ export function runningWork(terminals: readonly ITerminalInstance[], agents: Rea
 	return [...terminals]
 		.filter(instance => !instance.isDisposed && (agents.has(instance) ? instance.exitCode === undefined : instance.hasChildProcesses))
 		.sort((a, b) => a.instanceId - b.instanceId)
-		.map(instance => agents.has(instance)
-			? { id: instance.instanceId, kind: 'agent', name: instance.shellLaunchConfig?.name || instance.title }
-			: { id: instance.instanceId, kind: 'terminal', name: instance.title });
+		.map(instance => workOf(instance, agents));
+}
+
+/** What `instance` is: an agent while its CLI runs, by the name it started under; else a terminal, by its title. */
+export function workOf(instance: ITerminalInstance, agents: ReadonlySet<ITerminalInstance>): IRunningWork {
+	return agents.has(instance) && instance.exitCode === undefined
+		? { id: instance.instanceId, kind: 'agent', name: instance.shellLaunchConfig?.name || instance.title }
+		: { id: instance.instanceId, kind: 'terminal', name: instance.title };
 }
 
 /** Tells the workspace bar which agents run in each folder (WORKTREE.md WT-1.15), and what removing a folder would stop (W9.6). */

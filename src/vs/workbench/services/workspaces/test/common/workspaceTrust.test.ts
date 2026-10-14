@@ -4,11 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { IRemoteAuthorityResolverService } from '../../../../../platform/remote/common/remoteAuthorityResolver.js';
@@ -264,6 +268,42 @@ suite('Workspace Trust', () => {
 				withAFolder: await trusted(new Workspace('default', [toWorkspaceFolder(URI.file('/code/api'))], URI.file('/u/User/Default.code-workspace'))),
 				another: await trusted(new Workspace('team', [], URI.file('/code/team.code-workspace'))),
 			}, { empty: true, withAFolder: false, another: false });
+		});
+
+		test('a worktree\'s trust is its repository\'s: trusted in the workspace and when asked about, untrusted with the repository; a folder whose .git names a worktree\'s record is not (WORKTREE.md)', async () => {
+			await configurationService.setUserConfiguration('security', getUserSettings(true, true));
+			const fileService = store.add(new FileService(new NullLogService()));
+			store.add(fileService.registerProvider(Schemas.file, store.add(new InMemoryFileSystemProvider())));
+			instantiationService.stub(IFileService, fileService);
+			// The repository /repo, trusted, with a worktree at /wt; /impostor's .git names that worktree's record
+			const files: Record<string, string> = {
+				'/repo/.git/HEAD': 'ref: refs/heads/main',
+				'/repo/.git/worktrees/wt/commondir': '../..',
+				'/repo/.git/worktrees/wt/gitdir': '/wt/.git',
+				'/wt/.git': 'gitdir: /repo/.git/worktrees/wt',
+				'/impostor/.git': 'gitdir: /repo/.git/worktrees/wt',
+			};
+			for (const [path, content] of Object.entries(files)) {
+				await fileService.writeFile(URI.file(path), VSBuffer.fromString(content));
+			}
+			const trustInfo: IWorkspaceTrustInfo = { uriTrustInfo: [{ uri: URI.file('/repo'), trusted: true }] };
+			storageService.store(WORKSPACE_TRUST_STORAGE_KEY, JSON.stringify(trustInfo), StorageScope.APPLICATION_SHARED, StorageTarget.MACHINE);
+			workspaceService.setWorkspace(new Workspace('worktree', [toWorkspaceFolder(URI.file('/wt'))]));
+
+			const testObject = await initializeTestObject();
+			const trusted = async () => ({
+				window: testObject.isWorkspaceTrusted(),
+				worktree: (await testObject.getUriTrustInfo(URI.file('/wt'))).trusted,
+				impostor: (await testObject.getUriTrustInfo(URI.file('/impostor'))).trusted,
+				recorded: testObject.getTrustedUris().map(uri => uri.path),
+			});
+			const before = await trusted();
+			await testObject.setUrisTrust([URI.file('/repo')], false);
+
+			assert.deepStrictEqual({ before, repositoryUntrusted: await trusted() }, {
+				before: { window: true, worktree: true, impostor: false, recorded: ['/repo'] },
+				repositoryUntrusted: { window: false, worktree: false, impostor: false, recorded: [] },
+			});
 		});
 
 		async function initializeTestObject(): Promise<WorkspaceTrustManagementService> {

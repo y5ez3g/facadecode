@@ -98,6 +98,15 @@ export interface IView {
 	readonly snap?: boolean;
 
 	/**
+	 * Facade Code: whether dragging a sash next to this view resizes the views on the
+	 * sash's other side by their {@link IView.priority priority} rather than nearest
+	 * first, snapping none, as {@link ISplitView.sashResizesByPriority} has it.
+	 *
+	 * @defaultValue `false`
+	 */
+	readonly sashResizesByPriority?: boolean;
+
+	/**
 	 * View instances are supposed to fire this event whenever any of the constraint
 	 * properties have changed:
 	 *
@@ -877,6 +886,10 @@ class LeafNode implements ISplitView<ILayoutContext>, IDisposable {
 
 	get snap(): boolean | undefined {
 		return this.view.snap;
+	}
+
+	get sashResizesByPriority(): boolean | undefined {
+		return this.view.sashResizesByPriority;
 	}
 
 	get minimumOrthogonalSize(): number {

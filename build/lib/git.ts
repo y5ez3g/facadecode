@@ -6,10 +6,39 @@ import path from 'path';
 import fs from 'fs';
 
 /**
+ * Facade Code: a checkout's own git directory, where its HEAD is, and the repository's common one, where the
+ * branches are. Both are `.git` but in a worktree of git's, whose `.git` is a file naming its own directory.
+ */
+function gitDirectoriesOf(repo: string): { git: string; common: string } {
+	const dotGit = path.join(repo, '.git');
+	let pointer: string;
+
+	try {
+		pointer = fs.readFileSync(dotGit, 'utf8');
+	} catch (e) {
+		// A folder, as a checkout of its own has, or none
+		return { git: dotGit, common: dotGit };
+	}
+
+	const match = /^gitdir: (?<dir>.+)$/m.exec(pointer);
+	if (!match?.groups) {
+		return { git: dotGit, common: dotGit };
+	}
+
+	const git = path.resolve(repo, match.groups.dir.trim());
+	try {
+		return { git, common: path.resolve(git, fs.readFileSync(path.join(git, 'commondir'), 'utf8').trim()) };
+	} catch (e) {
+		// A submodule's git directory is one of its own
+		return { git, common: git };
+	}
+}
+
+/**
  * Returns the sha1 commit version of a repository or undefined in case of failure.
  */
 export function getVersion(repo: string): string | undefined {
-	const git = path.join(repo, '.git');
+	const { git, common } = gitDirectoriesOf(repo);
 	const headPath = path.join(git, 'HEAD');
 	let head: string;
 
@@ -30,7 +59,7 @@ export function getVersion(repo: string): string | undefined {
 	}
 
 	const ref = refMatch[1];
-	const refPath = path.join(git, ref);
+	const refPath = path.join(common, ref);
 
 	try {
 		return fs.readFileSync(refPath, 'utf8').trim();
@@ -38,7 +67,7 @@ export function getVersion(repo: string): string | undefined {
 		// noop
 	}
 
-	const packedRefsPath = path.join(git, 'packed-refs');
+	const packedRefsPath = path.join(common, 'packed-refs');
 	let refsRaw: string;
 
 	try {

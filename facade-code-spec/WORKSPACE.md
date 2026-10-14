@@ -234,7 +234,11 @@ trusted, ten of them named and the rest counted; why it asks; Trust and Add or C
 the box VS Code's question has to trust their parent folder whole, when they share one;
 and a link to open everything being added in a new window instead, where only that
 window is restricted. What is added together goes together: all of it here, all of it
-in the new window, or none of it. A folder that arrives where
+in the new window, or none of it. A worktree is trusted as its repository is
+(WORKTREE.md WT-3.9): one of a trusted repository is not asked about, and one of a
+repository that is not trusted is asked about as that repository - the question names
+the repository's folder, and Trust and Add trusts it and every worktree of it. A
+folder that arrives where
 nothing can ask first - the file edited by hand, an extension - meets VS Code's own
 trust question; answered No, the folder is taken back out of the list, and a
 notification offers to open it in a new window. The default workspace's own file is
@@ -319,9 +323,11 @@ updates labels without performing a switch or restoring editors.
 **Unsaved editors.** Text and untitled tabs belong to the folder context in which
 they were opened, even if their resource is in another folder. Switching hides
 the outgoing tabs without saving, reverting or asking. Returning restores them.
-Nothing on the folder's row marks them; VS Code's own count of unsaved files, on the
-Explorer's icon, includes them. A new file never saved (Ctrl+N) belongs to the
-folder the window was on when it was made.
+Nothing on the folder's row marks them, and the count of unsaved files on the
+Explorer's icon is the folder on screen's: what its editors show, and what is changed
+inside it with no editor open. Another folder's are out of sight and out of that count;
+Save All, closing the window and quitting take them in still (W11). A new file never
+saved (Ctrl+N) belongs to the folder the window was on when it was made.
 
 Keep the actual dirty working copies alive, not just serialized tab locations.
 Save All, Revert All, auto save, shutdown handling and backup restoration include
@@ -352,6 +358,7 @@ way of moving between folder sets.
 | terminals in the panel | the window's. A terminal Facade opened for a folder - an agent's - is that folder's wherever it is. Removing the folder asks before it ends; a folder that leaves where nothing could ask leaves its agents running in the panel (W9.6). Their tabs name the folder each works in, as stock VS Code does in a multi-root workspace: terminals of several folders stand side by side there | the window's |
 | new terminal, file dialogs, debug | start in the active folder. Create New Terminal does not ask which folder; Create New Terminal in Another Folder... does. An explicit `cwd`, a variable or a session choice still wins | the last active editor's root, or a question |
 | source control | Changes lists the active folder's repositories (`visibleRepositories`). The Graph and the status bar follow the active folder ahead of the editor. A folder without a repository says so | every repository |
+| unsaved count on the Explorer's icon | the active folder's: what its editors show, and what is changed inside it with no editor open (W6.2) | every unsaved file of the window |
 | search, Go to File, Go to Symbol | one scope for all three (`IFolderScopeService`): the active folder, or the workspace after Show All Folders in the search view's title or on either picker; kept per workspace. A resource in none of the folders is always covered. Go to Symbol is narrowed where its results land, since its providers run in the extension host | every folder |
 | Problems | filtered where the markers land, never at `IMarkerService`; the count follows the scope | every folder |
 | "which folder?" pickers | every folder, the active one first: debug configurations, snippets, the settings editor's folder tab, tasks, `_workbench.pickWorkspaceFolder`, `showWorkspaceFolderPick` (whose API caller still sees the workspace's order) | the workspace's order |
@@ -513,7 +520,9 @@ The title bar's first button collapses the bar to a column of icons and opens it
 again. Collapsed, it is the same tree without its words (WT-1.10): each row keeps its
 icon in its colour - the one chosen for it, else the folder icon - and a worktree its
 dot. Pointing at a row names it at once, in a card to the right of the icon. The state and the open width are kept per profile. A profile that has never
-touched the toggle starts collapsed.
+touched the toggle starts open. Dragging its edge resizes the bar alone: the side bar keeps
+its width, and the editor area gives or takes the difference, as it does when the bar is
+collapsed or opened.
 
 ### W9.10 Zen Mode
 
@@ -662,7 +671,8 @@ a colour and of an icon is the frame's too: 24 px swatches and 28 px icon square
 apart, each row on one line.
 
 What is in it is VS Code's. The font is VS Code's on each platform, in VS Code's weights:
-the title, the labels and the alert's first line semibold, the rest regular. Its sizes
+the title and the labels semibold, the rest regular - the alert's every line, its first
+too, is body text. Its sizes
 are VS Code's but for the title's: VS Code's body size, 13 px, for the description, the
 labels, the hints, the inputs and the alert, and VS Code's 12 px for the buttons. The
 buttons are VS Code's - the primary and the secondary as VS Code draws them, their
@@ -680,20 +690,29 @@ Every other dialog is a question, shown as VS Code shows its own: the operating 
 dialog, `window.dialogStyle` left at stock's `native`. VS Code's own questions - "Save
 changes?", deleting a file - and the questions Facade asks: Remove Folder, Delete
 Worktree, Delete Chat Rooms. Facade's are worded as VS Code words its own, in its shape:
-a question, then under it what it lists one to a line, when it lists anything, and one
-paragraph. The message is the question, naming what it is about in single quotes as its
-row names it, and what goes with it: "Are you sure you want to remove 'lab' and its
-worktree from the workspace?", "Are you sure you want to delete the worktree 'w2'?". The
-paragraph says what stops and what is lost - agents by name, terminals by title, files
-by name as VS Code names them - and then what is not, or that it cannot be undone:
-"Pinger and terminal 'PING' will be terminated, and unsaved changes in note.txt will be
-discarded. Files on disk will not be deleted." The primary button is the verb, beside Cancel.
-A question about losing something has the warning icon, whether or not anything is lost
-this time, as VS Code's delete does. It is plain text, so it reads the same in a system
-dialog. Facade does not ask what VS Code already asks: closing an agent's
-terminal from the list of active agents is VS Code's question for closing a terminal, and
-closing the window with work running is VS Code's question before shutdown (W11), which
-names an agent by the name it was started under, not by its terminal's title. What VS
+a question, then what it lists, then one paragraph. The message is the question, naming
+what it is about in single quotes as its row names it, and what goes with it: "Are you
+sure you want to remove 'lab' and its worktree from the workspace?", "Are you sure you
+want to delete the worktree 'w2'?". Under it is what would be lost, one to a line, as VS
+Code lists the files a close would lose: each list under a line saying what becomes of
+it - "The following agents and terminals will be terminated:", "The following files
+have unsaved changes that will be discarded:" - the agents and terminals first, as
+closing the window asks about them before the files. Every line is written one way: what
+it is, then ` · ` and where it is, by the names the bar gives its rows - `Agent @claude
+#a1 · lab`, `Terminal (npm run dev) · lab (worktree: w2)`, `notes.txt · docs`. An agent
+goes by the name it was started under, a terminal by its title, a file by the name its
+editor shows - a change git keeps no copy of by its path - and a worktree's place after
+its repository's. No line quotes a name: quotes mark a name inside a sentence. A line
+says where only where the question does not: under a question naming the one folder all
+of it is in, the lines leave it out. A list shows ten lines, then how many more, in VS
+Code's words: "...2 additional files not shown". The paragraph says what is not lost, or
+that it cannot be undone: "Files on disk will not be deleted." The primary button is the
+verb, beside Cancel. A question about losing something has the warning icon, whether or
+not anything is lost this time, as VS Code's delete does. It is plain text, so it reads
+the same in a system dialog. Facade does not ask what VS Code already asks: closing an
+agent's terminal from the list of active agents is VS Code's question for closing a
+terminal, and closing the window with work running or files unsaved asks VS Code's
+questions before shutdown (W11), whose lines Facade writes as above. What VS
 Code itself always draws in the window - its trust questions - stays so, and Facade's own
 trust question, for folders that are not trusted joining the window (W5), is drawn as
 those are: in the window, with the shield, its paths as code, VS Code's docs linked, and
@@ -707,7 +726,7 @@ Code's in-window ones do: on Windows the primary button first, on macOS and Linu
 | Event | Required result |
 | --- | --- |
 | Reload Window | Restore the active folder, row layout, editor sets including hidden dirty editors, scope and bar state. Reconnect terminals whose processes survived. Agents reconnect to those same processes; do not ask to stop them |
-| Close window or quit | Ask once before stopping agents or terminals running a process, including hidden ones: VS Code's own question (`terminal.integrated.confirmOnExit`, `hasChildProcesses` by Facade's default), Terminate or Cancel. Facade has it count the terminals kept in the background for folders the window is not on, which stock does not see, and name under it the agents and terminals that would stop, each with its folder (`terminalShutdownQuestion`). Use normal unsaved-file handling, including hidden dirty editors. Any cancellation cancels shutdown |
+| Close window or quit | Ask once before stopping agents or terminals running a process, including hidden ones: VS Code's own question (`terminal.integrated.confirmOnExit`, `hasChildProcesses` by Facade's default), Terminate or Cancel. Facade has it count the terminals kept in the background for folders the window is not on, which stock does not see, and list under it every agent and terminal that would stop, with its place, as W10.7 writes a line; with agents among them it counts them apart: "Do you want to terminate 2 agents and 3 terminals?" (`terminalShutdownQuestion`). Use normal unsaved-file handling, including hidden dirty editors; VS Code's question names each file with the folder it is found in (W6.2), as W10.7 writes a line (`unsavedNamesOf`). Any cancellation cancels shutdown |
 | Start the app again with `window.restoreWindows` | Restore folders, editor state, scope and layout. Terminal scrollback or a revived shell is not proof the old process survived. End agent runs whose processes ended; never label a replacement shell as the previous live agent |
 | Renderer crash with surviving processes | Reconnect using the recorded process/run identities. Preserve unsaved backups; do not relaunch an agent or replay setup merely because its UI was restored |
 | Save Workspace As | Transfer active folder, editor sets, scope and collapsed repositories to the new workspace storage; keep the file in the ordinary format |
@@ -887,7 +906,7 @@ unchanged across both documents.
 | WS-14 | U, I, H | Git: Clone with `openAfterClone` unset, `always` and `prompt`; Git: Initialize Repository on a folder outside the workspace | Unset or `always`: the clone is shown in this window, nothing asked. `prompt`, and the initialized repository: VS Code's question, word for word - Open, Open in New Window, and Add to Workspace when the window has folders; Open shows it in this window, Add to Workspace adds it without leaving the folder the window is on |
 | WS-15 | U, I | Click a row, press Enter, choose the row the window is on, double click | Moves once; the active row does nothing and fires nothing; a double click is one move |
 | WS-16 | I | Switch between two folders whose editors include split groups, a preview tab, a pinned tab and an auxiliary window | Each folder's editors come back as they were left; a never-seen folder starts with none |
-| WS-17 | I | Hide dirty text and untitled editors by switching folders; reload before saving, then return. In a separate run use Save All from another folder | Leaving asks nothing and nothing marks the row. Reload restores the exact dirty contents to their owner folders. Save All includes hidden editors and uses normal Save As handling; a successful save clears dirty state without changing folder ownership |
+| WS-17 | I | Hide dirty text and untitled editors by switching folders; reload before saving, then return. In a separate run use Save All from another folder | Leaving asks nothing and nothing marks the row; the Explorer's count drops them while they are out of sight and has them again on return. Reload restores the exact dirty contents to their owner folders. Save All includes hidden editors and uses normal Save As handling; a successful save clears dirty state without changing folder ownership |
 | WS-18 | U, I | Switch while a terminal in the editor area runs a process, with `followFolder` on and off; `cd` it out of its folder; open a terminal in the panel | On: put away and brought back with the same process and scrollback; its tab names no folder until its shell leaves the folder, then the one it went to. Off: stays on screen and its tab names its folder; the process never restarts. The panel's names its folder |
 | WS-19 | I | Switch to a folder deleted from disk while the window was open | Error notification naming the path; the row is struck through; the window stays; W3 holds |
 | WS-20 | I | Open a file of another folder by Go to Definition, Quick Open widened, and a drop; open a terminal; change a terminal's directory | The active folder never changes; the new terminal starts in the active folder |
@@ -916,7 +935,7 @@ unchanged across both documents.
 | WS-43 | H | Every W10 mark, ink and folder colour in Dark Modern, Light Modern, HC Dark, HC Light and the nineteen themes | W10.3-W10.6: the marks and ink as specified, contrast composited onto the real background; folder colours are W10.6's ten, none under 2.90 on the nineteen backgrounds |
 | WS-44 | I | Run the cold/warm performance procedure in W19.6 on the pinned fixture and baseline | Report distributions, not six selected timings; warm p95 within 100 ms and within the comparison gate; no extension-host restart during switches |
 | WS-48 | U, I | With trust on, add an untrusted folder through Open Folder, a drop, `facade <folder>` and the file by hand; drop several at once, trusted and not, in one parent folder and in two, and twelve; answer each choice, the box ticked and not, and follow the link | Facade's paths ask first, once, with VS Code's trust question in the window: the shield, the folders not trusted - ten named, the rest counted - two buttons, the parent-folder box only when they share one, and the link. Trust and Add adds them all, those listed trusted (their parent, ticked); the link opens all of them in one new window and adds none here; Cancel adds none. The file's path meets VS Code's question; No takes the folder back out and offers a new window. Facade's own paths never put the window in Restricted Mode; the file's path does only until the folder is out again |
-| WS-49 | I | Close the window and quit with an agent running in a folder not on screen, then with a running terminal, then with nothing running; reload with an agent running | One question, VS Code's, Terminate or Cancel, naming what will stop when something runs - the agent in the folder not on screen too - none when nothing does; the reload asks nothing and the agent reconnects |
+| WS-49 | I | Close the window and quit with an agent running in a folder not on screen, then with a running terminal, then with nothing running; reload with an agent running | One question, VS Code's, Terminate or Cancel, listing what will stop when something runs, each with its place - the agent in the folder not on screen too - none when nothing does; the reload asks nothing and the agent reconnects |
 | WS-50 | I | Set git's editor to `facade --wait`, start `git commit` in a terminal, switch folders before saving the message, switch back; the same with a merge editor opened from the command line | The waited-on editor stays open through the switches; git waits until the person closes it |
 | WS-51 | I, H | Open the settings editor's Workspace tab and an extension's Enable/Disable (Workspace) in a window of three folders | Each says it applies to all folders in this window |
 | WS-52 | I | Leave a folder with focus in a terminal, another with focus in an editor; switch back to each by mouse and by Switch Folder...; enter a folder for the first time | Focus returns where it was left; the first visit focuses the editor; the next keystroke reaches it, not the bar |

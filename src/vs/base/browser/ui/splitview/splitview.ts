@@ -84,6 +84,17 @@ export interface IView<TLayoutContext = undefined> {
 	readonly snap?: boolean;
 
 	/**
+	 * Facade Code: whether dragging a sash next to this view resizes the views on the
+	 * sash's other side in order of their {@link IView.priority priority}, high first and
+	 * low last, rather than nearest first: dragged wider, this view takes its room from
+	 * the view that gives way most readily, not from its neighbour. Such a sash snaps no
+	 * view shut or open: dragged past its limit, this view stops there.
+	 *
+	 * @defaultValue `false`
+	 */
+	readonly sashResizesByPriority?: boolean;
+
+	/**
 	 * View instances are supposed to fire the {@link IView.onDidChange} event whenever
 	 * any of the constraint properties have changed:
 	 *
@@ -257,6 +268,7 @@ abstract class ViewItem<TLayoutContext, TView extends IView<TLayoutContext>> {
 	get priority(): LayoutPriority | undefined { return this.view.priority; }
 	get proportionalLayout(): boolean { return this.view.proportionalLayout ?? true; }
 	get snap(): boolean { return !!this.view.snap; }
+	get sashResizesByPriority(): boolean { return !!this.view.sashResizesByPriority; }
 
 	set enabled(enabled: boolean) {
 		this.container.style.pointerEvents = enabled ? '' : 'none';
@@ -934,8 +946,12 @@ export class SplitView<TLayoutContext = undefined, TView extends IView<TLayoutCo
 				const minDeltaDown = downIndexes.length === 0 ? Number.NEGATIVE_INFINITY : downIndexes.reduce((r, i) => r + (sizes[i] - this.viewItems[i].viewMaximumSize), 0);
 				const minDelta = Math.max(minDeltaUp, minDeltaDown);
 				const maxDelta = Math.min(maxDeltaDown, maxDeltaUp);
-				const snapBeforeIndex = this.findFirstSnapIndex(upIndexes);
-				const snapAfterIndex = this.findFirstSnapIndex(downIndexes);
+				// Facade Code: a sash that resizes by priority snaps nothing, on either side: dragged past its limit,
+				// the view that asked for it stops there, and a hidden view - between it and the sash, where its own
+				// sashes lie - stays hidden (IView.sashResizesByPriority)
+				const byPriority = this.sashSideByPriority(index) !== undefined;
+				const snapBeforeIndex = byPriority ? undefined : this.findFirstSnapIndex(upIndexes);
+				const snapAfterIndex = byPriority ? undefined : this.findFirstSnapIndex(downIndexes);
 
 				if (typeof snapBeforeIndex === 'number') {
 					const viewItem = this.viewItems[snapBeforeIndex];
@@ -971,7 +987,8 @@ export class SplitView<TLayoutContext = undefined, TView extends IView<TLayoutCo
 		this.sashDragState!.current = current;
 
 		const delta = current - start;
-		const newDelta = this.resize(index, delta, sizes, undefined, undefined, minDelta, maxDelta, snapBefore, snapAfter);
+		const [lowPriorityIndexes, highPriorityIndexes] = this.sashPriorityIndexes(index);
+		const newDelta = this.resize(index, delta, sizes, lowPriorityIndexes, highPriorityIndexes, minDelta, maxDelta, snapBefore, snapAfter);
 
 		if (alt) {
 			const isLastSash = index === this.sashItems.length - 1;
@@ -987,6 +1004,36 @@ export class SplitView<TLayoutContext = undefined, TView extends IView<TLayoutCo
 
 		this.distributeEmptySpace();
 		this.layoutViews();
+	}
+
+	/**
+	 * Facade Code: the side of sash `index` whose views give way by priority, when the view next to it on the other
+	 * side asks for that ({@link IView.sashResizesByPriority}); undefined otherwise.
+	 */
+	private sashSideByPriority(index: number): 'up' | 'down' | undefined {
+		// The views next to the sash are the nearest visible ones: a hidden view's sashes lie on the same line
+		const up = range(index, -1).find(i => this.viewItems[i].visible);
+		const down = range(index + 1, this.viewItems.length).find(i => this.viewItems[i].visible);
+		return up !== undefined && this.viewItems[up].sashResizesByPriority ? 'down'
+			: down !== undefined && this.viewItems[down].sashResizesByPriority ? 'up'
+				: undefined;
+	}
+
+	/**
+	 * Facade Code: the views of that side ({@link sashSideByPriority}) as {@link resize} takes them - those of low
+	 * priority and those of high. None otherwise: the nearest give way first.
+	 */
+	private sashPriorityIndexes(index: number): [number[] | undefined, number[] | undefined] {
+		const side = this.sashSideByPriority(index);
+		if (!side) {
+			return [undefined, undefined];
+		}
+
+		const across = side === 'down' ? range(index + 1, this.viewItems.length) : range(index, -1);
+		return [
+			across.filter(i => this.viewItems[i].priority === LayoutPriority.Low),
+			across.filter(i => this.viewItems[i].priority === LayoutPriority.High)
+		];
 	}
 
 	private onSashEnd(index: number): void {
