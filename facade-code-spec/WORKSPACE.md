@@ -664,7 +664,8 @@ a colour and of an icon is the frame's too: 24 px swatches and 28 px icon square
 apart, each row on one line.
 
 What is in it is VS Code's. The font is VS Code's on each platform, in VS Code's weights:
-the title, the labels and the alert's first line semibold, the rest regular. Its sizes
+the title and the labels semibold, the rest regular - the alert's every line, its first
+too, is body text. Its sizes
 are VS Code's but for the title's: VS Code's body size, 13 px, for the description, the
 labels, the hints, the inputs and the alert, and VS Code's 12 px for the buttons. The
 buttons are VS Code's - the primary and the secondary as VS Code draws them, their
