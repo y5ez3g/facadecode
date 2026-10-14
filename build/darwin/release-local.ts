@@ -154,6 +154,17 @@ async function main(): Promise<void> {
 		throw new Error(`No app at ${appPath}. Build it, or leave out --skip-build.`);
 	}
 
+	// An app that records no commit takes itself for one run from the sources: it looks for the
+	// terminal and syntax highlighting in a `node_modules` folder the packaged app does not have,
+	// and both stay blank. Nothing else gives that away, so it is not signed.
+	// ⚠️ Not mended by setting BUILD_SOURCEVERSION: that tells the build it runs in CI, and parts of
+	// it then want what only CI sets.
+	const built = JSON.parse(fs.readFileSync(path.join(appPath, 'Contents', 'Resources', 'app', 'product.json'), 'utf8'));
+	if (!/^[0-9a-f]{40}$/i.test(built.commit ?? '')) {
+		throw new Error(`${appPath} records no commit: the build could not read one from git's files (build/lib/git.ts).`);
+	}
+	console.log(`Built from ${built.commit}`);
+
 	run('node', [path.join(import.meta.dirname, 'sign.ts'), outDir], { env: { ...env, CODESIGN_IDENTITY: identity } });
 	run('codesign', ['--verify', '--deep', '--strict', appPath]);
 
