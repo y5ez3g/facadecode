@@ -34,6 +34,7 @@ import { ICommandDetectionCapability, TerminalCapability } from '../../../../pla
 import { TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
+import { unreachable } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
@@ -44,6 +45,8 @@ import { IPathService } from '../../../services/path/common/pathService.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { getShellIntegrationTimeout } from '../../terminal/common/terminalEnvironment.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { IWorkbenchContribution } from '../../../common/contributions.js';
 
 /*
  * Making and deleting worktrees from the workspace bar (WORKTREE.md WT-5 to WT-8). A contribution
@@ -261,7 +264,13 @@ export interface IWorktreeService {
 	 * is not trusted, or a folder with no commit yet, is refused rather than trusted or given one.
 	 */
 	makeWorktree(main: URI, branch: string, options?: IMakeWorktreeOptions): Promise<URI>;
+
+	/** Says which worktrees' setup a window that closed was still sending, without sending it again (WT-7.7). */
+	reportUnfinishedSetup(): Promise<void>;
 }
+
+/** Where a window notes the setup it is still sending, for the next window to report (WT-7.7). */
+const SETUP_IN_FLIGHT_KEY = 'facade.worktrees.setupInFlight';
 
 /** How `makeWorktree` makes a worktree. */
 export interface IMakeWorktreeOptions {
@@ -287,6 +296,9 @@ export class WorktreeService implements IWorktreeService {
 	 */
 	private readonly running: ResourceMap<{ readonly done: Promise<void>; readonly waitedFor: boolean }>;
 
+	/** Worktrees whose setup this window has started, so that none is sent twice (WT-7.7). */
+	private readonly setupStarted: ResourceMap<true>;
+
 	constructor(
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
@@ -307,8 +319,10 @@ export class WorktreeService implements IWorktreeService {
 		@ILabelService private readonly labelService: ILabelService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@ILogService private readonly logService: ILogService,
+		@IStorageService private readonly storageService: IStorageService,
 	) {
 		this.running = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
+		this.setupStarted = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 	}
 
 	async createWorktree(target: URI | undefined): Promise<void> {
@@ -742,6 +756,11 @@ export class WorktreeService implements IWorktreeService {
 	 * own shell, with the output on screen. A failing line leaves the worktree usable.
 	 */
 	private async runSetup(main: URI, worktree: URI): Promise<void> {
+		if (this.setupStarted.has(worktree)) {
+			return;
+		}
+		this.setupStarted.set(worktree, true);
+
 		const content = await this.readFirst([joinPath(worktree, '.facade', 'worktrees.json'), joinPath(main, '.facade', 'worktrees.json')]);
 		if (content === undefined) {
 			return;
@@ -759,24 +778,76 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
-		const terminal = await this.terminalService.createTerminal({
-			config: {
-				name: localize('worktrees.setupTerminal', "Worktree Setup"),
-				cwd: worktree,
-				// Cursor's name for it, so a script written for Cursor's worktrees.json works here.
-				env: { ROOT_WORKTREE_PATH: toOsPath(main, windows) }
-			}
-		});
-		this.terminalService.setActiveInstance(terminal);
-		await this.terminalService.revealTerminal(terminal);
+		// Noted until the last line is sent, so that a window closed meanwhile leaves the note for the next (WT-7.7)
+		this.noteSetup(main, worktree, true);
+		try {
+			const terminal = await this.terminalService.createTerminal({
+				config: {
+					name: localize('worktrees.setupTerminal', "Worktree Setup"),
+					cwd: worktree,
+					// Cursor's name for it, so a script written for Cursor's worktrees.json works here.
+					env: { ROOT_WORKTREE_PATH: toOsPath(main, windows) }
+				}
+			});
+			this.terminalService.setActiveInstance(terminal);
+			await this.terminalService.revealTerminal(terminal);
 
-		// WT-7.4: each line whatever the one before did, one at a time: the next is sent once shell
-		// integration says the last finished, or straight after it without shell integration.
-		const detection = await this.commandDetection(terminal);
-		for (const line of setup.lines) {
-			if (!await runSetupLine(terminal, detection, line)) {
-				return;
+			// One line at a time, each once shell integration says the last finished (WT-7.4)
+			const detection = await this.commandDetection(terminal);
+			for (const line of setup.lines) {
+				if (!await runSetupLine(terminal, detection, line)) {
+					return;
+				}
 			}
+		} finally {
+			this.noteSetup(main, worktree, false);
+		}
+	}
+
+	async reportUnfinishedSetup(): Promise<void> {
+		const notes = this.setupNotes();
+		this.storageService.remove(SETUP_IN_FLIGHT_KEY, StorageScope.WORKSPACE);
+
+		for (const { main, worktree } of notes) {
+			// Passed over only when deleted: one on a drive not there yet still had its setup cut short (WORKSPACE.md WS-63)
+			if ((await unreachable(this.fileService, worktree))?.kind === 'missing') {
+				continue;
+			}
+
+			this.notificationService.prompt(Severity.Warning,
+				localize('worktrees.setupUnfinished', "Setup script for worktree '{0}' may have been interrupted by a window reload or close. Check its terminal output before retrying.", this.labelService.getUriLabel(worktree)),
+				[{
+					label: localize('worktrees.runSetupAgain', "Rerun Setup"),
+					// The only way setup runs twice for a worktree
+					run: () => {
+						this.setupStarted.delete(worktree);
+						return this.runSetup(main, worktree);
+					}
+				}]);
+		}
+	}
+
+	/** Notes that the setup of `worktree` is being sent, or takes the note back. */
+	private noteSetup(main: URI, worktree: URI, inFlight: boolean): void {
+		const notes = this.setupNotes().filter(note => !this.uriIdentityService.extUri.isEqual(note.worktree, worktree));
+		if (inFlight) {
+			notes.push({ main, worktree });
+		}
+
+		if (notes.length) {
+			this.storageService.store(SETUP_IN_FLIGHT_KEY, JSON.stringify(notes.map(note => ({ main: note.main.toString(), worktree: note.worktree.toString() }))), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		} else {
+			this.storageService.remove(SETUP_IN_FLIGHT_KEY, StorageScope.WORKSPACE);
+		}
+	}
+
+	private setupNotes(): { readonly main: URI; readonly worktree: URI }[] {
+		try {
+			const raw = this.storageService.get(SETUP_IN_FLIGHT_KEY, StorageScope.WORKSPACE);
+			return raw ? (JSON.parse(raw) as { main: string; worktree: string }[]).map(note => ({ main: URI.parse(note.main), worktree: URI.parse(note.worktree) })) : [];
+		} catch {
+			// A note that cannot be read is no setup half sent.
+			return [];
 		}
 	}
 
@@ -1020,6 +1091,16 @@ async function whenRegistered(command: string, timeoutMs: number): Promise<void>
 		await raceTimeout(Event.toPromise(Event.filter(CommandsRegistry.onDidRegisterCommand, id => id === command), store), timeoutMs);
 	} finally {
 		store.dispose();
+	}
+}
+
+/** Reports, once the window is up, the setup a previous window left half sent (WT-7.7). */
+export class UnfinishedWorktreeSetup implements IWorkbenchContribution {
+
+	static readonly ID = 'workbench.contrib.unfinishedWorktreeSetup';
+
+	constructor(@IWorktreeService worktreeService: IWorktreeService) {
+		worktreeService.reportUnfinishedSetup().then(undefined, onUnexpectedError);
 	}
 }
 

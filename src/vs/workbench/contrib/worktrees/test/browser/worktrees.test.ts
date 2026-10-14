@@ -27,7 +27,7 @@ import { ContextKeyService } from '../../../../../platform/contextkey/browser/co
 import { KeybindingsRegistry } from '../../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { RawWorkbenchListFocusContextKey } from '../../../../../platform/list/browser/listService.js';
 import { IConfirmation, IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
-import { IFileContent, IFileService } from '../../../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderErrorCode, IFileContent, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
@@ -50,6 +50,7 @@ import { IPathService } from '../../../../services/path/common/pathService.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { DeleteWorktreeAction, freeWorktreeName, freeWorktreeUri, NewWorktreeAction, readSetupCommands, worktreeFolderName, WorktreeService } from '../../browser/worktrees.js';
+import { InMemoryStorageService, IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 
 suite('Worktrees - names, paths and setup', () => {
 
@@ -307,6 +308,7 @@ suite('Worktrees - making and deleting one', () => {
 				return { confirmed: true };
 			}
 		});
+		instantiationService.stub(IStorageService, store.add(new InMemoryStorageService()));
 		instantiationService.stub(INotificationService, {
 			error: message => { steps.push(`error: ${message}`); },
 			warn: message => { steps.push(`warn: ${message}`); },
@@ -410,6 +412,79 @@ suite('Worktrees - making and deleting one', () => {
 			opened: 2,
 			setup: true
 		});
+	});
+
+	test('WTA-36 setup is noted before its first line is sent and the note taken back after its last; a window gone in between leaves it, and the next one says so and sends it again only when asked', async () => {
+		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
+		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
+		answer = { branch: 'w3', customization: {} };
+		files.set(`${w3.path}/.facade/worktrees.json`, '{ "setup-worktree": ["npm ci", "npm run build"] }');
+		const storage = instantiationService.get(IStorageService);
+		const noted = () => JSON.parse(storage.get('facade.worktrees.setupInFlight', StorageScope.WORKSPACE) ?? '[]').map((note: { worktree: string }) => URI.parse(note.worktree).path);
+
+		// The first window sends `npm ci` and goes before it finishes
+		await instantiationService.createInstance(WorktreeService).createWorktree(main);
+		const shell = await setupShell.p;
+		shell.integrate();
+		await shell.whenSent(1);
+		const whileSending = noted();
+
+		// The next window, the worktree still on disk
+		instantiationService.stub(IFileService, 'stat', async (uri: URI) => {
+			if (uri.path === w3.path) {
+				return upcastPartial<IFileStatWithPartialMetadata>({ resource: uri, isDirectory: true });
+			}
+			throw createFileSystemProviderError('nothing there', FileSystemProviderErrorCode.FileNotFound);
+		});
+		setupShell = new DeferredPromise<ISetupTerminal>();
+		const next = instantiationService.createInstance(WorktreeService);
+		await next.reportUnfinishedSetup();
+		const said = steps.filter(step => step.startsWith('prompt:'));
+		const sentByItself = setupShell.isSettled;
+		const afterSaying = noted();
+
+		// Rerun Setup, which sends it all again and takes the note back after
+		void prompted.find(choice => choice.label === 'Rerun Setup')!.run();
+		const again = await setupShell.p;
+		again.integrate();
+		await again.whenSent(1);
+		const whileSendingAgain = noted();
+		again.finish(again.sent[0].id);
+		await again.whenSent(2);
+		again.finish(again.sent[1].id);
+		await timeout(0);
+
+		assert.deepStrictEqual({ whileSending, said, sentByItself, afterSaying, whileSendingAgain, sentAgain: sentLines(again), afterAll: noted() }, {
+			whileSending: [w3.path],
+			said: [`prompt: Setup script for worktree '${w3.path}' may have been interrupted by a window reload or close. Check its terminal output before retrying.`],
+			sentByItself: false,
+			afterSaying: [],
+			whileSendingAgain: [w3.path],
+			sentAgain: ['run npm ci', 'run npm run build'],
+			afterAll: []
+		});
+
+		// The first window's lines, finished so nothing is left waiting
+		shell.finish(shell.sent[0].id);
+		await shell.whenSent(2);
+		shell.finish(shell.sent[1].id);
+		await timeout(0);
+	});
+
+	test('WS-63 a worktree whose setup was cut short is passed over when it has been deleted, and said when it only cannot be read', async () => {
+		const storage = instantiationService.get(IStorageService);
+		storage.store('facade.worktrees.setupInFlight', JSON.stringify([w2, w3].map(worktree => ({ main: main.toString(), worktree: worktree.toString() }))), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		instantiationService.stub(IFileService, 'stat', async (uri: URI) => {
+			throw uri.path === w2.path
+				? createFileSystemProviderError('nothing there', FileSystemProviderErrorCode.FileNotFound)
+				: createFileSystemProviderError('drive not ready', FileSystemProviderErrorCode.Unavailable);
+		});
+
+		await instantiationService.createInstance(WorktreeService).reportUnfinishedSetup();
+
+		assert.deepStrictEqual(steps.filter(step => step.startsWith('prompt:')), [
+			`prompt: Setup script for worktree '${w3.path}' may have been interrupted by a window reload or close. Check its terminal output before retrying.`
+		]);
 	});
 
 	test('WTA-18 made without asking, for an agent: no dialog, from the commit it is given, its row there, and the window left where it is', async () => {
