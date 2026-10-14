@@ -323,9 +323,11 @@ updates labels without performing a switch or restoring editors.
 **Unsaved editors.** Text and untitled tabs belong to the folder context in which
 they were opened, even if their resource is in another folder. Switching hides
 the outgoing tabs without saving, reverting or asking. Returning restores them.
-Nothing on the folder's row marks them; VS Code's own count of unsaved files, on the
-Explorer's icon, includes them. A new file never saved (Ctrl+N) belongs to the
-folder the window was on when it was made.
+Nothing on the folder's row marks them, and the count of unsaved files on the
+Explorer's icon is the folder on screen's: what its editors show, and what is changed
+inside it with no editor open. Another folder's are out of sight and out of that count;
+Save All, closing the window and quitting take them in still (W11). A new file never
+saved (Ctrl+N) belongs to the folder the window was on when it was made.
 
 Keep the actual dirty working copies alive, not just serialized tab locations.
 Save All, Revert All, auto save, shutdown handling and backup restoration include
@@ -356,6 +358,7 @@ way of moving between folder sets.
 | terminals in the panel | the window's. A terminal Facade opened for a folder - an agent's - is that folder's wherever it is. Removing the folder asks before it ends; a folder that leaves where nothing could ask leaves its agents running in the panel (W9.6). Their tabs name the folder each works in, as stock VS Code does in a multi-root workspace: terminals of several folders stand side by side there | the window's |
 | new terminal, file dialogs, debug | start in the active folder. Create New Terminal does not ask which folder; Create New Terminal in Another Folder... does. An explicit `cwd`, a variable or a session choice still wins | the last active editor's root, or a question |
 | source control | Changes lists the active folder's repositories (`visibleRepositories`). The Graph and the status bar follow the active folder ahead of the editor. A folder without a repository says so | every repository |
+| unsaved count on the Explorer's icon | the active folder's: what its editors show, and what is changed inside it with no editor open (W6.2) | every unsaved file of the window |
 | search, Go to File, Go to Symbol | one scope for all three (`IFolderScopeService`): the active folder, or the workspace after Show All Folders in the search view's title or on either picker; kept per workspace. A resource in none of the folders is always covered. Go to Symbol is narrowed where its results land, since its providers run in the extension host | every folder |
 | Problems | filtered where the markers land, never at `IMarkerService`; the count follows the scope | every folder |
 | "which folder?" pickers | every folder, the active one first: debug configurations, snippets, the settings editor's folder tab, tasks, `_workbench.pickWorkspaceFolder`, `showWorkspaceFolderPick` (whose API caller still sees the workspace's order) | the workspace's order |
@@ -894,7 +897,7 @@ unchanged across both documents.
 | WS-14 | U, I, H | Git: Clone with `openAfterClone` unset, `always` and `prompt`; Git: Initialize Repository on a folder outside the workspace | Unset or `always`: the clone is shown in this window, nothing asked. `prompt`, and the initialized repository: VS Code's question, word for word - Open, Open in New Window, and Add to Workspace when the window has folders; Open shows it in this window, Add to Workspace adds it without leaving the folder the window is on |
 | WS-15 | U, I | Click a row, press Enter, choose the row the window is on, double click | Moves once; the active row does nothing and fires nothing; a double click is one move |
 | WS-16 | I | Switch between two folders whose editors include split groups, a preview tab, a pinned tab and an auxiliary window | Each folder's editors come back as they were left; a never-seen folder starts with none |
-| WS-17 | I | Hide dirty text and untitled editors by switching folders; reload before saving, then return. In a separate run use Save All from another folder | Leaving asks nothing and nothing marks the row. Reload restores the exact dirty contents to their owner folders. Save All includes hidden editors and uses normal Save As handling; a successful save clears dirty state without changing folder ownership |
+| WS-17 | I | Hide dirty text and untitled editors by switching folders; reload before saving, then return. In a separate run use Save All from another folder | Leaving asks nothing and nothing marks the row; the Explorer's count drops them while they are out of sight and has them again on return. Reload restores the exact dirty contents to their owner folders. Save All includes hidden editors and uses normal Save As handling; a successful save clears dirty state without changing folder ownership |
 | WS-18 | U, I | Switch while a terminal in the editor area runs a process, with `followFolder` on and off; `cd` it out of its folder; open a terminal in the panel | On: put away and brought back with the same process and scrollback; its tab names no folder until its shell leaves the folder, then the one it went to. Off: stays on screen and its tab names its folder; the process never restarts. The panel's names its folder |
 | WS-19 | I | Switch to a folder deleted from disk while the window was open | Error notification naming the path; the row is struck through; the window stays; W3 holds |
 | WS-20 | I | Open a file of another folder by Go to Definition, Quick Open widened, and a drop; open a terminal; change a terminal's directory | The active folder never changes; the new terminal starts in the active folder |
