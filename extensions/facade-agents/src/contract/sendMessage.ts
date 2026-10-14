@@ -10,32 +10,30 @@ import { listAgentsTool } from './listAgents';
 import type { ContractTool } from './tools';
 
 /**
- * A send as the model reads it: what went to whom; that none is fetched yet, and that a reply comes to
- * the caller's mailbox; and where something holds a message up - a recipient still starting, one that
- * cannot reply - or the person has it.
+ * A send as the model reads it: a line for each message, what went to whom and, to an agent, that it is not
+ * fetched yet - with where something holds it up, a recipient still starting or one that cannot reply, or
+ * that the person has it - then, where an agent got one, that a reply rings the caller's doorbell.
  */
 function sentText(sent: readonly SentMessage[]): string {
-	const toAgents = sent.filter(message => !message.toPerson);
-	const unfetched = toAgents.length === sent.length
-		? (toAgents.length === 1 ? 'It has' : 'They have')
-		: `${toAgents.map(message => `#m${message.id}`).join(', ')} ${toAgents.length === 1 ? 'has' : 'have'}`;
-	const lines = [`Sent ${sent.map(message => `#m${message.id} to ${message.to}`).join(', ')}.${toAgents.length ? ` ${unfetched} not been fetched yet.` : ''}`];
-	for (const message of toAgents) {
+	const lines: string[] = [];
+	for (const message of sent) {
+		if (message.toPerson) {
+			lines.push(`Sent #m${message.id} to ${message.to}.`, `${describe(PERSON)} was notified of #m${message.id}; the chat room keeps a copy. Facade does not track whether the person reads it. They can reply in your terminal.`);
+			continue;
+		}
+		lines.push(`Sent #m${message.id} to ${message.to}. Not yet fetched.`);
 		if (message.starting) {
-			lines.push(`${message.to} is still starting: its doorbell rings once it runs.`);
+			lines.push(`${message.to} is starting; the doorbell waits until the run is ready.`);
 		}
 		if (message.reconnecting) {
-			lines.push(`${message.to} is not connected to Facade now: its doorbell rings once it connects again.`);
+			lines.push(`${message.to} is disconnected from Facade; the doorbell waits for reconnection.`);
 		}
 		if (message.cannotReply) {
-			lines.push(`${message.to} has its YOLO off, and you are not in its tree: it can reply to the person only, not to you.`);
+			lines.push(`${message.to} has YOLO off and you are outside its tree. It cannot reply to you; it can contact ${describe(PERSON)}.`);
 		}
 	}
-	for (const message of sent.filter(each => each.toPerson)) {
-		lines.push(`The person is told of #m${message.id}, and the chat room keeps it: whether they read it, Facade cannot tell. They answer by typing in your terminal.`);
-	}
-	if (toAgents.length) {
-		lines.push('A reply will notify you through your mailbox.');
+	if (sent.some(message => !message.toPerson)) {
+		lines.push('Agent replies trigger your mailbox doorbell. Continue independent work, or end this turn if you need a reply to proceed. Do not poll or sleep for it.');
 	}
 	return lines.join('\n');
 }
@@ -48,13 +46,13 @@ export const sendMessageTool: ContractTool = {
 	definition: {
 		name: 'send_message',
 		title: 'Send a message',
-		description: `Sends a message to agents of this window, or to the person, ${describe(PERSON)}: to an agent with something for it - work, a question, a report, an answer - directly, never through the person. Each recipient gets a message of its own, with its own number, as #m42. It answers at once, once the messages are recorded: a reply comes to your mailbox and rings your doorbell, a line typed into your terminal, so do not wait or poll for one - end your turn. ${listAgentsTool.definition.name} shows whether a recipient has fetched its message. With your YOLO off, you reach the agents of your own tree only, and the person. Something for the person: print it whole on your screen first, then send it to ${describe(PERSON)}.`,
+		description: `Send work, questions, answers, or reports to agents or ${describe(PERSON)}. Records a separate message ID per recipient without waiting for replies. Agent replies trigger a doorbell; continue independent work or end this turn if you need a reply. Do not poll or sleep. ${listAgentsTool.definition.name} shows delivery. With YOLO off, recipients must be in your tree or ${describe(PERSON)}. Print the full text before messaging ${describe(PERSON)}. Use terminal tools for CLI menus.`,
 		inputSchema: {
 			type: 'object',
 			properties: {
-				to: { type: 'array', items: { type: 'string' }, description: `The recipients: agents, each by its number as #a7, its @name, or as @name #a7; or the person, ${describe(PERSON)}. One alone is a list of one.` },
-				text: { type: 'string', description: 'What the message says: plain text. Texts over 8,000 characters reach the recipient in a file; a call carries a megabyte at most: give a bigger body, or a file, by its path.' },
-				reply_to: { type: 'string', description: 'The message this one answers, by its number, as #m40: one sent to you.' }
+				to: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, minItems: 1 }], description: `Recipient or nonempty list: #a7, @name, @name #a7, or ${describe(PERSON)}. Duplicate recipients receive only one message.` },
+				text: { type: 'string', description: 'Nonempty plain text, preserved exactly. Message bodies over 8,000 characters use a file. Encoded requests are limited to 1 MiB; share larger content by file path.' },
+				reply_to: { type: 'string', description: 'ID of the message being answered, such as #m40. It must be addressed to you.' }
 			},
 			required: ['to', 'text'],
 			additionalProperties: false

@@ -55,7 +55,7 @@ export function pipePath(id: string, tmpdir: string = os.tmpdir()): string {
 	}
 	const fallback = path.join(SHORT_PIPE_ROOT, `facade-${os.userInfo().uid}`, name);
 	if (!fits(fallback)) {
-		throw new Error(`Facade cannot listen: the temporary folder ${dir} is too long for a socket's path, which holds at most ${SOCKET_PATH_MAX} bytes here, and so is ${path.dirname(fallback)}.`);
+		throw new Error(`Cannot open a Facade socket: paths under both ${dir} and ${path.dirname(fallback)} exceed this platform's ${SOCKET_PATH_MAX}-byte socket path limit.`);
 	}
 	return fallback;
 }
@@ -75,7 +75,7 @@ function ensurePrivateFolder(pipe: string): void {
 	fs.mkdirSync(dir, { mode: 0o700, recursive: true });
 	const stat = fs.lstatSync(dir);
 	if (!stat.isDirectory() || stat.uid !== os.userInfo().uid || (stat.mode & 0o077) !== 0) {
-		throw new Error(`Facade cannot listen: ${dir} is not a folder of this user's alone.`);
+		throw new Error(`Cannot open a Facade socket: ${dir} must be a private directory owned by this user.`);
 	}
 }
 
@@ -148,7 +148,7 @@ export class PipeServer<C> {
 			});
 		});
 		// Once it listens, a connection it cannot take - out of handles, say - is no reason to stop
-		server.server.on('error', err => handlers.log?.(`The pipe ${pipe} could not take a connection: ${stackOf(err)}`));
+		server.server.on('error', err => handlers.log?.(`Could not accept a connection on pipe ${pipe}: ${stackOf(err)}`));
 		if (process.platform !== 'win32') {
 			try {
 				fs.chmodSync(bound, 0o600);
@@ -204,7 +204,7 @@ export class PipeServer<C> {
 					const pid = typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0 ? body.pid : undefined;
 					hello = JSON.stringify(this.handlers.hello(caller, pid !== undefined ? { pid } : {}));
 				} catch (err) {
-					this.answerFailure(res, 'saying hello', err);
+					this.answerFailure(res, 'completing the handshake', err);
 					return;
 				}
 				res.writeHead(200, { 'Content-Type': 'application/json' }).end(hello);
@@ -231,7 +231,7 @@ export class PipeServer<C> {
 		try {
 			caller = typeof authorization === 'string' && authorization.startsWith('Bearer ') ? this.handlers.authenticate(authorization.slice('Bearer '.length)) : undefined;
 		} catch (err) {
-			this.answerFailure(res, 'telling who called', err);
+			this.answerFailure(res, 'identifying the caller', err);
 			return undefined;
 		}
 		if (caller === undefined) {
@@ -242,7 +242,7 @@ export class PipeServer<C> {
 
 	/** Answers a request the window failed on `doing` with the failure's code and message, for the caller to say why, and logs it. */
 	private answerFailure(res: http.ServerResponse, doing: string, err: unknown): void {
-		this.handlers.log?.(`The window failed ${doing} on its pipe: ${stackOf(err)}`);
+		this.handlers.log?.(`IPC failure while ${doing}: ${stackOf(err)}`);
 		res.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ code: codeOf(err) ?? 'INTERNAL', message: messageOf(err) }));
 	}
 
@@ -262,7 +262,7 @@ export class PipeServer<C> {
 				try {
 					listener(written);
 				} catch (err) {
-					this.handlers.log?.(`A listener to a call's result on the pipe failed: ${stackOf(err)}`);
+					this.handlers.log?.(`A pipe result-delivery listener failed: ${stackOf(err)}`);
 				}
 			}
 		};
@@ -336,13 +336,13 @@ function failureCodeOf(req: http.ClientRequest): () => string {
 /** Why the window did not serve a request, by the status it answered with and, for its own failure, what it said. */
 function refusalOf(status: number | undefined, body: string, request: 'connection' | 'call'): PipeClientError {
 	if (status === 500) {
-		return new PipeClientError(windowFailureOf(body) ?? `Facade failed to answer the ${request} (500).`, 'FAILED');
+		return new PipeClientError(windowFailureOf(body) ?? `Facade IPC request '${request}' failed with status 500.`, 'FAILED');
 	}
 	if (status === 408) {
-		return new PipeClientError(`Facade's window did not take the ${request} in time, so it did not run.`, 'UNREACHABLE');
+		return new PipeClientError(`The Facade window did not accept request '${request}' before its deadline. The request did not run.`, 'UNREACHABLE');
 	}
 	const code = status === 401 ? 'UNAUTHORIZED' : status === 413 ? 'TOO_LARGE' : 'REJECTED';
-	return new PipeClientError(`Facade refused the ${request} (${status}).`, code);
+	return new PipeClientError(`Facade IPC request '${request}' was rejected (status ${status}).`, code);
 }
 
 /** The message the window answered a request it failed on with; undefined when there is none to read. */
@@ -373,7 +373,7 @@ export class PipeClient {
 				res.on('close', () => {
 					const body = Buffer.concat(chunks).toString('utf8');
 					if (!res.complete) {
-						reject(new PipeClientError('Facade closed the connection before it said hello.', 'NOT_CONNECTED'));
+						reject(new PipeClientError('Facade closed the connection before the handshake completed.', 'NOT_CONNECTED'));
 					} else if (res.statusCode !== 200) {
 						reject(refusalOf(res.statusCode, body, 'connection'));
 					} else {
@@ -386,7 +386,7 @@ export class PipeClient {
 				});
 			});
 			const failureCode = failureCodeOf(req);
-			req.on('error', err => reject(signal?.aborted ? new PipeClientError('Facade did not say hello in time.', failureCode()) : new PipeClientError(err.message, failureCode())));
+			req.on('error', err => reject(signal?.aborted ? new PipeClientError('The Facade handshake timed out.', failureCode()) : new PipeClientError(err.message, failureCode())));
 			// Which process it is: the window knows from it whether the agent's server still runs (O6)
 			req.end(JSON.stringify({ pid: process.pid }));
 		});
@@ -406,7 +406,7 @@ export class PipeClient {
 			// One the window would refuse is not sent: past the limit, a refusal could not be told from a connection that broke
 			const body = JSON.stringify({ tool, args });
 			if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
-				reject(new PipeClientError(`The call is over the ${MAX_BODY_BYTES} bytes a call may carry.`, 'TOO_LARGE'));
+				reject(new PipeClientError(`Request payload exceeds the IPC limit of ${MAX_BODY_BYTES} bytes.`, 'TOO_LARGE'));
 				return;
 			}
 			let settled = false;
@@ -420,7 +420,7 @@ export class PipeClient {
 			};
 			const notTaken = setTimeout(() => {
 				req.destroy();
-				settle(() => reject(new PipeClientError(`Facade's window did not take the call within ${(CALL_ACCEPT_MS + CALL_ACCEPT_MARGIN_MS) / 1000} s, so it did not run.`, 'UNREACHABLE')));
+				settle(() => reject(new PipeClientError(`The Facade window did not accept the call within ${(CALL_ACCEPT_MS + CALL_ACCEPT_MARGIN_MS) / 1000} seconds. The call did not run.`, 'UNREACHABLE')));
 			}, CALL_ACCEPT_MS + CALL_ACCEPT_MARGIN_MS);
 			const cancel = () => {
 				req.destroy();
@@ -445,7 +445,7 @@ export class PipeClient {
 						}
 						const line = callLineOf(text);
 						if (!line) {
-							settle(() => reject(new PipeClientError('Facade answered the call with a line that could not be read.', 'FAILED')));
+							settle(() => reject(new PipeClientError('Facade IPC returned a malformed response.', 'FAILED')));
 							res.destroy();
 							return;
 						}
@@ -458,7 +458,7 @@ export class PipeClient {
 						}
 					}
 				});
-				res.on('end', () => settle(() => reject(new PipeClientError('Facade closed the call without a result.', 'NOT_CONNECTED'))));
+				res.on('end', () => settle(() => reject(new PipeClientError('Facade closed the connection without returning a result.', 'NOT_CONNECTED'))));
 				res.on('error', err => settle(() => reject(new PipeClientError(err.message, 'NOT_CONNECTED'))));
 			});
 			const failureCode = failureCodeOf(req);

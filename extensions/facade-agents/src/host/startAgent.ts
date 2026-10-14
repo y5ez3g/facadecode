@@ -36,15 +36,15 @@ export async function pickAgent(rawArgs: unknown, offered: () => Promise<readonl
 		const configure = vscode.l10n.t("Configure Agents");
 		const off = await turnedOff();
 		const choice = await vscode.window.showInformationMessage(off.length
-			? vscode.l10n.t("No agent is available: the built-in CLIs Facade found on this machine are turned off in your settings ({0}), and you have no custom agent.", off.join(', '))
-			: vscode.l10n.t("No agent is available: Facade found none of its built-in CLIs on this machine, and you have no custom agent."), configure);
+			? vscode.l10n.t("No agents are available: the built-in agent CLIs found on this machine are disabled in your settings ({0}), and no custom agents are configured.", off.join(', '))
+			: vscode.l10n.t("No agents are available: none of the built-in agent CLIs were found on this machine, and no custom agents are configured."), configure);
 		if (choice === configure) {
 			await vscode.commands.executeCommand('facade.agent.configure');
 		}
 		return undefined;
 	}
 	// Each with the icon the agent menu shows it with: a built-in's logo, the robot for a custom agent
-	const pick = await vscode.window.showQuickPick(agents.map(each => ({ label: each.label, iconPath: new vscode.ThemeIcon(agentIconId(each.id, each.custom)), description: each.custom ? vscode.l10n.t("custom") : undefined, agent: each })), { title: vscode.l10n.t("Start Agent"), placeHolder: vscode.l10n.t("Which agent?") });
+	const pick = await vscode.window.showQuickPick(agents.map(each => ({ label: each.label, iconPath: new vscode.ThemeIcon(agentIconId(each.id, each.custom)), description: each.custom ? vscode.l10n.t("custom") : undefined, agent: each })), { title: vscode.l10n.t("Start Agent"), placeHolder: vscode.l10n.t("Select an agent to start") });
 	return pick && { id: pick.agent.id, custom: pick.agent.custom };
 }
 

@@ -107,7 +107,7 @@ export class WorkspaceBarSwitcher extends Disposable {
 				() => this._onDidRestoreEditors.fire(),
 				error => {
 					this.restoreFailure = error;
-					this.logService.error(`[workspaceBar] failed to restore editors for ${key}`, error);
+					this.logService.error(`[workspaceBar] Failed to restore editors for ${key}`, error);
 				});
 		}));
 	}
@@ -173,11 +173,11 @@ export class WorkspaceBarSwitcher extends Disposable {
 		if (why) {
 			let reason: string;
 			if (why.kind === 'missing') {
-				this.logService.warn(`[workspaceBar] ${this.key(uri)} is not on disk any more`);
+				this.logService.warn(`[workspaceBar] Folder '${this.key(uri)}' no longer exists on disk`);
 				this.notificationService.error(localize('workspaceBar.gone', "Folder '{0}' no longer exists on disk.", pathOf(uri)));
 				reason = localize('workspaceBar.goneReason', "no longer exists on disk");
 			} else {
-				this.logService.warn(`[workspaceBar] ${this.key(uri)} could not be read: ${why.reason}`);
+				this.logService.warn(`[workspaceBar] Could not read '${this.key(uri)}': ${why.reason}`);
 				this.notificationService.error(localize('workspaceBar.unreadable', "Failed to read folder '{0}': {1}", pathOf(uri), why.reason));
 				reason = why.reason;
 			}
@@ -200,8 +200,8 @@ export class WorkspaceBarSwitcher extends Disposable {
 
 			// The outgoing folder could not be captured, so nothing has changed (W6.2)
 			const reason = toErrorMessage(error);
-			this.logService.error(`[workspaceBar] could not leave for ${this.key(uri)}`, error);
-			this.notificationService.error(localize('workspaceBar.couldNotLeave', "Failed to switch folder: could not store the open editors of the current folder. {0}", reason));
+			this.logService.error(`[workspaceBar] Could not switch to ${this.key(uri)}`, error);
+			this.notificationService.error(localize('workspaceBar.couldNotLeave', "Failed to switch folder: could not save editor state for the active folder. {0}", reason));
 			return { kind: 'failed', reason };
 		}
 

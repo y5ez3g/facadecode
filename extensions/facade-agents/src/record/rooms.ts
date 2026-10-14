@@ -148,10 +148,10 @@ export class ChatRooms {
 	private entryOf(message: Message): string {
 		const state = this.state();
 		const marks = [
-			...(message.replyTo !== undefined ? [`re #m${message.replyTo}`] : []),
+			...(message.replyTo !== undefined ? [`reply to #m${message.replyTo}`] : []),
 			...(message.task ? ['task'] : [])
 		];
-		const text = this.messages.textOf(message) ?? `(Its text, ${message.length} ${message.length === 1 ? 'character' : 'characters'}, is gone with the chat rooms deleted before.)`;
+		const text = this.messages.textOf(message) ?? `(Message text unavailable: ${message.length} ${message.length === 1 ? 'character' : 'characters'} removed when the chat rooms were deleted.)`;
 		return `## #m${message.id} · ${timeText(message.time)} · ${whoOf(state, message.from)} → ${whoOf(state, message.to)}${marks.map(mark => ` · ${mark}`).join('')}\n${text}\n\n`;
 	}
 
@@ -163,11 +163,11 @@ export class ChatRooms {
 			return undefined;
 		}
 		if (returned.known) {
-			return `> #m${message.id} was not fetched by ${whoOf(state, message.to)} before it ended (${returned.reason}). It was not returned: ${whoOf(state, message.from)} was told it ended.\n\n`;
+			return `> #m${message.id} was not fetched by ${whoOf(state, message.to)} before the recipient ended (${returned.reason}). It was not returned because ${whoOf(state, message.from)} had already been notified of the recipient's exit.\n\n`;
 		}
 		// The person's go back to them always: only an agent's whose sender ended, and Facade's, do not
-		const why = message.from === FACADE ? 'Facade\'s own messages are not returned' : `${whoOf(state, message.from)}, its sender, had ended`;
-		return `> #m${message.id} was not fetched by ${whoOf(state, message.to)} before it ended (${returned.reason}). It could not be returned: ${why}.\n\n`;
+		const why = message.from === FACADE ? 'Facade system messages cannot be returned' : `its sender, ${whoOf(state, message.from)}, has already ended`;
+		return `> #m${message.id} was not fetched by ${whoOf(state, message.to)} before the recipient ended (${returned.reason}). It could not be returned: ${why}.\n\n`;
 	}
 }
 
@@ -191,7 +191,7 @@ export function rootsOf(state: WorkspaceState, message: Message): AgentIdentity[
 /** The heading a room begins with: whose tree it is. */
 function headingOf(root: AgentIdentity): string {
 	const who = describe(root);
-	return `# Chat room of ${who}\n\nEvery message to or from ${who} and the agents started from it, in order.\n\n`;
+	return `# Chat room: ${who}\n\nMessages to or from ${who} and its descendants, in chronological order.\n\n`;
 }
 
 /** Who sent or got a message, as Facade writes it: `@name #a7`, the person, `@human`, or Facade. */

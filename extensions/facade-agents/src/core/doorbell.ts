@@ -130,16 +130,16 @@ export class Doorbell implements Disposable {
 	 */
 	holdUp(id: number): string | undefined {
 		if (this.disconnected.has(id)) {
-			return 'its MCP server is not connected to Facade, and its doorbell waits for it to connect again';
+			return 'its MCP server is disconnected; the doorbell waits for reconnection';
 		}
 		if (this.waiting.has(id)) {
-			return 'its doorbell waits while the person types in its terminal';
+			return 'the doorbell is waiting for the person to submit or cancel terminal input, or leave the keyboard idle for 10 seconds';
 		}
 		if (this.behind.has(id)) {
-			return 'its doorbell waits behind what Facade types into its terminal';
+			return 'the doorbell is queued behind earlier Facade input';
 		}
 		if (this.retryAt.has(id)) {
-			return 'its doorbell could not be typed into its terminal, and is tried again each minute';
+			return 'the terminal could not receive the doorbell; Facade retries every minute';
 		}
 		return undefined;
 	}
@@ -194,7 +194,7 @@ export class Doorbell implements Disposable {
 			// Its MCP server gone, it could not fetch: its next hello rings it (M5)
 			if (!this.context.isConnected(agent)) {
 				this.disconnected.add(id);
-				this.context.log(`The doorbell of ${label} waits: its MCP server is not connected to Facade.`);
+				this.context.log(`Doorbell for ${label} is waiting for its MCP server to connect to Facade.`);
 				return;
 			}
 			const task = this.taskOf(agent, now);
@@ -204,18 +204,18 @@ export class Doorbell implements Disposable {
 			// window drops one Facade is off for when its turn comes, before anything of it goes in (M10)
 			const effect = await this.context.ports.terminals.type(id, line, { enter: true, enterDelayMs: this.context.delaysOf(agent).enterDelay, requiresFramework: true });
 			if (!effect) {
-				throw new Error('its terminal was not there');
+				throw new Error('its terminal was unavailable');
 			}
 			// Nothing went in and nothing rang: due again once Facade is on again, not tried again meanwhile (M10)
 			if (effect.reason === 'frameworkOff') {
-				this.context.log(`The doorbell of ${label} was not typed: the agent framework was off when its turn came. It rings once the framework is on again.`);
+				this.context.log(`Doorbell for ${label} was not sent: the agent framework was disabled when its turn arrived. Delivery resumes when the framework is enabled.`);
 				return;
 			}
 			if (effect.outcome !== 'applied') {
 				if (this.context.table.get(id)?.state !== 'running') {
 					return;
 				}
-				throw new Error(effect.pasted ? 'its terminal ended before Enter' : 'its terminal ended first');
+				throw new Error(effect.pasted ? 'its terminal ended before Enter could be sent' : 'its terminal ended before input could be sent');
 			}
 			if (!this.disposed) {
 				// Those it fetched meanwhile, as the line was typed, it was not rung for
@@ -229,7 +229,7 @@ export class Doorbell implements Disposable {
 		} catch (err) {
 			if (!this.disposed) {
 				this.retryAt.set(id, Date.now() + RETRY_MS);
-				this.context.log(`The doorbell of ${label} could not be rung: ${messageOf(err)}. It is tried again in a minute.`);
+				this.context.log(`Could not send the doorbell to ${label}. Retrying in one minute. Reason: ${messageOf(err)}`);
 			}
 		} finally {
 			this.ringing.delete(id);
@@ -250,7 +250,7 @@ export class Doorbell implements Disposable {
 				try {
 					input = await this.context.ports.terminals.input(agent.id);
 				} catch (err) {
-					this.context.log(`What the person typed into the terminal of ${label} could not be told: ${messageOf(err)}`);
+					this.context.log(`Could not determine the human-input state of ${label}'s terminal: ${messageOf(err)}`);
 					return;
 				}
 				const typing = !!input?.pending && input.lastKey !== undefined && Date.now() - input.lastKey < TYPING_IDLE_MS;

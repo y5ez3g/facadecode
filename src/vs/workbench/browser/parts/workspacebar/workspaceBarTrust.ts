@@ -67,7 +67,7 @@ export class WorkspaceBarTrustGate {
 		}
 
 		const answer = await this.ask(untrusted, uris.length);
-		this.logService.trace(`[workspaceBar] ${untrusted.length} folder(s) not trusted: ${answer?.kind ?? 'cancelled'}`);
+		this.logService.trace(`[workspaceBar] ${untrusted.length} folder(s) untrusted: ${answer?.kind ?? 'cancelled'}`);
 		if (!answer) {
 			return undefined;
 		}
@@ -117,8 +117,8 @@ export class WorkspaceBarTrustGate {
 						{ markdown: new MarkdownString(paths.join('  \n')) },
 						{
 							markdown: new MarkdownString(one
-								? localize('workspaceBar.untrustedConsequence', "This window is trusted. Adding an untrusted folder will switch the entire workspace and active agents to Restricted Mode.")
-								: localize('workspaceBar.untrustedConsequenceMany', "This window is trusted. Adding untrusted folders will switch the entire workspace and active agents to Restricted Mode."))
+								? localize('workspaceBar.untrustedConsequence', "This workspace is trusted. Adding an untrusted folder will switch the entire workspace and active agents to Restricted Mode.")
+								: localize('workspaceBar.untrustedConsequenceMany', "This workspace is trusted. Adding untrusted folders will switch the entire workspace and active agents to Restricted Mode."))
 						},
 						{
 							markdown: links,
@@ -200,7 +200,7 @@ export class UntrustedFolderEviction extends Disposable implements IWorkbenchCon
 		}
 
 		this.notificationService.prompt(Severity.Info,
-			localize('workspaceBar.untrustedTakenOut', "Folder '{0}' is untrusted and was removed to prevent switching the workspace to Restricted Mode.", refused.map(folder => basename(folder.uri)).join(', ')),
+			localize('workspaceBar.untrustedTakenOut', "Folder '{0}' was removed because it is untrusted and would switch the workspace to Restricted Mode.", refused.map(folder => basename(folder.uri)).join(', ')),
 			[{
 				label: localize('workspaceBar.openInNewWindow', "Open in New Window"),
 				run: () => this.hostService.openWindow(refused.map(folder => ({ folderUri: folder.uri })), { forceNewWindow: true })

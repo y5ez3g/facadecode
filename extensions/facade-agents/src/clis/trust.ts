@@ -39,7 +39,7 @@ export function trustTarget(cli: AgentCli, config: CliConfig, trusted: TrustedFo
 	const values = { home: homeOf(env), folder: canonicalFolder(trusted.folder), repository: canonicalFolder(trusted.repository), ...cli.trustValues?.(trusted, env) };
 	const file = withValues(trust.file, values, `${setting}.file`).replace(/^~(?=$|[\\/])/, () => values.home);
 	if (!path.isAbsolute(file)) {
-		throw new Error(`${setting}.file is ${JSON.stringify(file)}, which is no absolute path: start it with \${home}.`);
+		throw new Error(`Setting '${setting}.file' must be an absolute path; received '${file}'. For example, use a path under \${home}.`);
 	}
 	return { file: path.resolve(file), entry: jsonWithValues(trust.merge, values, `${setting}.merge`) };
 }
@@ -59,9 +59,9 @@ export function writeTrust(cli: AgentCli, config: CliConfig, trusted: TrustedFol
 	const { file, entry } = target;
 	const outcome = mergeIntoJsonFile(file, entry, lock);
 	switch (outcome) {
-		case 'written': return { outcome, text: `Facade merged ${JSON.stringify(entry)} into ${file}: ${cli.displayName} trusts ${trusted.folder} now.` };
-		case 'there': return { outcome, text: `${file} has ${JSON.stringify(entry)} already: ${cli.displayName} trusted ${trusted.folder} before.` };
-		case 'unreadable': return { outcome, text: `${whyLeftAlone(file, readJsonFile(file), entry, cli.displayName)}, so Facade left it alone and cannot give ${cli.displayName} the person's trust in ${trusted.folder}: put the file right, or set ${cli.setting}.launch.trust to null for ${cli.displayName} to ask.` };
+		case 'written': return { outcome, text: `Merged trust entry ${JSON.stringify(entry)} into ${file}; ${cli.displayName} is now configured to trust ${trusted.folder}.` };
+		case 'there': return { outcome, text: `Trust entry ${JSON.stringify(entry)} already exists in ${file}; ${cli.displayName} was already configured to trust ${trusted.folder}.` };
+		case 'unreadable': return { outcome, text: `${whyLeftAlone(file, readJsonFile(file), entry, cli.displayName)}. Facade left the file unchanged and could not configure ${cli.displayName} to trust ${trusted.folder}. Correct the file, or set ${cli.setting}.launch.trust to null so ${cli.displayName} can ask for trust itself.` };
 	}
 }
 
@@ -85,7 +85,7 @@ export function trustProblem(cli: AgentCli, config: CliConfig, trusted: TrustedF
 	if (read.kind === 'missing' || (read.kind === 'object' && mergedInto(read.value, target.entry).kind !== 'conflict')) {
 		return undefined;
 	}
-	return `${whyLeftAlone(target.file, read, target.entry, cli.displayName)}, so Facade cannot give ${cli.displayName} the person's trust in ${trusted.folder}: put the file right, or set ${cli.setting}.launch.trust to null for ${cli.displayName} to ask.`;
+	return `${whyLeftAlone(target.file, read, target.entry, cli.displayName)}. Facade cannot configure ${cli.displayName} to trust ${trusted.folder}. Correct the file, or set ${cli.setting}.launch.trust to null so ${cli.displayName} can ask for trust itself.`;
 }
 
 /**
@@ -99,8 +99,8 @@ function whyLeftAlone(file: string, read: JsonFile, entry: JsonObject, cliName: 
 	}
 	const merged = read.kind === 'object' ? mergedInto(read.value, entry) : undefined;
 	return merged?.kind === 'conflict'
-		? `${file} has ${JSON.stringify(merged.at)} as another kind of value than ${cliName} writes there`
-		: `${file} could not be read, or is not as ${cliName} writes it`;
+		? `${file} contains an incompatible value at ${JSON.stringify(merged.at)}; ${cliName} expects a different type there`
+		: `${file} could not be read or does not match ${cliName}'s expected format`;
 }
 
 /**

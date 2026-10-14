@@ -611,7 +611,7 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 		const { finalScreen: file } = agent.options;
 		const screen: IAgentFinalScreenFile = { ...finalScreen(raw, this.alternateFrame), capturedAt: Date.now(), ...(this.lastOutput !== undefined ? { lastOutput: this.lastOutput } : {}) };
 		this.fileService.writeFile(file, VSBuffer.fromString(JSON.stringify(screen)), { atomic: { postfix: '.tmp' } }).then(undefined, err => {
-			this.logService.warn(`[facade] The final screen of ${this.ctx.instance.title} could not be kept in ${file.toString()}: ${toErrorMessage(err)}`);
+			this.logService.warn(`[facade] Could not save final screen snapshot for '${this.ctx.instance.title}' to ${file.toString()}: ${toErrorMessage(err)}`);
 		});
 	}
 }

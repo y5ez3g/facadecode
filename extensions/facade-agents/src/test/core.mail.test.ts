@@ -167,8 +167,8 @@ suite('Core: messages', () => {
 			}
 
 			assert.deepStrictEqual({ partway, empty, sent, recorded: [...world.table.state.mail.messages.values()].filter(message => message.text?.startsWith('Done')).map(message => message.to) }, {
-				partway: 'FAILED: #m3 to @lead #a1 was sent; then the message to @docs #a3 could not be recorded: EPERM: operation not permitted. Do not send those again; send to the rest again once Facade can record.',
-				empty: 'INVALID: to has an empty recipient: give an agent - #a7, @name or @name #a7 - or the person, @human; or several of them.',
+				partway: 'FAILED: Recorded messages: #m3 to @lead #a1. Failed to record a message to @docs #a3: EPERM: operation not permitted\nFurther effects are unknown. Do not resend the messages listed above; inspect the recorded state before sending again.',
+				empty: 'INVALID: Argument \'to\' contains an empty recipient. Provide an agent (#a7, @name, or @name #a7), @human, or a nonempty list of recipients.',
 				sent: [{ id: 4, to: '@lead #a1' }],
 				recorded: [1]
 			});
@@ -184,7 +184,7 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ mine, theirs }, {
 				mine: [{ id: 2, to: '@lint #a2', toPerson: false }],
-				theirs: 'INVALID: 2 agents that have not ended are called @lint: @lint #a2, @lint #a3. Name one by its number.'
+				theirs: 'INVALID: 2 active runs are named @lint: @lint #a2, @lint #a3. Select one by its agent ID.'
 			});
 		});
 
@@ -231,18 +231,18 @@ suite('Core: messages', () => {
 				send(PERSON, ['@human']),
 				lint.id
 			], [
-				'NOT_FOUND: No agent you reach is called @nobody: list_agents with all lists them.',
-				'INVALID: to names nobody: give an agent - #a7, @name or @name #a7 - or the person, @human; or several of them.',
-				'NOT_FOUND: Every agent called @lint has ended: @lint #a2. Name the one you mean by its number.',
-				'REFUSED: @lint #a2 has ended (stopped: its tab was closed). Nothing was sent.',
-				'INVALID: #m2 is not an agent\'s number but a message\'s: agents are numbered #a1, #a2 and on.',
-				'INVALID: text is empty: write what the message says.',
-				'INVALID: #m2 was sent to @lint #a2, not to you: reply_to names a message sent to you.',
-				'INVALID: #a2 is an agent, not a message: reply_to takes a message\'s number, as #m42.',
-				'INVALID: 3 is not a message\'s number: reply_to takes one as #m42.',
-				'NOT_FOUND: No message is #m99: reply_to names a message sent to you, by its number.',
-				'INVALID: @human is you: your messages go to agents.',
-				'INVALID: @human is you: your messages go to agents.',
+				'NOT_FOUND: No reachable agent is named @nobody. Call list_agents with all:true to see reachable runs.',
+				'INVALID: Argument \'to\' has no recipients. Provide an agent (#a7, @name, or @name #a7), @human, or a nonempty list of recipients.',
+				'NOT_FOUND: All runs named @lint have ended: @lint #a2. Select one by its agent ID.',
+				'REFUSED: @lint #a2 has ended (stopped: its terminal tab was closed). Nothing was sent.',
+				'INVALID: \'#m2\' is not an agent ID; it is a message ID. Use an agent ID such as #a1 or #a2.',
+				'INVALID: Argument \'text\' must contain a message; it cannot be empty.',
+				'INVALID: Message #m2 was addressed to @lint #a2, not to you. reply_to must identify a message addressed to you.',
+				'INVALID: \'#a2\' is an agent ID. Argument \'reply_to\' requires a message ID such as #m42.',
+				'INVALID: 3 is not a message ID. Argument \'reply_to\' requires a message ID such as #m42.',
+				'NOT_FOUND: Message #m99 was not found. reply_to must identify a message addressed to you.',
+				'INVALID: You are @human. Send messages to agents, not to yourself.',
+				'INVALID: You are @human. Send messages to agents, not to yourself.',
 				2
 			]);
 		});
@@ -263,9 +263,9 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ told: shown(fetched), person: world.person.told }, {
 				told: [
-					'#m5 unread from Facade: @crash #a2 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.',
-					'#m6 unread from Facade: @closed #a3 ended: stopped by @human: its tab was closed. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.',
-					'#m7 unread from Facade: @done #a4 ended: it exited, with exit code 0. It takes no more messages. Its last screen was not kept: read_screen #a4 says why.'
+					'#m5 unread from Facade: @crash #a2 ended: it exited with code 1. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a2 to find out why.',
+					'#m6 unread from Facade: @closed #a3 ended: stopped by @human: its terminal tab was closed. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a3 to find out why.',
+					'#m7 unread from Facade: @done #a4 ended: it exited with code 0. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a4 to find out why.'
 				],
 				person: ['error: @boom #a7 exited: its CLI ended with exit code 2. (#a7\'s terminal)']
 			});
@@ -287,8 +287,8 @@ suite('Core: messages', () => {
 			assert.deepStrictEqual({ early, told: texts(fetched) }, {
 				early: 0,
 				told: [
-					'@crash #a2 ended: it exited, with exit code 1. It takes no more messages.\nThe last lines of its screen, as they were (read_screen #a2 gives up to 2000 of them):\nWorking on it\nError: out of memory',
-					'@quiet #a3 ended: it exited, with exit code 0. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.'
+					'@crash #a2 ended: it exited with code 1. It can no longer receive messages.\nScreen excerpt for #a2. Use read_screen for up to 2000 lines:\nWorking on it\nError: out of memory',
+					'@quiet #a3 ended: it exited with code 0. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a3 to find out why.'
 				]
 			});
 		});
@@ -301,7 +301,7 @@ suite('Core: messages', () => {
 			const ledger = fs.readFileSync(path.join(dir, 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
 
 			assert.deepStrictEqual(ledger.filter(event => event.type === 'message.sent' && event.facade === 'ended').map(event => ({ to: event.to, about: event.about, text: event.text })), [
-				{ to: lead.id, about: 2, text: '@late #a2 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not read before Facade stopped: read_screen #a2 shows it once Facade is back.' }
+				{ to: lead.id, about: 2, text: '@late #a2 ended: it exited with code 1. It can no longer receive messages. Facade shut down before reading the final screen. After Facade reconnects, call read_screen with agent #a2.' }
 			]);
 		});
 
@@ -320,7 +320,7 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual(texts(fetched).map(text => text.split('\n').pop()), [
 				'in time',
-				'@late #a3 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.'
+				'@late #a3 ended: it exited with code 1. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a3 to find out why.'
 			]);
 		});
 
@@ -331,9 +331,9 @@ suite('Core: messages', () => {
 			world.terminals.end(terminalOf(2), { exitCode: 1, byThePerson: false });
 			await sleep(1_000);
 
-			assert.deepStrictEqual({ told: world.facadeMessagesTo(1, 'unread'), logged: world.logs.filter(line => line.includes('could not be read for its creator')) }, {
-				told: ['@crash #a2 ended: it exited, with exit code 1. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.'],
-				logged: ['The last lines of @crash #a2\'s screen could not be read for its creator: EIO: i/o error, read']
+			assert.deepStrictEqual({ told: world.facadeMessagesTo(1, 'unread'), logged: world.logs.filter(line => line.includes('screen excerpt for its creator')) }, {
+				told: ['@crash #a2 ended: it exited with code 1. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a2 to find out why.'],
+				logged: ['Could not read @crash #a2\'s screen excerpt for its creator: EIO: i/o error, read']
 			});
 		});
 
@@ -369,8 +369,8 @@ suite('Core: messages', () => {
 			await settled(stopping);
 
 			assert.deepStrictEqual({ plain, beingStopped, unchanged }, {
-				plain: 'REFUSED: @arg #a3 was started without Facade\'s tools - its launch has no connect group, or the agent framework was off - and cannot fetch messages. Nothing was sent.',
-				beingStopped: 'REFUSED: @lint #a2 is being stopped. Nothing was sent.',
+				plain: 'REFUSED: @arg #a3 cannot fetch messages because it was started without Facade tools: its launch has no connect group, or the agent framework was disabled. Nothing was sent.',
+				beingStopped: 'REFUSED: @lint #a2 is stopping. Nothing was sent.',
 				unchanged: true
 			});
 		});
@@ -403,11 +403,11 @@ suite('Core: messages', () => {
 				person: person.messages.map(message => message.id),
 				mailboxes: [!!world.facade.mail.mailboxOf(1, lint), world.facade.mail.mailboxOf(3, lint), !!world.facade.mail.mailboxOf(2, other)]
 			}, {
-				out: 'NOT_FOUND: No agent you reach is called @other: list_agents with all lists them.',
+				out: 'NOT_FOUND: No reachable agent is named @other. Call list_agents with all:true to see reachable runs.',
 				within: [{ id: 2, to: '@lead #a1', toPerson: false }, { id: 3, to: '@human', toPerson: true }],
 				fromOther: [{ id: 4, to: '@lint #a2', toPerson: false, cannotReply: true }],
 				own: ['#m4 unread from @other #a3: From the other tree.'],
-				outside: '#m5 is out of your reach: your YOLO is off, so you fetch by number only the messages to or from your own tree - the agents that come from @lead #a1. Nothing was fetched.',
+				outside: 'Cannot fetch #m5: it is outside your reach. With YOLO off, an ID lookup can read only messages to or from your tree, rooted at @lead #a1. Nothing was fetched.',
 				intoTree: ['#m2 unread from @lint #a2 to @lead #a1: Up.'],
 				person: [2, 5],
 				mailboxes: [true, undefined, true]
@@ -441,7 +441,7 @@ suite('Core: messages', () => {
 				states: ['delivered', 'unread'],
 				again: ['#m4 unread from @lint #a2 to @docs #a3: Docs?'],
 				all: ['#m1 delivered from @lead #a1: Be lint.', '#m3 delivered from @lead #a1: Lint.'],
-				bare: '4 is not a message\'s number: ids takes one as #m42.',
+				bare: '4 is not a message ID. Argument \'ids\' requires a message ID such as #m42.',
 				docs: [4]
 			});
 		});
@@ -504,11 +504,11 @@ suite('Core: messages', () => {
 			const again = await world.fetched(2);
 			const after = await world.fetched(2);
 
-			assert.deepStrictEqual({ first: shown(first), again: shown(again), after: shown(after), logged: world.logs.filter(line => line.includes('has its messages could not be recorded')) }, {
+			assert.deepStrictEqual({ first: shown(first), again: shown(again), after: shown(after), logged: world.logs.filter(line => line.startsWith('Could not record message delivery')) }, {
 				first: ['#m2 unread from @lead #a1: One.'],
 				again: ['#m2 unread from @lead #a1: One.'],
 				after: [],
-				logged: ['That #a2 has its messages could not be recorded: EPERM: operation not permitted. They stay unread, and come again under their numbers.']
+				logged: ['Could not record message delivery to #a2. The messages remain unread and will appear again with the same IDs. Reason: EPERM: operation not permitted']
 			});
 		});
 
@@ -523,8 +523,8 @@ suite('Core: messages', () => {
 			const none = await world.fetched(3, { ids: ['#m9'] }).then(() => 'fetched', err => messageOf(err));
 
 			assert.deepStrictEqual({ refused, none }, {
-				refused: `#m2 is from before this window last started: it is in the chat room ${path.join(dir, 'rooms', 'lead-a1.md')} only.`,
-				none: 'No message is #m9: the last one is #m2.'
+				refused: `Message #m2 predates this window's current session. Its only copy is in chat room ${path.join(dir, 'rooms', 'lead-a1.md')}.`,
+				none: 'Message #m9 was not found. The latest message ID is #m2.'
 			});
 		});
 
@@ -540,8 +540,8 @@ suite('Core: messages', () => {
 			const gone = await world.fetched(2, { ids: ['#m1'] }).then(() => 'fetched', err => messageOf(err));
 
 			assert.deepStrictEqual({ none, gone }, {
-				none: 'No message is #m1: none has been sent.',
-				gone: '#m1 is from before this window last started, and the chat rooms with it were deleted: it is gone.'
+				none: 'Message #m1 was not found. No messages have been sent.',
+				gone: 'Message #m1 predates this window\'s current session, and its chat rooms were deleted. The message is no longer available.'
 			});
 		});
 
@@ -554,9 +554,9 @@ suite('Core: messages', () => {
 			const notYours = outcome(() => world.facade.mail.send(PERSON, ['@lint'], 'Thanks.', `#m${ask.id}`));
 			const yours = outcome(() => world.facade.mail.send(PERSON, ['@lint'], 'Thanks.', `#m${toYou.id}`).map(message => message.id));
 
-			assert.deepStrictEqual({ answers: fetched.messages.map(message => [message.id, message.replyTo, headingOf(message).split(' · ').filter(part => part.startsWith('re '))]), notYours, yours }, {
-				answers: [[3, 2, ['re #m2']]],
-				notYours: 'INVALID: #m2 was sent to @lint #a2, not to you: reply_to names a message sent to you.',
+			assert.deepStrictEqual({ answers: fetched.messages.map(message => [message.id, message.replyTo, headingOf(message).split(' · ').filter(part => part.startsWith('reply to '))]), notYours, yours }, {
+				answers: [[3, 2, ['reply to #m2']]],
+				notYours: 'INVALID: Message #m2 was addressed to @lint #a2, not to you. reply_to must identify a message addressed to you.',
 				yours: [5]
 			});
 		});
@@ -709,9 +709,9 @@ suite('Core: messages', () => {
 			world.facade.mail.send(lead, ['@lint'], 'Hello?', undefined);
 			await sleep(3_000);
 
-			assert.deepStrictEqual({ rung: ringsOf(2), logged: world.logs.filter(line => line.startsWith('What the person typed into')) }, {
+			assert.deepStrictEqual({ rung: ringsOf(2), logged: world.logs.filter(line => line.startsWith('Could not determine the human-input state')) }, {
 				rung: ['[facade] 1 unread message: #m2 from @lead #a1. Call read_messages.'],
-				logged: ['What the person typed into the terminal of @lint #a2 could not be told: the window did not answer']
+				logged: ['Could not determine the human-input state of @lint #a2\'s terminal: the window did not answer']
 			});
 		});
 
@@ -726,7 +726,7 @@ suite('Core: messages', () => {
 			const early = ringsOf(2).length;
 			await sleep(5_000);
 
-			assert.deepStrictEqual({ failed, early, rung: ringsOf(2).length, logged: world.logs.some(line => line.includes('could not be rung: its terminal was not there')) }, {
+			assert.deepStrictEqual({ failed, early, rung: ringsOf(2).length, logged: world.logs.some(line => line.includes('Retrying in one minute. Reason: its terminal was unavailable')) }, {
 				failed: 0,
 				early: 0,
 				rung: 1,
@@ -769,7 +769,7 @@ suite('Core: messages', () => {
 			world.facade.mail.send(lead, ['@lint'], 'Are you there?', undefined);
 			await sleep(3_000);
 			const whileGone = ringsOf(2).length;
-			const logged = world.logs.filter(line => line.includes('its MCP server is not connected')).length;
+			const logged = world.logs.filter(line => line.includes('is waiting for its MCP server to connect')).length;
 			world.facade.connected(lint, startFakeProcess());
 			await sleep(1_000);
 
@@ -841,9 +841,9 @@ suite('Core: messages', () => {
 				person: world.person.notified.map(each => each.text),
 				still: [world.facade.mail.mailboxOf(child.id, lead)?.unread.map(message => message.id), world.facade.mail.mailboxOf(own.id, PERSON)?.unread.map(message => message.id)]
 			}, {
-				told: ['#m3 unread from Facade: @stuck #a2 has not fetched its task #m1 since it started. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: read_screen #a2 shows its screen; a menu there may have taken its doorbell - answer it, and do not send the task again or start another agent for it.'],
+				told: ['#m3 unread from Facade: @stuck #a2 has not fetched task #m1 since starting. The task is still queued; Facade retries the doorbell automatically. Call read_screen with agent #a2. A CLI menu may have consumed the doorbell; answer it with type_text or press_keys. Do not resend the task or start a replacement agent for it.'],
 				again: 0,
-				person: ['Facade: @mine #a3 has not fetched its task #m2 since it started. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: its terminal shows that.'],
+				person: ['Facade: @mine #a3 has not fetched task #m2 since starting. The task is still queued; Facade retries the doorbell automatically. Facade cannot determine what the CLI is doing. Inspect its terminal.'],
 				still: [[1], [2]]
 			});
 		});
@@ -851,8 +851,8 @@ suite('Core: messages', () => {
 		test('messages unfetched for the timeout from their first doorbell are told of once to the sender of the oldest - an agent, or the person - with what holds them up where Facade knows; told again only once the mailbox was emptied', async () => {
 			world.timing.startTimeoutMs = 30_000;
 			// An agent told of it reads the screen with read_screen; the person sees the terminal
-			const tail = 'The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: read_screen #a2 shows its screen; a menu there may have taken its doorbell - answer it, and do not send the messages again.';
-			const personsTail = 'The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: its terminal shows that.';
+			const tail = 'The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. Call read_screen with agent #a2. A CLI menu may have consumed the doorbell; answer it with type_text or press_keys. Do not resend the messages.';
+			const personsTail = 'The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. Facade cannot determine what the CLI is doing. Inspect its terminal.';
 			const { lead } = await team('lint', 'docs');
 			world.facade.mail.send(lead, ['@lint'], 'Report?', undefined);
 			await sleep(31_000);
@@ -877,16 +877,16 @@ suite('Core: messages', () => {
 				person: world.person.notified.filter(each => each.key === 'message:facade:3').map(each => each.text)
 			}, {
 				early: 0,
-				told: [`@lint #a2 has not fetched #m3 in 32 seconds. ${tail}`],
+				told: [`@lint #a2 has not fetched #m3 after 32 seconds. ${tail}`],
 				once: 1,
-				again: [`@lint #a2 has not fetched #m7 in 32 seconds. ${tail}`],
-				person: [`Facade: ${`@docs #a3 has not fetched #m6 in 32 seconds: its doorbell waits while the person types in its terminal. ${personsTail}`.slice(0, 200)}...`]
+				again: [`@lint #a2 has not fetched #m7 after 32 seconds. ${tail}`],
+				person: [`Facade: ${`@docs #a3 has not fetched #m6 after 32 seconds: the doorbell is waiting for the person to submit or cancel terminal input, or leave the keyboard idle for 10 seconds. ${personsTail}`.slice(0, 200)}...`]
 			});
 		});
 
 		test('what holds a doorbell up is said too: Facade\'s own input going into the terminal, which it waits behind, or a terminal away for a moment, tried again each minute', async () => {
 			world.timing.startTimeoutMs = 30_000;
-			const tail = (id: number) => `The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: read_screen #a${id} shows its screen; a menu there may have taken its doorbell - answer it, and do not send the messages again.`;
+			const tail = (id: number) => `The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. Call read_screen with agent #a${id}. A CLI menu may have consumed the doorbell; answer it with type_text or press_keys. Do not resend the messages.`;
 			const { lead } = await team('lint', 'docs');
 			// Facade types into @lint's terminal all along; @docs's terminal is away
 			world.terminals.inputs.set(2, { pending: false, busy: true });
@@ -896,8 +896,8 @@ suite('Core: messages', () => {
 			await sleep(33_000);
 
 			assert.deepStrictEqual(world.facadeMessagesTo(1, 'unread').sort(), [
-				`@docs #a3 has not fetched #m4 in 32 seconds: its doorbell could not be typed into its terminal, and is tried again each minute. ${tail(3)}`,
-				`@lint #a2 has not fetched #m3 in 32 seconds: its doorbell waits behind what Facade types into its terminal. ${tail(2)}`
+				`@docs #a3 has not fetched #m4 after 32 seconds: the terminal could not receive the doorbell; Facade retries every minute. ${tail(3)}`,
+				`@lint #a2 has not fetched #m3 after 32 seconds: the doorbell is queued behind earlier Facade input. ${tail(2)}`
 			]);
 		});
 
@@ -910,7 +910,7 @@ suite('Core: messages', () => {
 			await sleep(33_000);
 			const mailbox = world.facade.mail.mailboxOf(2, lead);
 
-			assert.deepStrictEqual({ listed: mailbox?.unread.map(message => message.id), more: mailbox?.more, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(' in ')[0]) }, {
+			assert.deepStrictEqual({ listed: mailbox?.unread.map(message => message.id), more: mailbox?.more, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(' after ')[0]) }, {
 				listed: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
 				more: 2,
 				told: ['@lint #a2 has not fetched #m2, #m3, #m4, #m5, #m6, #m7, #m8, #m9, #m10, #m11, and 2 more']
@@ -938,7 +938,7 @@ suite('Core: messages', () => {
 			const early = world.facadeMessagesTo(1, 'unread').length;
 			await sleep(60_000);
 
-			assert.deepStrictEqual({ early, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(' in ')[0]) }, {
+			assert.deepStrictEqual({ early, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(' after ')[0]) }, {
 				early: 0,
 				told: ['@lint #a2 has not fetched #m3']
 			});
@@ -959,9 +959,9 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ back: texts(back), original: shown(original), lint: lint.name }, {
 				back: [
-					'#m2 was not fetched by @lint #a2 before it ended (stopped by @human: its tab was closed).\nOriginal message:\nFirst.',
-					'#m3 was not fetched by @lint #a2 before it ended (stopped by @human: its tab was closed).\nOriginal message:\nSecond.',
-					'@lint #a2 ended: stopped by @human: its tab was closed. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.'
+					'#m2 was returned because @lint #a2 ended without fetching it (stopped by @human: its terminal tab was closed).\nOriginal message:\nFirst.',
+					'#m3 was returned because @lint #a2 ended without fetching it (stopped by @human: its terminal tab was closed).\nOriginal message:\nSecond.',
+					'@lint #a2 ended: stopped by @human: its terminal tab was closed. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a2 to find out why.'
 				],
 				original: ['#m2 returned from @lead #a1 to @lint #a2: First.'],
 				lint: 'lint'
@@ -975,7 +975,7 @@ suite('Core: messages', () => {
 			await world.facade.stopAgent(docs, '@lint');
 			await sleep(1_000);
 
-			assert.deepStrictEqual(world.facadeMessagesTo(lead.id ?? 0, 'unread').map(text => text.split('.')[0]), ['#m3 was not fetched by @lint #a2 before it ended (stopped by @docs #a3 with stop_agent)', '@lint #a2 ended: stopped by @docs #a3 with stop_agent, its CLI ending with exit code 143']);
+			assert.deepStrictEqual(world.facadeMessagesTo(lead.id ?? 0, 'unread').map(text => text.split('.')[0]), ['#m3 was returned because @lint #a2 ended without fetching it (stopped by @docs #a3 with stop_agent)', '@lint #a2 ended: stopped by @docs #a3 with stop_agent, with CLI exit code 143']);
 		});
 
 		test('one whose sender ended goes back to nobody, and nobody is told: its chat room notes it; neither does one of Facade\'s; one the person sent goes back to them', async () => {
@@ -993,8 +993,8 @@ suite('Core: messages', () => {
 				// Told of both ends, and nothing more
 				lead: world.facadeMessagesTo(lead.id ?? 0, 'unread').map(text => text.split(':')[0])
 			}, {
-				notes: ['> #m3 was not fetched by @docs #a3 before it ended (it exited, with exit code 0). It could not be returned: @lint #a2, its sender, had ended.'],
-				person: ['Facade: #m4 was not fetched by @docs #a3 before it ended (it exited, with exit code 0).'],
+				notes: ['> #m3 was not fetched by @docs #a3 before the recipient ended (it exited with code 0). It could not be returned: its sender, @lint #a2, has already ended.'],
+				person: ['Facade: #m4 was returned because @docs #a3 ended without fetching it (it exited with code 0).'],
 				lead: ['@lint #a2 ended', '@docs #a3 ended']
 			});
 		});
@@ -1027,11 +1027,11 @@ suite('Core: messages', () => {
 			}, {
 				failed: 'FAILED: Arg Code did not start as @fails #a2: its CLI ended with exit code 1',
 				rootFailed: 'FAILED: Arg Code did not start as @alone #a3: its CLI ended with exit code 1',
-				closed: 'FAILED: Arg Code did not start as @closed #a4: its tab was closed',
+				closed: 'FAILED: Arg Code did not start as @closed #a4: its terminal tab was closed',
 				// Its tasks back, and no notice of the ends
 				lead: ['#m4 returned', '#m6 returned'],
-				returns: ['returned: it did not start: its CLI ended with exit code 1', 'returned: it did not start: its CLI ended with exit code 1', 'returned: stopped by @human: its tab was closed'],
-				person: ['Facade: #m2 was not fetched by @alone #a3 before it ended (it did not start: its CLI ended with exit code 1).']
+				returns: ['returned: it did not start: its CLI ended with exit code 1', 'returned: it did not start: its CLI ended with exit code 1', 'returned: stopped by @human: its terminal tab was closed'],
+				person: ['Facade: #m2 was returned because @alone #a3 ended without fetching it (it did not start: its CLI ended with exit code 1).']
 			});
 		});
 	});
@@ -1052,8 +1052,8 @@ suite('Core: messages', () => {
 			await sleep(10);
 
 			assert.deepStrictEqual({ first, second: second?.text, revealed: world.terminals.revealed, opened: world.person.opened, unread: world.table.state.mail.entries.get(4)?.state, returns: world.table.state.mail.returns.size }, {
-				first: { key: 'message:2', text: '@lint #a2 has something for you: The tests pass.', buttons: ['Show'], quietIn: 2 },
-				second: '@lint #a2 has something for you: And the docs build.',
+				first: { key: 'message:2', text: '@lint #a2 sent you a message: The tests pass.', buttons: ['Show'], quietIn: 2 },
+				second: '@lint #a2 sent you a message: And the docs build.',
 				revealed: [2],
 				opened: ['lead-a1.md #m4'],
 				unread: 'delivered',
@@ -1071,7 +1071,7 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ opened: world.person.opened, told: world.person.told }, {
 				opened: [],
-				told: ['information: #m2 is in no chat room any more: the chat rooms were deleted.']
+				told: ['information: Message #m2 is no longer available because the chat rooms were deleted.']
 			});
 		});
 	});
@@ -1088,7 +1088,7 @@ suite('Core: messages', () => {
 			world.terminals.end(terminalOf(1), { exitCode: 0, byThePerson: false });
 			await sleep(5 * 60_000);
 
-			assert.deepStrictEqual(world.facadeMessagesTo(docs.id ?? 0, 'unread').map(text => text.split(' in ')[0]), ['@stuck #a3 has not fetched #m2, #m3']);
+			assert.deepStrictEqual(world.facadeMessagesTo(docs.id ?? 0, 'unread').map(text => text.split(' after ')[0]), ['@stuck #a3 has not fetched #m2, #m3']);
 		});
 
 		test('a child still starting as the window reloads, which then fails, is told of to its creator - its end, and its task back - as any child: the call that waited for it went with the window (M6, M8)', async () => {
@@ -1108,8 +1108,8 @@ suite('Core: messages', () => {
 			await sleep(1_000);
 
 			assert.deepStrictEqual(world.facadeMessagesTo(1, 'unread').map(text => text.split('\n')[0]), [
-				'#m1 was not fetched by @lint #a2 before it ended (it did not start: its CLI ended with exit code 1).',
-				'@lint #a2 ended: it did not start: its CLI ended with exit code 1. It takes no more messages. Its last screen was not kept: read_screen #a2 says why.'
+				'#m1 was returned because @lint #a2 ended without fetching it (it did not start: its CLI ended with exit code 1).',
+				'@lint #a2 ended: it did not start: its CLI ended with exit code 1. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a2 to find out why.'
 			]);
 		});
 
@@ -1123,7 +1123,7 @@ suite('Core: messages', () => {
 				}
 				await world.facade.recover(true);
 			};
-			const notices = () => world.facadeMessagesTo(1, 'unread').map(text => text.split(/ since | in /)[0]);
+			const notices = () => world.facadeMessagesTo(1, 'unread').map(text => text.split(/ since | after /)[0]);
 			world.timing.startTimeoutMs = 30_000;
 			const { lead } = await team('lint');
 			await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', name: 'stuck', task: 'Stuck.' });
@@ -1136,8 +1136,8 @@ suite('Core: messages', () => {
 			await sleep(5 * 60_000);
 
 			assert.deepStrictEqual({ onTime, after: notices() }, {
-				onTime: ['@stuck #a3 has not fetched its task #m2', '@lint #a2 has not fetched #m3'],
-				after: ['@stuck #a3 has not fetched its task #m2', '@lint #a2 has not fetched #m3']
+				onTime: ['@stuck #a3 has not fetched task #m2', '@lint #a2 has not fetched #m3'],
+				after: ['@stuck #a3 has not fetched task #m2', '@lint #a2 has not fetched #m3']
 			});
 		});
 
@@ -1177,7 +1177,7 @@ suite('Core: messages', () => {
 			assert.deepStrictEqual({ mailboxes: [...world.table.state.mail.mailboxes.keys()], next: world.table.state.mail.lastMessage, notes: room.split('\n').filter(line => line.startsWith('>')) }, {
 				mailboxes: [3],
 				next: 3,
-				notes: ['> #m2 was not fetched by @lint #a2 before it ended (stopped: its window went). It could not be returned: @lead #a1, its sender, had ended.']
+				notes: ['> #m2 was not fetched by @lint #a2 before the recipient ended (stopped: its window closed). It could not be returned: its sender, @lead #a1, has already ended.']
 			});
 		});
 
@@ -1199,8 +1199,8 @@ suite('Core: messages', () => {
 			assert.deepStrictEqual({ lint: ringsOf(2).length, back: texts(back).map(text => text.split('\n')[0]) }, {
 				lint: 1,
 				back: [
-					'#m4 was not fetched by @docs #a3 before it ended (it was lost: its terminal was gone when Facade came back).',
-					'@docs #a3 ended: it was lost: its terminal was gone when Facade came back. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.'
+					'#m4 was returned because @docs #a3 ended without fetching it (it was lost: its terminal was missing when Facade restarted).',
+					'@docs #a3 ended: it was lost: its terminal was missing when Facade restarted. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a3 to find out why.'
 				]
 			});
 		});
@@ -1224,7 +1224,7 @@ suite('Core: messages', () => {
 			const early = world.facadeMessagesTo(1, 'unread').length;
 			await sleep(15_000);
 
-			assert.deepStrictEqual({ whileOff, rung, early, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(' in ')[0]) }, {
+			assert.deepStrictEqual({ whileOff, rung, early, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(' after ')[0]) }, {
 				whileOff: { rings: 0, told: 0 },
 				rung: ['[facade] 1 unread message: #m2 from @lead #a1. Call read_messages.'],
 				early: 0,
@@ -1253,12 +1253,12 @@ suite('Core: messages', () => {
 				asked: world.terminals.typeOptions.map(options => options.requiresFramework),
 				whileOff,
 				rings: world.table.state.mail.entries.get(2)?.rings,
-				logged: world.logs.filter(line => line.startsWith('The doorbell of @lint #a2'))
+				logged: world.logs.filter(line => line.startsWith('Doorbell for @lint #a2'))
 			}, {
 				asked: [true, true],
 				whileOff: { rings: 0, tries: 1 },
 				rings: 1,
-				logged: ['The doorbell of @lint #a2 was not typed: the agent framework was off when its turn came. It rings once the framework is on again.']
+				logged: ['Doorbell for @lint #a2 was not sent: the agent framework was disabled when its turn arrived. Delivery resumes when the framework is enabled.']
 			});
 		});
 
@@ -1275,7 +1275,7 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ whileOff, shown: world.person.notified.map(each => each.text.split(' (')[0]) }, {
 				whileOff: { shown: [], returned: 3 },
-				shown: ['Facade: #m2 was not fetched by @lint #a2 before it ended']
+				shown: ['Facade: #m2 was returned because @lint #a2 ended without fetching it']
 			});
 		});
 
@@ -1299,7 +1299,7 @@ suite('Core: messages', () => {
 			assert.deepStrictEqual({ whileOff, reloaded, on: { shown: world.person.notified.map(each => each.text), state: world.table.state.mail.entries.get(id)?.state } }, {
 				whileOff: { shown: 0, state: 'unread' },
 				reloaded: { shown: 0, state: 'unread' },
-				on: { shown: ['@lead #a1 has something for you: Pick red or blue.'], state: 'delivered' }
+				on: { shown: ['@lead #a1 sent you a message: Pick red or blue.'], state: 'delivered' }
 			});
 		});
 
@@ -1318,10 +1318,10 @@ suite('Core: messages', () => {
 			const early = world.facadeMessagesTo(1, 'unread');
 			await sleep(2_000);
 
-			assert.deepStrictEqual({ whileOff, early, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(/ since | in /)[0]).sort() }, {
+			assert.deepStrictEqual({ whileOff, early, told: world.facadeMessagesTo(1, 'unread').map(text => text.split(/ since | after /)[0]).sort() }, {
 				whileOff: [],
 				early: [],
-				told: ['@lint #a2 has not fetched #m3', '@stuck #a3 has not fetched its task #m2']
+				told: ['@lint #a2 has not fetched #m3', '@stuck #a3 has not fetched task #m2']
 			});
 		});
 	});
@@ -1343,7 +1343,7 @@ suite('Core: messages', () => {
 				rooms: world.facade.mail.rooms.list().map(room => `${room.root.name} #a${room.root.id} ${room.live ? 'running' : 'ended'}: ${room.messages}`)
 			}, {
 				listed: [3],
-				refused: `#m2 is from before this window last started: it is in the chat room ${path.join(dir, 'rooms', 'lead-a1.md')} only.`,
+				refused: `Message #m2 predates this window's current session. Its only copy is in chat room ${path.join(dir, 'rooms', 'lead-a1.md')}.`,
 				rooms: ['lead #a1 ended: 2']
 			});
 		});

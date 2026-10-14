@@ -23,7 +23,7 @@ const UNKNOWN_POLL_MS = 250;
 /** How often the watched agents' processes are looked at, for one that ended while its terminal stays open to show how. */
 const ENDS_POLL_MS = 5_000;
 /** Why a window cannot read agents' screens or type there: in English, as Facade's errors say it to the agent. */
-const WITHOUT_WORKBENCH = 'This window cannot read agents\' screens or type into their terminals: it runs without Facade\'s workbench.';
+const WITHOUT_WORKBENCH = 'Cannot read agent screens or send terminal input: this window is running without Facade\'s workbench.';
 /** Why the window says it closed an agent's terminal, where it was not its tab. */
 const TERMINAL_END_REASONS: ReadonlySet<string> = new Set<NonNullable<TerminalEnd['reason']>>(['worktreeDeleted', 'folderRemoved', 'folderGone']);
 /** Why the window says not all of an input went in. */
@@ -87,7 +87,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 
 	async launch(request: TerminalLaunch): Promise<{ readonly processId?: number }> {
 		if (!(await vscode.commands.getCommands()).includes('_facade.terminal.create')) {
-			throw new Error('This window has no agents\' terminals: Facade Code\'s workbench makes them.');
+			throw new Error('Cannot create agent terminals in this window: Facade Code\'s workbench is unavailable.');
 		}
 		const opened = await vscode.commands.executeCommand<{ readonly processId?: number; readonly closed: boolean; readonly exitCode?: number }>('_facade.terminal.create', vscode.Uri.file(request.cwd), {
 			name: request.name,
@@ -130,7 +130,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 		if (known.state === 'unknown') {
 			// Looked for all the same: once the window tells of its end, that end is recorded (L12)
 			this.watched.add(id);
-			throw new Error('the window cannot tell whether its process runs');
+			throw new Error('the window cannot determine whether the agent\'s process is running');
 		}
 		if (known.state === 'present') {
 			this.watched.add(id);
@@ -235,7 +235,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 	dispose(): void {
 		clearInterval(this.poll);
 		this.listeners.clear();
-		disposeAll(this.disposables, err => this.log(`Stopping Facade agents: ${messageOf(err)}`));
+		disposeAll(this.disposables, err => this.log(`Error while shutting down Facade agents: ${messageOf(err)}`));
 	}
 
 	async inside(folder: string): Promise<TerminalsInside> {
@@ -277,7 +277,7 @@ export class HostTerminals implements Terminals, vscode.Disposable {
 					}
 				}
 			}
-		}).catch(err => this.log(`Looking for agents whose processes ended failed: ${messageOf(err)}`)).finally(() => {
+		}).catch(err => this.log(`Could not check for agents whose processes have ended: ${messageOf(err)}`)).finally(() => {
 			const again = this.looking === 'again';
 			this.looking = undefined;
 			if (again) {
@@ -310,7 +310,7 @@ export async function agentProcessesRun(workspace: string): Promise<boolean> {
 export async function terminalEnvironment(folder: string): Promise<Environment> {
 	const env = await vscode.commands.executeCommand<unknown>('_facade.terminal.environment', vscode.Uri.file(folder));
 	if (!isJsonObject(env)) {
-		throw new Error('The window did not say what environment its terminals get.');
+		throw new Error('The window did not return its terminal environment.');
 	}
 	return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 }
@@ -354,7 +354,7 @@ function effectOf(value: unknown): InputEffect | undefined {
 		|| (value.reason !== undefined && !isInputReason(value.reason))
 		|| (value.pasted !== undefined && typeof value.pasted !== 'boolean') || (value.entered !== undefined && typeof value.entered !== 'boolean')
 		|| (value.keysSent !== undefined && (typeof value.keysSent !== 'number' || !Number.isInteger(value.keysSent) || value.keysSent < 0))) {
-		throw new Error(`the window answered with ${JSON.stringify(value)}, which does not say what went in`);
+		throw new Error(`The workbench did not confirm whether input was written: ${JSON.stringify(value)}.`);
 	}
 	return {
 		outcome: value.outcome,
@@ -367,7 +367,7 @@ function effectOf(value: unknown): InputEffect | undefined {
 
 /** Why a launch failed whose terminal closed as it started; in English, as Facade's own errors say it to the parent. */
 function exitedAsItStarted(executable: string, exitCode: number | undefined): string {
-	return exitCode === undefined ? `${executable} exited as it started.` : `${executable} exited as it started (exit code ${exitCode}).`;
+	return exitCode === undefined ? `${executable} exited during startup.` : `${executable} exited during startup (exit code ${exitCode}).`;
 }
 
 /**

@@ -61,8 +61,8 @@ async function agentNotAttached(backend: ITerminalBackend, id: number): Promise<
 		// Not known to be anywhere: ended
 	}
 	return elsewhere
-		? localize('facade.agentElsewhere', "This agent runs in another window: use its tab there.")
-		: localize('facade.agentProcessGone', "This agent's process ended while the window was away.");
+		? localize('facade.agentElsewhere', "This agent is running in another window. Switch to its tab there.")
+		: localize('facade.agentProcessGone', "This agent's process ended while the window was closed or reloading.");
 }
 
 const enum ProcessConstants {

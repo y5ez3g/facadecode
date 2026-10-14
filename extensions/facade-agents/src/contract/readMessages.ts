@@ -8,30 +8,34 @@ import { Args } from './args';
 import type { ContractTool } from './tools';
 
 /** What every result of `read_messages` ends with: CLIs fold tool results away, and printing is how the person sees a message. */
-const PRINT = 'Print those new to you before you act on them, for the person, who watches your screen: one of 500 characters or fewer as it is, with its number and its sender; a longer one as its number, its sender and a sentence or two of what it says.';
+const PRINT = 'Show messages new to you in your terminal before acting. Include each ID and sender. Print messages of 500 characters or fewer verbatim; summarize longer messages in 1-2 sentences.';
+
+/** What a fetch's delivery states are: as the messages stood before it, which says nothing of what was done with them. */
+const STATES_BEFORE = 'Delivery states describe the messages before this fetch. delivered means fetched, not acted on or completed.';
 
 /** The delivery states a fetch counts, in the order its count names them. */
 const STATES = ['unread', 'delivered', 'returned'] as const;
 
 /**
- * A fetch as the model reads it: how many messages, and how many in each delivery state; each one's
- * heading - its number, sender and recipient, time, what it answers, length and delivery state - and its
- * text, or the file that holds all their texts; then the request to print those new to the caller.
+ * A fetch as the model reads it: how many messages, and how many in each delivery state - as they stood
+ * before it; each one's heading - its number, sender and recipient, time, what it answers, length and
+ * delivery state - and its text, or the file that holds all their texts; then the request to print those
+ * new to the caller.
  */
 function fetchedText(fetched: Fetched): string {
 	const { messages } = fetched;
 	if (!messages.length) {
-		return fetched.way === 'all' ? 'No message has been sent to you.' : 'No unread messages.';
+		return fetched.way === 'all' ? 'No messages have been sent to you.' : 'No unread messages.';
 	}
 	const states = STATES.map(state => [state, messages.filter(message => message.state === state).length] as const).filter(([, total]) => total > 0);
 	const count = `${messages.length} ${messages.length === 1 ? 'message' : 'messages'}: ${states.map(([state, total]) => `${total} ${state}`).join(', ')}`;
 	const lines: string[] = [];
 	if (fetched.file !== undefined) {
 		const length = messages.reduce((total, message) => total + message.length, 0);
-		lines.push(`${count}; ${length.toLocaleString('en-US')} characters, in the file ${fetched.file}. All of it is in the file: read the whole file before you act on any of it.`, '');
+		lines.push(`${count}; ${length.toLocaleString('en-US')} characters. Full message bodies: ${fetched.file}. Read the entire file before acting.`, STATES_BEFORE, '');
 		lines.push(...messages.map(headingOf));
 	} else {
-		lines.push(`${count}.`);
+		lines.push(`${count}.`, STATES_BEFORE);
 		for (const message of messages) {
 			lines.push('', headingOf(message), message.text ?? '');
 		}
@@ -49,12 +53,12 @@ export const readMessagesTool: ContractTool = {
 	definition: {
 		name: 'read_messages',
 		title: 'Read messages',
-		description: 'Fetches messages. With nothing, your unread ones, oldest first; with ids, the messages of those numbers, as #m42, whoever they were sent to - with your YOLO off, those to or from your own tree; with all, every message sent to you, those you fetched before too - your task among them, after your context was cleared or compacted. Each comes with its delivery state as you fetched it: unread, delivered - fetched before - or returned, one that went back to its sender. A message fetched again comes under the same number with the same text: keep track yourself of what you have handled. Call it when a line starting [facade] in your terminal says you have unread messages, and print those new to you before you act on them.',
+		description: 'Fetch unread messages oldest first after a [facade] notice. ids selects reachable messages; all:true retrieves your inbox history and task. Delivery states describe the messages before this fetch: delivered means fetched, not handled. Repeated reads keep IDs and available message text. Show new messages with sender and ID before acting. Read any returned file in full.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				ids: { type: 'array', items: { type: 'string' }, description: 'Messages by number, as #m42, whoever they were sent to: one at least; one alone is a list of one.' },
-				all: { type: 'boolean', description: 'Every message sent to you, those you fetched before too. Not with ids.' }
+				ids: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, minItems: 1 }], description: 'Message ID or nonempty list, such as #m42. Can include others\' messages within reach; with YOLO off, a sender or recipient must be in your tree. Cannot be combined with all:true.' },
+				all: { type: 'boolean', default: false, description: 'Retrieve your entire current-session inbox, including fetched and returned messages. all:true cannot be combined with ids.' }
 			},
 			additionalProperties: false
 		}

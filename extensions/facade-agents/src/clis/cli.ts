@@ -140,7 +140,7 @@ export interface CliConfig {
 export function withValues(text: string, values: { readonly [name: string]: string }, setting: string): string {
 	return text.replace(/\$\{(?<name>[^}]*)\}/g, (placeholder, name: string) => {
 		if (!Object.hasOwn(values, name)) {
-			throw new Error(`${setting} has ${placeholder}, for which Facade has no value: it has ${Object.keys(values).map(each => `\${${each}}`).join(', ')}.`);
+			throw new Error(`Setting '${setting}' contains an unknown variable '${placeholder}'. Supported variables: ${Object.keys(values).map(each => `\${${each}}`).join(', ')}.`);
 		}
 		return values[name];
 	});

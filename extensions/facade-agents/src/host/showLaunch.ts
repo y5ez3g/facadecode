@@ -95,7 +95,7 @@ async function describedCli(cli: AgentCli, config: CliConfig, yours: unknown, fo
 		cli,
 		config,
 		yours,
-		program: found ? { target: launchTarget(found.executable, process.platform, env) } : { missing: whyNotInstalled(cli, config, folder === undefined ? undefined : 'the PATH a terminal there has') },
+		program: found ? { target: launchTarget(found.executable, process.platform, env) } : { missing: whyNotInstalled(cli, config, folder === undefined ? undefined : 'the PATH used by a terminal in that folder') },
 		trust: theirs.trust,
 		...(theirs.overridden !== undefined ? { overridden: theirs.overridden } : {}),
 		throughStartAgent: starterFacts(cli, config, place, terminal, true),

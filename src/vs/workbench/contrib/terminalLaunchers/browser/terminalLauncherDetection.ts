@@ -45,7 +45,7 @@ export class TerminalLauncherDetection {
 		if (searchPath.length === 0) {
 			// No `PATH` at all, which is what a remote or web window comes out as. An empty menu
 			// would be worse than an optimistic one.
-			this._logService.trace('[terminalLaunchers] no readable PATH, reporting every launcher present');
+			this._logService.trace('[terminalLaunchers] No readable PATH, reporting all detected launchers');
 			for (const launcher of launchers) {
 				found.add(launcher.id);
 			}
@@ -131,7 +131,7 @@ export class TerminalLauncherDetection {
 			// An unknown variable is handed back unresolved
 			return resolved.includes('${env:') ? undefined : resolved;
 		} catch (error) {
-			this._logService.trace(`[terminalLaunchers] could not resolve ${value}: ${error}`);
+			this._logService.trace(`[terminalLaunchers] Could not resolve ${value}: ${error}`);
 			return undefined;
 		}
 	}

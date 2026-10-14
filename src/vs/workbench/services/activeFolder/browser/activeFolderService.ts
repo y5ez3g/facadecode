@@ -149,7 +149,7 @@ export class ActiveFolderService extends Disposable implements IActiveFolderServ
 		if (!target) {
 			// Racing a removal. Reported rather than adopted: a root that is not in the workspace
 			// cannot be shown by the parts that read the workspace.
-			throw new Error(`Not a folder of this workspace: ${uri.toString(true)}`);
+			throw new Error(`Invalid active folder: '${uri.toString(true)}' does not belong to the current workspace.`);
 		}
 
 		if (this._activeFolder && this.uriIdentityService.extUri.isEqual(this._activeFolder.uri, target.uri)) {

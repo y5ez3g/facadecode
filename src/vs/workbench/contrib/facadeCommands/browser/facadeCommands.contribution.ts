@@ -233,12 +233,13 @@ CommandsRegistry.registerCommand('_facade.worktree.stopSetup', (accessor, ...arg
 });
 
 // `(worktree, options?)`: deletes the worktree as Delete Worktree does, with nothing asked, its branch
-// kept, for an agent stopping the agents in it (`IWorktreeService.removeWorktree`): changes git would lose,
-// unsaved editors and submodules refuse it unless `options.discardChanges` - all but `options.ownFiles`, what
-// Facade put there and nobody changed, by hash. `options.main` is its main checkout, for a bar that lists no
-// worktrees; `options.runs` the agents' runs stopped in it, the only agents' terminals it closes;
-// `options.leftover` says it is what a deletion in this window left of one, which git no longer lists. Rejects with
-// why it could not, in the product's words: a main checkout is never deleted.
+// kept, for an agent's stop_agent, which stops the agents in it in the same order (`IWorktreeService.removeWorktree`):
+// changes git would lose, what git ignores, unsaved editors and submodules refuse it unless `options.discardChanges` -
+// all but `options.ownFiles`, what Facade put there and nobody changed, by hash. `options.main` is its main checkout,
+// for a bar that lists no worktrees; `options.runs` the agents' runs working in it that the caller looked at, the only
+// agents' terminals it closes; `options.leftover` says it is what a deletion in this window left of one, which git no
+// longer lists. Rejects with why it could not, in the product's words, and what was done all the same: a main checkout
+// is never deleted.
 CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...args) => {
 	const [worktree, options] = args;
 	assertType(URI.isUri(worktree), 'URI');
@@ -249,7 +250,7 @@ CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...
 });
 
 // `(worktree, options?)`: what `_facade.worktree.delete` with these options would lose, each named as its refusal
-// names it, for an agent's deletion to be refused before it stops anything (O5 step 2): nothing is done
+// names it, for an agent's deletion to be refused before it stops anything (O5): nothing is done
 // (`IWorktreeService.removalLoss`).
 CommandsRegistry.registerCommand('_facade.worktree.removalLoss', (accessor, ...args): Promise<readonly string[]> => {
 	const [worktree, options] = args;

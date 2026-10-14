@@ -354,7 +354,7 @@ way of moving between folder sets.
 | source control | Changes lists the active folder's repositories (`visibleRepositories`). The Graph and the status bar follow the active folder ahead of the editor. A folder without a repository says so | every repository |
 | search, Go to File, Go to Symbol | one scope for all three (`IFolderScopeService`): the active folder, or the workspace after Show All Folders in the search view's title or on either picker; kept per workspace. A resource in none of the folders is always covered. Go to Symbol is narrowed where its results land, since its providers run in the extension host | every folder |
 | Problems | filtered where the markers land, never at `IMarkerService`; the count follows the scope | every folder |
-| "which folder?" pickers | every folder, the active one first: debug configurations, snippets, the settings editor's folder tab, tasks, the agent folder picker, `_workbench.pickWorkspaceFolder`, `showWorkspaceFolderPick` (whose API caller still sees the workspace's order) | the workspace's order |
+| "which folder?" pickers | every folder, the active one first: debug configurations, snippets, the settings editor's folder tab, tasks, `_workbench.pickWorkspaceFolder`, `showWorkspaceFolderPick` (whose API caller still sees the workspace's order) | the workspace's order |
 | workspace settings, an extension enabled or disabled for the workspace | apply to every folder of the window, as in stock; the settings editor's Workspace tab and the extension's Enable/Disable (Workspace) say "applies to all folders in this window" beside them. Settings for one project are its folder's | the workspace |
 
 What is remembered is what the person chose, never what is on screen. Saving SCM's
@@ -646,7 +646,7 @@ registered as `facadeBar.*`; upstream is free to add `workspaceBar.*` of its own
 
 ### W10.7 Dialogs
 
-Facade's three forms - New Worktree, Customize and Agents - take their frame from
+Facade's two forms - New Worktree and Customize - take their frame from
 shadcn/ui's Dialog as its own site draws it (`facade-dialog`; measured on
 ui.shadcn.com/docs/components/radix/dialog), and what is in the frame from VS Code.
 
@@ -672,8 +672,9 @@ the frame's parts VS Code has no colour for: its lines, its band and its choices
 
 VS Code has no form of their kind - stock has one, an input box for proxy
 authentication - and `IDialogService` takes no fields like theirs. They are built on VS
-Code's dialog widget: the bar's two are `IWorkspaceBarDialogService`'s, Agents is the
-agent menu's.
+Code's dialog widget, both through `IWorkspaceBarDialogService`. Agent launch and
+configuration use the menu, Quick Pick and ordinary Settings editor defined in
+AGENT-LAUNCHER.md L3 and L7.
 
 Every other dialog is a question, shown as VS Code shows its own: the operating system's
 dialog, `window.dialogStyle` left at stock's `native`. VS Code's own questions - "Save
@@ -920,7 +921,7 @@ unchanged across both documents.
 | WS-51 | I, H | Open the settings editor's Workspace tab and an extension's Enable/Disable (Workspace) in a window of three folders | Each says it applies to all folders in this window |
 | WS-52 | I | Leave a folder with focus in a terminal, another with focus in an editor; switch back to each by mouse and by Switch Folder...; enter a folder for the first time | Focus returns where it was left; the first visit focuses the editor; the next keystroke reaches it, not the bar |
 | WS-53 | I | In an agent's terminal, press Switch Folder...'s key; pick by typing; press it again with its modifier held | The quick pick opens over the terminal, rows most recent first with the previous folder selected; typing filters; held, the key moves down the list; the shell receives nothing |
-| WS-54 | I, H | Close an unsaved file, delete a file, remove a folder, delete a worktree, open Customize, New Worktree and Agents, on Windows and macOS; then set `window.dialogStyle` to `custom` | The questions are the system's dialogs, Facade's in plain text as VS Code's are, the trust questions in the window as stock has them; the three forms in Facade's look in the window; buttons in the platform's order everywhere (primary first on Windows, last on macOS); with `custom` every question is drawn in the window in VS Code's look |
+| WS-54 | I, H | Close an unsaved file, delete a file, remove a folder, delete a worktree, open Customize and New Worktree, on Windows and macOS; then set `window.dialogStyle` to `custom` | The questions are the system's dialogs, Facade's in plain text as VS Code's are, the trust questions in the window as stock has them; the two forms in Facade's look in the window with the primary button last under W10.7; questions use the platform's button order (primary first on Windows, last on macOS); with `custom` every question is drawn in the window in VS Code's look |
 | WS-55 | I | Remove an active or inactive folder with dirty editors and agents through the file and API; repeat for the last member | Preserve exact dirty contents and agent process identity; expose retained work in editors/the panel, including when no active folder remains; notify and offer Stop |
 | WS-56 | I | Close Workspace from default and saved workspaces, with dirty editors and running work; cancel, then confirm | Cancellation retains the workspace and its work; completion makes the current window EMPTY after W11 checks, without quitting the app |
 | WS-57 | U, I | On A, request B and delay it; request C, then D, while B runs; separately remove, rename or reorder the destination during capture/restore | B completes, C never runs and its caller is told it was superseded, the window ends on D; no earlier request overwrites a later one; the final active folder is a current member and editors belong to the correct context |

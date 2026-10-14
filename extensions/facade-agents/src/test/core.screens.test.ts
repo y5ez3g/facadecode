@@ -99,14 +99,14 @@ suite('Core: agents\' screens', () => {
 		// One the person starts now, with YOLO on
 		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Free.', folder: lab, name: 'free' });
 		const yolo = (await world.facade.screens.read(callerOf(world.agent(5)), '#4')).id;
-		const outsideYourTree = 'REFUSED: #a4 is outside your tree: your YOLO is off, and you reach only your own tree - the agents that come from the agent the person started that you come from.';
+		const outsideYourTree = 'REFUSED: #a4 is outside your tree. With YOLO off, you can reach only your tree: your human-started root and all its descendants.';
 
 		assert.deepStrictEqual({ ...outcomes, stillOff, recorded: [world.agent(2).yolo, world.agent(5).yolo], yolo }, {
 			ancestor: 1,
 			descendantEnded: 'none',
 			otherTree: outsideYourTree,
 			person: 4,
-			personsOwn: 'REFUSED: @human is the person, not an agent: they have no run to stop, read or type into. send_message reaches them.',
+			personsOwn: 'REFUSED: @human is the person and has no agent run to stop, read, or type into. Use send_message to contact them.',
 			typeOtherTree: outsideYourTree,
 			stillOff: outsideYourTree,
 			recorded: [false, true],
@@ -137,7 +137,7 @@ suite('Core: agents\' screens', () => {
 			pressed: 2,
 			sent: ['@twin #a2'],
 			// By its name, one out of reach is no agent the caller knows of (O2)
-			far: 'NOT_FOUND: No agent you reach is called @far: list_agents with all lists them.'
+			far: 'NOT_FOUND: No reachable agent is named @far. Call list_agents with all:true to see reachable runs.'
 		});
 	});
 
@@ -150,9 +150,9 @@ suite('Core: agents\' screens', () => {
 			none: await outcomeOf(world.facade.screens.read(PERSON, '#9')),
 			mismatched: await outcomeOf(world.facade.screens.read(PERSON, '@worker #a3'))
 		}, {
-			ended: 'NOT_FOUND: Every agent called @helper has ended: @helper #a3. Name the one you mean by its number.',
-			none: 'NOT_FOUND: No agent is #a9: list_agents with all lists every agent you reach.',
-			mismatched: 'NOT_FOUND: No agent is both @worker and #a3: #a3 is @helper. Name it by its number alone, or by its name.'
+			ended: 'NOT_FOUND: All runs named @helper have ended: @helper #a3. Select one by its agent ID.',
+			none: 'NOT_FOUND: No agent has ID #a9. Call list_agents with all:true to see every reachable run.',
+			mismatched: 'NOT_FOUND: Name and ID do not match: @worker is not #a3; #a3 is @helper. Use the ID alone or the correct name.'
 		});
 	});
 
@@ -218,13 +218,13 @@ suite('Core: agents\' screens', () => {
 			noScreen: noScreen.empty,
 			notKept: { source: notKept.source, empty: notKept.empty, end: notKept.end?.kind, file: notKept.finalScreen },
 			unreadable: { empty: unreadable.empty, problem: unreadable.problem },
-			logged: world.logs.filter(line => line.startsWith('The final screen of')).length
+			logged: world.logs.filter(line => line.startsWith('Could not ') && line.includes('final screen')).length
 		}, {
-			four: { source: 'final', selected: 4, older: true, text: '[the last full-screen frame it drew before it left it]\n[[> keep]]\n  drop\n[its screen as its terminal ended]\nbye\n$', parts: [{ kind: 'frame', lines: 2, of: 3 }, { kind: 'final', lines: 2, of: 2 }], file: true },
+			four: { source: 'final', selected: 4, older: true, text: '[last full-screen frame before the CLI left full-screen mode]\n[[> keep]]\n  drop\n[screen at terminal end]\nbye\n$', parts: [{ kind: 'frame', lines: 2, of: 3 }, { kind: 'final', lines: 2, of: 2 }], file: true },
 			two: { selected: 2, older: true, text: 'bye\n$', parts: [{ kind: 'frame', lines: 0, of: 3 }, { kind: 'final', lines: 2, of: 2 }] },
 			noScreen: 'no_text',
 			notKept: { source: 'none', empty: 'not_kept', end: 'stopped', file: undefined },
-			unreadable: { empty: 'unreadable', problem: 'it is not JSON' },
+			unreadable: { empty: 'unreadable', problem: 'the file is not valid JSON' },
 			logged: 1
 		});
 	});
@@ -237,9 +237,9 @@ suite('Core: agents\' screens', () => {
 
 		assert.deepStrictEqual({ selected: read.selected, omitted: read.omitted, first: read.text.slice(0, 4), last: read.text.split('\n').slice(-3) }, {
 			selected: 102,
-			omitted: { lines: 21, chars: 2_155, partialFirstLine: false },
+			omitted: { lines: 21, chars: 2_162, partialFirstLine: false },
 			first: '021 ',
-			last: ['[its screen as its terminal ended]', 'bye', '$']
+			last: ['[screen at terminal end]', 'bye', '$']
 		});
 	});
 
@@ -257,7 +257,7 @@ suite('Core: agents\' screens', () => {
 		assert.deepStrictEqual({ finalScreen: read.finalScreen, cut: !!read.omitted, text, again: [again.finalScreen, fs.readFileSync(file, 'utf8') === text] }, {
 			finalScreen: file,
 			cut: true,
-			text: ['[the last full-screen frame it drew before it left it]', 'Pick one', '[[> keep]]', '[its screen as its terminal ended]', ...long, ''].join('\n'),
+			text: ['[last full-screen frame before the CLI left full-screen mode]', 'Pick one', '[[> keep]]', '[screen at terminal end]', ...long, ''].join('\n'),
 			again: [file, true]
 		});
 	});
@@ -275,8 +275,8 @@ suite('Core: agents\' screens', () => {
 		const notices = ends.map(text => text.split('\n').slice(1));
 
 		assert.deepStrictEqual({ menu: [menu.text, menu.parts], notices }, {
-			menu: ['[the last full-screen frame it drew before it left it]\nPick one\n[[> keep]]\n[its screen as its terminal ended: blank]', [{ kind: 'frame', lines: 2, of: 2 }, { kind: 'final', lines: 0, of: 0 }]],
-			notices: [['Its last screen was blank: nothing was on it as its terminal ended.']]
+			menu: ['[last full-screen frame before the CLI left full-screen mode]\nPick one\n[[> keep]]\n[screen at terminal end: blank]', [{ kind: 'frame', lines: 2, of: 2 }, { kind: 'final', lines: 0, of: 0 }]],
+			notices: [['The final screen was blank.']]
 		});
 	});
 
@@ -295,7 +295,7 @@ suite('Core: agents\' screens', () => {
 
 		assert.deepStrictEqual({ whole: [whole.source, whole.text], half: [half.empty, half.problem] }, {
 			whole: ['final', 'bye'],
-			half: ['unreadable', 'it is not JSON']
+			half: ['unreadable', 'the file is not valid JSON']
 		});
 	});
 
@@ -333,10 +333,10 @@ suite('Core: agents\' screens', () => {
 				'@worker #a2: keys Down Enter, waiting 120000 ms at most'
 			],
 			logs: [
-				`@lead #a1 typing ${text.length} characters, ${shown}, and Enter, into @worker #a2's terminal.`,
-				`@lead #a1 typing ${text.length} characters, ${shown}, and Enter, into @worker #a2's terminal: the text went in, and Enter.`,
-				'@lead #a1 pressing Down, Enter in @worker #a2\'s terminal.',
-				'@lead #a1 pressing Down, Enter in @worker #a2\'s terminal: all 2 keys went in.'
+				`@lead #a1 pasting ${text.length} characters, ${shown}, then sending Enter, into @worker #a2's terminal.`,
+				`@lead #a1 pasting ${text.length} characters, ${shown}, then sending Enter, into @worker #a2's terminal: the text was pasted and Enter was sent.`,
+				'@lead #a1 sending keys Down, Enter to @worker #a2\'s terminal.',
+				'@lead #a1 sending keys Down, Enter to @worker #a2\'s terminal: all 2 keys were sent.'
 			]
 		});
 	});
@@ -357,10 +357,10 @@ suite('Core: agents\' screens', () => {
 			await failureOf(settled(world.facade.screens.press(lead, '#2', ['Down', 'Enter']))),
 			await failureOf(settled(world.facade.screens.type(lead, '#2', 'yes', false)))
 		], [
-			{ code: 'UNAVAILABLE', message: 'Nothing went into @worker #a2\'s terminal: it waited 120 seconds for its turn, behind what the person was typing there or what Facade typed before. Read its screen, then try again.', data: { outcome: 'not_applied', reason: 'timeout', pasted: false, entered: false } },
-			{ code: 'REFUSED', message: 'Nothing went into @worker #a2\'s terminal: it ended first. read_screen shows its last screen.', data: { outcome: 'not_applied', reason: 'ended', keysSent: 0 } },
-			{ code: 'FAILED', message: '@worker #a2\'s terminal ended partway: 1 of its keys went in.', data: { outcome: 'partial', reason: 'ended', keysSent: 1 } },
-			{ code: 'UNAVAILABLE', message: 'Whether it went into @worker #a2\'s terminal is not known: the extension host restarted. Read its screen before you type or press anything again.', data: { outcome: 'unknown' } }
+			{ code: 'UNAVAILABLE', message: 'No input was written to @worker #a2\'s terminal. It waited 120 seconds behind human typing or earlier Facade input. Call read_screen before retrying.', data: { outcome: 'not_applied', reason: 'timeout', pasted: false, entered: false } },
+			{ code: 'REFUSED', message: 'No input was written to @worker #a2\'s terminal because it ended first. Use read_screen to inspect its final screen.', data: { outcome: 'not_applied', reason: 'ended', keysSent: 0 } },
+			{ code: 'FAILED', message: '@worker #a2\'s terminal ended during input: sent 1 of the requested keys.', data: { outcome: 'partial', reason: 'ended', keysSent: 1 } },
+			{ code: 'UNAVAILABLE', message: 'Terminal input outcome is unknown for @worker #a2. Call read_screen before sending any more text or keys. Reason: the extension host restarted', data: { outcome: 'unknown' } }
 		]);
 	});
 
@@ -371,7 +371,7 @@ suite('Core: agents\' screens', () => {
 
 		assert.deepStrictEqual(await failureOf(settled(world.facade.screens.type(callerOf(world.agent(1)), '#2', 'yes', true))), {
 			code: 'FAILED',
-			message: '@worker #a2\'s terminal ended partway: the text went in, without Enter. Its last lines:\nBye!',
+			message: '@worker #a2\'s terminal ended during input: the text was pasted without Enter. Final screen excerpt:\nBye!',
 			data: { outcome: 'partial', reason: 'ended', pasted: true, entered: false, finalScreen: finalScreenTextFile(screensDir(world.table.dir), 2) }
 		});
 	});
@@ -404,13 +404,13 @@ suite('Core: agents\' screens', () => {
 		assert.deepStrictEqual({ starting, notBack, unread }, {
 			starting: {
 				read: ['not_created', 'launching_cli'],
-				type: { code: 'REFUSED', message: '@new #a5 has no terminal yet: it is still starting. Nothing was typed.', data: { outcome: 'not_applied' } }
+				type: { code: 'REFUSED', message: '@new #a5 is still starting and has no terminal yet. No input was written.', data: { outcome: 'not_applied' } }
 			},
 			notBack: {
-				read: 'UNAVAILABLE: @worker #a2\'s terminal is not there now: the window may still be giving its terminals back after a reload. Try again in a moment.',
-				keys: { code: 'UNAVAILABLE', message: '@worker #a2\'s terminal is not there now: the window may still be giving its terminals back after a reload. Nothing was typed; try again in a moment.', data: { outcome: 'not_applied' } }
+				read: 'UNAVAILABLE: @worker #a2\'s terminal is temporarily unavailable; the window may still be restoring terminals after a reload. Retry once the terminal is available.',
+				keys: { code: 'UNAVAILABLE', message: '@worker #a2\'s terminal is temporarily unavailable; the window may still be restoring terminals after a reload. No input was written. Retry once the terminal is available.', data: { outcome: 'not_applied' } }
 			},
-			unread: { id: 2, name: 'worker', effect: { outcome: 'applied', pasted: true, entered: true }, screenUnavailable: '@worker #a2\'s terminal is not there now: the window may still be giving its terminals back after a reload. Try again in a moment.' }
+			unread: { id: 2, name: 'worker', effect: { outcome: 'applied', pasted: true, entered: true }, screenUnavailable: '@worker #a2\'s terminal is temporarily unavailable; the window may still be restoring terminals after a reload. Retry once the terminal is available.' }
 		});
 	});
 
@@ -422,11 +422,11 @@ suite('Core: agents\' screens', () => {
 
 		assert.deepStrictEqual({
 			ended: await failureOf(world.facade.screens.type(worker, '#3', 'hi', true)),
-			logged: world.logs.filter(line => line.includes('was refused')),
+			logged: world.logs.filter(line => line.startsWith('Refused input from')),
 			own: own.effect
 		}, {
-			ended: { code: 'REFUSED', message: '@helper #a3 ended (stopped: with stop_agent): its terminal takes nothing more. read_screen shows its last screen.', data: { outcome: 'not_applied', reason: 'ended' } },
-			logged: ['@worker #a2 was refused typing 2 characters, "hi", and Enter, into "#3"\'s terminal: @helper #a3 ended (stopped: with stop_agent): its terminal takes nothing more. read_screen shows its last screen.'],
+			ended: { code: 'REFUSED', message: '@helper #a3 has ended (stopped: with stop_agent) and cannot receive terminal input. Use read_screen to inspect its final screen.', data: { outcome: 'not_applied', reason: 'ended' } },
+			logged: ['Refused input from @worker #a2: pasting 2 characters, "hi", then sending Enter, into "#3"\'s terminal. Reason: @helper #a3 has ended (stopped: with stop_agent) and cannot receive terminal input. Use read_screen to inspect its final screen.'],
 			own: { outcome: 'applied', keysSent: 1 }
 		});
 	});
@@ -447,10 +447,10 @@ suite('Core: agents\' screens', () => {
 		assert.deepStrictEqual({ failed, told: world.person.told, ended: world.facade.endedAgent(2) }, {
 			failed: {
 				code: 'FAILED',
-				message: 'Arg Code did not start as @nope #a1: its CLI ended with exit code 1\nThe last lines of its screen, as they were (read_screen #a1 gives up to 2000 of them):\nError: unknown model nope\nexiting',
+				message: 'Arg Code did not start as @nope #a1: its CLI ended with exit code 1\nScreen excerpt for #a1. Use read_screen for up to 2000 lines:\nError: unknown model nope\nexiting',
 				data: { outcome: 'failed', agent: 1, phase: 'connecting', finalScreen: finalScreenTextFile(dir, 1) }
 			},
-			told: ['error: @nope #a1 did not start: its CLI ended with exit code 1. (#a1\'s terminal)', 'error: @lead #a2 exited: its CLI ended with exit code 3. (#a2\'s terminal)'],
+			told: ['error: @nope #a1 failed to start: its CLI ended with exit code 1. (#a1\'s terminal)', 'error: @lead #a2 exited: its CLI ended with exit code 3. (#a2\'s terminal)'],
 			ended: { id: 2, name: 'lead', finalScreen: finalScreenFile(dir, 2), ending: 'exited: its CLI ended with exit code 3' }
 		});
 	});
@@ -474,7 +474,7 @@ suite('Core: agents\' screens', () => {
 			registered: [1, 2, 4].map(id => `#a${id} ${finalScreenFile(dir, id)}`),
 			afterReload: true,
 			afterRestart: false,
-			read: 'NOT_FOUND: No agent is #a3: list_agents with all lists every agent you reach.'
+			read: 'NOT_FOUND: No agent has ID #a3. Call list_agents with all:true to see every reachable run.'
 		});
 	});
 
@@ -491,10 +491,10 @@ suite('Core: agents\' screens', () => {
 		const history = fs.readFileSync(world.table.logFile, 'utf8').split('\n').filter(line => line.includes('  input  ')).map(line => line.replace(/^\S+ \S+ {2}/, ''));
 
 		assert.deepStrictEqual({ refused, history }, {
-			refused: { code: 'REFUSED', message: '@other #a4 is being stopped: its terminal takes nothing more.', data: { outcome: 'not_applied', reason: 'ended' } },
+			refused: { code: 'REFUSED', message: '@other #a4 is stopping and cannot receive terminal input.', data: { outcome: 'not_applied', reason: 'ended' } },
 			history: [
-				'input    @lead #a1 typing 3 characters, "yes", and Enter, into @worker #a2\'s terminal',
-				'input    @lead #a1 typing 3 characters, "yes", and Enter, into @worker #a2\'s terminal: the text went in, and Enter'
+				'input    @lead #a1 pasting 3 characters, "yes", then sending Enter, into @worker #a2\'s terminal',
+				'input    @lead #a1 pasting 3 characters, "yes", then sending Enter, into @worker #a2\'s terminal: the text was pasted and Enter was sent'
 			]
 		});
 	});
@@ -524,8 +524,8 @@ suite('Core: agents\' screens', () => {
 		await settled(Promise.resolve());
 
 		assert.deepStrictEqual({ told: world.person.told, ends: [3, 4].map(id => world.table.get(id)?.end?.reason) }, {
-			told: ['error: @other #a4 exited: its CLI ended with exit code 130, after @lead #a1 pressed Ctrl+C there. (#a4\'s terminal)'],
-			ends: ['its CLI ended with exit code 130', 'its CLI ended with exit code 130, after @lead #a1 pressed Ctrl+C there']
+			told: ['error: @other #a4 exited: its CLI ended with exit code 130, after @lead #a1 sent Ctrl+C to its terminal. (#a4\'s terminal)'],
+			ends: ['its CLI ended with exit code 130', 'its CLI ended with exit code 130, after @lead #a1 sent Ctrl+C to its terminal']
 		});
 	});
 
@@ -545,9 +545,9 @@ suite('Core: agents\' screens', () => {
 
 		assert.deepStrictEqual({ notices, docs: world.table.get(5)?.end?.exitCode }, {
 			notices: [
-				'#m6 was not fetched by @helper #a3 before it ended (it exited: its CLI ended with exit code 130, after @other #a4 pressed Ctrl+C there).',
-				'@helper #a3 ended: it exited: its CLI ended with exit code 130, after @other #a4 pressed Ctrl+C there. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.',
-				'@docs #a5 ended: stopped by @human: its tab was closed, its CLI ending with exit code 129. It takes no more messages. Its last screen was not kept: read_screen #a5 says why.'
+				'#m6 was returned because @helper #a3 ended without fetching it (it exited: its CLI ended with exit code 130, after @other #a4 sent Ctrl+C to its terminal).',
+				'@helper #a3 ended: it exited: its CLI ended with exit code 130, after @other #a4 sent Ctrl+C to its terminal. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a3 to find out why.',
+				'@docs #a5 ended: stopped by @human: its terminal tab was closed, with CLI exit code 129. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a5 to find out why.'
 			],
 			docs: 129
 		});

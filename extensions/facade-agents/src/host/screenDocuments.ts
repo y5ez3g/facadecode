@@ -42,16 +42,16 @@ export class ScreenDocuments implements vscode.TextDocumentContentProvider {
 		try {
 			screen = file ? readFinalScreen(file) : undefined;
 		} catch (err) {
-			return vscode.l10n.t("{0}: its file, {1}, could not be read: {2}. It ended - {3}.", title, file, messageOf(err), ending);
+			return vscode.l10n.t("{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.", title, file, messageOf(err), ending);
 		}
 		if (!screen) {
-			return vscode.l10n.t("{0}: no last screen was kept. It ended - {1}. The window keeps one as an agent's terminal closes or its process ends - not of an agent that ended before its terminal was made, nor while no window was there, nor as the whole window closed.", title, ending);
+			return vscode.l10n.t("{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.", title, ending);
 		}
-		const parts = [vscode.l10n.t("{0}, kept as its terminal closed. It ended - {1}.", title, ending)];
+		const parts = [vscode.l10n.t("{0}, saved when its terminal closed. How it ended: {1}.", title, ending)];
 		if (screen.frame) {
-			parts.push(vscode.l10n.t("The last full-screen frame it drew, before it left it:"), screen.frame.join('\n'));
+			parts.push(vscode.l10n.t("The last full-screen frame rendered before leaving full screen:"), screen.frame.join('\n'));
 		}
-		parts.push(screen.frame ? vscode.l10n.t("Its screen as its terminal ended:") : '', screen.final.lines.join('\n'));
+		parts.push(screen.frame ? vscode.l10n.t("Terminal screen content upon exit:") : '', screen.final.lines.join('\n'));
 		return parts.filter(part => part !== '').join('\n\n');
 	}
 }

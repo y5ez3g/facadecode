@@ -189,7 +189,7 @@ export class Mail implements Disposable {
 		this.stillOpen();
 		const recipients = this.recipientsOf(caller, to);
 		if (!text.trim()) {
-			throw new FacadeError('INVALID', 'text is empty: write what the message says.');
+			throw new FacadeError('INVALID', 'Argument \'text\' must contain a message; it cannot be empty.');
 		}
 		const answers = replyTo === undefined ? undefined : this.repliedTo(caller, replyTo);
 		const own = caller.id === undefined ? undefined : this.context.table.get(caller.id);
@@ -205,7 +205,7 @@ export class Mail implements Disposable {
 				}
 				// Said in words and in data alike, from the one record of what went
 				const cutShort: SendCutShort = { outcome: 'unknown', sent: sent.map(each => ({ id: each.id, to: each.to })) };
-				throw new FacadeError('FAILED', `${cutShort.sent.map(each => `#m${each.id} to ${each.to}`).join(', ')} ${cutShort.sent.length === 1 ? 'was' : 'were'} sent; then the message to ${this.whoOf(recipient)} could not be recorded: ${messageOf(err)}. Do not send those again; send to the rest again once Facade can record.`, cutShort);
+				throw new FacadeError('FAILED', `Recorded messages: ${cutShort.sent.map(each => `#m${each.id} to ${each.to}`).join(', ')}. Failed to record a message to ${this.whoOf(recipient)}: ${messageOf(err)}\nFurther effects are unknown. Do not resend the messages listed above; inspect the recorded state before sending again.`, cutShort);
 			}
 			const agent = typeof recipient === 'number' ? this.context.table.get(recipient) : undefined;
 			sent.push({
@@ -364,10 +364,10 @@ export class Mail implements Disposable {
 	 * the window keeps a moment after the end (AGENT-DEBUGGING.md D6) - or that none was kept.
 	 */
 	private tellCreatorOfEnd(agent: Agent, how: string): void {
-		const first = `${describe(agent)} ended: ${how}. It takes no more messages.`;
+		const first = `${describe(agent)} ended: ${how}. It can no longer receive messages.`;
 		this.endsToTell.set(agent.id, first);
 		void this.context.excerptOf(agent).catch(err => {
-			this.context.log(`The last lines of ${describe(agent)}'s screen could not be read for its creator: ${messageOf(err)}`);
+			this.context.log(`Could not read ${describe(agent)}'s screen excerpt for its creator: ${messageOf(err)}`);
 			return undefined;
 		}).then(excerpt => {
 			// Told of already, as Facade stopped meanwhile
@@ -388,12 +388,12 @@ export class Mail implements Disposable {
 			return;
 		}
 		const text = excerpt !== undefined ? `${first}\n${excerptText(id, excerpt)}`
-			: stopping ? `${first} Its last screen was not read before Facade stopped: read_screen #a${id} shows it once Facade is back.`
-				: `${first} Its last screen was not kept: read_screen #a${id} says why.`;
+			: stopping ? `${first} Facade shut down before reading the final screen. After Facade reconnects, call read_screen with agent #a${id}.`
+				: `${first} No final screen was saved. Call read_screen with agent #a${id} to find out why.`;
 		try {
 			this.record({ from: FACADE, to: creator.id, text, facade: 'ended', about: id });
 		} catch (err) {
-			this.context.log(`The creator of ${describe(agent)} could not be told of its end: ${messageOf(err)}`);
+			this.context.log(`Could not notify the creator that ${describe(agent)} ended: ${messageOf(err)}`);
 		}
 	}
 
@@ -430,7 +430,7 @@ export class Mail implements Disposable {
 		try {
 			this.context.table.messages.shown(held.map(message => message.id));
 		} catch (err) {
-			this.context.log(`That the person was shown what came for them while the agent framework was off could not be recorded: ${messageOf(err)}`);
+			this.context.log(`Could not record delivery of notifications held for the person while the agent framework was disabled: ${messageOf(err)}`);
 		}
 		held.forEach(message => this.tellThePerson(message));
 	}
@@ -455,7 +455,7 @@ export class Mail implements Disposable {
 	private recipientsOf(caller: Caller, to: readonly string[]): Recipient[] {
 		const named = to.map(each => each.trim());
 		if (!named.length || named.some(each => !each)) {
-			throw new FacadeError('INVALID', `to ${named.length ? 'has an empty recipient' : 'names nobody'}: give an agent - #a7, @name or @name #a7 - or the person, @${PERSON.name}; or several of them.`);
+			throw new FacadeError('INVALID', `Argument 'to' ${named.length ? 'contains an empty recipient' : 'has no recipients'}. Provide an agent (#a7, @name, or @name #a7), @${PERSON.name}, or a nonempty list of recipients.`);
 		}
 		const recipients: Recipient[] = [];
 		const refused: string[] = [];
@@ -463,7 +463,7 @@ export class Mail implements Disposable {
 			let recipient: Recipient;
 			if (namesThePerson(text)) {
 				if (caller.id === undefined) {
-					throw new FacadeError('INVALID', `${describe(PERSON)} is you: your messages go to agents.`);
+					throw new FacadeError('INVALID', `You are ${describe(PERSON)}. Send messages to agents, not to yourself.`);
 				}
 				recipient = HUMAN;
 			} else {
@@ -474,12 +474,12 @@ export class Mail implements Disposable {
 					continue;
 				}
 				if (agent.state === 'stopping') {
-					refused.push(`${describe(agent)} is being stopped`);
+					refused.push(`${describe(agent)} is stopping`);
 					continue;
 				}
 				// Launched without Facade's integration, it has no tool to fetch with (M2)
 				if (!agent.integration) {
-					refused.push(`${describe(agent)} was started without Facade's tools - its launch has no connect group, or the agent framework was off - and cannot fetch messages`);
+					refused.push(`${describe(agent)} cannot fetch messages because it was started without Facade tools: its launch has no connect group, or the agent framework was disabled`);
 					continue;
 				}
 				recipient = agent.id;
@@ -499,10 +499,10 @@ export class Mail implements Disposable {
 		const id = messageNumberOf(text, 'reply_to');
 		const message = this.context.table.state.mail.messages.get(id);
 		if (!message) {
-			throw new FacadeError('NOT_FOUND', `No message is #m${id}: reply_to names a message sent to you, by its number.`);
+			throw new FacadeError('NOT_FOUND', `Message #m${id} was not found. reply_to must identify a message addressed to you.`);
 		}
 		if (message.to !== (caller.id ?? HUMAN)) {
-			throw new FacadeError('INVALID', `#m${id} was sent to ${this.whoOf(message.to)}, not to you: reply_to names a message sent to you.`);
+			throw new FacadeError('INVALID', `Message #m${id} was addressed to ${this.whoOf(message.to)}, not to you. reply_to must identify a message addressed to you.`);
 		}
 		return id;
 	}
@@ -536,7 +536,7 @@ export class Mail implements Disposable {
 		const { state } = this.context.table;
 		const mail = state.mail;
 		if (request.all && request.ids?.length) {
-			throw new FacadeError('INVALID', 'Give ids or all, not both: ids fetches messages by number, all every message sent to you.');
+			throw new FacadeError('INVALID', 'Use ids for specific messages or all:true for your inbox history, not both. Nothing was fetched.');
 		}
 		let ids: number[];
 		let way: Fetched['way'];
@@ -549,7 +549,7 @@ export class Mail implements Disposable {
 			for (const id of ids) {
 				const message = mail.messages.get(id);
 				if (reach !== undefined && message && !rootsOf(state, message).some(root => root.id === reach)) {
-					throw new FacadeError('REFUSED', `#m${id} is out of your reach: your YOLO is off, so you fetch by number only the messages to or from your own tree - the agents that come from ${this.whoOf(reach)}. Nothing was fetched.`);
+					throw new FacadeError('REFUSED', `Cannot fetch #m${id}: it is outside your reach. With YOLO off, an ID lookup can read only messages to or from your tree, rooted at ${this.whoOf(reach)}. Nothing was fetched.`);
 				}
 				this.assertInMailbox(id);
 			}
@@ -595,12 +595,12 @@ export class Mail implements Disposable {
 		}
 		const message = mail.messages.get(id);
 		if (!message) {
-			throw new FacadeError('NOT_FOUND', mail.lastMessage ? `No message is #m${id}: the last one is #m${mail.lastMessage}.` : `No message is #m${id}: none has been sent.`);
+			throw new FacadeError('NOT_FOUND', mail.lastMessage ? `Message #m${id} was not found. The latest message ID is #m${mail.lastMessage}.` : `Message #m${id} was not found. No messages have been sent.`);
 		}
 		const room = id > mail.roomsDeletedUpTo ? this.rooms.roomOf(message) : undefined;
 		throw new FacadeError('NOT_FOUND', room
-			? `#m${id} is from before this window last started: it is in the chat room ${room} only.`
-			: `#m${id} is from before this window last started, and the chat rooms with it were deleted: it is gone.`);
+			? `Message #m${id} predates this window's current session. Its only copy is in chat room ${room}.`
+			: `Message #m${id} predates this window's current session, and its chat rooms were deleted. The message is no longer available.`);
 	}
 
 	/** Records that the caller's own messages in a result were delivered, and works out its doorbell again. */
@@ -609,7 +609,7 @@ export class Mail implements Disposable {
 		try {
 			this.context.table.messages.delivered(agent, own);
 		} catch (err) {
-			this.context.log(`That #a${agent} has its messages could not be recorded: ${messageOf(err)}. They stay unread, and come again under their numbers.`);
+			this.context.log(`Could not record message delivery to #a${agent}. The messages remain unread and will appear again with the same IDs. Reason: ${messageOf(err)}`);
 			return;
 		}
 		this.doorbell.update(agent);
@@ -625,13 +625,13 @@ export class Mail implements Disposable {
 		const sender = message.from;
 		if (sender === FACADE || (sender !== undefined && !isLive(table.get(sender)))) {
 			table.messages.returned(message.id, how);
-			this.inRooms(`with the note on #m${message.id}`, () => this.rooms.noteUnreturned(message.id));
+			this.inRooms(`with a note about #m${message.id}`, () => this.rooms.noteUnreturned(message.id));
 			return;
 		}
 		const back = this.record({
 			from: FACADE,
 			to: sender ?? HUMAN,
-			text: `#m${message.id} was not fetched by ${describe(recipient)} before it ended (${how}).\nOriginal message:\n${table.messages.textOf(message) ?? ''}`,
+			text: `#m${message.id} was returned because ${describe(recipient)} ended without fetching it (${how}).\nOriginal message:\n${table.messages.textOf(message) ?? ''}`,
 			facade: 'returned',
 			about: recipient.id
 		});
@@ -649,13 +649,13 @@ export class Mail implements Disposable {
 		const from = typeof message.from === 'number' ? table.get(message.from) : undefined;
 		const about = from ?? (message.about !== undefined ? table.get(message.about) : undefined);
 		const show = l10n.t("Show");
-		const text = from ? l10n.t("{0} has something for you: {1}", describe(from), shown) : l10n.t("Facade: {0}", shown);
+		const text = from ? l10n.t("{0} sent you a message: {1}", describe(from), shown) : l10n.t("Facade: {0}", shown);
 		const key = from ? `message:${from.id}` : facadeNoticeKey(message.about ?? message.id);
 		void this.context.ports.person.notify({ key, text, buttons: [show], ...(from ? { quietIn: from.id } : {}) }).then(async choice => {
 			if (choice === show) {
 				await this.show(message, about);
 			}
-		}).catch(err => this.context.log(`A message to the person could not be shown: ${messageOf(err)}`));
+		}).catch(err => this.context.log(`Could not show a message notification to the person: ${messageOf(err)}`));
 	}
 
 	/** Shows the person a message: the terminal of the agent it is from or about, else the message in its chat room, unless that was deleted. */
@@ -667,7 +667,7 @@ export class Mail implements Disposable {
 		if (room && fs.existsSync(room)) {
 			await this.context.ports.person.openRoom(room, message.id);
 		} else {
-			this.context.ports.person.tell(l10n.t("#m{0} is in no chat room any more: the chat rooms were deleted.", message.id), undefined, 'information');
+			this.context.ports.person.tell(l10n.t("Message #m{0} is no longer available because the chat rooms were deleted.", message.id), undefined, 'information');
 		}
 	}
 
@@ -703,12 +703,12 @@ export class Mail implements Disposable {
 			this.record({
 				from: FACADE,
 				to: agent.creator ?? HUMAN,
-				text: `${describe(agent)} has not fetched its task #m${task} since it started${why ? `: ${why}` : ''}. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: ${whereToLook(id, agent.creator ?? HUMAN, 'task')}.`,
+				text: `${describe(agent)} has not fetched task #m${task} since starting${why ? `: ${why}` : ''}. The task is still queued; Facade retries the doorbell automatically. ${whereToLook(id, agent.creator ?? HUMAN, 'task')}`,
 				facade: 'taskNotFetched',
 				about: id
 			});
 		} catch (err) {
-			this.context.log(`That ${describe(agent)} has not fetched its task could not be told: ${messageOf(err)}`);
+			this.context.log(`Could not notify the creator that ${describe(agent)} has not fetched its task: ${messageOf(err)}`);
 		}
 	}
 
@@ -786,12 +786,12 @@ export class Mail implements Disposable {
 			this.record({
 				from: FACADE,
 				to: oldest.from ?? HUMAN,
-				text: `${describe(agent)} has not fetched ${ids} in ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: ${whereToLook(id, oldest.from ?? HUMAN, 'messages')}.`,
+				text: `${describe(agent)} has not fetched ${ids} after ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. ${whereToLook(id, oldest.from ?? HUMAN, 'messages')}`,
 				facade: 'delayed',
 				about: id
 			});
 		} catch (err) {
-			this.context.log(`That the messages of ${describe(agent)} wait unfetched could not be told: ${messageOf(err)}`);
+			this.context.log(`Could not notify the sender that ${describe(agent)} has unfetched messages: ${messageOf(err)}`);
 		}
 	}
 
@@ -806,14 +806,14 @@ export class Mail implements Disposable {
 			table.messages.deleteFetches(agent => isLive(table.get(agent)));
 			table.messages.deleteTexts(id => mail.entries.has(id) || id > mail.roomsDeletedUpTo);
 		} catch (err) {
-			this.context.log(`The message files no longer needed could not all be deleted: ${messageOf(err)}`);
+			this.context.log(`Could not delete all message files that are no longer needed: ${messageOf(err)}`);
 		}
 	}
 
 	/** A message's text; a note saying so for one whose file went with the chat rooms. */
 	private textOf(id: number): string {
 		const message = this.context.table.state.mail.messages.get(id);
-		return (message && this.context.table.messages.textOf(message)) ?? '(Its text is gone: the chat rooms were deleted.)';
+		return (message && this.context.table.messages.textOf(message)) ?? '(Message text unavailable: the chat rooms were deleted.)';
 	}
 
 	/** Writes to the chat rooms: one that fails is written again from the ledger as the window loads next. */
@@ -821,7 +821,7 @@ export class Mail implements Disposable {
 		try {
 			write();
 		} catch (err) {
-			this.context.log(`The chat rooms could not be written ${what}: ${messageOf(err)}. They are written again as the window loads.`);
+			this.context.log(`Could not update chat rooms ${what}. They will be rebuilt from the ledger the next time the window loads. Reason: ${messageOf(err)}`);
 		}
 	}
 
@@ -833,7 +833,7 @@ export class Mail implements Disposable {
 	/** After each of its waits: a window that closed meanwhile does nothing more, and says so. */
 	private stillOpen(): void {
 		if (this.disposed) {
-			throw new FacadeError('UNAVAILABLE', 'The window closed meanwhile, and does nothing more: try again once it is open.');
+			throw new FacadeError('UNAVAILABLE', 'The window closed during this call; the call will do no further work. Earlier effects may already have occurred. After the window reconnects, inspect the state before retrying.');
 		}
 	}
 }
@@ -845,19 +845,19 @@ export class Mail implements Disposable {
  */
 function whereToLook(id: number, told: Recipient | typeof FACADE, waiting: 'task' | 'messages'): string {
 	return told === HUMAN
-		? 'its terminal shows that'
-		: `read_screen #a${id} shows its screen; a menu there may have taken its doorbell - answer it, and do not ${waiting === 'task' ? 'send the task again or start another agent for it' : 'send the messages again'}`;
+		? 'Facade cannot determine what the CLI is doing. Inspect its terminal.'
+		: `Call read_screen with agent #a${id}. A CLI menu may have consumed the doorbell; answer it with type_text or press_keys. Do not resend ${waiting === 'task' ? 'the task or start a replacement agent for it' : 'the messages'}.`;
 }
 
 /** The number of the message `text` names, as `#m42`; throws, saying why, for what is none - an agent's number among them. */
 function messageNumberOf(text: string, what: string): number {
 	const trimmed = text.trim();
 	if (AGENT_NUMBER.test(trimmed)) {
-		throw new FacadeError('INVALID', `${trimmed} is an agent, not a message: ${what} takes a message's number, as #m42.`);
+		throw new FacadeError('INVALID', `'${trimmed}' is an agent ID. Argument '${what}' requires a message ID such as #m42.`);
 	}
 	const id = MESSAGE_NUMBER.exec(trimmed)?.groups?.id;
 	if (id === undefined || Number(id) < 1) {
-		throw new FacadeError('INVALID', `${trimmed || 'An empty text'} is not a message's number: ${what} takes one as #m42.`);
+		throw new FacadeError('INVALID', `${trimmed || 'An empty string'} is not a message ID. Argument '${what}' requires a message ID such as #m42.`);
 	}
 	return Number(id);
 }
@@ -893,7 +893,7 @@ export function headingOf(message: FetchedMessage): string {
 		`#m${message.id}`,
 		`from ${message.from} to ${message.own ? 'you' : message.to}`,
 		clockOf(message.time),
-		...(message.replyTo !== undefined ? [`re #m${message.replyTo}`] : []),
+		...(message.replyTo !== undefined ? [`reply to #m${message.replyTo}`] : []),
 		...(message.task ? ['task'] : []),
 		`${message.length.toLocaleString('en-US')} ${message.length === 1 ? 'character' : 'characters'}`,
 		message.state

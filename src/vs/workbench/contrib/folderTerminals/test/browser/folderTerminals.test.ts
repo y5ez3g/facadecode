@@ -413,7 +413,12 @@ class TestWorkspaceBarService extends mock<IWorkspaceBarService>() {
 	/** Whether folders leave through Remove Folder, which agreed to stop what runs in them, rather than a file edit. */
 	removing = true;
 
+	/** Whether folders leave for their worktree's deletion, which stops what runs in them itself. */
+	deleting = false;
+
 	override isRemoving(): boolean { return this.removing; }
+
+	override isDeleting(): boolean { return this.deleting; }
 
 	restored(): void { this._onDidRestoreEditors.fire(); }
 
@@ -1010,6 +1015,22 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		context.removeFolder(beta);
 
 		assert.deepStrictEqual({ ended: [held.disposed, held.exitReason], said: notifications.said.length }, { ended: [true, TerminalExitReason.User], said: 0 });
+	});
+
+	test('a folder that leaves for its worktree\'s deletion keeps what runs in it where it is - neither ended nor moved to the panel, nothing said - for the deletion to stop, which finds it still its own (WORKTREE.md WT-8, steps 5 and 6)', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const { terminals, folders, context, bar, folderTerminals, notifications } = setup([new TestGroup(0, [])], []);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		const held = await folderTerminals.openFor(beta.uri, { name: 'held' }) as unknown as TestInstance;
+		bar.removing = false;
+		bar.deleting = true;
+
+		context.removeFolder(beta);
+		await timeout(0);
+
+		assert.deepStrictEqual({ ended: held.disposed, inPanel: terminals.toPanel, said: notifications.said.length, going: folderTerminals.terminalsOf(beta.uri).length }, { ended: false, inPanel: [], said: 0, going: 1 });
 	});
 
 	test('another folder leaving ends none of the terminals shown for the folder on screen, nor does the folder on screen leaving while terminals do not follow folders', async () => {

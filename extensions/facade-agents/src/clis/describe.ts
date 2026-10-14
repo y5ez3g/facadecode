@@ -67,7 +67,7 @@ export function starterFacts(cli: AgentCli, config: CliConfig, place: { readonly
 	const refused = cli.exemptionOverride?.(launch, env, place?.folder);
 	return {
 		trust: givenTrust(cli, launch, place, env),
-		...(refused !== undefined ? { overridden: l10n.t("{0}: with YOLO off, {1} refuses Facade's tools", refused, cli.displayName) } : {}),
+		...(refused !== undefined ? { overridden: l10n.t("{0}: with YOLO off, {1} denies Facade tools", refused, cli.displayName) } : {}),
 		...(place && unattended && cli.projectServersOff ? { serversOff: cli.projectServersOff(launch, place, homeOf(env), false, unattended) } : {})
 	};
 }
@@ -106,10 +106,10 @@ export interface ShownLaunches {
 /** A CLI's trust as the document shows it. */
 function trustShown(trust: GivenTrust): string | object {
 	switch (trust.kind) {
-		case 'file': return { file: trust.file, merge: trust.merge, kept: l10n.t("for good: Facade never takes it back") };
+		case 'file': return { file: trust.file, merge: trust.merge, kept: l10n.t("permanently: Facade never removes it") };
 		case 'arguments': return { arguments: trust.arguments };
 		case 'none': return l10n.t("none: the CLI asks whether you trust the folder");
-		case 'cannot': return l10n.t("cannot be given: {0}", trust.why);
+		case 'cannot': return l10n.t("cannot be granted: {0}", trust.why);
 	}
 }
 
@@ -121,26 +121,26 @@ function trustShown(trust: GivenTrust): string | object {
  */
 function facadeToolsShown(cli: AgentCli, config: CliConfig, overridden: string | undefined, unattended: boolean): string {
 	if (overridden !== undefined) {
-		return l10n.t("refused: {0}", overridden);
+		return l10n.t("denied: {0}", overridden);
 	}
 	if (cli.custom) {
-		return l10n.t("as your launch's yoloOff group says");
+		return l10n.t("as set by your launch's yoloOff group");
 	}
 	const changed = exemptionGroupsChanged(cli, config, unattended);
 	if (changed.length) {
 		return changed.length === 1
-			? l10n.t("as your launch's {0} group says: Facade's own lets its server through, and you changed it", changed[0])
-			: l10n.t("as your launch's {0} and {1} groups say: Facade's own let its server through, and you changed them", changed[0], changed[1]);
+			? l10n.t("as set by your launch's {0} group: Facade's default exempts its server from approval, and you changed it", changed[0])
+			: l10n.t("as set by your launch's {0} and {1} groups: Facade's defaults exempt its server from approval, and you changed them", changed[0], changed[1]);
 	}
 	if (cli.exemption === 'precise') {
-		return l10n.t("never asked: its launch lets Facade's server through alone");
+		return l10n.t("never asked: its launch exempts only Facade's server from approval");
 	}
 	// Its sandbox as the launch with YOLO off leaves it: one it has not is not said to be on (X-38)
 	switch (sandboxOf(cli, launchFor(config, unattended), { framework: true, yolo: false, model: false, effort: false, task: false, trust: true })) {
-		case 'on': return l10n.t("never asked: it cannot let Facade's server alone through, so with YOLO off it asks for nothing, its sandbox still on");
-		case 'off': return l10n.t("never asked: it cannot let Facade's server alone through, so with YOLO off it asks for nothing; its sandbox is off as your launch has it");
-		case 'unknown': return l10n.t("never asked: it cannot let Facade's server alone through, so with YOLO off it asks for nothing; its sandbox as your launch's groups have it");
-		default: return l10n.t("never asked: it cannot let Facade's server alone through, so with YOLO off it asks for nothing; it has no sandbox");
+		case 'on': return l10n.t("never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox stays on");
+		case 'off': return l10n.t("never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is off, as your launch sets it");
+		case 'unknown': return l10n.t("never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is as your launch's groups set it");
+		default: return l10n.t("never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; it has no sandbox");
 	}
 }
 
@@ -155,14 +155,14 @@ function questionsShown(cli: AgentCli, config: CliConfig, unattended: boolean): 
 	switch (cli.questionTool) {
 		case 'removed':
 			return taken
-				? l10n.t("taken away by its launch's questions group: it asks through Facade messages")
+				? l10n.t("removed by its launch's questions group: it asks through Facade messages")
 				: unattended
-					? l10n.t("kept: your launch empties its questions group, so it can put up a question that waits for someone to pick an answer")
-					: l10n.t("kept: it can put up a question for you to answer, as it does outside Facade");
+					? l10n.t("kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer")
+					: l10n.t("kept: it can show a question for you to answer, as it does outside Facade");
 		case 'kept': return unattended
-			? l10n.t("kept: no launch can take its question tool away, so what it is told as it starts has it ask through Facade messages; asked for that tool by name, it can still put one up")
-			: l10n.t("kept: it can put up a question for you to answer, as it does outside Facade");
-		case 'unknown': return l10n.t("as your launch's questions group says");
+			? l10n.t("kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question")
+			: l10n.t("kept: it can show a question for you to answer, as it does outside Facade");
+		case 'unknown': return l10n.t("as set by your launch's questions group");
 	}
 }
 
@@ -174,17 +174,17 @@ function questionsShown(cli: AgentCli, config: CliConfig, unattended: boolean): 
  */
 function approvalsShown(cli: AgentCli, config: CliConfig, unattended: boolean): string {
 	if (cli.custom || exemptionGroupsChanged(cli, config, unattended).includes('yoloOff')) {
-		return l10n.t("as your launch's yoloOff group says");
+		return l10n.t("as set by your launch's yoloOff group");
 	}
 	if (cli.exemption === 'all') {
-		return l10n.t("nothing asked, nothing refused: it cannot let Facade's tools alone through, so its approvals are off");
+		return l10n.t("nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off");
 	}
 	// Edits in its folder that go unasked - Claude Code's dontAsk with them let through, as through start_agent - are said
 	// so; without, the person's own asks them as its CLI does, in their own permission mode (L4)
 	const edits = (launchFor(cli.defaults, unattended).launch.arguments.yoloOff ?? []).some(arg => arg.startsWith('Edit('));
 	return unattended
-		? (edits ? l10n.t("its edits in its folder unasked; anything else that would ask is refused unasked") : l10n.t("anything that would ask is refused unasked"))
-		: (edits ? l10n.t("its edits in its folder unasked; anything else asks you, as its CLI does") : l10n.t("asks you, as its CLI does"));
+		? (edits ? l10n.t("edits in its folder are allowed without asking; anything else that would ask is denied without asking") : l10n.t("anything that would ask is denied without asking"))
+		: (edits ? l10n.t("edits in its folder are allowed without asking; anything else asks you, as its CLI does") : l10n.t("asks you, as its CLI does"));
 }
 
 /**
@@ -194,10 +194,10 @@ function approvalsShown(cli: AgentCli, config: CliConfig, unattended: boolean): 
  */
 function serversOffShown(serversOff: readonly string[] | undefined): string {
 	return serversOff === undefined
-		? l10n.t("with YOLO off, those of its folder's .mcp.json you have not approved for its project are turned off for the run, so that it does not stop to ask about them")
+		? l10n.t("with YOLO off, the servers in its folder's .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them")
 		: serversOff.length
-			? l10n.t("with YOLO off, turned off for the run, so that it does not stop to ask about them - you have not approved them for this project: {0}", serversOff.join(', '))
-			: l10n.t("with YOLO off, none turned off: this folder's .mcp.json has no server you have not approved for its project");
+			? l10n.t("with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: {0}", serversOff.join(', '))
+			: l10n.t("with YOLO off, none turned off: this folder's .mcp.json has no server that you have not approved for its project");
 }
 
 /**
@@ -258,20 +258,20 @@ export function launchDocument({ folder, yolo, framework, clis }: ShownLaunches)
 	}));
 	return [
 		`// ${folder === undefined
-			? l10n.t("What Facade starts each agent with now: the program it runs, and its launch - Facade's own, with your facade.agents settings over it.")
-			: l10n.t("What Facade starts each agent with now, for an agent in {0}: the program a terminal there runs, and its launch - Facade's own, with your facade.agents settings over it.", folder)}`,
+			? l10n.t("What Facade starts each agent with now: the program it runs and its launch, which is Facade's default with your facade.agents settings applied over it.")
+			: l10n.t("What Facade starts each agent with now, for an agent in {0}: the program a terminal there runs and its launch, which is Facade's default with your facade.agents settings applied over it.", folder)}`,
 		`// ${typeof yolo !== 'boolean'
-			? l10n.t("YOLO: {0}. No agent starts until it is put right.", yolo.wrong)
+			? l10n.t("YOLO: {0}. No agent starts until this is fixed.", yolo.wrong)
 			: yolo
-				? l10n.t("YOLO is on: each agent is given its yoloOn arguments - its sandbox off, nothing asked. facade.agents.yolo turns it off for the agents started after.")
-				: l10n.t("YOLO is off: each agent is given its yoloOff arguments - its sandbox on where it has one, and Facade's tools let through where its CLI can: facadeTools and approvalsWithYoloOff say, for each, what is asked and what is refused.")}`,
-		`// ${l10n.t("An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO has them. One another agent or your script starts through start_agent, where nobody may be watching, runs with its launch's unattended part - its groups in place of the launch's, its environment and settings over the launch's - so that, where its CLI allows it, nothing waits for an answer: whenYouStartIt and throughStartAgent say what each gets.")}`,
+				? l10n.t("YOLO is on: each agent gets its yoloOn arguments, with its sandbox off and nothing asked. Turning off facade.agents.yolo applies to agents started afterward.")
+				: l10n.t("YOLO is off: each agent gets its yoloOff arguments, with its sandbox on where it has one and Facade tools exempted from approval where its CLI allows it. facadeTools and approvalsWithYoloOff show, for each agent, what is asked and what is denied.")}`,
+		`// ${l10n.t("An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.")}`,
 		`// ${framework
-			? l10n.t("The agent framework is on: its warmUp, connect and messages groups apply, and Facade's tools, skills and files go into each launch.")
-			: l10n.t("The agent framework is off: no warmUp, connect or messages group applies, and nothing of Facade's goes into a launch.")}`,
-		`// ${l10n.t("task: argument - the notice of its task is its argument; typed - typed into its terminal once it has connected; none - it takes no task.")}`,
-		`// ${l10n.t("trust: a file's entry is merged in as if you had answered the CLI yourself, and stays: Facade never takes it back. Arguments trust the folder for that launch alone.")}`,
-		`// ${l10n.t("This only shows the launch: to change it, write what you change in your settings. An agent with wrongSettings does not start until they are put right; cannotStart says what else would refuse its start here.")}`,
+			? l10n.t("The agent framework is on: the warmUp, connect, and messages groups apply, and Facade tools, skills, and files are added to each launch.")
+			: l10n.t("The agent framework is off: the warmUp, connect, and messages groups do not apply, and nothing of Facade's is added to a launch.")}`,
+		`// ${l10n.t("task: argument - its task notice is passed as an argument; typed - its task notice is typed into its terminal once it connects; none - it takes no task.")}`,
+		`// ${l10n.t("trust: a file entry is merged in as if you had answered the CLI yourself, and it stays: Facade never removes it. Arguments trust the folder for that launch only.")}`,
+		`// ${l10n.t("This document only shows the launch. To change it, set what you want to change in your settings. An agent with wrongSettings does not start until they are fixed; cannotStart lists anything else that would prevent its start here.")}`,
 		JSON.stringify(shown, undefined, '\t'),
 		''
 	].join('\n');

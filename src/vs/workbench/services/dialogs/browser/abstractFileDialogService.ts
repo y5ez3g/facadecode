@@ -76,7 +76,7 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 		if (!candidate) {
 			candidate = this.activeFolderService.activeFolderFor(schemeFilter, authorityFilter)?.uri;
 			if (candidate) {
-				this.logService.debug(`[FileDialogService] Default file path using the folder the window is on: ${candidate}`);
+				this.logService.debug(`[FileDialogService] Default file path for active workspace folder: ${candidate}`);
 			}
 		} else {
 			this.logService.debug(`[FileDialogService] Default file path using parent of last active file: ${candidate}`);
@@ -110,7 +110,7 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 				this.logService.debug(`[FileDialogService] Default folder path using parent of last active file: ${candidate}`);
 			}
 		} else {
-			this.logService.debug(`[FileDialogService] Default folder path using the folder the window is on: ${candidate}`);
+			this.logService.debug(`[FileDialogService] Default folder path for active workspace folder: ${candidate}`);
 		}
 
 		if (!candidate) {

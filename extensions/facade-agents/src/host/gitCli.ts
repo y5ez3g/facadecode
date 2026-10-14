@@ -64,7 +64,7 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 	}
 	const [gitDir, commonDir] = dirs.split(/\r?\n/);
 	if (!gitDir || !commonDir) {
-		throw new Error(`git did not say where the repository of ${folder} is.`);
+		throw new Error(`Git did not return a repository path for '${folder}'.`);
 	}
 	let head: string | undefined;
 	try {
@@ -86,7 +86,7 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 /**
  * The folder of the worktree `folder` is in, its top level: the way up from `folder` git gives, so that it is written as
  * `folder` is, links and all, not as git resolves them; undefined outside a work tree - in no repository, or in one's git
- * directory or a bare one (O5 step 1; OR-09).
+ * directory or a bare one (O5; OR-09).
  */
 export async function worktreeRootIn(git: string, folder: string): Promise<string | undefined> {
 	let answer: string;
@@ -183,7 +183,7 @@ export async function excludeIn(git: string, folder: string): Promise<{ readonly
 	}
 	const [file, root] = found.split(/\r?\n/);
 	if (!file || !root) {
-		throw new Error(`git did not say where the info/exclude and the worktree of ${folder} are.`);
+		throw new Error(`Git did not return the info/exclude path and worktree path for '${folder}'.`);
 	}
 	return { file: path.normalize(file), root: path.normalize(root) };
 }
@@ -319,14 +319,14 @@ export async function whyNotBranchNameIn(git: string, main: string, branch: stri
 	} catch (err) {
 		// git's no is its exit code; anything else - its time over, git missing - is no answer, and says so (X-57)
 		if (err instanceof GitError && err.exitCode !== undefined) {
-			return `git does not take ${JSON.stringify(branch)} for a branch's name`;
+			return `Git rejects ${JSON.stringify(branch)} as a branch name`;
 		}
 		throw err;
 	}
 	// A branch is a file, and the branches under its name a folder of the same name: `a` and `a/b` cannot both be
 	const branches = (await runGit(git, ['-C', main, 'for-each-ref', '--format=%(refname)', 'refs/heads/'])).split('\n').filter(Boolean).map(ref => ref.slice('refs/heads/'.length));
 	const clash = branches.find(each => branch.startsWith(`${each}/`) || each.startsWith(`${branch}/`));
-	return clash === undefined ? undefined : `the branch ${clash} is there already, and git cannot have a branch and others under its name both`;
+	return clash === undefined ? undefined : `branch '${clash}' already exists; Git cannot use the same name for both a branch and a branch-name prefix`;
 }
 
 /**

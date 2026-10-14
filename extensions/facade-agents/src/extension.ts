@@ -38,7 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	let deactivated = false;
 	const start = async () => {
 		if (!context.storageUri) {
-			log.info('Facade agents need a folder or workspace open; nothing started.');
+			log.info('Facade agents require an open folder or workspace. Nothing was started.');
 			none = 'noFolder';
 			return;
 		}
@@ -54,8 +54,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		} catch (err) {
 			created.dispose('facade');
 			none = 'failed';
-			log.error(`Facade agents could not start: ${stackOf(err)}`);
-			void vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start: {0}", messageOf(err)));
+			log.error(`Could not start Facade agents: ${stackOf(err)}`);
+			void vscode.window.showErrorMessage(vscode.l10n.t("Facade Agents could not start: {0}", messageOf(err)));
 		} finally {
 			creating = undefined;
 		}
@@ -70,11 +70,20 @@ export function activate(context: vscode.ExtensionContext): void {
 		return await service?.launchProblems(installed, folder) ?? [];
 	}));
 	context.subscriptions.push(
-		// `(folder)`: the person is deleting that worktree in the window - Facade's word first on its agents still starting (N-34)
-		vscode.commands.registerCommand('_facade.agents.worktreeDeleting', async (folder?: unknown) => {
+		// `(folder)`: the person decided to delete that worktree in the window - no agent starts there until it is over (OR-10)
+		vscode.commands.registerCommand('_facade.agents.worktreeDeleting', (folder?: unknown) => {
 			if (folder instanceof vscode.Uri && folder.scheme === 'file') {
-				await service?.worktreeDeleting(folder.fsPath);
+				service?.worktreeDeleting(folder.fsPath);
 			}
+		}),
+		// `(folder)`: the window's deletion of that worktree, which is out of the workspace now, stops what goes with it -
+		// its agents, waited for - and answers those still stopping when the stop timeout was over (WT-8, step 6)
+		vscode.commands.registerCommand('_facade.agents.worktreeStopping', async (folder?: unknown) => {
+			await ready;
+			if (!(folder instanceof vscode.Uri) || folder.scheme !== 'file') {
+				return { stopping: [] };
+			}
+			return await service?.worktreeStopping(folder.fsPath) ?? { stopping: [] };
 		}),
 		// `(workspace, id)`: the person stops that agent from the window - one with no terminal yet (L3)
 		vscode.commands.registerCommand('_facade.agents.stopAgent', async (workspace?: unknown, id?: unknown) => {
@@ -105,8 +114,8 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (!service) {
 				// A failure as one (UI-17); a folder to open, as news
 				void (none === 'failed'
-					? vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why."))
-					: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to start an agent in it.")));
+					? vscode.window.showErrorMessage(vscode.l10n.t("Facade Agents could not start in this window. See the Facade Agents output for details."))
+					: vscode.window.showInformationMessage(vscode.l10n.t("Open a local folder to start an agent.")));
 				return undefined;
 			}
 			return service.startAgentCommand(args);
@@ -120,8 +129,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		await ready;
 		if (!service) {
 			void (none === 'failed'
-				? vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why."))
-				: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to have agents in it.")));
+				? vscode.window.showErrorMessage(vscode.l10n.t("Facade Agents could not start in this window. See the Facade Agents output for details."))
+				: vscode.window.showInformationMessage(vscode.l10n.t("Open a local folder to start an agent.")));
 			return;
 		}
 		await command(service);
@@ -144,7 +153,7 @@ export function activate(context: vscode.ExtensionContext): void {
  */
 async function showAgentsLog(file: string | undefined): Promise<void> {
 	if (!file || !fs.existsSync(file)) {
-		void vscode.window.showInformationMessage(vscode.l10n.t("No agent has started in this workspace yet."));
+		void vscode.window.showInformationMessage(vscode.l10n.t("No agent has been started in this workspace yet."));
 		return;
 	}
 	await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });

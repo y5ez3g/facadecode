@@ -12,7 +12,7 @@ import { registerColor, transparent } from '../../../../platform/theme/common/co
 
 export const FACADE_DIALOG_BORDER = registerColor('facadeDialog.border',
 	{ dark: transparent(foreground, 0.1), light: transparent(foreground, 0.1), hcDark: contrastBorder, hcLight: contrastBorder },
-	localize('facadeDialogBorder', "Border color in Facade dialogs: the dialog outline, the line above its buttons, and notice boxes."));
+	localize('facadeDialogBorder', "Border color in Facade dialogs: the dialog outline, the separator above the buttons, and notice boxes."));
 
 export const FACADE_DIALOG_CONTROL_BORDER = registerColor('facadeDialog.controlBorder',
 	{ dark: transparent(foreground, 0.2), light: transparent(foreground, 0.2), hcDark: contrastBorder, hcLight: contrastBorder },

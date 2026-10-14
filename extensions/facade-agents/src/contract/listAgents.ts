@@ -19,12 +19,12 @@ const STATES: readonly AgentState[] = ['starting', 'running', 'stopping', 'ended
  * fetched; and its task. Not a guess at what it is doing: what it has not fetched, only.
  */
 function mailboxText(mailbox: Mailbox, now: number): string {
-	const unread = mailbox.unread.map(message => `${messageRef(message.id)} (${message.from}, ${Math.max(0, Math.floor((now - message.time) / 60_000))} min)`);
+	const unread = mailbox.unread.map(message => `${messageRef(message.id)} (from ${message.from}, ${Math.max(0, Math.floor((now - message.time) / 60_000))} min ago)`);
 	return [
-		unread.length ? `${unread.length + mailbox.more} unread: ${unread.join(', ')}${mailbox.more ? `, and ${mailbox.more} more` : ''}` : 'nothing unread',
+		unread.length ? `${unread.length + mailbox.more} unread: ${unread.join(', ')}${mailbox.more ? `, and ${mailbox.more} more` : ''}` : 'no unread messages',
 		`${mailbox.fetched} fetched`,
-		...(mailbox.lastFetched !== undefined ? [`last fetch ${clockOf(mailbox.lastFetched)}`] : []),
-		...(mailbox.task ? [`task ${messageRef(mailbox.task.id)} ${mailbox.task.state === 'delivered' ? 'fetched' : mailbox.task.state === 'returned' ? 'not fetched before it ended' : 'not fetched yet'}`] : [])
+		...(mailbox.lastFetched !== undefined ? [`last fetched at ${clockOf(mailbox.lastFetched)}`] : []),
+		...(mailbox.task ? [`task ${messageRef(mailbox.task.id)} ${mailbox.task.state === 'delivered' ? 'fetched' : mailbox.task.state === 'returned' ? 'returned without being fetched before the run ended' : 'not yet fetched'}`] : [])
 	].join('; ');
 }
 
@@ -35,7 +35,7 @@ export function endText(facade: Facade, end: End): string {
 
 /** A model or an effort as the model reads it: as asked for, the CLI's own where none was, unknown where it was left out. */
 function asked(value: string | undefined, ignored: boolean, what: string): string {
-	return ignored ? `${what} unknown (${value} not applied)` : value ?? `its own ${what}`;
+	return ignored ? `${what} unknown (${value} not applied)` : value ?? `CLI default ${what}`;
 }
 
 /**
@@ -49,8 +49,8 @@ export function factsText(facade: Facade, facts: AgentFacts): string {
 		asked(facts.model, facts.ignored.includes('model'), 'model'),
 		asked(facts.effort, facts.ignored.includes('effort'), 'effort'),
 		`YOLO ${facts.yolo ? 'on' : 'off'}, ${sandboxText(facts.sandbox)}`,
-		...facts.state === 'ended' ? [] : [!facts.integration ? 'no Facade tools' : facts.connected ? 'connected' : facts.state === 'starting' ? 'not connected yet' : 'not connected: its MCP server is gone'],
-		`in ${facts.folder}`,
+		...facts.state === 'ended' ? [] : [!facts.integration ? 'Facade tools not configured' : facts.connected ? 'connected to Facade' : facts.state === 'starting' ? 'not yet connected to Facade' : 'disconnected from Facade: its MCP server is gone'],
+		`folder ${facts.folder}`,
 		facts.taskMessage !== undefined ? `task ${messageRef(facts.taskMessage)}` : 'no task'
 	].join(', ');
 }
@@ -58,15 +58,15 @@ export function factsText(facade: Facade, facts: AgentFacts): string {
 /** One line of `list_agents`, as the model reads it; `self` is the caller's number, none for the person. */
 function line(facade: Facade, row: AgentFacts, self: number | undefined, now: number): string {
 	const state = row.end ? `ended at ${timeOfDay(row.end.time)} (${endText(facade, row.end)}${row.end.exitCode !== undefined ? `, exit code ${row.end.exitCode}` : ''})` : row.state;
-	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  by ${facade.whoIs(row.creator)}  tree ${agentRef(row.root)}  ${state}  ${row.outsideGit ? `folder ${row.folder} (in no Git repository)` : `worktree ${row.worktree}`}${setupText(row.setup)}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}${row.mailbox ? `  mailbox: ${mailboxText(row.mailbox, now)}` : ''}`;
+	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  creator ${facade.whoIs(row.creator)}  tree ${agentRef(row.root)}  ${state}  ${row.outsideGit ? `folder ${row.folder} (not a Git repository)` : `worktree ${row.worktree}`}${setupText(row.setup)}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}${row.mailbox ? `  mailbox: ${mailboxText(row.mailbox, now)}` : ''}`;
 }
 
 /** How the setup of an agent's new worktree went, as its row says it, where one ran or should have (O11). */
 function setupText(setup: AgentFacts['setup']): string {
 	switch (setup) {
-		case 'succeeded': return ', its setup succeeded';
-		case 'submitted': return ', its setup sent - whether it finished is not known';
-		case 'invalid': return ', its setup file unreadable - none ran';
+		case 'succeeded': return ', setup succeeded';
+		case 'submitted': return ', setup submitted; completion unknown';
+		case 'invalid': return ', setup file unreadable; setup did not run';
 		default: return '';
 	}
 }
@@ -79,8 +79,8 @@ function summary(rows: readonly AgentFacts[]): string {
 
 /** A CLI an agent can start, as the model reads it: what its launch takes. */
 function cliLine(cli: StartableCli): string {
-	const takes = [cli.integration ? 'Facade tools' : '', cli.task ? 'a task' : '', cli.model ? 'a model' : '', cli.effort ? 'an effort' : ''].filter(Boolean);
-	return `${cli.id}${cli.custom ? ' (custom)' : ` (${cli.displayName})`}: takes ${takes.length ? takes.join(', ') : 'none of Facade tools, a task, a model or an effort'}`;
+	const takes = [cli.integration ? 'Facade tools' : '', cli.task ? 'task' : '', cli.model ? 'model' : '', cli.effort ? 'effort' : ''].filter(Boolean);
+	return `${cli.id}${cli.custom ? ' (custom)' : ` (${cli.displayName})`}: supports ${takes.length ? takes.join(', ') : 'none of Facade tools, task, model, or effort'}`;
 }
 
 /**
@@ -93,11 +93,11 @@ export const listAgentsTool: ContractTool = {
 	definition: {
 		name: 'list_agents',
 		title: 'List agents',
-		description: 'Lists agents: you, the agent that started you, and the agents you started, those that ended too - with all, every agent you reach: every agent of this window with your YOLO on, your own tree with it off. First who you are and how many there are in each state, then each with its name and number, as @name #a7; who started it, an agent or @human, and its tree; its state - starting, running, stopping, or ended, how, by whom and with what exit code; its CLI, model and effort; its YOLO and sandbox; whether it is connected to Facade; its worktree; its task\'s message; and its mailbox: the messages it has not fetched, how many it has fetched, when it last fetched, and whether it has fetched its task. Then the CLIs you can start, and what each takes. Whether a running agent works or waits is not Facade\'s to know: its worktree and its terminal show it - and agents report through messages.',
+		description: 'Inspect runs, delivery, and available CLIs. Defaults to you, your creator, and immediate children, including ended runs. all:true includes every reachable run: this window with YOLO on, your tree with YOLO off. Includes identity/tree, lifecycle/exit, CLI/options, YOLO/sandbox, connection, location/setup, timestamps, and mailbox history. Running does not prove activity or completion; check reports and work evidence.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				all: { type: 'boolean', description: 'Every agent you reach.' }
+				all: { type: 'boolean', default: false, description: 'Include every reachable run.' }
 			},
 			additionalProperties: false
 		}
@@ -108,12 +108,12 @@ export const listAgentsTool: ContractTool = {
 		const listed = facade.listAgents(caller, all);
 		const now = Date.now();
 		const who = caller.id === undefined
-			? 'You are @human, and reach every agent.'
-			: `You are ${describe(caller)}, YOLO ${listed.yolo ? 'on: you reach every agent of this window' : 'off: you reach your own tree'}.`;
+			? 'You are @human and can reach every agent in this window.'
+			: `You are ${describe(caller)}. YOLO ${listed.yolo ? 'on: you can reach every agent in this window' : 'off: you can reach only your own tree'}.`;
 		return {
 			text: [
 				who,
-				listed.agents.length ? summary(listed.agents) : 'No agents.',
+				listed.agents.length ? summary(listed.agents) : 'No agents in this selection.',
 				...listed.agents.map(row => line(facade, row, caller.id, now)),
 				`CLIs you can start: ${listed.clis.length ? listed.clis.map(cliLine).join('; ') : 'none on this machine'}.`
 			].join('\n'),

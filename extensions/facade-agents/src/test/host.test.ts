@@ -86,7 +86,7 @@ suite('Host: the window\'s state, beside the record', () => {
 		const notAnObject = new JsonFileState(file).unreadable;
 		fs.writeFileSync(file, '{"pipe":"a1"}');
 
-		assert.deepStrictEqual({ missing, broken: typeof broken, notAnObject, read: new JsonFileState(file).unreadable }, { missing: undefined, broken: 'string', notAnObject: 'it holds no JSON object', read: undefined });
+		assert.deepStrictEqual({ missing, broken: typeof broken, notAnObject, read: new JsonFileState(file).unreadable }, { missing: undefined, broken: 'string', notAnObject: 'it does not contain a JSON object', read: undefined });
 	});
 });
 
@@ -220,7 +220,7 @@ suite('Host: git\'s records, read with git', function () {
 		});
 	});
 
-	test('the worktree a folder is in, its top level, written as the folder is - through a link, the link: the main checkout\'s, or a worktree git added, from a folder inside it; none in its git directory, in a bare repository or in no repository; git failing otherwise says why (O5 step 1; OR-09)', async () => {
+	test('the worktree a folder is in, its top level, written as the folder is - through a link, the link: the main checkout\'s, or a worktree git added, from a folder inside it; none in its git directory, in a bare repository or in no repository; git failing otherwise says why (O5; OR-09)', async () => {
 		const lab = path.join(temp.dir, 'lab');
 		const added = path.join(temp.dir, 'lab-lint');
 		const bare = path.join(temp.dir, 'lab.git');
@@ -363,9 +363,9 @@ suite('Host: git\'s records, read with git', function () {
 			noGit: /ENOENT/.test(await outcomeOf(whyNotBranchNameIn(path.join(temp.dir, 'no-git'), lab, 'clamp')))
 		}, {
 			fine: undefined,
-			notAName: 'git does not take "a..b" for a branch\'s name',
-			under: 'the branch feature is there already, and git cannot have a branch and others under its name both',
-			over: 'the branch fix/login is there already, and git cannot have a branch and others under its name both',
+			notAName: 'Git rejects "a..b" as a branch name',
+			under: 'branch \'feature\' already exists; Git cannot use the same name for both a branch and a branch-name prefix',
+			over: 'branch \'fix/login\' already exists; Git cannot use the same name for both a branch and a branch-name prefix',
 			noGit: true
 		});
 	});

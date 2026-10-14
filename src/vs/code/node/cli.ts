@@ -96,7 +96,7 @@ export async function main(argv: string[]): Promise<void> {
 	// are left out of the help then, and used anyway, they say so rather than open what is hidden.
 	const aiFeaturesOff = areAIFeaturesOff(readUserSettings(args));
 	if (aiFeaturesOff && (args.chat || args.agents)) {
-		console.error(`AI features are off ("chat.disableAIFeatures" in your settings). Set it to false to use ${args.chat ? `'${product.applicationName} chat'` : '--agents'}.`);
+		console.error(`AI features are disabled ("chat.disableAIFeatures" in your settings). Set it to false to use ${args.chat ? `'${product.applicationName} chat'` : '--agents'}.`);
 		return;
 	}
 

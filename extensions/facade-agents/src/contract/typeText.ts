@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { FacadeError } from '../core/errors';
-import { ANSWER_DELAY_MS, MOST_TYPED } from '../core/screens';
+import { ANSWER_DELAY_MS, ANSWER_LINES, MOST_TYPED } from '../core/screens';
 import { describe } from '../record/events';
 import { Args } from './args';
 import { screenAfter } from './readScreen';
@@ -17,14 +17,14 @@ const NOT_TYPED = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 export const typeTextTool: ContractTool = {
 	definition: {
 		name: 'type_text',
-		title: 'Type into an agent\'s terminal',
-		description: `Types one line into another agent's terminal, as one paste, as the person types into it - its CLI cannot tell the difference - and presses Enter after it with enter. It is for that CLI's own interface: answering what it asks, filling in what it wants, running its own commands such as /compact. What you type, its model takes as the person's words, and no message history has it. Up to ${MOST_TYPED} characters with no line break or control key in it: press keys with press_keys; give anything longer in a file, and type its path. It goes in its turn, after what Facade types there before, and waits while the person is typing there - for Enter, or ten seconds without a key. It answers with what went in and the bottom lines of the screen ${ANSWER_DELAY_MS / 1000} seconds on: read them before you type again. Nothing is typed twice: where it is not known what went in, read the screen first.`,
+		title: 'Type text into an agent\'s terminal',
+		description: `Paste one line; enter:true submits it in the same queued operation. Use for CLI prompts or commands such as /compact; use send_message for agent work. Input appears as human input and is not in message history. Waits behind Facade input and human typing until submission, cancellation, or 10 idle seconds; may append to a draft. Returns actual writes and normally ${ANSWER_LINES} screen lines after ${ANSWER_DELAY_MS / 1000} seconds. Inspect the returned screen before more input; after an unknown outcome, call read_screen first.`,
 		inputSchema: {
 			type: 'object',
 			properties: {
-				agent: { type: 'string', description: 'The agent: its number, as #a7, or its @name, where only one agent that has not ended has it. It may be you.' },
-				text: { type: 'string', description: `One line of plain text, up to ${MOST_TYPED} characters, typed as it is, spaces at its ends too.` },
-				enter: { type: 'boolean', description: 'Press Enter after it, a fixed pause after the paste: the time its CLI is set to be given to take a paste in, which says nothing of whether it did. Without it, the text stays in the input.' }
+				agent: { type: 'string', description: 'Run ID (#a7) or unique active @name. You may target yourself; Escape or Ctrl+C can interrupt this caller.' },
+				text: { type: 'string', description: `One nonempty line, at most ${MOST_TYPED} Unicode code points; spaces are preserved. No newlines, tabs, Escape, or other control characters. Use press_keys for keys or a file path for longer content.` },
+				enter: { type: 'boolean', default: false, description: 'Send Enter after the CLI\'s configured paste delay. This does not guarantee acceptance. Default false leaves the text in the input.' }
 			},
 			required: ['agent', 'text'],
 			additionalProperties: false
@@ -35,16 +35,16 @@ export const typeTextTool: ContractTool = {
 		const agent = args.text('agent');
 		const text = args.exactText('text');
 		if ([...text].length > MOST_TYPED) {
-			throw new FacadeError('INVALID', `text is ${[...text].length} characters, past the ${MOST_TYPED} type_text types: give more in a file, and type its path.`);
+			throw new FacadeError('INVALID', `Argument 'text' contains ${[...text].length} Unicode code points; the limit is ${MOST_TYPED}. Put longer content in a file and type its path. No text was pasted.`);
 		}
 		if (NOT_TYPED.test(text)) {
-			throw new FacadeError('INVALID', 'text has a line break, Escape, a tab or another control character in it: type one line with type_text, and press Enter, Escape, Tab and the like with press_keys. Nothing was typed.');
+			throw new FacadeError('INVALID', 'Argument \'text\' must be one line with no control characters. Use press_keys for Enter, Escape, Tab, or other keys. No text was pasted.');
 		}
 		const enter = args.boolean('enter') ?? false;
 		const result = await facade.screens.type(caller, agent, text, enter);
 		const chars = [...text].length;
-		const typed = `Typed ${chars} ${chars === 1 ? 'character' : 'characters'} into ${describe(result)}'s terminal, as one paste${result.effect.entered ? ', and pressed Enter' : ', without Enter'}.`;
+		const typed = `Pasted ${chars} ${chars === 1 ? 'character' : 'characters'} into ${describe(result)}'s terminal${result.effect.entered ? ' and sent Enter' : ' without Enter'}.`;
 		// What was sent, as the text says it: the line and its count of characters (D4)
-		return { text: `${typed} ${screenAfter(result, facade.cliName(facade.agent(result.id)?.cli ?? ''))}`, data: { ...result, text, chars } };
+		return { text: `${typed}\n${screenAfter(result, facade.cliName(facade.agent(result.id)?.cli ?? ''))}`, data: { ...result, text, chars } };
 	}
 };

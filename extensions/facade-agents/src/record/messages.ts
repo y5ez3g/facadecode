@@ -462,7 +462,7 @@ export class MessageRecord {
 		this.ledger.append({ type: 'message.sent', id, ...fields, ...place, length: text.length });
 		const sent = this.state.messages.get(id);
 		if (!sent) {
-			throw new Error(`The ledger did not record #m${id}.`);
+			throw new Error(`Failed to record message #m${id} in the ledger.`);
 		}
 		return sent;
 	}

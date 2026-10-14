@@ -23,7 +23,7 @@ export function readSeconds(setting: string, value: unknown, fallbackMs: number)
 	if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= MAX_TIME_S) {
 		return { ms: value * 1000 };
 	}
-	return { ms: fallbackMs, wrong: `${setting} is ${shown(value)}, which is no whole number of seconds from 1 to ${MAX_TIME_S}: ${fallbackMs / 1000} s, its default, is used` };
+	return { ms: fallbackMs, wrong: `${setting} must be an integer from 1 to ${MAX_TIME_S} seconds; received ${shown(value)}. Using the default of ${fallbackMs / 1000} seconds` };
 }
 
 /**
@@ -38,18 +38,18 @@ export function readCliConfig(cli: AgentCli, read: (name: string) => unknown): C
 	const wrong: string[] = [];
 	const enabled = read('enabled');
 	if (enabled !== undefined && typeof enabled !== 'boolean') {
-		wrong.push(`${section}.enabled is ${shown(enabled)}, which is neither true nor false`);
+		wrong.push(`${section}.enabled must be true or false; received ${shown(enabled)}`);
 	}
 	const path = read('path');
 	if (path !== undefined && typeof path !== 'string') {
-		wrong.push(`${section}.path is ${shown(path)}, which is no text`);
+		wrong.push(`${section}.path must be a string; received ${shown(path)}`);
 	} else if (typeof path === 'string' && path !== '' && !path.trim()) {
 		// Not PATH's in its place: a path set is the file it names (X-59)
-		wrong.push(`${section}.path is ${shown(path)}, only spaces, which name no file: give the file, or leave it empty for the ${cli.command} PATH finds`);
+		wrong.push(`${section}.path contains only spaces (${shown(path)}). Provide an executable path, or use an empty string to find ${cli.command} on PATH`);
 	}
 	const launch = read('launch');
 	if (launch !== undefined && !isJsonObject(launch)) {
-		wrong.push(`${section}.launch is ${shown(launch)}, which is no object`);
+		wrong.push(`${section}.launch must be an object; received ${shown(launch)}`);
 	}
 	return {
 		path: typeof path === 'string' ? path.trim() : cli.defaults.path,
@@ -67,10 +67,10 @@ export function whyNotInstalled(cli: AgentCli, config: CliConfig, onPath = 'this
 	return [
 		...config.wrong ?? [],
 		cli.custom
-			? `${cli.setting}.path is ${JSON.stringify(config.path)}, which is no file, nor a command on ${onPath}`
+			? `${cli.setting}.path is ${JSON.stringify(config.path)}; it resolves to neither a file nor a command on ${onPath}`
 			: config.path
-				? `${cli.setting}.path is ${JSON.stringify(config.path)}, which is no file, nor a command on ${onPath}`
-				: `${cli.command} is not on ${onPath}, and ${cli.setting}.path names no other`
+				? `${cli.setting}.path is ${JSON.stringify(config.path)}; it resolves to neither a file nor a command on ${onPath}`
+				: `${cli.command} was not found on ${onPath}, and ${cli.setting}.path does not specify an alternative`
 	].join('; ');
 }
 
@@ -96,7 +96,7 @@ export function launchOf(cli: AgentCli, set: JsonObject, setting: string, wrong:
 	const parts = ['arguments', 'environment', 'trust', ...defaults.settings ? ['settings'] : [], 'enterDelay', 'taskDelay', 'unattended'];
 	for (const key of Object.keys(set)) {
 		if (!parts.includes(key)) {
-			wrong.push(`${setting} has ${key}, which ${cli.displayName}'s launch does not have: it has ${parts.join(', ')}`);
+			wrong.push(`Unknown field '${key}' in ${setting}. ${cli.displayName}'s launch accepts: ${parts.join(', ')}`);
 		}
 	}
 	// Part by part, in the order the person reads them.
@@ -122,24 +122,24 @@ export function launchOf(cli: AgentCli, set: JsonObject, setting: string, wrong:
 function unattendedOf(cli: AgentCli, set: unknown, setting: string, wrong: string[]): UnattendedLaunch {
 	const defaults = cli.defaults.launch.unattended;
 	if (set !== undefined && !isJsonObject(set)) {
-		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+		wrong.push(`${setting} must be an object; received ${shown(set)}`);
 	}
 	const own = isJsonObject(set) ? set : {};
 	const parts = ['arguments', 'environment', ...cli.defaults.launch.settings ? ['settings'] : []];
 	for (const key of Object.keys(own)) {
 		if (!parts.includes(key)) {
-			wrong.push(`${setting} has ${key}, which its unattended launch does not have: it has ${parts.join(', ')}`);
+			wrong.push(`Unknown field '${key}' in ${setting}. The unattended launch accepts: ${parts.join(', ')}`);
 		}
 	}
 	const known = argumentGroupsOf(cli);
 	const groups: { [Group in ArgGroup]?: readonly string[] } = { ...defaults?.arguments };
 	for (const [group, value] of Object.entries(objectOf(own.arguments, `${setting}.arguments`, wrong))) {
 		if (!(known as readonly string[]).includes(group)) {
-			wrong.push(`${setting}.arguments has ${group}, which is no group of ${cli.displayName}'s arguments: it has ${known.join(', ')}`);
+			wrong.push(`Unknown argument group '${group}' in ${setting}.arguments. ${cli.displayName} accepts: ${known.join(', ')}`);
 		} else if (value === null || isStringArray(value)) {
 			groups[group as ArgGroup] = value ?? [];
 		} else {
-			wrong.push(`${setting}.arguments.${group} is ${shown(value)}, which is neither a list of text nor null`);
+			wrong.push(`${setting}.arguments.${group} must be an array of strings or null; received ${shown(value)}`);
 		}
 	}
 	const environment: { [name: string]: string | null } = { ...defaults?.environment };
@@ -147,7 +147,7 @@ function unattendedOf(cli: AgentCli, set: unknown, setting: string, wrong: strin
 		if (value === null || typeof value === 'string') {
 			environment[variableKey(environment, name)] = value;
 		} else {
-			wrong.push(`${setting}.environment.${name} is ${shown(value)}, which is neither text nor null`);
+			wrong.push(`${setting}.environment.${name} must be a string or null; received ${shown(value)}`);
 		}
 	}
 	const settings = isJsonObject(own.settings) ? overlaid(defaults?.settings ?? {}, own.settings) : defaults?.settings;
@@ -158,7 +158,7 @@ function unattendedOf(cli: AgentCli, set: unknown, setting: string, wrong: strin
 /** `value`, a part of the person's that is an object, where they set one: none where they did not, and where it is no object - said in `wrong`. */
 function objectOf(value: unknown, setting: string, wrong: string[]): JsonObject {
 	if (value !== undefined && !isJsonObject(value)) {
-		wrong.push(`${setting} is ${shown(value)}, which is no object`);
+		wrong.push(`${setting} must be an object; received ${shown(value)}`);
 	}
 	return isJsonObject(value) ? value : {};
 }
@@ -178,19 +178,19 @@ function argumentsOf(cli: AgentCli, set: unknown, setting: string, wrong: string
 	const defaults = cli.defaults.launch.arguments;
 	const known = argumentGroupsOf(cli);
 	if (set !== undefined && !isJsonObject(set)) {
-		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+		wrong.push(`${setting} must be an object; received ${shown(set)}`);
 	}
 	const own = isJsonObject(set) ? set : {};
 	for (const key of Object.keys(own)) {
 		if (!(known as readonly string[]).includes(key)) {
-			wrong.push(`${setting} has ${key}, which is no group of ${cli.displayName}'s arguments: it has ${known.join(', ')}`);
+			wrong.push(`Unknown argument group '${key}' in ${setting}. ${cli.displayName} accepts: ${known.join(', ')}`);
 		}
 	}
 	const groups: { [Group in ArgGroup]?: readonly string[] } = {};
 	for (const group of known) {
 		const value = own[group];
 		if (value !== undefined && value !== null && !isStringArray(value)) {
-			wrong.push(`${setting}.${group} is ${shown(value)}, which is neither a list of text nor null`);
+			wrong.push(`${setting}.${group} must be an array of strings or null; received ${shown(value)}`);
 		}
 		const args = value === null ? undefined : isStringArray(value) ? value : defaults[group];
 		if (args) {
@@ -206,7 +206,7 @@ function argumentsOf(cli: AgentCli, set: unknown, setting: string, wrong: string
  */
 function variablesOf(defaults: { readonly [name: string]: string }, set: unknown, setting: string, wrong: string[]): { readonly [name: string]: string } {
 	if (set !== undefined && !isJsonObject(set)) {
-		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+		wrong.push(`${setting} must be an object; received ${shown(set)}`);
 	}
 	const variables: { [name: string]: string } = { ...defaults };
 	for (const [name, value] of Object.entries(isJsonObject(set) ? set : {})) {
@@ -215,7 +215,7 @@ function variablesOf(defaults: { readonly [name: string]: string }, set: unknown
 		} else if (typeof value === 'string') {
 			variables[variableKey(variables, name)] = value;
 		} else {
-			wrong.push(`${setting}.${name} is ${shown(value)}, which is neither text nor null`);
+			wrong.push(`${setting}.${name} must be a string or null; received ${shown(value)}`);
 		}
 	}
 	return variables;
@@ -238,37 +238,37 @@ function trustOf(defaults: TrustConfig | undefined, set: unknown, setting: strin
 		return defaults;
 	}
 	if (!isJsonObject(set)) {
-		wrong.push(`${setting} is ${shown(set)}, which is neither an object nor null`);
+		wrong.push(`${setting} must be an object or null; received ${shown(set)}`);
 		return defaults;
 	}
 	const before = wrong.length;
 	for (const key of Object.keys(set)) {
 		if (key !== 'arguments' && key !== 'file' && key !== 'merge') {
-			wrong.push(`${setting} has ${key}, which a trust does not have: it has arguments, or a file and what to merge into it`);
+			wrong.push(`Unknown field '${key}' in ${setting}. Configure trust with arguments, or with file and merge`);
 		}
 	}
 	const { arguments: args } = set;
 	if (args !== undefined) {
 		if (!isStringArray(args)) {
-			wrong.push(`${setting}.arguments is ${shown(args)}, which is no list of text`);
+			wrong.push(`${setting}.arguments must be an array of strings; received ${shown(args)}`);
 			return defaults;
 		}
 		if (set.file !== undefined || set.merge !== undefined) {
-			wrong.push(`${setting} has arguments and a file: a trust is given one way or the other`);
+			wrong.push(`${setting} cannot use both arguments and a file. Choose one trust mechanism`);
 			return defaults;
 		}
 		return wrong.length === before ? { arguments: args } : defaults;
 	}
 	if (set.file !== undefined && !(typeof set.file === 'string' && set.file.trim())) {
-		wrong.push(`${setting}.file is ${shown(set.file)}, which names no file`);
+		wrong.push(`${setting}.file must specify a file path; received ${shown(set.file)}`);
 	}
 	if (set.merge !== undefined && !isJsonObject(set.merge)) {
-		wrong.push(`${setting}.merge is ${shown(set.merge)}, which is no object`);
+		wrong.push(`${setting}.merge must be an object; received ${shown(set.merge)}`);
 	}
 	const file = typeof set.file === 'string' && set.file.trim() ? set.file.trim() : defaults?.file;
 	const merge = isJsonObject(set.merge) ? set.merge : defaults?.merge;
 	if (wrong.length === before && (file === undefined || merge === undefined)) {
-		wrong.push(`${setting} has ${file === undefined ? 'what to merge, and no file to merge it into' : 'a file, and nothing to merge into it'}`);
+		wrong.push(`${setting} has ${file === undefined ? 'merge without file; specify the target file' : 'file without merge; specify the entry to merge'}`);
 	}
 	return wrong.length === before && file !== undefined && merge !== undefined ? { file, merge } : defaults;
 }
@@ -276,7 +276,7 @@ function trustOf(defaults: TrustConfig | undefined, set: unknown, setting: strin
 /** Claude Code's settings: the defaults with the person's over them, key by key. */
 function settingsOf(defaults: JsonObject, set: unknown, setting: string, wrong: string[]): JsonObject {
 	if (set !== undefined && !isJsonObject(set)) {
-		wrong.push(`${setting} is ${shown(set)}, which is no object`);
+		wrong.push(`${setting} must be an object; received ${shown(set)}`);
 	}
 	return mergedObject(defaults, set);
 }
@@ -287,7 +287,7 @@ function delayOf(byDefault: number, set: unknown, setting: string, wrong: string
 		return byDefault;
 	}
 	if (typeof set !== 'number' || !Number.isInteger(set) || set < 0 || set > MAX_DELAY_MS) {
-		wrong.push(`${setting} is ${shown(set)}, which is no whole number of milliseconds from 0 to ${MAX_DELAY_MS}`);
+		wrong.push(`${setting} must be an integer from 0 to ${MAX_DELAY_MS} milliseconds; received ${shown(set)}`);
 		return byDefault;
 	}
 	return set;

@@ -560,7 +560,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		}
 		this._recordOpenedFor(instance, folder, key);
 		this._hold(key, [{ instance, group: NO_GROUP, index: -1, persisted: config.forcePersist, active: false }]);
-		this._logService.trace(`[folderTerminals] opened a terminal for ${key}`);
+		this._logService.trace(`[folderTerminals] Opened terminal for ${key}`);
 
 		// On the folder already: up now, unless its editors are still being put up or its terminals are
 		// coming back, which bring it with them
@@ -758,7 +758,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 		for (const [key, entries] of parking) {
 			this._hold(key, entries);
-			this._logService.trace(`[folderTerminals] parked ${entries.length} terminal(s) for ${key === WINDOW ? 'the window' : key}`);
+			this._logService.trace(`[folderTerminals] Parked ${entries.length} terminal(s) for ${key === WINDOW ? 'the window' : key}`);
 		}
 
 		for (const instance of leaving) {
@@ -893,7 +893,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			restored += parked.length;
 		}
 
-		this._logService.trace(`[folderTerminals] parked ${restored} terminal(s) again`);
+		this._logService.trace(`[folderTerminals] Re-parked ${restored} terminal(s)`);
 
 		// A folder that left the workspace while the window was closed takes its terminals with it, as
 		// one leaving now does, and so does a row whose folder is gone from disk
@@ -1035,7 +1035,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 						activation: EditorActivation.PRESERVE
 					});
 				} catch (error) {
-					this._logService.error(`[folderTerminals] could not reopen a terminal for ${key}`, error);
+					this._logService.error(`[folderTerminals] Could not reopen a terminal for ${key}`, error);
 					failed = true;
 				}
 
@@ -1049,7 +1049,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 					if (!ended) {
 						this._terminalService.moveToBackground(entry.instance);
 					}
-					this._logService.trace(`[folderTerminals] switch during restore, ${queue.length} terminal(s) still parked for ${key}`);
+					this._logService.trace(`[folderTerminals] Folder switch during restore; ${queue.length} terminal(s) still parked for ${key}`);
 					movedOn = true;
 					return;
 				}
@@ -1059,7 +1059,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 				// next reload loses it, the shell in it with it
 				if (!ended && !this._placeOf(entry.instance)) {
 					if (!failed) {
-						this._logService.error(`[folderTerminals] a terminal for ${key} did not come back`);
+						this._logService.error(`[folderTerminals] A terminal for ${key} was not restored`);
 					}
 					this._terminalService.moveToBackground(entry.instance);
 					return;
@@ -1073,7 +1073,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 				}
 			}
 
-			this._logService.trace(`[folderTerminals] reopened ${reopened} terminal(s) for ${key}`);
+			this._logService.trace(`[folderTerminals] Restored ${reopened} terminal(s) for ${key}`);
 		} finally {
 			// Only this record: one the folder going has dropped may have been followed by a new one
 			if (!queue.length && this._parked.get(key) === queue) {
@@ -1148,10 +1148,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	private _pruneRemovedFolders(): void {
 		const present = new Set(this._contextService.getWorkspace().folders.map(folder => this._key(folder.uri)));
 
-		// Only a folder that left through Remove Folder stops what runs in it; otherwise it moves to the panel (W9.6)
+		// Only a folder that left through Remove Folder stops what runs in it; otherwise it moves to the panel (W9.6).
+		// One that left for its worktree's deletion keeps it where it is, for the deletion to stop (WT-8, step 6).
 		const known = this._known;
 		this._known = this._foldersByKey();
 		const agreed = new Set([...known].filter(([key, uri]) => !present.has(key) && this._workspaceBarService.isRemoving(uri)).map(([key]) => key));
+		const deleting = new Set([...known].filter(([key, uri]) => !present.has(key) && this._workspaceBarService.isDeleting(uri)).map(([key]) => key));
 		const stops = (key: string, members?: ReadonlySet<string>) => agreed.has(key) || (!!members && [...members].some(member => agreed.has(member)));
 		const kept: ITerminalInstance[] = [];
 
@@ -1176,7 +1178,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			if (present.has(key)) {
 				this._rows.delete(key);
 			} else if (row.members && ![...row.members].some(member => present.has(member))) {
-				this._logService.trace(`[folderTerminals] repository removed, ${stops(key, row.members) ? 'disposing' : 'keeping'} ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
+				this._logService.trace(`[folderTerminals] Repository removed, ${stops(key, row.members) ? 'disposing' : 'keeping'} ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
 				if (stops(key, row.members)) {
 					this._endHeld(key, 'folderRemoved');
 				} else {
@@ -1187,11 +1189,11 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 		// Those on their way with the window are none of the folders'
 		for (const [key, parked] of [...this._parked]) {
-			if (key === WINDOW || present.has(key) || this._rows.has(key)) {
+			if (key === WINDOW || present.has(key) || this._rows.has(key) || deleting.has(key)) {
 				continue;
 			}
 
-			this._logService.trace(`[folderTerminals] folder removed, ${stops(key) ? 'disposing' : 'keeping'} ${parked.length} parked terminal(s)`);
+			this._logService.trace(`[folderTerminals] Folder removed, ${stops(key) ? 'disposing' : 'keeping'} ${parked.length} parked terminal(s)`);
 			if (stops(key)) {
 				this._endHeld(key, 'folderRemoved');
 			} else {
@@ -1205,8 +1207,10 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		for (const [instance, opened] of [...this._openedFor]) {
 			if (present.has(opened.key)) {
 				opened.joined = true;
+			} else if (deleting.has(opened.key)) {
+				continue;
 			} else if (opened.joined || (opened.members && ![...opened.members].some(member => present.has(member)))) {
-				this._logService.trace(`[folderTerminals] folder removed, ${stops(opened.key, opened.members) ? 'disposing' : 'keeping'} a terminal opened for ${opened.key}`);
+				this._logService.trace(`[folderTerminals] Folder removed, ${stops(opened.key, opened.members) ? 'disposing' : 'keeping'} terminal opened for ${opened.key}`);
 				if (stops(opened.key, opened.members)) {
 					this._endOpenedFor(instance, 'folderRemoved');
 				} else {
@@ -1216,7 +1220,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		}
 
 		if (kept.length) {
-			this._sayKept([...known].filter(([key]) => !present.has(key) && !agreed.has(key)).map(([, uri]) => uri), kept);
+			this._sayKept([...known].filter(([key]) => !present.has(key) && !agreed.has(key) && !deleting.has(key)).map(([, uri]) => uri), kept);
 		}
 	}
 
@@ -1284,7 +1288,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 		// Unless it has ended meanwhile
 		if (this._openedFor.get(instance) === opened) {
-			this._logService.trace(`[folderTerminals] worktree gone from disk, disposing a terminal opened for ${opened.key}`);
+			this._logService.trace(`[folderTerminals] Worktree no longer on disk; disposing terminal opened for ${opened.key}`);
 			this._endOpenedFor(instance, 'folderGone');
 		}
 	}
@@ -1343,7 +1347,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 		// Unless it has joined the workspace, ended, or been read again meanwhile
 		if (this._rows.get(key)?.uri === uri && !this._membersOf(uri)) {
-			this._logService.trace(`[folderTerminals] row gone from disk, disposing ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
+			this._logService.trace(`[folderTerminals] Workspace row no longer on disk; disposing ${this._parked.get(key)?.length ?? 0} terminal(s) held for ${key}`);
 			this._endHeld(key, 'folderGone');
 		}
 	}

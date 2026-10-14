@@ -17,7 +17,9 @@ import { callerOf, fakeWorld } from './fakes';
 import { tempDir } from './util';
 
 /** What every result of read_messages ends with. */
-const PRINT = 'Print those new to you before you act on them, for the person, who watches your screen: one of 500 characters or fewer as it is, with its number and its sender; a longer one as its number, its sender and a sentence or two of what it says.';
+const PRINT = 'Show messages new to you in your terminal before acting. Include each ID and sender. Print messages of 500 characters or fewer verbatim; summarize longer messages in 1-2 sentences.';
+const STATES = 'Delivery states describe the messages before this fetch. delivered means fetched, not acted on or completed.';
+const REPLIES = 'Agent replies trigger your mailbox doorbell. Continue independent work, or end this turn if you need a reply to proceed. Do not poll or sleep for it.';
 
 suite('Contract: messages', () => {
 
@@ -81,13 +83,13 @@ suite('Contract: messages', () => {
 		await settled(starting);
 
 		assert.deepStrictEqual({ one, two, three }, {
-			one: { text: 'Sent #m2 to @lint #a2. It has not been fetched yet.\nA reply will notify you through your mailbox.', data: { messages: [{ id: 2, to: '@lint #a2' }] } },
+			one: { text: `Sent #m2 to @lint #a2. Not yet fetched.\n${REPLIES}`, data: { messages: [{ id: 2, to: '@lint #a2' }] } },
 			two: {
-				text: 'Sent #m3 to @lead #a1, #m4 to @human. #m3 has not been fetched yet.\nThe person is told of #m4, and the chat room keeps it: whether they read it, Facade cannot tell. They answer by typing in your terminal.\nA reply will notify you through your mailbox.',
+				text: `Sent #m3 to @lead #a1. Not yet fetched.\nSent #m4 to @human.\n@human was notified of #m4; the chat room keeps a copy. Facade does not track whether the person reads it. They can reply in your terminal.\n${REPLIES}`,
 				data: { messages: [{ id: 3, to: '@lead #a1' }, { id: 4, to: '@human' }] }
 			},
 			three: {
-				text: 'Sent #m6 to @quiet #a3, #m7 to @slow #a5. They have not been fetched yet.\n@quiet #a3 has its YOLO off, and you are not in its tree: it can reply to the person only, not to you.\n@slow #a5 is still starting: its doorbell rings once it runs.\nA reply will notify you through your mailbox.',
+				text: `Sent #m6 to @quiet #a3. Not yet fetched.\n@quiet #a3 has YOLO off and you are outside its tree. It cannot reply to you; it can contact @human.\nSent #m7 to @slow #a5. Not yet fetched.\n@slow #a5 is starting; the doorbell waits until the run is ready.\n${REPLIES}`,
 				data: { messages: [{ id: 6, to: '@quiet #a3', cannotReply: true }, { id: 7, to: '@slow #a5', starting: true }] }
 			}
 		});
@@ -97,7 +99,7 @@ suite('Contract: messages', () => {
 		world.recording.fails = message => message.to === HUMAN ? new Error('ENOSPC: no space left on device') : undefined;
 
 		assert.deepStrictEqual(await call(lint, 'send_message', { to: ['@lead', '@human'], text: 'Done.' }), {
-			text: '#m2 to @lead #a1 was sent; then the message to @human could not be recorded: ENOSPC: no space left on device. Do not send those again; send to the rest again once Facade can record.',
+			text: 'Recorded messages: #m2 to @lead #a1. Failed to record a message to @human: ENOSPC: no space left on device\nFurther effects are unknown. Do not resend the messages listed above; inspect the recorded state before sending again.',
 			isError: true,
 			data: { code: 'FAILED', outcome: 'unknown', sent: [{ id: 2, to: '@lead #a1' }] }
 		});
@@ -113,6 +115,7 @@ suite('Contract: messages', () => {
 		assert.deepStrictEqual({ text: fetched.text.split('\n'), again: again.text.split('\n'), none: (await call(lint, 'read_messages', {})).text }, {
 			text: [
 				'3 messages: 3 unread.',
+				STATES,
 				'',
 				`#m1 · from @lead #a1 to you · ${time(1)} · task · 5 characters · unread`,
 				'Lint.',
@@ -127,6 +130,7 @@ suite('Contract: messages', () => {
 			],
 			again: [
 				'1 message: 1 delivered.',
+				STATES,
 				'',
 				`#m2 · from @lead #a1 to you · ${time(2)} · 14 characters · delivered`,
 				'Lint the docs.',
@@ -144,9 +148,10 @@ suite('Contract: messages', () => {
 		const fetched = await call(lint, 'read_messages', {});
 		const file = path.join(temp.dir, 'workspace', 'messages', 'fetch-a2-1.txt');
 
-		assert.deepStrictEqual({ head: fetched.text.split('\n').slice(0, 5), data: JSON.parse(JSON.stringify(fetched.data)).file, file: fs.readFileSync(file, 'utf8').endsWith('\nShort.\n') }, {
+		assert.deepStrictEqual({ head: fetched.text.split('\n').slice(0, 6), data: JSON.parse(JSON.stringify(fetched.data)).file, file: fs.readFileSync(file, 'utf8').endsWith('\nShort.\n') }, {
 			head: [
-				`2 messages: 2 unread; 8,006 characters, in the file ${file}. All of it is in the file: read the whole file before you act on any of it.`,
+				`2 messages: 2 unread; 8,006 characters. Full message bodies: ${file}. Read the entire file before acting.`,
+				STATES,
 				'',
 				`#m2 · from @lead #a1 to you · ${clockOf(world.table.state.mail.messages.get(2)?.time ?? 0)} · 8,000 characters · unread`,
 				`#m3 · from @lead #a1 to you · ${clockOf(world.table.state.mail.messages.get(3)?.time ?? 0)} · 6 characters · unread`,
@@ -162,9 +167,9 @@ suite('Contract: messages', () => {
 		const again = await call(lint, 'read_messages', {});
 		await sleep(10);
 
-		assert.deepStrictEqual({ lost: lost.text.split('\n')[0], again: again.text.split('\n').slice(0, 3).map(line => line.replace(/\d\d:\d\d/g, 'hh:mm')), all: (await call(lint, 'read_messages', { all: true })).text.split('\n')[0] }, {
+		assert.deepStrictEqual({ lost: lost.text.split('\n')[0], again: again.text.split('\n').slice(0, 4).map(line => line.replace(/\d\d:\d\d/g, 'hh:mm')), all: (await call(lint, 'read_messages', { all: true })).text.split('\n')[0] }, {
 			lost: '1 message: 1 unread.',
-			again: ['1 message: 1 unread.', '', '#m1 · from @lead #a1 to you · hh:mm · task · 5 characters · unread'],
+			again: ['1 message: 1 unread.', STATES, '', '#m1 · from @lead #a1 to you · hh:mm · task · 5 characters · unread'],
 			all: '1 message: 1 delivered.'
 		});
 	});
@@ -184,18 +189,30 @@ suite('Contract: messages', () => {
 
 		assert.deepStrictEqual({ results, unread: world.table.state.mail.entries.get(1)?.state }, {
 			results: [
-				[true, 'INVALID', 'Give ids or all, not both: ids fetches messages by number, all every message sent to you.'],
-				[true, 'INVALID', '#a1 is an agent, not a message: ids takes a message\'s number, as #m42.'],
-				[true, 'INVALID', 'nothing is not a message\'s number: ids takes one as #m42.'],
-				[true, 'INVALID', 'ids must be a list of strings.'],
-				[true, 'INVALID', 'ids must have one at least, or be left out.'],
-				[true, 'INVALID', 'read_messages takes ids?, all?; not unread.'],
-				[true, 'INVALID', 'to is required.'],
-				[true, 'INVALID', 'to must be a list of strings.'],
-				[true, 'INVALID', 'text must be a string.']
+				[true, 'INVALID', 'Use ids for specific messages or all:true for your inbox history, not both. Nothing was fetched.'],
+				[true, 'INVALID', '\'#a1\' is an agent ID. Argument \'ids\' requires a message ID such as #m42.'],
+				[true, 'INVALID', 'nothing is not a message ID. Argument \'ids\' requires a message ID such as #m42.'],
+				[true, 'INVALID', 'Argument \'ids\' must be a string or an array of strings.'],
+				[true, 'INVALID', 'Argument \'ids\' must contain at least one item. Omit it if no selection is needed.'],
+				[true, 'INVALID', 'Unknown arguments for read_messages: unread. Accepted arguments (? = optional): ids?, all?.'],
+				[true, 'INVALID', 'Argument \'to\' is required.'],
+				[true, 'INVALID', 'Argument \'to\' must be a string or an array of strings.'],
+				[true, 'INVALID', 'Argument \'text\' must be a string.']
 			],
 			// Nothing was fetched: lint's task is unread still
 			unread: 'unread'
+		});
+	});
+
+	test('a list sent as a string holding JSON - as a client offered a string or a list may send it (Muse Code) - is that list, for to and ids; a string that holds no list is one value still', async () => {
+		const sent = await call(lead, 'send_message', { to: '["@lint", "@human"]', text: 'Both.' });
+		const fetched = await call(lint, 'read_messages', { ids: '["#m1", "#m2"]' });
+		const odd = await call(lead, 'send_message', { to: '[@lint]', text: 'Hm.' });
+
+		assert.deepStrictEqual({ sent: sent.data, fetched: (fetched.data as { messages: { id: number }[] }).messages.map(message => message.id), odd: [odd.isError, (odd.data as { code: string }).code] }, {
+			sent: { messages: [{ id: 2, to: '@lint #a2' }, { id: 3, to: '@human' }] },
+			fetched: [1, 2],
+			odd: [true, 'NOT_FOUND']
 		});
 	});
 

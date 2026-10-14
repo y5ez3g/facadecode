@@ -161,7 +161,7 @@ suite('Record: messages', () => {
 		const docs = table.start(newAgent('docs', lead.id)).agent;
 		const task = table.messages.send({ from: lead.id, to: lint.id, text: 'Lint.', task: true });
 		const toLead = table.messages.send({ to: lead.id, text: 'Lead.' });
-		const refused = (call: () => unknown) => outcome(call).replace(/^Facade did not record (\S+): .*$/, 'refused $1');
+		const refused = (call: () => unknown) => outcome(call).replace(/^Failed to persist (\S+) event to ledger: .*$/, 'refused $1');
 		const results = [
 			refused(() => table.messages.send({ from: other.id, to: docs.id, text: 'Mine.', task: true })),
 			refused(() => table.messages.send({ from: lead.id, to: lint.id, text: 'Again.', task: true })),
@@ -172,7 +172,7 @@ suite('Record: messages', () => {
 		results.push(refused(() => table.messages.returned(task.id, 'it exited')));
 
 		assert.deepStrictEqual({ results, task: table.state.mail.tasks.get(lint.id) }, {
-			results: ['refused message.sent', 'refused message.sent', 'refused mailbox.rang', 'refused message.returned', 'refused message.returned'],
+			results: ['Failed to record event message.sent in the ledger: the written data could not be verified by reading it back.', 'Failed to record event message.sent in the ledger: the written data could not be verified by reading it back.', 'Failed to record event mailbox.rang in the ledger: the written data could not be verified by reading it back.', 'Failed to record event message.returned in the ledger: the written data could not be verified by reading it back.', 'Failed to record event message.returned in the ledger: the written data could not be verified by reading it back.'],
 			task: task.id
 		});
 	});
@@ -263,7 +263,7 @@ suite('Record: messages', () => {
 		const partly = table.state.mail.drainedAt.has(lint.id);
 		table.messages.delivered(lint.id, [two.id, toLead.id]);
 		const emptied = table.state.mail.drainedAt.get(lint.id);
-		table.messages.send({ from: FACADE, to: lead.id, text: '@lint #a2 has not fetched #m1 in 2 minutes.', facade: 'delayed', about: lint.id });
+		table.messages.send({ from: FACADE, to: lead.id, text: '@lint #a2 has not fetched #m1 after 2 minutes.', facade: 'delayed', about: lint.id });
 		const delayed = table.state.mail.delayedAt.get(lint.id);
 		table.dispose();
 		table = AgentTable.open({ dir: temp.dir });
@@ -319,19 +319,19 @@ suite('Record: chat rooms', () => {
 		const long = send({ from: lint.id, to: lead.id, text: 'w'.repeat(TEXT_IN_LINE + 2), replyTo: task });
 		const across = send({ from: lint.id, to: docs.id, text: 'Which file?' });
 		const toPerson = send({ from: docs.id, to: HUMAN, text: 'Done:\nsee docs/.' });
-		const ended = send({ from: FACADE, to: lead.id, text: '@docs #a3 ended: it exited, with exit code 1.', facade: 'ended', about: docs.id });
-		const heading = (root: string) => `# Chat room of ${root}\n\nEvery message to or from ${root} and the agents started from it, in order.\n\n`;
+		const ended = send({ from: FACADE, to: lead.id, text: '@docs #a3 ended: it exited with code 1.', facade: 'ended', about: docs.id });
+		const heading = (root: string) => `# Chat room: ${root}\n\nMessages to or from ${root} and its descendants, in chronological order.\n\n`;
 
 		assert.deepStrictEqual({ lead: room('lead-a1.md'), docs: room('docs-a3.md'), files: fs.readdirSync(rooms.folder).sort() }, {
 			lead: heading('@lead #a1')
 				+ entry(task, '@lead #a1 → @lint #a2 · task', 'Lint the docs.')
-				+ entry(long, '@lint #a2 → @lead #a1 · re #m1', 'w'.repeat(TEXT_IN_LINE + 2))
+				+ entry(long, '@lint #a2 → @lead #a1 · reply to #m1', 'w'.repeat(TEXT_IN_LINE + 2))
 				+ entry(across, '@lint #a2 → @docs #a3', 'Which file?')
-				+ entry(ended, 'Facade → @lead #a1', '@docs #a3 ended: it exited, with exit code 1.'),
+				+ entry(ended, 'Facade → @lead #a1', '@docs #a3 ended: it exited with code 1.'),
 			docs: heading('@docs #a3')
 				+ entry(across, '@lint #a2 → @docs #a3', 'Which file?')
 				+ entry(toPerson, '@docs #a3 → @human', 'Done:\nsee docs/.')
-				+ entry(ended, 'Facade → @lead #a1', '@docs #a3 ended: it exited, with exit code 1.'),
+				+ entry(ended, 'Facade → @lead #a1', '@docs #a3 ended: it exited with code 1.'),
 			files: ['docs-a3.md', 'lead-a1.md']
 		});
 	});
@@ -350,8 +350,8 @@ suite('Record: chat rooms', () => {
 		const text = room('lead-a1.md');
 
 		assert.deepStrictEqual(text.split('\n').filter(line => line.startsWith('>')), [
-			'> #m1 was not fetched by @lint #a2 before it ended (stopped by @human). It could not be returned: @lead #a1, its sender, had ended.',
-			'> #m2 was not fetched by @lint #a2 before it ended (stopped by @human). It could not be returned: Facade\'s own messages are not returned.'
+			'> #m1 was not fetched by @lint #a2 before the recipient ended (stopped by @human). It could not be returned: its sender, @lead #a1, has already ended.',
+			'> #m2 was not fetched by @lint #a2 before the recipient ended (stopped by @human). It could not be returned: Facade system messages cannot be returned.'
 		]);
 	});
 

@@ -88,7 +88,7 @@ export class HostGit implements Git {
 	}
 
 	async deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]> {
-		// The same deletion's shared preflight alone: nothing stopped, closed or removed (O5 step 2)
+		// The same deletion's shared preflight alone: nothing stopped, closed or removed (O5)
 		return await vscode.commands.executeCommand<readonly string[] | undefined>('_facade.worktree.removalLoss', vscode.Uri.file(folder), this.deletionOf(options)) ?? [];
 	}
 

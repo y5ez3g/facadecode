@@ -1105,8 +1105,8 @@ export class NativeWindow extends BaseWindow {
 	private async notOpened(request: INativeOpenFileRequest): Promise<void> {
 		const files = coalesce([...request.filesToOpenOrCreate ?? [], ...request.filesToDiff ?? [], ...request.filesToMerge ?? []].map(path => path.fileUri && URI.revive(path.fileUri)));
 		const labels = files.map(file => this.labelService.getUriLabel(file)).join(', ');
-		this.logService.warn(`[window] not opened, as the window did not get to the folder they came with: ${labels}`);
-		this.notificationService.warn(localize('notOpenedWithoutFolder', "Could not open files because the folder containing them could not be switched to: {0}.", labels));
+		this.logService.warn(`[window] Could not open ${labels} because the window could not switch to the folder that contains them`);
+		this.notificationService.warn(localize('notOpenedWithoutFolder', "Could not open {0} because the window could not switch to the folder that contains them.", labels));
 
 		if (request.filesToWait) {
 			await this.fileService.del(URI.revive(request.filesToWait.waitMarkerFileUri));

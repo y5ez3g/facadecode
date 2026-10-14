@@ -86,7 +86,7 @@ export class McpStdioServer {
 		try {
 			message = JSON.parse(line);
 		} catch {
-			this.options.log?.('A line that is not JSON came in, and was answered with a parse error.');
+			this.options.log?.('Received a line that is not valid JSON; returned a parse error.');
 			this.send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
 			return;
 		}
@@ -178,7 +178,7 @@ export class McpStdioServer {
 			case 'tools/call':
 				return this.callTool(id, params);
 			default:
-				throw new RpcError(-32601, `Method not found: ${method}`);
+				throw new RpcError(-32601, `Method not found: ${method}.`);
 		}
 	}
 
@@ -198,7 +198,7 @@ export class McpStdioServer {
 	private async callTool(id: JsonRpcId, params: JsonObject): Promise<object> {
 		const name = params.name;
 		if (typeof name !== 'string') {
-			throw new RpcError(-32602, 'tools/call needs a tool name.');
+			throw new RpcError(-32602, 'tools/call requires a \'name\' parameter identifying the tool.');
 		}
 		// Cancellable from here: finding the tools may wait, as for a window that reloads
 		const controller = new AbortController();
@@ -209,7 +209,7 @@ export class McpStdioServer {
 			throw new RpcError(-32603, 'Cancelled');
 		}
 		if (!tools.some(tool => tool.name === name)) {
-			throw new RpcError(-32602, `Unknown tool: ${name}`);
+			throw new RpcError(-32602, `Unknown tool: ${name}.`);
 		}
 		const token = isJsonObject(params._meta) ? params._meta.progressToken : undefined;
 		const progressToken = typeof token === 'string' || typeof token === 'number' ? token : undefined;

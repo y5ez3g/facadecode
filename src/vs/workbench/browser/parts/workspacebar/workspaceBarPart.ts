@@ -378,7 +378,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// leave it in the workspace marked gone. The rows are read again, and the person told as the switch tells
 		// them (N-29). One that cannot be read is no deletion, and goes the switch's way (WS-63).
 		if (!await this.model.resolve(uri) && (await unreachable(this.fileService, uri))?.kind === 'missing') {
-			this.logService.warn(`[workspaceBar] ${uri.toString(true)} is not on disk any more: not taken into the workspace`);
+			this.logService.warn(`[workspaceBar] Folder '${uri.toString(true)}' no longer exists on disk; omitted from workspace`);
 			this.notificationService.error(localize('workspaceBar.gone', "Folder '{0}' no longer exists on disk.", pathOf(uri)));
 			await this.git.refresh();
 			return { kind: 'failed', reason: localize('workspaceBar.goneReason', "no longer exists on disk") };
@@ -422,7 +422,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	}
 
 	private couldNotAdd(uri: URI, reason: string): ShowResult {
-		this.logService.warn(`[workspaceBar] ${uri.toString(true)} did not become a folder of this workspace: ${reason}`);
+		this.logService.warn(`[workspaceBar] Folder '${uri.toString(true)}' was not added to workspace: ${reason}`);
 		this.notificationService.error(localize('workspaceBar.couldNotAdd', "Failed to add folder '{0}' to the workspace: {1}", uri.scheme === 'file' ? uri.fsPath : uri.toString(true), reason));
 		return { kind: 'failed', reason };
 	}
@@ -445,6 +445,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 	isRemoving(folder: URI): boolean {
 		return !!this._removal?.isRemoving(folder);
+	}
+
+	isDeleting(folder: URI): boolean {
+		return !!this._removal?.isDeleting(folder);
 	}
 
 	async moveFolder(uri: URI, offset: number): Promise<void> {

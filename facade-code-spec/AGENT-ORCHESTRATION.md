@@ -34,7 +34,8 @@ dialog. Calls that cannot proceed explain the reason and the next available step
 Starting or manipulating an agent in the background must not activate a terminal,
 select a folder, move an editor or add a folder to the workspace, except for O5's
 deletion cleanup and view fallback. A newly created worktree appears in the
-workspace bar; selecting it is the person's decision.
+workspace bar while worktree management is enabled (WORKTREE.md WT-9); selecting
+it is the person's decision.
 
 Creator relationships describe provenance and supply a default communication path.
 They do not impose a staffing algorithm, automatically reparent orphans, or require
@@ -100,9 +101,15 @@ the caller's repository. A detached worktree must be named by path. No branch na
 including `main` or `new`, has a special meaning. If a branch is checked out in
 multiple worktrees, return the paths and ask the caller to select one.
 
-With new_worktree, create an additional worktree of the chosen folder's repository
-on a new branch named name. Use the caller checkout's current HEAD when it is the
-same repository; otherwise use the target repository's main checkout HEAD.
+With worktree management off, ordinary starts can use existing workspace folders
+and recorded launch folders; do not restart Git discovery to resolve a new worktree
+path or branch shorthand (WORKTREE.md WT-9).
+
+With new_worktree, apply WT-9's shared admission check before allocating a run,
+creating a worktree or injecting configuration. Once accepted, create an additional
+worktree of the chosen folder's repository on a new branch named name. Use the
+caller checkout's current HEAD when it is the same repository; otherwise use the
+target repository's main checkout HEAD.
 Resolve the commit when accepting the request. Uncommitted edits are not included.
 An existing branch, invalid Git branch name or repository without a commit is a
 clear rejection before creation. The caller can choose another name or an existing
@@ -186,17 +193,18 @@ or cancel its pending start, and finish when it has ended. A stop already in pro
 joins the existing operation. A stop of an ended run reports its recorded outcome.
 It does not fail merely because the process is already gone.
 
-With deletion:
+With delete_worktree, apply WORKTREE.md WT-9's shared admission check before
+stopping any run, including requests for main checkouts or non-Git folders.
+For an additional worktree, use the shared Delete Worktree operation in WT-8;
+that section owns the execution order. Do not stop agents ahead of that operation.
 
-1. Resolve the additional worktree and all live or starting agents in that folder.
-   Check the caller can reach every affected agent before stopping any of them.
-2. Preflight the shared Delete Worktree operation. Report uncommitted/untracked
-   changes and unsaved editor content. Unless discard_changes is true, refuse any
-   loss of user work and leave all agents running.
-3. Prevent new starts into that folder, stop its agents and cancel their pending
-   starts. Use the existing worktree service to close associated terminals/editors.
-4. Release Facade's injected files, then remove the worktree, retaining its branch.
-5. Return every stopped agent and whether the folder was deleted.
+Its preflight checks the caller's reach over every live or starting agent that
+would be stopped, before stopping any of them. Unless discard_changes is true,
+refuse any loss of user work, including ignored files and unsaved editor content,
+and leave all agents running. delete_worktree authorizes removal; discard_changes
+authorizes discarding user content inside that worktree. WT-8.10 applies these
+choices without a dialog. Return every stopped agent and the actual deletion
+outcome, retaining the branch.
 
 A worktree may be deleted while selected or included in the workspace, subject to
 the same preflight above. If deletion removes the person's current worktree view,
@@ -212,8 +220,10 @@ that no worktree was deleted. Never delete the main checkout.
 
 If stopping exceeds the timeout, return pending and do not delete the worktree.
 Termination may continue, but deletion requires a later explicit stop_agent call
-after that pending result. If deletion fails, return the filesystem/Git reason and
-remaining folder path. A retry against the ended agent can finish deletion.
+after that pending result. If a later loss check or deletion fails, report the
+reason, remaining folder path and completed effects, including membership removal
+and stopped agents. Do not imply that they were rolled back. A retry against the
+ended agent can finish deletion.
 
 No dialog appears for this tool: delete_worktree and discard_changes are explicit
 choices in its arguments. Do not add an extra confirmation round.
@@ -462,7 +472,7 @@ two agent trees and a configurable fake CLI.
 | OR-16 | Custom agent with/without connect/task/model/effort groups | Capability-aware behavior; impossible task rejected; ignored overrides reported | U,I,V |
 | OR-17 | Stop child, sibling, root, ancestor, self and already-ended run | Correct reach and actor; only specified processes stop | I,V |
 | OR-18 | Delete worktree containing several agents, including an out-of-scope run | Whole preflight; out-of-scope rejection stops nothing | I |
-| OR-19 | Dirty files, unsaved editor, owned configuration; discard off/on | No unintended partial stop on refusal; explicit discard deletes; branch retained | I,V |
+| OR-19 | Dirty files, ignored files, unsaved editor, owned configuration; discard off/on; new loss after stopping | Preflight refusal stops/discards nothing; only authorized content is discarded; late refusal reports completed effects; branch retained | I,V |
 | OR-20 | Main checkout deletion requested | Requested agent stopped; main checkout retained and result explains it | I |
 | OR-21 | Slow termination and filesystem deletion failure | Pending/error reports real remaining work; retry can finish deletion | I,V |
 | OR-22 | Project configuration absent, tracked, untracked, already dirty or conflicting | Merge only owned content; preserve user content; useful conflict error | U,I |
@@ -470,7 +480,8 @@ two agent trees and a configurable fake CLI.
 | OR-24 | Interrupted injection/cleanup; reload; framework off | Recovery preserves live ownership and later edits; no silent overwrite | U,I |
 | OR-25 | Disabled framework, invalid/revoked token, pipe outage and reconnect | Prompt correct error; no unauthorized mutation or replay | I,V |
 | OR-26 | Parent ends before child, or caller disappears during start | Child ownership remains; accepted work has one recorded outcome | I,V |
-| OR-27 | Delete the selected worktree, including one added to the workspace; owning folder present/absent | Ordinary O5 preflight applies; view returns to the owning folder, or the previous folder if it is gone | I,H |
+| OR-27 | Delete the selected worktree, including one added to the workspace; owning folder present/absent; fail the fallback or membership edit | WT-8 orders the shared operation; view returns to the owning folder, or the previous folder if it is gone; failed prerequisites preserve processes and dirty contents | I,H |
+| OR-28 | Worktree management off: request new_worktree or delete_worktree, including deletion for a main checkout; ordinary start/stop in a known folder | WT-9 rejects the whole worktree request before allocation, injection or stopping; ordinary start/stop and discovery of live agents remain available | U,I |
 
 Use fakes and a controllable clock for ordering, timeouts and cancellation.
 Test ordinary overlap points; exhaustive scheduling of every possible filesystem

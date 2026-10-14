@@ -14,15 +14,15 @@ import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
-const TOOLS = 'Your tools: start_agent starts an agent, in any folder of this window or a new worktree, and answers with its number once it has started; list_agents lists you, the agent that started you and the agents you started - with all, every agent you reach - with their mailboxes, and the CLIs you can start; stop_agent stops an agent you reach, and can delete its worktree. read_screen reads an agent\'s screen as its terminal draws it; type_text types a line into its terminal and press_keys presses keys there, as the person does, for its CLI\'s own interface.';
-const MESSAGES = 'Messages: send_message sends a message to agents, or to the person, @human, and answers at once with its number, as #m42: a reply comes to your mailbox. A line starting [facade] typed into your terminal says you have unread messages: call read_messages, and print those new to you before you act on them. A message fetched again comes under the same number: keep track of what you have handled. Something for the person: print it whole first, then send it to @human. Do not poll or wait for a reply: end your turn.';
+const TOOLS = 'Tools: start_agent launches a separate CLI in a window folder or new worktree; started confirms launch readiness, not task completion. list_agents shows runs, mailboxes, and available CLIs: you, your creator, and your immediate children by default, or every reachable run with all:true. stop_agent ends a run and can delete its worktree. read_screen inspects a CLI; type_text and press_keys send terminal input and normally return the resulting screen.';
+const MESSAGES = 'Use send_message for tasks, questions, answers, and reports. It records each message and returns its ID without waiting for a reply. On a [facade] unread-message notice, call read_messages and show new messages in your terminal before acting. Repeated reads keep the same IDs; track which work you have handled. Before messaging @human, print the full text here. Continue independent work after sending. If you need a reply to proceed, end this turn and leave your CLI running. Agent replies trigger a doorbell; do not poll or sleep for them.';
 /** Whom each agent asks (M8): a child its creator; one the person started from the UI the person; one their script started @human. */
-const ASK_CREATOR = 'Message the agent that started you when you are done, stuck, or need a decision.';
-const ASK_IN_TERMINAL = 'The person started you: ask and answer them in your terminal, as your CLI does.';
-const ASK_HUMAN = 'The person\'s script started you: send your questions and your report to @human by message.';
-const PERSON_MESSAGES = 'Messages: send_message sends a message to agents and answers with its number, as #m42. Messages to you come as notifications; read_messages with all gives them again.';
-const UNANSWERED = 'A call that got no answer - cut off, its server gone - may have happened all the same: look with list_agents before calling again.';
-const NO_PICKS = 'Nobody may be watching your terminal: ask through Facade messages - never with a tool that waits for someone to pick an answer. Facade types messages into your terminal, and a pick waiting there would take them as its answer.';
+const ASK_CREATOR = 'Use send_message to send questions to your creator and report when you finish or become blocked.';
+const ASK_IN_TERMINAL = 'The person started you from the window. Communicate with them here using your CLI\'s normal interaction.';
+const ASK_HUMAN = 'A script started you. Use send_message to send questions and reports to @human.';
+const PERSON_MESSAGES = 'send_message records messages to agents and returns their IDs. Messages addressed to @human appear as notifications. Use read_messages with all:true to retrieve that inbox again.';
+const UNANSWERED = 'A call with no result may already have taken effect. Before retrying, inspect starts or stops with list_agents and terminal input with read_screen. Resend a message only if you establish that it was not recorded.';
+const NO_PICKS = 'Your terminal may be unattended. Ask through Facade messages. Do not use blocking question or choice tools: they may consume a terminal doorbell as an answer.';
 
 suite('Contract: what the model sees, and what it gets back', () => {
 
@@ -94,13 +94,13 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			state: 'running',
 			tools: ['start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'],
 			// Open: one installed or added later is startable all the same (X-39; C-CORE-23)
-			cli: { type: 'string', description: 'The CLI, or a custom agent: arg (Arg Code), told (Told Code) - as they were when you started; list_agents lists them as they are now.' },
-			model: { type: 'string', description: 'The model, as that CLI\'s --model option takes it. Omitted: the CLI\'s own default.' },
-			effort: { type: 'string', description: 'How hard it thinks, as that CLI takes it: low, medium, high and so on. Omitted: the CLI\'s own default.' },
+			cli: { type: 'string', description: 'CLI ID or custom agent name. Available when listed: arg (Arg Code), told (Told Code). Use list_agents to refresh availability and supported options.' },
+			model: { type: 'string', description: 'Value for the CLI\'s --model option. Omit to use its default.' },
+			effort: { type: 'string', description: 'CLI reasoning effort, such as low, medium, or high. Omit to use its default. Does not require model.' },
 			instructions: [
-				'You are @planner #a2, a Told Code agent in Facade Code, started by @lead #a1; your tree is #a1\'s.',
-				`You run in ${lab}: the worktree main. You are in that folder already: run commands there without cd.`,
-				'Your YOLO is on: you reach every agent of this window, and the agents you start have YOLO on.',
+				'You are @planner #a2, a Told Code agent in Facade Code. Creator: @lead #a1. Tree root: #a1.',
+				`Working directory: ${lab} (worktree main). You are already in this directory; no cd is needed to start work here.`,
+				'YOLO is on. You can reach every agent in this window. Children inherit YOLO on.',
 				TOOLS,
 				MESSAGES,
 				ASK_CREATOR,
@@ -108,9 +108,9 @@ suite('Contract: what the model sees, and what it gets back', () => {
 				NO_PICKS
 			],
 			own: [
-				'You are @arg #a3, an Arg Code agent in Facade Code, started by @human; your tree is #a3\'s.',
-				`You run in ${lab}: the worktree main. You are in that folder already: run commands there without cd.`,
-				'Your YOLO is on: you reach every agent of this window, and the agents you start have YOLO on.',
+				'You are @arg #a3, an Arg Code agent in Facade Code. Creator: @human. Tree root: #a3.',
+				`Working directory: ${lab} (worktree main). You are already in this directory; no cd is needed to start work here.`,
+				'YOLO is on. You can reach every agent in this window. Children inherit YOLO on.',
 				TOOLS,
 				MESSAGES,
 				ASK_IN_TERMINAL,
@@ -118,7 +118,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			],
 			// Started by the person's script through start_agent: nobody may be watching it (M8)
 			script: [MESSAGES, ASK_HUMAN, UNANSWERED, NO_PICKS],
-			person: { name: 'human', instructions: ['You act as the person, @human, in Facade Code, and reach every agent of this window.', TOOLS, PERSON_MESSAGES, UNANSWERED] }
+			person: { name: 'human', instructions: ['You act as @human in Facade Code and can reach every agent in this window.', TOOLS, PERSON_MESSAGES, UNANSWERED] }
 		});
 	});
 
@@ -128,9 +128,9 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			firstLineFor({ id: 1, name: 'lead' }, PERSON, 1, 'Its setup is not known to have finished.'),
 			firstLineFor({ id: 4, name: 'idle' }, { id: 1, name: 'lead' }, undefined)
 		], [
-			'[facade] You are @lint #a2, created by @lead #a1. Your task is #m3. Call read_messages, read the task, then carry it out. Send your questions and your report to @lead #a1 with send_message - never only on your screen, never with a tool that waits for someone to pick an answer.',
-			'[facade] You are @lead #a1, created by @human. Its setup is not known to have finished. Your task is #m1. Call read_messages, read the task, then carry it out. Send your questions and your report to @human with send_message - never only on your screen, never with a tool that waits for someone to pick an answer.',
-			'[facade] You are @idle #a4, created by @lead #a1. Send your questions and your report to @lead #a1 with send_message - never only on your screen, never with a tool that waits for someone to pick an answer.'
+			'[facade] You are @lint #a2, created by @lead #a1. Your task is #m3. Call read_messages to fetch it, then carry it out. Use send_message to send questions and your report to @lead #a1; terminal output alone does not reach them. Do not use blocking question or choice tools.',
+			'[facade] You are @lead #a1, created by @human. Its setup is not known to have finished. Your task is #m1. Call read_messages to fetch it, then carry it out. Use send_message to send questions and your report to @human; terminal output alone does not reach them. Do not use blocking question or choice tools.',
+			'[facade] You are @idle #a4, created by @lead #a1. Use send_message to send questions and your report to @lead #a1; terminal output alone does not reach them. Do not use blocking question or choice tools.'
 		]);
 	});
 
@@ -148,7 +148,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		await world.facade.startForPerson('review', lab);
 		world.settings.arg = { launch: { arguments: { yoloOff: ['--sandbox'] } } };
 		await world.startUp(PERSON, { cli: 'arg', task: 'Changed.', name: 'changed', folder: lab });
-		const said = (id: number) => contract.hello(callerOf(world.agent(id))).instructions.split('\n')[2].replace(/^Your YOLO is off: you reach your own tree only, and the agents you start have YOLO off too\. /, '');
+		const said = (id: number) => contract.hello(callerOf(world.agent(id))).instructions.split('\n')[2].replace(/^YOLO is off\. You can reach only your own tree\. Children inherit YOLO off\. /, '');
 		const launched = [1, 2, 3, 4].map(said);
 		world.dispose();
 		world = fakeWorld(dir, { repositories: { [lab]: [] }, folders: [plain] });
@@ -156,15 +156,15 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		await world.facade.recover(true);
 		contract = new Contract(world.facade);
 
-		assert.deepStrictEqual({ launched, afterReload: said(1), skill: facadeSkill().body.split('\n').filter(line => line.includes('approval of its own')) }, {
+		assert.deepStrictEqual({ launched, afterReload: said(1), skill: facadeSkill().body.split('\n').filter(line => line.includes('adds no approval requirement')) }, {
 			launched: [
-				'Facade\'s tools never need anyone\'s approval.',
-				'Your CLI refuses the Facade tools a setting of the person\'s denies: /home/.arg/settings.json denies mcp__facade.',
-				'Your CLI may ask for approval before Facade\'s tools: its launch is the person\'s own.',
-				'Your CLI may ask for approval before Facade\'s tools: its launch\'s yoloOff group is changed from Facade\'s, which lets its server through.'
+				'Your CLI allows Facade tools without approval.',
+				'User settings cause your CLI to deny some Facade tools: /home/.arg/settings.json denies mcp__facade.',
+				'Your custom CLI launch may require approval to use Facade tools.',
+				'Your CLI may require approval to use Facade tools: the launch\'s yoloOff group differs from Facade\'s defaults for allowing tools without approval.'
 			],
-			afterReload: 'Facade adds no approval of its own to its tools.',
-			skill: ['start take your YOLO. Facade adds no approval of its own to its tools.']
+			afterReload: 'Facade itself does not require approval for its tools.',
+			skill: ['tree. Children inherit your YOLO. Facade itself adds no approval requirement;']
 		});
 	});
 
@@ -172,7 +172,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const body = facadeSkill().body.replace(/\s+/g, ' ');
 		const orphan = /If your creator has ended[^.]*\./.exec(body)?.[0] ?? '';
 
-		assert.deepStrictEqual({ nearest: /nearest agent above it that still runs/.test(orphan), person: orphan.includes('@human'), report: /report/.test(orphan) }, { nearest: true, person: true, report: true });
+		assert.deepStrictEqual({ nearest: /follow creator IDs to the nearest running ancestor/.test(orphan), person: orphan.includes('contact `@human` if none remains') }, { nearest: true, person: true });
 	});
 
 	test('the start_agent tool requires a name and the CLI, the model, the effort, the task, the folder and a new worktree left to the caller, and names no model or level of its own: the CLI is the one that knows them', () => {
@@ -201,18 +201,18 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders: [plain] });
 
 		assert.deepStrictEqual({
-			started: (started.text ?? '').split(':')[0],
-			notes: [row('notes').includes(`folder ${plain} (in no Git repository)`), row('notes').includes('worktree')],
+			started: (started.text ?? '').split('\n')[0],
+			notes: [row('notes').includes(`folder ${plain} (not a Git repository)`), row('notes').includes('worktree')],
 			lead: row('lead').includes('worktree main'),
 			data: (listed.data as { agents: { name: string; outsideGit?: boolean }[] }).agents.map(each => [each.name, each.outsideGit ?? false]),
 			told,
 			reopened: world.table.get(2)?.outsideGit
 		}, {
-			started: `Started @notes #a2 in ${plain}, a folder in no Git repository`,
+			started: `Started @notes #a2 in ${plain} (not a Git repository).`,
 			notes: [true, false],
 			lead: true,
 			data: [['lead', false], ['notes', true]],
-			told: `You run in ${plain}, a folder in no Git repository. You are in that folder already: run commands there without cd.`,
+			told: `Working directory: ${plain} (not a Git repository). You are already in this directory; no cd is needed to start work here.`,
 			reopened: true
 		});
 	});
@@ -234,9 +234,9 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const mainCheckout = await call(lead, 'stop_agent', { agent: '@here', delete_worktree: true });
 
 		assert.deepStrictEqual({ outsideGit: outsideGit.text, refused: refused.text, mainCheckout: mainCheckout.text }, {
-			outsideGit: 'Stopped @notes #a2: its terminal closed. Its folder stays as it is.',
+			outsideGit: 'Stopped @notes #a2: its terminal closed. Its folder is unchanged.',
 			refused: 'Stopped @w #a3: its terminal closed. ~/.facade/worktrees/lab/w was not deleted: an agent of another window is working inside it, @there #a9. Stop it in that window first.',
-			mainCheckout: `Stopped @here #a4: its terminal closed. ${lab} was not deleted: it is its repository's main checkout, which is never deleted.`
+			mainCheckout: `Stopped @here #a4: its terminal closed. ${lab} was not deleted: it is the repository's main checkout, which cannot be deleted.`
 		});
 	});
 
@@ -251,7 +251,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const args = (n: number) => world.terminals.launched[n].args.filter(arg => ['--model', '--effort', 'flash-high', 'low'].includes(arg));
 
 		assert.deepStrictEqual({ both: both.text, bothData: (both.data as { ignored: string[] }).ignored, bothArgs: args(1), alone: (alone.data as { effort?: string; ignored: string[] }), aloneArgs: args(2) }, {
-			both: `Started @both #a2 in the worktree main: Told Code, flash-high, effort unknown (low not applied), YOLO on, no sandbox, connected, in ${lab}, no task. The effort you gave was passed on, but Told Code may override it where the model\'s name carries an effort, as flash-high\'s may: the effort it runs at is not known.`,
+			both: `Started @both #a2 in worktree main.\nTold Code, flash-high, effort unknown (low not applied), YOLO on, no sandbox, connected to Facade, folder ${lab}, no task.\nThe requested effort was passed to Told Code, but model flash-high may specify an overriding effort. The actual effort is unknown.`,
 			bothData: ['effort'],
 			bothArgs: ['--model', 'flash-high', '--effort', 'low'],
 			alone: { ...(alone.data as object), effort: 'low', ignored: [] },
@@ -276,29 +276,29 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 		const facts = ['status', 'id', 'name', 'creator', 'root', 'cli', 'model', 'effort', 'ignored', 'yolo', 'sandbox', 'connected', 'worktree', 'folder', 'newWorktree', 'taskMessage', 'task'];
 		const picked = (data: unknown) => Object.fromEntries(Object.entries(JSON.parse(JSON.stringify(data))).filter(([key]) => facts.includes(key)));
-		const arg = (model: string, folder: string, message: number) => `Arg Code, ${model}, high, YOLO on, sandbox off, connected, in ${folder}, task #m${message}`;
-		const fetches = ' It fetches its task itself: list_agents shows when it has.';
+		const arg = (model: string, folder: string, message: number) => `Arg Code, ${model}, high, YOLO on, sandbox off, connected to Facade, folder ${folder}, task #m${message}`;
+		const fetches = (message: number) => `\nThe child must fetch task #m${message} itself. Launch readiness does not confirm task retrieval; list_agents shows delivery.`;
 
 		assert.deepStrictEqual({ beside: { text: beside.text, data: picked(beside.data) }, inNew: inNew.text, unconfirmed: { text: unconfirmed.text, data: picked(unconfirmed.data) }, stopped: stopped.text, again: again.text, listed: listed.text.split('\n'), rows: JSON.parse(JSON.stringify(listed.data)).agents.map((row: { id: number; creator?: number }) => `${row.id}<${Object.keys(row).includes('creator') ? row.creator : 'none'}`) }, {
 			beside: {
-				text: `Started @tests #a2 in the worktree main: ${arg('small', lab, 2)}.${fetches}`,
+				text: `Started @tests #a2 in worktree main.\n${arg('small', lab, 2)}.${fetches(2)}`,
 				data: { status: 'started', id: 2, name: 'tests', creator: 1, root: 1, cli: 'arg', model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', connected: true, worktree: 'main', folder: lab, newWorktree: false, taskMessage: 2 }
 			},
-			inNew: `Started @clamp #a3 in the new worktree clamp (a new branch): ${arg('small', clamp, 3)}.${fetches}`,
+			inNew: `Started @clamp #a3 in new worktree clamp on a new branch.\n${arg('small', clamp, 3)}.${fetches(3)}`,
 			unconfirmed: {
-				text: `@waits #a4 is not confirmed to have started: it has not started within 5 seconds: its CLI is open but has not connected to Facade, and may be slow, or waiting for an answer on its screen. It stays starting - phase connecting, Told Code, deep, high, YOLO on, no sandbox, not connected yet, in ${lab}, no task - and may start yet: look at it with list_agents or read_screen, or stop it with stop_agent; do not start it again.`,
+				text: `Start unconfirmed for @waits #a4: after 5 seconds, the CLI is open but has not connected to Facade; it may be slow or waiting at a prompt.\nphase connecting, Told Code, deep, high, YOLO on, no sandbox, not yet connected to Facade, folder ${lab}, no task.\nThis start is still pending. Inspect #a4 with list_agents or read_screen, or cancel it with stop_agent. Do not start a duplicate.`,
 				data: { status: 'unconfirmed', id: 4, name: 'waits', creator: 1, root: 1, cli: 'told', model: 'deep', effort: 'high', ignored: [], yolo: true, sandbox: 'unavailable', connected: false, worktree: 'main', folder: lab, newWorktree: false }
 			},
-			stopped: 'Stopped @tests #a2: its terminal closed. Its worktree stays as it is.',
-			again: '@tests #a2 had ended already (stopped by @lead #a1: with stop_agent).',
+			stopped: 'Stopped @tests #a2: its terminal closed. Its worktree is unchanged.',
+			again: '@tests #a2 had already ended (stopped by @lead #a1: with stop_agent).',
 			listed: [
-				'You are @lead #a1, YOLO on: you reach every agent of this window.',
+				'You are @lead #a1. YOLO on: you can reach every agent in this window.',
 				'3 agents: 2 running, 1 ended',
 				// Each with its mailbox (M3): @tests' task went back to @lead as it ended unfetched, in #m4 (M6)
-				`@lead #a1 (you)  by @human  tree #a1  running  worktree main  started ${timeOfDay(world.agent(1).startTime)}  ${arg('large', lab, 1)}  mailbox: 2 unread: #m1 (@human, 0 min), #m4 (Facade, 0 min); 0 fetched; task #m1 not fetched yet`,
-				`@tests #a2  by @lead #a1  tree #a1  ended at ${timeOfDay(world.agent(2).end?.time)} (stopped by @lead #a1: with stop_agent)  worktree main  started ${timeOfDay(world.agent(2).startTime)}  ${arg('small', lab, 2).replace(', connected', '')}  mailbox: nothing unread; 0 fetched; task #m2 not fetched before it ended`,
-				`@clamp #a3  by @lead #a1  tree #a1  running  worktree clamp  started ${timeOfDay(world.agent(3).startTime)}  ${arg('small', clamp, 3)}  mailbox: 1 unread: #m3 (@lead #a1, 0 min); 0 fetched; task #m3 not fetched yet`,
-				'CLIs you can start: arg (Arg Code): takes Facade tools, a task, a model, an effort; told (Told Code): takes Facade tools, a task, a model, an effort.'
+				`@lead #a1 (you)  creator @human  tree #a1  running  worktree main  started ${timeOfDay(world.agent(1).startTime)}  ${arg('large', lab, 1)}  mailbox: 2 unread: #m1 (from @human, 0 min ago), #m4 (from Facade, 0 min ago); 0 fetched; task #m1 not yet fetched`,
+				`@tests #a2  creator @lead #a1  tree #a1  ended at ${timeOfDay(world.agent(2).end?.time)} (stopped by @lead #a1: with stop_agent)  worktree main  started ${timeOfDay(world.agent(2).startTime)}  ${arg('small', lab, 2).replace(', connected to Facade', '')}  mailbox: no unread messages; 0 fetched; task #m2 returned without being fetched before the run ended`,
+				`@clamp #a3  creator @lead #a1  tree #a1  running  worktree clamp  started ${timeOfDay(world.agent(3).startTime)}  ${arg('small', clamp, 3)}  mailbox: 1 unread: #m3 (from @lead #a1, 0 min ago); 0 fetched; task #m3 not yet fetched`,
+				'CLIs you can start: arg (Arg Code): supports Facade tools, task, model, effort; told (Told Code): supports Facade tools, task, model, effort.'
 			],
 			rows: ['1<none', '2<1', '3<1']
 		});
@@ -307,7 +307,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	test('with the agent framework off every call - an agent\'s or the person\'s script\'s - answers at once that it is, doing nothing', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		world.switches.framework = false;
-		const off = { text: 'Facade\'s tools are off: the person turned the agent framework off (facade.orchestration.enabled). Nothing was done; the agents running run on.', isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
+		const off = { text: 'Facade tools are disabled by facade.orchestration.enabled. This call had no effect; existing agents keep running.', isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
 		const results = [
 			await contract.call(callerOf(world.agent(1)), 'list_agents', {}, () => undefined),
 			await contract.call(PERSON, 'start_agent', { name: 'more', cli: 'arg' }, () => undefined),
@@ -350,7 +350,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 		assert.deepStrictEqual({ kept: sent && world.table.messages.textOf(sent), blank: blank.text }, {
 			kept: '  a\n',
-			blank: 'task must not be empty.'
+			blank: 'Argument \'task\' must not be empty.'
 		});
 	});
 
@@ -366,7 +366,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		await starting;
 
 		assert.deepStrictEqual({ text: stopped.text, startStopped: (stopped.data as { startStopped?: string }).startStopped }, {
-			text: 'Stopped @clamp #a2: its start was stopped as its worktree was being made, before its CLI was launched. Git may still make its worktree, which would stay, with its branch.',
+			text: 'Stopped @clamp #a2: startup was stopped during worktree creation, before the CLI launched. Git may still finish creating its worktree; the worktree and branch will be kept.',
 			startStopped: 'creating_worktree'
 		});
 	});
@@ -381,7 +381,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		await starting;
 
 		assert.deepStrictEqual({ text: stopped.text, startStopped: (stopped.data as { startStopped?: string }).startStopped }, {
-			text: 'Stopped @clamp #a2: its start was stopped as its worktree was set up, before its CLI was launched. Its worktree stays as it is.',
+			text: 'Stopped @clamp #a2: startup was stopped during worktree setup, before the CLI launched. Its worktree is unchanged.',
 			startStopped: 'running_setup'
 		});
 	});
@@ -395,7 +395,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 		assert.deepStrictEqual({ isError: result.isError, text: result.text, data: result.data }, {
 			isError: true,
-			text: `Arg Code did not start as @clamp #a2: the window has no terminal for it. The worktree clamp was made for it, at ${clamp}, and stays, with its branch: start an agent there by its folder, or delete it. Its start: Arg Code, small, high, YOLO on, sandbox off, in ${clamp}, task #m2.`,
+			text: `Arg Code did not start as @clamp #a2: the window has no terminal for it.\nRun facts: Arg Code, small, high, YOLO on, sandbox off, folder ${clamp}, task #m2.\nWorktree clamp was created at ${clamp}; the worktree and branch have been kept. To reuse it, start an agent with folder set to this path. Delete it only if it is no longer needed.`,
 			data: {
 				code: 'FAILED', outcome: 'failed', agent: 2, phase: 'launching_cli', status: 'failed', newWorktree: true,
 				id: 2, name: 'clamp', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: false,
@@ -414,8 +414,8 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		await sleep(6_000);
 		const result = await starting;
 
-		assert.deepStrictEqual({ text: result.text.slice(result.text.indexOf('Its worktree\'s setup is running')), settingUp: (result.data as { settingUp?: unknown }).settingUp, phase: (result.data as { phase?: string }).phase }, {
-			text: 'Its worktree\'s setup is running `npm ci`. The last lines of its setup terminal, as they were:\nnpm ci\nnpm ERR! need auth: run npm login\nUsername:',
+		assert.deepStrictEqual({ text: result.text.slice(result.text.indexOf('Worktree setup is running')), settingUp: (result.data as { settingUp?: unknown }).settingUp, phase: (result.data as { phase?: string }).phase }, {
+			text: ':',
 			settingUp: { running: 'npm ci', lines: ['npm ci', 'npm ERR! need auth: run npm login', 'Username:'] },
 			phase: 'running_setup'
 		});
@@ -447,20 +447,20 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const error = (code: string, text: string) => ({ text, isError: true, data: { code } });
 
 		assert.deepStrictEqual(results, [
-			error('INVALID', 'Unknown tool send. The tools: start_agent, list_agents, stop_agent, send_message, read_messages, read_screen, type_text, press_keys.'),
-			error('INVALID', 'start_agent takes name, cli, model?, effort?, task?, folder?, new_worktree?; not color.'),
-			error('INVALID', 'start_agent takes an object of arguments: name, cli, model?, effort?, task?, folder?, new_worktree?.'),
-			error('INVALID', 'name is required.'),
-			error('INVALID', 'task must not be empty.'),
-			error('INVALID', 'task must not be empty.'),
-			error('INVALID', 'model must be a string.'),
-			error('INVALID', 'effort must be a string.'),
-			error('INVALID', 'new_worktree must be true or false.'),
-			error('INVALID', 'all must be true or false.'),
-			error('INVALID', 'agent is required.'),
-			error('REFUSED', '@human is the person, not an agent: they have no run to stop, read or type into. send_message reaches them.'),
-			error('NOT_FOUND', 'No agent is #a99: list_agents with all lists every agent you reach.'),
-			{ text: 'nope is neither a CLI Facade starts nor a custom agent of the person\'s. It starts: arg, told.', isError: true, data: { code: 'INVALID', phase: 'validating' } },
+			error('INVALID', 'Unknown tool \'send\'. Available tools: start_agent, list_agents, stop_agent, send_message, read_messages, read_screen, type_text, press_keys.'),
+			error('INVALID', 'Unknown arguments for start_agent: color. Accepted arguments (? = optional): name, cli, model?, effort?, task?, folder?, new_worktree?.'),
+			error('INVALID', 'Provide a JSON arguments object for start_agent. Accepted arguments (? = optional): name, cli, model?, effort?, task?, folder?, new_worktree?.'),
+			error('INVALID', 'Argument \'name\' is required.'),
+			error('INVALID', 'Argument \'task\' must not be empty.'),
+			error('INVALID', 'Argument \'task\' must not be empty.'),
+			error('INVALID', 'Argument \'model\' must be a string.'),
+			error('INVALID', 'Argument \'effort\' must be a string.'),
+			error('INVALID', 'Argument \'new_worktree\' must be a boolean.'),
+			error('INVALID', 'Argument \'all\' must be a boolean.'),
+			error('INVALID', 'Argument \'agent\' is required.'),
+			error('REFUSED', '@human is the person and has no agent run to stop, read, or type into. Use send_message to contact them.'),
+			error('NOT_FOUND', 'No agent has ID #a99. Call list_agents with all:true to see every reachable run.'),
+			{ text: 'Unknown CLI or custom agent \'nope\'. Available to start: arg, told.', isError: true, data: { code: 'INVALID', phase: 'validating' } },
 			error('FAILED', 'the ledger could not be read')
 		]);
 	});
@@ -471,7 +471,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const result = await contract.call(callerOf(world.agent(1)), 'start_agent', { name: 'go', cli: 'arg', task: 'Go.', folder: path.join(temp.dir, 'elsewhere') }, message => heard.push(message));
 
 		assert.deepStrictEqual({ heard, isError: result.isError, data: result.data, agents: [...world.table.state.agents.keys()] }, {
-			heard: ['Validating the start of @go: nothing is made for it until it is recorded.'],
+			heard: ['Validating @go; no run has been recorded yet.'],
 			isError: true,
 			data: { code: 'NOT_FOUND', phase: 'validating' },
 			agents: [1]

@@ -31,6 +31,12 @@ export type RemoveResult =
 export interface IRemoveOptions {
 	/** The caller has already asked about what would be lost, as deleting a worktree does. */
 	readonly confirmed?: boolean;
+	/**
+	 * The folders leave for their worktree's deletion, which stops what runs in them and discards their unsaved
+	 * changes itself once they are out (WORKTREE.md WT-8, steps 5 and 6): leaving, nothing of theirs is stopped or
+	 * discarded, or moved to the panel.
+	 */
+	readonly deleting?: boolean;
 }
 
 /**
@@ -90,6 +96,9 @@ export interface IWorkspaceBarService {
 
 	/** Whether `folder` is leaving through `remove`, so what runs in it stops rather than moves to the panel. */
 	isRemoving(folder: URI): boolean;
+
+	/** Whether `folder` is leaving through `remove` for its worktree's deletion, which stops what runs in it itself. */
+	isDeleting(folder: URI): boolean;
 
 	/**
 	 * Moves the row `uri` is - a folder's, or a repository's with its worktrees in the workspace -

@@ -40,7 +40,7 @@ export function withFileLock<T>(file: string, fn: () => T): T {
 	const deadline = Date.now() + WAIT_MS;
 	while (!tryAcquire(lock, mark)) {
 		if (Date.now() > deadline) {
-			throw new Error(`${file} stayed locked by another window for ${WAIT_MS / 1000} seconds.`);
+			throw new Error(`Timed out after ${WAIT_MS / 1000} seconds waiting for another window to release the lock on '${file}'.`);
 		}
 		sleepSync(RETRY_MS);
 	}

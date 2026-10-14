@@ -70,7 +70,7 @@ const NUMBER_TEXT_MAX = 512;
 export function parseJsonc(text: string): JsonNode {
 	let at = text.charCodeAt(0) === BYTE_ORDER_MARK ? 1 : 0;
 	const fail = (what: string): never => {
-		throw new SyntaxError(`${what} was expected at offset ${at}`);
+		throw new SyntaxError(`Expected ${what} at offset ${at}`);
 	};
 	const blank = () => {
 		for (; ;) {
@@ -83,7 +83,7 @@ export function parseJsonc(text: string): JsonNode {
 			} else if (text.startsWith('/*', at)) {
 				const end = text.indexOf('*/', at + 2);
 				if (end < 0) {
-					fail('The end of a comment');
+					fail('the end of a comment');
 				}
 				at = end + 2;
 			} else {
@@ -102,7 +102,7 @@ export function parseJsonc(text: string): JsonNode {
 				return JSON.parse(text.slice(start, at));
 			}
 		}
-		return fail('The end of a string');
+		return fail('the end of a string');
 	};
 	const value = (): JsonNode => {
 		blank();
@@ -118,14 +118,14 @@ export function parseJsonc(text: string): JsonNode {
 					return { kind: 'object', start, end: at, members };
 				}
 				if (text[at] !== '"') {
-					fail('A key');
+					fail('a key');
 				}
 				const keyStart = at;
 				const key = string();
 				const keyEnd = at;
 				blank();
 				if (text[at] !== ':') {
-					fail('A colon');
+					fail('a colon');
 				}
 				at++;
 				members.push({ key, keyStart, keyEnd, value: value() });
@@ -133,7 +133,7 @@ export function parseJsonc(text: string): JsonNode {
 				if (text[at] === ',') {
 					at++;
 				} else if (text[at] !== '}') {
-					fail('A comma or the end of an object');
+					fail('a comma or the end of an object');
 				}
 			}
 		}
@@ -151,7 +151,7 @@ export function parseJsonc(text: string): JsonNode {
 				if (text[at] === ',') {
 					at++;
 				} else if (text[at] !== ']') {
-					fail('A comma or the end of a list');
+					fail('a comma or the end of an array');
 				}
 			}
 		}
@@ -161,7 +161,7 @@ export function parseJsonc(text: string): JsonNode {
 		}
 		const literal = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(text.slice(at, at + NUMBER_TEXT_MAX));
 		if (!literal) {
-			return fail('A value');
+			return fail('a value');
 		}
 		at += literal[0].length;
 		return { kind: 'scalar', start, end: at, value: JSON.parse(literal[0]) };
@@ -169,7 +169,7 @@ export function parseJsonc(text: string): JsonNode {
 	const root = value();
 	blank();
 	if (at < text.length) {
-		fail('The end of the text');
+		fail('the end of the text');
 	}
 	return root;
 }

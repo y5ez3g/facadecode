@@ -66,10 +66,10 @@ export class LedgerLockedError extends Error {
 	 */
 	constructor(readonly pid: number | undefined, readonly touchedAt: number, closedBy: ClosedBy = 'window') {
 		super(pid !== undefined
-			? `Another Facade window (process ${pid}) has this workspace's agents.`
+			? `Another Facade window (process ${pid}) manages this workspace's agents.`
 			: closedBy === 'window'
-				? 'Another Facade window has this workspace\'s agents: it closed them a moment ago, as it reloads.'
-				: 'Another Facade window has this workspace\'s agents: Facade there let go of them a moment ago.');
+				? 'Another Facade window is reloading and has just released this workspace\'s agent ledger. Management is still reserved for that window.'
+				: 'Facade in another window has just released this workspace\'s agent ledger. Management is still reserved for that window.');
 		this.name = 'LedgerLockedError';
 	}
 }
@@ -101,7 +101,7 @@ export function lockWait(handoverMs: number): (err: unknown) => boolean {
 /** The ledger was taken by another window - its lock untouched for too long, as while this one stood still - and takes no event more from this one. */
 export class LedgerTakenError extends Error {
 	constructor(dir: string) {
-		super(`Another Facade window took this workspace's agents: the ledger in ${dir} takes no event more from this one.`);
+		super(`Another Facade window has taken over this workspace's agents. The ledger in '${dir}' is locked.`);
 		this.name = 'LedgerTakenError';
 	}
 }
@@ -109,7 +109,7 @@ export class LedgerTakenError extends Error {
 /** An event for a ledger that was closed: another window may own its file by now. */
 class LedgerClosedError extends Error {
 	constructor(dir: string) {
-		super(`The ledger in ${dir} is closed.`);
+		super(`The agent ledger in '${dir}' is closed.`);
 		this.name = 'LedgerClosedError';
 	}
 }
@@ -121,7 +121,7 @@ class LedgerClosedError extends Error {
  */
 export class LedgerUnreadableError extends Error {
 	constructor(readonly file: string, why: string) {
-		super(`${why}, so this window starts and stops no agent of this workspace while an agent of it may still run. Its next start with none running begins a new list.`);
+		super(`${why}. This window cannot start or stop workspace agents while any may still be running. When the workspace next opens with no agents running, Facade will begin a new agent list.`);
 		this.name = 'LedgerUnreadableError';
 	}
 }
@@ -225,7 +225,7 @@ export class Ledger {
 		// Only a line the ledger reads back is written: one the next load refused would stop the workspace's agents
 		const back = eventOf(JSON.parse(line));
 		if (!back || !fitsState(this.state, back)) {
-			throw new Error(`Facade did not record ${body.type}: its ledger could not read it back.`);
+			throw new Error(`Failed to record event ${body.type} in the ledger: the written data could not be verified by reading it back.`);
 		}
 		if (this.fd === undefined) {
 			this.fd = fs.openSync(path.join(this.dir, LEDGER_FILE), 'a', 0o600);
@@ -341,7 +341,7 @@ function load(dir: string, mayMoveAside: (() => boolean) | undefined, onMovedAsi
 	const complete = lines.slice(0, -1);
 	const version = versionOf(complete);
 	if (version !== undefined && !READ_VERSIONS.has(version)) {
-		return unreadable(`${file} is a ledger of version ${version}, which this Facade does not read`, `ledger.v${version}`);
+		return unreadable(`${file} uses ledger version ${version}, which this version of Facade cannot read`, `ledger.v${version}`);
 	}
 	const state = createState();
 	for (const [index, line] of complete.entries()) {
@@ -352,11 +352,11 @@ function load(dir: string, mayMoveAside: (() => boolean) | undefined, onMovedAsi
 		try {
 			parsed = JSON.parse(line);
 		} catch {
-			return unreadable(`Line ${index + 1} of ${file} is not an event Facade can read`, 'ledger.unreadable');
+			return unreadable(`Line ${index + 1} of ${file} is not a readable Facade event`, 'ledger.unreadable');
 		}
 		const event = isJsonObject(parsed) && READ_VERSIONS.has(parsed.v) && parsed.seq === state.seq + 1 ? eventOf(parsed) : undefined;
 		if (!event || !fitsState(state, event)) {
-			return unreadable(`Line ${index + 1} of ${file} is not an event Facade can read`, 'ledger.unreadable');
+			return unreadable(`Line ${index + 1} of ${file} is not a readable Facade event`, 'ledger.unreadable');
 		}
 		applyEvent(state, event);
 	}
@@ -455,7 +455,7 @@ function acquireLock(dir: string, mark: string, isRunning: (pid: number) => bool
 		}
 		removeLockIfUnchanged(file, content);
 	}
-	throw new Error(`Could not take the lock ${file}.`);
+	throw new Error(`Could not acquire the file lock '${file}'.`);
 }
 
 /**

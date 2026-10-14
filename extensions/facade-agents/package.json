@@ -1075,7 +1075,7 @@
 										},
 										"default": [
 											"-i",
-											"Reply with the single word ready, and nothing else."
+											"Reply only with ready."
 										]
 									},
 									"connect": {
@@ -1188,7 +1188,7 @@
 								"default": {
 									"warmUp": [
 										"-i",
-										"Reply with the single word ready, and nothing else."
+										"Reply only with ready."
 									],
 									"messages": [
 										"--add-dir",
@@ -1288,7 +1288,7 @@
 												},
 												"default": [
 													"-i",
-													"Reply with the single word ready, and nothing else. Nobody may be watching this terminal. ${opening}"
+													"Reply only with ready. Your terminal may be unattended. ${opening}"
 												]
 											},
 											"connect": {
@@ -1377,7 +1377,7 @@
 										"default": {
 											"warmUp": [
 												"-i",
-												"Reply with the single word ready, and nothing else. Nobody may be watching this terminal. ${opening}"
+												"Reply only with ready. Your terminal may be unattended. ${opening}"
 											]
 										},
 										"markdownDescription": "%config.launch.unattended.arguments%"
@@ -1401,7 +1401,7 @@
 									"arguments": {
 										"warmUp": [
 											"-i",
-											"Reply with the single word ready, and nothing else. Nobody may be watching this terminal. ${opening}"
+											"Reply only with ready. Your terminal may be unattended. ${opening}"
 										]
 									},
 									"environment": {
