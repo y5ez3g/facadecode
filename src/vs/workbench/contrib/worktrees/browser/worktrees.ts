@@ -35,7 +35,7 @@ import { TerminalExitReason, TerminalSettingId } from '../../../../platform/term
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
-import { IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
@@ -609,8 +609,13 @@ export class WorktreeService implements IWorktreeService {
 	 * WT-5.4 once the branch is decided: the folder, its customization, and git's worktree. Failures
 	 * are returned, for New Worktree to say on screen and `makeWorktree` to throw.
 	 */
-	private async createDecided(main: URI, branch: string, name: string, parent: URI, customization: IFolderCustomization, startPoint: string | undefined): Promise<CreateOutcome> {
+	private async createDecided(main: URI, branch: string, name: string, parent: URI, given: IFolderCustomization, startPoint: string | undefined): Promise<CreateOutcome> {
 		const worktree = await freeWorktreeUri(parent, name, candidate => this.fileService.exists(candidate));
+
+		// A colour none of the repository's other worktrees has, unless one was chosen (WT-1.12)
+		const siblings = this.workspaceBarService.repositoryFor(main)?.worktrees ?? [];
+		const color = given.color ?? freeWorktreeColor(siblings.map(sibling => this.customizationService.get(sibling.uri)?.color));
+		const customization: IFolderCustomization = color ? { ...given, color } : given;
 
 		// Before git writes its record, which the bar reads a row from while the files are still being
 		// checked out. Written even when nothing was chosen: customizations are kept by path, and one left

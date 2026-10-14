@@ -366,7 +366,7 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual(steps, [
 			'_git.prepareWorktreeBaseAt /lab inspect',
 			'ask',
-			'customize /home/me/.facade/worktrees/lab/w3 {"name":"Three"}',
+			'customize /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"red"}',
 			'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
 			'trust /home/me/.facade/worktrees/lab/w3',
 			'listed /home/me/.facade/worktrees/lab/w3',
@@ -388,7 +388,7 @@ suite('Worktrees - making and deleting one', () => {
 			made: '/home/me/.facade/worktrees/lab/w3',
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
-				'customize /home/me/.facade/worktrees/lab/w3 {}',
+				'customize /home/me/.facade/worktrees/lab/w3 {"color":"red"}',
 				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
 				'trust /home/me/.facade/worktrees/lab/w3',
 				'listed /home/me/.facade/worktrees/lab/w3',
@@ -639,7 +639,7 @@ suite('Worktrees - making and deleting one', () => {
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
 				'ask',
-				'customize /home/me/.facade/worktrees/lab/w2 {"name":"Two"}',
+				'customize /home/me/.facade/worktrees/lab/w2 {"name":"Two","color":"red"}',
 				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 w2',
 				// Nothing was made at that path: the name given for it is taken back.
 				'customize /home/me/.facade/worktrees/lab/w2 {}',

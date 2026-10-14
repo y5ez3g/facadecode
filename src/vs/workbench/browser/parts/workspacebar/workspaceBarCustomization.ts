@@ -39,6 +39,11 @@ export function isFolderColor(candidate: unknown): candidate is FolderColor {
 	return typeof candidate === 'string' && (FOLDER_COLORS as readonly string[]).includes(candidate);
 }
 
+/** The first of `FOLDER_COLORS` no other worktree of the repository has (WORKTREE.md WT-1.12). */
+export function freeWorktreeColor(taken: readonly (FolderColor | undefined)[]): FolderColor | undefined {
+	return FOLDER_COLORS.find(color => !taken.includes(color));
+}
+
 /**
  * The glyphs a folder can be given, and nothing else from the 652 the icon font has.
  *
