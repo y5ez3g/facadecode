@@ -137,7 +137,7 @@ export class WorkspaceBarEditors extends Disposable {
 			if (leaving) {
 				this.putAwayEditorsService.set(leaving.folder, []);
 			}
-			this.logService.warn(`[workspaceBar] the editor part declined the editors of ${key}`);
+			this.logService.warn(`[workspaceBar] Editor part rejected editors for ${key}`);
 			// Shown after the switcher's "Some editors could not be restored for this folder."
 			throw new Error(localize('workspaceBar.editorsNotClosed', "The open editors could not be closed."));
 		}

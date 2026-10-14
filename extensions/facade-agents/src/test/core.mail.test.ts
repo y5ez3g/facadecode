@@ -1052,8 +1052,8 @@ suite('Core: messages', () => {
 			await sleep(10);
 
 			assert.deepStrictEqual({ first, second: second?.text, revealed: world.terminals.revealed, opened: world.person.opened, unread: world.table.state.mail.entries.get(4)?.state, returns: world.table.state.mail.returns.size }, {
-				first: { key: 'message:2', text: '@lint #a2 has something for you: The tests pass.', buttons: ['Show'], quietIn: 2 },
-				second: '@lint #a2 has something for you: And the docs build.',
+				first: { key: 'message:2', text: '@lint #a2 sent you a message: The tests pass.', buttons: ['Show'], quietIn: 2 },
+				second: '@lint #a2 sent you a message: And the docs build.',
 				revealed: [2],
 				opened: ['lead-a1.md #m4'],
 				unread: 'delivered',
@@ -1071,7 +1071,7 @@ suite('Core: messages', () => {
 
 			assert.deepStrictEqual({ opened: world.person.opened, told: world.person.told }, {
 				opened: [],
-				told: ['information: #m2 is in no chat room any more: the chat rooms were deleted.']
+				told: ['information: Message #m2 is no longer available because the chat rooms were deleted.']
 			});
 		});
 	});
@@ -1299,7 +1299,7 @@ suite('Core: messages', () => {
 			assert.deepStrictEqual({ whileOff, reloaded, on: { shown: world.person.notified.map(each => each.text), state: world.table.state.mail.entries.get(id)?.state } }, {
 				whileOff: { shown: 0, state: 'unread' },
 				reloaded: { shown: 0, state: 'unread' },
-				on: { shown: ['@lead #a1 has something for you: Pick red or blue.'], state: 'delivered' }
+				on: { shown: ['@lead #a1 sent you a message: Pick red or blue.'], state: 'delivered' }
 			});
 		});
 

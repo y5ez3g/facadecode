@@ -12,7 +12,7 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { FolderScope, FolderScopeContext, IFolderScopeService } from '../common/folderScope.js';
 
 const allFoldersIcon = registerIcon('facade-all-folders', Codicon.folderLibrary,
-	localize('allFoldersIcon', 'Icon for toggling view scope between the current folder and the whole workspace.'));
+	localize('allFoldersIcon', 'Icon for toggling view scope between the current folder and the entire workspace.'));
 
 /**
  * The way back to the whole workspace, in the title of every view that narrows.

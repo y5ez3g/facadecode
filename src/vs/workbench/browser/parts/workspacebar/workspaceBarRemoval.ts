@@ -138,7 +138,7 @@ export class WorkspaceBarRemoval {
 			agreed = loss;
 		}
 
-		this.logService.trace(`[workspaceBar] removing ${leaving.map(folder => folder.uri.toString(true)).join(', ')}`);
+		this.logService.trace(`[workspaceBar] Removing ${leaving.map(folder => folder.uri.toString(true)).join(', ')}`);
 		const marked = options.deleting ? this.deleting : this.removing;
 		for (const folder of leaving) {
 			marked.add(folder.uri);

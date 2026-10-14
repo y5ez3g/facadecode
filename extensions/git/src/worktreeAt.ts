@@ -127,13 +127,13 @@ const INHERITED_REPOSITORY_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_F
 function validateArguments(paths: readonly unknown[]): IWorktreeAtError | undefined {
 	for (const candidate of paths) {
 		if (typeof candidate !== 'string' || !isWholePath(candidate)) {
-			return invalidArgument(`Not an absolute path: ${String(candidate)}`);
+			return invalidArgument(`Invalid argument: '${String(candidate)}' is not an absolute path.`);
 		}
 	}
 
 	const inherited = INHERITED_REPOSITORY_VARIABLES.filter(name => process.env[name]);
 	if (inherited.length > 0) {
-		return { kind: 'error', code: 'InheritedGitEnvironment', message: `This window was started with ${inherited.join(', ')} set, which points git at another repository.` };
+		return { kind: 'error', code: 'InheritedGitEnvironment', message: `This window was started with ${inherited.join(', ')} set, which points Git at another repository.` };
 	}
 
 	return undefined;
@@ -263,10 +263,10 @@ export async function prepareWorktreeBaseAt(git: IWorktreeGit, root: string, mod
 		return refused;
 	}
 	if (mode !== 'inspect' && mode !== 'initialize') {
-		return invalidArgument(`Not a mode: ${String(mode)}`);
+		return invalidArgument(`Invalid mode: ${String(mode)}`);
 	}
 	if (mode === 'initialize' && !isBranchName(branch)) {
-		return invalidArgument(`Not a branch name: ${String(branch)}`);
+		return invalidArgument(`Invalid branch name: ${String(branch)}`);
 	}
 
 	try {
@@ -283,7 +283,7 @@ export async function prepareWorktreeBaseAt(git: IWorktreeGit, root: string, mod
 		}
 		const own = !!top && await isSameDirectory(top, root);
 		if (hasGitDirectory && !own) {
-			return { kind: 'error', code: 'UnreadableGitDirectory', message: `${path.join(root, '.git')} is not a repository git can read.` };
+			return { kind: 'error', code: 'UnreadableGitDirectory', message: `Cannot read Git repository at '${path.join(root, '.git')}'.` };
 		}
 
 		if (own && await hasHead(git, root)) {
@@ -293,7 +293,7 @@ export async function prepareWorktreeBaseAt(git: IWorktreeGit, root: string, mod
 		// A repository with history whose HEAD is on a branch without commits (`switch --orphan`) is not
 		// one to give a first commit: that commit would take the folder's files onto somebody's branch.
 		if (own && await hasCommits(git, root)) {
-			return { kind: 'error', code: 'UnbornBranch', message: 'HEAD is on a branch with no commits, and the repository has commits on other branches.' };
+			return { kind: 'error', code: 'UnbornBranch', message: 'HEAD points to a branch with no commits, but the repository contains commits on other branches.' };
 		}
 
 		if (mode === 'initialize' && branch) {
@@ -345,11 +345,11 @@ async function initialize(git: IWorktreeGit, root: string, own: boolean, branch:
 		// Case-insensitive where refs are: `Master` beside `master` is one file on Windows and macOS.
 		const initial = (await git.exec(root, ['symbolic-ref', '--short', 'HEAD'])).stdout.trim();
 		if (IGNORES_CASE ? initial.toLowerCase() === branch.toLowerCase() : initial === branch) {
-			return { kind: 'error', code: 'InitialBranch', message: `The initial commit goes on "${branch}", so the worktree needs a branch of another name.` };
+			return { kind: 'error', code: 'InitialBranch', message: `The initial commit is on branch "${branch}". The new worktree requires a different branch name.` };
 		}
 
 		if (!await hasIdentity(git, root)) {
-			return { kind: 'error', code: 'NoIdentity', message: 'Git user name and email are not configured, and a commit requires them.' };
+			return { kind: 'error', code: 'NoIdentity', message: 'Git author identity (user.name and user.email) is not configured. An initial commit requires author identity.' };
 		}
 
 		await git.exec(root, ['add', '-A']);
@@ -455,10 +455,10 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 		return refused;
 	}
 	if (!isBranchName(branch)) {
-		return invalidArgument(`Not a branch name: ${String(branch)}`);
+		return invalidArgument(`Invalid branch name: ${String(branch)}`);
 	}
 	if (startPoint !== undefined && !isCommitId(startPoint)) {
-		return invalidArgument(`Not a commit id: ${String(startPoint)}`);
+		return invalidArgument(`Invalid commit ID: ${String(startPoint)}`);
 	}
 
 	// Read first: a failed create deletes the branch only while it is still at this commit
@@ -469,7 +469,7 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 		return toError(err);
 	}
 	if (!startCommit) {
-		return invalidArgument(`Not a commit: ${startPoint ?? 'HEAD'}`);
+		return invalidArgument(`Invalid commit reference: ${startPoint ?? 'HEAD'}`);
 	}
 
 	// `worktree add -b` makes the branch before it checks out, so a failure can leave the branch behind
@@ -507,14 +507,14 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 		copyFailures = await copyWorktreeInclude(git, root, worktreePath);
 	} catch (err) {
 		// The worktree is usable; a failed copy is reported, not fatal.
-		copyFailures = [`.worktreeinclude: ${toError(err).message}`];
+		copyFailures = [`.worktreeinclude error: ${toError(err).message}`];
 	}
 
 	if (included) {
 		try {
 			copyFailures = [...copyFailures, ...await copyIntoWorktree(root, worktreePath, inRepository(root, await included()))];
 		} catch (err) {
-			copyFailures = [...copyFailures, `git.worktreeIncludeFiles: ${toError(err).message}`];
+			copyFailures = [...copyFailures, `git.worktreeIncludeFiles error: ${toError(err).message}`];
 		}
 	}
 
@@ -539,7 +539,7 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 		return refused;
 	}
 	if (mode !== 'check' && mode !== 'remove' && mode !== 'force' && mode !== 'cleanup') {
-		return invalidArgument(`Not a mode: ${String(mode)}`);
+		return invalidArgument(`Invalid mode: ${String(mode)}`);
 	}
 
 	if (mode === 'cleanup') {
@@ -659,7 +659,7 @@ async function cleanupLeftover(git: IWorktreeGit, root: string, worktreePath: st
 		return notTheLeftover(`Path '${worktreePath}' does not match the expected worktree folder. No files were deleted.`);
 	}
 	if (actual === topLevel || (await isListed(git, root, worktreePath)) !== false) {
-		return notTheLeftover(`'${worktreePath}' is tracked as an active Git worktree or the repository root, so nothing was deleted.`);
+		return notTheLeftover(`'${worktreePath}' is tracked as an active Git worktree or repository root. No files were deleted.`);
 	}
 
 	try {
@@ -883,7 +883,7 @@ async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath
 		if ((err as { code?: string }).code === 'ENOENT') {
 			return [];
 		}
-		return [`.worktreeinclude: ${toError(err).message}`];
+		return [`.worktreeinclude error: ${toError(err).message}`];
 	}
 
 	const rules = parseWorktreeInclude(content);

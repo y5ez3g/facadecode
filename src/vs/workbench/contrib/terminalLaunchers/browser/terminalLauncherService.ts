@@ -405,7 +405,7 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		try {
 			return await this._commandService.executeCommand<IProcessEnvironment>('_facade.terminal.environment', folder);
 		} catch (error) {
-			this._logService.trace('[terminalLaunchers] the environment a terminal gets could not be read', error);
+			this._logService.trace('[terminalLaunchers] Could not read terminal process environment', error);
 			return undefined;
 		}
 	}

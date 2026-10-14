@@ -28,7 +28,7 @@ import { ACTIVITY_BAR_ACTIVE_BORDER, ACTIVITY_BAR_BACKGROUND, ACTIVITY_BAR_BORDE
  */
 export const FACADE_BAR_BACKGROUND = registerColor('facadeBar.background',
 	ACTIVITY_BAR_BACKGROUND,
-	localize('facadeBarBackground', "Background color of the workspace bar, the column of folders along the left edge of the window."));
+	localize('facadeBarBackground', "Background color of the workspace bar. The workspace bar is the column of folders along the left edge of the window."));
 
 export const FACADE_BAR_FOREGROUND = registerColor('facadeBar.foreground',
 	ACTIVITY_BAR_FOREGROUND,
@@ -113,34 +113,34 @@ function folderColor(id: string, value: string, description: string) {
 }
 
 export const FACADE_FOLDER_RED = folderColor('Red', '#DD443F',
-	localize('facadeBarFolderRed', "The red accent color for folders in the workspace bar."));
+	localize('facadeBarFolderRed', "Red accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_ORANGE = folderColor('Orange', '#C26016',
-	localize('facadeBarFolderOrange', "The orange accent color for folders in the workspace bar."));
+	localize('facadeBarFolderOrange', "Orange accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_YELLOW = folderColor('Yellow', '#9A760A',
-	localize('facadeBarFolderYellow', "The yellow accent color for folders in the workspace bar."));
+	localize('facadeBarFolderYellow', "Yellow accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_LIME = folderColor('Lime', '#618720',
-	localize('facadeBarFolderLime', "The lime accent color for folders in the workspace bar."));
+	localize('facadeBarFolderLime', "Lime accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_GREEN = folderColor('Green', '#2C8C46',
-	localize('facadeBarFolderGreen', "The green accent color for folders in the workspace bar."));
+	localize('facadeBarFolderGreen', "Green accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_TEAL = folderColor('Teal', '#208986',
-	localize('facadeBarFolderTeal', "The teal accent color for folders in the workspace bar."));
+	localize('facadeBarFolderTeal', "Teal accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_BLUE = folderColor('Blue', '#277CDC',
-	localize('facadeBarFolderBlue', "The blue accent color for folders in the workspace bar."));
+	localize('facadeBarFolderBlue', "Blue accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_INDIGO = folderColor('Indigo', '#7B6CD8',
-	localize('facadeBarFolderIndigo', "The indigo accent color for folders in the workspace bar."));
+	localize('facadeBarFolderIndigo', "Indigo accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_PURPLE = folderColor('Purple', '#A15FC7',
-	localize('facadeBarFolderPurple', "The purple accent color for folders in the workspace bar."));
+	localize('facadeBarFolderPurple', "Purple accent color for folders in the workspace bar."));
 
 export const FACADE_FOLDER_PINK = folderColor('Pink', '#CA4A9B',
-	localize('facadeBarFolderPink', "The pink accent color for folders in the workspace bar."));
+	localize('facadeBarFolderPink', "Pink accent color for folders in the workspace bar."));
 
 /**
  * The agents' colour: the `+N` of agents past a row's logos, the dot a row with agents carries while
@@ -161,4 +161,4 @@ export const FACADE_AGENT_BADGE_BACKGROUND = registerColor('facadeAgentBadge.bac
 
 export const FACADE_AGENT_BADGE_FOREGROUND = registerColor('facadeAgentBadge.foreground',
 	'#FFFFFF',
-	localize('facadeAgentBadgeForeground', "Foreground color of agent badge counts."));
+	localize('facadeAgentBadgeForeground', "Foreground color of agent badge count text."));

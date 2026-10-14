@@ -810,7 +810,7 @@ function notStartedWhy(phase: StartPhase | undefined, integration: boolean, ms: 
  * (AGENT-LAUNCHER.md, L5): in their language.
  */
 export function notConnectedNotice(agent: Agent): string {
-	return l10n.t("{0} is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.", describe(agent));
+	return l10n.t("{0} is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.", describe(agent));
 }
 
 /** What a call answers once the window closed under it: it does nothing more. */

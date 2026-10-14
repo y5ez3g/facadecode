@@ -376,7 +376,7 @@ export class PtyService extends Disposable implements IPtyService {
 			const persistentProcess = this._throwIfNoPty(id);
 			// Facade Code: an agent's process is one window's (`mayAttachProcess`; N-68)
 			if (!await mayAttachProcess(persistentProcess)) {
-				throw new Error(`it is an agent's that another window has`);
+				throw new Error(`because another window holds this agent's process`);
 			}
 			await persistentProcess.attach();
 			this._logService.info(`Persistent process reconnection "${id}"`);

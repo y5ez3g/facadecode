@@ -55,7 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			created.dispose('facade');
 			none = 'failed';
 			log.error(`Could not start Facade agents: ${stackOf(err)}`);
-			void vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start: {0}", messageOf(err)));
+			void vscode.window.showErrorMessage(vscode.l10n.t("Facade Agents could not start: {0}", messageOf(err)));
 		} finally {
 			creating = undefined;
 		}
@@ -114,8 +114,8 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (!service) {
 				// A failure as one (UI-17); a folder to open, as news
 				void (none === 'failed'
-					? vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why."))
-					: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to start an agent in it.")));
+					? vscode.window.showErrorMessage(vscode.l10n.t("Facade Agents could not start in this window. See the Facade Agents output for details."))
+					: vscode.window.showInformationMessage(vscode.l10n.t("Open a local folder to start an agent.")));
 				return undefined;
 			}
 			return service.startAgentCommand(args);
@@ -129,8 +129,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		await ready;
 		if (!service) {
 			void (none === 'failed'
-				? vscode.window.showErrorMessage(vscode.l10n.t("Facade agents could not start in this window: the Facade Agents output says why."))
-				: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to have agents in it.")));
+				? vscode.window.showErrorMessage(vscode.l10n.t("Facade Agents could not start in this window. See the Facade Agents output for details."))
+				: vscode.window.showInformationMessage(vscode.l10n.t("Open a local folder to start an agent.")));
 			return;
 		}
 		await command(service);
@@ -153,7 +153,7 @@ export function activate(context: vscode.ExtensionContext): void {
  */
 async function showAgentsLog(file: string | undefined): Promise<void> {
 	if (!file || !fs.existsSync(file)) {
-		void vscode.window.showInformationMessage(vscode.l10n.t("No agent has started in this workspace yet."));
+		void vscode.window.showInformationMessage(vscode.l10n.t("No agent has been started in this workspace yet."));
 		return;
 	}
 	await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });

@@ -258,7 +258,7 @@ suite('Agent picker - every agent open, in one list', () => {
 
 		assert.deepStrictEqual(picks.map(pick => ({ id: pick.preparing?.id, label: pick.label, ariaLabel: pick.ariaLabel, buttons: pick.buttons?.length })), [
 			{ id: 9, label: '$(rocket~folderred) FacadeCode $(chevron-right) $(workspace-bar-worktree) docs $(chevron-right) $(loading~spin) @docs #a9 \u00b7 setting up its worktree', ariaLabel: 'FacadeCode, docs, @docs #a9, setting up its worktree', buttons: 1 },
-			{ id: 7, label: '$(loading~spin) @lint #a7 \u00b7 making its worktree', ariaLabel: '@lint #a7, making its worktree', buttons: 1 }
+			{ id: 7, label: '$(loading~spin) @lint #a7 \u00b7 creating its worktree', ariaLabel: '@lint #a7, creating its worktree', buttons: 1 }
 		]);
 	});
 

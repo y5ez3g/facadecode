@@ -937,7 +937,7 @@ export class Facade implements Disposable {
 		}
 		this.launcher.tellUnconfirmed(now, now.phase === 'connecting'
 			? notConnectedNotice(now)
-			: l10n.t("{0} is not confirmed to have started: {1}.", describe(now), why));
+			: l10n.t("Facade could not confirm that {0} started: {1}.", describe(now), why));
 	}
 
 	/** Whether `agent` is starting still: not stopped meanwhile. */
@@ -2494,9 +2494,9 @@ function endNotice(agent: Agent, end: End, stopper: string): string {
 		case 'exited':
 			return l10n.t("{0} exited: {1}.", describe(agent), end.reason);
 		case 'failed':
-			return l10n.t("{0} did not start: {1}.", describe(agent), end.reason);
+			return l10n.t("{0} failed to start: {1}.", describe(agent), end.reason);
 		case 'lost':
-			return l10n.t("{0} was lost: {1}.", describe(agent), end.reason);
+			return l10n.t("{0} ended unexpectedly: {1}.", describe(agent), end.reason);
 		case 'stopped':
 			return typeof end.by === 'number'
 				? l10n.t("{0} was stopped by {1}.", describe(agent), stopper)

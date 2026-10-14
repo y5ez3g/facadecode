@@ -138,7 +138,7 @@ suite('worktreeAt', () => {
 			files: Object.fromEntries(['.env', 'app.local.json', 'secrets/key.txt', '.cache', 'node_modules/dep/index.js'].map(file => [file, existsSync(path.join(worktree, file))]))
 		}, {
 			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
-			failed: { kind: 'created', copyFailures: ['git.worktreeIncludeFiles: no file search'], hookFailure: undefined },
+			failed: { kind: 'created', copyFailures: ['git.worktreeIncludeFiles error: no file search'], hookFailure: undefined },
 			files: { '.env': true, 'app.local.json': true, 'secrets/key.txt': true, '.cache': false, 'node_modules/dep/index.js': false }
 		});
 	});
@@ -276,7 +276,7 @@ suite('worktreeAt', () => {
 
 		const result = await createWorktreeAt(git, main, worktree, 'unreadable');
 
-		assert.deepStrictEqual(result.kind === 'created' ? result.copyFailures.map(failure => failure.split(':')[0]) : result, ['.worktreeinclude']);
+		assert.deepStrictEqual(result.kind === 'created' ? result.copyFailures.map(failure => failure.split(':')[0]) : result, ['.worktreeinclude error']);
 	});
 
 	test('WTA-31 a path that passes through a link is a path through a link, on either side', async () => {

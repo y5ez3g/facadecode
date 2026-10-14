@@ -37,13 +37,13 @@ export async function pickRoom(rooms: readonly ChatRoom[]): Promise<void> {
 		const time = new Date(room.lastTime).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' });
 		return {
 			label: describe(room.root),
-			description: room.live ? room.root.worktree : vscode.l10n.t("{0}, ended", room.root.worktree),
+			description: room.live ? room.root.worktree : vscode.l10n.t("{0} (ended)", room.root.worktree),
 			detail: room.messages === 1
 				? vscode.l10n.t("1 message, at {0}", time)
-				: vscode.l10n.t("{0} messages, the last at {1}", room.messages, time),
+				: vscode.l10n.t("{0} messages, latest at {1}", room.messages, time),
 			room
 		};
-	}), { title: vscode.l10n.t("Open Chat Room"), placeHolder: vscode.l10n.t("Every message of an agent you started, and of the agents it started") });
+	}), { title: vscode.l10n.t("Open Chat Room"), placeHolder: vscode.l10n.t("Each chat room holds every message of an agent you started and of the agents it started") });
 	if (picked) {
 		await openRoom(picked.room.file);
 	}
@@ -57,7 +57,7 @@ export async function confirmDeleteRooms(): Promise<boolean> {
 	const remove = vscode.l10n.t("Delete");
 	// As VS Code asks before deleting what cannot be restored: a question, then what goes and that it is for good
 	const answer = await vscode.window.showWarningMessage(
-		vscode.l10n.t("Are you sure you want to delete the chat rooms of this workspace?"),
+		vscode.l10n.t("Are you sure you want to delete all chat rooms in this workspace?"),
 		{ modal: true, detail: vscode.l10n.t("All messages between you and your agents in this workspace will be deleted. This action cannot be undone.") },
 		remove
 	);

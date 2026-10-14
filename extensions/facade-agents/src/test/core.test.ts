@@ -488,12 +488,12 @@ suite('Core: starting an agent, step by step', () => {
 			],
 			typed: [],
 			told: [
-				'error: @main #a1 did not start: the window has no terminal for it. (#a1\'s terminal)',
-				'error: @main #a2 did not start: its CLI ended with exit code 2. (#a2\'s terminal)',
-				'warning: @main #a3 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a3\'s terminal)'
+				'error: @main #a1 failed to start: the window has no terminal for it. (#a1\'s terminal)',
+				'error: @main #a2 failed to start: its CLI ended with exit code 2. (#a2\'s terminal)',
+				'warning: @main #a3 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal. (#a3\'s terminal)'
 			],
 			// Its connection closes that warning (L5)
-			closed: ['message:facade:3: @main #a3 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.']
+			closed: ['message:facade:3: @main #a3 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.']
 		});
 	});
 
@@ -1337,7 +1337,7 @@ suite('Core: after a reload', () => {
 			stillStarting: ['#a1 @main by @human starting'],
 			agents: ['#a1 @main by @human running'],
 			typed: [],
-			told: ['warning: @main #a1 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a1\'s terminal)']
+			told: ['warning: @main #a1 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal. (#a1\'s terminal)']
 		});
 	});
 
@@ -1763,7 +1763,7 @@ suite('Core: what Facade puts into a folder', () => {
 		assert.deepStrictEqual({ file: JSON.parse(fs.readFileSync(mcp, 'utf8')), kept: keptFiles(), told: world.person.told.map(text => text.replace(/kept at .*$/, 'kept at …')) }, {
 			file: { mcpServers: { docs: { command: 'docs-server' } }, mine: true },
 			kept: [theirs],
-			told: [`warning: ${mcp} changed after Facade's part went in, as its window went: what it held before is kept at …`]
+			told: [`warning: ${mcp} was changed after Facade added its part, while its window was closing. Its previous content is kept at …`]
 		});
 	});
 
@@ -1797,7 +1797,7 @@ suite('Core: what Facade puts into a folder', () => {
 
 		assert.deepStrictEqual({ kept: keptFiles(), told: told.map(text => text.replace(/kept at .*$/, 'kept at …')), gone: !fs.existsSync(mcp) }, {
 			kept: [theirs],
-			told: [`warning: ${mcp} was gone when another agent started there: what it held before Facade's part went in is kept at …`],
+			told: [`warning: ${mcp} was missing when another agent started there. Its content from before Facade's changes is kept at …`],
 			gone: true
 		});
 	});
@@ -2072,7 +2072,7 @@ suite('Core: what Facade puts into a folder', () => {
 
 		assert.deepStrictEqual({ kept: kept.map(file => fs.readFileSync(file, 'utf8')), told: world.person.told }, {
 			kept: [theirs],
-			told: [`warning: ${mcp} was gone when its agents ended: what it held before Facade's part went in is kept at ${kept[0]}.`]
+			told: [`warning: ${mcp} was missing when its agents ended. Its content from before Facade's changes is kept at ${kept[0]}.`]
 		});
 	});
 
@@ -2195,7 +2195,7 @@ suite('Core: the person\'s own agents', () => {
 
 		assert.deepStrictEqual({ state: facts.state, told, meanwhile, after: agents(world), toldAfter: world.person.told }, {
 			state: 'starting',
-			told: ['warning: @arg #a1 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a1\'s terminal)'],
+			told: ['warning: @arg #a1 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal. (#a1\'s terminal)'],
 			meanwhile: ['#a1 @arg by @human starting'],
 			after: ['#a1 @arg by @human running'],
 			toldAfter: told
@@ -2215,12 +2215,12 @@ suite('Core: the person\'s own agents', () => {
 		assert.deepStrictEqual({ closedBefore, closed: world.person.closed, told: world.person.told, agents: agents(world) }, {
 			closedBefore: [],
 			closed: [
-				'message:facade:1: @arg #a1 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.',
-				'message:facade:2: @arg #a2 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen.'
+				'message:facade:1: @arg #a1 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.',
+				'message:facade:2: @arg #a2 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.'
 			],
 			told: [
-				'warning: @arg #a1 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a1\'s terminal)',
-				'warning: @arg #a2 is open, but has not connected to Facade: it has no Facade tools yet. It may be slow, or waiting for an answer on its screen. (#a2\'s terminal)'
+				'warning: @arg #a1 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal. (#a1\'s terminal)',
+				'warning: @arg #a2 is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal. (#a2\'s terminal)'
 			],
 			agents: ['#a1 @arg by @human running', '#a2 @arg by @human stopped by @human: its terminal tab was closed']
 		});
@@ -2233,7 +2233,7 @@ suite('Core: the person\'s own agents', () => {
 		assert.deepStrictEqual({ state: facts.state, agents: agents(world), told: world.person.told }, {
 			state: 'starting',
 			agents: ['#a1 @arg by @human failed: its CLI ended with exit code 1'],
-			told: ['error: @arg #a1 did not start: its CLI ended with exit code 1. (#a1\'s terminal)']
+			told: ['error: @arg #a1 failed to start: its CLI ended with exit code 1. (#a1\'s terminal)']
 		});
 	});
 
@@ -2251,7 +2251,7 @@ suite('Core: the person\'s own agents', () => {
 				'#a2 @arg by @human failed: its CLI ended with exit code 130',
 				'#a3 @arg by @human failed: its CLI ended with exit code 1'
 			],
-			told: ['error: @arg #a3 did not start: its CLI ended with exit code 1. (#a3\'s terminal)']
+			told: ['error: @arg #a3 failed to start: its CLI ended with exit code 1. (#a3\'s terminal)']
 		});
 	});
 

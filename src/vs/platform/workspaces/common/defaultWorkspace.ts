@@ -49,11 +49,11 @@ export async function ensureDefaultWorkspace(fileService: IFileService, logServi
 		if (!(await fileService.stat(uri)).isDirectory) {
 			return uri;
 		}
-		logService.warn(`[defaultWorkspace] ${uri.fsPath} is a directory, not a workspace file: an empty window opens instead`);
+		logService.warn(`[defaultWorkspace] Path '${uri.fsPath}' is a directory, not a workspace file. Opening an empty window instead.`);
 		return undefined;
 	} catch (error) {
 		if (toFileOperationResult(error) !== FileOperationResult.FILE_NOT_FOUND) {
-			logService.warn(`[defaultWorkspace] ${uri.fsPath} could not be read: an empty window opens instead`, error);
+			logService.warn(`[defaultWorkspace] Could not read workspace file at '${uri.fsPath}'. Opening an empty window instead.`, error);
 			return undefined;
 		}
 	}
@@ -62,7 +62,7 @@ export async function ensureDefaultWorkspace(fileService: IFileService, logServi
 		await fileService.writeFile(uri, VSBuffer.fromString(DEFAULT_WORKSPACE_CONTENT));
 		return uri;
 	} catch (error) {
-		logService.warn(`[defaultWorkspace] ${uri.fsPath} could not be written: an empty window opens instead`, error);
+		logService.warn(`[defaultWorkspace] Could not write workspace file at '${uri.fsPath}'. Opening an empty window instead.`, error);
 		return undefined;
 	}
 }

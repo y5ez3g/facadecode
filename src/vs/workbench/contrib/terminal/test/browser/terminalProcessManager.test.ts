@@ -202,13 +202,13 @@ suite('Workbench - TerminalProcessManager', () => {
 		test('an agent\'s run whose process is gone as the window comes back gets no shell in its place, under its last output: the attach fails, saying so (N-15)', async () => {
 			const result = await manager.createProcess({ attachPersistentProcess: upcastPartial<IProcessDetails>({ id: 7, reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }) }, 80, 24, false);
 
-			deepStrictEqual(result, { message: 'This agent\'s process ended while the window was away.' });
+			deepStrictEqual(result, { message: 'This agent\'s process ended while the window was closed or reloading.' });
 		});
 
 		test('an agent\'s run whose process another window has - one opening a workspace\'s old file, its last layout or editors naming it - is not attached a second time: the attach fails, saying where it runs (N-68)', async () => {
 			const result = await manager.createProcess({ attachPersistentProcess: upcastPartial<IProcessDetails>({ id: 8, reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }) }, 80, 24, false);
 
-			deepStrictEqual(result, { message: 'This agent runs in another window: use its tab there.' });
+			deepStrictEqual(result, { message: 'This agent is running in another window. Switch to its tab there.' });
 		});
 
 		test('an agent\'s run is not relaunched - that would run its CLI again - but ends', async () => {

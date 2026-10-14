@@ -450,7 +450,7 @@ suite('Core: agents\' screens', () => {
 				message: 'Arg Code did not start as @nope #a1: its CLI ended with exit code 1\nScreen excerpt for #a1. Use read_screen for up to 2000 lines:\nError: unknown model nope\nexiting',
 				data: { outcome: 'failed', agent: 1, phase: 'connecting', finalScreen: finalScreenTextFile(dir, 1) }
 			},
-			told: ['error: @nope #a1 did not start: its CLI ended with exit code 1. (#a1\'s terminal)', 'error: @lead #a2 exited: its CLI ended with exit code 3. (#a2\'s terminal)'],
+			told: ['error: @nope #a1 failed to start: its CLI ended with exit code 1. (#a1\'s terminal)', 'error: @lead #a2 exited: its CLI ended with exit code 3. (#a2\'s terminal)'],
 			ended: { id: 2, name: 'lead', finalScreen: finalScreenFile(dir, 2), ending: 'exited: its CLI ended with exit code 3' }
 		});
 	});

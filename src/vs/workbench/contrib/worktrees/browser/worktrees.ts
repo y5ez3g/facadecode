@@ -173,11 +173,11 @@ function explainFailure(error: WorktreeAtError | undefined, main: URI, branch?: 
 		case 'NotASafeGitRepository':
 			return localize('worktrees.unsafeRepository', "Git cannot open '{0}' because it is owned by another user. Run '{1}' to mark it safe, then try again.", basename(main), `git config --global --add safe.directory ${main.scheme === Schemas.file ? main.fsPath : main.path}`);
 		case 'InheritedGitEnvironment':
-			return localize('worktrees.inheritedEnvironment', "This window was started with GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE set, redirecting Git to another repository. Please open the folder in a new window.");
+			return localize('worktrees.inheritedEnvironment', "This window was started with GIT_DIR, GIT_WORK_TREE, or GIT_INDEX_FILE set, redirecting Git to another repository. Please open the folder in a new window.");
 		case 'InvalidBranchName':
 			return localize('worktrees.invalidBranchName', "'{0}' is not a valid branch name.", branch ?? '');
 		case 'InitialBranch':
-			return localize('worktrees.initialBranch', "The initial commit is on '{0}'. Please choose a different branch name for the new worktree.", branch ?? '');
+			return localize('worktrees.initialBranch', "The initial commit is on branch '{0}'. Please choose a different branch name for the new worktree.", branch ?? '');
 		case 'UnbornBranch':
 			return localize('worktrees.unbornBranch', "Repository '{0}' has no commits on the current branch. Create a commit or switch branches first.", basename(main));
 		case 'WorktreeContainsChanges':
@@ -219,7 +219,7 @@ function restrictedUnasked(): string {
 }
 
 function noIdentityMessage(): string {
-	return localize('worktrees.noIdentity', "Git user name and email are not configured. Run '{0}' and '{1}', then try again.", 'git config --global user.name', 'git config --global user.email');
+	return localize('worktrees.noIdentity', "Git author identity (user.name and user.email) is not configured. Run '{0}' and '{1}', then try again.", 'git config --global user.name', 'git config --global user.email');
 }
 
 /** A path spelled for the OS the folder is on - the remote's, for a folder on a remote. */
@@ -479,7 +479,7 @@ function deleteFailure(error: WorktreeAtError | undefined, main: URI): string {
 
 /** That the worktree `name` was not deleted, as the workspace did not let it go: nothing was stopped or discarded (WT-8, step 5). */
 function notOutOfWorkspace(name: string): string {
-	return localize('worktrees.notOut', "Worktree '{0}' was not deleted and could not be removed from the workspace.", name);
+	return localize('worktrees.notOut', "Worktree '{0}' could not be removed from the workspace, so it was not deleted.", name);
 }
 
 /** That the worktree `name` was not deleted, the agents `stopping` working in it not stopped in time (WT-8, step 6). */
@@ -713,7 +713,7 @@ export class WorktreeService implements IWorktreeService {
 		const { main, worktree, name } = this.toRemove(target, options);
 		// The deletion's own first look, the caller's own files applied as it applies them (O5)
 		const loss = await this.undecidedLoss(main, worktree, await this.checkToRemove(main, worktree, name, options), options);
-		return loss ? [...lostFiles(loss), ...(loss.submodules ? [localize('worktrees.submodulesLost', "its submodules (with any of their commits not pushed)")] : [])] : [];
+		return loss ? [...lostFiles(loss), ...(loss.submodules ? [localize('worktrees.submodulesLost', "its submodules (including any unpushed commits)")] : [])] : [];
 	}
 
 	/**
@@ -830,7 +830,7 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-5.1: an untrusted repository gets no worktree - a new one would be trusted as it is made.
 		if (trustEnabled && !(await this.workspaceTrustManagementService.getUriTrustInfo(main)).trusted
-			&& !await this.workspaceTrustRequestService.requestResourcesTrust({ uri: main, message: localize('worktrees.untrusted', "A worktree inherits trust from its parent repository '{0}'. Please trust the repository first.", this.labelService.getUriLabel(main)) })) {
+			&& !await this.workspaceTrustRequestService.requestResourcesTrust({ uri: main, message: localize('worktrees.untrusted', "A worktree inherits trust from its parent repository '{0}'. Please trust the parent repository first.", this.labelService.getUriLabel(main)) })) {
 			return undefined;
 		}
 
@@ -892,8 +892,8 @@ export class WorktreeService implements IWorktreeService {
 
 		// WT-5.2: the branch, where it starts and the folder it goes in, with the name and colour beside it.
 		const origin = prepare
-			? localize('worktrees.startsAtFirst', "Branches off the initial commit.")
-			: localize('worktrees.startsAt', "Branches off HEAD of '{0}'.", basename(main));
+			? localize('worktrees.startsAtFirst', "The branch starts from the initial commit.")
+			: localize('worktrees.startsAt', "The branch starts from HEAD of '{0}'.", basename(main));
 		const answer = await this.workspaceBarDialogService.showNewWorktreeDialog(basename(main), origin, value => {
 			const trimmed = value.trim();
 			if (!trimmed) {
@@ -933,7 +933,7 @@ export class WorktreeService implements IWorktreeService {
 			if (prepared?.kind !== 'ready') {
 				const error = prepared?.kind === 'error' ? prepared : undefined;
 				const message = gitMessage(error);
-				this.logService.warn(`[worktrees] preparing ${main.toString(true)} failed: ${message}`);
+				this.logService.warn(`[worktrees] Failed to prepare repository at '${main.toString(true)}': ${message}`);
 				this.notificationService.error(explainFailure(error, main, branch)
 					?? localize('worktrees.prepareFailed', "Failed to create the initial commit for '{0}': {1}", basename(main), message));
 				return undefined;
@@ -1068,7 +1068,7 @@ export class WorktreeService implements IWorktreeService {
 
 		if (!result || result.kind === 'error') {
 			this.customizationService.set(worktree, {});
-			this.logService.warn(`[worktrees] creating ${worktree.toString(true)} failed: ${result?.message ?? 'no answer'}`);
+			this.logService.warn(`[worktrees] Failed to create worktree at '${worktree.toString(true)}': ${result?.message ?? 'no response'}`);
 			return { kind: 'failed', worktree, result };
 		}
 
@@ -1079,7 +1079,7 @@ export class WorktreeService implements IWorktreeService {
 
 		// Nor does a hook that failed: git kept the worktree, and so does this.
 		if (result.hookFailure && !quiet) {
-			this.notificationService.warn(localize('worktrees.hookFailed', "Worktree created successfully, but a Git hook failed: {0}", result.hookFailure));
+			this.notificationService.warn(localize('worktrees.hookFailed', "Worktree was created, but a Git hook failed: {0}", result.hookFailure));
 		}
 
 		// A worktree made where one was deleted is a new one, its setup not started (WT-7.7)
@@ -1245,7 +1245,7 @@ export class WorktreeService implements IWorktreeService {
 				// With its shell gone, the lines after it cannot run: that it ended is the setup's failure, unless it failed
 				const unrun = ran.shellEnded && index < setup.lines.length - 1;
 				if ((ran.exitCode !== undefined && ran.exitCode !== 0) || unrun) {
-					const output = [ran.output?.trimEnd(), unrun ? localize('worktrees.shellEnded', "The shell ended with this line: the lines after it did not run.") : undefined].filter(Boolean).join('\n');
+					const output = [ran.output?.trimEnd(), unrun ? localize('worktrees.shellEnded', "The shell exited after this command, so the commands after it did not run.") : undefined].filter(Boolean).join('\n');
 					failed ??= { kind: 'failed', line, exitCode: ran.exitCode ?? 0, ...(output ? { output: output.slice(-SETUP_OUTPUT_CHARS) } : {}) };
 				}
 				if (ran.shellEnded) {
@@ -1392,7 +1392,7 @@ export class WorktreeService implements IWorktreeService {
 			if (!await this.fileService.exists(worktree)) {
 				return;
 			}
-			throw new Error(localize('worktrees.leftoverUnknown', "{0} is not what a deletion in this window left of a worktree, so it is not deleted: delete it by hand if it is to go.", this.labelService.getUriLabel(worktree)));
+			throw new Error(localize('worktrees.leftoverUnknown', "'{0}' was not recognized as a worktree folder left behind by a deletion in this window, so it was not deleted. Delete it manually if needed.", this.labelService.getUriLabel(worktree)));
 		}
 
 		const check = await this.checkToRemove(main, worktree, name, options);
@@ -1591,12 +1591,12 @@ export class WorktreeService implements IWorktreeService {
 			: listed.join(', ');
 		if (late) {
 			return listed.length
-				? localize('worktrees.changedMeanwhile', "{0} was not deleted: changes came into it as it was being deleted, which deleting it would lose: {1}.", label, named)
-				: localize('worktrees.submodulesMeanwhile', "{0} was not deleted: it has submodules now, which would go with it with any of their commits not pushed.", label);
+				? localize('worktrees.changedMeanwhile', "'{0}' was not deleted because new changes appeared in it during deletion and would be lost: {1}.", label, named)
+				: localize('worktrees.submodulesMeanwhile', "'{0}' was not deleted because submodules were added to it during deletion; deleting it would lose any of their unpushed commits.", label);
 		}
 		return listed.length
-			? localize('worktrees.wouldLose', "{0} has changes that deleting it would lose: {1}. Nothing was deleted.", label, named)
-			: localize('worktrees.wouldLoseSubmodules', "{0} has submodules, which would go with it with any of their commits not pushed. Nothing was deleted.", label);
+			? localize('worktrees.wouldLose', "'{0}' has changes that would be lost if it were deleted: {1}. Nothing was deleted.", label, named)
+			: localize('worktrees.wouldLoseSubmodules', "'{0}' has submodules; deleting it would lose any of their unpushed commits. Nothing was deleted.", label);
 	}
 
 	/** `_git.deleteWorktreeAt`, for `worktree` of `main`; `recovery` is what `cleanup` deletes by. */
@@ -1644,7 +1644,7 @@ export class WorktreeService implements IWorktreeService {
 				// is closed or moved (SP-18; N-37)
 				const elsewhere = await this.otherWindowsAgentsIn(worktree);
 				if (elsewhere.length) {
-					return { kind: 'refused', why: localize('worktrees.agentElsewhere', "{0} was not deleted: an agent of another window is working inside it, {1}. Stop it in that window first.", this.labelService.getUriLabel(worktree), elsewhere.join(', ')) };
+					return { kind: 'refused', why: localize('worktrees.agentElsewhere', "'{0}' was not deleted because an agent from another window is working in it ({1}). Stop that agent in its window first.", this.labelService.getUriLabel(worktree), elsewhere.join(', ')) };
 				}
 
 				// Decided by a caller, whether it goes is settled before anything is moved, closed or removed: a deletion
@@ -1656,7 +1656,7 @@ export class WorktreeService implements IWorktreeService {
 						return run && instance.exitCode === undefined && !decided.runs.some(each => each.workspace === run.workspace && each.id === run.id);
 					});
 					if (unnamed.length) {
-						return { kind: 'refused', why: localize('worktrees.agentInside', "{0} was not deleted: an agent the call did not stop is working inside it, in {1}. Stop it first.", this.labelService.getUriLabel(worktree), unnamed.map(instance => instance.title).join(', ')) };
+						return { kind: 'refused', why: localize('worktrees.agentInside', "'{0}' was not deleted because an agent that this deletion does not stop is working in it ({1}). Stop that agent first.", this.labelService.getUriLabel(worktree), unnamed.map(instance => instance.title).join(', ')) };
 					}
 				}
 
@@ -1797,7 +1797,7 @@ export class WorktreeService implements IWorktreeService {
 		}
 		const previous = this.activeFolderService.previousFolder;
 		if (previous) {
-			await this.activeFolderService.setActiveFolder(previous).catch(err => this.logService.trace(`[worktrees] the window could not go back to ${previous.uri.toString(true)}: ${toErrorMessage(err)}`));
+			await this.activeFolderService.setActiveFolder(previous).catch(err => this.logService.trace(`[worktrees] Window could not return to '${previous.uri.toString(true)}': ${toErrorMessage(err)}`));
 		}
 		return true;
 	}
@@ -1813,7 +1813,7 @@ export class WorktreeService implements IWorktreeService {
 		try {
 			await this.commandService.executeCommand('_facade.agents.worktreeDeleting', worktree);
 		} catch (error) {
-			this.logService.trace(`[worktrees] no agents asked to stop in ${worktree.toString(true)}: ${toErrorMessage(error)}`);
+			this.logService.trace(`[worktrees] Could not tell the agents that '${worktree.toString(true)}' is being deleted: ${toErrorMessage(error)}`);
 		}
 		return true;
 	}
@@ -1842,7 +1842,7 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
-		this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} ended as ${outcome?.kind ?? 'unknown'}${outcome?.kind === 'error' ? `: ${outcome.message}` : ''}`);
+		this.logService.warn(`[worktrees] Deleting '${worktree.toString(true)}' concluded as ${outcome?.kind ?? 'unknown'}${outcome?.kind === 'error' ? `: ${outcome.message}` : ''}`);
 		if (outcome?.kind === 'refused') {
 			this.notificationService.error(outcome.why);
 		} else if (outcome?.kind === 'stayed') {
@@ -1897,13 +1897,13 @@ export class WorktreeService implements IWorktreeService {
 			why = outcome.why ?? stillStopping(name, outcome.stopping, false);
 		} else {
 			const error = outcome?.kind === 'error' ? outcome : undefined;
-			this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} failed: ${gitMessage(error)}`);
+			this.logService.warn(`[worktrees] Failed to delete worktree '${worktree.toString(true)}': ${gitMessage(error)}`);
 			why = deleteFailure(error, main);
 		}
 
 		const done = [
 			deletion.leftFolders ? localize('worktrees.outOfWorkspace', "It was removed from the workspace.") : undefined,
-			deletion.ended.length ? localize('worktrees.terminalsEnded', "The terminals working in it were closed for the deletion, which ended what ran in them: {0}.", deletion.ended.join(', ')) : undefined
+			deletion.ended.length ? localize('worktrees.terminalsEnded', "Terminals associated with this worktree were closed and active processes terminated: {0}.", deletion.ended.join(', ')) : undefined
 		].filter(isString);
 		return [why, ...done].join('\n');
 	}
@@ -1968,7 +1968,7 @@ export class WorktreeService implements IWorktreeService {
 	 */
 	private tellAgents(command: '_facade.agents.worktreeDeleteFailed' | '_facade.agents.worktreeDeleted', worktree: URI, what: string): void {
 		this.commandService.executeCommand(command, worktree).catch(err => {
-			const message = `[worktrees] the agents were not told ${worktree.toString(true)} ${what}: ${toErrorMessage(err)}`;
+			const message = `[worktrees] Could not tell the agents that ${worktree.toString(true)} ${what}: ${toErrorMessage(err)}`;
 			if (CommandsRegistry.getCommand(command)) {
 				this.logService.warn(message);
 			} else {
@@ -1988,7 +1988,7 @@ export class WorktreeService implements IWorktreeService {
 	private holdReadonly(worktree: URI): IDisposable {
 		const extUri = this.uriIdentityService.extUri;
 		const held = new ResourceSet(uri => extUri.getComparisonKey(uri));
-		const why = new MarkdownString(localize('worktrees.beingDeleted', "Its worktree is being deleted."));
+		const why = new MarkdownString(localize('worktrees.beingDeleted', "The worktree is being deleted."));
 		const hold = (resources: readonly URI[]) => {
 			const fresh = resources.filter(resource => extUri.isEqualOrParent(resource, worktree) && !held.has(resource) && !this.filesConfigurationService.isReadonly(resource));
 			for (const resource of fresh) {

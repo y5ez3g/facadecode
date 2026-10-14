@@ -649,7 +649,7 @@ export class Mail implements Disposable {
 		const from = typeof message.from === 'number' ? table.get(message.from) : undefined;
 		const about = from ?? (message.about !== undefined ? table.get(message.about) : undefined);
 		const show = l10n.t("Show");
-		const text = from ? l10n.t("{0} has something for you: {1}", describe(from), shown) : l10n.t("Facade: {0}", shown);
+		const text = from ? l10n.t("{0} sent you a message: {1}", describe(from), shown) : l10n.t("Facade: {0}", shown);
 		const key = from ? `message:${from.id}` : facadeNoticeKey(message.about ?? message.id);
 		void this.context.ports.person.notify({ key, text, buttons: [show], ...(from ? { quietIn: from.id } : {}) }).then(async choice => {
 			if (choice === show) {
@@ -667,7 +667,7 @@ export class Mail implements Disposable {
 		if (room && fs.existsSync(room)) {
 			await this.context.ports.person.openRoom(room, message.id);
 		} else {
-			this.context.ports.person.tell(l10n.t("#m{0} is in no chat room any more: the chat rooms were deleted.", message.id), undefined, 'information');
+			this.context.ports.person.tell(l10n.t("Message #m{0} is no longer available because the chat rooms were deleted.", message.id), undefined, 'information');
 		}
 	}
 

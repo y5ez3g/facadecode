@@ -102,7 +102,7 @@ suite('Workspace bar - a folder not trusted, on its way into a trusted window', 
 				message: 'Do you trust the authors of the files in these 2 folders?',
 				details: [
 					'`/tmp/a`  \n`/srv/b`',
-					'This window is trusted. Adding untrusted folders will switch the entire workspace and active agents to Restricted Mode.',
+					'This workspace is trusted. Adding untrusted folders will switch the entire workspace and active agents to Restricted Mode.',
 					'See [our docs](https://aka.ms/vscode-workspace-trust) to learn more, or [open all 3 folders in a new window](command:_facade.workspaceBar.openElsewhere) in Restricted Mode.'
 				],
 				// In two parent folders: neither is offered whole
@@ -198,7 +198,7 @@ suite('Workspace bar - a folder not trusted, on its way into a trusted window', 
 	test('WS-48 a folder added by hand and not trusted at VS Code\'s question is taken back out, said, with a window of its own offered', async () => {
 		assert.deepStrictEqual(await addedByHand(trustedWindow(), false), [
 			'remove /tmp/a',
-			'said: Folder \'a\' is untrusted and was removed to prevent switching the workspace to Restricted Mode.',
+			'said: Folder \'a\' was removed because it is untrusted and would switch the workspace to Restricted Mode.',
 			'new window /tmp/a'
 		]);
 	});

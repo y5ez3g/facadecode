@@ -156,7 +156,7 @@ export class AgentsService implements vscode.Disposable {
 						const history = path.join(dir, AGENTS_LOG);
 						this.log.error(`${why}. Preserved the previous record as ${keptAs} and started a new agent list. agents.log retains the history; agent IDs continue without reuse.`);
 						// What happened, and what the person is to do about it - nothing, but where to look (L12; N-31)
-						void vscode.window.showErrorMessage(vscode.l10n.t("Facade could not read this workspace's record of its agents ({0}), so it began a new list. Nothing needs doing: agents start as before, and their numbers go on. Their history is in {1}; the unreadable record is kept as {2} - delete it once you no longer need it.", why, history, keptAs));
+						void vscode.window.showErrorMessage(vscode.l10n.t("Facade could not read this workspace's agent record ({0}), so it started a new one. No action is needed: agents start as before, and their numbering continues. Their history is in {1}; the unreadable record is kept as {2}. Delete it once you no longer need it.", why, history, keptAs));
 					});
 				}
 				throw err;
@@ -165,13 +165,13 @@ export class AgentsService implements vscode.Disposable {
 			if (err instanceof LedgerLockedError) {
 				this.log.warn(err.message);
 				// One actionable error (L12; N-32): where the agents are, and how to have them here instead
-				void vscode.window.showErrorMessage(vscode.l10n.t("Another Facade window has this workspace's agents, and keeps them. Use that window; or close it, then reload this one to have them here."));
+				void vscode.window.showErrorMessage(vscode.l10n.t("Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here."));
 				this.noCore = 'otherWindow';
 				return;
 			}
 			if (err instanceof LedgerUnreadableError) {
 				this.log.error(err.message);
-				void vscode.window.showErrorMessage(vscode.l10n.t("Facade cannot read this workspace's record: {0}", err.message));
+				void vscode.window.showErrorMessage(vscode.l10n.t("Facade cannot read this workspace's agent record: {0}", err.message));
 				this.noCore = 'unreadable';
 				return;
 			}
@@ -405,10 +405,10 @@ export class AgentsService implements vscode.Disposable {
 		if (!facade) {
 			// A record that cannot be read is a failure, another window's agents a start refused (UI-17)
 			void (this.noCore === 'otherWindow'
-				? vscode.window.showWarningMessage(vscode.l10n.t("Another Facade window has this workspace's agents: start agents in that window."))
+				? vscode.window.showWarningMessage(vscode.l10n.t("Another Facade window manages this workspace's agents. Start agents in that window."))
 				: this.noCore === 'unreadable'
-					? vscode.window.showErrorMessage(vscode.l10n.t("Facade cannot read this workspace's record while an agent of it may still run: the Facade Agents output says why."))
-					: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to start an agent in it.")));
+					? vscode.window.showErrorMessage(vscode.l10n.t("Facade cannot read this workspace's agent record while one of its agents may still be running. See the Facade Agents output for details."))
+					: vscode.window.showInformationMessage(vscode.l10n.t("Open a local folder to start an agent.")));
 			return undefined;
 		}
 		const picked = await pickAgent(rawArgs, async (): Promise<OfferedAgent[]> => {
@@ -431,7 +431,7 @@ export class AgentsService implements vscode.Disposable {
 		// The folder on screen as the person chose, where the menu sent it: not the one they went to since (PS-15)
 		const folder = picked.folder ?? await folderOnScreen() ?? local.at(0)?.uri.fsPath;
 		if (folder === undefined) {
-			void vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to start an agent in it."));
+			void vscode.window.showInformationMessage(vscode.l10n.t("Open a local folder to start an agent."));
 			return undefined;
 		}
 		try {
@@ -487,8 +487,8 @@ export class AgentsService implements vscode.Disposable {
 		void (this.noCore === 'otherWindow'
 			? vscode.window.showWarningMessage(otherWindow)
 			: this.noCore === 'unreadable'
-				? vscode.window.showErrorMessage(vscode.l10n.t("Facade cannot read this workspace's record while an agent of it may still run: the Facade Agents output says why."))
-				: vscode.window.showInformationMessage(vscode.l10n.t("Open a folder on this machine to have agents in it.")));
+				? vscode.window.showErrorMessage(vscode.l10n.t("Facade cannot read this workspace's agent record while one of its agents may still be running. See the Facade Agents output for details."))
+				: vscode.window.showInformationMessage(vscode.l10n.t("Open a local folder to start an agent.")));
 	}
 
 	/** Keeps `owner` as who this workspace's window is to its ledger: the window's own, carried into a new workspace's storage. */
@@ -595,7 +595,7 @@ export class AgentsService implements vscode.Disposable {
 		if (unreadable !== undefined) {
 			this.log.error(`Could not read ${path.join(dir, WINDOW_STATE_FILE)} (${unreadable}). Facade is opening a new pipe.`);
 			if (agentsRun) {
-				void vscode.window.showErrorMessage(vscode.l10n.t("Facade could not read {0}, which names the pipe its agents call: the agents still running from before cannot use Facade's tools any more. Agents started from now on can.", path.join(dir, WINDOW_STATE_FILE)));
+				void vscode.window.showErrorMessage(vscode.l10n.t("Facade could not read {0}, which tells running agents how to reach this window. Agents that were already running can no longer use Facade tools; agents started from now on can.", path.join(dir, WINDOW_STATE_FILE)));
 			}
 		}
 		if (typeof kept === 'string' && /^[0-9a-f]{16}$/.test(kept)) {
@@ -610,7 +610,7 @@ export class AgentsService implements vscode.Disposable {
 			}
 			this.log.warn(`Pipe ${pipePath(kept)} is still in use. Facade is opening a new pipe.`);
 			if (agentsRun) {
-				void vscode.window.showWarningMessage(vscode.l10n.t("Could not reconnect to the agents that were already running. They cannot use Facade's tools, but agents started from now on work normally."));
+				void vscode.window.showWarningMessage(vscode.l10n.t("Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally."));
 			}
 		}
 		const pipeId = crypto.randomBytes(8).toString('hex');

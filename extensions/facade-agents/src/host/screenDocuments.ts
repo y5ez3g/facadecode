@@ -42,12 +42,12 @@ export class ScreenDocuments implements vscode.TextDocumentContentProvider {
 		try {
 			screen = file ? readFinalScreen(file) : undefined;
 		} catch (err) {
-			return vscode.l10n.t("{0}: Failed to read last screen file '{1}': {2}. Status: {3}.", title, file, messageOf(err), ending);
+			return vscode.l10n.t("{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.", title, file, messageOf(err), ending);
 		}
 		if (!screen) {
-			return vscode.l10n.t("{0}: No last screen preserved. Status: {1}. Last screen capture is available only when an agent terminal closes while the window remains open.", title, ending);
+			return vscode.l10n.t("{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.", title, ending);
 		}
-		const parts = [vscode.l10n.t("{0}, preserved upon terminal exit. Exit status: {1}.", title, ending)];
+		const parts = [vscode.l10n.t("{0}, saved when its terminal closed. How it ended: {1}.", title, ending)];
 		if (screen.frame) {
 			parts.push(vscode.l10n.t("The last full-screen frame rendered before leaving full screen:"), screen.frame.join('\n'));
 		}

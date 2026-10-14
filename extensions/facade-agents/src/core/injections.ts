@@ -344,7 +344,7 @@ export class Injections {
 			for (const { target, theirs } of deleted) {
 				const kept = this.keep(target, theirs);
 				this.log(`${target} was missing when Facade added its entries again. Content from before the first addition was preserved at ${kept}.`);
-				this.tell(l10n.t("{0} was gone when another agent started there: what it held before Facade's part went in is kept at {1}.", target, kept));
+				this.tell(l10n.t("{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.", target, kept));
 			}
 		});
 	}
@@ -573,7 +573,7 @@ export class Injections {
 					if (now !== undefined && before !== undefined && hashOf(now) !== wrote.hash && !now.equals(Buffer.from(before, 'base64'))) {
 						const at = this.keep(target, before);
 						this.log(`${target} changed after Facade wrote its entries and before rollback following window closure. The previous content was preserved at ${at}.`);
-						this.tell(l10n.t("{0} changed after Facade's part went in, as its window went: what it held before is kept at {1}.", target, at));
+						this.tell(l10n.t("{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.", target, at));
 						kept = true;
 					}
 					this.takeBackFile(target, { hash: wrote.hash, ...(wrote.ours !== undefined ? { ours: wrote.ours } : {}), ...(before !== undefined ? { theirs: before } : {}) }, kept);
@@ -663,7 +663,7 @@ export class Injections {
 			if (written.theirs !== undefined) {
 				const at = this.keep(target, written.theirs);
 				this.log(`${target} was missing when its agents ended. Content from before Facade's entries were added was preserved at ${at}.`);
-				this.tell(l10n.t("{0} was gone when its agents ended: what it held before Facade's part went in is kept at {1}.", target, at));
+				this.tell(l10n.t("{0} was missing when its agents ended. Its content from before Facade's changes is kept at {1}.", target, at));
 			}
 			return;
 		}
@@ -698,7 +698,7 @@ export class Injections {
 		} else if (written.theirs !== undefined && !kept) {
 			const at = this.keep(target, written.theirs);
 			this.log(`${target} changed while agents used it and no longer contains Facade's entries. Left it unchanged and preserved its previous content at ${at}.`);
-			this.tell(l10n.t("{0} changed while agents used it and holds nothing of Facade's: it is left as it is, and what it held before is kept at {1}.", target, at));
+			this.tell(l10n.t("{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.", target, at));
 		} else {
 			this.log(`Leaving ${target} unchanged because it was edited after Facade created it.`);
 		}

@@ -274,9 +274,9 @@ suite('CLIs: each launch, argument by argument', () => {
 				startAgent: ['facade', 'la13-own'],
 				yoloOn: ['facade'],
 				persons: ['facade'],
-				shown: [undefined, 'with YOLO off, turned off for the run, so that it does not stop to ask about them - you have not approved them for this project: la13-own'],
+				shown: [undefined, 'with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: la13-own'],
 				allApproved: ['facade'],
-				allShown: 'with YOLO off, none turned off: this folder\'s .mcp.json has no server you have not approved for its project'
+				allShown: 'with YOLO off, none turned off: this folder\'s .mcp.json has no server that you have not approved for its project'
 			});
 		} finally {
 			temp.remove();
@@ -644,7 +644,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			says: texts[names?.errorMessage?.replace(/^%|%$/g, '') ?? '']
 		}, {
 			names: candidates.map(name => [name, customAgentNameProblem(name, builtIns) === undefined]),
-			says: 'A custom agent\'s name is 1 to 40 lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit - not a built-in\'s id (claude, codex, agy, muse), nor human, you, me, facade, all, everyone, init or kernel.'
+			says: 'A custom agent\'s name must be 1 to 40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit. It cannot be a built-in agent\'s ID (claude, codex, agy, muse) or a reserved name (human, you, me, facade, all, everyone, init, kernel).'
 		});
 	});
 
@@ -675,9 +675,9 @@ suite('CLIs: how the person has Facade start each one', () => {
 		const problems = ['Cannot start Codex: /home/.codex/config.toml already defines an MCP server named facade. Codex would merge Facade\'s server into that entry. Rename or remove the existing entry.'];
 		const theirs = parts(launchDocument({ folder: '/lab', yolo: false, framework: true, clis: [{ cli: codexCli, config: theirConnect, yours: { arguments: { connect } }, program: { target: { executable: '/bin/codex', args: [], throughCmd: false } }, trust: { kind: 'none' }, problems }] })).shown.codex;
 		const sandboxOff = process.platform === 'win32' ? 'unavailable' : 'on';
-		const yoursToAnswer = 'kept: it can put up a question for you to answer, as it does outside Facade';
-		const toldInWords = 'kept: no launch can take its question tool away, so what it is told as it starts has it ask through Facade messages; asked for that tool by name, it can still put one up';
-		const changedConnect = 'as your launch\'s connect group says: Facade\'s own lets its server through, and you changed it';
+		const yoursToAnswer = 'kept: it can show a question for you to answer, as it does outside Facade';
+		const toldInWords = 'kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question';
+		const changedConnect = 'as set by your launch\'s connect group: Facade\'s default exempts its server from approval, and you changed it';
 
 		assert.deepStrictEqual({
 			comments: [on.comments.length, on.comments[0].includes('/lab'), on.comments[1].includes('YOLO is on'), parts(shownWith(false)).comments[1].includes('YOLO is off'), parts(shownWith({ wrong: 'facade.agents.yolo is "yes"' })).comments[1].includes('"yes"'), on.comments[2].includes('unattended part'), on.comments[3].includes('is on'), parts(shownWith(true, false)).comments[3].includes('is off')],
@@ -688,27 +688,27 @@ suite('CLIs: how the person has Facade start each one', () => {
 			shown: {
 				claude: {
 					program: 'C:/tools/claude.cmd', throughCmd: true, offered: true, task: 'argument',
-					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'refused: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'its edits in its folder unasked; anything else that would ask is refused unasked', questions: 'taken away by its launch\'s questions group: it asks through Facade messages', projectMcpServers: 'with YOLO off, those of its folder\'s .mcp.json you have not approved for its project are turned off for the run, so that it does not stop to ask about them' },
-					trust: { file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } }, kept: 'for good: Facade never takes it back' }, wrongSettings: ['Unknown field \'extra\' in facade.agents.claude.launch. Claude Code\'s launch accepts: arguments, environment, trust, settings, enterDelay, taskDelay, unattended'], verified: '2.1.296', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours
+					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'denied: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'denied: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'edits in its folder are allowed without asking; anything else that would ask is denied without asking', questions: 'removed by its launch\'s questions group: it asks through Facade messages', projectMcpServers: 'with YOLO off, the servers in its folder\'s .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them' },
+					trust: { file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } }, kept: 'permanently: Facade never removes it' }, wrongSettings: ['Unknown field \'extra\' in facade.agents.claude.launch. Claude Code\'s launch accepts: arguments, environment, trust, settings, enterDelay, taskDelay, unattended'], verified: '2.1.296', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours
 				},
 				codex: {
 					program: 'C:/node/node.exe', script: 'C:/npm/codex.js', offered: true, task: 'argument',
-					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch lets Facade\'s server through alone', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch lets Facade\'s server through alone', approvalsWithYoloOff: 'anything that would ask is refused unasked', questions: 'taken away by its launch\'s questions group: it asks through Facade messages' },
+					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch exempts only Facade\'s server from approval', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'never asked: its launch exempts only Facade\'s server from approval', approvalsWithYoloOff: 'anything that would ask is denied without asking', questions: 'removed by its launch\'s questions group: it asks through Facade messages' },
 					trust: { arguments: ['-c', 'projects={ ${folder} = { trust_level = "trusted" } }'] }, verified: '0.162.1', launch: launch(codexCli), yourChanges: {}
 				},
 				muse: {
 					program: 'C:/muse/muse.exe', offered: true, task: 'argument',
-					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing, its sandbox still on', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing, its sandbox still on', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: toldInWords },
+					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot exempt only Facade\'s server, so with YOLO off it asks for nothing; its sandbox stays on', approvalsWithYoloOff: 'nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: 'on' }, facadeTools: 'never asked: it cannot exempt only Facade\'s server, so with YOLO off it asks for nothing; its sandbox stays on', approvalsWithYoloOff: 'nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off', questions: toldInWords },
 					trust: 'none: the CLI asks whether you trust the folder', verified: '1.4.4', launch: launch(museCli), yourChanges: {}
 				},
 				antigravity: {
 					program: 'not found: agy is not on the PATH used by a terminal in that folder', offered: true, task: 'typed',
-					whenYouStartIt: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot let Facade\'s server alone through, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing refused: it cannot let Facade\'s tools alone through, so its approvals are off', questions: toldInWords },
-					trust: 'cannot be given: the file is no absolute path', verified: '1.3.2', launch: launch(antigravityCli), yourChanges: {}
+					whenYouStartIt: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot exempt only Facade\'s server, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off', questions: yoursToAnswer },
+					throughStartAgent: { sandbox: { yoloOn: 'unavailable', yoloOff: 'unavailable' }, facadeTools: 'never asked: it cannot exempt only Facade\'s server, so with YOLO off it asks for nothing; it has no sandbox', approvalsWithYoloOff: 'nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off', questions: toldInWords },
+					trust: 'cannot be granted: the file is no absolute path', verified: '1.3.2', launch: launch(antigravityCli), yourChanges: {}
 				}
 			},
 			theirs: { yours: changedConnect, startAgent: changedConnect, cannotStart: problems }
@@ -723,7 +723,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			const each = Object.values(JSON.parse(lines.filter(line => !line.startsWith('// ')).join('\n')) as Record<string, { whenYouStartIt: { questions: string }; throughStartAgent: { questions: string } }>)[0];
 			return [each.whenYouStartIt.questions, each.throughStartAgent.questions];
 		};
-		const yours = 'kept: it can put up a question for you to answer, as it does outside Facade';
+		const yours = 'kept: it can show a question for you to answer, as it does outside Facade';
 
 		assert.deepStrictEqual({
 			claude: shown(claudeCli),
@@ -732,11 +732,11 @@ suite('CLIs: how the person has Facade start each one', () => {
 			muse: shown(museCli),
 			custom: shown(customAgentOf('mine', { path: '/bin/mine' }, undefined).cli)
 		}, {
-			claude: [yours, 'taken away by its launch\'s questions group: it asks through Facade messages'],
-			codex: [yours, 'taken away by its launch\'s questions group: it asks through Facade messages'],
-			emptied: [yours, 'kept: your launch empties its questions group, so it can put up a question that waits for someone to pick an answer'],
-			muse: [yours, 'kept: no launch can take its question tool away, so what it is told as it starts has it ask through Facade messages; asked for that tool by name, it can still put one up'],
-			custom: ['as your launch\'s questions group says', 'as your launch\'s questions group says']
+			claude: [yours, 'removed by its launch\'s questions group: it asks through Facade messages'],
+			codex: [yours, 'removed by its launch\'s questions group: it asks through Facade messages'],
+			emptied: [yours, 'kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer'],
+			muse: [yours, 'kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question'],
+			custom: ['as set by your launch\'s questions group', 'as set by your launch\'s questions group']
 		});
 	});
 
@@ -762,8 +762,8 @@ suite('CLIs: how the person has Facade start each one', () => {
 				throughStartAgent: [shown.throughStartAgent.facadeTools, shown.throughStartAgent.trust?.file],
 				both: shown.trust
 			}, {
-				whenYouStartIt: ['never asked: its launch lets Facade\'s server through alone', path.join(home, '.claude.json')],
-				throughStartAgent: [`refused: ${path.join(bots, 'settings.json')} blocks mcp__facade, overriding Facade's allow rule: with YOLO off, Claude Code refuses Facade's tools`, path.join(bots, '.claude.json')],
+				whenYouStartIt: ['never asked: its launch exempts only Facade\'s server from approval', path.join(home, '.claude.json')],
+				throughStartAgent: [`denied: ${path.join(bots, 'settings.json')} blocks mcp__facade, overriding Facade's allow rule: with YOLO off, Claude Code denies Facade tools`, path.join(bots, '.claude.json')],
 				both: undefined
 			});
 		} finally {

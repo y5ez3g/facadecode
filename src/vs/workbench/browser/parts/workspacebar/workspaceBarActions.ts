@@ -68,7 +68,7 @@ const ARRANGE = '2_arrange';
  * Remove Folder has no key - it is a dialog away, which is not something to put behind a stray
  * keystroke. Anybody can still bind it themselves, with this as the `when`.
  */
-export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorkspaceBarFocus', false, localize('workspaceBar.focusContext', "Whether the workspace's list of folders has keyboard focus"));
+export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorkspaceBarFocus', false, localize('workspaceBar.focusContext', "Whether the workspace folder list has keyboard focus"));
 
 /**
  * What the row a menu or a key acts on is: a plain `folder`, a `repository` (a main checkout, which
@@ -76,13 +76,13 @@ export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorksp
  *
  * Set by the view from the focused row; a right-click focuses its row first, so menu and keyboard agree.
  */
-export const WorkspaceBarRowKindContext = new RawContextKey<'folder' | 'repository' | 'worktree'>('facadeWorkspaceBarRowKind', 'folder', localize('workspaceBar.rowKindContext', "Whether the focused row of the workspace is a folder, a repository or a worktree"));
+export const WorkspaceBarRowKindContext = new RawContextKey<'folder' | 'repository' | 'worktree'>('facadeWorkspaceBarRowKind', 'folder', localize('workspaceBar.rowKindContext', "Whether the focused row is a folder, repository, or worktree"));
 
 /**
  * Whether the bar is collapsed to its column of icons - what its toggle in the title bar says it
  * will do: collapse it, or expand it again. Set by `WorkspaceBarPart`.
  */
-export const WorkspaceBarCollapsedContext = new RawContextKey<boolean>('facadeWorkspaceBarCollapsed', false, localize('workspaceBar.collapsedContext', "Whether the workspace bar is collapsed to its icons"));
+export const WorkspaceBarCollapsedContext = new RawContextKey<boolean>('facadeWorkspaceBarCollapsed', false, localize('workspaceBar.collapsedContext', "Whether the workspace bar is collapsed to icons"));
 
 /** Rows that are folders of the list: everything except a worktree. */
 const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
@@ -92,7 +92,7 @@ const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
  * `collapsed`, or empty for a row with nothing under it. WORKTREE.md WT-1.10.
  * Collapsed to its icons, the bar has no triangles, and the menu is how a repository opens and closes.
  */
-export const WorkspaceBarRowExpansionContext = new RawContextKey<'' | 'expanded' | 'collapsed'>('facadeWorkspaceBarRowExpansion', '', localize('workspaceBar.rowExpansionContext', "Whether the repository of the focused row of the workspace shows its worktrees"));
+export const WorkspaceBarRowExpansionContext = new RawContextKey<'' | 'expanded' | 'collapsed'>('facadeWorkspaceBarRowExpansion', '', localize('workspaceBar.rowExpansionContext', "Whether worktrees are expanded for the focused repository row"));
 
 /** Creates a worktree of a repository (WORKTREE.md WT-5); registered by `contrib/worktrees`, which can reach terminals. */
 export const NEW_WORKTREE_COMMAND = 'facade.workspaceBar.newWorktree';
@@ -121,7 +121,7 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 	properties: {
 		[SHOW_WORKTREES]: {
 			type: 'boolean',
-			description: localize('workspaceBar.worktrees', "Controls whether the workspace bar lists Git worktrees under each repository."),
+			description: localize('workspaceBar.worktrees', "Controls whether the workspace bar shows Git worktrees under each repository."),
 			default: true
 		}
 	}

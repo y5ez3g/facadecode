@@ -75,7 +75,7 @@ export function agentPicks(agents: readonly ITerminalInstance[], preparing: read
 
 /** The row of an active agent with no terminal yet: the way to its worktree where it has one, then the agent and what it is doing. */
 function toPreparingPick(run: IPreparingRun, steps: readonly IPlaceStep[]): IAgentPick {
-	const doing = run.phase === 'creating_worktree' ? localize('agentPicker.creatingWorktree', "making its worktree") : localize('agentPicker.runningSetup', "setting up its worktree");
+	const doing = run.phase === 'creating_worktree' ? localize('agentPicker.creatingWorktree', "creating its worktree") : localize('agentPicker.runningSetup', "setting up its worktree");
 	const agent = `@${run.name} #a${run.id}`;
 	return {
 		preparing: run,

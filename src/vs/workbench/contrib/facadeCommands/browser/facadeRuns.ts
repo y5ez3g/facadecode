@@ -444,7 +444,7 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 				continue;
 			}
 			this._elsewhere.delete(keyOf(run));
-			this._logService.info(`[facadeRuns] taking back ${keyOf(run)}, its process ${details.pid} still running`);
+			this._logService.info(`[facadeRuns] Taking back ${keyOf(run)}; its process ${details.pid} is still running`);
 			// As it was opened: its name, read as an agent's tab reads it, and held for the run's folder, not where
 			// its process went since (X-31)
 			const opened = facadeRunTerminalOf(details);
@@ -483,7 +483,7 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 			return;
 		}
 		if (Date.now() > deadline) {
-			this._logService.warn(`[facadeRuns] still the pty host's for a window that went: ${[...this._elsewhere].join(', ')}`);
+			this._logService.warn(`[facadeRuns] Still held by the pty host for a closed window: ${[...this._elsewhere].join(', ')}`);
 			this._elsewhere.clear();
 			return;
 		}
