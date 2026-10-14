@@ -216,6 +216,7 @@ VS Code but one: GitHub sign-in, for now, below.
 | Service | What Facade Code uses |
 | --- | --- |
 | extension gallery | Open VSX. Microsoft's Marketplace is for Microsoft's products; an extension published only there, Microsoft's Remote Development extensions included, is not offered |
+| extension signatures | not verified: `extensions.verifySignature` is off by default. The verifier, `@vscode/vsce-sign`, is Microsoft's, under its own licence, and not in the product; on without it, every install fails with "Signature verification was not executed" |
 | AI | upstream's chat and Copilot are not fronted (I11) |
 | voice | none: `product.json` names no voice service |
 | settings sync, tunnels | none |

@@ -331,7 +331,8 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration)
 			[VerifyExtensionSignatureConfigKey]: {
 				type: 'boolean',
 				description: localize('extensions.verifySignature', "When enabled, extensions are verified to be signed before getting installed."),
-				default: true,
+				// Facade Code: off - the verifier, `@vscode/vsce-sign`, is Microsoft's and not in the product, and on without it nothing installs (IDENTITY.md I9)
+				default: false,
 				scope: ConfigurationScope.APPLICATION,
 				included: isNative
 			},
