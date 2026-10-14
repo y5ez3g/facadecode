@@ -256,13 +256,19 @@ remains running; connection is a separate fact.
   exception described in O5.
 - A reload reconnects surviving processes when terminal persistent sessions are
   enabled. With that VS Code setting disabled, agents end on reload as terminals do.
-- Closing the window, quitting, or opening another workspace ends its agents.
-  The next launch of the app does not replay their command lines.
+- Closing the owning window, quitting, or closing/replacing its workspace ends
+  its agents only after WORKSPACE.md W11's checks succeed. Opening another workspace
+  in a new window leaves them running. Folder-window conversion and Save Workspace
+  As preserve the runs through storage migration. The next launch of the app does
+  not replay their command lines.
 - After a renderer crash, reconnect any surviving terminal process. A run whose
   process is gone without an observed exit is lost.
-- Removing a folder or worktree stops the agents associated with it. Switching the
-  selected folder does not stop them, including agents in worktrees not yet added
-  to the workspace.
+- Interactive Remove Folder follows WORKSPACE.md W9.6's confirmed stop; external
+  workspace-file edits and `updateWorkspaceFolders` keep affected agents running
+  in the panel with the same run identity and working directory. Delete Worktree
+  follows WORKTREE.md WT-8's ordered removal. Membership changes alone must not
+  independently stop a run. Switching the selected folder does not stop agents,
+  including those in worktrees not yet added to the workspace.
 - Framework off leaves processes and lifecycle tracking running. Existing Facade
   calls become unavailable; new launches receive no framework integration.
 
@@ -570,12 +576,12 @@ H = human-visible verification. Each row defines an observable outcome.
 | LA-10 | Precise MCP exemption and all-tools fallback available/unavailable | Available exemption/fallback applied without disabling a supported sandbox; missing controls follow L4 | U,V |
 | LA-11 | Question, update and trust interruptions in UI and start_agent launches, including @human scripts | UI keeps normal interaction subject to YOLO; tool-started runs apply supported suppressions; unsupported controls are reported without refusing launch | V,H |
 | LA-12 | Missing login, invalid model, unknown flag, delayed connection | Correct distinction between launch failure and live-but-unconfirmed; useful Show/result | V,H |
-| LA-13 | Agent exits, user closes/cancels close, agent interrupts, worktree is removed | Correct outcome and actor; only the intended notification; final screen accessible | I,V,H |
+| LA-13 | Agent exits, user closes/cancels close, agent interrupts, interactive folder removal or worktree deletion; external membership removal | Correct outcome and actor; W9.6/WT-8 govern stops; external removal preserves process, run identity and cwd in the panel; only the intended notification; final screen accessible for ended runs | I,V,H |
 | LA-14 | Reload with persistence on/off, including background/editor/floating terminals | Reconnect the same processes when supported; otherwise record their ends | I,V,H |
 | LA-15 | Quit/reopen, renderer crash, unavailable process information | No command replay; reconnect survivors; unknown is not prematurely ended | I,V |
 | LA-16 | Relaunch, split, detach and cross-window transfer attempts | Agent restrictions hold through UI and command paths; split is an ordinary shell | I,H |
 | LA-17 | Framework off/on with running agents and a new launch | L13 holds; no duplicate run, lost lifecycle event or newly injected conversation | I,V,H |
-| LA-18 | Folder-window conversion, Save As and independent workspace | Live identity follows migration; independent records do not collide | I |
+| LA-18 | Folder-window conversion, Save As, open another workspace in a new window; cancel then complete Close Workspace | Migration and a new window preserve existing runs; Close Workspace ends them only after W11 checks succeed; independent records do not collide | I |
 | LA-19 | Truncated ledger tail, invalid ledger, duplicate live owner | Defined recovery or actionable refusal; no second writer or duplicate process | U,I |
 | LA-20 | Windows shims; spaces, Unicode and quoting; environment overrides | Correct executable, arguments, cwd and configuration paths | U,V |
 | LA-21 | Trust file contains unrelated settings or is malformed | Preserve unrelated content; malformed file remains intact with a useful failure | U,I |

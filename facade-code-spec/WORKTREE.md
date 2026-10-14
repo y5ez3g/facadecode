@@ -379,7 +379,8 @@ palette (New Worktree...).
   that repository's main checkout's HEAD. It is refused, with the reason, in an
   untrusted workspace or repository and in a folder with no commit, rather than
   trusted or prepared (WT-5.8). It does not join `folders[]` and the window stays where
-  it is: the worktree shows on the bar as any worktree git records (WT-1.3). Setup runs
+  it is: the worktree shows on the bar as any worktree git records while worktree
+  management is enabled (WT-1.3, WT-9). Setup runs
   at once, in a terminal of its own held under the worktree's row, not revealed, once
   the repository's queue (WT-5.10) has moved on. The command answers once the worktree
   is made and its setup started; the setup's outcome is asked for apart: with shell
@@ -476,17 +477,26 @@ Prepare and perform a deletion in this order:
    including editors visible in another folder context and hidden editors. Also
    identify affected folder-owned editors and all related terminals/agents.
 3. Show the single confirmation in WT-8.1/WT-8.2. Cancellation changes nothing.
+   Once authorized, block new Facade agent starts into this target until the
+   operation settles. Revalidate scope and authorization for work added during
+   confirmation before continuing.
 4. If this worktree is active, await a successful switch to its main checkout. If
    that fails, abort deletion while retaining the worktree and its work.
-5. Close/discard only the dirty contents explicitly covered by the confirmation.
-   Editors owned by this folder whose files are outside the deleted directory stay
-   available in the window. Remove workspace membership through the prepared removal
-   flow, without another generic Remove Folder confirmation. An edit/cancellation
-   failure aborts before Git removal; report any preceding effects accurately.
+5. Remove workspace membership through the prepared removal flow, without another
+   generic Remove Folder confirmation. Keep dirty working copies and processes
+   intact until this edit succeeds; membership observers must not stop or discard
+   them independently. An edit/cancellation failure aborts before stopping work or
+   discarding content; report any preceding navigation or membership effects.
+   Folder-owned editors whose files are outside the deleted directory stay
+   available in the window.
 6. Stop the confirmed terminals and agents, including terminals working inside the
-   directory. Recheck Git state before force removal. A new loss not covered by the
-   confirmation requires an updated confirmation; it is not silently authorized by
-   the earlier snapshot.
+   directory, and cancel pending starts and their setup terminals. Wait for their
+   ends, then release unchanged Facade-owned configuration under
+   AGENT-ORCHESTRATION.md O10. Recheck disk and dirty editor losses before removal.
+   A new loss not covered by the authorization requires an updated confirmation;
+   it is not silently authorized by the earlier snapshot. Close/discard only the
+   authorized content. A late refusal or cancellation reports completed effects;
+   it does not restore stopped processes or removed membership.
 7. Run Git removal, then bounded directory cleanup under WT-4.5. Read the actual
    final state before reporting the outcome.
 
@@ -545,22 +555,38 @@ Prepare and perform a deletion in this order:
   editors, listed, unless the call says to discard them. Asking for the deletion in the
   call is step 3's confirmation; nothing is asked. With the repository's main checkout
   gone, step 4 goes back to the folder the person was on before (AGENT-ORCHESTRATION.md,
-  O5). Step 5 discards unsaved content only where the call said to, and a loss step 6
-  finds that the call did not decide on refuses the deletion rather than asking. It is
-  refused, with the reason, for a main checkout and in Restricted Mode, rather than trust
-  asked for; its progress is in the status bar; and its outcome is the call's answer, not
-  a notification, saying what was done as WT-8.6 says it. A directory left behind is
-  deleted on the caller's retry by the recovery this window holds for it (WT-4.5).
+  O5). Step 6 uses O5's stop timeout and explicit-retry rule, discards only content the
+  call authorized, and refuses newly found unauthorized loss rather than asking.
+  The shared delete operation refuses a main checkout or Restricted Mode with the
+  reason; O5 defines the stop-only result for a main checkout. It does not ask for
+  trust. Its progress is in the status bar, and its outcome is the call's answer,
+  not a notification, saying what was done as WT-8.6 says it. A directory left behind
+  is deleted on the caller's retry by the recovery this window holds for it (WT-4.5).
 
 ## WT-9. The switch
 
-- **WT-9.1** `facade.workspaceBar.worktrees`, boolean, default `true`. Off, the bar is
-  the flat list of `folders[]`, git's files are neither read nor watched, and New
-  Worktree, Delete Worktree and Move Worktree are neither offered nor run. On again,
-  the rows are grouped from a fresh read.
+- **WT-9.1** `facade.workspaceBar.worktrees`, boolean, default `true`, controls
+  Facade's worktree management across UI, commands and agent tools. Off, the bar is
+  the flat list of `folders[]`; automatic worktree discovery neither reads nor
+  watches Git's files. New Worktree, Delete Worktree and Move Worktree are not
+  offered, and the shared service admits no new create, delete or move operation.
+  On again, the rows are grouped from a fresh read. Toggling the setting alone never
+  changes the selected folder.
 - **WT-9.2** While it is on, the git extension's own Create Worktree... and Delete
   Worktree... are hidden from Source Control's menus and the palette: a worktree is
-  made and deleted one way, the bar's, with one result. Off, they are back.
+  made and deleted through Facade's shared service, with one result. Off, they are back.
+- **WT-9.3** Off, `start_agent(new_worktree: true)` and
+  `stop_agent(delete_worktree: true)` return `UNAVAILABLE`, naming the disabled
+  setting. Reject the whole request before allocating a run, injecting configuration
+  or stopping any agent; do not silently turn deletion into a stop-only request.
+  Ordinary starts in known folders and stops without deletion remain available.
+  Existing agents keep running, including those in unjoined worktrees, and remain
+  reachable through Show Active Agents and `list_agents`.
+- **WT-9.4** A create or delete already accepted when the setting turns off settles
+  under its original contract, including any Git reads needed to finish it. Report
+  its real success, failure or partial outcome; do not abandon it halfway or replay
+  it when the setting turns on. Newly created unjoined worktrees appear in the bar
+  when worktree management is enabled again.
 
 ## WT-10. Per platform
 
@@ -630,7 +656,7 @@ injection and integrated gate.
 | WTA-24 | U, I | Delete a locked worktree, fail removal while registered, then perform a successful delete | Reject a known lock before stopping work. Other failure restores a registered row with customization/trust and reports prior effects; success removes the row and directory and retains the branch |
 | WTA-25 | U, I | Remove Folder on a repository row whose worktrees are in `folders[]` | WT-8.8: they leave `folders[]` and stay on disk and in git |
 | WTA-26 | I | A worktree on a remote, with a terminal working inside it | The terminal is found by its path there, said to be running, and closed first |
-| WTA-27 | U, I | Turn `facade.workspaceBar.worktrees` off and on with repositories, an active worktree and worktree commands bound to keys | WT-9.1: flat `folders[]`; no reads or watchers; commands neither offered nor run; on again, grouped from a fresh read; the active folder never moves |
+| WTA-27 | U, I | Turn `facade.workspaceBar.worktrees` off and on with repositories, an active worktree, running agents and worktree commands bound to keys; repeat during accepted creation/deletion | WT-9: flat `folders[]`; no automatic worktree reads/watchers or new management operations; accepted operations settle truthfully without replay; agents remain reachable; on again, grouped from a fresh read; the toggle alone never changes the active folder |
 | WTA-28 | U, I | Create a worktree and inspect source files; exercise Windows path limits under recorded Git/OS configuration | No added ignore/settings entries; Git metadata changes are expected. Show any actual path-length failure without asserting every path over 259 characters must fail |
 | WTA-29 | U, I | Make three worktrees of one repository without choosing colours; collapse the bar | Each gets a colour its siblings do not have; the three dots are told apart collapsed |
 | WTA-30 | I | With worktrees on, look for Create Worktree and Delete Worktree in Source Control's menus and the palette; turn worktrees off and look again | On: only the bar's New Worktree and Delete Worktree. Off: git's own are back |
@@ -638,7 +664,7 @@ injection and integrated gate.
 | WTA-32 | U, I | Delete an ignored-only .env worktree, and one with dirty editors visible in another folder context; cancel first | Confirmation covers disk and editor losses despite an empty Git status; cancellation preserves them; no misleading Save and Delete path |
 | WTA-33 | U, I | Fail directory cleanup after Git removes its record; press Retry; replace the path before a second Retry | A notification names the leftover path with Reveal in File Explorer and Retry; Retry deletes the same verified target or refuses a replacement; no false registered row |
 | WTA-34 | U, I | Git creation succeeds but trust, record refresh, add/show or restore fails; lose the create response | Report the existing worktree and failed step; no duplicate create, branch deletion or premature setup; unknown effects are inspected |
-| WTA-35 | U, I | Change the loss set while delete confirmation is open; fail the switch to main or membership removal | Revalidate before force removal; newly exposed loss requires confirmation; a failed prerequisite prevents Git removal |
+| WTA-35 | U, I | Change the affected work while delete confirmation is open; attempt a new agent start during deletion; fail the switch to main or membership removal; introduce loss after stopping | Revalidate authorization; block new starts until the operation settles; failed prerequisites preserve processes and dirty contents; recheck loss before discarding/removing; late refusal reports completed effects |
 | WTA-36 | U, I | Reload before/after setup submission and lose its response; revisit or rediscover the worktree | No automatic duplicate setup submission; uncertain execution is reported for inspection and explicit retry |
 | WTA-37 | U, I | Collapse the active repository while main is missing, and while it is untrusted with its admission cancelled; separately, make main's editor restoration fail | Missing or cancelled: the worktree stays active and its repository open, with the reason. Failed restoration: the window is on main and says why, and the repository closes |
 | WTA-38 | U, I | Race branch creation/ref changes with failed checkout; an identical path was already registered before the request | Cleanup never deletes another operation's branch; an existing worktree is not falsely reported as a newly created hook-failure success |

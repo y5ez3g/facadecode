@@ -87,8 +87,8 @@ A successful send returns as soon as recording succeeds, with each number and
 recipient. It does not wait for a fetch or reply:
 
 ```text
-Sent #m42 to @lint #a3. It has not been fetched yet.
-A reply will notify you through your mailbox.
+Sent #m42 to @lint #a3. Awaiting fetch.
+Replies trigger your mailbox doorbell. Continue independent work, or end this turn if progress needs a reply. Do not poll or sleep for it.
 ```
 
 For a live agent, the result includes whether delivery is waiting for launch or
@@ -274,7 +274,7 @@ The initial prompt is a short generated notice:
 
 ```text
 [facade] You are @lint #a7, created by @lead #a1. Your task is #m12.
-Call read_messages, read the task, then carry it out.
+Call read_messages, then carry out that task.
 ```
 
 The actual emitted notice is one line. Claude Code, Codex and Muse Code receive
