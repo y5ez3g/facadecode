@@ -616,6 +616,8 @@ function parsePorcelain(stdout: string): string[] {
 interface IIncludeRule {
 	readonly negated: boolean;
 	readonly directoryOnly: boolean;
+	/** The pattern as a glob from the repository's root; one with no `/` of its own matches at any depth. */
+	readonly glob: string;
 	readonly matches: (file: string) => boolean;
 }
 
@@ -647,7 +649,8 @@ export function parseWorktreeInclude(content: string): readonly IIncludeRule[] {
 		}
 
 		if (pattern) {
-			rules.push({ negated, directoryOnly, matches: picomatch(anchored ? pattern : `**/${pattern}`, { dot: true }) });
+			const glob = anchored ? pattern : `**/${pattern}`;
+			rules.push({ negated, directoryOnly, glob, matches: picomatch(glob, { dot: true }) });
 		}
 	}
 
@@ -655,24 +658,15 @@ export function parseWorktreeInclude(content: string): readonly IIncludeRule[] {
 }
 
 /**
- * Whether `file`, relative to the repository and with `/`, is included: as in gitignore, the last
- * matching rule wins, and an included directory includes everything under it.
+ * Whether `file`, relative to the repository, is included: as in gitignore, the last rule matching it
+ * or a directory above it decides (WORKTREE.md WT-6.2).
  */
 export function isWorktreeIncluded(rules: readonly IIncludeRule[], file: string, isDirectory: boolean): boolean {
 	const parts = file.split('/');
-	for (let depth = 1; depth < parts.length; depth++) {
-		if (matchRules(rules, parts.slice(0, depth).join('/'), true)) {
-			return true;
-		}
-	}
-
-	return matchRules(rules, file, isDirectory);
-}
-
-function matchRules(rules: readonly IIncludeRule[], file: string, isDirectory: boolean): boolean {
+	const directories = parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'));
 	let included = false;
 	for (const rule of rules) {
-		if ((!rule.directoryOnly || isDirectory) && rule.matches(file)) {
+		if (directories.some(directory => rule.matches(directory)) || ((!rule.directoryOnly || isDirectory) && rule.matches(file))) {
 			included = !rule.negated;
 		}
 	}
@@ -680,51 +674,74 @@ function matchRules(rules: readonly IIncludeRule[], file: string, isDirectory: b
 	return included;
 }
 
+/** Pathspecs for the files the rules could include, so that git lists only those (WORKTREE.md WT-6.5). */
+function includePathspecs(rules: readonly IIncludeRule[]): string[] {
+	return rules.filter(rule => !rule.negated).flatMap(rule => rule.directoryOnly
+		? [`:(glob)${rule.glob}/**`]
+		: [`:(glob)${rule.glob}`, `:(glob)${rule.glob}/**`]);
+}
+
+/** Whether `relative` under `base` passes through a link or a junction, the path itself too with `itself` (WORKTREE.md WT-6.3). */
+export async function reachesThroughLink(base: string, relative: string, itself: boolean): Promise<boolean> {
+	const parts = relative.split('/');
+	const depth = itself ? parts.length : parts.length - 1;
+	for (let index = 1; index <= depth; index++) {
+		let stat;
+		try {
+			stat = await fs.lstat(path.join(base, ...parts.slice(0, index)));
+		} catch (err) {
+			if ((err as { code?: string }).code === 'ENOENT') {
+				return false;
+			}
+			throw err;
+		}
+		if (stat.isSymbolicLink()) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /**
- * Copies into the new worktree what the repository ignores and `.worktreeinclude` names (WORKTREE.md
- * section 8). Returns what failed to copy.
- *
- * The candidates are `git ls-files --others --ignored --exclude-standard --directory`, where a wholly
- * ignored directory is one entry, so a pattern does not reach into `node_modules`. Nothing is copied
- * over a file that is there already, and nothing through a link.
+ * Copies into the new worktree the ignored files `.worktreeinclude` names, never over a file or through
+ * a link (WORKTREE.md WT-6). Returns what failed to copy.
  */
 async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath: string): Promise<readonly string[]> {
 	let content: string;
 	try {
 		content = await fs.readFile(path.join(root, '.worktreeinclude'), 'utf8');
-	} catch {
-		return [];
+	} catch (err) {
+		// A file that is there but cannot be read is reported (WT-6.1)
+		if ((err as { code?: string }).code === 'ENOENT') {
+			return [];
+		}
+		return [`.worktreeinclude: ${toError(err).message}`];
 	}
 
 	const rules = parseWorktreeInclude(content);
-	if (rules.length === 0) {
+	const pathspecs = includePathspecs(rules);
+	if (pathspecs.length === 0) {
 		return [];
 	}
 
-	const { stdout } = await git.exec(root, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']);
+	const { stdout } = await git.exec(root, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', ...pathspecs]);
 	const candidates = stdout.split('\0').filter(entry => entry.length > 0);
 
 	const failures: string[] = [];
-	for (const candidate of candidates) {
-		const isDirectory = candidate.endsWith('/');
-		const relative = isDirectory ? candidate.slice(0, -1) : candidate;
-		if (!isWorktreeIncluded(rules, relative, isDirectory)) {
+	for (const relative of candidates) {
+		if (!isWorktreeIncluded(rules, relative, false)) {
 			continue;
 		}
 
-		const source = path.join(root, relative);
-		const target = path.join(worktreePath, relative);
 		try {
-			if ((await fs.lstat(source)).isSymbolicLink()) {
+			if (await reachesThroughLink(root, relative, true) || await reachesThroughLink(worktreePath, relative, false)) {
 				continue;
 			}
 
+			const target = path.join(worktreePath, relative);
 			await fs.mkdir(path.dirname(target), { recursive: true });
-			if (isDirectory) {
-				await fs.cp(source, target, { recursive: true, force: false, errorOnExist: false, filter: async from => !(await fs.lstat(from)).isSymbolicLink() });
-			} else {
-				await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
-			}
+			await fs.copyFile(path.join(root, relative), target, fsConstants.COPYFILE_EXCL);
 		} catch (err) {
 			if ((err as { code?: string }).code !== 'EEXIST') {
 				failures.push(relative);

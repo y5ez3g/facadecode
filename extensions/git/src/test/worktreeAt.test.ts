@@ -9,7 +9,7 @@ import { execFile, execFileSync, spawn } from 'child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createWorktreeAt, deleteWorktreeAt, folderPath, isWorktreeIncluded, IWorktreeGit, parseWorktreeInclude, prepareWorktreeBaseAt } from '../worktreeAt';
+import { createWorktreeAt, deleteWorktreeAt, folderPath, isWorktreeIncluded, IWorktreeGit, parseWorktreeInclude, prepareWorktreeBaseAt, reachesThroughLink } from '../worktreeAt';
 
 /**
  * What every git in these tests runs with: none of this machine's own configuration - a global
@@ -209,6 +209,67 @@ suite('worktreeAt', () => {
 			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
 			files: { '.cache': false, 'secrets/key.txt': true, 'secrets/outside': false }
 		});
+	});
+
+	test('WTA-31 a file .worktreeinclude names inside a wholly ignored directory is copied, and nothing else there', async () => {
+		write(path.join(main, '.gitignore'), 'node_modules/\nlocal/\n');
+		write(path.join(main, 'local', 'settings.json'), '{}\n');
+		write(path.join(main, 'local', 'other.json'), '{}\n');
+		write(path.join(main, '.worktreeinclude'), 'local/settings.json\n');
+		const worktree = path.join(dir, 'worktrees', 'one-file');
+
+		const result = await createWorktreeAt(git, main, worktree, 'one-file');
+
+		assert.deepStrictEqual({
+			result,
+			files: Object.fromEntries(['local/settings.json', 'local/other.json', 'node_modules/dep/index.js'].map(file => [file, existsSync(path.join(worktree, file))]))
+		}, {
+			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
+			files: { 'local/settings.json': true, 'local/other.json': false, 'node_modules/dep/index.js': false }
+		});
+	});
+
+	test('WTA-31 an exclusion inside an included directory holds', async () => {
+		write(path.join(main, '.gitignore'), 'node_modules/\nlocal/\n');
+		write(path.join(main, 'local', 'a.json'), '{}\n');
+		write(path.join(main, 'local', 'private', 'key.txt'), 'key\n');
+		write(path.join(main, '.worktreeinclude'), 'local/\n!local/private/\n');
+		const worktree = path.join(dir, 'worktrees', 'excluded');
+
+		const result = await createWorktreeAt(git, main, worktree, 'excluded');
+
+		assert.deepStrictEqual({
+			result,
+			files: Object.fromEntries(['local/a.json', 'local/private/key.txt'].map(file => [file, existsSync(path.join(worktree, file))]))
+		}, {
+			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
+			files: { 'local/a.json': true, 'local/private/key.txt': false }
+		});
+	});
+
+	test('WTA-20 a .worktreeinclude that cannot be read is said, not taken for none', async () => {
+		mkdirSync(path.join(main, '.worktreeinclude'));
+		const worktree = path.join(dir, 'worktrees', 'unreadable');
+
+		const result = await createWorktreeAt(git, main, worktree, 'unreadable');
+
+		assert.deepStrictEqual(result.kind === 'created' ? result.copyFailures.map(failure => failure.split(':')[0]) : result, ['.worktreeinclude']);
+	});
+
+	test('WTA-31 a path that passes through a link is a path through a link, on either side', async () => {
+		// A junction stands for a link git checked out in the new worktree
+		const base = path.join(dir, 'base');
+		const outside = path.join(dir, 'elsewhere');
+		mkdirSync(path.join(base, 'real'), { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		symlinkSync(outside, path.join(base, 'link'), 'junction');
+
+		assert.deepStrictEqual({
+			underLink: await reachesThroughLink(base, 'link/settings.json', false),
+			theLinkItself: await reachesThroughLink(base, 'link', true),
+			underRealDirectory: await reachesThroughLink(base, 'real/settings.json', false),
+			notThereYet: await reachesThroughLink(base, 'missing/deeper/settings.json', false)
+		}, { underLink: true, theLinkItself: true, underRealDirectory: false, notThereYet: false });
 	});
 
 	test('WTA-19 git lfs checkout runs in the new worktree, and no Git LFS is no failure', async () => {
