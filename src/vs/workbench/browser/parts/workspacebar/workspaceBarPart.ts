@@ -447,6 +447,10 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		return !!this._removal?.isRemoving(folder);
 	}
 
+	isDeleting(folder: URI): boolean {
+		return !!this._removal?.isDeleting(folder);
+	}
+
 	async moveFolder(uri: URI, offset: number): Promise<void> {
 		// Worked out when the edit runs, on the folders as they are then: an order worked out now would
 		// undo a move still in the queue, and leave out a folder being added.

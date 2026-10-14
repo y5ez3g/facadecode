@@ -86,7 +86,7 @@ export async function repositoryIn(git: string, folder: string): Promise<Reposit
 /**
  * The folder of the worktree `folder` is in, its top level: the way up from `folder` git gives, so that it is written as
  * `folder` is, links and all, not as git resolves them; undefined outside a work tree - in no repository, or in one's git
- * directory or a bare one (O5 step 1; OR-09).
+ * directory or a bare one (O5; OR-09).
  */
 export async function worktreeRootIn(git: string, folder: string): Promise<string | undefined> {
 	let answer: string;

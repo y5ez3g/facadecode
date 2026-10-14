@@ -77,6 +77,7 @@ type Answer = 'discard' | 'remove';
 export class WorkspaceBarRemoval {
 
 	private readonly removing: ResourceSet;
+	private readonly deleting: ResourceSet;
 
 	constructor(
 		private readonly model: WorkspaceBarModel,
@@ -94,11 +95,17 @@ export class WorkspaceBarRemoval {
 		@IWorkspaceBarCustomizationService private readonly customizationService: IWorkspaceBarCustomizationService,
 	) {
 		this.removing = new ResourceSet(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
+		this.deleting = new ResourceSet(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 	}
 
 	/** Whether `folder` is leaving through `remove`, so its terminals stop with it rather than move to the panel. */
 	isRemoving(folder: URI): boolean {
 		return this.removing.has(folder);
+	}
+
+	/** Whether `folder` is leaving through `remove` for its worktree's deletion, which stops its terminals itself. */
+	isDeleting(folder: URI): boolean {
+		return this.deleting.has(folder);
 	}
 
 	async remove(uris: readonly URI[], options: IRemoveOptions = {}): Promise<RemoveResult> {
@@ -132,8 +139,9 @@ export class WorkspaceBarRemoval {
 		}
 
 		this.logService.trace(`[workspaceBar] removing ${leaving.map(folder => folder.uri.toString(true)).join(', ')}`);
+		const marked = options.deleting ? this.deleting : this.removing;
 		for (const folder of leaving) {
-			this.removing.add(folder.uri);
+			marked.add(folder.uri);
 		}
 		try {
 			await this.model.remove(leaving.map(folder => folder.uri));
@@ -143,7 +151,7 @@ export class WorkspaceBarRemoval {
 			return { kind: 'failed', reason };
 		} finally {
 			for (const folder of leaving) {
-				this.removing.delete(folder.uri);
+				marked.delete(folder.uri);
 			}
 		}
 

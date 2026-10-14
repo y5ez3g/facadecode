@@ -260,7 +260,7 @@ export interface WorktreeDeletion {
 	readonly ownFiles: readonly OwnedFile[];
 	/** The main checkout of its repository. */
 	readonly main: string;
-	/** The agents whose terminals are in it, all stopped: the only agents' terminals the deletion may close. */
+	/** The agents working in it, looked at: the only agents' terminals the deletion may close. */
 	readonly agents: readonly number[];
 	/** Whether it is what a deletion left of a worktree: a folder git no longer lists, looked at already. */
 	readonly leftover?: boolean;
@@ -272,7 +272,7 @@ export interface Git {
 	repositoryOf(folder: string): Promise<Repository | undefined>;
 	/**
 	 * The folder of the worktree `folder` is in - its top level, `folder` itself or one it is in - written as `folder`
-	 * is; undefined where git says none, outside a work tree. A folder inside a worktree is not one (O5 step 1; OR-09).
+	 * is; undefined where git says none, outside a work tree. A folder inside a worktree is not one (O5; OR-09).
 	 */
 	worktreeRootOf(folder: string): Promise<string | undefined>;
 	/** The worktrees of the repository whose main checkout is `main`, main included. */
@@ -306,14 +306,16 @@ export interface Git {
 	changesIn(folder: string): Promise<WorktreeChanges>;
 	/**
 	 * What deleting the worktree `folder` as `options` say would lose, as the window's own Delete Worktree checks it - its
-	 * preflight alone, nothing stopped, closed or removed (AGENT-ORCHESTRATION.md, O5 step 2; O8): each as the window's
+	 * preflight alone, nothing stopped, closed or removed (AGENT-ORCHESTRATION.md, O5, O8): each as the window's
 	 * refusal words it, `logo.png (unsaved)`; none where nothing would be. Rejects with why it could not check.
 	 */
 	deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]>;
 	/**
-	 * Deletes the worktree `folder` as Delete Worktree does, with nothing asked, its branch kept; rejects with
-	 * why it could not. Changes git would lose, as the window finds them deleting it, refuse it unless
-	 * `discardChanges` - all but `ownFiles`, what Facade put there that nobody changed.
+	 * Deletes the worktree `folder` as Delete Worktree does, with nothing asked, its branch kept: off it and out of the
+	 * workspace, the window has the agents working in it stopped, by `Facade.worktreeStopping`, and looks again before
+	 * git deletes it (WORKTREE.md WT-8). Rejects with why it could not, and what it did all the same. Changes git would
+	 * lose, as the window finds them deleting it, refuse it unless `discardChanges` - all but `ownFiles`, what Facade
+	 * put there that nobody changed.
 	 */
 	deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void>;
 	/**

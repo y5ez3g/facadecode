@@ -321,7 +321,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		});
 	});
 
-	test('what deleting a worktree would lose is looked at - for an agent\'s deletion, before any agent is stopped - and answered as the worktrees name it, the options it is deleted with applied; nothing is deleted, and options of another kind are refused (O5 step 2; OR-04)', async () => {
+	test('what deleting a worktree would lose is looked at - for an agent\'s deletion, before any agent is stopped - and answered as the worktrees name it, the options it is deleted with applied; nothing is deleted, and options of another kind are refused (O5; OR-04)', async () => {
 		const clamp = URI.file('/home/me/.facade/worktrees/lab/clamp');
 		const loss = await run('_facade.worktree.removalLoss', clamp, { ownFiles: [{ path: '.mcp.json', sha256: 'ab'.repeat(32) }], main: URI.file('/lab'), runs: [{ workspace: 'a1b2', id: 2 }] });
 		const nothing = await run('_facade.worktree.removalLoss', URI.file('/home/me/.facade/worktrees/lab/tidy'));

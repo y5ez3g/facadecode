@@ -309,6 +309,11 @@ export class FakeGit implements Git {
 	readonly setupStates = new Map<string, SetupProgress>();
 	/** While set, deleting a worktree fails with this. */
 	failDelete: string | undefined;
+	/**
+	 * While set, deleting a worktree fails with this before anything that goes with it is stopped: the window could not move
+	 * off it, or the workspace did not let it go (WORKTREE.md WT-8, steps 4 and 5).
+	 */
+	failBeforeStopping: string | undefined;
 	/** Whether a deletion that fails gets as far as git forgetting the worktree, its folder left: a file it cannot delete. */
 	failAfterForgetting = false;
 	private readonly worktrees = new Map<string, ListedWorktree[]>();
@@ -381,8 +386,13 @@ export class FakeGit implements Git {
 
 	/** What each deletion was told, by the worktree's folder. */
 	readonly deletions = new Map<string, WorktreeDeletion>();
-	/** While set, a deletion waits for it before git is asked. */
+	/** While set, a deletion waits for it before git is asked: what goes with the worktree has stopped by then. */
 	deleting: Promise<void> | undefined;
+	/**
+	 * A deletion's step 6, as the world wires it: Facade's agents working in the worktree stopped, and waited for - those
+	 * still stopping answered (WORKTREE.md WT-8, step 6). None to stop unless wired.
+	 */
+	stopping: (folder: string) => Promise<{ readonly stopping: readonly string[]; readonly why?: string }> = async () => ({ stopping: [] });
 
 	/** What the window's own check finds deleting the worktree `folder` would lose, `options` applied: as it words each. */
 	async deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]> {
@@ -392,33 +402,43 @@ export class FakeGit implements Git {
 	}
 
 	async deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void> {
-		await this.deleting;
 		this.deletions.set(folder, options);
-		if (options.leftover) {
-			if (this.failDelete) {
-				throw new Error(this.failDelete);
-			}
-			this.steps.push(`delete what is left of ${folder}`);
-			fs.rmSync(folder, { recursive: true, force: true });
-			return;
-		}
 		const found = this.worktreeAt(folder);
+		if (!options.leftover && (!found || found.main === found.worktree.folder)) {
+			throw new Error(`${folder} is no worktree to delete`);
+		}
+		// As the window looks before it moves anything, and again once what ran in it has stopped: changes git would lose,
+		// and what only the window sees, refuse it unless discarded (WT-8.10)
+		const lost = () => options.discardChanges ? [] : [...(options.leftover ? [] : this.changes.get(folder)?.files ?? []).filter(file => !options.ownFiles.some(owned => owned.path === file)), ...this.windowOnlyLoss.get(folder) ?? []];
+		const before = lost();
+		if (before.length) {
+			throw new Error(`${folder} has changes that deleting it would lose: ${before.join(', ')}`);
+		}
+		if (this.failBeforeStopping) {
+			throw new Error(this.failBeforeStopping);
+		}
+		// Out of the workspace, what goes with it stops, and is waited for (WT-8, step 6)
+		const stopped = await this.stopping(folder);
+		if (stopped.stopping.length) {
+			throw new Error(stopped.why ?? `${folder} was not deleted: ${stopped.stopping.join(', ')} still stopping`);
+		}
+		await this.deleting;
+		const late = lost();
+		if (late.length) {
+			throw new Error(`${folder} was not deleted: changes came into it as it was being deleted, which deleting it would lose: ${late.join(', ')}`);
+		}
 		if (this.failDelete) {
-			if (this.failAfterForgetting && found) {
+			if (this.failAfterForgetting && found && !options.leftover) {
 				this.worktrees.set(found.main, (this.worktrees.get(found.main) ?? []).filter(each => each.folder !== found.worktree.folder));
 			}
 			throw new Error(this.failDelete);
 		}
-		if (!found || found.main === found.worktree.folder) {
-			throw new Error(`${folder} is no worktree to delete`);
+		if (options.leftover) {
+			this.steps.push(`delete what is left of ${folder}`);
+		} else if (found) {
+			this.steps.push(`delete ${folder}`);
+			this.worktrees.set(found.main, (this.worktrees.get(found.main) ?? []).filter(each => each.folder !== found.worktree.folder));
 		}
-		// As the window looks as it deletes it: changes git would lose, and what only the window sees, refuse it unless discarded.
-		const lost = [...(this.changes.get(folder)?.files ?? []).filter(file => !options.ownFiles.some(owned => owned.path === file)), ...this.windowOnlyLoss.get(folder) ?? []];
-		if (lost.length && !options.discardChanges) {
-			throw new Error(`${folder} has changes that deleting it would lose: ${lost.join(', ')}`);
-		}
-		this.steps.push(`delete ${folder}`);
-		this.worktrees.set(found.main, (this.worktrees.get(found.main) ?? []).filter(each => each.folder !== found.worktree.folder));
 		fs.rmSync(folder, { recursive: true, force: true });
 	}
 
@@ -875,6 +895,8 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			}
 		}
 	});
+	// The window's deletion stops the agents working in a worktree through the core, as the window asks it to
+	git.stopping = folder => facade.worktreeStopping(folder);
 	return {
 		table,
 		facade,

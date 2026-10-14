@@ -1148,10 +1148,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	private _pruneRemovedFolders(): void {
 		const present = new Set(this._contextService.getWorkspace().folders.map(folder => this._key(folder.uri)));
 
-		// Only a folder that left through Remove Folder stops what runs in it; otherwise it moves to the panel (W9.6)
+		// Only a folder that left through Remove Folder stops what runs in it; otherwise it moves to the panel (W9.6).
+		// One that left for its worktree's deletion keeps it where it is, for the deletion to stop (WT-8, step 6).
 		const known = this._known;
 		this._known = this._foldersByKey();
 		const agreed = new Set([...known].filter(([key, uri]) => !present.has(key) && this._workspaceBarService.isRemoving(uri)).map(([key]) => key));
+		const deleting = new Set([...known].filter(([key, uri]) => !present.has(key) && this._workspaceBarService.isDeleting(uri)).map(([key]) => key));
 		const stops = (key: string, members?: ReadonlySet<string>) => agreed.has(key) || (!!members && [...members].some(member => agreed.has(member)));
 		const kept: ITerminalInstance[] = [];
 
@@ -1187,7 +1189,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 
 		// Those on their way with the window are none of the folders'
 		for (const [key, parked] of [...this._parked]) {
-			if (key === WINDOW || present.has(key) || this._rows.has(key)) {
+			if (key === WINDOW || present.has(key) || this._rows.has(key) || deleting.has(key)) {
 				continue;
 			}
 
@@ -1205,6 +1207,8 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		for (const [instance, opened] of [...this._openedFor]) {
 			if (present.has(opened.key)) {
 				opened.joined = true;
+			} else if (deleting.has(opened.key)) {
+				continue;
 			} else if (opened.joined || (opened.members && ![...opened.members].some(member => present.has(member)))) {
 				this._logService.trace(`[folderTerminals] folder removed, ${stops(opened.key, opened.members) ? 'disposing' : 'keeping'} a terminal opened for ${opened.key}`);
 				if (stops(opened.key, opened.members)) {
@@ -1216,7 +1220,7 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		}
 
 		if (kept.length) {
-			this._sayKept([...known].filter(([key]) => !present.has(key) && !agreed.has(key)).map(([, uri]) => uri), kept);
+			this._sayKept([...known].filter(([key]) => !present.has(key) && !agreed.has(key) && !deleting.has(key)).map(([, uri]) => uri), kept);
 		}
 	}
 

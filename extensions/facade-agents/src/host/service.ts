@@ -387,9 +387,17 @@ export class AgentsService implements vscode.Disposable {
 		this.facade?.worktreeDeleteFailed(folder);
 	}
 
-	/** The person is deleting the worktree `folder` in the window: its agents still starting are stopped first (N-34). */
-	async worktreeDeleting(folder: string): Promise<void> {
-		await this.facade?.worktreeDeleting(folder);
+	/** The person decided to delete the worktree `folder` in the window: no agent starts there until it is over (OR-10). */
+	worktreeDeleting(folder: string): void {
+		this.facade?.worktreeDeleting(folder);
+	}
+
+	/**
+	 * The window's deletion of the worktree `folder` is at stopping what goes with it: its agents stop, and are waited for
+	 * (WORKTREE.md WT-8, step 6). Answers those still stopping when the stop timeout was over.
+	 */
+	async worktreeStopping(folder: string): Promise<{ readonly stopping: readonly string[]; readonly why?: string }> {
+		return await this.facade?.worktreeStopping(folder) ?? { stopping: [] };
 	}
 
 	async startAgentCommand(rawArgs: unknown): Promise<{ readonly id: number; readonly name: string } | undefined> {

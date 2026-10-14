@@ -70,11 +70,20 @@ export function activate(context: vscode.ExtensionContext): void {
 		return await service?.launchProblems(installed, folder) ?? [];
 	}));
 	context.subscriptions.push(
-		// `(folder)`: the person is deleting that worktree in the window - Facade's word first on its agents still starting (N-34)
-		vscode.commands.registerCommand('_facade.agents.worktreeDeleting', async (folder?: unknown) => {
+		// `(folder)`: the person decided to delete that worktree in the window - no agent starts there until it is over (OR-10)
+		vscode.commands.registerCommand('_facade.agents.worktreeDeleting', (folder?: unknown) => {
 			if (folder instanceof vscode.Uri && folder.scheme === 'file') {
-				await service?.worktreeDeleting(folder.fsPath);
+				service?.worktreeDeleting(folder.fsPath);
 			}
+		}),
+		// `(folder)`: the window's deletion of that worktree, which is out of the workspace now, stops what goes with it -
+		// its agents, waited for - and answers those still stopping when the stop timeout was over (WT-8, step 6)
+		vscode.commands.registerCommand('_facade.agents.worktreeStopping', async (folder?: unknown) => {
+			await ready;
+			if (!(folder instanceof vscode.Uri) || folder.scheme !== 'file') {
+				return { stopping: [] };
+			}
+			return await service?.worktreeStopping(folder.fsPath) ?? { stopping: [] };
 		}),
 		// `(workspace, id)`: the person stops that agent from the window - one with no terminal yet (L3)
 		vscode.commands.registerCommand('_facade.agents.stopAgent', async (workspace?: unknown, id?: unknown) => {

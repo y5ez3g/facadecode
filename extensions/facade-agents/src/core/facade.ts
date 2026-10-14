@@ -27,7 +27,7 @@ import { ErrorOutcome, FacadeError } from './errors';
 import { Injections, InjectionUser, UnchangedFile } from './injections';
 import { delaysOf, inBackground, Launched, Launcher, LaunchProgress, notConnectedNotice, Prepared, timingOf, windowClosed } from './launch';
 import { Mail, Mailbox } from './mail';
-import { AgentSetup, CliCatalog, Disposable, EndedAgent, EndTold, MadeWorktreeFolder, OwnedFile, Ports, Repository, SetupProgress, Severity, StopSignal, TerminalEnd, Timing, WORKTREES_SETTING } from './ports';
+import { AgentSetup, CliCatalog, Disposable, EndedAgent, EndTold, MadeWorktreeFolder, OwnedFile, Ports, Repository, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalsInside, Timing, WORKTREES_SETTING } from './ports';
 import { ScreenRead, Screens } from './screens';
 
 /**
@@ -207,6 +207,21 @@ interface PendingDeletion extends ErrorOutcome {
 	readonly stopping: readonly number[];
 }
 
+/** The refusal of a deletion of `folder` that would lose `changes`, before anything is stopped (AGENT-ORCHESTRATION.md, O5). */
+function lossRefusal(folder: string, changes: string): FacadeError {
+	return new FacadeError('REFUSED', `Cannot delete ${folder} without losing work: ${changes}. Nothing was stopped. Commit work you need to keep, or retry with discard_changes:true to discard it.`);
+}
+
+/**
+ * What the window's Delete Worktree stopped for a deletion with stop_agent, once it had moved off the worktree and taken
+ * it out of the workspace (WORKTREE.md WT-8, step 6): nothing before it began.
+ */
+interface DeletionStops {
+	began: boolean;
+	readonly stopped: number[];
+	readonly stopping: number[];
+}
+
 /** A folder of the window an agent can start in, and the worktree it is. */
 export interface WindowFolder {
 	readonly folder: string;
@@ -306,14 +321,16 @@ export class Facade implements Disposable {
 	private settling: [Agent, EndNotice][] | undefined;
 	/** The delays of each agent's launch, as its run's plan has them, by number: read once. */
 	private readonly delays = new Map<number, LaunchDelays>();
-	/** The worktrees being deleted: no agent starts in one meanwhile. */
 	/** The new branches starts are making worktrees on, by their repositories' main checkouts: a second start on one is refused. */
 	private readonly branchesBeingMade: { readonly main: string; readonly branch: string }[] = [];
-	/** The deletions of worktrees under way: no agent starts there meanwhile, and a second deletion joins the first. */
-	private readonly deletions: { readonly folder: string; readonly done: Promise<Stopped> }[] = [];
+	/**
+	 * The deletions of worktrees under way with stop_agent: no agent starts there meanwhile, and a second deletion joins
+	 * the first. Each with who asked for it, and what the window's Delete Worktree stopped for it (WORKTREE.md WT-8, step 6).
+	 */
+	private readonly deletions: { readonly folder: string; readonly done: Promise<Stopped>; readonly by: StoppedBy; readonly stops: DeletionStops }[] = [];
 	/**
 	 * The worktrees the person is deleting in the window: no agent starts there either, until the window says the deletion
-	 * is done or failed - or, should it never say, a while on (O5 step 3; OR-10).
+	 * is done or failed - or, should it never say, a while on (WORKTREE.md WT-8, step 3; OR-10).
 	 */
 	private readonly personDeletions: { readonly folder: string; readonly timer: ReturnType<typeof setTimeout> }[] = [];
 	/** The person's agents' ends told together: those that came within {@link ENDS_GATHERED_MS} of each other. */
@@ -979,19 +996,52 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * The person is deleting the worktree `folder` in the window: the agents still starting in it - making it, or
-	 * running its setup - are stopped by them, its worktree deleted, before it goes; no CLI is launched in it after
-	 * (AGENT-LAUNCHER.md: removing a worktree stops the agents associated with it; N-34), and no agent starts in it until
-	 * the window says how the deletion went (O5 step 3; OR-10). Those running in it end as its terminals close (N-04).
+	 * The person decided to delete the worktree `folder` in the window: no agent starts in it until the window says how
+	 * the deletion went (WORKTREE.md WT-8, step 3; OR-10). Its agents are stopped later, once the window is off it and it
+	 * is out of the workspace (`worktreeStopping`).
 	 */
-	async worktreeDeleting(folder: string): Promise<void> {
-		// No start goes in from now - one rule for the person's deletion and an agent's (O5 step 3; OR-10) - until the
-		// window says how it went: a deletion it never says the end of lets starts in again after the person's timeout
+	worktreeDeleting(folder: string): void {
+		// One rule for the person's deletion and an agent's: a deletion the window never says the end of lets starts in
+		// again after the person's timeout
 		this.deletionOver(folder);
-		const timer = setTimeout(() => this.deletionOver(folder), this.timing().startTimeoutMs);
-		this.personDeletions.push({ folder, timer });
-		const starting = this.liveAgents().filter(agent => agent.state === 'starting' && isEqualPath(agent.folder, folder));
-		await Promise.all(starting.map(agent => this.stopOne(agent, 'human', 'as its worktree was being deleted').catch(err => this.log(`Could not stop ${describe(agent)} during worktree deletion: ${messageOf(err)}`))));
+		this.personDeletions.push({ folder, timer: setTimeout(() => this.deletionOver(folder), this.timing().startTimeoutMs) });
+	}
+
+	/**
+	 * The window's Delete Worktree is at its step 6 for the worktree `folder`, which it has moved off and taken out of the
+	 * workspace: every agent working in it - started there, or gone there since; one starting, its start cancelled and
+	 * its setup with it - is stopped by whoever decided on the deletion, an agent's call or the person, and waited for
+	 * (WORKTREE.md WT-8, step 6; AGENT-LAUNCHER.md, L6; N-34). Answers those still stopping once the stop timeout is over,
+	 * which keeps git from deleting it - and, for a call, why, in its words (AGENT-ORCHESTRATION.md, O5).
+	 */
+	async worktreeStopping(folder: string): Promise<{ readonly stopping: readonly string[]; readonly why?: string }> {
+		const call = this.deletions.find(each => isEqualPath(each.folder, folder));
+		const { inside } = await this.workingIn(folder);
+		if (call) {
+			call.stops.began = true;
+		} else {
+			// The person's deletion stays theirs while its agents stop: the window's timeout counts from here
+			this.worktreeDeleting(folder);
+		}
+		const results = await Promise.allSettled(inside.map(agent => call
+			? this.stopOne(agent, call.by, 'with stop_agent to delete its worktree')
+			: this.stopOne(agent, 'human', 'as its worktree was being deleted')));
+		const stopped = inside.filter((_, i) => results[i].status === 'fulfilled').map(each => each.id);
+		const stopping = inside.filter((_, i) => results[i].status === 'rejected').map(each => each.id);
+		if (!call) {
+			results.forEach((result, i) => {
+				if (result.status === 'rejected') {
+					this.log(`Could not stop ${describe(inside[i])} during worktree deletion: ${messageOf(result.reason)}`);
+				}
+			});
+			return { stopping: stopping.map(id => this.whoIs(id)) };
+		}
+		call.stops.stopped.push(...stopped);
+		call.stops.stopping.push(...stopping);
+		if (!stopping.length) {
+			return { stopping: [] };
+		}
+		return { stopping: stopping.map(id => this.whoIs(id)), why: this.pendingDeletionText(folder, call.stops) };
 	}
 
 	/**
@@ -1086,7 +1136,7 @@ export class Facade implements Disposable {
 			return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: repository ? 'it is the repository\'s main checkout, which cannot be deleted' : 'the folder is not in a Git repository, so there is no worktree to delete' } };
 		}
 		// An agent's folder inside a worktree is not the worktree: the worktree is what is deleted, its top level - with
-		// every agent in it, by the same preflight (AGENT-ORCHESTRATION.md, O5 step 1; OR-09)
+		// every agent in it, by the same preflight (AGENT-ORCHESTRATION.md, O5; OR-09)
 		const root = repository ? await this.ports.git.worktreeRootOf(folder) : undefined;
 		if (root !== undefined && !isEqualPath(root, folder)) {
 			folder = root;
@@ -1105,11 +1155,11 @@ export class Facade implements Disposable {
 		}
 		const deleting = new DeferredPromise<Stopped>();
 		deleting.p.catch(() => undefined);
-		const entry = { folder, done: deleting.p };
+		const entry = { folder, done: deleting.p, by, stops: { began: false, stopped: [], stopping: [] } };
 		this.deletions.push(entry);
 		try {
 			const target: DeletionTarget = repository ? { main: repository.main, branch: repository.worktree, ...(repository.head !== undefined ? { head: repository.head } : {}) } : { main: leftover!.repository, leftover: leftover!.name };
-			const stopped = await this.deleteWorktreeOf(caller, agent, folder, target, by, alreadyEnded, options);
+			const stopped = await this.deleteWorktreeOf(caller, agent, folder, target, by, alreadyEnded, options, entry.stops);
 			deleting.complete(stopped);
 			return stopped;
 		} catch (err) {
@@ -1123,14 +1173,13 @@ export class Facade implements Disposable {
 	/**
 	 * `stopAgent`'s deletion of the worktree `folder` of `target`'s repository - or of what a deletion left of it -
 	 * once no other is under way: refused, nothing stopped, where an agent working in it is out of the caller's reach
-	 * or it has work deleting it would lose; else every agent working in it stopped, then - what came meanwhile
-	 * looked at again - the worktree deleted, its branch kept.
+	 * or it has work deleting it would lose; else the window's Delete Worktree, which stops every agent working in it
+	 * once it is off it and it is out of the workspace, looks again, and deletes it, its branch kept (WORKTREE.md WT-8;
+	 * AGENT-ORCHESTRATION.md, O5). What it stopped is in `stops`.
 	 */
-	private async deleteWorktreeOf(caller: Caller, agent: Agent, folder: string, target: DeletionTarget, by: StoppedBy, alreadyEnded: boolean, options: { readonly discardChanges?: boolean }): Promise<Stopped> {
-		// Every agent working in it: started there, or gone there since - a CLI that cd'd into it - wherever
-		// it was started; its terminal goes with it, so it is stopped and said to be (AGENT-ORCHESTRATION.md, O5;
-		// X-74). One the window holds for another record is no agent of this list to stop.
-		const terminals = await this.ports.terminals.inside(folder);
+	private async deleteWorktreeOf(caller: Caller, agent: Agent, folder: string, target: DeletionTarget, by: StoppedBy, alreadyEnded: boolean, options: { readonly discardChanges?: boolean }, stops: DeletionStops): Promise<Stopped> {
+		const { inside, terminals } = await this.workingIn(folder);
+		// One the window holds for another record is no agent of this list to stop
 		if (terminals.others) {
 			throw new FacadeError('REFUSED', `Cannot delete ${folder}: ${terminals.others === 1 ? 'an agent' : `${terminals.others} agents`} working there ${terminals.others === 1 ? 'is' : 'are'} missing from this window's agent list. Deleting the worktree would end ${terminals.others === 1 ? 'it' : 'them'} without an explicit stop. Nothing was stopped. Stop the unlisted agents first.`);
 		}
@@ -1140,14 +1189,6 @@ export class Facade implements Disposable {
 		if (elsewhere.length) {
 			throw new FacadeError('REFUSED', `Cannot delete ${folder}: it is in use by ${elsewhere.length === 1 ? 'an agent' : `${elsewhere.length} agents`} from another window (${elsewhere.join(', ')}). This call cannot stop ${elsewhere.length === 1 ? 'it' : 'them'}. Nothing was stopped. Stop the agents in their own window first.`);
 		}
-		const live = this.liveAgents();
-		// Its terminal the window cannot see go there - the CLI itself, or a shell it runs, cd'd - its processes say
-		const startedElsewhere = live.filter(each => !isEqualPath(each.folder, folder) && !isInsideFolder(each.folder, folder) && !terminals.agents.includes(each.id) && each.processId !== undefined);
-		const working = startedElsewhere.length ? await (this.options.workingFolders ?? workingFoldersOf)(startedElsewhere.map(each => each.processId!)) : new Map<number, readonly string[]>();
-		// The system names a process's folder by its real path
-		const real = canonicalFolder(folder);
-		const wentThere = (agent: Agent) => (working.get(agent.processId!) ?? []).some(each => [folder, real].some(at => isEqualPath(each, at) || isInsideFolder(each, at)));
-		const inside = live.filter(each => isEqualPath(each.folder, folder) || isInsideFolder(each.folder, folder) || terminals.agents.includes(each.id) || (each.processId !== undefined && wentThere(each)));
 		const outOfReach = inside.filter(each => !this.reaches(caller, each));
 		if (outOfReach.length) {
 			throw new FacadeError('REFUSED', `Cannot delete ${folder}: agents working there are outside your tree: ${outOfReach.map(each => `${describe(each)}${isEqualPath(each.folder, folder) ? '' : ` (started in ${each.folder})`}`).join(', ')}. With YOLO off, you can reach only your own tree. Nothing was stopped.`);
@@ -1156,29 +1197,18 @@ export class Facade implements Disposable {
 		const agents = [...new Set([...inside.map(each => each.id), ...terminals.agents])];
 		// The shared Delete Worktree's own preflight, before any agent is stopped: what it would refuse - an unsaved editor
 		// of any kind among it, where the extension host sees text and notebooks alone - refuses it here, all left running
-		// (O5 step 2; O8; OR-19; OR-04)
+		// (O5; O8; OR-19; OR-04)
 		const changes = options.discardChanges ? undefined : await this.lossIn(folder, target, agents);
 		if (changes) {
-			throw new FacadeError('REFUSED', `Cannot delete ${folder} without losing work: ${changes}. Nothing was stopped. Commit work you need to keep, or retry with discard_changes:true to discard it.`);
+			throw lossRefusal(folder, changes);
 		}
-		const results = await Promise.allSettled(inside.map(each => this.stopOne(each, by, 'with stop_agent to delete its worktree')));
-		const stopped = inside.map(each => this.factsOf(this.table.get(each.id) ?? each));
-		if (results.some(result => result.status === 'rejected')) {
-			// What happened all the same, said and given as the same facts: the agents it stopped, and those whose stops
-			// answered pending, still stopping (O2)
-			const facts: PendingDeletion = { outcome: 'pending', agent: agent.id, stopped: inside.filter((_, i) => results[i].status === 'fulfilled').map(each => each.id), stopping: inside.filter((_, i) => results[i].status === 'rejected').map(each => each.id) };
-			throw new FacadeError('UNAVAILABLE', this.pendingDeletionText(folder, facts), facts);
-		}
-		this.stillOpen();
-		// Looked at again, the agents gone and what Facade put there taken back: what came meanwhile - an edit
-		// a CLI finished as it ended, a build's output - is work too, and is not deleted unasked.
-		const since = options.discardChanges ? undefined : await this.lossIn(folder, target, agents);
-		this.stillOpen();
-		if (since) {
-			// Refused, as an error: what happened all the same - the agents stopped - said with it (X-23)
-			throw new FacadeError('REFUSED', `${folder} was not deleted: work appeared while its agents were stopping and would be lost: ${since}. Agents already stopped: ${stopped.map(each => describe(each)).join(', ')}. Commit work you need to keep, or retry with discard_changes:true to discard it.`, { agent: agent.id, worktree: folder, stopped: stopped.map(each => each.id) });
-		}
+		const stoppedNow = () => stops.stopped.flatMap(id => {
+			const stopped = this.table.get(id);
+			return stopped ? [this.factsOf(stopped)] : [];
+		});
 		try {
+			// Nothing is stopped ahead of it: the window stops them once it is off the worktree and the worktree is out of
+			// the workspace, and looks again before git deletes it (WT-8, steps 5 and 6)
 			await this.ports.git.deleteWorktree(folder, {
 				discardChanges: !!options.discardChanges,
 				ownFiles: target.leftover === undefined ? await this.ownFilesIn(folder, target) : [],
@@ -1187,18 +1217,54 @@ export class Facade implements Disposable {
 				...(target.leftover !== undefined ? { leftover: true } : {})
 			});
 		} catch (err) {
+			// Its agents not all ended in time: what happened all the same, said and given as the same facts - the agents it
+			// stopped, and those whose stops answered pending, still stopping (O2)
+			if (stops.stopping.length) {
+				const facts: PendingDeletion = { outcome: 'pending', agent: agent.id, stopped: stops.stopped, stopping: stops.stopping };
+				throw new FacadeError('UNAVAILABLE', messageOf(err), facts);
+			}
+			// Refused, or failed, before anything was stopped: work that came since the preflight refuses it as the preflight
+			// does; else the window says how far it came, and a call again starts over
+			if (!stops.began) {
+				const since = options.discardChanges ? undefined : await this.lossIn(folder, target, agents).catch(() => undefined);
+				throw since ? lossRefusal(folder, since) : new FacadeError('FAILED', `${messageOf(err)}\nNothing was stopped.`);
+			}
+			this.stillOpen();
+			// Refused as its last look found work that came meanwhile - an edit a CLI finished as it ended, a build's output
+			// - which is not deleted unasked: as an error, with what happened all the same (X-23)
+			const since = options.discardChanges ? undefined : await this.lossIn(folder, target, agents).catch(() => undefined);
+			if (since) {
+				throw new FacadeError('REFUSED', `${messageOf(err)}\nAgents already stopped: ${stoppedNow().map(each => describe(each)).join(', ')}. Commit work you need to keep, or retry with discard_changes:true to discard it.`, { agent: agent.id, worktree: folder, stopped: stops.stopped });
+			}
 			// Said in the log as well as to the caller, and kept in the record - the ledger and the person's history - where
 			// the caller and the person can read what came of the removal, a call cut as it went too (O5, O11; OR-15)
 			this.log(`Failed to delete ${folder} through stop_agent requested by ${this.whoIs(by)}: ${messageOf(err)}`);
 			// With what a retry needs to finish what is left once git forgot the worktree, whoever made it (OR-08)
 			const branch = target.leftover ?? target.branch;
 			this.recordRemoval({ folder, by, deleted: false, reason: messageOf(err), main: target.main, ...(branch !== undefined ? { branch } : {}) });
-			return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped, worktree: { folder, deleted: false, why: messageOf(err) } };
+			return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped: stoppedNow(), worktree: { folder, deleted: false, why: messageOf(err) } };
 		}
 		this.recordRemoval({ folder, by, deleted: true });
 		this.table.forgetWorktree(folder);
 		this.log(`Deleted ${folder} through stop_agent requested by ${this.whoIs(by)}.`);
-		return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped, worktree: { folder, deleted: true } };
+		return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped: stoppedNow(), worktree: { folder, deleted: true } };
+	}
+
+	/**
+	 * The agents of this window's list working in `folder` - started there, or gone there since: a CLI that cd'd into
+	 * it - wherever they were started, with the window's terminals inside it, whose agents go with it (O5; X-74).
+	 */
+	private async workingIn(folder: string): Promise<{ readonly inside: LiveAgent[]; readonly terminals: TerminalsInside }> {
+		const terminals = await this.ports.terminals.inside(folder);
+		const live = this.liveAgents();
+		// Its terminal the window cannot see go there - the CLI itself, or a shell it runs, cd'd - its processes say
+		const startedElsewhere = live.filter(each => !isEqualPath(each.folder, folder) && !isInsideFolder(each.folder, folder) && !terminals.agents.includes(each.id) && each.processId !== undefined);
+		const working = startedElsewhere.length ? await (this.options.workingFolders ?? workingFoldersOf)(startedElsewhere.map(each => each.processId!)) : new Map<number, readonly string[]>();
+		// The system names a process's folder by its real path
+		const real = canonicalFolder(folder);
+		const wentThere = (agent: Agent) => (working.get(agent.processId!) ?? []).some(each => [folder, real].some(at => isEqualPath(each, at) || isInsideFolder(each, at)));
+		const inside = live.filter(each => isEqualPath(each.folder, folder) || isInsideFolder(each.folder, folder) || terminals.agents.includes(each.id) || (each.processId !== undefined && wentThere(each)));
+		return { inside, terminals };
 	}
 
 	/**
@@ -1681,7 +1747,7 @@ export class Facade implements Disposable {
 	}
 
 	/** What the deletion of `folder` that waits for agents still stopping says: the facts its data carries, in words (O2, O5). */
-	private pendingDeletionText(folder: string, facts: PendingDeletion): string {
+	private pendingDeletionText(folder: string, facts: Pick<PendingDeletion, 'stopped' | 'stopping'>): string {
 		const named = (ids: readonly number[]) => ids.map(id => this.whoIs(id)).join(', ');
 		const one = facts.stopping.length === 1;
 		return `${folder} was not deleted: ${named(facts.stopping)} ${one ? 'is' : 'are'} still stopping${facts.stopped.length ? `; ${named(facts.stopped)} stopped` : ''}. Once ${one ? 'it has' : 'they have'} ended, call stop_agent again with delete_worktree:true.`;
@@ -1691,7 +1757,7 @@ export class Facade implements Disposable {
 	 * What deleting the worktree `folder` of `repository` - closing the terminals of `agents` - would lose, as a refusal
 	 * names it; undefined where nothing would be lost. What the shared Delete Worktree's own preflight finds, what Facade
 	 * put there and nobody changed applied as for the deletion - its check alone, nothing stopped, closed or removed
-	 * (AGENT-ORCHESTRATION.md, O5 step 2; O8; OR-04) - each as it words it; and beside it what only Facade knows: what of
+	 * (AGENT-ORCHESTRATION.md, O5, O8; OR-04) - each as it words it; and beside it what only Facade knows: what of
 	 * its own someone changed since, which git may not show, a worktree's submodules, and what a deletion left of it
 	 * holds that its branch does not.
 	 */

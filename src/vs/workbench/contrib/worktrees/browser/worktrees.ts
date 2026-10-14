@@ -321,10 +321,11 @@ export interface IWorktreeService {
 
 	/**
 	 * Deletes the worktree `target` as Delete Worktree does, without asking anything, for a caller that has
-	 * decided already - an agent stopping the agents in it - its branch kept. Changes git would lose, as it
-	 * finds them deleting it, refuse it unless `options` says to discard them (WT-8.10). Throws, in the
-	 * product's words, when it cannot: those changes, a main checkout, which is never deleted, a folder that
-	 * is no worktree, and a worktree git will not delete - whose row comes back, to try again (WT-8.6).
+	 * decided already - an agent's stop_agent - its branch kept, the agents working in it stopped in the same
+	 * order. Changes git would lose, as it finds them deleting it, refuse it unless `options` says to discard them
+	 * (WT-8.10). Throws, in the product's words, when it cannot - with what it did all the same: those changes, a
+	 * main checkout, which is never deleted, a folder that is no worktree, agents still stopping, and a worktree git
+	 * will not delete - whose row comes back, to try again (WT-8.6).
 	 */
 	removeWorktree(target: URI, options?: IRemoveWorktreeOptions): Promise<void>;
 
@@ -333,7 +334,7 @@ export interface IWorktreeService {
 	 * decide on, each named as its refusal names it, and nothing where nothing would be: the files git keeps no copy
 	 * of but those the caller put there, as it wrote them; its editors with unsaved changes; its submodules. A look and
 	 * nothing else - no agent stopped, no terminal or editor closed, nothing moved or removed - for a caller to refuse
-	 * with before it stops anything (AGENT-ORCHESTRATION.md, O5 step 2). Throws as `removeWorktree` does where it
+	 * with before it stops anything (AGENT-ORCHESTRATION.md, O5). Throws as `removeWorktree` does where it
 	 * cannot look: a main checkout, a folder that is no worktree, Restricted Mode, Git that cannot be asked.
 	 */
 	removalLoss(target: URI, options?: IRemoveWorktreeOptions): Promise<readonly string[]>;
@@ -372,8 +373,8 @@ export interface IRemoveWorktreeOptions {
 	 */
 	readonly main?: URI;
 	/**
-	 * The agents' runs the caller stopped in it: theirs are the only agents' terminals the deletion closes.
-	 * Another agent still working inside it refuses it - it would be ended unasked.
+	 * The agents' runs working in it that the caller looked at, which the deletion stops: theirs are the only agents'
+	 * terminals it closes. Another agent working inside it refuses it - it would be ended unasked.
 	 */
 	readonly runs?: readonly IFacadeRun[];
 	/**
@@ -404,7 +405,7 @@ function lostFiles(loss: UndecidedLoss): string[] {
 /** A deletion a caller decided on, nothing asked (WT-8.10). */
 interface IDecidedDeletion {
 	readonly kind: 'decided';
-	/** The agents' runs the caller stopped in it: the only agents' terminals it closes. */
+	/** The agents' runs working in it that the caller looked at: the only agents' terminals it closes. */
 	readonly runs: readonly IFacadeRun[];
 	/** Whether its unsaved changes go with it, as the caller said. */
 	readonly discardChanges: boolean;
@@ -426,12 +427,13 @@ interface IPersonDeletion {
 
 /**
  * How a deletion ended: as git answered, or before git was asked - refused, the window not off it, not confirmed
- * again, or not out of the workspace.
+ * again, not out of the workspace, or its agents still stopping once the stop timeout was over.
  */
 type DeletionOutcome =
 	| DeleteWorktreeAtResult
 	| { readonly kind: 'refused'; readonly why: string }
 	| { readonly kind: 'stayed' | 'kept' | 'notRemoved' }
+	| { readonly kind: 'stopping' } & IAgentsStopping
 	| undefined;
 
 /** How a deletion went: how it ended, and what of it was done whatever the end (WT-8.6). */
@@ -439,10 +441,18 @@ interface IDeletion {
 	readonly outcome: DeletionOutcome;
 	/** Whether its folder left the workspace's folders. */
 	readonly leftFolders: boolean;
-	/** Whether unsaved changes of its files were discarded. */
-	readonly discarded: boolean;
 	/** What ran in the terminals that went with it, which closing them ended. */
 	readonly ended: readonly string[];
+}
+
+/**
+ * What `_facade.agents.worktreeStopping` answers once the agents working in a worktree being deleted were stopped: those
+ * still stopping when the stop timeout was over, by name, and - for a deletion an agent's call asked for - why, in that
+ * call's words (AGENT-ORCHESTRATION.md, O5).
+ */
+interface IAgentsStopping {
+	readonly stopping: readonly string[];
+	readonly why?: string;
 }
 
 /** That the window could not go from the worktree `name` to its repository `main`, so it was not deleted (WT-8, step 4). */
@@ -460,11 +470,16 @@ function deleteFailure(error: WorktreeAtError | undefined, main: URI): string {
 	return explainFailure(error, main) ?? localize('worktrees.deleteFailed', "Failed to delete worktree: {0}", gitMessage(error));
 }
 
-/** That the worktree `name` was not deleted, as the workspace did not let it go - its unsaved changes discarded, where they were (WT-8, step 5). */
-function notOutOfWorkspace(name: string, discarded: boolean): string {
-	return discarded
-		? localize('worktrees.notOutDiscarded', "Worktree '{0}' was not deleted and could not be removed from the workspace. Unsaved changes were discarded.", name)
-		: localize('worktrees.notOut', "Worktree '{0}' was not deleted and could not be removed from the workspace.", name);
+/** That the worktree `name` was not deleted, as the workspace did not let it go: nothing was stopped or discarded (WT-8, step 5). */
+function notOutOfWorkspace(name: string): string {
+	return localize('worktrees.notOut', "Worktree '{0}' was not deleted and could not be removed from the workspace.", name);
+}
+
+/** That the worktree `name` was not deleted, the agents `stopping` working in it not stopped in time (WT-8, step 6). */
+function stillStopping(name: string, stopping: readonly string[], leftFolders: boolean): string {
+	return leftFolders
+		? localize('worktrees.stillStoppingOut', "Worktree '{0}' was not deleted because these agents have not stopped yet: {1}. It was removed from the workspace. Delete it again once they have stopped.", name, stopping.join(', '))
+		: localize('worktrees.stillStopping', "Worktree '{0}' was not deleted because these agents have not stopped yet: {1}. Delete it again once they have stopped.", name, stopping.join(', '));
 }
 
 /** How much of a failed setup line's output its outcome keeps: its end, where the error is. */
@@ -689,7 +704,7 @@ export class WorktreeService implements IWorktreeService {
 
 	async removalLoss(target: URI, options: IRemoveWorktreeOptions = {}): Promise<readonly string[]> {
 		const { main, worktree, name } = this.toRemove(target, options);
-		// The deletion's own first look, the caller's own files applied as it applies them (O5 step 2)
+		// The deletion's own first look, the caller's own files applied as it applies them (O5)
 		const loss = await this.undecidedLoss(worktree, await this.checkToRemove(main, worktree, name, options), options);
 		return loss ? [...lostFiles(loss), ...(loss.submodules ? [localize('worktrees.submodulesLost', "its submodules (with any of their commits not pushed)")] : [])] : [];
 	}
@@ -1560,14 +1575,15 @@ export class WorktreeService implements IWorktreeService {
 
 	/**
 	 * WT-8 from step 3, once what would be lost is known and its deletion decided - by the person's confirmation, or by a
-	 * caller (WT-8.10): everything that could hold the directory open is gone before git is asked to delete it, by force
-	 * where git's last look found changes or submodules - or, given the `leftover` recovery, what a deletion left deleted.
-	 * Answers how it ended, with what of it was done whatever the end: that stays done, and is said (WT-8.6).
+	 * caller (WT-8.10): the window off it and the workspace without it before anything of it is stopped or discarded, and
+	 * everything that could hold the directory open gone before git is asked to delete it, by force where git's last look
+	 * found changes or submodules - or, given the `leftover` recovery, what a deletion left deleted. Answers how it ended,
+	 * with what of it was done whatever the end: that stays done, and is said (WT-8.6).
 	 */
 	private async deleteChecked(main: URI, worktree: URI, name: string, deletion: IPersonDeletion | IDecidedDeletion, leftover?: string): Promise<IDeletion> {
 		const decided = deletion.kind === 'decided' ? deletion : undefined;
 		const wasFolder = this.contextService.getWorkspace().folders.some(folder => this.uriIdentityService.extUri.isEqual(folder.uri, worktree));
-		const done: { toldAgents: boolean; leftFolders: boolean; discarded: boolean; ended: readonly string[] } = { toldAgents: false, leftFolders: false, discarded: false, ended: [] };
+		const done: { toldAgents: boolean; leftFolders: boolean; ended: readonly string[] } = { toldAgents: false, leftFolders: false, ended: [] };
 
 		// 3 to 7 under one progress: a large tree takes a while to delete. A caller's in the status bar: nobody asked
 		// for it where they would look for it
@@ -1606,7 +1622,13 @@ export class WorktreeService implements IWorktreeService {
 						return { kind: 'refused', why };
 					}
 
-					// 3  move off, to the repository's own row (WT-8.3); a window that cannot stops the deletion
+					// 3  decided, no agent starts in it until the deletion is over: the person's says so here, a caller's
+					//    has said so before it asked (WT-8, step 3; OR-10). Without Facade's agents there is none to tell.
+					if (deletion.kind === 'person') {
+						done.toldAgents = await this.tellAgentsDeleting(worktree);
+					}
+
+					// 4  move off, to the repository's own row (WT-8.3); a window that cannot stops the deletion
 					if (!await this.moveOff(main, worktree, !!decided)) {
 						return { kind: 'stayed' };
 					}
@@ -1615,43 +1637,35 @@ export class WorktreeService implements IWorktreeService {
 					// seconds for a large worktree - and comes back if the deletion fails (WT-8.9).
 					hidden = this.workspaceBarService.hideWorktree(worktree);
 
-					// 4  discard what the confirmation named - all there is, where the caller said to - and close its editors
-					const unsaved = deletion.kind === 'person' ? deletion.unsaved : deletion.discardChanges ? (await this.unsavedIn(worktree)).map(each => each.workingCopy) : [];
-					await this.discardInside(worktree, unsaved);
-					done.discarded = unsaved.length > 0;
-
-					// The person's deletion stops an agent still starting in it - its worktree being made, or its setup
-					// running - so that no CLI is launched in the folder going (N-34). Without Facade's agents there is none.
-					if (deletion.kind === 'person') {
-						done.toldAgents = await this.tellAgentsDeleting(worktree);
-					}
-
-					// The terminals that go with it - working inside it, or parked for it - and what closing them ends: what a
-					// deletion that fails after this cannot put back. Closed for the person's deletion, an agent's ends say
-					// so, not that a tab was closed (N-04).
-					const going = await this.terminalsGoingWith(worktree);
-					done.ended = this.runningAmong(going).map(work => work.name);
-					if (deletion.kind === 'person') {
-						for (const instance of going) {
-							this.facadeRunsService.closingBecause(instance, 'worktreeDeleted');
-						}
-					}
-
-					// 5  leave folders[] without asking again (WT-8.4) - which also ends the terminals parked for it; a workspace
-					//    that refuses stops the deletion here
-					const removal = await this.workspaceBarService.remove([worktree], { confirmed: true });
+					// 5  leave folders[] without asking again (WT-8.4), its running work and unsaved changes left as they are: a
+					//    workspace that refuses stops the deletion here, nothing of it stopped or discarded
+					const removal = await this.workspaceBarService.remove([worktree], { confirmed: true, deleting: true });
 					if (removal.kind !== 'removed') {
 						return { kind: 'notRemoved' };
 					}
 					done.leftFolders = wasFolder;
 
-					// 6  close the terminals still going with it; git's delete waits for their shells to let go
+					// 6  stop what goes with it: Facade's agents working in it, by whoever decided on the deletion, their starts
+					//    cancelled, waited for - those still stopping keep it - then the terminals still going with it, working
+					//    inside it or parked for it, closed for the person's deletion, which an agent's end says, not that a tab
+					//    was closed (N-04). What closing them ended is said whatever comes after; git's delete waits for their
+					//    shells to let go.
+					const running = this.runningAmong(await this.terminalsGoingWith(worktree)).map(work => work.name);
+					const stopping = await this.stopAgentsIn(worktree);
+					if (stopping) {
+						return { kind: 'stopping', ...stopping };
+					}
+					done.ended = running;
 					for (const instance of await this.terminalsGoingWith(worktree)) {
+						if (deletion.kind === 'person') {
+							this.facadeRunsService.closingBecause(instance, 'worktreeDeleted');
+						}
 						instance.dispose(TerminalExitReason.User);
 					}
 
 					// What a deletion left: git has nothing more to say of it (WT-4.5)
 					if (leftover !== undefined) {
+						await this.discardDecided(worktree, deletion);
 						return await this.deleteAt(main, worktree, 'cleanup', leftover);
 					}
 
@@ -1670,6 +1684,10 @@ export class WorktreeService implements IWorktreeService {
 					} else if (!await deletion.confirmAgain(now)) {
 						return { kind: 'kept' };
 					}
+
+					// Only now what it was decided to discard: what the confirmation named - all there is, where the
+					// caller said to - its editors closed
+					await this.discardDecided(worktree, deletion);
 
 					// 7  delete. `force` only when what it throws away was confirmed, or the caller said it goes.
 					return await this.deleteAt(main, worktree, now.files.length > 0 || now.submodules ? 'force' : 'remove');
@@ -1702,7 +1720,16 @@ export class WorktreeService implements IWorktreeService {
 			this.leftovers.delete(worktree);
 		}
 
-		return { outcome, leftFolders: done.leftFolders, discarded: done.discarded, ended: done.ended };
+		return { outcome, leftFolders: done.leftFolders, ended: done.ended };
+	}
+
+	/**
+	 * Discards the unsaved changes the deletion of `worktree` was decided with - those the person's confirmation named, or
+	 * all there are where the caller said they go - and closes the editors of its files (WT-8, step 6).
+	 */
+	private async discardDecided(worktree: URI, deletion: IPersonDeletion | IDecidedDeletion): Promise<void> {
+		const unsaved = deletion.kind === 'person' ? deletion.unsaved : deletion.discardChanges ? (await this.unsavedIn(worktree)).map(each => each.workingCopy) : [];
+		await this.discardInside(worktree, unsaved);
 	}
 
 	/**
@@ -1727,9 +1754,8 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	/**
-	 * Tells the agents that the person is deleting `worktree`: those still starting in it are stopped, and none starts
-	 * there until the window says how it went (N-34; OR-10). Answers whether they were told; without Facade's agents
-	 * there are none to tell.
+	 * Tells the agents that the person decided to delete `worktree`: none starts there until the window says how it went
+	 * (WT-8, step 3; OR-10). Answers whether they were told; without Facade's agents there are none to tell.
 	 */
 	private async tellAgentsDeleting(worktree: URI): Promise<boolean> {
 		if (worktree.scheme !== Schemas.file) {
@@ -1741,6 +1767,19 @@ export class WorktreeService implements IWorktreeService {
 			this.logService.trace(`[worktrees] no agents asked to stop in ${worktree.toString(true)}: ${toErrorMessage(error)}`);
 		}
 		return true;
+	}
+
+	/**
+	 * Stops Facade's agents working in `worktree` - their starts cancelled, its setup terminals closed - by whoever decided
+	 * on its deletion, and waits for them (WT-8, step 6; N-34): undefined once all have ended, else those still stopping
+	 * when the stop timeout was over (AGENT-ORCHESTRATION.md, O5). Without Facade's agents there are none.
+	 */
+	private async stopAgentsIn(worktree: URI): Promise<IAgentsStopping | undefined> {
+		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.worktreeStopping')) {
+			return undefined;
+		}
+		const answer = await this.commandService.executeCommand<IAgentsStopping>('_facade.agents.worktreeStopping', worktree);
+		return answer?.stopping.length ? answer : undefined;
 	}
 
 	/** Says how the person's deletion of `worktree` ended, where it did not go as asked (WT-8.6). */
@@ -1765,7 +1804,9 @@ export class WorktreeService implements IWorktreeService {
 				: localize('worktrees.keptOutside', "Worktree '{0}' was not deleted from disk.", name));
 		} else if (outcome?.kind === 'notRemoved') {
 			// The workspace has said why; what was done before it is said as done (WT-8, step 5)
-			this.notificationService.error(notOutOfWorkspace(name, deletion.discarded));
+			this.notificationService.error(notOutOfWorkspace(name));
+		} else if (outcome?.kind === 'stopping') {
+			this.notificationService.error(stillStopping(name, outcome.stopping, deletion.leftFolders));
 		} else if (outcome?.kind === 'error') {
 			// Still registered, so its row comes back; what was done already is said (WT-8.6)
 			const failure = deleteFailure(outcome, main);
@@ -1801,7 +1842,10 @@ export class WorktreeService implements IWorktreeService {
 		} else if (outcome?.kind === 'stayed') {
 			why = couldNotLeave(main, name);
 		} else if (outcome?.kind === 'notRemoved') {
-			why = notOutOfWorkspace(name, deletion.discarded);
+			why = notOutOfWorkspace(name);
+		} else if (outcome?.kind === 'stopping') {
+			// Said in the caller's words, which name the agents its call stopped too
+			why = outcome.why ?? stillStopping(name, outcome.stopping, false);
 		} else {
 			const error = outcome?.kind === 'error' ? outcome : undefined;
 			this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} failed: ${gitMessage(error)}`);

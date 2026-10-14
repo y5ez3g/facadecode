@@ -420,6 +420,17 @@ suite('Workspace bar - removing folders', () => {
 		assert.deepStrictEqual({ during, after: removal!.isRemoving(URI.file('/w/notes')) }, { during: [true, false], after: false });
 	});
 
+	test('a worktree taken out for its deletion says so while its edit runs - not that what runs in it stops with it, which the deletion stops itself - and not after (WORKTREE.md WT-8, steps 5 and 6)', async () => {
+		let during: boolean[] = [];
+		let removal: WorkspaceBarRemoval | undefined;
+		await remove(['/wt/w2'], { folders: ['/lab', '/wt/w2'] }, { confirmed: true, deleting: true }, which => {
+			removal = which;
+			during = [which.isDeleting(URI.file('/wt/w2')), which.isRemoving(URI.file('/wt/w2')), which.isDeleting(URI.file('/lab'))];
+		});
+
+		assert.deepStrictEqual({ during, after: removal!.isDeleting(URI.file('/wt/w2')) }, { during: [true, false, false], after: false });
+	});
+
 	test('a caller that asked already - deleting a worktree - is asked nothing more', async () => {
 		const outcome = await remove(['/wt/w2'], {
 			folders: ['/lab', '/wt/w2'],

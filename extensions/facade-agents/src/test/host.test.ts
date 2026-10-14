@@ -220,7 +220,7 @@ suite('Host: git\'s records, read with git', function () {
 		});
 	});
 
-	test('the worktree a folder is in, its top level, written as the folder is - through a link, the link: the main checkout\'s, or a worktree git added, from a folder inside it; none in its git directory, in a bare repository or in no repository; git failing otherwise says why (O5 step 1; OR-09)', async () => {
+	test('the worktree a folder is in, its top level, written as the folder is - through a link, the link: the main checkout\'s, or a worktree git added, from a folder inside it; none in its git directory, in a bare repository or in no repository; git failing otherwise says why (O5; OR-09)', async () => {
 		const lab = path.join(temp.dir, 'lab');
 		const added = path.join(temp.dir, 'lab-lint');
 		const bare = path.join(temp.dir, 'lab.git');

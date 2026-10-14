@@ -2314,7 +2314,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		temp.remove();
 	});
 
-	test('an agent whose folder is inside a worktree - a package of it - has the worktree deleted, its top level, with every agent in it: never its folder alone, which is no worktree (O5 step 1; OR-09)', async () => {
+	test('an agent whose folder is inside a worktree - a package of it - has the worktree deleted, its top level, with every agent in it: never its folder alone, which is no worktree (O5; OR-09)', async () => {
 		world.dispose();
 		const w = worktreeFolder(lab, 'w');
 		const web = path.join(w, 'packages', 'web');
@@ -2370,7 +2370,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		});
 	});
 
-	test('a deletion is checked by the window\'s own Delete Worktree before any agent is stopped: what it alone sees would be lost - an unsaved image in its image editor, which the extension host never sees - refuses it, every agent left running and nothing deleted; discard_changes loses it (O5 step 2; O8; OR-19; OR-04)', async () => {
+	test('a deletion is checked by the window\'s own Delete Worktree before any agent is stopped: what it alone sees would be lost - an unsaved image in its image editor, which the extension host never sees - refuses it, every agent left running and nothing deleted; discard_changes loses it (O5, O8; OR-19; OR-04)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
@@ -2421,7 +2421,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		});
 	});
 
-	test('a start into a worktree that passed its checks just before the worktree\'s deletion began is refused as it would be recorded: no agent starts in a folder being deleted (O5, step 3)', async () => {
+	test('a start into a worktree that passed its checks just before the worktree\'s deletion began is refused as it would be recorded: no agent starts in a folder being deleted (WT-8, step 3)', async () => {
 		let lookedUp = () => { };
 		const lookup = new Promise<void>(resolve => lookedUp = resolve);
 		let looking = false;
@@ -2468,7 +2468,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		assert.deepStrictEqual({ whileThere, after: !!world.table.madeWorktree(clamp), lab: fs.existsSync(lab) }, { whileThere: true, after: false, lab: true });
 	});
 
-	test('work that comes while the agents in a worktree stop - an edit a CLI finished as it ended, a build\'s output - keeps the worktree: the agents are stopped, and the call is refused, as an error, saying what deleting it would lose and whom it stopped (X-23)', async () => {
+	test('work that comes while the agents in a worktree stop - an edit a CLI finished as it ended, a build\'s output - keeps the worktree: the window\'s last look refuses it, the agents stopped, and the call is refused, as an error, with what the window said and whom it stopped (X-23; WT-8, step 6)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
@@ -2485,7 +2485,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		assert.deepStrictEqual({ refused, agents: agents(world), steps: world.git.steps, exists: fs.existsSync(clamp) }, {
 			refused: {
 				code: 'REFUSED',
-				message: `${clamp} was not deleted: work appeared while its agents were stopping and would be lost: build/out.js. Agents already stopped: @clamp #a2. Commit work you need to keep, or retry with discard_changes:true to discard it.`,
+				message: `${clamp} was not deleted: changes came into it as it was being deleted, which deleting it would lose: build/out.js\nAgents already stopped: @clamp #a2. Commit work you need to keep, or retry with discard_changes:true to discard it.`,
 				outcome: { agent: 2, worktree: clamp, stopped: [2] }
 			},
 			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent to delete its worktree'],
@@ -2534,6 +2534,45 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 				data: { outcome: 'pending', agent: 2, stopped: [3], stopping: [2] }
 			},
 			exists: true
+		});
+	});
+
+	test('nothing is stopped ahead of the window\'s Delete Worktree: where it fails before its step 6 - the window could not move off the worktree, or the workspace did not let it go - every agent in it goes on, and the call fails saying so (WT-8, steps 4 to 6; O5; OR-27)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		await world.startUp(PERSON, { cli: 'arg', task: 'Help.', name: 'helper', folder: clamp });
+		world.git.failBeforeStopping = 'Worktree \'clamp\' was not deleted and could not be removed from the workspace.';
+		const failure = await failureOf(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true }));
+
+		assert.deepStrictEqual({ failure, agents: agents(world), closed: world.terminals.typed.filter(line => line.includes('[closed]')), exists: fs.existsSync(clamp) }, {
+			failure: { code: 'FAILED', message: 'Worktree \'clamp\' was not deleted and could not be removed from the workspace.\nNothing was stopped.', data: undefined },
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running', '#a3 @helper by @human running'],
+			closed: [],
+			exists: true
+		});
+	});
+
+	test('the person\'s deletion stops the agents working in the worktree at its step 6 - by the person, waited for - and answers one that has not ended in time as still stopping, which keeps git from deleting it; Facade goes on stopping it (WT-8, step 6; L6)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		await world.startUp(PERSON, { cli: 'arg', task: 'Help.', name: 'helper', folder: clamp });
+		world.terminals.stubborn = true;
+		world.facade.worktreeDeleting(clamp);
+		const decided = agents(world);
+		const stopping = world.facade.worktreeStopping(clamp);
+		await sleep(1_000);
+		world.terminals.end('@helper #a3', { byThePerson: false });
+		await sleep(5_000);
+
+		assert.deepStrictEqual({ decided, stopping: await stopping, agents: agents(world) }, {
+			decided: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running', '#a3 @helper by @human running'],
+			stopping: { stopping: ['@clamp #a2'] },
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by @human: as its worktree was being deleted', '#a3 @helper by @human stopped by @human: as its worktree was being deleted']
 		});
 	});
 
@@ -3276,13 +3315,17 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		});
 	});
 
-	test('the person deleting its worktree while its setup runs stops it first, by the person: its setup stopped, no CLI ever launched in the folder going; an agent elsewhere goes on (N-34)', async () => {
+	test('the person deleting its worktree while its setup runs: decided, nothing is stopped; at the deletion\'s step 6 it is stopped by the person, its setup with it, no CLI ever launched in the folder going; an agent elsewhere goes on (N-34; WT-8, step 6)', async () => {
 		world.git.setup = new Promise<SetupOutcome>(() => { });
 		const { starting, clamp } = await leadStarting();
 		await until(() => world.table.get(2)?.phase === 'running_setup');
-		await world.facade.worktreeDeleting(clamp);
+		world.facade.worktreeDeleting(clamp);
+		const decided = agents(world);
+		const stopping = await world.facade.worktreeStopping(clamp);
 
-		assert.deepStrictEqual({ answer: await starting, agents: agents(world), launched: world.terminals.launched.length, steps: world.git.steps }, {
+		assert.deepStrictEqual({ decided, stopping, answer: await starting, agents: agents(world), launched: world.terminals.launched.length, steps: world.git.steps }, {
+			decided: ['#a1 @lead by @human running', '#a2 @clamp by #a1 starting'],
+			stopping: { stopping: [] },
 			answer: `FAILED: Arg Code did not start as @clamp #a2: it was stopped as its worktree was being deleted\nWorktree clamp was created at ${clamp}; the worktree and branch have been kept. To reuse it, start an agent with folder set to this path. Delete it only if it is no longer needed.`,
 			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by @human: as its worktree was being deleted'],
 			launched: 1,
@@ -3290,12 +3333,12 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		});
 	});
 
-	test('while the person deletes a worktree in the window, no agent starts in it - an agent\'s child by its folder, nor the person\'s own from the window - until the window says how the deletion went: failed, starts go in again (O5 step 3; L6; OR-10)', async () => {
+	test('while the person deletes a worktree in the window, no agent starts in it - an agent\'s child by its folder, nor the person\'s own from the window - until the window says how the deletion went: failed, starts go in again (WT-8, step 3; L6; OR-10)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
 		const clamp = worktreeFolder(lab, 'clamp');
-		await world.facade.worktreeDeleting(clamp);
+		world.facade.worktreeDeleting(clamp);
 		const byAgent = await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'late', folder: clamp }));
 		const byPerson = await outcomeOf(world.facade.startForPerson('arg', clamp));
 		world.facade.worktreeDeleteFailed(clamp);
