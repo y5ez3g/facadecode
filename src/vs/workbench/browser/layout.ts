@@ -2732,7 +2732,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
 		const bannerHeight = this.bannerPartView.minimumHeight;
 		const statusBarHeight = this.statusBarPartView.minimumHeight;
 		const activityBarWidth = this.activityBarPartView.minimumWidth;
-		const workspaceBarWidth = this.stateModel.getInitializationValue(LayoutStateKeys.WORKSPACEBAR_SIZE);
+		// The width its state allows - collapsed, the column of icons - not an open width kept from before: laid out wider,
+		// the first layout would hand the difference to the side bar
+		const workspaceBarWidth = Math.min(Math.max(this.stateModel.getInitializationValue(LayoutStateKeys.WORKSPACEBAR_SIZE), this.workspaceBarPartView.minimumWidth), this.workspaceBarPartView.maximumWidth);
 		const middleSectionHeight = height - titleBarHeight - statusBarHeight;
 
 		const titleAndBanner: ISerializedNode[] = [
