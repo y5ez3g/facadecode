@@ -4,12 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Codicon } from '../../../../base/common/codicons.js';
+import { isWindows } from '../../../../base/common/platform.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { isObject, isString } from '../../../../base/common/types.js';
 import { localize } from '../../../../nls.js';
-import { IShellLaunchConfig, TerminalIcon } from '../../../../platform/terminal/common/terminal.js';
+import { IReconnectionProperties, IShellLaunchConfig } from '../../../../platform/terminal/common/terminal.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
-import { StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
+import { ILifecycleService, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 /** The glyph of an agent without a logo of its own (`agentIcon`). */
 export const AGENT_TERMINAL_ICON = Codicon.robot;
@@ -32,49 +34,41 @@ const AGENT_ICONS: ReadonlyMap<string, ThemeIcon> = new Map([
 ]);
 
 /**
- * The icon an agent's terminal is drawn with: its logo when it runs one of the built-in agents, the
- * robot otherwise - and for a command that is only a shell.
+ * The icon an agent's terminal is drawn with: a built-in agent's logo, by the command it runs; the robot
+ * for every custom agent, whatever program it runs - and for a command that is only a shell.
  *
- * By the program the command starts rather than by the agent's id, so a row somebody adds to the list
- * that runs `claude` is drawn as Claude, and a renamed built-in keeps its mark. The name is read as the
- * last segment of a path, without an extension: `C:\tools\claude.cmd` is `claude`.
+ * ⚠️ A custom agent is never drawn as a built-in, even one that runs `claude`: the logo says Facade's own
+ * integration of that CLI - its tools, YOLO and trust - which a custom agent's launch does not have
+ * (AGENT-LAUNCHER.md, L3: "every custom agent uses the standard robot icon, whatever program it runs";
+ * X-60). A built-in's command is read as the last segment of a path, without an extension:
+ * `C:\tools\claude.cmd` is `claude`.
  */
-export function agentIcon(command: string): ThemeIcon {
-	const executable = commandExecutable(command);
-	const name = executable?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, '').toLowerCase();
+export function agentIcon(command: string, custom = false): ThemeIcon {
+	const name = custom ? undefined : programOf(command);
 	return (name && AGENT_ICONS.get(name)) || AGENT_TERMINAL_ICON;
 }
 
-/**
- * Every icon an agent's terminal can have, which is how one is recognised afterwards.
- *
- * A terminal has nowhere to carry a flag of ours: `reconnectionProperties` is the field upstream built
- * for an owner to mark one, and setting it takes the terminal out of `shouldPersist` unless
- * `task.reconnection` is on - a worse bug traded for a smaller one. The icon is what survives a reload,
- * so the icon is the marker.
- */
-const AGENT_ICON_IDS: ReadonlySet<string> = new Set([AGENT_TERMINAL_ICON.id, ...[...AGENT_ICONS.values()].map(icon => icon.id)]);
-
-/**
- * Whether a terminal is drawn as an agent's, which is what makes it one.
- *
- * ⚠️ It reads both ways, and that is the price of the marker. Changing an agent tab's icon to something
- * else stops it being an agent tab, and giving a plain terminal the robot or an agent's logo starts it
- * being one. A terminal that looks like an agent behaves like one, which is at least a rule somebody can
- * see.
- */
-export function isAgentTerminalIcon(icon: TerminalIcon | undefined): boolean {
-	return ThemeIcon.isThemeIcon(icon) && AGENT_ICON_IDS.has(icon.id);
+/** The program a command starts, by its name: the last segment of its path, without an extension, in lower case. */
+function programOf(command: string): string | undefined {
+	return commandExecutable(command)?.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, '').toLowerCase();
 }
 
 /**
- * Whether a terminal being brought back as the window starts is an agent's that is gone: the agent
- * did not outlive the app, and only a reload finds it still running. Brought back anyway, its tab
- * would be a fresh shell under the old output, looking like the agent - so it is left out, as
- * upstream leaves out a task's terminal (`TerminalService._recreateTerminalGroup`).
+ * Whether a terminal being brought back as the window starts is an agent's that is gone: the window's
+ * last shutdown - closed, quit, left for another workspace - ended its agents, and only a reload finds
+ * them still running. Brought back anyway, its tab would be its CLI run again, or a fresh shell under the
+ * old output - so it is left out, as upstream leaves out a task's terminal
+ * (`TerminalService._recreateTerminalGroup`). An agent's terminal is one marked as an agent's run
+ * (`isFacadeRunTerminal`), as every agent Facade starts is - from the agent menu or through `start_agent`,
+ * the agent framework on or off - whatever its icon: not one only drawn as an agent's, an ordinary
+ * terminal the person gave the robot, whose shell comes back as any other's (X-51, N-78).
+ *
+ * ⚠️ Not after a crash: its window did not shut down - no reason recorded - and its Reopen is a new window
+ * whose agents run on in the pty host. They come back in their places, the panel's, the editor area's
+ * and floating windows', not taken back afterwards all in one editor group (N-49).
  */
-export function isAgentGoneAtStartup(icon: TerminalIcon | undefined, startupKind: StartupKind): boolean {
-	return startupKind !== StartupKind.ReloadedWindow && isAgentTerminalIcon(icon);
+export function isAgentGoneAtStartup(terminal: { readonly reconnectionProperties?: IReconnectionProperties }, lifecycle: Pick<ILifecycleService, 'startupKind' | 'lastShutdownReason'>): boolean {
+	return lifecycle.startupKind !== StartupKind.ReloadedWindow && lifecycle.lastShutdownReason !== undefined && isFacadeRunTerminal(terminal);
 }
 
 /**
@@ -95,12 +89,12 @@ export interface IAgentName {
 
 /**
  * What to keep of a terminal started now for a reload to give back: the name and title template it
- * was started with, when it is an agent's - drawn with an agent's icon, whoever started it: the agent
- * button, or anything else that gives a terminal one, as Facade's agents do. Undefined for any other,
- * one without a name, and one a reload brought back (`restoreAgentLaunch`).
+ * was started with, when it is an agent's - marked as its run's (`isFacadeRunTerminal`), as every agent
+ * Facade starts is, whatever its icon. Undefined for any other - an ordinary terminal drawn with the
+ * robot among them - one without a name, and one a reload brought back (`restoreAgentLaunch`).
  */
 export function agentLaunchOf(shellLaunchConfig: IShellLaunchConfig): IAgentName | undefined {
-	if (shellLaunchConfig.attachPersistentProcess || !isAgentTerminalIcon(shellLaunchConfig.icon) || !shellLaunchConfig.name) {
+	if (shellLaunchConfig.attachPersistentProcess || !isFacadeRunTerminal(shellLaunchConfig) || !shellLaunchConfig.name) {
 		return undefined;
 	}
 
@@ -147,12 +141,13 @@ export function readAgentNames(value: string | undefined): Map<string, IAgentNam
  * titles in one debounced call for all its terminals, so the name one was started with can have been
  * dropped for another terminal's title. Given both back, it takes the course it took when it started.
  *
- * ⚠️ Only one still drawn as an agent's: given another icon since, it is no longer one.
+ * ⚠️ Only an agent's: its process marked as its run's, whatever its icon - not an ordinary terminal drawn
+ * with the robot (`agentLaunchOf`).
  */
 export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names: ReadonlyMap<string, IAgentName>): boolean {
 	const reconnecting = shellLaunchConfig.attachPersistentProcess;
-	const kept = reconnecting && isAgentTerminalIcon(reconnecting.icon) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
-	if (!kept) {
+	const kept = reconnecting && isFacadeRunTerminal(reconnecting) ? names.get(reconnecting.shellIntegrationNonce) : undefined;
+	if (!reconnecting || !kept) {
 		return false;
 	}
 
@@ -162,36 +157,54 @@ export function restoreAgentLaunch(shellLaunchConfig: IShellLaunchConfig, names:
 }
 
 /**
- * Something the agent button can start: a name and a command line.
+ * Something the agent menu can start: an agent, by the id Start Agent takes - a built-in's, or a custom
+ * agent's name - with its label and the program that runs it, which gives its logo.
  */
 export interface ITerminalLauncher {
 	readonly id: string;
 	readonly label: string;
 
-	/** Sent to a new shell in the active folder. An empty command means just the shell. */
+	/** The program it runs: a built-in's command, or the path a custom agent's setting names. */
 	readonly command: string;
+
+	/** Where its settings are: `facade.agents.<cli>` for a built-in; none for a custom agent. */
+	readonly setting?: string;
+
+	/** Whether it is one of the person's custom agents. */
+	readonly custom?: boolean;
 }
 
 /**
- * The launchers this fork knows about. A table rather than a fixed set of buttons, so that adding
- * one costs a row.
+ * The built-in agents, in the order the agent menu lists them (AGENT-LAUNCHER.md, L3): Claude Code, Codex,
+ * Antigravity, Muse Code - each by the id Start Agent takes, its settings, and the command looked for.
  *
- * A name and a command, and nothing else. No glyph to store: an agent's is worked out from its
- * command (`agentIcon`), so there is no per-agent icon to pick, to keep, or to get wrong.
- *
- * And nothing about where the thing is installed. An earlier version carried a list of directories
- * per launcher and it was a list of Windows paths copied off one machine: `%LOCALAPPDATA%` means
- * nothing on macOS, and there was no macOS or Linux entry to mean anything instead. Where a tool
- * lives is what the shell's own `PATH` already answers, on every platform, without a table that
- * goes stale the next time an installer moves.
+ * Nothing about where the thing is installed: where a tool lives is what the terminal's own `PATH`
+ * answers, on every platform, or the person's path setting.
  */
 export const BUILT_IN_LAUNCHERS: readonly ITerminalLauncher[] = [
-	{ id: 'claude', label: 'Claude Code', command: 'claude' },
-	{ id: 'codex', label: 'Codex', command: 'codex' },
-	{ id: 'antigravity', label: 'Antigravity', command: 'agy' },
-	{ id: 'muse', label: 'Muse Code', command: 'muse' },
-	{ id: 'grok', label: 'Grok Build', command: 'grok' }
+	{ id: 'claude', label: 'Claude Code', command: 'claude', setting: 'facade.agents.claude' },
+	{ id: 'codex', label: 'Codex', command: 'codex', setting: 'facade.agents.codex' },
+	{ id: 'agy', label: 'Antigravity', command: 'agy', setting: 'facade.agents.antigravity' },
+	{ id: 'muse', label: 'Muse Code', command: 'muse', setting: 'facade.agents.muse' }
 ];
+
+/** The setting that holds the person's custom agents, by name: `{ "<name>": { "path": "...", "launch": { ... } } }`. */
+export const CUSTOM_AGENTS_SETTING = 'facade.agents.custom';
+
+/**
+ * The person's custom agents, in the order they wrote them, out of the setting's raw value: each by its
+ * name, run by the program its `path` names. One whose program is missing is listed all the same, so
+ * that choosing it says what is wrong.
+ */
+export function readCustomAgents(value: unknown): ITerminalLauncher[] {
+	if (!isObject(value) || Array.isArray(value)) {
+		return [];
+	}
+	return Object.entries(value).map(([name, entry]) => {
+		const program = isObject(entry) && isString((entry as Record<string, unknown>).path) ? ((entry as Record<string, unknown>).path as string).trim() : '';
+		return { id: name, label: name, command: program, custom: true };
+	});
+}
 
 /**
  * What a bare command could be called on Windows when `PATHEXT` cannot be read.
@@ -200,9 +213,6 @@ export const BUILT_IN_LAUNCHERS: readonly ITerminalLauncher[] = [
  * `TerminalLauncherDetection` asks for, and it carries entries like `.PS1` that this does not.
  */
 export const WINDOWS_PATH_EXTENSIONS: readonly string[] = ['.com', '.exe', '.bat', '.cmd'];
-
-/** The setting that holds the agents somebody has added to the button. */
-export const AGENTS_SETTING = 'facade.agents';
 
 /**
  * The executable a command line starts with, or `undefined` when there is no command. Quoted
@@ -238,88 +248,12 @@ export function executableFileNames(executable: string, pathExtensions: readonly
 	return hasExtension ? [executable] : pathExtensions.map(extension => executable + extension);
 }
 
-/** Whether a command names a location rather than something to look for on the search path. */
+/**
+ * Whether a command names a location rather than something to look for on the search path: it has a path separator
+ * in it - a backslash one on Windows alone, as the agents' extension reads it.
+ */
 export function isPathLike(executable: string): boolean {
-	return executable.includes('/') || executable.includes('\\');
-}
-
-/**
- * The agents somebody has added, out of the setting's raw value.
- *
- * Hand-edited JSON, so every field is checked and a row that does not answer is dropped rather
- * than drawn as a button that cannot start anything. An empty command is kept: it means the shell.
- */
-export function readConfiguredLaunchers(value: unknown): ITerminalLauncher[] {
-	if (!Array.isArray(value)) {
-		return [];
-	}
-
-	const launchers: ITerminalLauncher[] = [];
-	const seen = new Set<string>();
-
-	for (const entry of value) {
-		if (!entry || typeof entry !== 'object') {
-			continue;
-		}
-
-		const { id, label, command } = entry as Record<string, unknown>;
-		if (typeof id !== 'string' || !id.trim() || typeof command !== 'string' || seen.has(id)) {
-			continue;
-		}
-
-		seen.add(id);
-		launchers.push({
-			id,
-			label: typeof label === 'string' && label.trim() ? label : id,
-			command
-		});
-	}
-
-	return launchers;
-}
-
-/** What goes back into the setting: the fields somebody can change, and nothing else. */
-export function toConfiguredLaunchers(launchers: readonly ITerminalLauncher[]): object[] {
-	return launchers.map(({ id, label, command }) => ({ id, label, command }));
-}
-
-/**
- * The agents to start somebody off with, the first time the dialog is opened and never again.
- *
- * A seed and not a verdict. The scan reads the `PATH` the window was started with, and Windows
- * does not hand a new one to a process that is already running - measured here, `agy` was on the
- * stored `PATH` and absent from the running one, so an installed agent looked missing. Whatever
- * comes back, the list is somebody's to edit from then on.
- */
-export function seedLaunchers(detected: ReadonlySet<string>): ITerminalLauncher[] {
-	const found = BUILT_IN_LAUNCHERS.filter(launcher => detected.has(launcher.id));
-
-	// Nothing found is usually the scan being wrong rather than the machine being empty, so the
-	// whole table is offered instead of an empty form
-	return [...(found.length ? found : BUILT_IN_LAUNCHERS)];
-}
-
-/**
- * An id for a row somebody just added, from the name they gave it.
- *
- * Only ever computed for a new row: an id already in the setting is what its command is registered
- * under, and renaming an agent should not make it a different one.
- */
-export function uniqueLauncherId(label: string, taken: ReadonlySet<string>): string {
-	const base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
-	if (!taken.has(base)) {
-		return base;
-	}
-
-	// Bounded by what is already there, so the loop cannot outlive the set it is avoiding
-	for (let suffix = 2; suffix <= taken.size + 2; suffix++) {
-		const candidate = `${base}-${suffix}`;
-		if (!taken.has(candidate)) {
-			return candidate;
-		}
-	}
-
-	return `${base}-${taken.size + 3}`;
+	return (isWindows ? /[\\/]/ : /\//).test(executable);
 }
 
 /**

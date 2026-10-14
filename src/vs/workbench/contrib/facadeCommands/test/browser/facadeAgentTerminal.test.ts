@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Terminal as RawXtermTerminal } from '@xterm/xterm';
+import type { IModes, Terminal as RawXtermTerminal } from '@xterm/xterm';
 import assert from 'assert';
 import { importAMDNodeModule } from '../../../../../amdX.js';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
@@ -14,16 +14,19 @@ import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/virtualScheduling/index.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
+import { IFileService, IWriteFileOptions } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { BeforeShutdownEvent, ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
+import { IReconnectionProperties, IShellLaunchConfig } from '../../../../../platform/terminal/common/terminal.js';
 import { ITerminalInstance, IXtermTerminal } from '../../../terminal/browser/terminal.js';
 import { TerminalWidgetManager } from '../../../terminal/browser/widgets/widgetManager.js';
 import type { XtermTerminal } from '../../../terminal/browser/xterm/xtermTerminal.js';
 import { ITerminalProcessManager, ProcessState } from '../../../terminal/common/terminal.js';
-import { inputPieces, isAgentKey, keySequences } from '../../browser/facadeAgentKeys.js';
+import { inputPieces, isAgentKey, keySequences, pasteSequence } from '../../browser/facadeAgentKeys.js';
 import { finalScreen, readScreen } from '../../browser/facadeAgentScreen.js';
 import { FacadeAgentTerminal, IAgentTerminalOptions } from '../../browser/facadeAgentTerminal.js';
+import { facadeRunProperties } from '../../common/facadeRun.js';
 
 /** A terminal of the window as its contribution sees it: its process, what was written to it, and how it ends. */
 class TestTerminal {
@@ -34,6 +37,7 @@ class TestTerminal {
 	readonly onWillDispose: Event<ITerminalInstance>;
 	private readonly _onDidInputData: Emitter<string>;
 	readonly onDidInputData: Event<string>;
+	private readonly _onProcessReplayComplete: Emitter<void>;
 
 	/** What was written to its process, each with the time it went. */
 	readonly written: string[] = [];
@@ -45,16 +49,26 @@ class TestTerminal {
 	isDisposed = false;
 	exitCode: number | undefined;
 	processId: number | undefined = 4242;
-	/** Its process as its process manager has it: the state it is in, and what is written to it. */
-	readonly process = { processState: ProcessState.Running, write: (data: string) => this.write(data) };
+	/** What it was made with: a terminal the window gives back after a reload attaches to the process the pty host kept. */
+	readonly shellLaunchConfig: IShellLaunchConfig;
+	/** Its process as its process manager has it: the state it is in, what is written to it, and when the pty host's replay is done. */
+	readonly process: { processState: ProcessState; readonly write: (data: string) => Promise<void>; readonly onProcessReplayComplete: Event<void> };
 
-	constructor(store: Pick<DisposableStore, 'add'>, readonly raw?: RawXtermTerminal) {
+	/** Its mark, as a terminal instance has it: that of the process it attached to, else its own. */
+	get reconnectionProperties(): IReconnectionProperties | undefined {
+		return this.shellLaunchConfig.attachPersistentProcess?.reconnectionProperties ?? this.shellLaunchConfig.reconnectionProperties;
+	}
+
+	constructor(store: Pick<DisposableStore, 'add'>, readonly raw?: RawXtermTerminal, shellLaunchConfig: IShellLaunchConfig = {}) {
 		this._onExit = store.add(new Emitter<number | undefined>());
 		this.onExit = this._onExit.event;
 		this._onWillDispose = store.add(new Emitter<ITerminalInstance>());
 		this.onWillDispose = this._onWillDispose.event;
 		this._onDidInputData = store.add(new Emitter<string>());
 		this.onDidInputData = this._onDidInputData.event;
+		this._onProcessReplayComplete = store.add(new Emitter<void>());
+		this.shellLaunchConfig = shellLaunchConfig;
+		this.process = { processState: ProcessState.Running, write: (data: string) => this.write(data), onProcessReplayComplete: this._onProcessReplayComplete.event };
 		// What xterm takes in is the terminal's input, as the window tells it
 		if (raw) {
 			store.add(raw.onData(data => this._onDidInputData.fire(data)));
@@ -71,6 +85,11 @@ class TestTerminal {
 	/** As the window sends it text for the person - a file dropped on it - past xterm: told as its input all the same. */
 	async sendText(text: string): Promise<void> {
 		this._onDidInputData.fire(text);
+	}
+
+	/** The pty host has replayed into it, given back after a reload, what its process wrote before. */
+	replayed(): void {
+		this._onProcessReplayComplete.fire();
 	}
 
 	/** Its process exits, and the terminal says so once it drew what the process wrote last. */
@@ -105,8 +124,10 @@ suite('Facade agent terminals', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	let TerminalCtor: typeof RawXtermTerminal;
-	/** The files written, by path. */
+	/** The files written, by path: the screens - without the times they hold, which `writes` has. */
 	let written: Map<string, unknown>;
+	/** Each file written: where, the times it holds, and whether atomically, by a rename. */
+	let writes: { readonly path: string; readonly capturedAt: unknown; readonly lastOutput: unknown; readonly atomic: IWriteFileOptions['atomic'] }[];
 	let onBeforeShutdown: Emitter<BeforeShutdownEvent>;
 
 	suiteSetup(async () => {
@@ -115,6 +136,7 @@ suite('Facade agent terminals', () => {
 
 	setup(() => {
 		written = new Map();
+		writes = [];
 		onBeforeShutdown = store.add(new Emitter<BeforeShutdownEvent>());
 	});
 
@@ -128,17 +150,19 @@ suite('Facade agent terminals', () => {
 
 	/**
 	 * The contribution of `terminal`, its xterm ready where it has one: registered as the terminal of the
-	 * agent `agent` says - #3's where left out - or, with null, no agent's.
+	 * agent `agent` says - #3's where left out - or, with null, no agent's; `configuration`, the window's settings.
 	 */
-	function contributionOf(terminal: TestTerminal, agent: IAgentTerminalOptions | null = { run: 3, finalScreen: URI.file('/record/screens/a3.json') }): FacadeAgentTerminal {
+	function contributionOf(terminal: TestTerminal, agent: IAgentTerminalOptions | null = { run: { workspace: 'a1b2', id: 3 }, finalScreen: URI.file('/record/screens/a3.json') }, configuration = new TestConfigurationService()): FacadeAgentTerminal {
 		const fileService = upcastPartial<IFileService>({
-			writeFile: async (resource: URI, buffer: VSBuffer) => {
-				written.set(resource.path, JSON.parse(buffer.toString()));
+			writeFile: async (resource: URI, buffer: VSBuffer, options?: IWriteFileOptions) => {
+				const { capturedAt, lastOutput, ...screen } = JSON.parse(buffer.toString());
+				written.set(resource.path, screen);
+				writes.push({ path: resource.path, capturedAt, lastOutput, atomic: options?.atomic });
 				return upcastPartial({});
 			}
 		});
 		const lifecycleService = upcastPartial<ILifecycleService>({ onBeforeShutdown: onBeforeShutdown.event, onShutdownVeto: Event.None });
-		const contribution = store.add(new FacadeAgentTerminal({ instance: terminal.asInstance(), processManager: upcastPartial<ITerminalProcessManager>(terminal.process), widgetManager: upcastPartial<TerminalWidgetManager>({}) }, fileService, lifecycleService, new NullLogService()));
+		const contribution = store.add(new FacadeAgentTerminal({ instance: terminal.asInstance(), processManager: upcastPartial<ITerminalProcessManager>(terminal.process), widgetManager: upcastPartial<TerminalWidgetManager>({}) }, fileService, lifecycleService, new NullLogService(), configuration));
 		if (agent) {
 			contribution.register(agent);
 		}
@@ -196,11 +220,11 @@ suite('Facade agent terminals', () => {
 			await write(onFrame, '\x1b[?1049hframe');
 			const longFrame = Array.from({ length: 1_999 }, (_, index) => `row ${index}`);
 			assert.deepStrictEqual({ left: finalScreen(raw, ['menu', '> pick']), on: finalScreen(onFrame, ['older frame']), none: finalScreen(raw, undefined), long: finalScreen(raw, longFrame) }, {
-				left: { frame: ['menu', '> pick'], final: { buffer: 'normal', lines: ['Error: bad model', '$'] } },
-				on: { final: { buffer: 'alternate', lines: ['frame'] } },
-				none: { final: { buffer: 'normal', lines: ['Error: bad model', '$'] } },
-				// 2,000 lines in all: the frame first, then the newest of the screen
-				long: { frame: longFrame, final: { buffer: 'normal', lines: ['$'] } }
+				left: { frame: ['menu', '> pick'], final: { buffer: 'normal', lines: ['Error: bad model', '$'], older: false, trimmed: false } },
+				on: { final: { buffer: 'alternate', lines: ['frame'], older: false, trimmed: false } },
+				none: { final: { buffer: 'normal', lines: ['Error: bad model', '$'], older: false, trimmed: false } },
+				// 2,000 lines in all: the frame first, then the newest of the screen - its older lines not kept, said so
+				long: { frame: longFrame, final: { buffer: 'normal', lines: ['$'], older: true, trimmed: false } }
 			});
 		});
 	});
@@ -230,17 +254,38 @@ suite('Facade agent terminals', () => {
 			});
 		});
 
+		test('presses the cursor keys, Home and End in the cursor key mode the terminal is in now - application cursor keys as SS3, else CSI - through xterm\'s encoding, and without it (AGENT-DEBUGGING.md, D5; DB-10)', async () => {
+			const keys = ['Up', 'Down', 'Right', 'Left', 'Home', 'End'];
+			const normal = xterm();
+			const application = xterm();
+			await write(application, '\x1b[?1h');
+			// A terminal whose xterm encoding is not there: its modes alone
+			const withoutEncoding = (applicationCursorKeysMode: boolean) => upcastPartial<RawXtermTerminal>({ modes: upcastPartial<IModes>({ applicationCursorKeysMode }) });
+			const sent = (raw: RawXtermTerminal) => keys.map(key => keySequences(raw, key).join(''));
+			const csi = ['\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D', '\x1b[H', '\x1b[F'];
+			const ss3 = ['\x1bOA', '\x1bOB', '\x1bOC', '\x1bOD', '\x1bOH', '\x1bOF'];
+			assert.deepStrictEqual({ normal: sent(normal), application: sent(application), normalWithoutEncoding: sent(withoutEncoding(false)), applicationWithoutEncoding: sent(withoutEncoding(true)) }, {
+				normal: csi,
+				application: ss3,
+				normalWithoutEncoding: csi,
+				applicationWithoutEncoding: ss3
+			});
+		});
+
 		test('tells typed text, Enter and Ctrl+C, other keys and the terminal\'s own replies apart - in the default encoding, the kitty protocol\'s and win32 input mode\'s', () => {
 			assert.deepStrictEqual({
 				typed: inputPieces('ab\r\x03'),
 				keys: inputPieces('\x1b[A\x1bOB\x1b[3~\x7f\x1b'),
 				replies: inputPieces('\x1b[12;3R\x1b[I\x1b[?1;2c\x1b]11;rgb:0/0/0\x07\x1bP>|xterm.js\x1b\\x'),
+				// The mouse in today's form, and in the old one's three bytes, which are no typing (N-86)
+				mouse: inputPieces('\x1b[<0;10;5M\x1b[M !!x'),
 				kitty: inputPieces('\x1b[97u\x1b[13;2u\x1b[27u\x1b[97;1:3u\x1b[99;5u\x1b[13u'),
 				win32: inputPieces('\x1b[65;30;97;1;0;1_\x1b[65;30;97;0;0;1_\x1b[38;72;0;1;0;1_\x1b[67;46;3;1;8;1_')
 			}, {
 				typed: ['text', 'text', 'submit', 'submit'],
 				keys: ['key', 'key', 'key', 'key', 'key'],
 				replies: ['reply', 'reply', 'reply', 'reply', 'reply', 'text'],
+				mouse: ['reply', 'reply', 'text'],
 				kitty: ['text', 'text', 'key', 'key', 'submit', 'submit'],
 				win32: ['text', 'key', 'key', 'submit']
 			});
@@ -273,6 +318,21 @@ suite('Facade agent terminals', () => {
 			assert.deepStrictEqual({ effect, written: terminal.written }, {
 				effect: { outcome: 'applied', pasted: true, entered: true },
 				written: ['0 "\\u001b[200~go on\\u001b[201~"', '300 "\\r"']
+			});
+		}));
+
+		test('pastes as the terminal\'s own paste path does: not bracketed where the person set the terminal to ignore bracketed paste mode (`terminal.integrated.ignoreBracketedPasteMode`), the program\'s asking for it notwithstanding; line breaks as Enter, and no Escape inside the markers (AGENT-DEBUGGING.md, D4; DB-02)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			// VS Code gives xterm the setting as its option
+			const raw = store.add(new TerminalCtor({ cols: 20, rows: 6, allowProposedApi: true, ignoreBracketedPasteMode: true }));
+			await write(raw, '\x1b[?2004h');
+			const terminal = new TestTerminal(store, raw);
+			const effect = await contributionOf(terminal).type('go on', { enter: true, enterDelayMs: 300 });
+			const bracketed = xterm();
+			await write(bracketed, '\x1b[?2004h');
+			assert.deepStrictEqual({ effect, written: terminal.written, encoded: [pasteSequence(bracketed, 'a\x1bb\nc'), pasteSequence(xterm(), 'a\r\nb')] }, {
+				effect: { outcome: 'applied', pasted: true, entered: true },
+				written: ['0 "go on"', '300 "\\r"'],
+				encoded: ['\x1b[200~a\u241bb\rc\x1b[201~', 'a\rb']
 			});
 		}));
 
@@ -390,6 +450,27 @@ suite('Facade agent terminals', () => {
 			});
 		}));
 
+		test('input that needs the agent framework - a doorbell - and whose turn comes with the framework off goes in not at all, said so; other input goes in, and so does such input with the framework on (AGENT-MESSAGES.md, M10; XS-14)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			const terminal = new TestTerminal(store, xterm());
+			const configuration = new TestConfigurationService({ 'facade.orchestration.enabled': true });
+			const agent = contributionOf(terminal, undefined, configuration);
+			// Handed over as the person types there: it waits its turn behind them
+			terminal.type('x');
+			const doorbell = agent.type('[facade] 1 unread message', { enter: true, enterDelayMs: 0, requiresFramework: true });
+			const task = agent.type('task', { enter: true, enterDelayMs: 0 });
+			// The person turns the framework off while it waits
+			await configuration.setUserConfiguration('facade.orchestration.enabled', false);
+			const whileOff = { doorbell: await doorbell, task: await task };
+			await configuration.setUserConfiguration('facade.orchestration.enabled', true);
+			const on = await agent.type('[facade] 2 unread messages', { enter: false, enterDelayMs: 0, requiresFramework: true });
+			assert.deepStrictEqual({ ...whileOff, on, written: terminal.written }, {
+				doorbell: { outcome: 'not_applied', reason: 'frameworkOff', pasted: false, entered: false },
+				task: { outcome: 'applied', pasted: true, entered: true },
+				on: { outcome: 'applied', pasted: true, entered: false },
+				written: ['10000 "task"', '10000 "\\r"', '10000 "[facade] 2 unread messages"']
+			});
+		}));
+
 		test('input queued before the window knew the process\'s id goes into that process once it does, not into another after it', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
 			const terminal = new TestTerminal(store, xterm());
 			terminal.processId = undefined;
@@ -431,6 +512,22 @@ suite('Facade agent terminals', () => {
 			});
 		}));
 
+		test('drops what is waiting and the keys left once its run is being stopped, its process not ended yet: nothing goes into the stopping CLI (D3; DB-16)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			const terminal = new TestTerminal(store, xterm());
+			const agent = contributionOf(terminal);
+			const keys = agent.keys(['Down', 'Down', 'Enter'], {});
+			const waiting = agent.type('after', { enter: true, enterDelayMs: 0 });
+			await timeout(60);
+			agent.closeInput();
+			const after = await agent.type('later', { enter: true, enterDelayMs: 0 });
+			assert.deepStrictEqual({ keys: await keys, waiting: await waiting, after, written: terminal.written }, {
+				keys: { outcome: 'partial', reason: 'ended', keysSent: 2 },
+				waiting: { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false },
+				after: { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false },
+				written: ['0 "\\u001b[B"', '50 "\\u001b[B"']
+			});
+		}));
+
 		test('takes a process that exited as ended at once, before its terminal says so: nothing is written to it then', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
@@ -464,13 +561,13 @@ suite('Facade agent terminals', () => {
 			raw.write('bye');
 			terminal.dispose();
 			await timeout(0);
-			assert.deepStrictEqual([...written], [['/record/screens/a3.json', { frame: ['Trust this folder?', '[[> Yes]]'], final: { buffer: 'normal', lines: ['starting', 'gone', 'bye'] } }]]);
+			assert.deepStrictEqual([...written], [['/record/screens/a3.json', { frame: ['Trust this folder?', '[[> Yes]]'], final: { buffer: 'normal', lines: ['starting', 'gone', 'bye'], older: false, trimmed: false } }]]);
 		});
 
 		test('keeps it once its process ends, once what it wrote is drawn - the terminal drawing on what comes after, once - and not again as its terminal closes', async () => {
 			const raw = xterm(30, 4);
 			const terminal = new TestTerminal(store, raw);
-			contributionOf(terminal, { run: 4, finalScreen: URI.file('/record/screens/a4.json') });
+			contributionOf(terminal, { run: { workspace: 'a1b2', id: 4 }, finalScreen: URI.file('/record/screens/a4.json') });
 			raw.write('bye');
 			terminal.exit(1);
 			// What the terminal says of its process's end, written as it ended
@@ -480,8 +577,24 @@ suite('Facade agent terminals', () => {
 			await timeout(0);
 			assert.deepStrictEqual({ shown, written: [...written] }, {
 				shown: ['bye', '[process exited: 1]'],
-				written: [['/record/screens/a4.json', { final: { buffer: 'normal', lines: ['bye'] } }]]
+				written: [['/record/screens/a4.json', { final: { buffer: 'normal', lines: ['bye'], older: false, trimmed: false } }]]
 			});
+		});
+
+		test('a terminal the window gave back after a reload keeps it as its process ends before the agents\' extension registered it again, where its run\'s mark keeps where it goes (AGENT-DEBUGGING.md, D6, D8; DB-05)', async () => {
+			const mark = (id: number, finalScreen?: string) => facadeRunProperties({ workspace: 'a1b2', id }, { finalScreen });
+			const givenBack = (id: number, finalScreen?: string) => new TestTerminal(store, xterm(30, 4), { attachPersistentProcess: upcastPartial<NonNullable<IShellLaunchConfig['attachPersistentProcess']>>({ id, reconnectionProperties: mark(id, finalScreen) }) });
+			const kept = givenBack(6, URI.file('/record/screens/a6.json').toString());
+			// A mark from before it kept the final screen's file: none is kept until the extension registers it
+			const older = givenBack(7);
+			for (const terminal of [kept, older]) {
+				contributionOf(terminal, null);
+				await write(terminal.raw!, 'Error: crashed');
+				terminal.exit(1);
+				await write(terminal.raw!, '');
+			}
+			await timeout(0);
+			assert.deepStrictEqual([...written], [['/record/screens/a6.json', { final: { buffer: 'normal', lines: ['Error: crashed'], older: false, trimmed: false } }]]);
 		});
 
 		test('registered again - the window gave its terminal back after a reload - keeps what it saw of it, its final screen going to the file it was given last', async () => {
@@ -489,15 +602,42 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, raw);
 			const agent = contributionOf(terminal);
 			await write(raw, '\x1b[?1049hmenu\x1b[?1049l$ ');
-			agent.register({ run: 3, finalScreen: URI.file('/record/screens/a3-again.json') });
+			agent.register({ run: { workspace: 'a1b2', id: 3 }, finalScreen: URI.file('/record/screens/a3-again.json') });
 			terminal.dispose();
 			await timeout(0);
-			assert.deepStrictEqual([...written], [['/record/screens/a3-again.json', { frame: ['menu'], final: { buffer: 'normal', lines: ['$'] } }]]);
+			assert.deepStrictEqual([...written], [['/record/screens/a3-again.json', { frame: ['menu'], final: { buffer: 'normal', lines: ['$'], older: false, trimmed: false } }]]);
 		});
+
+		test('writes it whole or not at all, by a rename - the agents\' extension reads it as it ends - with when it was taken and last showed new output, and whether its terminal had let go of older lines (AGENT-DEBUGGING.md, D2, D8; DB-04, DB-06)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			const raw = store.add(new TerminalCtor({ cols: 20, rows: 2, scrollback: 3, allowProposedApi: true }));
+			const terminal = new TestTerminal(store, raw);
+			contributionOf(terminal);
+			await write(raw, '1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7');
+			await timeout(5_000);
+			terminal.exit(0);
+			await write(raw, '');
+			assert.deepStrictEqual({ writes, written: [...written] }, {
+				writes: [{ path: '/record/screens/a3.json', capturedAt: 5_000, lastOutput: 0, atomic: { postfix: '.tmp' } }],
+				written: [['/record/screens/a3.json', { final: { buffer: 'normal', lines: ['3', '4', '5', '6', '7'], older: false, trimmed: true } }]]
+			});
+		}));
+
+		test('a terminal the window gave back after a reload: what the pty host replays into it is what its process showed before, no new output - its last output is not known until its process writes again (AGENT-DEBUGGING.md, D2, D8; DB-07)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			const raw = xterm();
+			const terminal = new TestTerminal(store, raw, { attachPersistentProcess: upcastPartial<NonNullable<IShellLaunchConfig['attachPersistentProcess']>>({ id: 7 }) });
+			const agent = contributionOf(terminal);
+			await timeout(1_000);
+			await write(raw, 'what it showed before the reload');
+			terminal.replayed();
+			const afterReplay = (await agent.read(1))?.lastOutput;
+			await timeout(1_000);
+			await write(raw, '\r\nnew');
+			assert.deepStrictEqual({ afterReplay, afterNew: (await agent.read(1))?.lastOutput }, { afterReplay: undefined, afterNew: 2_000 });
+		}));
 
 		test('keeps none as the window shuts down or reloads while the process runs - it outlives its terminal - nor of a terminal no agent\'s', async () => {
 			const running = new TestTerminal(store, xterm());
-			contributionOf(running, { run: 5, finalScreen: URI.file('/record/screens/a5.json') });
+			contributionOf(running, { run: { workspace: 'a1b2', id: 5 }, finalScreen: URI.file('/record/screens/a5.json') });
 			const shell = new TestTerminal(store, xterm());
 			contributionOf(shell, null);
 			shell.dispose();

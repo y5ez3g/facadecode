@@ -60,7 +60,7 @@ suite('Core: messages at random', () => {
 	});
 
 	for (const seed of SEEDS) {
-		test(`run ${seed}: every message delivered at least once or returned, none lost while its recipient runs; one recipient's given in number order, given again marked; a doorbell a minute at most but once all was fetched, and within a minute of a message; messages waiting told of once, after the timeout; the ledger read back the same`, async function () {
+		test(`run ${seed}: every message delivered at least once or returned, none lost while its recipient runs; one recipient's given in number order, given again under its number with its text, in the delivery state it reached; a doorbell a minute at most but once all was fetched, and within a minute of a message; messages waiting told of once, after the timeout; the ledger read back the same`, async function () {
 			this.timeout(120_000);
 			const random = randomFrom(seed);
 			const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
@@ -74,6 +74,8 @@ suite('Core: messages at random', () => {
 			const written = new Map<number, Set<number>>();
 			/** The messages each agent was given, by number: in any result, reached or not. */
 			const given = new Map<number, Set<number>>();
+			/** Each message's text, as a result first gave it. */
+			const texts = new Map<number, string>();
 			const problems: string[] = [];
 			let names = 0;
 
@@ -81,9 +83,9 @@ suite('Core: messages at random', () => {
 			const open = (): World => {
 				const made = fakeWorld(dir, { repositories: { [lab]: [] }, session });
 				const type = made.terminals.type.bind(made.terminals);
-				made.terminals.type = async (name, text, options) => {
-					const agent = [...made.table.state.agents.values()].find(each => name.startsWith(`@${each.name} #${each.id} `));
-					if (agent && made.terminals.running.has(name)) {
+				made.terminals.type = async (id, text, options) => {
+					const agent = made.table.get(id);
+					if (agent && made.terminals.running.has(`@${agent.name} #a${agent.id}`)) {
 						if (text.startsWith('[facade]')) {
 							const unread = unreadOf(made.table.state.mail, agent.id).map(message => message.id);
 							const named = [...text.matchAll(/#m(?<id>\d+) from/g)].map(match => Number(match.groups?.id));
@@ -95,7 +97,7 @@ suite('Core: messages at random', () => {
 							}
 						}
 					}
-					return type(name, text, options);
+					return type(id, text, options);
 				};
 				return made;
 			};
@@ -103,19 +105,28 @@ suite('Core: messages at random', () => {
 			const running = () => [...world.table.state.agents.values()].filter(agent => agent.state === 'running');
 			const terminalOf = (id: number) => {
 				const agent = world.agent(id);
-				return `@${agent.name} #${agent.id} · ${agent.cli === 'arg' ? 'Arg Code' : 'Told Code'}`;
+				return `@${agent.name} #a${agent.id}`;
 			};
 
-			/** Takes in a fetch: its order, its marks, and what reached the agent. */
+			/** Takes in a fetch: its order, its delivery states, its texts, and what reached the agent. */
 			const took = (agent: number, fetched: Fetched, reached: boolean) => {
 				const ids = fetched.messages.map(message => message.id);
 				if (ids.join() !== [...ids].sort((a, b) => a - b).join()) {
 					problems.push(`#a${agent} was given ${ids.join()}, out of order`);
 				}
 				const before = given.get(agent) ?? new Set<number>();
+				const reachedBefore = written.get(agent) ?? new Set<number>();
 				for (const message of fetched.messages) {
-					if (message.mark !== 'returned' && (message.mark === 'given before') !== before.has(message.id)) {
-						problems.push(`#m${message.id} was given to #a${agent} marked ${message.mark}, ${before.has(message.id) ? '' : 'never '}given it before`);
+					// One of its own is delivered once a result with it reached it, unread until then: no mark of who was given what (M4)
+					if (message.own && message.state !== 'returned' && message.state !== (reachedBefore.has(message.id) ? 'delivered' : 'unread')) {
+						problems.push(`#m${message.id} was given to #a${agent} as ${message.state}, a result with it ${reachedBefore.has(message.id) ? '' : 'never '}having reached it`);
+					}
+					const text = texts.get(message.id);
+					if (message.text !== undefined && text !== undefined && message.text !== text) {
+						problems.push(`#m${message.id} was given to #a${agent} with another text`);
+					}
+					if (message.text !== undefined) {
+						texts.set(message.id, message.text);
 					}
 				}
 				ids.forEach(id => before.add(id));
@@ -129,8 +140,8 @@ suite('Core: messages at random', () => {
 
 			const start = async (caller: Caller) => {
 				const name = `a${++names}`;
-				const request = { cli: random() < 0.8 ? 'arg' : 'told', model: 'm', effort: 'e', name, ...(caller.id === undefined ? { folder: lab } : { prompt: `Task of ${name}.` }) };
-				await world.spawnUp(caller, request);
+				const request = { cli: random() < 0.8 ? 'arg' : 'told', model: 'm', effort: 'e', name, ...(caller.id === undefined ? { folder: lab } : { task: `Task of ${name}.` }) };
+				await world.startUp(caller, request);
 			};
 
 			await start(PERSON);
@@ -143,7 +154,7 @@ suite('Core: messages at random', () => {
 					const from = random() < 0.1 ? PERSON : callerOf(pick(live));
 					const to = [...new Set(Array.from({ length: 1 + Math.floor(random() * 3) }, () => `#a${pick(live).id}`))];
 					if (from.id !== undefined && random() < 0.15) {
-						to.push('@you');
+						to.push('@human');
 					}
 					world.facade.mail.send(from, to, random() < 0.05 ? 'x'.repeat(TEXT_IN_LINE + 1) : `Message ${step}.`, undefined);
 				} else if (roll < 0.5) {
@@ -175,8 +186,8 @@ suite('Core: messages at random', () => {
 				} else if (roll < 0.93) {
 					const agent = pick(live);
 					const how = random();
-					if (how < 0.4 && agent.parent !== undefined && isLive(world.table.get(agent.parent))) {
-						await world.facade.kill(callerOf(world.agent(agent.parent)), `#a${agent.id}`);
+					if (how < 0.4 && agent.creator !== undefined && isLive(world.table.get(agent.creator))) {
+						await world.facade.stopAgent(callerOf(world.agent(agent.creator)), `#a${agent.id}`);
 					} else {
 						world.terminals.end(terminalOf(agent.id), how < 0.7 ? { byThePerson: true } : { exitCode: how < 0.85 ? 0 : 1, byThePerson: false });
 					}
@@ -268,7 +279,7 @@ suite('Core: messages at random', () => {
 				} else if (line.type === 'message.returned') {
 					returned.add(line.id);
 					unread.get(Number(sent.get(line.id)))?.delete(line.id);
-				} else if (line.type === 'agent.exited') {
+				} else if (line.type === 'agent.ended') {
 					ended.add(line.id);
 				}
 			}

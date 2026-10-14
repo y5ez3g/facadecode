@@ -17,7 +17,7 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { Schemas } from '../../../../../base/common/network.js';
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { IEnvironmentVariableService } from '../environmentVariable.js';
-import { IProcessDataEvent, IRequestResolveVariablesEvent, IShellLaunchConfigDto, ITerminalLaunchError, ITerminalProfile, ITerminalsLayoutInfo, ITerminalsLayoutInfoById, TerminalIcon, IProcessProperty, ProcessPropertyType, IProcessPropertyMap, TitleEventSource, ISerializedTerminalState, IPtyHostController, ITerminalProcessOptions, IProcessReadyEvent, ITerminalLogService, IPtyHostLatencyMeasurement, ITerminalLaunchResult } from '../../../../../platform/terminal/common/terminal.js';
+import { IProcessDataEvent, IRequestResolveVariablesEvent, IShellLaunchConfigDto, ITerminalLaunchError, ITerminalProfile, ITerminalsLayoutInfo, ITerminalsLayoutInfoById, TerminalIcon, IProcessProperty, ProcessPropertyType, IProcessPropertyMap, TitleEventSource, ISerializedTerminalState, IPtyHostController, ITerminalProcessOptions, IProcessReadyEvent, ITerminalLogService, IPtyHostLatencyMeasurement, ITerminalLaunchResult, IListProcessesOptions } from '../../../../../platform/terminal/common/terminal.js';
 import { IGetTerminalLayoutInfoArgs, IProcessDetails, ISetTerminalLayoutInfoArgs } from '../../../../../platform/terminal/common/terminalProcess.js';
 import { IProcessEnvironment, OperatingSystem } from '../../../../../base/common/platform.js';
 import { ICompleteTerminalConfiguration } from '../terminal.js';
@@ -203,8 +203,8 @@ export class RemoteTerminalChannelClient implements IPtyHostController {
 	detachFromProcess(id: number, forcePersist?: boolean): Promise<void> {
 		return this._channel.call(RemoteTerminalChannelRequest.DetachFromProcess, [id, forcePersist]);
 	}
-	listProcesses(): Promise<IProcessDetails[]> {
-		return this._channel.call(RemoteTerminalChannelRequest.ListProcesses);
+	listProcesses(options?: IListProcessesOptions): Promise<IProcessDetails[]> {
+		return this._channel.call(RemoteTerminalChannelRequest.ListProcesses, [options]);
 	}
 	getLatency(): Promise<IPtyHostLatencyMeasurement[]> {
 		return this._channel.call(RemoteTerminalChannelRequest.GetLatency);

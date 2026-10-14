@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { SentMessage } from '../core/mail';
-import { PERSON } from '../record/events';
+import { describe, PERSON } from '../record/events';
 import { Args } from './args';
-import { psTool } from './ps';
+import { listAgentsTool } from './listAgents';
 import type { ContractTool } from './tools';
 
 /**
@@ -23,6 +23,9 @@ function sentText(sent: readonly SentMessage[]): string {
 	for (const message of toAgents) {
 		if (message.starting) {
 			lines.push(`${message.to} is still starting: its doorbell rings once it runs.`);
+		}
+		if (message.reconnecting) {
+			lines.push(`${message.to} is not connected to Facade now: its doorbell rings once it connects again.`);
 		}
 		if (message.cannotReply) {
 			lines.push(`${message.to} has its YOLO off, and you are not in its tree: it can reply to the person only, not to you.`);
@@ -45,11 +48,11 @@ export const sendMessageTool: ContractTool = {
 	definition: {
 		name: 'send_message',
 		title: 'Send a message',
-		description: `Sends a message to agents of this window, or to the person, @${PERSON.name}: to an agent with something for it - work, a question, a report, an answer - directly, never through the person. Each recipient gets a message of its own, with its own number, as #m42. It answers at once, once the messages are recorded: a reply comes to your mailbox and rings your doorbell, a line typed into your terminal, so do not wait or poll for one - end your turn. ${psTool.definition.name} shows whether a recipient has fetched its message. With your YOLO off, you reach the agents of your own tree only, and the person. Something for the person: print it whole on your screen first, then send it to @${PERSON.name}.`,
+		description: `Sends a message to agents of this window, or to the person, ${describe(PERSON)}: to an agent with something for it - work, a question, a report, an answer - directly, never through the person. Each recipient gets a message of its own, with its own number, as #m42. It answers at once, once the messages are recorded: a reply comes to your mailbox and rings your doorbell, a line typed into your terminal, so do not wait or poll for one - end your turn. ${listAgentsTool.definition.name} shows whether a recipient has fetched its message. With your YOLO off, you reach the agents of your own tree only, and the person. Something for the person: print it whole on your screen first, then send it to ${describe(PERSON)}.`,
 		inputSchema: {
 			type: 'object',
 			properties: {
-				to: { type: 'array', items: { type: 'string' }, description: `The recipients: agents, each by its number as #a7, its @name, or as @name #a7; or the person, @${PERSON.name}.` },
+				to: { type: 'array', items: { type: 'string' }, description: `The recipients: agents, each by its number as #a7, its @name, or as @name #a7; or the person, ${describe(PERSON)}. One alone is a list of one.` },
 				text: { type: 'string', description: 'What the message says: plain text. Texts over 8,000 characters reach the recipient in a file; a call carries a megabyte at most: give a bigger body, or a file, by its path.' },
 				reply_to: { type: 'string', description: 'The message this one answers, by its number, as #m40: one sent to you.' }
 			},
@@ -62,7 +65,7 @@ export const sendMessageTool: ContractTool = {
 		const sent = facade.mail.send(caller, args.strings('to'), args.string('text'), args.optionalText('reply_to'));
 		return {
 			text: sentText(sent),
-			data: { messages: sent.map(({ id, to, starting, cannotReply }) => ({ id, to, ...(starting ? { starting } : {}), ...(cannotReply ? { cannotReply } : {}) })) }
+			data: { messages: sent.map(({ id, to, starting, reconnecting, cannotReply }) => ({ id, to, ...(starting ? { starting } : {}), ...(reconnecting ? { reconnecting } : {}), ...(cannotReply ? { cannotReply } : {}) })) }
 		};
 	}
 };

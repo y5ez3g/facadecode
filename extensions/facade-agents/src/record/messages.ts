@@ -23,8 +23,11 @@ export const TEXT_IN_LINE = 8_000;
 const FIRST_MESSAGE = 1;
 /** The record's folder of message files: texts too long for a ledger line, and fetches too long for a result. */
 const MESSAGES_DIR = 'messages';
-/** The highest number given to a message, beside the ledger: written before the number is used. */
-const LAST_MESSAGE_FILE = 'last-message';
+/**
+ * The highest number given to a message, beside the ledger: written before the number is used - `last-message`
+ * - and, read too, what it was called while a task was the only message, in a file of its own.
+ */
+export const LAST_MESSAGE_FILES: readonly string[] = ['last-message', 'last-message-id'];
 /** A long text's file, by its message's number. */
 const TEXT_FILE = /^m(?<id>\d+)\.txt$/;
 /** A fetch's file, by its recipient - `a7`, or the person - and the count of its fetches. */
@@ -73,8 +76,6 @@ export interface Message {
 export interface MailboxEntry {
 	/** Unread until a result that holds it is delivered, or it goes back as its recipient ends. */
 	state: 'unread' | 'delivered' | 'returned';
-	/** When the results that held it went out to its recipient, oldest first. */
-	readonly given: number[];
 	/** How many doorbells named it. */
 	rings: number;
 }
@@ -119,8 +120,6 @@ export interface MessagesState {
 	readonly drainedAt: Map<number, number>;
 	/** When Facade last told of each agent's messages waiting unfetched for the timeout. */
 	readonly delayedAt: Map<number, number>;
-	/** When each agent was last given the messages of others it fetched by number: by its number, then theirs. */
-	readonly seen: Map<number, Map<number, number>>;
 	/** Each agent's task, by the agent's number. */
 	readonly tasks: Map<number, number>;
 	/** The agents whose creators were told that they had not fetched their tasks. */
@@ -145,8 +144,15 @@ export type MessageEventBody =
 		readonly task?: true;
 		readonly facade?: FacadeKind;
 		readonly about?: number;
+		/** A message to the person recorded while the agent framework was off: unread, held for their notification until it is shown (M10). */
+		readonly held?: true;
 	}
-	/** A result with these messages, as it goes out to the agent's pipe. */
+	/** Messages to the person held while the agent framework was off, shown to them: delivered (M10). */
+	| { readonly type: 'message.shown'; readonly ids: readonly number[] }
+	/**
+	 * A result with these messages, as it went out to the agent's pipe: written by Facades before M4 dropped the
+	 * marks of messages given before. Read, so that their ledgers load, and nothing more (AGENT-MESSAGES.md, M11).
+	 */
 	| { readonly type: 'message.given'; readonly agent: number; readonly ids: readonly number[] }
 	/** The pipe wrote that result. */
 	| { readonly type: 'message.delivered'; readonly agent: number; readonly ids: readonly number[] }
@@ -169,7 +175,6 @@ export function createMessagesState(): MessagesState {
 		fetchedAt: new Map(),
 		drainedAt: new Map(),
 		delayedAt: new Map(),
-		seen: new Map(),
 		tasks: new Map(),
 		notFetched: new Set(),
 		roomLines: [],
@@ -191,13 +196,13 @@ function isNumbers(value: unknown): value is readonly number[] {
 export function messageBodyOf(value: JsonObject): MessageEventBody | undefined {
 	switch (value.type) {
 		case 'message.sent': {
-			const { id, from, to, text, file, length, replyTo, task, facade, about } = value;
+			const { id, from, to, text, file, length, replyTo, task, facade, about, held } = value;
 			const inLine = typeof text === 'string' && text.length > 0 && text.length <= TEXT_IN_LINE && length === text.length && file === undefined;
 			const inFile = text === undefined && typeof file === 'string' && TEXT_FILE.exec(file)?.groups?.id === String(id) && isId(length) && length > TEXT_IN_LINE;
 			if (!isId(id) || (from !== undefined && from !== FACADE && !isId(from)) || (to !== HUMAN && !isId(to)) || !(inLine || inFile) || !isId(length)
 				|| (replyTo !== undefined && !isId(replyTo)) || (task !== undefined && task !== true)
 				|| (facade !== undefined && !isFacadeKind(facade)) || (facade !== undefined) !== (from === FACADE)
-				|| (about !== undefined && !isId(about))) {
+				|| (about !== undefined && !isId(about)) || (held !== undefined && (held !== true || to !== HUMAN))) {
 				return undefined;
 			}
 			return {
@@ -205,8 +210,12 @@ export function messageBodyOf(value: JsonObject): MessageEventBody | undefined {
 				...(from !== undefined ? { from } : {}), to,
 				...(inLine ? { text } : { file }), length,
 				...(replyTo !== undefined ? { replyTo } : {}), ...(task ? { task } : {}),
-				...(facade !== undefined ? { facade } : {}), ...(about !== undefined ? { about } : {})
+				...(facade !== undefined ? { facade } : {}), ...(about !== undefined ? { about } : {}), ...(held ? { held } : {})
 			};
+		}
+		case 'message.shown': {
+			const { ids } = value;
+			return isNumbers(ids) ? { type: 'message.shown', ids: [...ids] } : undefined;
 		}
 		case 'message.given':
 		case 'message.delivered':
@@ -235,7 +244,7 @@ export function messageBodyOf(value: JsonObject): MessageEventBody | undefined {
  * ones in the agent's own; a message goes back from its mailbox once, and only as a message of
  * Facade's that takes messages back; chat rooms are deleted up to a message there is.
  */
-export function fitsMessages(agents: ReadonlyMap<number, { readonly parent?: number }>, state: MessagesState, event: MessageEventBody): boolean {
+export function fitsMessages(agents: ReadonlyMap<number, { readonly creator?: number }>, state: MessagesState, event: MessageEventBody): boolean {
 	switch (event.type) {
 		case 'message.sent': {
 			const known = (id: number | undefined) => id === undefined || agents.has(id);
@@ -245,8 +254,10 @@ export function fitsMessages(agents: ReadonlyMap<number, { readonly parent?: num
 				&& (event.to === HUMAN || !!to)
 				&& known(event.about)
 				&& (event.replyTo === undefined || state.messages.has(event.replyTo))
-				&& (!event.task || (!!to && event.from !== FACADE && to.parent === event.from && !state.tasks.has(event.to as number)));
+				&& (!event.task || (!!to && event.from !== FACADE && to.creator === event.from && !state.tasks.has(event.to as number)));
 		}
+		case 'message.shown':
+			return event.ids.every(id => state.entries.has(id) && state.messages.get(id)?.to === HUMAN);
 		case 'message.given':
 			return agents.has(event.agent) && event.ids.every(id => state.entries.has(id));
 		case 'message.delivered':
@@ -276,8 +287,9 @@ export function applyMessages(state: MessagesState, event: MessageEventBody, tim
 				...(event.about !== undefined ? { about: event.about } : {}),
 				time
 			});
-			// The person's messages are delivered as they are recorded: shown at once, and never returned
-			state.entries.set(event.id, { state: event.to === HUMAN ? 'delivered' : 'unread', given: [], rings: 0 });
+			// The person's messages are delivered as they are recorded: shown at once, and never returned - but one held while
+			// the agent framework was off, unread until it is shown (M10)
+			state.entries.set(event.id, { state: event.to === HUMAN && !event.held ? 'delivered' : 'unread', rings: 0 });
 			mailboxOf(state, event.to).push(event.id);
 			state.lastMessage = Math.max(state.lastMessage, event.id);
 			if (event.task && typeof event.to === 'number') {
@@ -292,19 +304,16 @@ export function applyMessages(state: MessagesState, event: MessageEventBody, tim
 			state.roomLines.push({ message: event.id });
 			break;
 		}
-		case 'message.given':
+		case 'message.shown':
 			for (const id of event.ids) {
-				if (state.messages.get(id)?.to === event.agent) {
-					state.entries.get(id)?.given.push(time);
-				} else {
-					let seen = state.seen.get(event.agent);
-					if (!seen) {
-						seen = new Map();
-						state.seen.set(event.agent, seen);
-					}
-					seen.set(id, time);
+				const entry = state.entries.get(id);
+				if (entry?.state === 'unread') {
+					entry.state = 'delivered';
 				}
 			}
+			break;
+		case 'message.given':
+			// Facade keeps no history of who was given what: delivery is what counts (M4)
 			break;
 		case 'message.delivered': {
 			let own = false;
@@ -373,7 +382,6 @@ export function clearMailboxes(state: MessagesState, runs: (agent: number) => bo
 			state.fetchedAt.delete(recipient);
 			state.drainedAt.delete(recipient);
 			state.delayedAt.delete(recipient);
-			state.seen.delete(recipient);
 		}
 	}
 }
@@ -405,6 +413,8 @@ export interface NewMessage {
 	readonly task?: true;
 	readonly facade?: FacadeKind;
 	readonly about?: number;
+	/** To the person while the agent framework is off: held for their notification, unread until it is shown (M10). */
+	readonly held?: true;
 }
 
 /**
@@ -419,7 +429,7 @@ export class MessageRecord {
 	private lastMessage: number;
 
 	constructor(private readonly dir: string, private readonly ledger: Ledger) {
-		this.lastMessage = readLastNumber(path.join(dir, LAST_MESSAGE_FILE));
+		this.lastMessage = Math.max(...LAST_MESSAGE_FILES.map(file => readLastNumber(path.join(dir, file))));
 	}
 
 	/** What the ledger says of the messages now. */
@@ -440,7 +450,7 @@ export class MessageRecord {
 	send(message: NewMessage): Message {
 		this.ledger.assertOpen();
 		const id = Math.max(this.state.lastMessage, this.lastMessage) + 1;
-		replaceFile(path.join(this.dir, LAST_MESSAGE_FILE), String(id));
+		replaceFile(path.join(this.dir, LAST_MESSAGE_FILES[0]), String(id));
 		this.lastMessage = id;
 		const { text, ...fields } = message;
 		let place: { readonly text: string } | { readonly file: string } = { text };
@@ -457,10 +467,10 @@ export class MessageRecord {
 		return sent;
 	}
 
-	/** Records that a result with these messages goes out to `agent`'s pipe. */
-	given(agent: number, ids: readonly number[]): void {
+	/** Records that the person was shown these messages of theirs, held while the agent framework was off (M10). */
+	shown(ids: readonly number[]): void {
 		if (ids.length) {
-			this.ledger.append({ type: 'message.given', agent, ids });
+			this.ledger.append({ type: 'message.shown', ids });
 		}
 	}
 
@@ -478,12 +488,9 @@ export class MessageRecord {
 		}
 	}
 
-	/**
-	 * Records that a message went back to its sender `as` that message of Facade's, or that it could not,
-	 * or - `known` - needed not.
-	 */
-	returned(id: number, reason: string, { as, known }: { readonly as?: number; readonly known?: true } = {}): void {
-		this.ledger.append({ type: 'message.returned', id, reason, ...(as !== undefined ? { as } : {}), ...(known ? { known } : {}) });
+	/** Records that a message went back to its sender `as` that message of Facade's, or that it could not. */
+	returned(id: number, reason: string, { as }: { readonly as?: number } = {}): void {
+		this.ledger.append({ type: 'message.returned', id, reason, ...(as !== undefined ? { as } : {}) });
 	}
 
 	/** Records that the chat rooms were deleted, up to the last message: the notes since the last deletion too. */

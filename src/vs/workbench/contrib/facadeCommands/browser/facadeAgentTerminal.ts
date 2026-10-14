@@ -10,20 +10,25 @@ import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
 import { ITerminalContribution, ITerminalInstance, IXtermTerminal } from '../../terminal/browser/terminal.js';
 import { registerTerminalContribution, type ITerminalContributionContext } from '../../terminal/browser/terminalExtensions.js';
 import { ITerminalProcessManager, ProcessState } from '../../terminal/common/terminal.js';
-import { inputPieces, keySequences, PASTE_END, PASTE_START } from './facadeAgentKeys.js';
-import { finalScreen, IAgentScreen, MOST_SCREEN_LINES, readScreen } from './facadeAgentScreen.js';
+import { facadeRunOf, facadeRunTerminalOf, IFacadeRun, isFacadeRunTerminal } from '../common/facadeRun.js';
+import { inputPieces, keySequences, pasteSequence } from './facadeAgentKeys.js';
+import { finalScreen, IAgentFinalScreen, IAgentScreen, MOST_SCREEN_LINES, readScreen } from './facadeAgentScreen.js';
 
 /** How long the person's unsent typing in a terminal holds automated input back, from their last key. */
 const PERSON_INPUT_GUARD_MS = 10_000;
 
 /** The pause between two keys of one call. */
 const KEY_GAP_MS = 50;
+
+/** The agent framework's switch, which the agents' extension contributes: off only where set so (AGENT-LAUNCHER.md, L7). */
+const FRAMEWORK_SETTING = 'facade.orchestration.enabled';
 
 /** The DEC private modes whose reset leaves the alternate buffer: `CSI ? 1049 l`, `? 1047 l` and `? 47 l`. */
 const ALTERNATE_BUFFER_MODES: ReadonlySet<number> = new Set([1049, 1047, 47]);
@@ -36,12 +41,26 @@ export interface IAgentScreenRead extends IAgentScreen {
 	readonly lastOutput: number | undefined;
 }
 
+/**
+ * An agent's final screen as its file holds it (`IAgentFinalScreen`), with when it was taken and when the terminal
+ * last showed new output, where that is known: what a read of the screen while it ran says too (AGENT-DEBUGGING.md, D2).
+ */
+interface IAgentFinalScreenFile extends IAgentFinalScreen {
+	/** When it was taken, in milliseconds since 1970. */
+	readonly capturedAt: number;
+	/** When the terminal last showed new output; left out where that is not known. */
+	readonly lastOutput?: number;
+}
+
 /** What automated input into a terminal did: what went in, and why the rest did not. */
 export interface IAgentInputEffect {
 	/** `applied`: all of it; `partial`: a first part, the terminal ending before the rest; `not_applied`: nothing. */
 	readonly outcome: 'applied' | 'partial' | 'not_applied';
-	/** Why not all of it went in: the terminal ended, or the input waited in its queue past its time. */
-	readonly reason?: 'ended' | 'timeout';
+	/**
+	 * Why not all of it went in: the terminal ended, the input waited in its queue past its time, or - for input that
+	 * needs the agent framework - the framework was off when its turn came.
+	 */
+	readonly reason?: 'ended' | 'timeout' | 'frameworkOff';
 	/** For text: whether it was pasted. */
 	readonly pasted?: boolean;
 	/** For text: whether Enter followed. */
@@ -52,8 +71,8 @@ export interface IAgentInputEffect {
 
 /** A terminal registered as an agent's: its run, and the file its final screen goes to. */
 export interface IAgentTerminalOptions {
-	/** The agent's number, which its run has in the agents' extension. */
-	readonly run: number;
+	/** The agent's run: its record, and its number there. */
+	readonly run: IFacadeRun;
 	/** Where its final screen is written once its process ends or its terminal closes. */
 	readonly finalScreen: URI;
 }
@@ -65,6 +84,11 @@ export interface IAgentTypeOptions {
 	readonly enterDelayMs: number;
 	/** How long it may wait for its turn; none to wait as long as the person's typing holds it. */
 	readonly queueTimeoutMs?: number;
+	/**
+	 * Set for input the agent framework makes - a doorbell: it goes in not at all if the framework is off when its
+	 * turn comes (AGENT-MESSAGES.md, M10; AGENT-LAUNCHER.md, L13).
+	 */
+	readonly requiresFramework?: boolean;
 }
 
 /** How keys are pressed: how long they may wait for their turn. */
@@ -160,7 +184,7 @@ interface IQueuedInput {
  * The input of one terminal, in turn: each operation whole - text and its Enter, every key of a call -
  * before the next begins, and each begun only once the person's typing there lets it. An operation still
  * waiting at its deadline, wherever it is in the queue, leaves it without going in. Once the terminal's
- * process ends, or the queue goes with its terminal, nothing waiting goes in.
+ * process ends, the queue goes with its terminal, or its run is being stopped, nothing waiting goes in.
  */
 class InputQueue extends Disposable {
 
@@ -182,7 +206,10 @@ class InputQueue extends Disposable {
 		super.dispose();
 	}
 
-	/** Settles once the terminal's process ended, or the queue went with its terminal. */
+	/**
+	 * Settles once the queue has ended (`end`): the terminal's process ended, the queue went with its terminal, or its
+	 * run is being stopped.
+	 */
 	get whenEnded(): Promise<void> {
 		return this.ended.p;
 	}
@@ -226,8 +253,11 @@ class InputQueue extends Disposable {
 		}
 	}
 
-	/** Nothing waiting goes in any more: the terminal's process ended, or the terminal went. */
-	private end(): void {
+	/**
+	 * Nothing waiting goes in any more, nor what is left of an operation going in: the terminal's process ended, the
+	 * terminal went - or its run is being stopped, though its process has not ended yet (AGENT-DEBUGGING.md, D3).
+	 */
+	end(): void {
 		if (this.ended.isSettled) {
 			return;
 		}
@@ -322,11 +352,19 @@ class InputQueue extends Disposable {
 /** What is kept of a terminal registered as an agent's. */
 interface IAgentTerminal {
 	options: IAgentTerminalOptions;
-	/** The last frame a full-screen program drew before it left the alternate buffer. */
-	alternateFrame: readonly string[] | undefined;
-	lastOutput: number | undefined;
 	/** Set once its final screen was taken. */
 	captured: boolean;
+}
+
+/**
+ * The agent `instance` is the terminal of, and where its final screen goes, as its run's mark keeps them
+ * (`facadeRunProperties`): the mark's `finalScreen`, a URI as a string. Undefined for a terminal of no run, or
+ * whose mark keeps no final screen.
+ */
+function markedAgentOf(instance: ITerminalInstance): IAgentTerminalOptions | undefined {
+	const run = facadeRunOf(instance);
+	const finalScreen = facadeRunTerminalOf(instance)?.finalScreen;
+	return run && finalScreen ? { run, finalScreen: URI.parse(finalScreen) } : undefined;
 }
 
 /**
@@ -348,6 +386,15 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 	private readonly queue: InputQueue;
 	private raw: RawXtermTerminal | undefined;
 	private agent: IAgentTerminal | undefined;
+	/** The last frame a full-screen program drew before it left the alternate buffer, in an agent's terminal. */
+	private alternateFrame: readonly string[] | undefined;
+	/** When an agent's terminal last showed new output. */
+	private lastOutput: number | undefined;
+	/**
+	 * Set while a terminal the window gave back after a reload is written what its process wrote before - replayed
+	 * by the pty host, no new output (D8).
+	 */
+	private replaying = false;
 	/** Set once the agent's terminal is watched: `watchAgent`. */
 	private watching = false;
 	/** Set while the window shuts down, or reloads: its terminals go, their processes not with them. */
@@ -357,7 +404,8 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 		private readonly ctx: ITerminalContributionContext,
 		@IFileService private readonly fileService: IFileService,
 		@ILifecycleService lifecycleService: ILifecycleService,
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@IConfigurationService private readonly configurationService: IConfigurationService
 	) {
 		super();
 		this.queue = this._register(new InputQueue(ctx.instance, ctx.processManager, this.person));
@@ -366,6 +414,17 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 		this._register(ctx.instance.onExit(() => this.captureWhenParsed()));
 		this._register(lifecycleService.onBeforeShutdown(() => this.shuttingDown = true));
 		this._register(lifecycleService.onShutdownVeto(() => this.shuttingDown = false));
+		if (ctx.instance.shellLaunchConfig.attachPersistentProcess) {
+			this.replaying = true;
+			this._register(ctx.processManager.onProcessReplayComplete(() => this.replaying = false));
+		}
+		// Registered from its run's mark where the mark keeps where its final screen goes: a terminal the window gives
+		// back after a reload keeps its final screen from the moment it is attached, not only once the agents'
+		// extension, started anew, registers it again (AGENT-DEBUGGING.md, D6, D8)
+		const marked = markedAgentOf(ctx.instance);
+		if (marked) {
+			this.agent = { options: marked, captured: false };
+		}
 	}
 
 	xtermReady(xterm: IXtermTerminal & { raw: RawXtermTerminal }): void {
@@ -373,9 +432,9 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 		this.watchAgent();
 	}
 
-	/** Whether the terminal is registered as an agent's. */
+	/** Whether the terminal is an agent's: marked as its run's (`facadeRunProperties`), or registered as one. */
 	get isAgent(): boolean {
-		return !!this.agent;
+		return !!this.agent || isFacadeRunTerminal(this.ctx.instance);
 	}
 
 	/** Whether the terminal's process has ended, the terminal kept open. */
@@ -388,7 +447,16 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 	 * agent's, and whether Facade's own input goes in or waits its turn.
 	 */
 	inputState(): IAgentInputState {
+		this.watchAgent();
 		return { ...this.person.state(), busy: this.queue.busy };
+	}
+
+	/**
+	 * Closes its input, as its run is being stopped: what waits to go in, and the keys left of an operation going in, go
+	 * in no more (D3).
+	 */
+	closeInput(): void {
+		this.queue.end();
 	}
 
 	/**
@@ -397,10 +465,10 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 	 * again - keeps what was seen of it.
 	 */
 	register(options: IAgentTerminalOptions): void {
-		if (this.agent?.options.run === options.run) {
+		if (this.agent && this.agent.options.run.workspace === options.run.workspace && this.agent.options.run.id === options.run.id) {
 			this.agent.options = options;
 		} else {
-			this.agent = { options, alternateFrame: undefined, lastOutput: undefined, captured: false };
+			this.agent = { options, captured: false };
 		}
 		this.watchAgent();
 	}
@@ -411,21 +479,28 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 		if (!raw) {
 			return undefined;
 		}
-		return { ...readScreen(raw, Math.max(1, Math.min(MOST_SCREEN_LINES, Math.floor(lines)))), capturedAt: Date.now(), lastOutput: this.agent?.lastOutput };
+		return { ...readScreen(raw, Math.max(1, Math.min(MOST_SCREEN_LINES, Math.floor(lines)))), capturedAt: Date.now(), lastOutput: this.lastOutput };
 	}
 
 	/**
-	 * Pastes `text` as one paste - bracketed where the terminal's program turned that mode on - and, with
-	 * Enter, presses Enter `options.enterDelayMs` later: in its turn, behind what the person is typing.
+	 * Pastes `text` as one paste, as the terminal's own paste path sends it - bracketed where the terminal's
+	 * program turned that mode on, unless the person told the terminal to ignore that mode - and, with
+	 * Enter, presses Enter `options.enterDelayMs` later: in its turn, behind what the person is typing. Input
+	 * that needs the agent framework goes in not at all if the framework is off when its turn comes.
 	 */
 	type(text: string, options: IAgentTypeOptions): Promise<IAgentInputEffect> {
+		this.watchAgent();
 		const notApplied: IAgentInputEffect = { outcome: 'not_applied', pasted: false, entered: false };
 		return this.queue.add(async alive => {
 			if (!alive()) {
 				return { ...notApplied, reason: 'ended' };
 			}
-			const pasted = this.raw?.modes.bracketedPasteMode ? `${PASTE_START}${text}${PASTE_END}` : text;
-			if (!await this.send(pasted)) {
+			// Turned off while it waited its turn - behind the person's typing, say: a doorbell that has not begun
+			// writing is cancelled (AGENT-MESSAGES.md, M10)
+			if (options.requiresFramework && this.configurationService.getValue<boolean>(FRAMEWORK_SETTING) === false) {
+				return { ...notApplied, reason: 'frameworkOff' };
+			}
+			if (!await this.send(pasteSequence(this.raw, text))) {
 				return { ...notApplied, reason: 'ended' };
 			}
 			if (!options.enter) {
@@ -445,6 +520,7 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 	 * person is typing.
 	 */
 	keys(keys: readonly string[], options: IAgentKeysOptions): Promise<IAgentInputEffect> {
+		this.watchAgent();
 		const notApplied: IAgentInputEffect = { outcome: 'not_applied', keysSent: 0 };
 		return this.queue.add(async alive => {
 			for (let sent = 0; sent < keys.length; sent++) {
@@ -461,26 +537,29 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 	}
 
 	/**
-	 * Watches an agent's terminal once both its buffer and its registration are there: what the person
+	 * Watches an agent's terminal once both its buffer and its mark or registration are there: what the person
 	 * types there, when it last showed output, and the last frame of a full-screen program, taken just
 	 * before xterm leaves the alternate buffer - its own handler of that sequence still runs. A terminal no
-	 * agent's is not watched.
+	 * agent's is not watched. A terminal the window gave back after a reload has its run's mark once its
+	 * process is attached: it is watched from the first time Facade asks after it. What the pty host replays
+	 * into it then is what its process showed before the reload, not new output: its last output is not known
+	 * until its process writes again.
 	 */
 	private watchAgent(): void {
 		const raw = this.raw;
-		if (!raw || !this.agent || this.watching) {
+		if (!raw || !this.isAgent || this.watching) {
 			return;
 		}
 		this.watching = true;
 		this.person.attach(this.ctx.instance);
 		this._register(raw.onWriteParsed(() => {
-			if (this.agent) {
-				this.agent.lastOutput = Date.now();
+			if (!this.replaying) {
+				this.lastOutput = Date.now();
 			}
 		}));
 		this._register(raw.parser.registerCsiHandler({ prefix: '?', final: 'l' }, params => {
-			if (this.agent && raw.buffer.active.type === 'alternate' && params.some(param => typeof param === 'number' && ALTERNATE_BUFFER_MODES.has(param))) {
-				this.agent.alternateFrame = readScreen(raw, MOST_SCREEN_LINES).lines;
+			if (raw.buffer.active.type === 'alternate' && params.some(param => typeof param === 'number' && ALTERNATE_BUFFER_MODES.has(param))) {
+				this.alternateFrame = readScreen(raw, MOST_SCREEN_LINES).lines;
 			}
 			return false;
 		}));
@@ -514,8 +593,10 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 
 	/**
 	 * Takes an agent terminal's final screen, once, and writes it to its file - with `flush`, what the
-	 * process wrote last and xterm has not parsed yet drawn first, as the terminal goes. Not as the window
-	 * shuts down or reloads while the process runs: it outlives its terminal.
+	 * process wrote last and xterm has not parsed yet drawn first, as the terminal goes - with when it was
+	 * taken and last showed output. Written whole or not at all, by a rename: the agents' extension reads
+	 * it as it ends, and a reader never finds it half written. Not as the window shuts down or reloads while
+	 * the process runs: it outlives its terminal.
 	 */
 	private capture(flush: boolean): void {
 		const agent = this.agent;
@@ -528,7 +609,8 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 			(raw as ITerminalWithWriteBuffer)._core?._writeBuffer?.flushSync?.();
 		}
 		const { finalScreen: file } = agent.options;
-		this.fileService.writeFile(file, VSBuffer.fromString(JSON.stringify(finalScreen(raw, agent.alternateFrame)))).then(undefined, err => {
+		const screen: IAgentFinalScreenFile = { ...finalScreen(raw, this.alternateFrame), capturedAt: Date.now(), ...(this.lastOutput !== undefined ? { lastOutput: this.lastOutput } : {}) };
+		this.fileService.writeFile(file, VSBuffer.fromString(JSON.stringify(screen)), { atomic: { postfix: '.tmp' } }).then(undefined, err => {
 			this.logService.warn(`[facade] The final screen of ${this.ctx.instance.title} could not be kept in ${file.toString()}: ${toErrorMessage(err)}`);
 		});
 	}

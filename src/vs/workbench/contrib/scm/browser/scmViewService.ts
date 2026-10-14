@@ -198,6 +198,7 @@ export class SCMViewService implements ISCMViewService {
 	private updateProviderCount(): void {
 		this._providerCountContextKey.set(this.folderRepositories.length);
 		this._workspaceProviderCountContextKey.set(this.repositories.length);
+		this._onDidChangeFolderRepositories.fire();
 	}
 
 	get folderRepositories(): readonly ISCMRepository[] {
@@ -277,6 +278,9 @@ export class SCMViewService implements ISCMViewService {
 
 	private _onDidChangeRepositories = new Emitter<ISCMViewVisibleRepositoryChangeEvent>();
 	readonly onDidChangeRepositories = this._onDidChangeRepositories.event;
+
+	private readonly _onDidChangeFolderRepositories = this.disposables.add(new Emitter<void>());
+	readonly onDidChangeFolderRepositories = this._onDidChangeFolderRepositories.event;
 
 	private _onDidSetVisibleRepositories = new Emitter<ISCMViewVisibleRepositoryChangeEvent>();
 	readonly onDidChangeVisibleRepositories = Event.any(
@@ -515,6 +519,16 @@ export class SCMViewService implements ISCMViewService {
 	}
 
 	private onDidAddRepository(repository: ISCMRepository): void {
+		this.addRepositoryView(repository);
+
+		// ⚠️ After every way of adding one, the two that return early while the last session's choice is
+		// still loading included: a folder whose repository opened after the window came onto it would
+		// otherwise read as having none - the git extension's "no repository" welcome, or GitHub's
+		// "Publish", over its graph - until the next switch (N-46). Upstream counts in the SCM service.
+		this.updateProviderCount();
+	}
+
+	private addRepositoryView(repository: ISCMRepository): void {
 		if (!this.didFinishLoadingRepositories.get()) {
 			this.eventuallyFinishLoading();
 		}
@@ -589,8 +603,6 @@ export class SCMViewService implements ISCMViewService {
 		if (!this._repositories.find(r => r.focused)) {
 			this.focus(repository);
 		}
-
-		this.updateProviderCount();
 	}
 
 	private onDidRemoveRepository(repository: ISCMRepository): void {

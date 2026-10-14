@@ -11,7 +11,7 @@ icon bar, its locations and interaction. [WORKTREE.md](WORKTREE.md) defines Git
 worktree discovery, creation, setup and deletion. References beginning with AB and
 WT refer to those documents. [IDENTITY.md](IDENTITY.md) defines product branding and
 distribution.
-[AGENT-FRAMEWORK.md](AGENT-FRAMEWORK.md) defines agent lifetime and integration.
+[AGENT-LAUNCHER.md](AGENT-LAUNCHER.md) defines agent lifetime and integration.
 
 Each document separates required behavior, implementation guidance and acceptance.
 A requirement is not a claim that the current code implements it. L1 requires the
@@ -717,7 +717,7 @@ Code's in-window ones do: on Windows the primary button first, on macOS and Linu
 
 Closing, quitting and replacing a workspace use the same lifetime checks. A folder
 switch or repository collapse never counts as closing a workspace. Agent lifetime
-and final-screen handling follow AGENT-FRAMEWORK and AGENT-DEBUGGING.
+and final-screen handling follow AGENT-LAUNCHER and AGENT-DEBUGGING.
 
 # Part 2: Technical Design
 

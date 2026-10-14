@@ -730,6 +730,11 @@ interface ITerminalEditorInputObject {
 	readonly hideFromUser?: boolean;
 	readonly reconnectionProperties?: IReconnectionProperties;
 	readonly shellIntegrationNonce: string;
+	/**
+	 * Facade Code: an agent's tab written though its terminal is not kept - persistent sessions off - so that it
+	 * never comes back, and the floating window saved holding it is known to have come back emptied (D10, N-88).
+	 */
+	readonly notKept?: boolean;
 }
 
 export interface ISerializedTerminalEditorInput extends ITerminalEditorInputObject {

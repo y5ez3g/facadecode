@@ -7,31 +7,50 @@ import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Disposable, DisposableMap, DisposableStore, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IActionViewItemService } from '../../../../platform/actions/browser/actionViewItemService.js';
 import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
+import { Codicon } from '../../../../base/common/codicons.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
+import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { ContextKeyExpression, IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../services/editor/common/editorGroupsService.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
-import { agentIcon, AGENTS_SETTING, readConfiguredLaunchers } from '../common/terminalLaunchers.js';
-import { AGENT_MENU, AGENT_MENU_GROUP, createAgentMenuActionViewItem } from './terminalLauncherActions.js';
+import { agentIcon, BUILT_IN_LAUNCHERS, CUSTOM_AGENTS_SETTING, ITerminalLauncher, readCustomAgents } from '../common/terminalLaunchers.js';
+import { AGENT_MENU, AGENT_MENU_GROUP, CONFIGURE_AGENTS, createAgentMenuActionViewItem } from './terminalLauncherActions.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
-/** What an agent's command is called. The id somebody chose is the last part. */
+/** What an agent's command is called: a built-in's id, or `custom.` and a custom agent's name, is the last part. */
 export const OPEN_AGENT_PREFIX = 'facade.agent.open.';
 
+/** Whether this machine has a built-in, and the person offers it, by its id: what puts it in the menu. */
+function availableKey(id: string): RawContextKey<boolean> {
+	return new RawContextKey<boolean>(`facadeAgentAvailable.${id}`, false);
+}
+
+/** The glyph of the line an empty menu has in place of agents. */
+const AGENT_EMPTY_ICON = Codicon.info;
+
+/** Whether the menu has no agent to offer: no built-in found, and no custom agent. */
+const NO_AGENTS = new RawContextKey<boolean>('facadeNoAgents', false);
+
 /**
- * Keeps the agent menu in step with the setting.
- *
- * One command and one menu item per agent, thrown away and rebuilt whenever the setting changes,
- * because agents come and go with a dialog and a menu built once would show the list somebody had
- * when the window opened.
+ * Keeps the agent menu in step with this machine and the settings (AGENT-LAUNCHER.md, L3): the built-ins it
+ * has and the person offers, in the menu's order, then the person's custom agents in theirs - listed found
+ * or not, for choosing one to say what is wrong - and, with none of either, a line that says so above
+ * Configure Agents. The built-ins are looked for again as the menu opens, as the settings change, and as
+ * the window comes back to the front: nothing found is written into the settings.
  */
 export class TerminalLauncherMenu extends Disposable implements IWorkbenchContribution {
 
 	static readonly ID = 'workbench.contrib.terminalLaunchers';
 
 	private readonly _agents = this._register(new MutableDisposable<DisposableStore>());
+	private readonly _available: ReadonlyMap<string, IContextKey<boolean>>;
+	private readonly _none: IContextKey<boolean>;
+	/** Whether the built-ins have been looked for once: until then the menu says nothing of having none. */
+	private _looked = false;
 	/** One store per watched group and per watched part, released when that group or part goes. */
 	private readonly _groups = this._register(new DisposableMap<IEditorGroup>());
 	private readonly _parts = this._register(new DisposableMap<IEditorPart>());
@@ -41,7 +60,9 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IActionViewItemService actionViewItemService: IActionViewItemService,
 		@IEditorGroupsService private readonly _editorGroupsService: IEditorGroupsService,
-		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService
+		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService,
+		@IContextKeyService contextKeyService: IContextKeyService,
+		@IHostService hostService: IHostService
 	) {
 		super();
 
@@ -50,13 +71,68 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 		this._register(actionViewItemService.register(MenuId.TitleBar, AGENT_MENU, createAgentMenuActionViewItem));
 
 		this._editorGroupsService.whenReady.then(() => this._watchGroups(), onUnexpectedError);
+
+		this._available = new Map(BUILT_IN_LAUNCHERS.map(launcher => [launcher.id, availableKey(launcher.id).bindTo(contextKeyService)]));
+		this._none = NO_AGENTS.bindTo(contextKeyService);
+		this._registerBuiltIns();
 		this._update();
+		this._register(this._launcherService.onDidChangeAvailable(() => this._showAvailable()));
 
 		this._register(this._configurationService.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration(AGENTS_SETTING)) {
+			if (e.affectsConfiguration(CUSTOM_AGENTS_SETTING)) {
 				this._update();
 			}
+			if (e.affectsConfiguration('facade.agents')) {
+				this._launcherService.refreshAvailable().catch(onUnexpectedError);
+			}
 		}));
+		this._register(hostService.onDidChangeFocus(focused => {
+			if (focused) {
+				this._launcherService.refreshAvailable().catch(onUnexpectedError);
+			}
+		}));
+		this._launcherService.refreshAvailable().then(() => {
+			this._looked = true;
+			this._showAvailable();
+		}, onUnexpectedError);
+	}
+
+	/** The built-ins, each a command and a row shown while this machine has it and the person offers it. */
+	private _registerBuiltIns(): void {
+		for (const [order, launcher] of BUILT_IN_LAUNCHERS.entries()) {
+			this._registerAgent(this._store, launcher, `${OPEN_AGENT_PREFIX}${launcher.id}`, order, availableKey(launcher.id).isEqualTo(true));
+		}
+
+		this._register(MenuRegistry.appendMenuItem(AGENT_MENU, {
+			command: { id: CONFIGURE_AGENTS, title: localize('facade.agent.noneFound', "No Agents Found: Configure Agents..."), icon: AGENT_EMPTY_ICON },
+			group: AGENT_MENU_GROUP,
+			order: 0,
+			when: NO_AGENTS.isEqualTo(true)
+		}));
+	}
+
+	/** A command that starts `launcher`, and its row in the menu. */
+	private _registerAgent(store: DisposableStore, launcher: ITerminalLauncher, id: string, order: number, when: ContextKeyExpression | undefined): void {
+		store.add(CommandsRegistry.registerCommand(id, (accessor: ServicesAccessor) =>
+			accessor.get(ITerminalLauncherService).open(launcher)));
+
+		// With the agent's logo, the icon its terminal tab will carry: the button's dropdown draws it
+		// (`AgentMenuActionViewItem`), and the title bar's overflow, a context menu, leaves it out
+		store.add(MenuRegistry.appendMenuItem(AGENT_MENU, {
+			command: { id, title: launcher.label, icon: agentIcon(launcher.command, launcher.custom) },
+			group: AGENT_MENU_GROUP,
+			order,
+			when
+		}));
+	}
+
+	/** The built-ins as last found, and whether the menu has nothing to offer. */
+	private _showAvailable(): void {
+		const available = this._launcherService.available;
+		for (const [id, key] of this._available) {
+			key.set(available.has(id));
+		}
+		this._none.set(this._looked && available.size === 0 && readCustomAgents(this._configurationService.getValue(CUSTOM_AGENTS_SETTING)).length === 0);
 	}
 
 	/**
@@ -108,26 +184,18 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 		this._register(this._launcherService.onDidChangeAgentTerminals(() => this._refresh.forEach(refresh => refresh())));
 	}
 
+	/**
+	 * The person's custom agents, thrown away and made again as their setting changes: after the built-ins,
+	 * in the order they wrote them.
+	 */
 	private _update(): void {
 		// Assigning disposes the previous batch, which is what takes the old agents out of the menu
 		const store = new DisposableStore();
 		this._agents.value = store;
 
-		const launchers = readConfiguredLaunchers(this._configurationService.getValue(AGENTS_SETTING));
-
-		for (const [order, launcher] of launchers.entries()) {
-			const id = `${OPEN_AGENT_PREFIX}${launcher.id}`;
-
-			store.add(CommandsRegistry.registerCommand(id, (accessor: ServicesAccessor) =>
-				accessor.get(ITerminalLauncherService).open(launcher)));
-
-			// With the agent's logo, the icon its terminal tab will carry: the button's dropdown draws it
-			// (`AgentMenuActionViewItem`), and the title bar's overflow, a context menu, leaves it out
-			store.add(MenuRegistry.appendMenuItem(AGENT_MENU, {
-				command: { id, title: launcher.label, icon: agentIcon(launcher.command) },
-				group: AGENT_MENU_GROUP,
-				order
-			}));
+		for (const [order, launcher] of readCustomAgents(this._configurationService.getValue(CUSTOM_AGENTS_SETTING)).entries()) {
+			this._registerAgent(store, launcher, `${OPEN_AGENT_PREFIX}custom.${launcher.id}`, BUILT_IN_LAUNCHERS.length + order, undefined);
 		}
+		this._showAvailable();
 	}
 }

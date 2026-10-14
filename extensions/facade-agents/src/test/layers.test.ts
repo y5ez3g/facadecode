@@ -7,7 +7,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** What each layer may import of the others: the table in AGENT-FRAMEWORK.md, Code. */
+/** What each layer may import of the others: the boundaries of AGENT-LAUNCHER.md, L8. */
 const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 	'extension.ts': ['host', 'base'],
 	host: ['contract', 'core', 'record', 'clis', 'transport', 'base'],
@@ -64,5 +64,43 @@ suite('Layers: what each file may import', () => {
 		}
 
 		assert.deepStrictEqual(wrong, []);
+	});
+});
+
+/** The arguments of each call of `name` in `text`, as written: up to its closing parenthesis. */
+function callsOf(text: string, name: string): string[] {
+	const calls: string[] = [];
+	for (let at = text.indexOf(`${name}(`); at !== -1; at = text.indexOf(`${name}(`, at + 1)) {
+		let depth = 0;
+		let end = at + name.length;
+		for (; end < text.length; end++) {
+			if (text[end] === '(') {
+				depth++;
+			} else if (text[end] === ')' && --depth === 0) {
+				break;
+			}
+		}
+		calls.push(text.slice(at + name.length + 1, end));
+	}
+	return calls;
+}
+
+suite('Notices: how much each matters', () => {
+
+	test('a notification that says something failed, or cannot be done, shows as a warning or an error - never as information (UI-17; N-73)', () => {
+		const failure = /could not|cannot|failed|did not start/i;
+		const asNews = sourcesIn(SRC).filter(file => layerOf(file) !== 'test').flatMap(file =>
+			callsOf(fs.readFileSync(file, 'utf8'), 'showInformationMessage').filter(args => failure.test(args)).map(args => `${path.relative(SRC, file)}: ${args.replace(/\s+/g, ' ').slice(0, 100)}`));
+
+		assert.deepStrictEqual(asNews, []);
+	});
+
+	test('the window\'s own notifications, in host/, do not lead with "Facade: ": VS Code shows their source, Facade Agents, with them, as it does for its own extensions\' notifications - a message\'s sender label is no such prefix', () => {
+		// host/ alone: a message to the person shows who sent it - an agent, or Facade as `Facade: ` in core/mail.ts - a
+		// label of the message, not a prefix of the window's own
+		const prefixed = sourcesIn(path.join(SRC, 'host')).flatMap(file =>
+			[...fs.readFileSync(file, 'utf8').matchAll(/l10n\.t\(\s*"Facade: [^"]*"/g)].map(match => `${path.relative(SRC, file)}: ${match[0]}`));
+
+		assert.deepStrictEqual(prefixed, []);
 	});
 });

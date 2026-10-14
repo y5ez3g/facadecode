@@ -5,6 +5,7 @@
 
 import { FacadeError } from '../core/errors';
 import { ANSWER_DELAY_MS, MOST_TYPED } from '../core/screens';
+import { describe } from '../record/events';
 import { Args } from './args';
 import { screenAfter } from './readScreen';
 import type { ContractTool } from './tools';
@@ -21,7 +22,7 @@ export const typeTextTool: ContractTool = {
 		inputSchema: {
 			type: 'object',
 			properties: {
-				agent: { type: 'string', description: 'The agent: its number, as #a7, or its @name, where only one running agent has it. It may be you.' },
+				agent: { type: 'string', description: 'The agent: its number, as #a7, or its @name, where only one agent that has not ended has it. It may be you.' },
 				text: { type: 'string', description: `One line of plain text, up to ${MOST_TYPED} characters, typed as it is, spaces at its ends too.` },
 				enter: { type: 'boolean', description: 'Press Enter after it, a fixed pause after the paste: the time its CLI is set to be given to take a paste in, which says nothing of whether it did. Without it, the text stays in the input.' }
 			},
@@ -42,7 +43,8 @@ export const typeTextTool: ContractTool = {
 		const enter = args.boolean('enter') ?? false;
 		const result = await facade.screens.type(caller, agent, text, enter);
 		const chars = [...text].length;
-		const typed = `Typed ${chars} ${chars === 1 ? 'character' : 'characters'} into @${result.name} #a${result.id}'s terminal, as one paste${result.effect.entered ? ', and pressed Enter' : ', without Enter'}.`;
-		return { text: `${typed} ${screenAfter(result, facade.cliName(facade.agent(result.id)?.cli ?? ''))}`, data: result };
+		const typed = `Typed ${chars} ${chars === 1 ? 'character' : 'characters'} into ${describe(result)}'s terminal, as one paste${result.effect.entered ? ', and pressed Enter' : ', without Enter'}.`;
+		// What was sent, as the text says it: the line and its count of characters (D4)
+		return { text: `${typed} ${screenAfter(result, facade.cliName(facade.agent(result.id)?.cli ?? ''))}`, data: { ...result, text, chars } };
 	}
 };

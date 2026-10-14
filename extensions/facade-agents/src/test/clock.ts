@@ -10,16 +10,16 @@ interface Timer {
 }
 
 /**
- * A clock for tests of what runs in memory: while it is installed, `setTimeout`, `clearTimeout` and
- * `Date.now` are its own, and time moves only when the test moves it - every timer due on the way
- * firing in its turn, and what each one set going settled before the next. Mocha keeps timers of its
+ * A clock for tests of what runs in memory: while it is installed, `setTimeout`, `setInterval`, their
+ * `clear` and `Date.now` are its own, and time moves only when the test moves it - every timer due on the
+ * way firing in its turn, and what each one set going settled before the next. Mocha keeps timers of its
  * own, so a test's timeout still ends it.
  */
 export class FakeClock {
 
 	private readonly timers = new Map<number, Timer>();
 	private last = 0;
-	private readonly real = { setTimeout: global.setTimeout, clearTimeout: global.clearTimeout, now: Date.now, setImmediate: global.setImmediate };
+	private readonly real = { setTimeout: global.setTimeout, clearTimeout: global.clearTimeout, setInterval: global.setInterval, clearInterval: global.clearInterval, now: Date.now, setImmediate: global.setImmediate };
 
 	private constructor(private now: number) { }
 
@@ -27,14 +27,32 @@ export class FakeClock {
 	static install(): FakeClock {
 		const clock = new FakeClock(Date.now());
 		const handle = (id: number) => ({ id, ref: () => handle(id), unref: () => handle(id), hasRef: () => true, refresh: () => handle(id), [Symbol.toPrimitive]: () => id });
+		const clear = (timer: unknown) => {
+			clock.timers.delete(typeof timer === 'object' && timer ? (timer as { id: number }).id : Number(timer));
+		};
 		global.setTimeout = ((run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
 			const id = ++clock.last;
 			clock.timers.set(id, { at: clock.now + Math.max(0, ms ?? 0), run: () => run(...args) });
 			return handle(id);
 		}) as unknown as typeof global.setTimeout;
-		global.clearTimeout = ((timer: unknown) => {
-			clock.timers.delete(typeof timer === 'object' && timer ? (timer as { id: number }).id : Number(timer));
-		}) as typeof global.clearTimeout;
+		global.setInterval = ((run: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+			const id = ++clock.last;
+			// Set again before each run, so that the run can clear it; at least a millisecond apart, as Node's are
+			const every = Math.max(1, ms ?? 0);
+			const due = (at: number) => {
+				clock.timers.set(id, {
+					at,
+					run: () => {
+						due(at + every);
+						run(...args);
+					}
+				});
+			};
+			due(clock.now + every);
+			return handle(id);
+		}) as unknown as typeof global.setInterval;
+		global.clearTimeout = clear as typeof global.clearTimeout;
+		global.clearInterval = clear as typeof global.clearInterval;
 		Date.now = () => clock.now;
 		return clock;
 	}
@@ -43,6 +61,8 @@ export class FakeClock {
 	uninstall(): void {
 		global.setTimeout = this.real.setTimeout;
 		global.clearTimeout = this.real.clearTimeout;
+		global.setInterval = this.real.setInterval;
+		global.clearInterval = this.real.clearInterval;
 		Date.now = this.real.now;
 		this.timers.clear();
 	}

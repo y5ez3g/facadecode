@@ -44,6 +44,7 @@ import { IWorkbenchEnvironmentService } from '../../../services/environment/comm
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { ILifecycleService, ShutdownReason, StartupKind, WillShutdownEvent } from '../../../services/lifecycle/common/lifecycle.js';
 import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { terminalShutdownQuestion } from '../../terminalLaunchers/common/terminalShutdownQuestion.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { XtermTerminal } from './xterm/xtermTerminal.js';
@@ -65,6 +66,28 @@ interface IBackgroundTerminal {
 	terminalLocationOptions?: ITerminalLocationOptions;
 }
 
+/**
+ * Facade Code: resolves once `instance`, a terminal that came back, has replayed what its process wrote - or once it
+ * never will: its process ended, `ended` saying whether it has already - as one whose folder is gone fails to start -
+ * or its terminal closed. Upstream waited for the replay alone, and one terminal that failed to come back kept the
+ * window from ever being connected, and Facade from settling what became of its agents (N-67).
+ */
+export function whenReplayed(instance: Pick<ITerminalInstance, 'isDisposed' | 'onProcessReplayComplete' | 'onExit' | 'onDisposed'>, ended: boolean): Promise<void> {
+	if (ended || instance.isDisposed) {
+		return Promise.resolve();
+	}
+	return new Promise<void>(resolve => {
+		const store = new DisposableStore();
+		const done = () => {
+			store.dispose();
+			resolve();
+		};
+		store.add(Event.once(instance.onProcessReplayComplete)(done));
+		store.add(Event.once(instance.onExit)(done));
+		store.add(Event.once(instance.onDisposed)(done));
+	});
+}
+
 export class TerminalService extends Disposable implements ITerminalService {
 	declare _serviceBrand: undefined;
 
@@ -77,6 +100,8 @@ export class TerminalService extends Disposable implements ITerminalService {
 	private _isShuttingDown: boolean = false;
 	private _backgroundedTerminalInstances: IBackgroundTerminal[] = [];
 	private readonly _backgroundedTerminalDisposables = this._register(new DisposableMap<number>());
+	/** Facade Code: the terminals whose processes have ended, which will replay nothing (`whenReplayed`). */
+	private readonly _endedInstances = new WeakSet<ITerminalInstance>();
 	private _processSupportContextKey: IContextKey<boolean>;
 
 	private _primaryBackend?: ITerminalBackend;
@@ -293,7 +318,8 @@ export class TerminalService extends Disposable implements ITerminalService {
 				const instanceToDetach = this.getInstanceFromResource(getTerminalUri(e.workspaceId, e.instanceId));
 				if (instanceToDetach) {
 					const persistentProcessId = instanceToDetach?.persistentProcessId;
-					if (persistentProcessId && !instanceToDetach.shellLaunchConfig.isFeatureTerminal && !instanceToDetach.shellLaunchConfig.customPtyImplementation) {
+					// Facade Code: nor an agent's run, which stays in its window - dragged into another, it is not detached (`isFacadeRunTerminal`)
+					if (persistentProcessId && !instanceToDetach.shellLaunchConfig.isFeatureTerminal && !instanceToDetach.shellLaunchConfig.customPtyImplementation && !isFacadeRunTerminal(instanceToDetach)) {
 						if (instanceToDetach.target === TerminalLocation.Editor) {
 							this._terminalEditorService.detachInstance(instanceToDetach);
 						} else {
@@ -323,7 +349,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 			mark('code/terminal/didReconnect');
 			mark('code/terminal/willReplay');
 			const instances = await this._reconnectedTerminalGroups?.then(groups => groups.map(e => e.terminalInstances).flat()) ?? [];
-			await Promise.all(instances.map(e => new Promise<void>(r => Event.once(e.onProcessReplayComplete)(r))));
+			await Promise.all(instances.map(e => whenReplayed(e, this._endedInstances.has(e))));
 			mark('code/terminal/didReplay');
 			mark('code/terminal/willGetPerformanceMarks');
 			await Promise.all(Array.from(this._terminalInstanceService.getRegisteredBackends()).map(async backend => {
@@ -531,7 +557,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 			}
 			// Facade Code: an agent put away by a folder switch is gone once the app restarted, and revived
 			// it would be held where nothing shows it (`isAgentGoneAtStartup`)
-			if (isAgentGoneAtStartup(attachPersistentProcess.icon, this._lifecycleService.startupKind)) {
+			if (isAgentGoneAtStartup(attachPersistentProcess, this._lifecycleService)) {
 				continue;
 			}
 			const instance = await this.createTerminal({ config: { attachPersistentProcess, hideFromUser: true, forcePersist: true }, location: TerminalLocation.Panel });
@@ -548,7 +574,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 				continue;
 			}
 			// Facade Code: nor an agent's, which is gone once the app restarted as a task's is (`isAgentGoneAtStartup`)
-			if (isAgentGoneAtStartup(attachPersistentProcess.icon, this._lifecycleService.startupKind)) {
+			if (isAgentGoneAtStartup(attachPersistentProcess, this._lifecycleService)) {
 				continue;
 			}
 			mark(`code/terminal/willRecreateTerminal/${attachPersistentProcess.id}-${attachPersistentProcess.pid}`);
@@ -575,6 +601,21 @@ export class TerminalService extends Disposable implements ITerminalService {
 		this._register(this.onAnyInstanceProcessIdReady(() => this._saveState()));
 		this._register(this.onAnyInstanceTitleChange(instance => this._updateTitle(instance)));
 		this._register(this.onAnyInstanceIconChange(e => this._updateIcon(e.instance, e.userInitiated)));
+		// Facade Code: the pty host keeps the layout by workspace, and a window whose workspace became another - a
+		// folder window given a second folder, an untitled workspace saved as a file - had none under the new one
+		// until a terminal changed: reloaded meanwhile, it found the panel's terminals in no layout, and their
+		// processes - agents' too - ended as orphans. Kept under the new one at once (N-50)
+		let workspaceId = this._workspaceContextService.getWorkspace().id;
+		const onWorkspaceChange = () => {
+			const now = this._workspaceContextService.getWorkspace().id;
+			if (now !== workspaceId) {
+				workspaceId = now;
+				this._saveStateNow();
+			}
+		};
+		this._register(this._workspaceContextService.onDidChangeWorkbenchState(onWorkspaceChange));
+		this._register(this._workspaceContextService.onDidChangeWorkspaceFolders(onWorkspaceChange));
+		this._register(this._workspaceContextService.onDidChangeWorkspaceName(onWorkspaceChange));
 	}
 
 	private _handleInstanceContextKeys(): void {
@@ -735,6 +776,10 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	@debounce(500)
 	private _saveState(): void {
+		this._saveStateNow();
+	}
+
+	private _saveStateNow(): void {
 		// Avoid saving state when shutting down as that would override process state to be revived
 		if (this._isShuttingDown) {
 			return;
@@ -755,7 +800,12 @@ export class TerminalService extends Disposable implements ITerminalService {
 		if (instance.staticTitle) {
 			this._primaryBackend?.updateTitle(instance.persistentProcessId, instance.staticTitle, TitleEventSource.Api);
 		} else {
-			this._primaryBackend?.updateTitle(instance.persistentProcessId, instance.title, instance.titleSource);
+			// Facade Code: a title an escape sequence set is kept as the sequence it was, not as the label made
+			// from it - a terminal coming back takes the kept title for its sequence and makes its label again,
+			// which would hold its template's additions twice: `Fix it - @codex #a3 - @codex #a3` (N-03). One the
+			// process cleared is kept cleared, not as the label, which read `@codex #a3 - @codex #a3` (N-59).
+			const title = instance.titleSource === TitleEventSource.Sequence ? instance.sequence ?? '' : instance.title;
+			this._primaryBackend?.updateTitle(instance.persistentProcessId, title, instance.titleSource);
 		}
 	}
 
@@ -869,6 +919,7 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	protected _initInstanceListeners(instance: ITerminalInstance): void {
 		const instanceDisposables = new DisposableStore();
+		instanceDisposables.add(Event.once(instance.onExit)(() => this._endedInstances.add(instance)));
 		instanceDisposables.add(instance.onDimensionsChanged(() => {
 			this._onDidChangeInstanceDimensions.fire(instance);
 			if (this._terminalConfigurationService.config.enablePersistentSessions && this.isProcessSupportRegistered) {

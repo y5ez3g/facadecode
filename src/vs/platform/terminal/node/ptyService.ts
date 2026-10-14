@@ -12,7 +12,7 @@ import { URI } from '../../../base/common/uri.js';
 import { getSystemShell } from '../../../base/node/shell.js';
 import { ILogService, LogLevel } from '../../log/common/log.js';
 import { RequestStore } from '../common/requestStore.js';
-import { IProcessDataEvent, IProcessReadyEvent, IPtyService, IRawTerminalInstanceLayoutInfo, IReconnectConstants, IShellLaunchConfig, ITerminalInstanceLayoutInfoById, ITerminalLaunchError, ITerminalsLayoutInfo, ITerminalTabLayoutInfoById, TerminalIcon, IProcessProperty, TitleEventSource, ProcessPropertyType, IProcessPropertyMap, IFixedTerminalDimensions, IPersistentTerminalProcessLaunchConfig, ICrossVersionSerializedTerminalState, ISerializedTerminalState, ITerminalProcessOptions, IPtyHostLatencyMeasurement, type IPtyServiceContribution, PosixShellType, ITerminalLaunchResult } from '../common/terminal.js';
+import { IProcessDataEvent, IProcessReadyEvent, IPtyService, IRawTerminalInstanceLayoutInfo, IReconnectConstants, IShellLaunchConfig, ITerminalInstanceLayoutInfoById, ITerminalLaunchError, ITerminalsLayoutInfo, ITerminalTabLayoutInfoById, TerminalIcon, IProcessProperty, TitleEventSource, ProcessPropertyType, IProcessPropertyMap, IFixedTerminalDimensions, IPersistentTerminalProcessLaunchConfig, ICrossVersionSerializedTerminalState, ISerializedTerminalState, ITerminalProcessOptions, IPtyHostLatencyMeasurement, type IPtyServiceContribution, PosixShellType, ITerminalLaunchResult, IListProcessesOptions, mayAttachProcess } from '../common/terminal.js';
 import { TerminalDataBufferer } from '../common/terminalDataBuffering.js';
 import { escapeNonWindowsPath } from '../common/terminalEnvironment.js';
 import type { ISerializeOptions, SerializeAddon as XtermSerializeAddon } from '@xterm/addon-serialize';
@@ -90,6 +90,11 @@ export function traceRpc(_target: Object, key: string, descriptor: PropertyDescr
 }
 
 type WorkspaceId = string;
+
+/** Facade Code: how long the pty host keeps a persistent process's exit for a window that was away (N-14). */
+const EXITED_KEPT_MS = 10 * 60 * 1000;
+/** Facade Code: how many such exits it keeps at most. */
+const EXITED_KEPT_MAX = 200;
 
 let SerializeAddon: typeof XtermSerializeAddon;
 let Unicode11Addon: typeof XtermUnicode11Addon;
@@ -345,6 +350,8 @@ export class PtyService extends Disposable implements IPtyService {
 			for (const contrib of this._contributions) {
 				contrib.handleProcessDispose(id);
 			}
+			// Facade Code: remembered a while, for a window away as it exited - reloading - to learn its end (N-14)
+			this._rememberExit(id, persistentProcess, event);
 			persistentProcess.dispose();
 			this._ptys.delete(id);
 			this._onProcessExit.fire({ id, event });
@@ -366,7 +373,12 @@ export class PtyService extends Disposable implements IPtyService {
 	@traceRpc
 	async attachToProcess(id: number): Promise<void> {
 		try {
-			await this._throwIfNoPty(id).attach();
+			const persistentProcess = this._throwIfNoPty(id);
+			// Facade Code: an agent's process is one window's (`mayAttachProcess`; N-68)
+			if (!await mayAttachProcess(persistentProcess)) {
+				throw new Error(`it is an agent's that another window has`);
+			}
+			await persistentProcess.attach();
 			this._logService.info(`Persistent process reconnection "${id}"`);
 		} catch (e) {
 			this._logService.warn(`Persistent process reconnection "${id}" failed`, e.message);
@@ -411,14 +423,56 @@ export class PtyService extends Disposable implements IPtyService {
 		}
 	}
 
+	/**
+	 * Facade Code: the persistent processes with reconnection properties - the agents' runs among them - that
+	 * exited in the last {@link EXITED_KEPT_MS}, at most {@link EXITED_KEPT_MAX}, with their codes.
+	 */
+	private readonly _exited: { readonly details: IProcessDetails; readonly at: number }[] = [];
+
+	private _rememberExit(id: number, persistentProcess: PersistentTerminalProcess, event: number | undefined): void {
+		const reconnectionProperties = persistentProcess.shellLaunchConfig.reconnectionProperties;
+		if (!persistentProcess.shouldPersistTerminal || !reconnectionProperties) {
+			return;
+		}
+		this._exited.push({
+			at: Date.now(),
+			details: {
+				id,
+				pid: persistentProcess.pid,
+				title: persistentProcess.title,
+				titleSource: persistentProcess.titleSource,
+				cwd: '',
+				workspaceId: persistentProcess.workspaceId,
+				workspaceName: persistentProcess.workspaceName,
+				isOrphan: false,
+				icon: persistentProcess.icon,
+				color: persistentProcess.color,
+				fixedDimensions: persistentProcess.fixedDimensions,
+				environmentVariableCollections: undefined,
+				reconnectionProperties,
+				hasChildProcesses: false,
+				shellIntegrationNonce: persistentProcess.processLaunchOptions.options.shellIntegration.nonce,
+				...(typeof event === 'number' ? { exitCode: event } : {})
+			}
+		});
+		this._exited.splice(0, Math.max(0, this._exited.length - EXITED_KEPT_MAX));
+	}
+
 	@traceRpc
-	async listProcesses(): Promise<IProcessDetails[]> {
+	async listProcesses(options?: IListProcessesOptions): Promise<IProcessDetails[]> {
+		if (options?.exited) {
+			const since = Date.now() - EXITED_KEPT_MS;
+			const kept = this._exited.findIndex(each => each.at >= since);
+			this._exited.splice(0, kept === -1 ? this._exited.length : kept);
+			return this._exited.map(each => ({ ...each.details }));
+		}
 		const persistentProcesses = Array.from(this._ptys.entries()).filter(([_, pty]) => pty.shouldPersistTerminal);
 
 		this._logService.info(`Listing ${persistentProcesses.length} persistent terminals, ${this._ptys.size} total terminals`);
 		const promises = persistentProcesses.map(async ([id, terminalProcessData]) => this._buildProcessDetails(id, terminalProcessData));
 		const allTerminals = await Promise.all(promises);
-		return allTerminals.filter(entry => entry.isOrphan);
+		// Facade Code: with `attached`, every one, each saying whether it is an orphan
+		return options?.attached ? allTerminals : allTerminals.filter(entry => entry.isOrphan);
 	}
 
 	@traceRpc

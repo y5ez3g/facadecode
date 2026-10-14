@@ -86,6 +86,11 @@ export class ActionWidgetDropdownActionViewItem extends BaseActionViewItem {
 		this.actionWidgetDropdown?.show();
 	}
 
+	/** Whether its dropdown is open. */
+	isOpen(): boolean {
+		return !!this.actionWidgetDropdown?.isVisible();
+	}
+
 	hide(): void {
 		this.actionWidgetDropdown?.hide();
 	}

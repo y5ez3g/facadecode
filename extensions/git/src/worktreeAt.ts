@@ -439,15 +439,17 @@ async function hasCommits(git: IWorktreeGit, root: string): Promise<boolean> {
 }
 
 /**
- * `git worktree add -b <branch> <worktreePath> <startPoint>` in `root`, then `.worktreeinclude`.
- * The start point is `HEAD` unless a commit is given, as Facade's agents do for a child's worktree,
- * which starts at its parent worktree's HEAD (WORKTREE.md, WT-5.11).
+ * `git worktree add -b <branch> <worktreePath> <startPoint>` in `root`, then `.worktreeinclude` - and
+ * what `included` names: the paths in `root` that VS Code's `git.worktreeIncludeFiles` names, as the
+ * repository finds them for its own Create Worktree, so that a worktree gets the same files whichever
+ * way it is made. The start point is `HEAD` unless a commit is given, as Facade's agents do for a
+ * child's worktree, which starts at its parent worktree's HEAD (WORKTREE.md, WT-5.11).
  *
  * With `GIT_LFS_SKIP_SMUDGE=1`, so an LFS object that is missing does not fail the whole checkout
  * (WORKTREE.md WT-4), then `git lfs checkout` to put back the objects that are here - it
  * downloads nothing.
  */
-export async function createWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, branch: string, startPoint?: string): Promise<CreateWorktreeAtResult> {
+export async function createWorktreeAt(git: IWorktreeGit, root: string, worktreePath: string, branch: string, startPoint?: string, included?: () => Promise<Iterable<string>>): Promise<CreateWorktreeAtResult> {
 	const refused = validateArguments([root, worktreePath]);
 	if (refused) {
 		return refused;
@@ -506,6 +508,14 @@ export async function createWorktreeAt(git: IWorktreeGit, root: string, worktree
 	} catch (err) {
 		// The worktree is usable; a failed copy is reported, not fatal.
 		copyFailures = [`.worktreeinclude: ${toError(err).message}`];
+	}
+
+	if (included) {
+		try {
+			copyFailures = [...copyFailures, ...await copyIntoWorktree(root, worktreePath, inRepository(root, await included()))];
+		} catch (err) {
+			copyFailures = [...copyFailures, `git.worktreeIncludeFiles: ${toError(err).message}`];
+		}
 	}
 
 	return { kind: 'created', copyFailures, hookFailure };
@@ -850,9 +860,19 @@ export async function reachesThroughLink(base: string, relative: string, itself:
 	return false;
 }
 
+/** Whether the worktree at `worktreePath` is there: its folder, with the `.git` file git gave it. */
+async function isWorktreeThere(worktreePath: string): Promise<boolean> {
+	try {
+		await fs.lstat(path.join(worktreePath, '.git'));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
- * Copies into the new worktree the ignored files `.worktreeinclude` names, never over a file or through
- * a link (WORKTREE.md WT-6). Returns what failed to copy.
+ * Copies into the new worktree the ignored files `.worktreeinclude` names, as `copyIntoWorktree` copies
+ * (WORKTREE.md WT-6). Returns what failed to copy.
  */
 async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath: string): Promise<readonly string[]> {
 	let content: string;
@@ -875,20 +895,52 @@ async function copyWorktreeInclude(git: IWorktreeGit, root: string, worktreePath
 	const { stdout } = await git.exec(root, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', ...pathspecs]);
 	const candidates = stdout.split('\0').filter(entry => entry.length > 0);
 
-	const failures: string[] = [];
-	for (const relative of candidates) {
-		if (!isWorktreeIncluded(rules, relative, false)) {
-			continue;
-		}
+	return copyIntoWorktree(root, worktreePath, candidates.filter(relative => isWorktreeIncluded(rules, relative, false)));
+}
 
+/** `paths`, absolute, relative to `root` with `/`: those in it alone. */
+function inRepository(root: string, paths: Iterable<string>): string[] {
+	const relatives: string[] = [];
+	for (const each of paths) {
+		const relative = path.relative(root, each);
+		if (relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+			relatives.push(relative.split(path.sep).join('/'));
+		}
+	}
+	return relatives;
+}
+
+/**
+ * Copies `files` - each relative to `root` with `/`, a file or a folder with what is in it - into the new worktree:
+ * over nothing that is there already, nothing through a link or a junction on either side (WORKTREE.md WT-6.3), and
+ * nothing into a folder that is no worktree any more, deleted while git made it: copying would make it again, holding
+ * the copies (N-66). Returns what failed to copy.
+ */
+async function copyIntoWorktree(root: string, worktreePath: string, files: readonly string[]): Promise<readonly string[]> {
+	const failures: string[] = [];
+	for (const relative of files) {
+		if (!await isWorktreeThere(worktreePath)) {
+			break;
+		}
 		try {
-			if (await reachesThroughLink(root, relative, true) || await reachesThroughLink(worktreePath, relative, false)) {
+			if (await reachesThroughLink(root, relative, true)) {
+				continue;
+			}
+
+			// A folder already there is copied into: one that is a link is not
+			const source = path.join(root, relative);
+			const isDirectory = (await fs.lstat(source)).isDirectory();
+			if (await reachesThroughLink(worktreePath, relative, isDirectory)) {
 				continue;
 			}
 
 			const target = path.join(worktreePath, relative);
 			await fs.mkdir(path.dirname(target), { recursive: true });
-			await fs.copyFile(path.join(root, relative), target, fsConstants.COPYFILE_EXCL);
+			if (isDirectory) {
+				await fs.cp(source, target, { recursive: true, force: false, errorOnExist: false, filter: async from => !(await fs.lstat(from)).isSymbolicLink() });
+			} else {
+				await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
+			}
 		} catch (err) {
 			if ((err as { code?: string }).code !== 'EEXIST') {
 				failures.push(relative);

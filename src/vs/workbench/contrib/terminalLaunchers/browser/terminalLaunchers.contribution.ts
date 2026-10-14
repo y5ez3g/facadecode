@@ -4,12 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './media/agentIcons.css';
-import { localize } from '../../../../nls.js';
-import { ConfigurationScope, Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
-import { workbenchConfigurationNodeBase } from '../../../common/configuration.js';
+import { ConfigurationKeyValuePairs, Extensions as WorkbenchExtensions, IConfigurationMigrationRegistry } from '../../../common/configuration.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
-import { AGENTS_SETTING } from '../common/terminalLaunchers.js';
 import { registerTerminalLauncherActions } from './terminalLauncherActions.js';
 import './terminalLauncherService.js';
 import { TerminalLauncherMenu } from './terminalLauncherMenu.js';
@@ -26,32 +23,12 @@ registerWorkbenchContribution2(TerminalLauncherMenu.ID, TerminalLauncherMenu, Wo
 registerWorkbenchContribution2(TerminalLauncherWorkspaceBar.ID, TerminalLauncherWorkspaceBar, WorkbenchPhase.AfterRestored);
 registerWorkbenchContribution2(RunningWorkShutdownQuestion.ID, RunningWorkShutdownQuestion, WorkbenchPhase.AfterRestored);
 
-Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
-	...workbenchConfigurationNodeBase,
-	properties: {
-		[AGENTS_SETTING]: {
-			type: 'array',
-			description: localize('agents.description', "The agents in the Agent menu. Each one opens a terminal in the current folder and runs its command there. The Configure Agents command edits this list."),
-			default: [],
-			scope: ConfigurationScope.APPLICATION,
-			items: {
-				type: 'object',
-				required: ['id', 'command'],
-				properties: {
-					id: {
-						type: 'string',
-						description: localize('agents.id', "Identifies the agent. An entry whose id repeats an earlier one is ignored.")
-					},
-					label: {
-						type: 'string',
-						description: localize('agents.label', "The name shown in the list. Defaults to the id.")
-					},
-					command: {
-						type: 'string',
-						description: localize('agents.command', "The command line run in the new terminal. Leave empty to open a shell and run nothing.")
-					}
-				}
-			}
-		}
-	}
-});
+// The agent menu once kept a list of agents of its own under `facade.agents`, which is where the agents'
+// settings are now (AGENT-LAUNCHER.md, L7): the built-ins are found as the menu opens, and a list left
+// there would hide them, so it goes.
+Registry.as<IConfigurationMigrationRegistry>(WorkbenchExtensions.ConfigurationMigration)
+	.registerConfigurationMigrations([{
+		key: 'facade.agents',
+		includeApplication: true,
+		migrateFn: (value: unknown): ConfigurationKeyValuePairs => Array.isArray(value) ? [['facade.agents', { value: undefined }]] : []
+	}]);

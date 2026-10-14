@@ -38,6 +38,7 @@ import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IPickOptions, IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
 import { TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
 import { ITerminalProfile, TerminalExitReason, TerminalIcon, TerminalLocation, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
+import { IProcessDetails } from '../../../../platform/terminal/common/terminalProcess.js';
 import { createProfileSchemaEnums } from '../../../../platform/terminal/common/terminalProfiles.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
@@ -64,6 +65,7 @@ import { ITerminalQuickPickItem } from './terminalProfileQuickpick.js';
 import { TerminalTabList } from './terminalTabsList.js';
 import { ResourceContextKey } from '../../../common/contextkeys.js';
 import { SeparatorSelectOption } from '../../../../base/browser/ui/selectBox/selectBox.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 export const switchTerminalShowTabsTitle = localize('showTerminalTabs', "Show Tabs");
 
@@ -108,6 +110,27 @@ export async function getCwdForSplit(
 		case 'inherited':
 			return instance.getSpeculativeCwd();
 	}
+}
+
+/**
+ * Splits the active terminal, the new one starting where `terminal.integrated.splitCwd` says. What it needs of
+ * `accessor` is read before its first await, after which the accessor is no longer valid (N-74).
+ */
+export async function splitActiveTerminal(c: ITerminalServicesCollection, accessor: ServicesAccessor, args?: unknown): Promise<void> {
+	const optionsOrProfile = isObject(args) ? args as ICreateTerminalOptions | ITerminalProfile : undefined;
+	const workspaceContextService = accessor.get(IWorkspaceContextService);
+	const activeFolderService = accessor.get(IActiveFolderService);
+	const options = convertOptionsOrProfileToOptions(optionsOrProfile);
+	const activeInstance = (await c.service.getInstanceHost(options?.location)).activeInstance;
+	if (!activeInstance) {
+		return;
+	}
+	const cwd = await getCwdForSplit(activeInstance, workspaceContextService.getWorkspace().folders, activeFolderService.activeFolder, c.configService);
+	if (cwd === undefined) {
+		return;
+	}
+	const instance = await c.service.createTerminal({ location: { parentTerminal: activeInstance }, config: options?.config, cwd });
+	await focusActiveTerminal(instance, c);
 }
 
 export class TerminalLaunchHelpAction extends Action {
@@ -809,7 +832,9 @@ export function registerTerminalActions() {
 	registerActiveInstanceAction({
 		id: TerminalCommandId.DetachSession,
 		title: localize2('workbench.action.terminal.detachSession', 'Detach Session'),
-		run: (activeInstance) => activeInstance.detachProcessAndDispose(TerminalExitReason.User)
+		// Facade Code: not for an agent's run, which stays in its window (`isFacadeRunTerminal`)
+		precondition: ContextKeyExpr.and(TerminalContextKeys.processSupported, TerminalContextKeys.facadeRun.negate()),
+		run: (activeInstance) => isFacadeRunTerminal(activeInstance) ? undefined : activeInstance.detachProcessAndDispose(TerminalExitReason.User)
 	});
 
 	registerTerminalAction({
@@ -832,7 +857,7 @@ export function registerTerminalActions() {
 
 			backend.reduceConnectionGraceTime();
 
-			const unattachedTerms = terms.filter(term => !c.service.isAttachedToTerminal(term));
+			const unattachedTerms = attachableProcesses(terms, term => c.service.isAttachedToTerminal(term));
 			const items = unattachedTerms.map(term => {
 				const cwdLabel = labelService.getUriLabel(URI.file(term.cwd));
 				return {
@@ -1036,7 +1061,9 @@ export function registerTerminalActions() {
 	registerActiveInstanceAction({
 		id: TerminalCommandId.Relaunch,
 		title: localize2('workbench.action.terminal.relaunch', 'Relaunch Active Terminal'),
-		run: (activeInstance) => activeInstance.relaunch()
+		// Facade Code: not for an agent's run, which a relaunch would run again (`isFacadeRunTerminal`)
+		precondition: ContextKeyExpr.and(TerminalContextKeys.processSupported, TerminalContextKeys.facadeRun.negate()),
+		run: (activeInstance) => isFacadeRunTerminal(activeInstance) ? undefined : activeInstance.relaunch()
 	});
 
 	registerTerminalAction({
@@ -1053,21 +1080,7 @@ export function registerTerminalActions() {
 			when: TerminalContextKeys.focus
 		},
 		icon: Codicon.splitHorizontal,
-		run: async (c, accessor, args) => {
-			const optionsOrProfile = isObject(args) ? args as ICreateTerminalOptions | ITerminalProfile : undefined;
-			const workspaceContextService = accessor.get(IWorkspaceContextService);
-			const options = convertOptionsOrProfileToOptions(optionsOrProfile);
-			const activeInstance = (await c.service.getInstanceHost(options?.location)).activeInstance;
-			if (!activeInstance) {
-				return;
-			}
-			const cwd = await getCwdForSplit(activeInstance, workspaceContextService.getWorkspace().folders, accessor.get(IActiveFolderService).activeFolder, c.configService);
-			if (cwd === undefined) {
-				return;
-			}
-			const instance = await c.service.createTerminal({ location: { parentTerminal: activeInstance }, config: options?.config, cwd });
-			await focusActiveTerminal(instance, c);
-		}
+		run: (c, accessor, args) => splitActiveTerminal(c, accessor, args)
 	});
 
 	registerTerminalAction({
@@ -1734,6 +1747,15 @@ async function resolveWorkspaceFolderCwd(folder: IWorkspaceFolder, configuration
 /**
  * Drops repeated CWDs, if any, by keeping the one which best matches the workspace folder. It also preserves the original order.
  */
+/**
+ * The processes Attach to Session offers: those no terminal of this window is attached to - and, Facade Code,
+ * none of an agent's run, which stays in its window, that window taking it back after a reload or a crash
+ * (`isFacadeRunTerminal`; X-32).
+ */
+export function attachableProcesses<T extends IProcessDetails>(processes: readonly T[], isAttached: (process: T) => boolean): T[] {
+	return processes.filter(process => !isAttached(process) && !isFacadeRunTerminal(process));
+}
+
 export function shrinkWorkspaceFolderCwdPairs(pairs: WorkspaceFolderCwdPair[]): WorkspaceFolderCwdPair[] {
 	const map = new Map<string, WorkspaceFolderCwdPair>();
 	for (const pair of pairs) {

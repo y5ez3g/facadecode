@@ -264,18 +264,22 @@ available with the agent framework disabled.
 
 The hello instructions, Facade skill and tool descriptions teach this workflow:
 
-1. Use messages for tasks, results and questions. Wait for replies through the
-   mailbox instead of repeatedly reading a healthy child's screen.
+1. Use messages for agent-to-agent tasks, results and questions. Wait for replies
+   through the mailbox instead of repeatedly reading a healthy child's screen.
 2. Inspect a failed or unconfirmed start, a task not fetched, a delayed message,
    an unexpected exit, or a run whose silence suggests an interactive problem.
 3. Read before sending keys. Decide what the displayed CLI needs; do not infer it
    from a run title or a previous screen that may have changed.
 4. Type or press the smallest useful sequence, then inspect the returned screen.
    Continue an intentional debug loop when needed.
-5. If actual information is missing, ask the creator by message. Escalate up the
-   creator chain; the root asks the person in ordinary text in their terminal.
+5. If actual information is missing, follow M8: children ask their creator by
+   message, a UI-started agent asks through its normal CLI interaction, and a root
+   started through start_agent asks @human by message.
 
-Blocking question tools are disabled under L4, including for human-created roots.
+L4's supported blocking-question suppressions apply only to start_agent runs,
+including roots started by the person's scripts. UI-started agents keep their
+normal question tools.
+
 If an unavoidable vendor prompt still appears in a child, its creator uses these
 tools to resolve it from the available context. Do not send the person to click
 a child's AskUserQuestion button. A login or credential that only the person can

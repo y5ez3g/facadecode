@@ -1152,6 +1152,32 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		});
 	});
 
+	test('a reveal that may not join leaves a terminal held for a row that has not joined where it is: the workspace and the window stay as they are', async () => {
+		const alpha = folder('alpha');
+		const p1 = folder('p1');
+		const column = new TestGroup(0, []);
+		const { terminals, folders, context, bar, folderTerminals } = setup([column], []);
+		context.folders = [alpha];
+		folders.activeFolder = alpha;
+		bar.rows.push(p1.uri);
+		bar.moving = async () => {
+			context.addFolder(p1);
+			await folders.switchTo(p1);
+		};
+
+		const agent = await folderTerminals.openFor(p1.uri, { name: 'agent' });
+		const inFront = await folderTerminals.reveal(agent, { join: false });
+
+		assert.deepStrictEqual({ inFront, moves: bar.moves, tabs: column.names(), revealed: terminals.revealed, held: folderTerminals.terminalsOf(p1.uri).includes(agent), joined: context.folders.map(each => each.name) }, {
+			inFront: false,
+			moves: [],
+			tabs: [],
+			revealed: [],
+			held: true,
+			joined: ['alpha'],
+		});
+	});
+
 	test('revealing a terminal on its way with the window to the next folder puts it in front once that folder\'s editors are up, without moving the window', async () => {
 		const alpha = folder('alpha');
 		const beta = folder('beta');
@@ -1534,6 +1560,31 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 		await timeout(0);
 
 		assert.deepStrictEqual({ ended: (agent as unknown as TestInstance).disposed, held: folderTerminals.terminalsOf(p1).length }, { ended: true, held: 0 });
+	});
+
+	test('a terminal it ends says why, for an agent\'s run to say so: its folder left the workspace, or its worktree is gone from the disk; the person\'s own shell it leaves says nothing (AGENT-LAUNCHER.md, L6; LA-06)', async () => {
+		const alpha = folder('alpha');
+		const beta = folder('beta');
+		const p1 = URI.file('/w/p1');
+		const shell = new TestInstance('shell');
+		const { folders, context, bar, folderTerminals, files } = setup([new TestGroup(0, [tabFor(shell)])], [shell]);
+		context.folders = [alpha, beta];
+		onScreen(folders, bar, alpha);
+		bar.members = [alpha, beta];
+		bar.rows.push(p1);
+		const removed = await folderTerminals.openFor(beta.uri, { name: 'removed' });
+		const gone = await folderTerminals.openFor(p1, { name: 'gone' });
+
+		context.removeFolder(beta);
+		files.gone.add('/w/p1/.git');
+		bar.read([]);
+		await timeout(0);
+
+		assert.deepStrictEqual([removed, gone, shell.asInstance()].map(instance => [(instance as unknown as TestInstance).name, (instance as unknown as TestInstance).exitReason, folderTerminals.endedBecause(instance)]), [
+			['removed', TerminalExitReason.User, 'folderRemoved'],
+			['gone', TerminalExitReason.User, 'folderGone'],
+			['shell', undefined, undefined],
+		]);
 	});
 
 	test('a row that joined the workspace while the window was closed is that folder after a reload: taking it out then ends its terminals', async () => {

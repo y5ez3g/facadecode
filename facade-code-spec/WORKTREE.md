@@ -7,7 +7,7 @@ Opening one adds it to the normal workspace folder list when necessary.
 [WORKSPACE.md](WORKSPACE.md) owns folder switching, editors, terminals and window
 lifetime. [ACTIVITY-BAR.md](ACTIVITY-BAR.md) defines the separate view icon bar.
 W references below refer to WORKSPACE.md. This document owns the Git
-operations and their effects on disk. [AGENT-FRAMEWORK.md](AGENT-FRAMEWORK.md) owns
+operations and their effects on disk. [AGENT-LAUNCHER.md](AGENT-LAUNCHER.md) owns
 agent lifetime, including agents working in directories outside the folder list.
 
 WT rule numbers remain stable so code and tests can cite them. Acceptance cases
@@ -25,7 +25,7 @@ workspace.** Everything the workspace does for a folder - fast switching, editor
 terminals kept per folder, source control and search narrowed to it - works for a
 worktree with no new code. This part adds only what is about git. The top-level row is
 a **folder**; the second level is a **worktree**. Worktrees agents make are
-AGENT-FRAMEWORK.md's beyond how they are made (WT-5.11).
+AGENT-ORCHESTRATION.md's beyond how they are made (WT-5.11).
 
 | Decision | Choice |
 | --- | --- |
@@ -189,7 +189,7 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   no `.gitignore` entry, no `.git/info/exclude` entry and no `files.exclude` default.
   Git necessarily writes branch and worktree metadata in the shared Git directory. While agents run in
   a worktree, the files put there for them get `info/exclude` lines that go with them
-  (AGENT-FRAMEWORK.md, 1.7).
+  (AGENT-ORCHESTRATION.md, O10).
 - **WT-2.5** No `core.longpaths` and no path-length check. A path too long for Windows
   fails with git's own "Filename too long", said on screen.
 
@@ -373,12 +373,19 @@ palette (New Worktree...).
   row still at work is a second click, and does nothing. The worktrees agents ask for
   in one repository are made one after another, none refused because another is being
   made; a New Worktree the person asks for meanwhile goes once the agent's is made.
-- **WT-5.11** An agent's worktree (AGENT-FRAMEWORK.md, 1.3) is made through
-  `_facade.worktree.create` by the same service, without the dialog: from the parent
-  worktree's HEAD; refused, with the reason, in an untrusted workspace or repository
-  and in a folder with no commit, rather than trusted or prepared (WT-5.8); the window
-  stays where it is unless asked to show the worktree; setup runs at once, in a
-  terminal of its own, revealed - not held under the worktree's row as an agent's is.
+- **WT-5.11** An agent's worktree (AGENT-ORCHESTRATION.md, O3 and O4) is made through
+  `_facade.worktree.create` by the same service, without the dialog, at the commit the
+  start resolved when it was accepted: the caller's HEAD, or, in another repository,
+  that repository's main checkout's HEAD. It is refused, with the reason, in an
+  untrusted workspace or repository and in a folder with no commit, rather than
+  trusted or prepared (WT-5.8). It does not join `folders[]` and the window stays where
+  it is: the worktree shows on the bar as any worktree git records (WT-1.3). Setup runs
+  at once, in a terminal of its own held under the worktree's row, not revealed, once
+  the repository's queue (WT-5.10) has moved on. The command answers once the worktree
+  is made and its setup started; the setup's outcome is asked for apart: with shell
+  integration, each line's exit code once the last has finished; without it, that the
+  lines were sent, their completion unknown. A start cancelled meanwhile closes the
+  setup terminal; the worktree stays.
 
 ## WT-6. Copying local files with `.worktreeinclude`
 
@@ -531,6 +538,19 @@ Prepare and perform a deletion in this order:
   moving off it. Resolve that suppression against a fresh Git/filesystem read.
   Success never flashes the old row back; a partial or unknown outcome is said in its
   notification (WT-8.6), even when Git no longer has a record.
+- **WT-8.10** An agent's deletion (AGENT-ORCHESTRATION.md, O5) goes through
+  `_facade.worktree.delete` by the same service, in the same order. Steps 1 and 2 come
+  first: a lock refuses it, and so do files that would be lost - besides what Facade put
+  there for agents and nobody changed (AGENT-ORCHESTRATION.md, O10) - and unsaved
+  editors, listed, unless the call says to discard them. Asking for the deletion in the
+  call is step 3's confirmation; nothing is asked. With the repository's main checkout
+  gone, step 4 goes back to the folder the person was on before (AGENT-ORCHESTRATION.md,
+  O5). Step 5 discards unsaved content only where the call said to, and a loss step 6
+  finds that the call did not decide on refuses the deletion rather than asking. It is
+  refused, with the reason, for a main checkout and in Restricted Mode, rather than trust
+  asked for; its progress is in the status bar; and its outcome is the call's answer, not
+  a notification, saying what was done as WT-8.6 says it. A directory left behind is
+  deleted on the caller's retry by the recovery this window holds for it (WT-4.5).
 
 ## WT-9. The switch
 
@@ -601,7 +621,7 @@ injection and integrated gate.
 | WTA-15 | U, I | Branch exists; branch checked out in another worktree; path exists; invalid branch name; unsafe repository; inherited `GIT_DIR`; git extension not running; Restricted Mode; an untrusted repository | WT-5.1, WT-5.3, WT-5.5: each said on screen in the product's words; Switch to Worktree only for a checked-out branch; trust asked before git runs; nothing runs without it |
 | WTA-16 | U, I | The first worktree of a plain folder, of a repository with no commit, of a folder inside another repository; without a git identity; with an `includeIf` identity; a branch git refuses | WT-5.8: Initialize and Create with the file count; nothing changes before it is pressed; disabled with how-to without an identity; the refused branch is said before anything changes |
 | WTA-17 | U, I | Two New Worktree clicks; two agents asking at once; New Worktree while an agent's is being made | WT-5.10 |
-| WTA-18 | U, I | An agent's worktree from a given commit; with a start point that is not a full id; untrusted workspace; untrusted repository; no commit; `show` true and false | WT-5.11 and WT-4: no dialog; refused with reasons; the window stays unless asked; setup in its own revealed terminal |
+| WTA-18 | U, I | An agent's worktree from a given commit; with a start point that is not a full id; untrusted workspace; untrusted repository; no commit; `show` true and false | WT-5.11 and WT-4: no dialog; refused with reasons; the window stays and `folders[]` is unchanged unless asked; setup in a terminal held under its row, not revealed, its outcome asked for apart |
 | WTA-19 | U | `_git.createWorktreeAt` with LFS objects present and missing, a failing post-checkout hook, a failure after `-b`, an existing branch | WT-4: LFS skipped then checked out from local objects; the hook warning keeps the worktree; only its own branch deleted; failures returned, never thrown |
 | WTA-20 | U | `.worktreeinclude` with files, a wholly ignored directory, tracked and unignored files, a link, a file git checked out, an unreadable file | WT-6: only ignored and included paths copied; nothing overwritten; links skipped; one warning counting failures |
 | WTA-21 | U, I | `worktrees.json` with each OS key, only the common key, an empty list, invalid JSON, a non-string; in the worktree and only in the main checkout; with and without shell integration; close the terminal midway | WT-7: the right lines, in order, in one revealed "Worktree Setup" terminal with `ROOT_WORKTREE_PATH`; one warning and nothing run when invalid; no terminal for an empty list; the rest stop when closed |

@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
+import { FacadeError } from '../core/errors';
 
 /** A temporary folder, real path, removed by the returned function. */
 export function tempDir(prefix: string): { dir: string; remove(): void } {
@@ -55,6 +56,16 @@ export async function outcomeOf(promise: Promise<unknown>): Promise<string> {
 	} catch (err) {
 		const code = codeOf(err);
 		return code ? `${code}: ${messageOf(err)}` : messageOf(err);
+	}
+}
+
+/** What a call failed with: its code, its message, and the facts its data holds. */
+export async function failureOf(promise: Promise<unknown>): Promise<{ readonly code: string; readonly message: string; readonly data: unknown } | 'fulfilled'> {
+	try {
+		await promise;
+		return 'fulfilled';
+	} catch (err) {
+		return err instanceof FacadeError ? { code: err.code, message: err.message, data: err.outcome } : { code: 'none', message: String(err), data: undefined };
 	}
 }
 

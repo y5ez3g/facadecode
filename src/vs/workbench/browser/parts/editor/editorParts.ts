@@ -8,7 +8,7 @@ import { EditorGroupLayout, GroupActivationReason, GroupDirection, GroupLocation
 import { Emitter } from '../../../../base/common/event.js';
 import { DisposableMap, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { GroupIdentifier, IEditorPartOptions } from '../../../common/editor.js';
-import { EditorPart, IEditorPartUIState, MainEditorPart } from './editorPart.js';
+import { EditorPart, IEditorPartUIState, isEmptiedByRestore, isGoingWithItsEditors, MainEditorPart } from './editorPart.js';
 import { IEditorGroupView, IEditorPartsView } from './editor.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
@@ -510,7 +510,9 @@ export class EditorParts extends MultiWindowParts<EditorPart, IEditorPartsMement
 		return {
 			auxiliary: this.parts
 				.map(part => ({ part, auxiliaryWindow: this.auxiliaryWindowService.getWindow(part.windowId) }))
-				.filter(({ auxiliaryWindow }) => auxiliaryWindow !== undefined)
+				// Facade Code: not a floating window going with its editors, each one disposed: kept in a folder's
+				// working set, it would come back empty with the folder, one more each round trip (N-87)
+				.filter(({ part, auxiliaryWindow }) => auxiliaryWindow !== undefined && !isGoingWithItsEditors(part.groups))
 				.map(({ part, auxiliaryWindow }) => ({
 					state: part.createState(),
 					...auxiliaryWindow!.createState()
@@ -540,6 +542,15 @@ export class EditorParts extends MultiWindowParts<EditorPart, IEditorPartsMement
 
 			// Await ready
 			await Promise.allSettled(this.parts.map(part => part.whenReady));
+
+			// Facade Code: a floating window that came back emptied - it held only agents' tabs, whose agents ended with
+			// the app - is not kept open: an empty window per agent, for the person to close by hand (D10)
+			const created = await Promise.allSettled(auxiliaryEditorPartPromises);
+			created.forEach((result, index) => {
+				if (result.status === 'fulfilled' && isEmptiedByRestore(state.auxiliary[index].state, result.value)) {
+					result.value.close();
+				}
+			});
 		}
 	}
 

@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import './media/scm.css';
 import { Event, Emitter } from '../../../../base/common/event.js';
 import { basename, dirname } from '../../../../base/common/resources.js';
@@ -1441,7 +1440,6 @@ export class SCMViewPane extends ViewPane {
 		@IMenuService private readonly menuService: IMenuService,
 		@ISCMService private readonly scmService: ISCMService,
 		@ISCMViewService private readonly scmViewService: ISCMViewService,
-		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
 		@IStorageService private readonly storageService: IStorageService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IKeybindingService keybindingService: IKeybindingService,
@@ -1492,8 +1490,10 @@ export class SCMViewPane extends ViewPane {
 			this.storeTreeViewState();
 		}, this, this.disposables);
 
-		// ⚠️ And a switch, which changes the answer without any repository arriving or leaving.
-		Event.any<unknown>(this.scmService.onDidAddRepository, this.scmService.onDidRemoveRepository, this.activeFolderService.onDidChangeActiveFolder)(() => this._onDidChangeViewWelcomeState.fire(), this, this.disposables);
+		// ⚠️ And a switch, which changes the answer without any repository arriving or leaving. Asked once the view
+		// service has the change: a pane that heard of a repository from the SCM service before the view service
+		// did - made later, it listens later - found none, and drew GitHub's welcome over its rows (N-46).
+		this.scmViewService.onDidChangeFolderRepositories(() => this._onDidChangeViewWelcomeState.fire(), this, this.disposables);
 
 		this.disposables.add(this.revealResourceThrottler);
 		this.disposables.add(this.updateChildrenThrottler);

@@ -8,6 +8,14 @@ export function messageOf(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * A sentence as a clause, to be put in a sentence of one's own: without the full stop it ends with. Quoted
+ * whole, one read "(… did not run.)." or "… choose another name.. Show Agent Launch shows them." (N-52, N-56).
+ */
+export function clauseOf(sentence: string): string {
+	return sentence.replace(/\.\s*$/, '');
+}
+
 /** The stack of an error where it has one, for the log. */
 export function stackOf(err: unknown): string {
 	return err instanceof Error ? err.stack ?? err.message : String(err);

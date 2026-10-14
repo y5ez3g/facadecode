@@ -164,7 +164,7 @@ export class McpStdioServer {
 				const instructions = await this.options.instructions();
 				return {
 					protocolVersion: this.protocolVersion,
-					capabilities: { tools: { listChanged: false } },
+					capabilities: { tools: { listChanged: true } },
 					serverInfo: { name: this.options.name, version: this.options.version },
 					...(instructions ? { instructions } : {})
 				};
@@ -233,6 +233,11 @@ export class McpStdioServer {
 			...(this.isStructured() && result.data !== undefined ? { structuredContent: result.data } : {}),
 			...(result.isError ? { isError: true } : {})
 		};
+	}
+
+	/** Tells the client the tools changed, for it to list them again: as the window comes that was not there. */
+	toolsChanged(): void {
+		this.send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
 	}
 
 	private send(message: object): void {

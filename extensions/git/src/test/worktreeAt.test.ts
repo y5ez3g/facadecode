@@ -120,6 +120,29 @@ suite('worktreeAt', () => {
 		});
 	});
 
+	test('copies what `git.worktreeIncludeFiles` names as well - files and folders, as VS Code\'s own Create Worktree copies them - beside what .worktreeinclude names, through no link, and says why it could not (AGENT-ORCHESTRATION.md, O4; VC-09)', async () => {
+		const outside = path.join(dir, 'outside');
+		write(path.join(outside, 'private.txt'), 'private\n');
+		symlinkSync(outside, path.join(main, '.cache'), 'junction');
+		write(path.join(main, '.worktreeinclude'), '.env\n');
+		const worktree = path.join(dir, 'worktrees', 'main', 'setting');
+		// As the repository finds them for the setting: the ignored files and folders it names, by their paths
+		const named = async () => ['app.local.json', 'secrets', '.env', '.cache'].map(file => path.join(main, file));
+
+		const result = await createWorktreeAt(git, main, worktree, 'setting', undefined, named);
+		const failed = await createWorktreeAt(git, main, path.join(dir, 'worktrees', 'main', 'failed'), 'failed', undefined, async () => { throw new Error('no file search'); });
+
+		assert.deepStrictEqual({
+			result,
+			failed,
+			files: Object.fromEntries(['.env', 'app.local.json', 'secrets/key.txt', '.cache', 'node_modules/dep/index.js'].map(file => [file, existsSync(path.join(worktree, file))]))
+		}, {
+			result: { kind: 'created', copyFailures: [], hookFailure: undefined },
+			failed: { kind: 'created', copyFailures: ['git.worktreeIncludeFiles: no file search'], hookFailure: undefined },
+			files: { '.env': true, 'app.local.json': true, 'secrets/key.txt': true, '.cache': false, 'node_modules/dep/index.js': false }
+		});
+	});
+
 	test('WTA-28 making a worktree adds no ignore entry and no setting, to the checkout or the worktree: only git\'s own record of it changes', async () => {
 		write(path.join(main, '.worktreeinclude'), '.env\n');
 		const read = (file: string) => existsSync(file) ? readFileSync(file, 'utf8') : undefined;
@@ -359,6 +382,48 @@ suite('worktreeAt', () => {
 			hookFailure: true,
 			listed: true,
 			branch: 'hooked',
+		});
+	});
+
+	test('a worktree deleted as git makes it - the person deleting it while its post-checkout hook runs - is not made again by the copy of what .worktreeinclude names: nothing goes into a folder that is no worktree (N-66)', async () => {
+		write(path.join(main, '.worktreeinclude'), '.env\nsecrets/\n');
+		const hook = path.join(main, '.git', 'hooks', 'post-checkout');
+		// The hook runs in the new worktree, which goes under it
+		write(hook, '#!/bin/sh\nrm -rf "$PWD"\n');
+		chmodSync(hook, 0o755);
+		const worktree = path.join(dir, 'worktrees', 'deleted');
+
+		const result = await createWorktreeAt(git, main, worktree, 'deleted');
+
+		assert.deepStrictEqual({ kind: result.kind, folder: existsSync(worktree) }, { kind: 'created', folder: false });
+	});
+
+	test('a create that fails takes the branch it made with it however few branches have its commit - a child\'s, at its parent worktree\'s HEAD; one it cannot take back, moved since or with git unable to say its worktree is gone, is kept and said, by name (AGENT-ORCHESTRATION.md, O4; OR-07)', async () => {
+		// A commit the main checkout's HEAD does not have, as a parent worktree's: `branch -d` refuses a branch at it
+		run(main, 'checkout', '-q', '-b', 'parent');
+		write(path.join(main, 'parent.txt'), 'parent\n');
+		run(main, 'add', 'parent.txt');
+		run(main, '-c', 'user.name=test', '-c', 'user.email=test@test', 'commit', '-q', '-m', 'parent');
+		const parent = run(main, 'rev-parse', 'HEAD');
+		run(main, 'checkout', '-q', 'main');
+		// A folder already at the path: git makes the branch, then refuses the path
+		const taken = path.join(dir, 'worktrees', 'taken');
+		write(path.join(taken, 'keep.txt'), 'keep\n');
+		// Git that will not take a branch back, and git that cannot list its worktrees
+		const unmoved: IWorktreeGit = { exec: (cwd, args, options) => args[0] === 'update-ref' ? Promise.reject(Object.assign(new Error('failed'), { stderr: 'fatal: cannot lock ref', exitCode: 128 })) : git.exec(cwd, args, options) };
+		const unlisted: IWorktreeGit = { exec: (cwd, args, options) => args[0] === 'worktree' && args[1] === 'list' ? Promise.reject(new Error('failed')) : git.exec(cwd, args, options) };
+
+		const failed = await createWorktreeAt(git, main, taken, 'child', parent);
+		const moved = await createWorktreeAt(unmoved, main, taken, 'moved', parent);
+		const unknown = await createWorktreeAt(unlisted, main, taken, 'unknown', parent);
+		const branches = run(main, 'branch', '--list', '--format=%(refname:short)', 'child', 'moved', 'unknown').split('\n').filter(Boolean);
+
+		assert.deepStrictEqual({
+			kept: [failed, moved, unknown].map(result => result.kind === 'error' ? /The branch '(?<branch>[^']+)' was preserved\.$/.exec(result.message)?.groups?.branch : result.kind),
+			branches,
+		}, {
+			kept: [undefined, 'moved', 'unknown'],
+			branches: ['moved', 'unknown'],
 		});
 	});
 

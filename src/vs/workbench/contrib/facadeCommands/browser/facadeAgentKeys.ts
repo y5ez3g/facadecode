@@ -7,8 +7,20 @@ import type { Terminal as RawXtermTerminal } from '@xterm/xterm';
 import { CharCode } from '../../../../base/common/charCode.js';
 
 /** What bracketed paste mode wraps a paste in, for the program to take it as one. */
-export const PASTE_START = '\x1b[200~';
-export const PASTE_END = '\x1b[201~';
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+
+/**
+ * What `raw` sends its process for `text` pasted, as its own paste path sends the person's paste (xterm's `paste`,
+ * which VS Code's Paste calls): line breaks as Enter, and in the bracketed-paste markers where the program turned
+ * that mode on and the person has not told the terminal to ignore it - `terminal.integrated.ignoreBracketedPasteMode`,
+ * which VS Code gives xterm as its `ignoreBracketedPasteMode` option - with no Escape inside them that could end the
+ * paste early. Never through xterm itself, whose paste the window takes as the person's typing.
+ */
+export function pasteSequence(raw: RawXtermTerminal | undefined, text: string): string {
+	const lines = text.replace(/\r?\n/g, '\r');
+	return raw?.modes.bracketedPasteMode && raw.options.ignoreBracketedPasteMode !== true ? `${PASTE_START}${lines.replace(/\x1b/g, '\u241b')}${PASTE_END}` : lines;
+}
 
 /** A key as a keyboard event gives it, for the terminal to encode, and as it is sent without the terminal's help. */
 interface INamedKey {
@@ -167,7 +179,7 @@ function pieceOfChar(code: number, shift: boolean, ctrl: boolean, altOrSuper: bo
  * The pieces of `data` that a terminal took in: each character typed, a bracketed paste as one, and each
  * escape sequence - a key such as the arrows, in the terminal's default encoding, the kitty keyboard
  * protocol's or win32 input mode's, or what the terminal answers a program with on its own: a cursor
- * position, focus coming and going, a color, its version.
+ * position, focus coming and going, the mouse - the old report's three bytes with it - a color, its version.
  */
 export function inputPieces(data: string): InputPiece[] {
 	const pieces: InputPiece[] = [];
@@ -189,6 +201,10 @@ export function inputPieces(data: string): InputPiece[] {
 			const end = data.indexOf(PASTE_END, i + PASTE_START.length);
 			pieces.push('text');
 			i = end === -1 ? data.length : end + PASTE_END.length;
+		} else if (next === '[' && data[i + 2] === 'M') {
+			// The old mouse report, X10's: its button and place are three bytes after it, which type nothing (N-86)
+			pieces.push('reply');
+			i += 6;
 		} else if (next === '[') {
 			// A control sequence, which ends at its final character
 			let end = i + 2;

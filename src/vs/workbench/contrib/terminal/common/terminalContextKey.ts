@@ -57,6 +57,14 @@ export namespace TerminalContextKeys {
 	 */
 	export const agentTerminal = new RawContextKey<boolean>('facadeAgentTerminal', false, localize('facadeAgentTerminalContextKey', "Whether the active terminal editor was started from the agent menu"));
 
+	/**
+	 * Whether the active terminal is an agent's run's, which stays in its window and is never relaunched.
+	 *
+	 * Bound by `contrib/facadeCommands`, which keeps the runs. Declared here so that the actions reading it
+	 * do not have to reach across into another contribution for a key.
+	 */
+	export const facadeRun = new RawContextKey<boolean>('facadeRunTerminal', false, localize('facadeRunTerminalContextKey', "Whether the active terminal runs an agent Facade started."));
+
 	/** Whether the terminal is focused. */
 	export const focus = new RawContextKey<boolean>(TerminalContextKeyStrings.Focus, false, localize('terminalFocusContextKey', "Whether the terminal is focused."));
 

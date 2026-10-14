@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { replaceFile } from '../base/files';
-import { Agent, PERSON, rootOf, WorkspaceState } from './events';
+import { AgentIdentity, describe, isLive, PERSON, WorkspaceState } from './events';
 import { FACADE, HUMAN, Message, MessageRecord, Recipient } from './messages';
 
 /** The record's folder of chat rooms. */
@@ -17,7 +17,9 @@ const ROOMS_DIR = 'rooms';
 export interface ChatRoom {
 	readonly file: string;
 	/** The agent the person started, whose tree it is. */
-	readonly root: Agent;
+	readonly root: AgentIdentity;
+	/** Whether that agent has not ended. */
+	readonly live: boolean;
 	/** How many messages it has. */
 	readonly messages: number;
 	/** When its last message came. */
@@ -85,7 +87,7 @@ export class ChatRooms {
 	/** The rooms there are, the one with the latest message first. */
 	list(): ChatRoom[] {
 		const state = this.state();
-		const rooms = new Map<number, { root: Agent; messages: number; lastTime: number; last: number }>();
+		const rooms = new Map<number, { root: AgentIdentity; messages: number; lastTime: number; last: number }>();
 		for (const line of state.mail.roomLines) {
 			const message = line.unreturned ? undefined : state.mail.messages.get(line.message);
 			for (const root of message ? rootsOf(state, message) : []) {
@@ -98,15 +100,15 @@ export class ChatRooms {
 		}
 		return [...rooms.values()]
 			.sort((a, b) => b.last - a.last)
-			.map(({ root, messages, lastTime }) => ({ file: this.fileOf(root), root, messages, lastTime }));
+			.map(({ root, messages, lastTime }) => ({ file: this.fileOf(root), root, live: isLive(state.agents.get(root.id)), messages, lastTime }));
 	}
 
 	/** The room a message is shown in: of its sender's tree, for one to the person; else of its recipient's. */
 	roomOf(message: Message): string | undefined {
 		const state = this.state();
 		const roots = rootsOf(state, message);
-		const recipient = typeof message.to === 'number' ? state.agents.get(message.to) : undefined;
-		const root = (recipient && roots.find(each => each.id === rootOf(state.agents, recipient).id)) ?? roots[0];
+		const recipient = typeof message.to === 'number' ? state.identities.get(message.to) : undefined;
+		const root = (recipient && roots.find(each => each.id === recipient.root)) ?? roots[0];
 		return root && this.fileOf(root);
 	}
 
@@ -116,12 +118,12 @@ export class ChatRooms {
 	}
 
 	/** The file of the room of `root`'s tree. */
-	private fileOf(root: Agent): string {
+	private fileOf(root: AgentIdentity): string {
 		return path.join(this.folder, `${root.name}-a${root.id}.md`);
 	}
 
 	/** Appends `text` to the room of `root`'s tree, which begins with its heading. */
-	private appendTo(root: Agent, text: string): void {
+	private appendTo(root: AgentIdentity, text: string): void {
 		const file = this.fileOf(root);
 		fs.mkdirSync(this.folder, { recursive: true });
 		fs.appendFileSync(file, fs.existsSync(file) ? text : `${headingOf(root)}${text}`, { mode: 0o600 });
@@ -171,14 +173,15 @@ export class ChatRooms {
 
 /**
  * The roots of the trees a message is to or from - of its sender, its recipient, and the agent one of
- * Facade's is about - each the agent the person started at the top: the chat rooms it is in.
+ * Facade's is about - each the agent the person started at the top: the chat rooms it is in. Agents that left
+ * the list are known by who they were.
  */
-export function rootsOf(state: WorkspaceState, message: Message): Agent[] {
-	const roots = new Map<number, Agent>();
+export function rootsOf(state: WorkspaceState, message: Message): AgentIdentity[] {
+	const roots = new Map<number, AgentIdentity>();
 	for (const id of [message.from, message.to, message.from === FACADE ? message.about : undefined]) {
-		const agent = typeof id === 'number' ? state.agents.get(id) : undefined;
-		if (agent) {
-			const root = rootOf(state.agents, agent);
+		const agent = typeof id === 'number' ? state.identities.get(id) : undefined;
+		const root = agent && state.identities.get(agent.root);
+		if (root) {
 			roots.set(root.id, root);
 		}
 	}
@@ -186,20 +189,21 @@ export function rootsOf(state: WorkspaceState, message: Message): Agent[] {
 }
 
 /** The heading a room begins with: whose tree it is. */
-function headingOf(root: Agent): string {
-	return `# Chat room of @${root.name} #a${root.id}\n\nEvery message to or from @${root.name} #a${root.id} and the agents started from it, in order.\n\n`;
+function headingOf(root: AgentIdentity): string {
+	const who = describe(root);
+	return `# Chat room of ${who}\n\nEvery message to or from ${who} and the agents started from it, in order.\n\n`;
 }
 
-/** Who sent or got a message, as Facade writes it: `@name #a7`, the person, or Facade. */
+/** Who sent or got a message, as Facade writes it: `@name #a7`, the person, `@human`, or Facade. */
 export function whoOf(state: WorkspaceState, who: Recipient | typeof FACADE | undefined): string {
 	if (who === FACADE) {
 		return 'Facade';
 	}
 	if (who === undefined || who === HUMAN) {
-		return `@${PERSON.name}`;
+		return describe(PERSON);
 	}
-	const agent = state.agents.get(who);
-	return agent ? `@${agent.name} #a${agent.id}` : `#a${who}`;
+	const agent = state.identities.get(who);
+	return agent ? describe(agent) : `#a${who}`;
 }
 
 /** A time as a room writes it: the date and the time of day, on this machine's clock. */

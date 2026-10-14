@@ -52,6 +52,29 @@ export interface IEditorPartUIState {
 	readonly mostRecentActiveGroups: GroupIdentifier[];
 }
 
+/**
+ * Facade Code: whether an editor part came back emptied: saved holding editors, it restored none - an agent's tab is
+ * not brought back once its agent ended with the app (`isAgentGoneAtStartup`). One saved empty, as New Empty Editor
+ * Window makes one, did not (D10).
+ */
+export function isEmptiedByRestore(saved: IEditorPartUIState, restored: { readonly groups: readonly { readonly isEmpty: boolean }[] }): boolean {
+	const editorsIn = (node: ISerializedNode): number => node.type === 'branch'
+		? node.data.reduce((sum, child) => sum + editorsIn(child), 0)
+		: isSerializedEditorGroupModel(node.data) ? node.data.editors.length : 0;
+	return editorsIn(saved.serializedGrid.root) > 0 && restored.groups.every(group => group.isEmpty);
+}
+
+/**
+ * Facade Code: whether an editor part is going with its editors: it holds some, and every one is disposed - a
+ * folder's terminals put away as the window leaves the folder, say - so its groups close them, and the part
+ * itself, on the next turn. Saved now, it would come back empty with the folder, beside the window its
+ * terminals come back in (N-87). Not one empty as the person left it, nor one holding anything still open.
+ */
+export function isGoingWithItsEditors(groups: readonly { readonly editors: readonly { isDisposed(): boolean }[] }[]): boolean {
+	const editors = groups.flatMap(group => group.editors);
+	return editors.length > 0 && editors.every(editor => editor.isDisposed());
+}
+
 interface IEditorPartMemento {
 	'editorpart.state'?: IEditorPartUIState;
 	'editorpart.centeredview'?: CenteredViewState;

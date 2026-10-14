@@ -28,11 +28,14 @@ import { IViewDescriptorService } from '../../../../common/views.js';
 import { ITerminalConfigurationService, ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../browser/terminal.js';
 import { TerminalConfigurationService } from '../../browser/terminalConfigurationService.js';
 import { parseExitResult, TerminalInstance, TerminalLabelComputer } from '../../browser/terminalInstance.js';
-import { IEnvironmentVariableService } from '../../common/environmentVariable.js';
+import { IEnvironmentVariableInfo, IEnvironmentVariableService } from '../../common/environmentVariable.js';
 import { EnvironmentVariableService } from '../../common/environmentVariableService.js';
 import { ITerminalProfileResolverService, ProcessState, DEFAULT_COMMANDS_TO_SKIP_SHELL } from '../../common/terminal.js';
 import { TestViewDescriptorService } from './xterm/xtermTerminal.test.js';
 import { AGENT_TERMINAL_ICON } from '../../../terminalLaunchers/common/terminalLaunchers.js';
+import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
+import { TerminalStatus } from '../../browser/terminalStatusList.js';
+import Severity from '../../../../../base/common/severity.js';
 import { fixPath } from '../../../../services/search/test/browser/queryBuilder.test.js';
 import { TestTerminalProfileResolverService, workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
@@ -183,13 +186,15 @@ suite('Workbench - TerminalInstance', () => {
 			terminalInstanceService?: TestTerminalInstanceService,
 			workspace?: Workspace,
 			requestWorkspaceTrust: () => Promise<boolean> = async () => true,
-			workspaceTrustRequestService?: IWorkspaceTrustRequestService
+			workspaceTrustRequestService?: IWorkspaceTrustRequestService,
+			enablePersistentSessions?: boolean
 		) {
 			const instantiationService = workbenchInstantiationService({
 				configurationService: () => new TestConfigurationService({
 					files: {},
 					terminal: {
 						integrated: {
+							...(enablePersistentSessions !== undefined ? { enablePersistentSessions } : {}),
 							fontFamily: 'monospace',
 							scrollback: 1000,
 							fastScrollSensitivity: 2,
@@ -497,12 +502,64 @@ suite('Workbench - TerminalInstance', () => {
 			}
 		});
 
-		test('a path inserted into an agent\'s terminal is not PowerShell\'s command to run it, as it is in any other terminal', async () => {
+		test('Facade Code: one shown in a terminal editor and put out of it for another before its xterm is made still starts its process, and opens once shown again (N-82)', async () => {
+			const terminalInstanceService = store.add(new TestTerminalInstanceService());
+			const instance = store.add(createTerminalInstantiationService(terminalInstanceService).createInstance(TerminalInstance, terminalShellTypeContextKey, {}));
+			const container = document.createElement('div');
+			document.body.appendChild(container);
+			try {
+				// Two agents started at once: the editor shows the first, then the second in its place -
+				// `TerminalEditor.setInput` detaches the first without hiding it
+				instance.attachToElement(container);
+				instance.setVisible(true);
+				instance.detachFromElement();
+				await instance.xtermReadyPromise;
+				await terminalInstanceService.processCreatedPromise;
+				instance.attachToElement(container);
+				instance.setVisible(true);
+
+				deepStrictEqual({ processes: terminalInstanceService.createProcessCount, opened: !!instance.xterm?.raw.element }, { processes: 1, opened: true });
+			} finally {
+				container.remove();
+			}
+		});
+
+		test('an agent\'s run is not offered a relaunch for an environment that changed - it would run its CLI again - where any other terminal is', async () => {
+			const statuses: Record<string, string[]> = {};
+			const stale: IEnvironmentVariableInfo = { requiresAction: true, getStatus: () => ({ id: TerminalStatus.RelaunchNeeded, severity: Severity.Warning }) };
+			for (const [name, reconnectionProperties] of [['run', facadeRunProperties({ workspace: 'w', id: 1 })], ['plain', undefined]] as const) {
+				const instance = await createTerminalInstance(undefined, undefined, { executable: 'claude', reconnectionProperties });
+				await (instance as unknown as Record<string, (info: IEnvironmentVariableInfo) => Promise<void>>)['_refreshEnvironmentVariableInfoWidgetState'](stale);
+				statuses[name] = instance.statusList.statuses.map(status => status.id);
+			}
+
+			deepStrictEqual(statuses, { run: [], plain: [TerminalStatus.RelaunchNeeded] });
+		});
+
+		test('an agent\'s run persists through a reload only with persistent sessions on: off, the reload ends it, and its tab is not kept to come back as a shell under its name (N-47)', async () => {
+			const persists: Record<string, boolean> = {};
+			for (const enablePersistentSessions of [true, false]) {
+				const terminalInstanceService = store.add(new TestTerminalInstanceService());
+				const instantiationService = createTerminalInstantiationService(terminalInstanceService, undefined, undefined, undefined, enablePersistentSessions);
+				const instance = store.add(instantiationService.createInstance(TerminalInstance, terminalShellTypeContextKey, { executable: 'claude', reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }));
+				await instance.xtermReadyPromise;
+				await terminalInstanceService.processCreatedPromise;
+				persists[enablePersistentSessions ? 'on' : 'off'] = instance.shouldPersist;
+			}
+
+			deepStrictEqual(persists, { on: true, off: false });
+		});
+
+		test('a path inserted into an agent\'s terminal - its run\'s, by its mark - is not PowerShell\'s command to run it, as it is in any other terminal, one the person drew with the robot included (VC-06)', async () => {
 			const path = isWindows ? 'c:\\Screenshots\\Screenshot 2026-09-24 171704.png' : '/Screenshots/Screenshot 2026-09-24 171704.png';
 			const sent: Record<string, string[]> = {};
-			for (const [name, icon] of [['agent', AGENT_TERMINAL_ICON], ['plain', undefined]] as const) {
+			for (const [name, config] of [
+				['agent', { icon: AGENT_TERMINAL_ICON, reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }],
+				['robot', { icon: AGENT_TERMINAL_ICON }],
+				['plain', {}]
+			] as const) {
 				const process = new ReadyTestTerminalChildProcess(false);
-				const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => process)), undefined, { executable: 'pwsh', icon });
+				const instance = await createTerminalInstance(store.add(new TestTerminalInstanceService(() => process)), undefined, { executable: 'pwsh', ...config });
 				await instance.processReady;
 				await instance.sendPath(path, false);
 				sent[name] = process.sent;
@@ -510,6 +567,7 @@ suite('Workbench - TerminalInstance', () => {
 
 			deepStrictEqual(sent, {
 				agent: [isWindows ? `"${path}"` : `'${path}'`],
+				robot: [`& '${path}'`],
 				plain: [`& '${path}'`],
 			});
 		});
@@ -759,6 +817,31 @@ suite('Workbench - TerminalInstance', () => {
 			terminalLabelComputer.refreshLabel(createInstance({ capabilities, processName: 'process', workspaceFolder: { uri: URI.from({ scheme: Schemas.file, path: 'folder' }) } as IWorkspaceFolder, staticTitle: 'my-title' }));
 			strictEqual(terminalLabelComputer.title, 'my-title');
 			strictEqual(terminalLabelComputer.description, 'folder');
+		});
+		test('a renamed terminal whose own template is built around its sequence keeps the rest: an agent\'s keeps its suffix (Facade Code, X-52)', () => {
+			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}', description: '${cwd}' } } } });
+			const titleOf = (partial: Partial<ITerminalInstance>) => {
+				terminalLabelComputer.refreshLabel(createInstance({ capabilities, sequence: 'Fix it', processName: 'node', ...partial }));
+				return terminalLabelComputer.title;
+			};
+			deepStrictEqual([
+				titleOf({ staticTitle: 'mine', shellLaunchConfig: { titleTemplate: '${sequence}${separator}@claude #a1' } }),
+				titleOf({ staticTitle: 'mine', shellLaunchConfig: { titleTemplate: '${sequence}' } }),
+				titleOf({ staticTitle: 'mine', shellLaunchConfig: { titleTemplate: '${process}' } })
+			], ['mine - @claude #a1', 'mine', 'mine']);
+		});
+		test('a terminal come back after a reload or a crash, whose static title is only the name it was opened with, is not taken as renamed: its sequence, or none, before its suffix (Facade Code, N-59)', () => {
+			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}', description: '${cwd}' } } } });
+			const titleOf = (partial: Partial<ITerminalInstance>) => {
+				terminalLabelComputer.refreshLabel(createInstance({ capabilities, processName: 'node', ...partial }));
+				return terminalLabelComputer.title;
+			};
+			const opened = { name: '@claude #a1', titleTemplate: '${sequence}${separator}@claude #a1' };
+			deepStrictEqual([
+				titleOf({ staticTitle: '@claude #a1', sequence: '', shellLaunchConfig: opened }),
+				titleOf({ staticTitle: '@claude #a1', sequence: 'Fix it', shellLaunchConfig: opened }),
+				titleOf({ staticTitle: 'mine', sequence: 'Fix it', shellLaunchConfig: opened })
+			], ['@claude #a1', 'Fix it - @claude #a1', 'mine - @claude #a1']);
 		});
 		test('should use shellLaunchConfig.titleTemplate as template when set', () => {
 			const terminalLabelComputer = createLabelComputer({ terminal: { integrated: { tabs: { separator: ' - ', title: '${process}', description: '${cwd}' } } } });

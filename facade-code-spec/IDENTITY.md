@@ -248,7 +248,7 @@ literally, and each one that still says VS Code is listed with its reason.
 
 ## I11. AI
 
-Facade's AI is its agents, which run in terminals (AGENT-FRAMEWORK.md). Upstream's chat
+Facade's AI is its agents, which run in terminals (AGENT-LAUNCHER.md). Upstream's chat
 and Copilot are not registered by default: `chat.disableAIFeatures` defaults to `true`
 where upstream's is `false`, and `false` restores stock in one step, without a rebuild.
 They are hidden, not deleted: the Copilot extension stays in the tree and the build,

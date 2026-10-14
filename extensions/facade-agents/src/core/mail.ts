@@ -7,14 +7,13 @@ import * as fs from 'fs';
 import * as l10n from '@vscode/l10n';
 import { DeferredPromise } from '../base/async';
 import { messageOf } from '../base/errors';
-import { isYolo } from '../clis/cli';
 import { AgentTable } from '../record/agents';
-import { Agent, Caller, isLive, PERSON, rootOf } from '../record/events';
+import { Agent, Caller, describe, isLive, namesThePerson, PERSON } from '../record/events';
 import { FACADE, HUMAN, MailboxEntry, Message, NewMessage, Recipient, TEXT_IN_LINE, unreadOf } from '../record/messages';
 import { ChatRooms, rootsOf, whoOf } from '../record/rooms';
-import { Doorbell, NEW_MESSAGE_MS, RING_GAP_MS } from './doorbell';
-import { FacadeError } from './errors';
-import { AgentSetup, CliCatalog, Disposable, EndedAgent, Ports, Timing } from './ports';
+import { Doorbell, LaunchDelays, NEW_MESSAGE_MS, RING_GAP_MS } from './doorbell';
+import { ErrorOutcome, FacadeError } from './errors';
+import { Disposable, Ports, Timing } from './ports';
 import { excerptText } from './screens';
 
 /** A message's number, as a tool is given it: `#m42`, or `m42`. */
@@ -23,8 +22,6 @@ const MESSAGE_NUMBER = /^#?m(?<id>\d+)$/i;
 const AGENT_NUMBER = /^(?:@\S+\s+)?#?a\d+$/i;
 /** How much of a message's first line a notification shows. */
 const SHOWN_CHARS = 200;
-/** How long the unexpected ends of the person's agents are gathered into one notification. */
-const ENDS_GATHERED_MS = 1_000;
 /** How many of an agent's unread messages its mailbox, or a notice of Facade's, names, the oldest: the others it counts. */
 const LISTED = 10;
 
@@ -32,16 +29,23 @@ const LISTED = 10;
 export interface MailContext {
 	readonly table: AgentTable;
 	readonly ports: Ports;
-	readonly clis: CliCatalog;
-	readonly setup: AgentSetup;
 	/** How long the core waits, as the person sets it now: messages unfetched that long are told of. */
 	timing(): Timing;
-	/** The agent a tool names - by a name several have, the one `within` the caller's reach; throws, saying why, where none is. */
-	agentNamed(text: string, within?: (agent: Agent) => boolean): Agent;
-	/** The name of the terminal an agent runs in. */
-	terminalOf(agent: Agent): string;
-	/** The agent numbered `id` once it ended, as a notice about it shows it: where its last screen is; undefined while it runs. */
-	endedAgent(id: number): EndedAgent | undefined;
+	/**
+	 * The agent a tool names, as every Facade tool takes one (AGENT-ORCHESTRATION.md, O2): one the caller reaches
+	 * (O1) - else refused, saying why.
+	 */
+	agentNamed(text: string, caller: Caller): Agent;
+	/** Whether `caller` reaches `agent` (O1): the person every agent; an agent with YOLO on every agent, with it off its own tree. */
+	reaches(caller: Caller, agent: Agent): boolean;
+	/** An agent's first line, with its task: who it is, who created it, and the number of its task (M7). */
+	firstLine(agent: Agent, task: number): string;
+	/** The delays of an agent's launch, as its start had them. */
+	delaysOf(agent: Agent): LaunchDelays;
+	/** Whether the agent framework is on: off, no doorbell goes in (M10). */
+	frameworkOn(): boolean;
+	/** Whether the agent's MCP server is connected now. */
+	isConnected(agent: Agent): boolean;
 	/** The last lines of an agent's screen - of its final screen once it ended, waited for a moment - or undefined where there are none. */
 	excerptOf(agent: Agent): Promise<{ readonly text: string } | undefined>;
 	log(message: string): void;
@@ -56,8 +60,20 @@ export interface SentMessage {
 	readonly toPerson: boolean;
 	/** Set where its recipient is still starting: its doorbell rings once it runs. */
 	readonly starting?: true;
+	/** Set where its recipient runs, its MCP server gone: its doorbell rings once it connects again (M2). */
+	readonly reconnecting?: true;
 	/** Set where its recipient's YOLO is off and its tree is not the caller's: it can reply to the person only. */
 	readonly cannotReply?: true;
+}
+
+/**
+ * What a send to several that Facade failed to record partway answers with, its text made of it too (AGENT-MESSAGES.md,
+ * M11; AGENT-ORCHESTRATION.md, O2): the messages it recorded, by number and recipient - they went, and sent again they would
+ * come twice - and that what became of the rest is not known.
+ */
+interface SendCutShort extends ErrorOutcome {
+	readonly outcome: 'unknown';
+	readonly sent: NonNullable<ErrorOutcome['sent']>;
 }
 
 /** What a fetch asks for: the caller's unread messages, with nothing; messages by number, `ids`; or `all` sent to it. */
@@ -66,21 +82,15 @@ export interface FetchRequest {
 	readonly all?: boolean;
 }
 
-/** How a fetch marks a message: new to the caller, given to it before, or gone back to its sender. */
-export type Mark = 'new' | 'given before' | 'returned';
-
 /** A message as a fetch gives it. */
 export interface FetchedMessage {
 	readonly id: number;
-	readonly mark: Mark;
-	/** When it was last given to the caller, for one given before. */
-	readonly givenAt?: number;
 	/** Its sender and its recipient, as Facade writes them. */
 	readonly from: string;
 	readonly to: string;
 	/** Whether it was sent to the caller. */
 	readonly own: boolean;
-	/** Whether it was delivered as the fetch took it: one the caller fetches now is delivered once its result reaches it. */
+	/** Its delivery state as the fetch took it: one the caller fetches now is delivered once its result reaches it. */
 	readonly state: MailboxEntry['state'];
 	readonly time: number;
 	readonly replyTo?: number;
@@ -100,7 +110,7 @@ export interface Fetched {
 	readonly file?: string;
 }
 
-/** An agent's mailbox, as `ps` gives it. */
+/** An agent's mailbox, as `list_agents` gives it (AGENT-MESSAGES.md, M3). */
 export interface Mailbox {
 	/** Its oldest unread messages: their numbers, senders, and when they came. */
 	readonly unread: readonly { readonly id: number; readonly from: string; readonly time: number }[];
@@ -117,10 +127,10 @@ export interface Mailbox {
 /**
  * The messages (AGENT-MESSAGES.md): each numbered as it is sent and put into its recipient's mailbox;
  * Facade rings the recipient's doorbell and it fetches them with `read_messages`. Every message is
- * delivered at least once - a result that did not reach the pipe is given again, marked - or, its
- * recipient ending, goes back to its sender, or is noted in its chat room where its sender ended or was
- * told of the end otherwise; the chat rooms keep them all. An agent whose YOLO is off reaches the agents
- * of its own tree only, and the person. Every message is recorded before anything is done with it.
+ * delivered at least once - a result that did not reach the pipe leaves them unread, to come again - or, its
+ * recipient ending, goes back to its sender, or is noted in its chat room where its sender ended; the chat
+ * rooms keep them all. An agent whose YOLO is off reaches the agents of its own tree only, and the person.
+ * Every message is recorded before anything is done with it.
  */
 export class Mail implements Disposable {
 
@@ -132,12 +142,9 @@ export class Mail implements Disposable {
 	private readonly tasks = new Map<number, ReturnType<typeof setTimeout>>();
 	/** When each agent with messages unfetched is looked at again, for whether they waited the timeout. */
 	private readonly delays = new Map<number, ReturnType<typeof setTimeout>>();
-	/** The person's agents that ended unexpectedly, gathered for one notification: each agent's number and its line. */
-	private readonly ends: { readonly id: number; readonly line: string }[] = [];
 	/** Children whose creators are told of their ends once their last screens are kept, by number: each notice's first line. */
 	private readonly endsToTell = new Map<number, string>();
-	private endsTimer: ReturnType<typeof setTimeout> | undefined;
-	/** When Facade was turned on again in this window, where it was: no doorbell was due while it was off. */
+	/** When the agent framework was turned on again in this window, where it was: no doorbell was due while it was off. */
 	private onAgainTime = 0;
 	private disposed = false;
 
@@ -147,11 +154,12 @@ export class Mail implements Disposable {
 		this.doorbell = new Doorbell({
 			table,
 			ports: context.ports,
-			clis: context.clis,
-			terminalOf: agent => context.terminalOf(agent),
-			firstLine: (agent, task) => this.firstLineOf(agent, task.id),
+			delaysOf: agent => context.delaysOf(agent),
+			firstLine: (agent, task) => context.firstLine(agent, task.id),
 			senderOf: message => this.whoOf(message.from),
 			fetchesDone: id => this.fetching.get(id) ?? Promise.resolve(),
+			frameworkOn: () => context.frameworkOn(),
+			isConnected: agent => context.isConnected(agent),
 			log: message => context.log(message)
 		});
 	}
@@ -169,7 +177,6 @@ export class Mail implements Disposable {
 		}
 		this.tasks.clear();
 		this.delays.clear();
-		clearTimeout(this.endsTimer);
 	}
 
 	/**
@@ -185,9 +192,7 @@ export class Mail implements Disposable {
 			throw new FacadeError('INVALID', 'text is empty: write what the message says.');
 		}
 		const answers = replyTo === undefined ? undefined : this.repliedTo(caller, replyTo);
-		const { agents } = this.context.table.state;
 		const own = caller.id === undefined ? undefined : this.context.table.get(caller.id);
-		const ownTree = own && rootOf(agents, own).id;
 		const sent: SentMessage[] = [];
 		for (const recipient of recipients) {
 			let message: Message;
@@ -198,7 +203,9 @@ export class Mail implements Disposable {
 				if (!sent.length) {
 					throw err;
 				}
-				throw new FacadeError('FAILED', `${sent.map(each => `#m${each.id} to ${each.to}`).join(', ')} ${sent.length === 1 ? 'was' : 'were'} sent; then the message to ${this.whoOf(recipient)} could not be recorded: ${messageOf(err)}. Do not send those again; send to the rest again once Facade can record.`);
+				// Said in words and in data alike, from the one record of what went
+				const cutShort: SendCutShort = { outcome: 'unknown', sent: sent.map(each => ({ id: each.id, to: each.to })) };
+				throw new FacadeError('FAILED', `${cutShort.sent.map(each => `#m${each.id} to ${each.to}`).join(', ')} ${cutShort.sent.length === 1 ? 'was' : 'were'} sent; then the message to ${this.whoOf(recipient)} could not be recorded: ${messageOf(err)}. Do not send those again; send to the rest again once Facade can record.`, cutShort);
 			}
 			const agent = typeof recipient === 'number' ? this.context.table.get(recipient) : undefined;
 			sent.push({
@@ -206,26 +213,22 @@ export class Mail implements Disposable {
 				to: this.whoOf(message.to),
 				toPerson: message.to === HUMAN,
 				...(agent?.state === 'starting' ? { starting: true } : {}),
-				...(agent && ownTree !== undefined && !this.yoloOf(agent) && rootOf(agents, agent).id !== ownTree ? { cannotReply: true } : {})
+				...(agent?.state === 'running' && agent.integration && !this.context.isConnected(agent) ? { reconnecting: true } : {}),
+				// Its YOLO off, it reaches its own tree and the person alone: not a caller of another tree (M2)
+				...(agent && own && !agent.yolo && agent.root !== own.root ? { cannotReply: true } : {})
 			});
 		}
 		return sent;
 	}
 
-	/** Records the task the creator gives a new agent: a message to it, sent as it was recorded. */
+	/** Records the task the creator gives a new agent: a message to it, sent as it was recorded (M7). */
 	sendTask(creator: Caller, agent: Agent, text: string): Message {
 		return this.record({ ...(creator.id !== undefined ? { from: creator.id } : {}), to: agent.id, text, task: true });
 	}
 
-	/** Records that the agent's first line, given as its launch argument, rang for its task. */
+	/** Records that the agent's first line, given as its launch argument, rang for its task (M7). */
 	firstRing(agent: Agent, task: number): void {
 		this.context.table.messages.rang(agent.id, [task]);
-	}
-
-	/** The first line of an agent with a task: who it is, who created it, and its task's number. */
-	firstLineOf(agent: Agent, task: number): string {
-		const creator = agent.parent === undefined ? undefined : this.context.table.get(agent.parent);
-		return this.context.setup.firstLine({ id: agent.id, name: agent.name }, creator ? { id: creator.id, name: creator.name } : PERSON, task);
 	}
 
 	/** An agent is running: its doorbell is due from now on, and its task and its messages are waited for. */
@@ -235,12 +238,40 @@ export class Mail implements Disposable {
 		this.watchDelivery(agent.id);
 	}
 
+	/** An agent's MCP server said hello: connected again, its doorbell rings again, where it waited for that. */
+	connected(agent: Agent): void {
+		if (agent.state === 'running') {
+			this.doorbell.connected(agent.id);
+		}
+	}
+
+	/**
+	 * The agent framework was turned on, or off: on, the agents running are watched again, their doorbells due
+	 * from now - none was while it was off - and the person is shown what came for them meanwhile (M10); off, no
+	 * doorbell is due, and none that has not begun goes in.
+	 */
+	frameworkChanged(on: boolean): void {
+		if (on) {
+			this.recover(false, true);
+			return;
+		}
+		// Nothing can be fetched meanwhile: no task or message is told of as unfetched for it
+		for (const timer of [...this.tasks.values(), ...this.delays.values()]) {
+			clearTimeout(timer);
+		}
+		this.tasks.clear();
+		this.delays.clear();
+		for (const agent of this.context.table.state.agents.values()) {
+			this.doorbell.update(agent.id);
+		}
+	}
+
 	/**
 	 * Fetches messages for the caller: its unread ones, those numbered `ids` in its reach, or `all` sent to
 	 * it. Its fetches run one after the other; one is done once the pipe said whether its result went
 	 * out. The caller's own messages in a result that went out are delivered; those in one that did not
-	 * are unread still, and are given again, marked. Texts that come to more than a result holds are all
-	 * in one file.
+	 * are unread still, and come again under their numbers. Texts that come to more than a result holds are
+	 * all in one file.
 	 */
 	async fetch(caller: Caller, request: FetchRequest, whenWritten: (listener: (written: boolean) => void) => void): Promise<Fetched> {
 		const recipient: Recipient = caller.id ?? HUMAN;
@@ -261,7 +292,6 @@ export class Mail implements Disposable {
 				turn.complete();
 				return fetched;
 			}
-			this.context.table.messages.given(agent, fetched.messages.map(message => message.id));
 			whenWritten(written => {
 				try {
 					if (written && !this.disposed) {
@@ -285,8 +315,7 @@ export class Mail implements Disposable {
 	mailboxOf(id: number, caller: Caller): Mailbox | undefined {
 		const { table } = this.context;
 		const agent = table.get(id);
-		const reach = this.reachOf(caller);
-		if (!agent || (reach && rootOf(table.state.agents, agent).id !== reach.id)) {
+		if (!agent || !this.context.reaches(caller, agent)) {
 			return undefined;
 		}
 		const mail = table.state.mail;
@@ -304,26 +333,29 @@ export class Mail implements Disposable {
 	}
 
 	/**
-	 * An agent ended, `how` saying how; `tell` says whether its creator is told: an agent creator by a
-	 * message of Facade's, while it runs; the person, for an agent they started, by a notification. Its
-	 * unread messages go back to their senders, oldest first - but to `knownTo`, told of the end otherwise
-	 * (its start, or its window closing), and to a sender that ended: for those its chat room notes it.
+	 * An agent ended, `how` saying how - `told`, as its creator's notice says it; `tell` says whether its creator, an agent, is told: by a message of
+	 * Facade's, while it runs (M8) - the person hears of the ends of the agents they started as L6 has it. Its
+	 * unread messages go back to their senders, oldest first - every live one, the person whose window went among
+	 * them (M6) - but Facade's own, and those of a sender that ended: for those its chat room notes it.
 	 */
-	ended(agent: Agent, how: string, tell: boolean, knownTo: readonly Recipient[] = []): void {
+	ended(agent: Agent, how: string, tell: boolean, told = how): void {
 		this.doorbell.forget(agent.id);
 		for (const timers of [this.tasks, this.delays]) {
 			clearTimeout(timers.get(agent.id));
 			timers.delete(agent.id);
 		}
-		if (tell) {
-			if (agent.parent === undefined) {
-				this.gatherEnd(agent.id, l10n.t("@{0} #a{1} ended: {2}.", agent.name, agent.id, how));
-			} else if (isLive(this.context.table.get(agent.parent))) {
-				this.tellCreatorOfEnd(agent, how);
-			}
+		if (tell && agent.creator !== undefined && isLive(this.context.table.get(agent.creator))) {
+			this.tellCreatorOfEnd(agent, told);
 		}
 		for (const message of unreadOf(this.context.table.state.mail, agent.id)) {
-			this.giveBack(message, agent, how, message.from !== FACADE && knownTo.includes(message.from ?? HUMAN));
+			this.giveBack(message, agent, how);
+		}
+		// Its children whose tasks wait unfetched: no notice of that can go to it now, so their other senders hear of
+		// what waits (M6) - their watch set again
+		for (const child of this.context.table.state.agents.values()) {
+			if (child.creator === agent.id && child.state === 'running') {
+				this.watchDelivery(child.id);
+			}
 		}
 	}
 
@@ -332,10 +364,10 @@ export class Mail implements Disposable {
 	 * the window keeps a moment after the end (AGENT-DEBUGGING.md D6) - or that none was kept.
 	 */
 	private tellCreatorOfEnd(agent: Agent, how: string): void {
-		const first = `${agentText(agent)} ended: ${how}. It takes no more messages.`;
+		const first = `${describe(agent)} ended: ${how}. It takes no more messages.`;
 		this.endsToTell.set(agent.id, first);
 		void this.context.excerptOf(agent).catch(err => {
-			this.context.log(`The last lines of ${agentText(agent)}'s screen could not be read for its creator: ${messageOf(err)}`);
+			this.context.log(`The last lines of ${describe(agent)}'s screen could not be read for its creator: ${messageOf(err)}`);
 			return undefined;
 		}).then(excerpt => {
 			// Told of already, as Facade stopped meanwhile
@@ -351,7 +383,7 @@ export class Mail implements Disposable {
 	 */
 	private tellEnd(id: number, first: string, excerpt: string | undefined, stopping = false): void {
 		const agent = this.context.table.get(id);
-		const creator = agent?.parent === undefined ? undefined : this.context.table.get(agent.parent);
+		const creator = agent?.creator === undefined ? undefined : this.context.table.get(agent.creator);
 		if (!agent || !creator || !isLive(creator)) {
 			return;
 		}
@@ -361,7 +393,7 @@ export class Mail implements Disposable {
 		try {
 			this.record({ from: FACADE, to: creator.id, text, facade: 'ended', about: id });
 		} catch (err) {
-			this.context.log(`The creator of ${agentText(agent)} could not be told of its end: ${messageOf(err)}`);
+			this.context.log(`The creator of ${describe(agent)} could not be told of its end: ${messageOf(err)}`);
 		}
 	}
 
@@ -383,6 +415,24 @@ export class Mail implements Disposable {
 				this.running(agent);
 			}
 		}
+		this.showHeld();
+	}
+
+	/**
+	 * Shows the person what came for them while the agent framework was off, held unread in the record - a reload
+	 * meanwhile included - once it is on: recorded delivered, and told (M10; MS-03).
+	 */
+	private showHeld(): void {
+		if (!this.context.frameworkOn()) {
+			return;
+		}
+		const held = unreadOf(this.context.table.state.mail, HUMAN);
+		try {
+			this.context.table.messages.shown(held.map(message => message.id));
+		} catch (err) {
+			this.context.log(`That the person was shown what came for them while the agent framework was off could not be recorded: ${messageOf(err)}`);
+		}
+		held.forEach(message => this.tellThePerson(message));
 	}
 
 	/**
@@ -407,27 +457,29 @@ export class Mail implements Disposable {
 		if (!named.length || named.some(each => !each)) {
 			throw new FacadeError('INVALID', `to ${named.length ? 'has an empty recipient' : 'names nobody'}: give an agent - #a7, @name or @name #a7 - or the person, @${PERSON.name}; or several of them.`);
 		}
-		const reach = this.reachOf(caller);
-		const { agents } = this.context.table.state;
-		const inReach = reach && ((agent: Agent) => rootOf(agents, agent).id === reach.id);
 		const recipients: Recipient[] = [];
 		const refused: string[] = [];
-		const outside: string[] = [];
 		for (const text of named) {
 			let recipient: Recipient;
-			if (isPerson(text)) {
+			if (namesThePerson(text)) {
 				if (caller.id === undefined) {
-					throw new FacadeError('INVALID', `@${PERSON.name} is you: your messages go to agents.`);
+					throw new FacadeError('INVALID', `${describe(PERSON)} is you: your messages go to agents.`);
 				}
 				recipient = HUMAN;
 			} else {
-				const agent = this.context.agentNamed(text, inReach);
-				if (agent.exit) {
-					refused.push(`${agentText(agent)} has ended (${agent.exit.kind}: ${agent.exit.reason})`);
+				// Out of the caller's reach, refused as every tool refuses it: nothing is sent
+				const agent = this.context.agentNamed(text, caller);
+				if (agent.end) {
+					refused.push(`${describe(agent)} has ended (${agent.end.kind}: ${agent.end.reason})`);
 					continue;
 				}
-				if (inReach && !inReach(agent)) {
-					outside.push(agentText(agent));
+				if (agent.state === 'stopping') {
+					refused.push(`${describe(agent)} is being stopped`);
+					continue;
+				}
+				// Launched without Facade's integration, it has no tool to fetch with (M2)
+				if (!agent.integration) {
+					refused.push(`${describe(agent)} was started without Facade's tools - its launch has no connect group, or the agent framework was off - and cannot fetch messages`);
 					continue;
 				}
 				recipient = agent.id;
@@ -435,9 +487,6 @@ export class Mail implements Disposable {
 			if (!recipients.includes(recipient)) {
 				recipients.push(recipient);
 			}
-		}
-		if (reach && outside.length) {
-			refused.push(`${outside.join(', ')} ${outside.length === 1 ? 'is' : 'are'} out of your reach: your YOLO is off, so you reach the agents of your own tree only - ${agentText(reach)} and the agents started from it - and @${PERSON.name}`);
 		}
 		if (refused.length) {
 			throw new FacadeError('REFUSED', `${refused.join('; ')}. Nothing was sent.`);
@@ -458,12 +507,19 @@ export class Mail implements Disposable {
 		return id;
 	}
 
-	/** Records a message, puts it into its chat rooms, and rings its recipient's doorbell, or tells the person. */
+	/**
+	 * Records a message, puts it into its chat rooms, and rings its recipient's doorbell, or tells the person - once the
+	 * agent framework is on: one that comes for them while it is off waits for it, as an agent's does (M10).
+	 */
 	private record(message: NewMessage): Message {
-		const sent = this.context.table.messages.send(message);
+		// Held in the record, unread, for the person while the framework is off: shown once it is on, a reload meanwhile too
+		const held = message.to === HUMAN && !this.context.frameworkOn();
+		const sent = this.context.table.messages.send(held ? { ...message, held } : message);
 		this.inRooms(`with #m${sent.id}`, () => this.rooms.append(sent.id));
 		if (sent.to === HUMAN) {
-			this.tellThePerson(sent);
+			if (!held) {
+				this.tellThePerson(sent);
+			}
 		} else {
 			this.doorbell.update(sent.to);
 			this.watchDelivery(sent.to);
@@ -472,7 +528,7 @@ export class Mail implements Disposable {
 	}
 
 	/**
-	 * The messages a fetch gives, marked, by number: the caller's unread ones, those asked for - in its
+	 * The messages a fetch gives, by number: the caller's unread ones, those asked for - in its
 	 * reach, its YOLO off: those its tree's chat room has - or all sent to it.
 	 */
 	private take(caller: Caller, request: FetchRequest): Fetched {
@@ -487,13 +543,15 @@ export class Mail implements Disposable {
 		if (request.ids?.length) {
 			way = 'ids';
 			ids = [...new Set(request.ids.map(text => messageNumberOf(text, 'ids')))].sort((a, b) => a - b);
-			const reach = this.reachOf(caller);
+			const own = caller.id === undefined ? undefined : this.context.table.get(caller.id);
+			// Its YOLO off, an agent reads by number only what went to or from its own tree (M4)
+			const reach = own && !own.yolo ? own.root : undefined;
 			for (const id of ids) {
-				this.assertInMailbox(id);
 				const message = mail.messages.get(id);
-				if (reach && message && !rootsOf(state, message).some(root => root.id === reach.id)) {
-					throw new FacadeError('REFUSED', `#m${id} is out of your reach: your YOLO is off, so you fetch by number only the messages to or from your own tree - ${agentText(reach)} and the agents started from it. Nothing was fetched.`);
+				if (reach !== undefined && message && !rootsOf(state, message).some(root => root.id === reach)) {
+					throw new FacadeError('REFUSED', `#m${id} is out of your reach: your YOLO is off, so you fetch by number only the messages to or from your own tree - the agents that come from ${this.whoOf(reach)}. Nothing was fetched.`);
 				}
+				this.assertInMailbox(id);
 			}
 		} else if (request.all) {
 			way = 'all';
@@ -502,7 +560,6 @@ export class Mail implements Disposable {
 			way = 'unread';
 			ids = unreadOf(mail, recipient).map(message => message.id);
 		}
-		const seen = typeof recipient === 'number' ? mail.seen.get(recipient) : undefined;
 		const messages: FetchedMessage[] = [];
 		for (const id of ids) {
 			const message = mail.messages.get(id);
@@ -511,11 +568,8 @@ export class Mail implements Disposable {
 				continue;
 			}
 			const own = message.to === recipient;
-			const givenAt = own ? entry.given[entry.given.length - 1] : seen?.get(id);
 			messages.push({
 				id,
-				mark: entry.state === 'returned' ? 'returned' : givenAt !== undefined ? 'given before' : 'new',
-				...(givenAt !== undefined ? { givenAt } : {}),
 				from: this.whoOf(message.from),
 				to: this.whoOf(message.to),
 				own,
@@ -555,7 +609,7 @@ export class Mail implements Disposable {
 		try {
 			this.context.table.messages.delivered(agent, own);
 		} catch (err) {
-			this.context.log(`That #a${agent} has its messages could not be recorded: ${messageOf(err)}. They are given again, marked.`);
+			this.context.log(`That #a${agent} has its messages could not be recorded: ${messageOf(err)}. They stay unread, and come again under their numbers.`);
 			return;
 		}
 		this.doorbell.update(agent);
@@ -564,20 +618,20 @@ export class Mail implements Disposable {
 
 	/**
 	 * Sends a message its recipient ended without back to its sender, as a message of Facade's with its
-	 * text; notes in its chat room one that cannot go back, and - `known` - one whose sender knows of the end.
+	 * text; notes in its chat room one that cannot go back: Facade's own, or one whose sender ended.
 	 */
-	private giveBack(message: Message, recipient: Agent, how: string, known: boolean): void {
+	private giveBack(message: Message, recipient: Agent, how: string): void {
 		const { table } = this.context;
 		const sender = message.from;
-		if (known || sender === FACADE || (sender !== undefined && !isLive(table.get(sender)))) {
-			table.messages.returned(message.id, how, known ? { known: true } : {});
+		if (sender === FACADE || (sender !== undefined && !isLive(table.get(sender)))) {
+			table.messages.returned(message.id, how);
 			this.inRooms(`with the note on #m${message.id}`, () => this.rooms.noteUnreturned(message.id));
 			return;
 		}
 		const back = this.record({
 			from: FACADE,
 			to: sender ?? HUMAN,
-			text: `#m${message.id} was not fetched by ${agentText(recipient)} before it ended (${how}).\nOriginal message:\n${table.messages.textOf(message) ?? ''}`,
+			text: `#m${message.id} was not fetched by ${describe(recipient)} before it ended (${how}).\nOriginal message:\n${table.messages.textOf(message) ?? ''}`,
 			facade: 'returned',
 			about: recipient.id
 		});
@@ -595,9 +649,9 @@ export class Mail implements Disposable {
 		const from = typeof message.from === 'number' ? table.get(message.from) : undefined;
 		const about = from ?? (message.about !== undefined ? table.get(message.about) : undefined);
 		const show = l10n.t("Show");
-		const text = from ? l10n.t("@{0} #a{1} has something for you: {2}", from.name, from.id, shown) : l10n.t("Facade: {0}", shown);
-		const key = from ? `message:${from.id}` : `message:facade:${message.about ?? message.id}`;
-		void this.context.ports.person.notify({ key, text, buttons: [show], ...(from ? { quietIn: this.context.terminalOf(from) } : {}) }).then(async choice => {
+		const text = from ? l10n.t("{0} has something for you: {1}", describe(from), shown) : l10n.t("Facade: {0}", shown);
+		const key = from ? `message:${from.id}` : facadeNoticeKey(message.about ?? message.id);
+		void this.context.ports.person.notify({ key, text, buttons: [show], ...(from ? { quietIn: from.id } : {}) }).then(async choice => {
 			if (choice === show) {
 				await this.show(message, about);
 			}
@@ -606,46 +660,15 @@ export class Mail implements Disposable {
 
 	/** Shows the person a message: the terminal of the agent it is from or about, else the message in its chat room, unless that was deleted. */
 	private async show(message: Message, agent: Agent | undefined): Promise<void> {
-		if (agent && isLive(this.context.table.get(agent.id)) && await this.context.ports.terminals.reveal(this.context.terminalOf(agent))) {
+		if (agent && isLive(this.context.table.get(agent.id)) && await this.context.ports.terminals.reveal(agent.id)) {
 			return;
 		}
 		const room = message.id > this.context.table.state.mail.roomsDeletedUpTo ? this.rooms.roomOf(message) : undefined;
 		if (room && fs.existsSync(room)) {
 			await this.context.ports.person.openRoom(room, message.id);
 		} else {
-			this.context.ports.person.tell(l10n.t("#m{0} is in no chat room any more: the chat rooms were deleted.", message.id), undefined);
+			this.context.ports.person.tell(l10n.t("#m{0} is in no chat room any more: the chat rooms were deleted.", message.id), undefined, 'information');
 		}
-	}
-
-	/**
-	 * Gathers the unexpected end of an agent the person started with those at the same moment, for one
-	 * notification, whose Show shows each: its terminal while that is open, else its last screen.
-	 */
-	private gatherEnd(id: number, line: string): void {
-		this.ends.push({ id, line });
-		if (this.endsTimer !== undefined) {
-			return;
-		}
-		this.endsTimer = setTimeout(() => {
-			this.endsTimer = undefined;
-			const ends = this.ends.splice(0);
-			if (this.disposed || !ends.length) {
-				return;
-			}
-			const { ports } = this.context;
-			const show = l10n.t("Show");
-			void ports.person.notify({ key: `ended:${Date.now()}`, text: ends.map(end => end.line).join(' '), buttons: [show] }).then(async choice => {
-				if (choice !== show) {
-					return;
-				}
-				for (const end of ends) {
-					const ended = this.context.endedAgent(end.id);
-					if (ended) {
-						await ports.person.showEnded(ended);
-					}
-				}
-			}).catch(err => this.context.log(`The person could not be told of agents that ended, or shown them: ${messageOf(err)}`));
-		}, ENDS_GATHERED_MS);
 	}
 
 	/** Waits for a running agent to fetch its task, for the timeout from when it was running: then its creator is told, once. */
@@ -653,10 +676,11 @@ export class Mail implements Disposable {
 		const mail = this.context.table.state.mail;
 		const agent = this.context.table.get(id);
 		const task = mail.tasks.get(id);
-		if (this.disposed || this.tasks.has(id) || agent?.state !== 'running' || task === undefined || mail.notFetched.has(id) || mail.entries.get(task)?.state !== 'unread') {
+		if (this.disposed || this.tasks.has(id) || !this.context.frameworkOn() || agent?.state !== 'running' || task === undefined || mail.notFetched.has(id) || mail.entries.get(task)?.state !== 'unread') {
 			return;
 		}
-		const due = (agent.runningTime ?? Date.now()) + this.context.timing().startTimeoutMs;
+		// The framework turned on again, the timeout counts from then: no doorbell rang while it was off
+		const due = Math.max(agent.runningTime ?? Date.now(), this.onAgainTime) + this.context.timing().startTimeoutMs;
 		this.tasks.set(id, setTimeout(() => {
 			this.tasks.delete(id);
 			this.taskNotFetched(id, task);
@@ -666,24 +690,25 @@ export class Mail implements Disposable {
 	/**
 	 * Tells an agent's creator that it has not fetched its task: by a message of Facade's, the person's
 	 * too. Its task stays where it is. Once: `watchTask` waits no more for an agent whose creator was told.
+	 * Nothing while the agent framework is off, whatever timer is left from before: nothing can be fetched then (M10).
 	 */
 	private taskNotFetched(id: number, task: number): void {
 		const agent = this.context.table.get(id);
-		if (this.disposed || !isLive(agent) || this.context.table.state.mail.entries.get(task)?.state !== 'unread'
-			|| (agent.parent !== undefined && !isLive(this.context.table.get(agent.parent)))) {
+		if (this.disposed || !this.context.frameworkOn() || !isLive(agent) || this.context.table.state.mail.entries.get(task)?.state !== 'unread'
+			|| (agent.creator !== undefined && !isLive(this.context.table.get(agent.creator)))) {
 			return;
 		}
 		const why = this.doorbell.holdUp(id);
 		try {
 			this.record({
 				from: FACADE,
-				to: agent.parent ?? HUMAN,
-				text: `${agentText(agent)} has not fetched its task #m${task} since it started${why ? `: ${why}` : ''}. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: ${whereToLook(id, agent.parent ?? HUMAN)}.`,
+				to: agent.creator ?? HUMAN,
+				text: `${describe(agent)} has not fetched its task #m${task} since it started${why ? `: ${why}` : ''}. The task waits for it, and its doorbell rings again by itself. Facade cannot see what holds it up: ${whereToLook(id, agent.creator ?? HUMAN, 'task')}.`,
 				facade: 'taskNotFetched',
 				about: id
 			});
 		} catch (err) {
-			this.context.log(`That ${this.context.terminalOf(agent)} has not fetched its task could not be told: ${messageOf(err)}`);
+			this.context.log(`That ${describe(agent)} has not fetched its task could not be told: ${messageOf(err)}`);
 		}
 	}
 
@@ -692,7 +717,7 @@ export class Mail implements Disposable {
 		clearTimeout(this.delays.get(id));
 		this.delays.delete(id);
 		const due = this.delayDueAt(id);
-		if (this.disposed || due === undefined) {
+		if (this.disposed || due === undefined || !this.context.frameworkOn()) {
 			return;
 		}
 		this.delays.set(id, setTimeout(() => {
@@ -714,8 +739,11 @@ export class Mail implements Disposable {
 		const agent = table.get(id);
 		const unread = unreadOf(mail, id);
 		const task = mail.tasks.get(id);
+		// Its task unfetched, the notice of that goes to its creator in place of this one - where its creator is there to
+		// be told (M6): with its creator ended, the other senders still hear that their messages wait
+		const creatorTold = agent?.creator === undefined || isLive(table.get(agent.creator));
 		if (agent?.state !== 'running' || !unread.some(message => message.from !== FACADE)
-			|| (task !== undefined && mail.entries.get(task)?.state === 'unread')) {
+			|| (task !== undefined && mail.entries.get(task)?.state === 'unread' && creatorTold)) {
 			return undefined;
 		}
 		// Since the oldest that waits came, the mailbox was never left empty
@@ -732,11 +760,12 @@ export class Mail implements Disposable {
 	/**
 	 * Tells the sender of the oldest unread message of an agent's - an agent still running, or the person -
 	 * that its messages have waited the timeout: which, and what holds them up where Facade knows. Once
-	 * for as long as its mailbox is not emptied.
+	 * for as long as its mailbox is not emptied. Nothing while the agent framework is off, whatever timer is left
+	 * from before: nothing can be fetched then, and it is timed again from when the framework is on again (M10).
 	 */
 	private deliveryDelayed(id: number): void {
 		const due = this.delayDueAt(id);
-		if (this.disposed || due === undefined) {
+		if (this.disposed || due === undefined || !this.context.frameworkOn()) {
 			return;
 		}
 		if (due > Date.now()) {
@@ -757,12 +786,12 @@ export class Mail implements Disposable {
 			this.record({
 				from: FACADE,
 				to: oldest.from ?? HUMAN,
-				text: `${agentText(agent)} has not fetched ${ids} in ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: ${whereToLook(id, oldest.from ?? HUMAN)}.`,
+				text: `${describe(agent)} has not fetched ${ids} in ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages wait for it, and its doorbell rings again by itself; one goes back to its sender if it ends. Facade cannot see what holds it up: ${whereToLook(id, oldest.from ?? HUMAN, 'messages')}.`,
 				facade: 'delayed',
 				about: id
 			});
 		} catch (err) {
-			this.context.log(`That the messages of ${this.context.terminalOf(agent)} wait unfetched could not be told: ${messageOf(err)}`);
+			this.context.log(`That the messages of ${describe(agent)} wait unfetched could not be told: ${messageOf(err)}`);
 		}
 	}
 
@@ -779,34 +808,6 @@ export class Mail implements Disposable {
 		} catch (err) {
 			this.context.log(`The message files no longer needed could not all be deleted: ${messageOf(err)}`);
 		}
-	}
-
-	/**
-	 * The tree an agent caller reaches, its YOLO off: the agent the person started at the top of its
-	 * creators. Undefined where it reaches the whole window: the person does, and an agent whose YOLO is on.
-	 */
-	private reachOf(caller: Caller): Agent | undefined {
-		const agent = caller.id === undefined ? undefined : this.context.table.get(caller.id);
-		return agent && !this.yoloOf(agent) ? rootOf(this.context.table.state.agents, agent) : undefined;
-	}
-
-	/** Whether the agent `id` is in the caller's reach: the caller's own tree, its YOLO off; else any. */
-	inReach(caller: Caller, id: number): boolean {
-		const reach = this.reachOf(caller);
-		const agent = this.context.table.get(id);
-		return !reach || (!!agent && rootOf(this.context.table.state.agents, agent).id === reach.id);
-	}
-
-	/**
-	 * Whether an agent's YOLO is on: its CLI started with full access, as the ledger recorded it; for one a
-	 * ledger before that did not say, as the person has it set up now. A CLI Facade no longer knows: off.
-	 */
-	private yoloOf(agent: Agent): boolean {
-		if (agent.yolo !== undefined) {
-			return agent.yolo;
-		}
-		const cli = this.context.clis.known.find(each => each.id === agent.cli);
-		return !!cli && isYolo(this.context.clis.configOf(cli));
 	}
 
 	/** A message's text; a note saying so for one whose file went with the chat rooms. */
@@ -837,20 +838,15 @@ export class Mail implements Disposable {
 	}
 }
 
-/** An agent as Facade's messages write it: `@name #a7`. */
-export function agentText(agent: { readonly id: number; readonly name: string }): string {
-	return `@${agent.name} #a${agent.id}`;
-}
-
-/** Where the one told of agent `id` sees what holds it up: an agent reads its screen with read_screen, the person has its terminal. */
-function whereToLook(id: number, told: Recipient | typeof FACADE): string {
-	return told === HUMAN ? 'its terminal shows that' : `read_screen #a${id} shows its screen`;
-}
-
-/** Whether `text` names the person: `@you`, or `@human`, as the other specs write them. */
-function isPerson(text: string): boolean {
-	const name = text.replace(/^@/, '').toLowerCase();
-	return name === PERSON.name || name === HUMAN;
+/**
+ * Where the one told of agent `id` sees what holds it up: an agent reads its screen with read_screen, the person has its
+ * terminal. An agent is told too what to do of a menu that took the doorbell: answer it, and send nothing again - what was
+ * sent waits under its number (AGENT-DEBUGGING.md, D7; DB-09).
+ */
+function whereToLook(id: number, told: Recipient | typeof FACADE, waiting: 'task' | 'messages'): string {
+	return told === HUMAN
+		? 'its terminal shows that'
+		: `read_screen #a${id} shows its screen; a menu there may have taken its doorbell - answer it, and do not ${waiting === 'task' ? 'send the task again or start another agent for it' : 'send the messages again'}`;
 }
 
 /** The number of the message `text` names, as `#m42`; throws, saying why, for what is none - an agent's number among them. */
@@ -875,19 +871,26 @@ function durationOf(ms: number): string {
 	return `${Math.round(seconds / 60)} minutes`;
 }
 
+/**
+ * The key of Facade's notice to the person about agent `id` - a message of Facade's about it, or its start not confirmed -
+ * or, about no agent, of its message numbered `id`: the next with the key takes its place (AGENT-MESSAGES.md, M11).
+ */
+export function facadeNoticeKey(id: number): string {
+	return `message:facade:${id}`;
+}
+
 /** A time of day as the messages give it: hours and minutes, on this machine's clock. */
 export function clockOf(time: number): string {
 	return new Date(time).toTimeString().slice(0, 5);
 }
 
 /**
- * A message's heading in a fetch: its number, its mark, who sent it to whom, when, what it answers, its
- * length, and whether it was delivered as the fetch took it.
+ * A message's heading in a fetch: its number, who sent it to whom, when, what it answers, its length, and
+ * its delivery state as the fetch took it.
  */
 export function headingOf(message: FetchedMessage): string {
 	return [
 		`#m${message.id}`,
-		message.mark === 'given before' && message.givenAt !== undefined ? `given before (${clockOf(message.givenAt)})` : message.mark,
 		`from ${message.from} to ${message.own ? 'you' : message.to}`,
 		clockOf(message.time),
 		...(message.replyTo !== undefined ? [`re #m${message.replyTo}`] : []),

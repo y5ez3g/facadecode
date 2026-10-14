@@ -5,11 +5,10 @@
 
 import { timeout } from '../base/async';
 import { messageOf } from '../base/errors';
-import { CliConfig } from '../clis/cli';
 import { AgentTable } from '../record/agents';
-import { Agent, isLive } from '../record/events';
+import { Agent, describe, isLive } from '../record/events';
 import { Message, unreadOf } from '../record/messages';
-import { CliCatalog, Disposable, PersonInput, Ports } from './ports';
+import { Disposable, PersonInput, Ports } from './ports';
 
 /** How long after a new message comes its doorbell rings: what comes meanwhile rings with it. */
 export const NEW_MESSAGE_MS = 2_000;
@@ -27,22 +26,29 @@ const TYPING_POLL_MS = 1_000;
 const RETRY_MS = 60_000;
 /** How many unread messages a doorbell names: the others it counts. */
 const NAMED = 5;
-/** How a CLI Facade no longer knows is taken to have been started: the delays the longest of its CLIs'. */
-const UNKNOWN_CLI: CliConfig = { path: '', launch: { arguments: {}, environment: {}, enterDelay: 900, taskDelay: 2_000 } };
+
+/** The delays of a launch: from a paste into its terminal to Enter, and from its hello to its task's first line typed there. */
+export interface LaunchDelays {
+	readonly enterDelay: number;
+	readonly taskDelay: number;
+}
 
 /** What the doorbell needs of the core around it. */
 export interface DoorbellContext {
 	readonly table: AgentTable;
 	readonly ports: Ports;
-	readonly clis: CliCatalog;
-	/** The name of the terminal an agent runs in. */
-	terminalOf(agent: Agent): string;
+	/** The delays of an agent's launch, as its start had them (AGENT-LAUNCHER.md, L9). */
+	delaysOf(agent: Agent): LaunchDelays;
 	/** The first line of an agent whose task no doorbell named yet: its doorbell types it instead, once. */
 	firstLine(agent: Agent, task: Message): string;
 	/** A message's sender, as Facade writes it. */
 	senderOf(message: Message): string;
 	/** Settles once the agent's fetches under way are done: whether their results went out is known. */
 	fetchesDone(id: number): Promise<void>;
+	/** Whether the agent framework is on: off, no doorbell goes in (AGENT-MESSAGES.md, M10). */
+	frameworkOn(): boolean;
+	/** Whether the agent's MCP server is connected: one that is not waits for its next hello (M5). */
+	isConnected(agent: Agent): boolean;
 	log(message: string): void;
 }
 
@@ -69,6 +75,8 @@ export class Doorbell implements Disposable {
 	private readonly waiting = new Set<number>();
 	/** The agents whose doorbells wait behind what Facade types into their terminals. */
 	private readonly behind = new Set<number>();
+	/** The agents whose doorbells wait for their MCP servers to connect again: their next hello rings them. */
+	private readonly disconnected = new Set<number>();
 	private disposed = false;
 
 	constructor(private readonly context: DoorbellContext) { }
@@ -81,12 +89,15 @@ export class Doorbell implements Disposable {
 		this.timers.clear();
 	}
 
-	/** Works out again when the agent's doorbell is due - its messages, its doorbells or its state changed - and waits for then. */
+	/**
+	 * Works out again when the agent's doorbell is due - its messages, its doorbells or its state changed, or the
+	 * agent framework was turned on - and waits for then. While the framework is off, none is due.
+	 */
 	update(id: number): void {
 		clearTimeout(this.timers.get(id));
 		this.timers.delete(id);
 		const agent = this.context.table.get(id);
-		if (this.disposed || !agent || this.ringing.has(id)) {
+		if (this.disposed || !agent || this.ringing.has(id) || !this.context.frameworkOn()) {
 			return;
 		}
 		// Its mailbox emptied, a doorbell that failed before is tried again no more: the next message rings afresh
@@ -104,10 +115,23 @@ export class Doorbell implements Disposable {
 		clearTimeout(this.timers.get(id));
 		this.timers.delete(id);
 		this.retryAt.delete(id);
+		this.disconnected.delete(id);
 	}
 
-	/** What holds the agent's doorbell up, where Facade knows: the person typing in its terminal, or a doorbell that could not be typed. */
+	/** The agent's MCP server said hello: a doorbell that waited for it to connect again is due again. */
+	connected(id: number): void {
+		this.disconnected.delete(id);
+		this.update(id);
+	}
+
+	/**
+	 * What holds the agent's doorbell up, where Facade knows: the person typing in its terminal, Facade's own input
+	 * there, its MCP server not connected, or a doorbell that could not be typed.
+	 */
 	holdUp(id: number): string | undefined {
+		if (this.disconnected.has(id)) {
+			return 'its MCP server is not connected to Facade, and its doorbell waits for it to connect again';
+		}
 		if (this.waiting.has(id)) {
 			return 'its doorbell waits while the person types in its terminal';
 		}
@@ -121,13 +145,14 @@ export class Doorbell implements Disposable {
 	}
 
 	/**
-	 * When the agent's doorbell is due, as the ledger says; undefined while none is - it is not running,
-	 * or has nothing unread. Never sooner than its CLI's task delay after it was running.
+	 * When the agent's doorbell is due, as the ledger says; undefined while none is - it is not running, has
+	 * nothing unread, or was launched without Facade's integration, which has no tool to fetch with. One that types
+	 * its task's first line never sooner than its launch's task delay after it was running (M5, M7).
 	 */
 	dueAt(agent: Agent): number | undefined {
 		const mail = this.context.table.state.mail;
 		const unread = unreadOf(mail, agent.id);
-		if (agent.state !== 'running' || !unread.length) {
+		if (agent.state !== 'running' || !agent.integration || !unread.length || this.disconnected.has(agent.id)) {
 			return undefined;
 		}
 		const last = mail.rungAt.get(agent.id);
@@ -143,7 +168,8 @@ export class Doorbell implements Disposable {
 		if (named.length && last !== undefined) {
 			due = Math.min(due, last + againAfter(Math.min(...named)));
 		}
-		const settled = (agent.runningTime ?? agent.startTime) + this.configOf(agent).launch.taskDelay;
+		// The task delay bounds the line that types the task alone: a doorbell after it waits for nothing of the kind
+		const settled = this.taskOf(agent, unread) ? (agent.runningTime ?? agent.startTime) + this.context.delaysOf(agent).taskDelay : 0;
 		return Math.max(due, settled, this.retryAt.get(agent.id) ?? 0);
 	}
 
@@ -151,30 +177,42 @@ export class Doorbell implements Disposable {
 	private async ring(id: number): Promise<void> {
 		this.timers.delete(id);
 		const agent = this.context.table.get(id);
-		if (this.disposed || agent?.state !== 'running' || this.ringing.has(id) || !unreadOf(this.context.table.state.mail, id).length) {
+		if (this.disposed || agent?.state !== 'running' || this.ringing.has(id) || !this.context.frameworkOn() || !unreadOf(this.context.table.state.mail, id).length) {
 			return;
 		}
-		const config = this.configOf(agent);
-		const terminal = this.context.terminalOf(agent);
+		const label = describe(agent);
 		this.ringing.add(id);
 		try {
-			await this.waitForTurn(agent, terminal);
+			await this.waitForTurn(agent, label);
 			// What a fetch under way takes is not rung for
 			await this.context.fetchesDone(id);
 			const now = unreadOf(this.context.table.state.mail, id);
-			if (this.disposed || !isLive(this.context.table.get(id)) || !now.length) {
+			// Being stopped, or ended, it takes nothing more; the framework turned off, no doorbell begins (M10)
+			if (this.disposed || this.context.table.get(id)?.state !== 'running' || !this.context.frameworkOn() || !now.length) {
+				return;
+			}
+			// Its MCP server gone, it could not fetch: its next hello rings it (M5)
+			if (!this.context.isConnected(agent)) {
+				this.disconnected.add(id);
+				this.context.log(`The doorbell of ${label} waits: its MCP server is not connected to Facade.`);
 				return;
 			}
 			const task = this.taskOf(agent, now);
 			const line = task ? this.context.firstLine(agent, task) : doorbellLine(now, this.context.senderOf);
-			// In the terminal's turn, behind what Facade typed there before: its line, then its Enter after the
-			// pause its CLI needs, Facade turned off meanwhile or not - a line left unsent would wait in its input
-			const effect = await this.context.ports.terminals.type(terminal, line, { enter: true, enterDelayMs: agent.enterDelay ?? config.launch.enterDelay });
+			// In the terminal's turn, behind what Facade typed there before: its line, then its Enter after the pause its
+			// CLI needs - begun, Facade turned off meanwhile or not, as a line left unsent would wait in its input; the
+			// window drops one Facade is off for when its turn comes, before anything of it goes in (M10)
+			const effect = await this.context.ports.terminals.type(id, line, { enter: true, enterDelayMs: this.context.delaysOf(agent).enterDelay, requiresFramework: true });
 			if (!effect) {
 				throw new Error('its terminal was not there');
 			}
+			// Nothing went in and nothing rang: due again once Facade is on again, not tried again meanwhile (M10)
+			if (effect.reason === 'frameworkOff') {
+				this.context.log(`The doorbell of ${label} was not typed: the agent framework was off when its turn came. It rings once the framework is on again.`);
+				return;
+			}
 			if (effect.outcome !== 'applied') {
-				if (!isLive(this.context.table.get(id))) {
+				if (this.context.table.get(id)?.state !== 'running') {
 					return;
 				}
 				throw new Error(effect.pasted ? 'its terminal ended before Enter' : 'its terminal ended first');
@@ -191,7 +229,7 @@ export class Doorbell implements Disposable {
 		} catch (err) {
 			if (!this.disposed) {
 				this.retryAt.set(id, Date.now() + RETRY_MS);
-				this.context.log(`The doorbell of ${terminal} could not be rung: ${messageOf(err)}. It is tried again in a minute.`);
+				this.context.log(`The doorbell of ${label} could not be rung: ${messageOf(err)}. It is tried again in a minute.`);
 			}
 		} finally {
 			this.ringing.delete(id);
@@ -205,14 +243,14 @@ export class Doorbell implements Disposable {
 	 * its turn. Its line is made only then, of what is unread as it goes in; and Facade turned off meanwhile, it
 	 * never goes in. A window that cannot tell does not hold the doorbell back.
 	 */
-	private async waitForTurn(agent: Agent, terminal: string): Promise<void> {
+	private async waitForTurn(agent: Agent, label: string): Promise<void> {
 		try {
 			while (!this.disposed && isLive(this.context.table.get(agent.id))) {
 				let input: PersonInput | undefined;
 				try {
-					input = await this.context.ports.terminals.input(terminal);
+					input = await this.context.ports.terminals.input(agent.id);
 				} catch (err) {
-					this.context.log(`What the person typed into ${terminal} could not be told: ${messageOf(err)}`);
+					this.context.log(`What the person typed into the terminal of ${label} could not be told: ${messageOf(err)}`);
 					return;
 				}
 				const typing = !!input?.pending && input.lastKey !== undefined && Date.now() - input.lastKey < TYPING_IDLE_MS;
@@ -234,12 +272,6 @@ export class Doorbell implements Disposable {
 		const mail = this.context.table.state.mail;
 		const task = mail.tasks.get(agent.id);
 		return unread.find(message => message.id === task && mail.entries.get(task)?.rings === 0);
-	}
-
-	/** How the person has Facade start the agent's CLI; for a CLI Facade no longer knows, the longest delays. */
-	private configOf(agent: Agent): CliConfig {
-		const cli = this.context.clis.known.find(each => each.id === agent.cli);
-		return cli ? this.context.clis.configOf(cli) : UNKNOWN_CLI;
 	}
 }
 

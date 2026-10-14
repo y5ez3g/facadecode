@@ -34,6 +34,13 @@ export interface IActiveFolderService {
 	readonly activeFolder: IWorkspaceFolder | undefined;
 
 	/**
+	 * The folder the window was moved off to reach the active one, while it is still one of the
+	 * workspace's roots; undefined otherwise. Where a view falls back to when the folder it was on goes
+	 * and the folder that owned it is gone too (AGENT-ORCHESTRATION.md, O5).
+	 */
+	readonly previousFolder: IWorkspaceFolder | undefined;
+
+	/**
 	 * Before the change, for whoever has to put something away first.
 	 *
 	 * ⚠️ Only for a deliberate move. When the active root leaves the workspace this service moves to

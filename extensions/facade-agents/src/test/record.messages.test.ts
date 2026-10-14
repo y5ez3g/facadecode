@@ -14,9 +14,9 @@ import { tempDir } from './util';
 
 const LEDGER = 'ledger.jsonl';
 
-/** An agent the person starts, or the agent `parent` does. */
-function newAgent(name: string, parent?: number): NewAgent {
-	return { name, parent, cli: 'arg', model: 'small', effort: 'high', worktree: 'main', folder: '/lab', yolo: true };
+/** An agent the person starts, or the agent `creator` does. */
+function newAgent(name: string, creator?: number): NewAgent {
+	return { name, creator, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, worktree: 'main', folder: '/lab' };
 }
 
 /** What a call came to: `done`, or the message of what it threw. */
@@ -96,45 +96,61 @@ suite('Record: messages', () => {
 		});
 	});
 
-	test('a message is unread until a result with it is delivered; one given whose result did not reach the pipe stays unread, given at that time; one to the person is delivered as it is recorded; one gone back is returned', () => {
+	test('a message is unread until a result with it is delivered; one whose result did not reach the pipe stays unread; one to the person is delivered as it is recorded; one gone back is returned', () => {
 		const lead = table.start(newAgent('lead')).agent;
 		const lint = table.start(newAgent('lint', lead.id)).agent;
 		const delivered = table.messages.send({ from: lead.id, to: lint.id, text: 'Lint it.' });
 		const lost = table.messages.send({ from: lead.id, to: lint.id, text: 'And the docs.' });
 		const back = table.messages.send({ from: lead.id, to: lint.id, text: 'Never read.' });
 		const toPerson = table.messages.send({ from: lint.id, to: HUMAN, text: 'Done.' });
-		table.messages.given(lint.id, [delivered.id, lost.id]);
 		table.messages.delivered(lint.id, [delivered.id]);
-		table.messages.given(lint.id, [lost.id]);
 		table.messages.returned(back.id, 'it exited');
 		const { entries, fetchedAt } = table.state.mail;
 
 		assert.deepStrictEqual({
 			states: [delivered, lost, back, toPerson].map(message => entries.get(message.id)?.state),
-			given: [entries.get(delivered.id)?.given.length, entries.get(lost.id)?.given.length],
 			fetched: fetchedAt.has(lint.id),
 			returns: [...table.state.mail.returns.entries()].map(([id, returned]) => [id, returned.reason, returned.as])
 		}, {
 			states: ['delivered', 'unread', 'returned', 'delivered'],
-			given: [1, 2],
 			fetched: true,
 			returns: [[3, 'it exited', undefined]]
 		});
 	});
 
-	test('a result with another\'s message, fetched by its number, does not deliver it: it stays unread for its recipient, given to it never, and the fetcher has seen it', () => {
+	test('a result with another\'s message, fetched by its number, does not deliver it: it stays unread for its recipient, and the fetcher has fetched none of its own', () => {
 		const lead = table.start(newAgent('lead')).agent;
 		const lint = table.start(newAgent('lint', lead.id)).agent;
 		const toLead = table.messages.send({ from: lint.id, to: lead.id, text: 'Done.' });
-		table.messages.given(lint.id, [toLead.id]);
 		table.messages.delivered(lint.id, [toLead.id]);
-		const { entries, seen, fetchedAt } = table.state.mail;
+		const { entries, fetchedAt } = table.state.mail;
 
-		assert.deepStrictEqual({ state: entries.get(toLead.id)?.state, given: entries.get(toLead.id)?.given.length, seen: seen.get(lint.id)?.has(toLead.id), fetched: fetchedAt.has(lint.id) }, {
+		assert.deepStrictEqual({ state: entries.get(toLead.id)?.state, fetched: fetchedAt.has(lint.id) }, {
 			state: 'unread',
-			given: 0,
-			seen: true,
 			fetched: false
+		});
+	});
+
+	test('Facade keeps no history of who was given which message (M4): a ledger whose earlier Facade wrote message.given loads, the line changing nothing, and none is written now', () => {
+		const lead = table.start(newAgent('lead')).agent;
+		const lint = table.start(newAgent('lint', lead.id)).agent;
+		const one = table.messages.send({ from: lead.id, to: lint.id, text: 'One.' });
+		const before = structuredClone(table.state.mail);
+		table.dispose();
+		// As a Facade before M4 dropped the marks wrote it, as a result went out
+		const file = path.join(temp.dir, LEDGER);
+		const seq = JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n').pop() ?? '{}').seq;
+		fs.appendFileSync(file, `${JSON.stringify({ v: 6, seq: seq + 1, time: 1, type: 'message.given', agent: lint.id, ids: [one.id] })}\n`);
+		table = AgentTable.open({ dir: temp.dir });
+		const read = structuredClone(table.state.mail);
+		table.messages.delivered(lint.id, [one.id]);
+
+		assert.deepStrictEqual({
+			read,
+			written: lines(temp.dir).filter(line => line.includes(' message.'))
+		}, {
+			read: before,
+			written: [`v6 message.sent ${one.id}`, `v6 message.given ${lint.id} ${one.id}`, `v6 message.delivered ${lint.id} ${one.id}`]
 		});
 	});
 
@@ -181,15 +197,14 @@ suite('Record: messages', () => {
 		});
 	});
 
-	test('a reload loses nothing of the messages: the mailboxes, what was given and when, the doorbells, the returns, the tasks', () => {
+	test('a reload loses nothing of the messages: the mailboxes, what was delivered and when, the doorbells, the returns, the tasks', () => {
 		const lead = table.start(newAgent('lead')).agent;
 		const lint = table.start(newAgent('lint', lead.id)).agent;
 		const task = table.messages.send({ from: lead.id, to: lint.id, text: 'Lint.', task: true });
 		const long = table.messages.send({ from: lint.id, to: lead.id, text: 'z'.repeat(TEXT_IN_LINE + 5), replyTo: task.id });
 		table.messages.rang(lint.id, [task.id]);
-		table.messages.given(lint.id, [task.id, long.id]);
 		table.messages.delivered(lint.id, [task.id]);
-		table.messages.returned(long.id, 'stopped by @you');
+		table.messages.returned(long.id, 'stopped by @human');
 		const before = structuredClone(table.state.mail);
 		table.dispose();
 		table = AgentTable.open({ dir: temp.dir });
@@ -203,7 +218,7 @@ suite('Record: messages', () => {
 		const toLead = table.messages.send({ to: lead.id, text: 'Keep.' });
 		const toGone = table.messages.send({ from: lead.id, to: gone.id, text: 'Gone.' });
 		const toPerson = table.messages.send({ from: lead.id, to: HUMAN, text: 'Hi.' });
-		table.setExited(gone.id, 'killed', 'the person closed its window');
+		table.end(gone.id, 'stopped', 'the person closed its window');
 		table.clearList();
 		const { entries, mailboxes, messages } = table.state.mail;
 
@@ -218,7 +233,7 @@ suite('Record: messages', () => {
 			mailboxes: [lead.id],
 			stillKnown: 3,
 			next: 4,
-			types: ['v5 list.cleared', 'v5 message.sent 4']
+			types: ['v6 list.cleared', 'v6 message.sent 4']
 		});
 	});
 
@@ -244,10 +259,8 @@ suite('Record: messages', () => {
 		const one = table.messages.send({ from: lead.id, to: lint.id, text: 'One.' });
 		const two = table.messages.send({ from: lead.id, to: lint.id, text: 'Two.' });
 		const toLead = table.messages.send({ from: lint.id, to: lead.id, text: 'Done.' });
-		table.messages.given(lint.id, [one.id]);
 		table.messages.delivered(lint.id, [one.id]);
 		const partly = table.state.mail.drainedAt.has(lint.id);
-		table.messages.given(lint.id, [two.id, toLead.id]);
 		table.messages.delivered(lint.id, [two.id, toLead.id]);
 		const emptied = table.state.mail.drainedAt.get(lint.id);
 		table.messages.send({ from: FACADE, to: lead.id, text: '@lint #a2 has not fetched #m1 in 2 minutes.', facade: 'delayed', about: lint.id });
@@ -317,7 +330,7 @@ suite('Record: chat rooms', () => {
 				+ entry(ended, 'Facade → @lead #a1', '@docs #a3 ended: it exited, with exit code 1.'),
 			docs: heading('@docs #a3')
 				+ entry(across, '@lint #a2 → @docs #a3', 'Which file?')
-				+ entry(toPerson, '@docs #a3 → @you', 'Done:\nsee docs/.')
+				+ entry(toPerson, '@docs #a3 → @human', 'Done:\nsee docs/.')
 				+ entry(ended, 'Facade → @lead #a1', '@docs #a3 ended: it exited, with exit code 1.'),
 			files: ['docs-a3.md', 'lead-a1.md']
 		});
@@ -328,17 +341,17 @@ suite('Record: chat rooms', () => {
 		const lint = table.start(newAgent('lint', lead.id)).agent;
 		const lost = send({ from: lead.id, to: lint.id, text: 'Lint.' });
 		const own = send({ from: FACADE, to: lint.id, text: 'Facade says.', facade: 'ended', about: lead.id });
-		table.setExited(lead.id, 'exited', 'its CLI ended');
-		table.setExited(lint.id, 'killed', 'killed by the person');
+		table.end(lead.id, 'exited', 'its CLI ended');
+		table.end(lint.id, 'stopped', 'killed by the person');
 		for (const id of [lost, own]) {
-			table.messages.returned(id, 'stopped by @you');
+			table.messages.returned(id, 'stopped by @human');
 			rooms.noteUnreturned(id);
 		}
 		const text = room('lead-a1.md');
 
 		assert.deepStrictEqual(text.split('\n').filter(line => line.startsWith('>')), [
-			'> #m1 was not fetched by @lint #a2 before it ended (stopped by @you). It could not be returned: @lead #a1, its sender, had ended.',
-			'> #m2 was not fetched by @lint #a2 before it ended (stopped by @you). It could not be returned: Facade\'s own messages are not returned.'
+			'> #m1 was not fetched by @lint #a2 before it ended (stopped by @human). It could not be returned: @lead #a1, its sender, had ended.',
+			'> #m2 was not fetched by @lint #a2 before it ended (stopped by @human). It could not be returned: Facade\'s own messages are not returned.'
 		]);
 	});
 

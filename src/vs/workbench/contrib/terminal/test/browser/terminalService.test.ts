@@ -3,8 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { fail, strictEqual } from 'assert';
-import { Emitter } from '../../../../../base/common/event.js';
+import { deepStrictEqual, fail, strictEqual } from 'assert';
+import { timeout } from '../../../../../base/common/async.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
+import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
@@ -12,11 +14,12 @@ import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.j
 import { TestDialogService } from '../../../../../platform/dialogs/test/common/testDialogService.js';
 import { TerminalLocation, TitleEventSource, type ITerminalBackend, type TerminalIcon } from '../../../../../platform/terminal/common/terminal.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../browser/terminal.js';
-import { TerminalService } from '../../browser/terminalService.js';
+import { TerminalService, whenReplayed } from '../../browser/terminalService.js';
 import { TERMINAL_CONFIG_SECTION } from '../../common/terminal.js';
 import { IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
 import { workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
 import type { IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
+import { IWorkspace, IWorkspaceContextService, WorkbenchState } from '../../../../../platform/workspace/common/workspace.js';
 
 suite('Workbench - TerminalService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -80,6 +83,25 @@ suite('Workbench - TerminalService', () => {
 				strictEqual(disposalEmitters[i].hasListeners(), false);
 			}
 		});
+	});
+
+	test('the window is connected once each terminal that came back has replayed what its process wrote, or never will: its process failed to start - its folder gone - or ended, before or after, or its terminal closed (N-67)', async () => {
+		const terminal = () => {
+			const replayed = store.add(new Emitter<void>());
+			const exit = store.add(new Emitter<number | undefined>());
+			const disposed = store.add(new Emitter<ITerminalInstance>());
+			return { replayed, exit, disposed, instance: upcastPartial<ITerminalInstance>({ isDisposed: false, onProcessReplayComplete: replayed.event, onExit: exit.event, onDisposed: disposed.event }) };
+		};
+		const [replaying, failing, closing, endedBefore] = [terminal(), terminal(), terminal(), terminal()];
+		const connected = Promise.all([whenReplayed(replaying.instance, false), whenReplayed(failing.instance, false), whenReplayed(closing.instance, false), whenReplayed(endedBefore.instance, true)]).then(() => 'connected');
+		replaying.replayed.fire();
+		failing.exit.fire(undefined);
+		closing.disposed.fire(closing.instance);
+		const meanwhile = timeout(50);
+		const outcome = await Promise.race([connected, meanwhile.then(() => 'still waiting', () => 'still waiting')]);
+		meanwhile.cancel();
+
+		strictEqual(outcome, 'connected');
 	});
 
 	suite('safeDisposeTerminal', () => {
@@ -227,6 +249,49 @@ suite('Workbench - TerminalService', () => {
 			strictEqual(backend.iconUpdateCount, 1);
 			strictEqual(backend.lastTitle, 'terminal title');
 			strictEqual(backend.lastIconUserInitiated, true);
+		});
+
+		test('a window whose workspace became another - a folder window given a second folder - keeps its terminals\' layout under the new one at once, not a debounce later: reloaded right after, it finds them (N-50)', () => {
+			let id = 'folder';
+			const stateChanged = store.add(new Emitter<WorkbenchState>());
+			instantiationService.set(IWorkspaceContextService, upcastPartial<IWorkspaceContextService>({
+				getWorkspace: () => upcastPartial<IWorkspace>({ id, folders: [] }),
+				getWorkbenchState: () => WorkbenchState.FOLDER,
+				onDidChangeWorkbenchState: stateChanged.event,
+				onDidChangeWorkspaceFolders: Event.None,
+				onDidChangeWorkspaceName: Event.None
+			}));
+			const service = store.add(instantiationService.createInstance(TerminalService));
+			const savedUnder: string[] = [];
+			(service as unknown as { _primaryBackend: Partial<ITerminalBackend> })._primaryBackend = { setTerminalLayoutInfo: async () => { savedUnder.push(id); } };
+			// eslint-disable-next-line @typescript-eslint/naming-convention
+			(service as unknown as { _attachProcessLayoutListeners(): void })._attachProcessLayoutListeners();
+
+			stateChanged.fire(WorkbenchState.FOLDER);
+			id = 'untitled';
+			stateChanged.fire(WorkbenchState.WORKSPACE);
+
+			deepStrictEqual(savedUnder, ['untitled']);
+		});
+
+		test('a title an escape sequence set is kept as the sequence, not as the label its template made of it (N-03)', async () => {
+			const instance = { ...createTerminalInstance(), title: 'Fix it - @codex #a3', titleSource: TitleEventSource.Sequence, sequence: 'Fix it' } as ITerminalInstance;
+
+			await runWithFakedTimers({}, async () => {
+				updateTitle(terminalService, instance);
+			});
+
+			strictEqual(backend.lastTitle, 'Fix it');
+		});
+
+		test('a title the process cleared by an escape sequence is kept cleared, not as the label its template made without it (N-59)', async () => {
+			const instance = { ...createTerminalInstance(), title: '@codex #a3', titleSource: TitleEventSource.Sequence, sequence: '' } as ITerminalInstance;
+
+			await runWithFakedTimers({}, async () => {
+				updateTitle(terminalService, instance);
+			});
+
+			strictEqual(backend.lastTitle, '');
 		});
 	});
 });

@@ -4,14 +4,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ANSWER_DELAY_MS, DEFAULT_LINES, InputResult, MOST_INLINE_CHARS, MOST_LINES, ScreenRead } from '../core/screens';
+import { describe } from '../record/events';
 import { Args } from './args';
 import type { ContractTool } from './tools';
 import { timeOfDay } from './words';
 
-/** How long before `now` `time` was, in words. */
-function ago(time: number, now: number): string {
+/** How long before `now` `time` was, in words: `20 minutes`. */
+function span(time: number, now: number): string {
 	const seconds = Math.max(0, Math.round((now - time) / 1000));
-	return seconds < 120 ? `${seconds} seconds ago` : `${Math.round(seconds / 60)} minutes ago`;
+	return seconds < 120 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
 }
 
 /** `count` lines, in words. */
@@ -23,7 +24,7 @@ function lines(count: number): string {
 function emptyText(read: ScreenRead): string {
 	switch (read.empty) {
 		case 'not_created':
-			return 'it has no terminal yet: it is still starting.';
+			return `it has no terminal yet: it is still starting${read.phase === 'creating_worktree' ? ', its worktree being made' : read.phase === 'running_setup' ? ', its worktree being set up' : read.phase === 'launching_cli' ? ', its CLI being launched' : ''}.`;
 		case 'discarded':
 			return 'its screens were deleted when Facade started afresh, with those of every agent that had ended before.';
 		case 'unreadable':
@@ -38,20 +39,26 @@ function emptyText(read: ScreenRead): string {
  * lines it gives and what it leaves out - then the lines as they are.
  */
 export function screenText(read: ScreenRead, cliName: string): string {
-	const state = read.exit ? `ended at ${timeOfDay(read.exit.time)} (${read.exit.kind}: ${read.exit.reason})` : read.exited ? `${read.state}, its process ended - its terminal still open` : read.state;
-	const who = `@${read.name} #a${read.id} (${cliName}), ${state}`;
+	const state = read.end ? `ended at ${timeOfDay(read.end.time)} (${read.end.kind}: ${read.end.reason})` : read.exited ? `${read.state}, its process ended - its terminal still open` : read.state;
+	const who = `${describe(read)} (${cliName}), ${state}`;
 	if (read.source === 'none') {
 		return `${who}. Nothing to read: ${emptyText(read)}`;
 	}
 	let from: string;
 	if (read.source === 'final') {
 		const frame = read.parts?.find(part => part.kind === 'frame');
-		from = `Its last screen, kept as its terminal ended: ${read.selected < read.requested ? `all ${lines(read.selected)} of it` : `its bottom ${lines(read.selected)}`}`
+		const kept = `Its last screen, kept as its terminal ended${read.capturedAt !== undefined ? ` at ${timeOfDay(read.capturedAt)}` : ''}`
+			+ (read.lastOutput !== undefined && read.capturedAt !== undefined ? `, which last showed new output ${span(read.lastOutput, read.capturedAt)} before that` : '');
+		if (!read.selected) {
+			return `${who}. ${kept}: blank - nothing was on it.`;
+		}
+		from = `${kept}: ${read.selected < read.requested && !read.cut ? `all ${lines(read.selected)} of it` : `its bottom ${lines(read.selected)}`}`
+			+ (read.older ? ', with older lines above them' : read.trimmed ? ' - its terminal had let go of older lines past what it keeps' : '')
 			+ (frame && !frame.lines ? `. The file also has the last full-screen frame it drew before it left it, ${lines(frame.of)}` : '')
-			+ `. All of it is in ${read.finalScreen}`;
+			+ (read.finalScreen ? `. All ${read.cut ? `the window kept of it - its newest lines, ${MOST_LINES} at most in all -` : 'of it'} is in ${read.finalScreen}` : '');
 	} else {
 		const what = read.source === 'alternate' ? 'A full-screen program\'s frame on its screen' : 'Its screen';
-		const shown = read.lastOutput !== undefined && read.capturedAt !== undefined ? `, which last showed new output ${ago(read.lastOutput, read.capturedAt)}` : '';
+		const shown = read.lastOutput !== undefined && read.capturedAt !== undefined ? `, which last showed new output ${span(read.lastOutput, read.capturedAt)} ago` : '';
 		if (read.empty === 'no_text') {
 			return `${who}. ${what}${shown}: nothing on it yet.`;
 		}
@@ -59,8 +66,9 @@ export function screenText(read: ScreenRead, cliName: string): string {
 			+ (read.selected < read.requested ? `all ${lines(read.selected)} it has` : `its bottom ${lines(read.selected)}`)
 			+ (read.older ? ', with older lines above them' : read.trimmed ? ' - its terminal let go of older lines past what it keeps' : '');
 	}
+	const file = read.snapshot ?? read.finalScreen;
 	const omitted = read.omitted
-		? ` Past the ${MOST_INLINE_CHARS} characters a result holds, here are its last ${lines(read.selected - read.omitted.lines)}${read.omitted.partialFirstLine ? ', the first of them only the end of it' : ''}; the ${read.omitted.chars} characters before them are in ${read.snapshot ?? read.finalScreen}, with the rest: read that file for them.`
+		? ` Past the ${MOST_INLINE_CHARS} characters a result holds, here are its last ${lines(read.selected - read.omitted.lines)}${read.omitted.partialFirstLine ? ', the first of them only the end of it' : ''}; the ${read.omitted.chars} characters before them are ${file ? `in ${file}, with the rest: read that file for them` : 'left out: no file could be written for them'}.`
 		: '';
 	return `${who}. ${from}.${omitted} The lines, as they are - [[...]] marks inverse video, {{...}} dim text:\n${read.text}`;
 }
@@ -82,7 +90,7 @@ export const readScreenTool: ContractTool = {
 		inputSchema: {
 			type: 'object',
 			properties: {
-				agent: { type: 'string', description: 'The agent: its number, as #a7, or its @name, where only one running agent has it. One that ended, by its number.' },
+				agent: { type: 'string', description: 'The agent: its number, as #a7, or its @name, where only one agent that has not ended has it. One that ended, by its number.' },
 				lines: { type: 'integer', minimum: 1, maximum: MOST_LINES, description: `How many of its bottom lines: ${DEFAULT_LINES} unless given, ${MOST_LINES} at most. A line the terminal wraps over several rows counts as one.` }
 			},
 			required: ['agent'],

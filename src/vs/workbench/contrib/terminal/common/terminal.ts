@@ -661,6 +661,8 @@ export const DEFAULT_COMMANDS_TO_SKIP_SHELL: string[] = [
 	'workbench.action.terminal.chat.runCommand',
 	'workbench.action.terminal.chat.insertCommand',
 	'workbench.action.terminal.chat.viewInChat',
+	// Facade Code: Show Agent Menu, whose Ctrl+Alt+A xterm.js would otherwise send to the shell on Linux
+	'facade.agent.showMenu',
 	...defaultTerminalContribCommandsToSkipShell,
 ];
 

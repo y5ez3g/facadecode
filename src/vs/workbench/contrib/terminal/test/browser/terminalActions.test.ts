@@ -6,8 +6,15 @@
 import { deepStrictEqual } from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
-import { WorkspaceFolderCwdPair, shrinkWorkspaceFolderCwdPairs } from '../../browser/terminalActions.js';
+import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { ICreateTerminalOptions, ITerminalConfigurationService, ITerminalInstance, ITerminalInstanceHost, ITerminalService } from '../../browser/terminal.js';
+import { ITerminalServicesCollection, WorkspaceFolderCwdPair, attachableProcesses, shrinkWorkspaceFolderCwdPairs, splitActiveTerminal } from '../../browser/terminalActions.js';
+import { ITerminalConfiguration } from '../../common/terminal.js';
+import { IProcessDetails } from '../../../../../platform/terminal/common/terminalProcess.js';
+import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
+import { upcastPartial } from '../../../../../base/test/common/mock.js';
 
 function makeFakeFolder(name: string, uri: URI): IWorkspaceFolder {
 	return {
@@ -28,13 +35,47 @@ function makePair(folder: IWorkspaceFolder, cwd?: URI | IWorkspaceFolder, isAbso
 }
 
 suite('terminalActions', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const root: URI = URI.file('/some-root');
 	const a = makeFakeFolder('a', URI.joinPath(root, 'a'));
 	const b = makeFakeFolder('b', URI.joinPath(root, 'b'));
 	const c = makeFakeFolder('c', URI.joinPath(root, 'c'));
 	const d = makeFakeFolder('d', URI.joinPath(root, 'd'));
+
+	test('Attach to Session offers the processes no terminal here is attached to, an agent\'s run never - it stays in its window, which takes it back (X-32; C-WB-09)', () => {
+		const process = (pid: number, run?: number) => upcastPartial<IProcessDetails>({ pid, ...(run !== undefined ? { reconnectionProperties: facadeRunProperties({ workspace: 'w', id: run }) } : {}) });
+		const processes = [process(1), process(2), process(3, 7)];
+
+		deepStrictEqual(attachableProcesses(processes, each => each.pid === 2).map(each => each.pid), [1]);
+	});
+
+	test('Split Terminal splits the active terminal, the new one where the window is: what it needs of the services is read as it is invoked, the accessor being no longer valid after its first await (N-74; TM-06)', async () => {
+		const instantiationService = store.add(new TestInstantiationService());
+		instantiationService.stub(IWorkspaceContextService, upcastPartial<IWorkspaceContextService>({ getWorkspace: () => upcastPartial<IWorkspace>({ folders: [a, b] }) }));
+		instantiationService.stub(IActiveFolderService, upcastPartial<IActiveFolderService>({ activeFolder: b }));
+		const parent = upcastPartial<ITerminalInstance>({});
+		const split = upcastPartial<ITerminalInstance>({});
+		const made: ICreateTerminalOptions[] = [];
+		const focused: ITerminalInstance[] = [];
+		const c = upcastPartial<ITerminalServicesCollection>({
+			service: upcastPartial<ITerminalService>({
+				getInstanceHost: async () => upcastPartial<ITerminalInstanceHost>({ activeInstance: parent }),
+				createTerminal: async options => {
+					made.push(options!);
+					return split;
+				},
+				focusInstance: async instance => {
+					focused.push(instance);
+				}
+			}),
+			configService: upcastPartial<ITerminalConfigurationService>({ config: upcastPartial<ITerminalConfiguration>({ splitCwd: 'workspaceRoot' }) })
+		});
+
+		await instantiationService.invokeFunction(accessor => splitActiveTerminal(c, accessor));
+
+		deepStrictEqual({ made, focused }, { made: [{ location: { parentTerminal: parent }, config: undefined, cwd: b.uri }], focused: [split] });
+	});
 
 	suite('shrinkWorkspaceFolderCwdPairs', () => {
 		test('should return empty when given array is empty', () => {

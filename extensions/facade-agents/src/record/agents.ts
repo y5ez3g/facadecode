@@ -8,9 +8,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { isEqualPath, readLastNumber, replaceFile } from '../base/files';
-import { Agent, Caller, Exit, ExitKind, isAgentName, isLive, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, parentOf, PERSON, RESERVED_NAMES, WorkspaceState } from './events';
-import { ClosedBy, LastClose, Ledger, LedgerOptions } from './ledger';
-import { HUMAN, MessageRecord } from './messages';
+import { isJsonObject } from '../base/json';
+import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LedgerEventBody, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, SetupState, StartPhase, StoppedBy, WorkspaceState, WorktreeRemoval } from './events';
+import { ClosedBy, LastClose, Ledger, LEDGER_FILE, LedgerOptions } from './ledger';
+import { AgentLog, LoggedLaunch } from './log';
+import { LAST_MESSAGE_FILES, MessageRecord } from './messages';
 
 /** The person's token, in the workspace's folder: scripts that hold it act as the person. */
 const YOU_TOKEN_FILE = 'you.token';
@@ -25,18 +27,15 @@ const RUNS_DIR = 'runs';
 /** A file of an agent's run: `<number>.<anything>`. */
 const RUN_FILE = /^(?<id>\d+)\./;
 
-/**
- * An agent's name as given - `@clamp` or `Clamp` - in its form: lower case, without the `@`. Throws with
- * why one is no name. `human` is the person's, as messages name them, though a ledger may have an agent of
- * it from before.
- */
+/** An agent's name, as it is given, trimmed: `clamp`. Throws with why one is no name - `@clamp` and `Clamp` among them. */
 export function agentName(text: string): string {
-	const name = text.trim().replace(/^@/, '').toLowerCase();
-	if (RESERVED_NAMES.has(name) || name === HUMAN) {
+	// Taken as it is given: one that is no name is refused, rather than made one
+	const name = text.trim();
+	if (RESERVED_NAMES.has(name)) {
 		throw new Error(`"${name}" is reserved: choose another name.`);
 	}
 	if (!isAgentName(name)) {
-		throw new Error(`"${text}" is not a name: use up to ${MAX_NAME_LENGTH} letters, digits, dots, dashes or underscores, starting with a letter or digit.`);
+		throw new Error(`"${text}" is not a name: use up to ${MAX_NAME_LENGTH} lower-case letters, digits, dots, dashes or underscores, starting with a letter or digit.`);
 	}
 	return name;
 }
@@ -44,29 +43,40 @@ export function agentName(text: string): string {
 /** The name an agent gets from its worktree when it is given none: `feature/Clamp` gives `feature-clamp`. */
 export function nameOfWorktree(worktree: string): string {
 	const name = worktree.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, MAX_NAME_LENGTH).replace(/[^a-z0-9]+$/, '');
-	return isAgentName(name) && name !== HUMAN ? name : 'agent';
+	return isAgentName(name) ? name : 'agent';
 }
 
-/** Where a workspace's agents are recorded, and what tests replace of the ledger's. */
+/** Where a workspace's agents are recorded, and what tests replace of the ledger's and of its record of messages. */
 export interface AgentTableOptions extends LedgerOptions {
 	/** The workspace's folder under `~/.facade/workspaces`. */
 	readonly dir: string;
+	/** Makes the record of the workspace's messages, over its ledger: Facade's own where left out. */
+	readonly messageRecord?: (dir: string, ledger: Ledger) => MessageRecord;
 }
 
-/** An agent to start: who it is, who starts it, and where it works. */
+/** An agent to start: who it is, who starts it, how, where it works, and its task. */
 export interface NewAgent {
 	readonly name: string;
 	/** The agent that starts it; none for the person. */
-	readonly parent?: number;
+	readonly creator?: number;
 	readonly cli: string;
-	readonly model: string;
-	readonly effort: string;
-	readonly worktree: string;
-	readonly folder: string;
-	/** Whether its CLI starts with full access: its YOLO, for good. */
+	readonly custom: boolean;
+	/** As its creator asked for them; none where it asked for none. */
+	readonly model?: string;
+	readonly effort?: string;
+	/** What it was asked for that its launch has no group for. */
+	readonly ignored: readonly Ignored[];
 	readonly yolo: boolean;
-	/** How long after a paste into its terminal Enter is pressed. */
-	readonly enterDelay?: number;
+	/** Started through `start_agent`, where nobody may be watching it (L4). */
+	readonly unattended?: boolean;
+	readonly sandbox: SandboxState;
+	readonly integration: boolean;
+	readonly worktree: string;
+	/** Its folder is in no Git repository (N-05). */
+	readonly outsideGit?: boolean;
+	readonly folder: string;
+	/** Where its start begins: making its worktree, or launching its CLI. */
+	readonly phase?: StartPhase;
 }
 
 /** An agent just started, and the token it calls Facade with. */
@@ -87,15 +97,27 @@ export class AgentTable {
 	private personToken = '';
 	/** The highest number given, as `last-id` says it: a ledger begun anew counts on from it. */
 	private lastId = 0;
+	/** The person's history: each start and each end. */
+	private readonly log: AgentLog;
+	/** The workspace's messages, which its ledger records too (AGENT-MESSAGES.md). */
+	readonly messages: MessageRecord;
 
-	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger, readonly messages: MessageRecord) { }
+	/** Hears each change of the record as it is written: an agent starting, moving on, or ending. */
+	onDidChange(listener: () => void): { dispose(): void } {
+		return this.ledger.onDidAppend(() => listener());
+	}
+
+	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) {
+		this.log = AgentLog.of(options.dir);
+		this.messages = options.messageRecord?.(options.dir, ledger) ?? new MessageRecord(options.dir, ledger);
+	}
 
 	/** Opens a workspace's ledger, making it the first time. */
 	static open(options: AgentTableOptions): AgentTable {
 		const ledger = Ledger.open(options.dir, options);
 		let table: AgentTable;
 		try {
-			table = new AgentTable(options, ledger, new MessageRecord(options.dir, ledger));
+			table = new AgentTable(options, ledger);
 			table.personToken = readOrCreateToken(path.join(options.dir, YOU_TOKEN_FILE));
 			table.lastId = readLastNumber(path.join(options.dir, LAST_ID_FILE)) || readLastNumber(path.join(options.dir, LAST_PID_FILE));
 		} catch (err) {
@@ -130,6 +152,20 @@ export class AgentTable {
 		return path.join(this.options.dir, RUNS_DIR);
 	}
 
+	/** The person's history of the workspace's agents. */
+	get logFile(): string {
+		return this.log.file;
+	}
+
+	/** Who started or stopped an agent, as Facade's words name them: `@lead #a1`, `@human`; a number alone for one the list no longer has. */
+	whoIs(who: StoppedBy | undefined): string {
+		if (who === undefined || who === 'human') {
+			return describe(PERSON);
+		}
+		const agent = this.state.agents.get(who);
+		return agent ? describe(agent) : agentRef(who);
+	}
+
 	/**
 	 * Closes the ledger, for this window's reload or the next window to open it: as the window goes, or as
 	 * Facade lets go of its agents while the window stays.
@@ -158,19 +194,25 @@ export class AgentTable {
 		return [...this.state.agents.values()].filter((agent): agent is LiveAgent => isLive(agent) && agent.name === name);
 	}
 
-	/** An agent's parent now: none, the person, once the agent that started it has exited. */
-	parentOf(agent: Agent): number | undefined {
-		return parentOf(this.state, agent);
+	/** The agents the agent `id` started - the person, for none - that have not ended, oldest first. */
+	childrenOf(id: number | undefined): LiveAgent[] {
+		return [...this.state.agents.values()].filter((agent): agent is LiveAgent => isLive(agent) && agent.creator === id);
 	}
 
-	/** The children of the agent `id` - of the person, for none - that have not exited, oldest first. */
-	childrenOf(id: number | undefined): LiveAgent[] {
-		return [...this.state.agents.values()].filter((agent): agent is LiveAgent => isLive(agent) && this.parentOf(agent) === id);
+	/** The agents that have not ended and are called `name` among `agents`, ended ones being taken by number. */
+	static liveNamedIn(agents: readonly Agent[], name: string): LiveAgent[] {
+		return agents.filter((agent): agent is LiveAgent => isLive(agent) && agent.name === name);
+	}
+
+	/** The file the plan of the launch of the agent `id` is in: what its terminal runs, and its delays. */
+	launchFileOf(id: number): string {
+		return path.join(this.runsDir, `${id}.launch.json`);
 	}
 
 	/**
-	 * Records a new agent under the next number, and writes its token. Nothing is written once the ledger
-	 * is closed or another window's: the number may be one that window gave.
+	 * Records a new agent under the next number, and writes its token. Nothing is written once the ledger is
+	 * closed or another window's: the number may be one that window gave. Its task is a message, sent once it
+	 * is recorded (AGENT-MESSAGES.md, M7).
 	 */
 	start(agent: NewAgent): StartedAgent {
 		const name = agentName(agent.name);
@@ -183,55 +225,146 @@ export class AgentTable {
 		const tokenFile = path.join(this.runsDir, `${id}.token`);
 		fs.mkdirSync(this.runsDir, { recursive: true });
 		fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-		this.ledger.append({
+		const creator = agent.creator === undefined ? undefined : this.state.agents.get(agent.creator);
+		const event: LedgerEventBody = {
 			type: 'agent.started',
 			id,
 			name,
-			...(agent.parent !== undefined ? { parent: agent.parent } : {}),
+			...(agent.creator !== undefined ? { creator: agent.creator, root: creator?.root ?? agent.creator } : {}),
 			cli: agent.cli,
-			model: agent.model,
-			effort: agent.effort,
-			worktree: agent.worktree,
-			folder: agent.folder,
+			...(agent.custom ? { custom: true } : {}),
+			...(agent.model !== undefined ? { model: agent.model } : {}),
+			...(agent.effort !== undefined ? { effort: agent.effort } : {}),
+			...(agent.ignored.length ? { ignored: agent.ignored } : {}),
 			yolo: agent.yolo,
-			...(agent.enterDelay !== undefined ? { enterDelay: agent.enterDelay } : {}),
-			tokenHash: hashToken(token)
-		});
+			...(agent.unattended ? { unattended: true as const } : {}),
+			sandbox: agent.sandbox,
+			integration: agent.integration,
+			// Never empty: a ledger before this build read an empty one as no event (X-13)
+			worktree: agent.worktree || path.basename(agent.folder) || agent.folder,
+			...(agent.outsideGit ? { outsideGit: true as const } : {}),
+			folder: agent.folder,
+			tokenHash: hashToken(token),
+			...(agent.phase !== undefined ? { phase: agent.phase } : {})
+		};
+		try {
+			this.ledger.append(event);
+		} catch (err) {
+			// Not recorded: its token goes too, rather than lie about for a number nobody has (X-75)
+			fs.rmSync(tokenFile, { force: true });
+			throw err;
+		}
 		const started = this.state.agents.get(id);
 		if (!started) {
-			throw new Error(`The ledger did not record #${id}.`);
+			throw new Error(`The ledger did not record ${agentRef(id)}.`);
 		}
+		this.log.started(started, this.whoIs(started.creator));
 		return { agent: started, token, tokenFile };
 	}
 
-	/** Records that a starting agent is running: its MCP server said hello. */
-	setRunning(id: number): void {
+	/** Writes into the person's history what goes into an agent's terminal, and what went in (AGENT-DEBUGGING.md, D9). */
+	auditInput(what: string): void {
+		this.log.input(Date.now(), what);
+	}
+
+	/**
+	 * Records that a starting agent's start moved on: to `phase`, its worktree made in `folder` where one was, and how
+	 * its setup went, `setup`, as it goes on to its CLI (O11).
+	 */
+	phase(id: number, phase: StartPhase, folder?: string, setup?: SetupState): void {
 		if (this.state.agents.get(id)?.state === 'starting') {
-			this.ledger.append({ type: 'agent.running', id });
+			this.ledger.append({ type: 'agent.phase', id, phase, ...(folder !== undefined ? { folder } : {}), ...(setup !== undefined ? { setup } : {}) });
 		}
 	}
 
 	/**
-	 * Records that the list starts again, as a window starts that is not a reload: the mailboxes of the
-	 * agents that exited are emptied; numbers go on.
+	 * Records that the worktree made for agent `id`'s start is in `folder`, whatever its state: one stopped while git made
+	 * it is where git made it, not in the folder planned for it - another's, maybe (AGENT-ORCHESTRATION.md, O4; OR-05).
+	 */
+	recordWorktreeFolder(id: number, folder: string): void {
+		if (this.state.agents.has(id)) {
+			this.ledger.append({ type: 'agent.worktreeMade', id, folder });
+		}
+	}
+
+	/** Writes into the person's history what agent `id`'s terminal is to run, as its launch has it (UI-14). */
+	launching(id: number, launch: LoggedLaunch): void {
+		const agent = this.state.agents.get(id);
+		if (agent) {
+			this.log.launched(agent, launch, Date.now());
+		}
+	}
+
+	/** Records the process of an agent's CLI, once its terminal runs it. */
+	launched(id: number, processId: number): void {
+		if (isLive(this.state.agents.get(id))) {
+			this.ledger.append({ type: 'agent.launched', id, processId });
+		}
+	}
+
+	/** Records that an agent's MCP server said hello to Facade. */
+	connected(id: number): void {
+		const agent = this.state.agents.get(id);
+		if (isLive(agent) && !agent.connected) {
+			this.ledger.append({ type: 'agent.connected', id });
+			this.log.connected(agent, Date.now());
+		}
+	}
+
+	/** Records that a starting agent has started, and runs. */
+	running(id: number): void {
+		const agent = this.state.agents.get(id);
+		if (agent?.state === 'starting') {
+			this.ledger.append({ type: 'agent.running', id });
+			this.log.running(agent, Date.now());
+		}
+	}
+
+	/** Records that Facade set out to stop an agent - by whom, and why - until its process has ended. */
+	stopping(id: number, reason: string, by?: StoppedBy): void {
+		const agent = this.state.agents.get(id);
+		if (agent?.state === 'starting' || agent?.state === 'running') {
+			this.ledger.append({ type: 'agent.stopping', id, ...(by !== undefined ? { by } : {}), reason });
+		}
+	}
+
+	/**
+	 * Records how an agent ended - by whom, where someone stopped it, and with its CLI's exit code where it
+	 * is known - and removes its run files; answers with its end, or undefined for one that had ended already.
+	 */
+	end(id: number, kind: EndKind, reason: string, details: { readonly by?: StoppedBy; readonly exitCode?: number } = {}): End | undefined {
+		if (!isLive(this.state.agents.get(id))) {
+			return undefined;
+		}
+		this.ledger.append({ type: 'agent.ended', id, kind, ...(details.by !== undefined ? { by: details.by } : {}), reason, ...(details.exitCode !== undefined ? { exitCode: details.exitCode } : {}) });
+		this.removeRunFiles(each => each === id);
+		const agent = this.state.agents.get(id);
+		if (agent?.end) {
+			this.log.ended(agent, agent.end, agent.end.by === undefined ? undefined : this.whoIs(agent.end.by));
+		}
+		return agent?.end;
+	}
+
+	/**
+	 * Begins a new list, as a window starts that is not a reload: the agents that ended leave it, but for the
+	 * creators of agents that have not, and their mailboxes are emptied; numbers go on.
 	 */
 	clearList(): void {
 		this.ledger.append({ type: 'list.cleared' });
 	}
 
-	/** Records how an agent exited, and removes its run files; answers with its exit, or undefined for one that had exited already. */
-	setExited(id: number, kind: ExitKind, reason: string): Exit | undefined {
-		if (!isLive(this.state.agents.get(id))) {
-			return undefined;
-		}
-		this.ledger.append({ type: 'agent.exited', id, kind, reason });
-		this.removeRunFiles(each => each === id);
-		return this.state.agents.get(id)?.exit;
-	}
-
-	/** Records a worktree Facade made for a child. */
+	/** Records a worktree Facade made for an agent. */
 	recordWorktree(worktree: MadeWorktree): void {
 		this.ledger.append({ type: 'worktree.made', ...worktree });
+	}
+
+	/**
+	 * Records how a worktree's removal with `stop_agent` went - deleted, or not and why - in the ledger and the person's
+	 * history alike: what came of it, whoever's tool call was cut as it went (AGENT-ORCHESTRATION.md, O5, O11).
+	 */
+	recordWorktreeRemoval(removal: WorktreeRemoval): void {
+		this.ledger.append({ type: 'worktree.removal', ...removal });
+		this.log.removal(removal, Date.now(), this.whoIs(removal.by));
 	}
 
 	/** Records that a worktree Facade made is gone; nothing for a folder Facade did not make. */
@@ -244,6 +377,11 @@ export class AgentTable {
 	/** The worktree Facade made at `folder`, if it did. */
 	madeWorktree(folder: string): MadeWorktree | undefined {
 		return [...this.state.worktrees.values()].find(made => isEqualPath(made.folder, folder));
+	}
+
+	/** The last removal of the worktree `folder` with `stop_agent`, where it failed: until one there succeeds, or the folder is gone (O11). */
+	failedRemoval(folder: string): WorktreeRemoval | undefined {
+		return [...this.state.removals.values()].find(removal => isEqualPath(removal.folder, folder));
 	}
 
 	/** Removes the run files of the agents `exited` names; a file that is in use stays for the next opening. */
@@ -290,4 +428,62 @@ function readOrCreateToken(file: string): string {
 	const token = crypto.randomBytes(32).toString('base64url');
 	replaceFile(file, token);
 	return token;
+}
+
+/** The highest numbers a record gave: of its agents, and of its messages. */
+export interface NumberedUpTo {
+	readonly agents: number;
+	readonly messages: number;
+}
+
+/**
+ * The highest numbers the record in `dir` gave: of its agents, by its `last-id` - or `last-pid` - or its
+ * ledger, where that says more; of its messages, by its `last-message` - or the file of the build before
+ * messages - or its ledger. 0 for none.
+ */
+export function numberedUpTo(dir: string): NumberedUpTo {
+	let agents = Math.max(readLastNumber(path.join(dir, LAST_ID_FILE)), readLastNumber(path.join(dir, LAST_PID_FILE)));
+	let messages = Math.max(...LAST_MESSAGE_FILES.map(file => readLastNumber(path.join(dir, file))));
+	let text = '';
+	try {
+		text = fs.readFileSync(path.join(dir, LEDGER_FILE), 'utf8');
+	} catch {
+		// No ledger: the files say it all
+	}
+	const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value);
+	for (const line of text.split('\n')) {
+		try {
+			const event: unknown = JSON.parse(line);
+			if (!isJsonObject(event) || typeof event.type !== 'string') {
+				continue;
+			}
+			if (event.type.startsWith('agent.') && isNumber(event.id)) {
+				agents = Math.max(agents, event.id);
+			}
+			if (event.type === 'message.sent' && isNumber(event.id)) {
+				messages = Math.max(messages, event.id);
+			}
+			if (event.type === 'agent.started' && isNumber(event.taskMessage)) {
+				messages = Math.max(messages, event.taskMessage);
+			}
+		} catch {
+			// A line cut short, or none: nothing to count
+		}
+	}
+	return { agents, messages };
+}
+
+/**
+ * Has the record in `dir` count on from `reached`: no number up to it is given again - of an agent
+ * (AGENT-LAUNCHER.md, L2; X-49), nor of a message (AGENT-MESSAGES.md, M10).
+ */
+export function countOnFrom(dir: string, reached: NumberedUpTo): void {
+	if (reached.agents > readLastNumber(path.join(dir, LAST_ID_FILE))) {
+		fs.mkdirSync(dir, { recursive: true });
+		replaceFile(path.join(dir, LAST_ID_FILE), String(reached.agents));
+	}
+	if (reached.messages > readLastNumber(path.join(dir, LAST_MESSAGE_FILES[0]))) {
+		fs.mkdirSync(dir, { recursive: true });
+		replaceFile(path.join(dir, LAST_MESSAGE_FILES[0]), String(reached.messages));
+	}
 }

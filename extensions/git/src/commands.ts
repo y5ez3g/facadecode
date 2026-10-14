@@ -3809,7 +3809,10 @@ export class CommandCenter {
 	// than throw - everything else is in worktreeAt.ts.
 	@command('_git.createWorktreeAt')
 	async createWorktreeAt(root: Uri, worktree: Uri, branch: string, startPoint?: string): Promise<worktreeAt.CreateWorktreeAtResult> {
-		return worktreeAt.createWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), branch, startPoint);
+		// And what `git.worktreeIncludeFiles` names, found as the repository's own Create Worktree finds it (O4)
+		const repository = this.model.getRepository(root);
+		const included = repository && pathEquals(repository.root, worktreeAt.folderPath(root)) ? () => repository._getWorktreeIncludePaths() : undefined;
+		return worktreeAt.createWorktreeAt(this.git, worktreeAt.folderPath(root), worktreeAt.folderPath(worktree), branch, startPoint, included);
 	}
 
 	@command('_git.deleteWorktreeAt')

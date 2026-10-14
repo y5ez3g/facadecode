@@ -105,7 +105,7 @@ suite('SCM view service - which repositories the window shows', () => {
 	 * ⚠️ `storage` can be handed in, which is how a second window reads what the first wrote: the
 	 * record of which repositories the person chose outlives the window that wrote it.
 	 */
-	function openWindow(options: { folders?: URI[]; repositories?: URI[]; storage?: TestStorageService } = {}): IWindow {
+	function openWindow(options: { folders?: URI[]; repositories?: URI[]; storage?: TestStorageService; loading?: boolean } = {}): IWindow {
 		const store = disposables.add(new DisposableStore());
 
 		const workspace = new Workspace('test', (options.folders ?? [apiFolder, webFolder, notesFolder])
@@ -133,8 +133,10 @@ suite('SCM view service - which repositories the window shows', () => {
 		const contextKeyService = instantiationService.get(IContextKeyService);
 
 		// The record is only kept once the repositories are all in, which in a real window is a
-		// debounce away. Nothing here is waiting for a timer.
-		view.didFinishLoadingRepositories.set(true, undefined);
+		// debounce away. Nothing here is waiting for a timer - unless the test is about that time.
+		if (!options.loading) {
+			view.didFinishLoadingRepositories.set(true, undefined);
+		}
 
 		return {
 			view, scm, activeFolder, storage,
@@ -374,6 +376,44 @@ suite('SCM view service - which repositories the window shows', () => {
 
 		await window.go(window.folders[2]);
 		assert.strictEqual(window.providerCount(), 0);
+	});
+
+	test('⭐ and a repository that opens once the window is on its folder, while the last session\'s choice still loads, is counted - chosen then or not: no "no repository" welcome over it (N-46)', async () => {
+		// ⚠️ Both ways of adding one that return early while the choice loads - a repository the record
+		// does not name, and one it names as not chosen - had left the count as it was until a switch.
+		const storage = disposables.add(new TestStorageService());
+		const state: ISCMViewServiceState = {
+			all: ['git:api:' + apiFolder.toString(), 'git:zed:' + zedFolder.toString()],
+			visible: [0],
+			sortKey: ISCMRepositorySortKey.DiscoveryTime
+		};
+		storage.store('scm:view:visibleRepositories', JSON.stringify(state), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		const window = openWindow({ folders: [apiFolder, webFolder, zedFolder], repositories: [apiFolder], storage, loading: true });
+
+		await window.go(window.folders[2]);
+		const zedBefore = window.providerCount();
+		window.scm.add(repository(zedFolder, 'zed'));
+		const zedAfter = window.providerCount();
+		await window.go(window.folders[1]);
+		const webBefore = window.providerCount();
+		window.scm.add(repository(webFolder, 'web'));
+
+		assert.deepStrictEqual({ zed: [zedBefore, zedAfter], web: [webBefore, window.providerCount()], onScreen: window.onScreen() }, { zed: [0, 1], web: [0, 1], onScreen: ['web'] });
+	});
+
+	test('⭐ and says when its folder\'s repositories may have changed - one arrived or left, or a switch - once it has the change: the Changes pane asks then whether to draw its welcome. Asked as the SCM service told of a repository, a pane that listened before the view service did found none, and drew GitHub\'s welcome over the repository\'s rows (N-46)', async () => {
+		const window = openWindow({ repositories: [apiFolder] });
+		await window.go(window.folders[1]);
+		const seen: number[] = [];
+		disposables.add(window.view.onDidChangeFolderRepositories(() => seen.push(window.view.folderRepositories.length)));
+
+		const web = repository(webFolder, 'web');
+		window.scm.add(web);
+		await window.go(window.folders[2]);
+		await window.go(window.folders[1]);
+		window.scm.remove(web);
+
+		assert.deepStrictEqual(seen, [1, 0, 1, 0]);
 	});
 
 	test('and turning the only repository off is not the same as not having one', async () => {

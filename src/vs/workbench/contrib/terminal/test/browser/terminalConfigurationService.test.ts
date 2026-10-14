@@ -80,6 +80,11 @@ suite('Workbench - TerminalConfigurationService', () => {
 			});
 			strictEqual(terminalConfigurationService.shouldCommandSkipShell(defaultCommand), false);
 		});
+
+		test('Facade Code: Show Agent Menu skips the shell by default, so that its Ctrl+Alt+A opens the agent menu from a focused terminal on Linux too (LA-01)', () => {
+			const terminalConfigurationService = createTerminalConfigationService({ terminal: { integrated: {} } });
+			strictEqual(terminalConfigurationService.shouldCommandSkipShell('facade.agent.showMenu'), true);
+		});
 	});
 
 	function createTerminalConfigationService(config: any, linuxDistro?: LinuxDistro): ITerminalConfigurationService {

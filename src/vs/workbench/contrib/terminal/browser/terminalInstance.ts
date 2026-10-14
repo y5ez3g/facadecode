@@ -73,7 +73,7 @@ import { ITerminalProcessManager, ITerminalProfileResolverService, ProcessState,
 import { TERMINAL_BACKGROUND_COLOR } from '../common/terminalColorRegistry.js';
 import { TerminalContextKeys } from '../common/terminalContextKey.js';
 import { getUriLabelForShell, getShellIntegrationTimeout, getWorkspaceForTerminal, preparePathForShell } from '../common/terminalEnvironment.js';
-import { isAgentTerminalIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { onDidChangeTerminalSoleFolder, terminalSoleFolder } from '../../folderTerminals/common/terminalSoleFolder.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
@@ -788,7 +788,10 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	}
 
 	get persistentProcessId(): number | undefined { return this._processManager.persistentProcessId; }
-	get shouldPersist(): boolean { return this._processManager.shouldPersist && !this.shellLaunchConfig.isTransient && (!this.reconnectionProperties || this._configurationService.getValue('task.reconnection') === true); }
+	// Facade Code: an agent's run is marked as a task is, and persists whatever tasks are set to (`isFacadeRunTerminal`) - as
+	// long as persistent sessions are on. Off, a reload ends the agent, and its tab kept would come back as a shell under
+	// its name, or as an empty one: upstream brings back no terminal then (N-47)
+	get shouldPersist(): boolean { return this._processManager.shouldPersist && !this.shellLaunchConfig.isTransient && (!this.reconnectionProperties || (isFacadeRunTerminal(this) ? this._terminalConfigurationService.config.enablePersistentSessions : this._configurationService.getValue('task.reconnection') === true)); }
 
 	public static getXtermConstructor(keybindingService: IKeybindingService, contextKeyService: IContextKeyService) {
 		const keybinding = keybindingService.lookupKeybinding(TerminalContribCommandId.A11yFocusAccessibleBuffer, contextKeyService);
@@ -949,7 +952,10 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 			this._userHome = userHome.fsPath;
 		});
 
-		if (this._isVisible) {
+		// Facade Code: opened now only where it is still in the page. A terminal editor that shows another
+		// terminal in its place detaches this one without hiding it (`TerminalEditor.setInput`); opening it then
+		// would throw, and its process would never be started. It opens once it is shown again (N-82).
+		if (this._isVisible && this._container?.isConnected) {
 			this._open();
 		}
 
@@ -1432,11 +1438,11 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	}
 
 	async sendPath(originalPath: string | URI, shouldExecute: boolean): Promise<void> {
-		// Facade Code: a path inserted into an agent's terminal, as a dropped file's is, is read by the
-		// agent rather than the shell. So it is not made PowerShell's command to run it, `& '...'`, which
-		// the agent takes for text, and it goes pasted - both as Windows Terminal inserts one. Other
-		// terminals, and a path sent to be run, keep upstream's form.
-		if (!shouldExecute && isAgentTerminalIcon(this.icon)) {
+		// Facade Code: a path inserted into an agent's terminal - its run's, by its mark - as a dropped file's
+		// is, is read by the agent rather than the shell. So it is not made PowerShell's command to run it,
+		// `& '...'`, which the agent takes for text, and it goes pasted - both as Windows Terminal inserts one.
+		// Other terminals, and a path sent to be run, keep upstream's form.
+		if (!shouldExecute && isFacadeRunTerminal(this)) {
 			return this.sendText(await this.preparePathForShell(originalPath, false), false, true);
 		}
 		return this.sendText(await this.preparePathForShell(originalPath), shouldExecute);
@@ -1797,7 +1803,8 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		} else {
 			if (exitMessage) {
 				const failedDuringLaunch = this._processManager.processState === ProcessState.KilledDuringLaunch;
-				if (failedDuringLaunch || (this._terminalConfigurationService.config.showExitAlert && this.xterm?.lastInputEvent !== /*Ctrl+D*/'\x04')) {
+				// Facade Code: not for an agent's run, whose end Facade's own notice names the agent of (`isFacadeRunTerminal`)
+				if (!isFacadeRunTerminal(this) && (failedDuringLaunch || (this._terminalConfigurationService.config.showExitAlert && this.xterm?.lastInputEvent !== /*Ctrl+D*/'\x04'))) {
 					this._notificationService.notify({
 						message: exitMessage,
 						severity: Severity.Error,
@@ -2370,11 +2377,17 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 			!this._shellLaunchConfig.isExtensionOwnedTerminal &&
 			// Not a reconnected or revived terminal
 			!this._shellLaunchConfig.attachPersistentProcess &&
+			// Facade Code: not an agent's run, which a relaunch would run again (`isFacadeRunTerminal`)
+			!isFacadeRunTerminal(this) &&
 			// Not a Windows remote using ConPTY which cannot relaunch (#187084). ConPTY is used on
 			// Windows builds 18309+.
 			!(this._processManager.remoteAuthority && (await this._processManager.getBackendOS()) === OperatingSystem.Windows && this._processManager.processTraits?.windowsPty?.buildNumber && this._processManager.processTraits.windowsPty.buildNumber >= 18309)
 		) {
 			this.relaunch();
+			return;
+		}
+		// Facade Code: an agent's run is never relaunched, so it is not offered one either (`isFacadeRunTerminal`)
+		if (info.requiresAction && isFacadeRunTerminal(this)) {
 			return;
 		}
 		// Re-create statuses
@@ -2820,7 +2833,20 @@ export class TerminalLabelComputer extends Disposable {
 			return labelType === TerminalLabelType.Title ? (instance.processName || '') : '';
 		}
 		if (!reset && instance.staticTitle && labelType === TerminalLabelType.Title) {
-			return instance.staticTitle.replace(/[\n\r\t]/g, '') || templateProperties.process?.replace(/[\n\r\t]/g, '') || '';
+			const staticTitle = instance.staticTitle.replace(/[\n\r\t]/g, '');
+			// Facade Code: a title its owner made around what its process says - an agent's, `${sequence}${separator}@claude #a1`
+			// - keeps the rest when the person renames it, their name standing in for the process's: the tab reads
+			// `mine - @claude #a1` (AGENT-LAUNCHER.md: a user-renamed terminal keeps the agent suffix; X-52)
+			const ownTemplate = instance.shellLaunchConfig.titleTemplate?.trim();
+			if (!staticTitle || !ownTemplate || ownTemplate === '${sequence}' || !ownTemplate.includes('${sequence}')) {
+				return staticTitle || templateProperties.process?.replace(/[\n\r\t]/g, '') || '';
+			}
+			// The name it was opened with - the pty host's first title for its process, an API one as a rename's, and
+			// so its static title once it came back after a reload or a crash - is no rename: read as one, the tab
+			// held the name twice, `@claude #a1 - @claude #a1` (N-59)
+			if (staticTitle !== instance.shellLaunchConfig.name) {
+				templateProperties.sequence = staticTitle;
+			}
 		}
 		const detection = instance.capabilities.has(TerminalCapability.CwdDetection) || instance.capabilities.has(TerminalCapability.NaiveCwdDetection);
 		const folders = this._workspaceContextService.getWorkspace().folders;

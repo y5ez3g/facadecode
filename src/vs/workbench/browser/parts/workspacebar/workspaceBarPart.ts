@@ -15,6 +15,7 @@ import { InstantiationType, registerSingleton } from '../../../../platform/insta
 import { Emitter, Event, Relay } from '../../../../base/common/event.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -30,7 +31,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { MenuWorkbenchToolBar } from '../../../../platform/actions/browser/toolbar.js';
 // Imported for its `registerAction2` calls as much as for the menu id.
 import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarCollapsedContext, WorkspaceBarTitleMenu } from './workspaceBarActions.js';
-import { moveRow, rowsOfFolders } from './workspaceBar.js';
+import { moveRow, pathOf, rowsOfFolders, unreachable } from './workspaceBar.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, WorkspaceBarGit } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
@@ -171,6 +172,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@ILogService private readonly logService: ILogService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IWorkspaceBarCustomizationService customizationService: IWorkspaceBarCustomizationService,
+		@IFileService private readonly fileService: IFileService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IHostService private readonly hostService: IHostService,
@@ -371,6 +373,17 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 	/** `show`, for a folder that `addedBefore` were put in the workspace on the way to. */
 	private async doShow(uri: URI, addedBefore: readonly URI[]): Promise<ShowResult> {
+		// Facade Code: a folder gone from disk that the workspace does not have - a worktree removed outside the
+		// window, whose row git's files have not been read again for yet - is not taken in, where the switch would
+		// leave it in the workspace marked gone. The rows are read again, and the person told as the switch tells
+		// them (N-29). One that cannot be read is no deletion, and goes the switch's way (WS-63).
+		if (!await this.model.resolve(uri) && (await unreachable(this.fileService, uri))?.kind === 'missing') {
+			this.logService.warn(`[workspaceBar] ${uri.toString(true)} is not on disk any more: not taken into the workspace`);
+			this.notificationService.error(localize('workspaceBar.gone', "Folder '{0}' no longer exists on disk.", pathOf(uri)));
+			await this.git.refresh();
+			return { kind: 'failed', reason: localize('workspaceBar.goneReason', "no longer exists on disk") };
+		}
+
 		// An empty window opens on its first folder, as stock, rather than becoming an untitled workspace (W4)
 		if (this.contextService.getWorkbenchState() === WorkbenchState.EMPTY) {
 			await this.hostService.openWindow([{ folderUri: uri }], { forceReuseWindow: true });

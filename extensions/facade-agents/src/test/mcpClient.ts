@@ -23,6 +23,8 @@ export class StdioMcpClient {
 	private buffer = '';
 	private readonly pending = new Map<number, (message: { result?: unknown; error?: { message: string } }) => void>();
 	readonly progress: string[] = [];
+	/** The other notifications the server sent, by method. */
+	readonly notifications: string[] = [];
 	/** The ids of the requests the server answered. */
 	readonly answered = new Set<number>();
 
@@ -40,6 +42,8 @@ export class StdioMcpClient {
 					this.pending.delete(message.id);
 				} else if (message.method === 'notifications/progress') {
 					this.progress.push(String(message.params?.message ?? ''));
+				} else if (typeof message.method === 'string') {
+					this.notifications.push(message.method);
 				}
 			}
 		});

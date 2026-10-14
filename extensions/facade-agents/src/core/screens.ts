@@ -5,12 +5,11 @@
 
 import { timeout } from '../base/async';
 import { messageOf } from '../base/errors';
-import { AgentCli } from '../clis/cli';
 import { AgentTable } from '../record/agents';
-import { Agent, AgentState, Caller, describe, Exit, isLive, namesThePerson } from '../record/events';
-import { discardScreens, FinalScreen, finalScreenFile, readFinalScreen, writeScreenSnapshot } from '../record/screens';
+import { Agent, AgentState, Caller, describe, End, isLive, StartPhase } from '../record/events';
+import { discardScreens, FinalScreen, FinalScreenError, finalScreenFile, readFinalScreen, writeFinalScreenText, writeScreenSnapshot } from '../record/screens';
 import { FacadeError } from './errors';
-import { CliCatalog, InputEffect, Ports, TerminalScreen, Timing } from './ports';
+import { InputEffect, Ports, TerminalScreen, Timing } from './ports';
 
 /** How many lines `read_screen` gives where it is not told. */
 export const DEFAULT_LINES = 50;
@@ -30,39 +29,45 @@ const ANSWER_LINES = 20;
 const FINAL_SCREEN_WAIT_MS = 2_000;
 /** How often a final screen still to be written is looked for. */
 const FINAL_SCREEN_POLL_MS = 100;
+/** How long after an agent pressed Ctrl+C in a terminal an exit code 130 there is taken as its doing (L6). */
+const INTERRUPT_KNOWN_MS = 10_000;
 
 /**
  * The last lines of agent `id`'s screen as a failure or an end says them: what they are, and how to read more of
- * them (AGENT-DEBUGGING.md D6).
+ * them (AGENT-DEBUGGING.md D6) - or, for a final screen kept with nothing on it, that it was blank.
  */
 export function excerptText(id: number, lines: string): string {
-	return `The last lines of its screen, as they were (read_screen #a${id} gives up to ${MOST_LINES} of them):\n${lines}`;
+	return lines
+		? `The last lines of its screen, as they were (read_screen #a${id} gives up to ${MOST_LINES} of them):\n${lines}`
+		: 'Its last screen was blank: nothing was on it as its terminal ended.';
 }
 /** How many characters of a text typed the log says. */
 const LOGGED_CHARS = 40;
-/** What a final screen read gives before each part, where it gives both. */
+/** What a final screen read, and its file as text, give before each part, where they give the frame (D6). */
 const FRAME_HEADING = '[the last full-screen frame it drew before it left it]';
 const FINAL_HEADING = '[its screen as its terminal ended]';
+/** The heading of the screen as its terminal ended, where nothing was on it. */
+const BLANK_FINAL_HEADING = '[its screen as its terminal ended: blank]';
 
 /** What the core gives the screens it reads, and the terminals it types into. */
 export interface ScreensContext {
 	readonly table: AgentTable;
 	readonly ports: Ports;
-	readonly clis: CliCatalog;
 	/** The screens folder of the workspace's record. */
 	readonly dir: string;
-	/** How long the core waits, as the person sets it now: a call waits its turn in a terminal no longer than its start timeout. */
+	/** How long the core waits, as the person sets it now: a call waits its turn in a terminal no longer than its timeout. */
 	timing(): Timing;
-	/** A CLI Facade knows, by its id. */
-	cliOf(id: string): AgentCli | undefined;
-	/** The agent a tool names, as every Facade tool takes one - by a name several have, the one `within` the caller's reach. */
-	agentNamed(target: string, within?: (agent: Agent) => boolean): Agent;
-	/** Whether the agent `id` is in the caller's reach, as for every Facade tool: its own tree with its YOLO off, else any. */
-	inReach(caller: Caller, id: number): boolean;
-	/** The name of the terminal an agent runs in. */
-	terminalOf(agent: Agent): string;
-	/** A line of Facade's log: who typed or pressed what, where. */
+	/**
+	 * The agent a tool names, as every Facade tool takes one (AGENT-ORCHESTRATION.md, O2): one the caller
+	 * reaches (O1) - else refused, saying why; the person, who has no terminal, refused too (AGENT-DEBUGGING.md, D2).
+	 */
+	agentNamed(target: string, caller: Caller): Agent;
+	/** How long after a paste into an agent's terminal Enter is pressed: its launch's `enterDelay`, as its start had it. */
+	enterDelayOf(agent: Agent): number;
+	/** A line of Facade's log. */
 	log(message: string): void;
+	/** A line of the person's history of the agents, `agents.log`: who is about to type or press what where, and what went in (D9). */
+	audit(what: string): void;
 }
 
 /** A part of a final screen, as a read gives it: how many of its lines, of how many. */
@@ -85,7 +90,10 @@ export interface ScreenRead {
 	readonly name: string;
 	readonly cli: string;
 	readonly state: AgentState;
-	readonly exit?: Exit;
+	/** How it ended, for one that ended. */
+	readonly end?: End;
+	/** Where its start is, for one that has no terminal yet (AGENT-ORCHESTRATION.md, O4). */
+	readonly phase?: StartPhase;
 	/**
 	 * Where the lines come from: the terminal's normal buffer, with its scrollback; a full-screen program's
 	 * alternate buffer; the final screen kept as the terminal ended; none, where there is nothing to read.
@@ -109,13 +117,15 @@ export interface ScreenRead {
 	readonly older: boolean;
 	/** Whether the terminal let go of lines above all it has: its scrollback is full. */
 	readonly trimmed?: boolean;
+	/** For an agent that ended: whether its terminal had lines above those its final screen kept, past the {@link MOST_LINES} it keeps. */
+	readonly cut?: boolean;
 	/** The lines as text: every line given, or the last of them where they are past {@link MOST_INLINE_CHARS}. */
 	readonly text: string;
 	/** What the text leaves out of the lines given. */
 	readonly omitted?: { readonly lines: number; readonly chars: number; readonly partialFirstLine: boolean };
 	/** The file every line given is in, where the text leaves some out of a screen read while it ran. */
 	readonly snapshot?: string;
-	/** For an agent that ended: the file its final screen is in, where it is there. */
+	/** For an agent that ended: the file its final screen is in as text - one line of it per line, its parts labeled - where it is there. */
 	readonly finalScreen?: string;
 	/** For an agent that ended: the parts of its final screen the lines come from. */
 	readonly parts?: readonly ScreenReadPart[];
@@ -154,11 +164,14 @@ export class Screens {
 	/** The agents whose screens were deleted as Facade started afresh: `discard`. */
 	private readonly discarded = new Set<number>();
 
+	/** Who last pressed Ctrl+C in each agent's terminal, an agent, and when. */
+	private readonly interrupts = new Map<number, { readonly by: number; readonly at: number }>();
+
 	constructor(private readonly context: ScreensContext) { }
 
 	/** The bottom `lines` lines of the screen of the agent `target` names; for one that ended, of its final screen. */
 	async read(caller: Caller, target: string, lines = DEFAULT_LINES): Promise<ScreenRead> {
-		return this.screenOf(this.reachable(caller, target), lines);
+		return this.screenOf(this.context.agentNamed(target, caller), lines);
 	}
 
 	/** Types `text` into the terminal of the agent `target` names, as one paste, and Enter after it where `enter`. */
@@ -168,9 +181,9 @@ export class Screens {
 		const doing = `typing ${chars.length} ${chars.length === 1 ? 'character' : 'characters'}, ${JSON.stringify(shown)}${enter ? ', and Enter,' : ''} into`;
 		const agent = this.inputTarget(caller, target, doing);
 		const timing = this.context.timing();
-		return this.input(caller, agent, doing, timing, terminal => this.context.ports.terminals.type(terminal, text, {
+		return this.input(caller, agent, doing, timing, id => this.context.ports.terminals.type(id, text, {
 			enter,
-			enterDelayMs: this.enterDelayOf(agent),
+			enterDelayMs: this.context.enterDelayOf(agent),
 			queueTimeoutMs: timing.startTimeoutMs
 		}));
 	}
@@ -180,13 +193,37 @@ export class Screens {
 		const doing = `pressing ${keys.join(', ')} in`;
 		const agent = this.inputTarget(caller, target, doing);
 		const timing = this.context.timing();
-		return this.input(caller, agent, doing, timing, terminal => this.context.ports.terminals.keys(terminal, keys, { queueTimeoutMs: timing.startTimeoutMs }));
+		// Known before the keys go in: a CLI that exits on Ctrl+C at once has its end told before the keys' answer - the
+		// agent that pressed it, where one did
+		const interrupter = keys.includes('Ctrl+C') ? caller.id : undefined;
+		if (interrupter !== undefined) {
+			this.interrupts.set(agent.id, { by: interrupter, at: Date.now() });
+		}
+		try {
+			return await this.input(caller, agent, doing, timing, id => this.context.ports.terminals.keys(id, keys, { queueTimeoutMs: timing.startTimeoutMs }));
+		} catch (err) {
+			// Nothing went in: no interrupt of its
+			if (interrupter !== undefined && err instanceof FacadeError && err.outcome?.outcome === 'not_applied') {
+				this.interrupts.delete(agent.id);
+			}
+			throw err;
+		}
+	}
+
+	/**
+	 * The agent that pressed Ctrl+C in the terminal of the agent `id` a moment ago, if one did: an exit code 130 that
+	 * follows is its doing, not the person's at their keyboard (AGENT-LAUNCHER.md, L6).
+	 */
+	interruptedBy(id: number): number | undefined {
+		const interrupt = this.interrupts.get(id);
+		return interrupt && Date.now() - interrupt.at <= INTERRUPT_KNOWN_MS ? interrupt.by : undefined;
 	}
 
 	/**
 	 * The last {@link ANSWER_LINES} lines of an agent's screen, for the answer to a failure: of its terminal
 	 * while it is open, else of its final screen. With `ended`, its terminal just ended, which Facade may
-	 * not know yet: its final screen, waited for a moment. Undefined where there are none.
+	 * not know yet: its final screen, waited for a moment. Undefined where there are none: a final screen
+	 * kept with nothing on it is one, its text empty (`excerptText` says it was blank).
 	 */
 	async excerptOf(agent: Agent, ended = false): Promise<ScreenRead | undefined> {
 		try {
@@ -194,7 +231,7 @@ export class Screens {
 			const read = ended && isLive(now)
 				? this.finalScreen(now, ANSWER_LINES, await this.keptScreenOf(now, Date.now()))
 				: await this.screenOf(now, ANSWER_LINES);
-			return read.selected ? read : undefined;
+			return read.selected || read.source === 'final' ? read : undefined;
 		} catch (err) {
 			this.context.log(`The last lines of ${describe(agent)}'s screen could not be read: ${messageOf(err)}`);
 			return undefined;
@@ -221,25 +258,18 @@ export class Screens {
 		}
 	}
 
-	/** The agent `target` names, which the caller reaches: the person has no terminal. */
-	private reachable(caller: Caller, target: string): Agent {
-		if (namesThePerson(target)) {
-			throw new FacadeError('REFUSED', 'The person, @you, has no terminal of Facade\'s: these tools read and type into agents\' terminals.');
-		}
-		// A name two trees have is the one in reach, as send_message takes it
-		const agent = this.context.agentNamed(target, each => this.context.inReach(caller, each.id));
-		if (!this.context.inReach(caller, agent.id)) {
-			throw new FacadeError('REFUSED', `${describe(agent)} is outside your tree: you were started with YOLO off, so you reach only the agents of your own tree - the agent the person started it from and every agent started under it, those that ended too.`);
-		}
-		return agent;
-	}
-
-	/** The agent `target` names, which the caller may type into: one that has not ended. A refusal is logged with what it was to be. */
+	/**
+	 * The agent `target` names, which the caller may type into: one neither stopping nor ended (D9). A refusal is
+	 * logged with what it was to be.
+	 */
 	private inputTarget(caller: Caller, target: string, doing: string): Agent {
 		try {
-			const agent = this.reachable(caller, target);
-			if (agent.exit) {
-				throw new FacadeError('REFUSED', `${describe(agent)} ended (${agent.exit.kind}: ${agent.exit.reason}): its terminal takes nothing more. read_screen shows its last screen.`, { outcome: 'not_applied', reason: 'ended' });
+			const agent = this.context.agentNamed(target, caller);
+			if (agent.end) {
+				throw new FacadeError('REFUSED', `${describe(agent)} ended (${agent.end.kind}: ${agent.end.reason}): its terminal takes nothing more. read_screen shows its last screen.`, { outcome: 'not_applied', reason: 'ended' });
+			}
+			if (agent.state === 'stopping') {
+				throw new FacadeError('REFUSED', `${describe(agent)} is being stopped: its terminal takes nothing more.`, { outcome: 'not_applied', reason: 'ended' });
 			}
 			return agent;
 		} catch (err) {
@@ -253,37 +283,43 @@ export class Screens {
 	 * with what went in and the screen {@link ANSWER_DELAY_MS} on; fails with what went in, where that was
 	 * not all, and with `outcome: unknown` where it cannot be known.
 	 */
-	private async input(caller: Caller, agent: Agent, doing: string, timing: Timing, send: (terminal: string) => Promise<InputEffect | undefined>): Promise<InputResult> {
+	private async input(caller: Caller, agent: Agent, doing: string, timing: Timing, send: (id: number) => Promise<InputEffect | undefined>): Promise<InputResult> {
 		const who = `${describe(caller)} ${doing} ${describe(agent)}'s terminal`;
 		this.context.log(`${who}.`);
+		// Written before anything goes in: an intent, not that it went in (D9)
+		this.context.audit(who);
 		let effect: InputEffect | undefined;
 		try {
-			effect = await send(this.context.terminalOf(agent));
+			effect = await send(agent.id);
 		} catch (err) {
 			// One the window says outright, nothing gone in; any other leaves what went in unknown
 			if (err instanceof FacadeError) {
 				this.context.log(`${who}: ${err.message}`);
+				this.context.audit(`${who}: nothing went in - ${err.message}`);
 				throw err;
 			}
 			this.context.log(`${who}: what went in is not known: ${messageOf(err)}`);
+			this.context.audit(`${who}: what went in is not known`);
 			throw new FacadeError('UNAVAILABLE', `Whether it went into ${describe(agent)}'s terminal is not known: ${messageOf(err)}. Read its screen before you type or press anything again.`, { outcome: 'unknown' });
 		}
 		if (!effect) {
 			this.context.log(`${who}: nothing went in, its terminal not there.`);
+			this.context.audit(`${who}: nothing went in, its terminal not there`);
 			throw this.context.table.get(agent.id)?.state === 'starting'
 				? new FacadeError('REFUSED', `${describe(agent)} has no terminal yet: it is still starting. Nothing was typed.`, { outcome: 'not_applied' })
 				: new FacadeError('UNAVAILABLE', `${describe(agent)}'s terminal is not there now: the window may still be giving its terminals back after a reload. Nothing was typed; try again in a moment.`, { outcome: 'not_applied' });
 		}
 		this.context.log(`${who}: ${effectText(effect)}.`);
-		const facts = { ...effect };
+		this.context.audit(`${who}: ${effectText(effect)}${effect.reason === 'timeout' ? ', its turn not come in time' : effect.reason === 'ended' && effect.outcome !== 'applied' ? ', its terminal ended' : ''}`);
 		if (effect.outcome === 'not_applied') {
+			const facts = { ...effect, outcome: effect.outcome };
 			throw effect.reason === 'timeout'
 				? new FacadeError('UNAVAILABLE', `Nothing went into ${describe(agent)}'s terminal: it waited ${Math.round(timing.startTimeoutMs / 1000)} seconds for its turn, behind what the person was typing there or what Facade typed before. Read its screen, then try again.`, facts)
 				: new FacadeError('REFUSED', `Nothing went into ${describe(agent)}'s terminal: it ended first. read_screen shows its last screen.`, facts);
 		}
 		if (effect.outcome === 'partial') {
 			const excerpt = await this.excerptOf(agent, true);
-			throw new FacadeError('FAILED', `${describe(agent)}'s terminal ended partway: ${effectText(effect)}.${excerpt ? ` Its last lines:\n${excerpt.text}` : ''}`, { ...facts, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
+			throw new FacadeError('FAILED', `${describe(agent)}'s terminal ended partway: ${effectText(effect)}.${excerpt ? ` Its last lines:\n${excerpt.text}` : ''}`, { ...effect, outcome: effect.outcome, ...(excerpt?.finalScreen ? { finalScreen: excerpt.finalScreen } : {}) });
 		}
 		await timeout(ANSWER_DELAY_MS);
 		try {
@@ -296,9 +332,9 @@ export class Screens {
 	/** The bottom `lines` lines of an agent's screen, or of its final screen once it ended. */
 	private async screenOf(agent: Agent, lines: number): Promise<ScreenRead> {
 		if (!isLive(agent)) {
-			return this.finalScreen(agent, lines, await this.keptScreenOf(agent, agent.exit?.time ?? 0));
+			return this.finalScreen(agent, lines, await this.keptScreenOf(agent, agent.end?.time ?? 0));
 		}
-		const screen = await this.context.ports.terminals.read(this.context.terminalOf(agent), lines);
+		const screen = await this.context.ports.terminals.read(agent.id, lines, this.context.timing().startTimeoutMs);
 		if (screen) {
 			return this.liveScreen(agent, lines, screen);
 		}
@@ -306,8 +342,9 @@ export class Screens {
 		if (!isLive(now)) {
 			return this.screenOf(now, lines);
 		}
-		if (now.state === 'starting') {
-			return { ...this.base(now, lines), source: 'none', empty: 'not_created', selected: 0, older: false, text: '' };
+		// Its worktree being made or set up, or its CLI being launched: no terminal yet (D2)
+		if (now.state === 'starting' && now.processId === undefined) {
+			return { ...this.base(now, lines), ...(now.phase !== undefined ? { phase: now.phase } : {}), source: 'none', empty: 'not_created', selected: 0, older: false, text: '' };
 		}
 		throw new FacadeError('UNAVAILABLE', `${describe(now)}'s terminal is not there now: the window may still be giving its terminals back after a reload. Try again in a moment.`);
 	}
@@ -338,30 +375,38 @@ export class Screens {
 	/**
 	 * An ended agent's final screen, as its file has it: the newest lines of the screen as its terminal
 	 * ended first, then, while lines are left to give, the last frame of a full-screen program that left
-	 * it - which a CLI that restores a nearly empty screen as it exits would otherwise hide.
+	 * it - which a CLI that restores a nearly empty screen as it exits would otherwise hide. The frame
+	 * given is always labeled as such, apart from the screen as the terminal ended, blank or not (D6). With
+	 * when it was taken and last showed output, and what its terminal no longer held, as a live read has
+	 * them (D2); and the file all of it is in as text.
 	 */
 	private finalScreen(agent: Agent, requested: number, kept: KeptScreen): ScreenRead {
 		const base = this.base(agent, requested);
 		if (!kept.screen) {
 			return { ...base, source: 'none', empty: kept.missing ?? 'not_kept', ...(kept.problem ? { problem: kept.problem } : {}), selected: 0, older: false, text: '' };
 		}
-		const { final, frame } = kept.screen;
+		const { final, frame, capturedAt, lastOutput } = kept.screen;
 		const fromFinal = final.lines.slice(Math.max(0, final.lines.length - requested));
 		const left = requested - fromFinal.length;
 		const fromFrame = frame && left > 0 ? frame.slice(Math.max(0, frame.length - left)) : [];
-		const both = fromFrame.length > 0 && fromFinal.length > 0;
-		const lines = both ? [FRAME_HEADING, ...fromFrame, FINAL_HEADING, ...fromFinal] : [...fromFrame, ...fromFinal];
+		const labeled = fromFrame.length > 0;
+		const lines = labeled ? [FRAME_HEADING, ...fromFrame, finalHeading(final.lines), ...fromFinal] : fromFinal;
 		const { text, omitted } = inlinePart(lines);
 		// The headings are no lines of the screen: what the text leaves out counts its lines alone
-		const headingsLeftOut = both && omitted ? [0, fromFrame.length + 1].filter(index => index < omitted.lines).length : 0;
+		const headingsLeftOut = labeled && omitted ? [0, fromFrame.length + 1].filter(index => index < omitted.lines).length : 0;
+		const file = this.finalScreenTextOf(agent, kept.screen);
 		return {
 			...base,
 			source: 'final',
+			...(capturedAt !== undefined ? { capturedAt } : {}),
+			...(lastOutput !== undefined ? { lastOutput } : {}),
 			selected: fromFrame.length + fromFinal.length,
-			older: final.lines.length > fromFinal.length || (frame?.length ?? 0) > fromFrame.length,
+			older: final.lines.length > fromFinal.length || (frame?.length ?? 0) > fromFrame.length || !!final.older,
+			...(final.trimmed ? { trimmed: true } : {}),
+			...(final.older ? { cut: true } : {}),
 			text,
 			...(omitted ? { omitted: { ...omitted, lines: omitted.lines - headingsLeftOut } } : {}),
-			finalScreen: this.finalScreenOf(agent),
+			...(file ? { finalScreen: file } : {}),
 			parts: [
 				...(frame ? [{ kind: 'frame' as const, lines: fromFrame.length, of: frame.length }] : []),
 				{ kind: 'final' as const, lines: fromFinal.length, of: final.lines.length }
@@ -370,8 +415,24 @@ export class Screens {
 	}
 
 	/**
+	 * The file an ended agent's final screen is in as text - one screen line per line, its parts labeled - which
+	 * an agent's file reader takes whole, where the window's own file is one line of JSON (D2, D6): written as it is
+	 * first read, and never again. Undefined where it cannot be written.
+	 */
+	private finalScreenTextOf(agent: Agent, screen: FinalScreen): string | undefined {
+		const { final, frame } = screen;
+		try {
+			return writeFinalScreenText(this.context.dir, agent.id, frame ? [FRAME_HEADING, ...frame, finalHeading(final.lines), ...final.lines] : final.lines);
+		} catch (err) {
+			this.context.log(`The final screen of ${describe(agent)} could not be written as text: ${messageOf(err)}`);
+			return undefined;
+		}
+	}
+
+	/**
 	 * An ended agent's final screen, or why there is none: waited for until a moment after `since`, where
-	 * it just ended - the window writes it as the terminal goes.
+	 * it just ended - the window writes it as the terminal goes. A file read before the window finished
+	 * writing it is looked at again while there is time.
 	 */
 	private async keptScreenOf(agent: Agent, since: number): Promise<KeptScreen> {
 		if (this.discarded.has(agent.id)) {
@@ -386,8 +447,10 @@ export class Screens {
 					return { screen };
 				}
 			} catch (err) {
-				this.context.log(`The final screen of ${describe(agent)} could not be read from ${file}: ${messageOf(err)}`);
-				return { missing: 'unreadable', problem: messageOf(err) };
+				if (!(err instanceof FinalScreenError) || Date.now() >= until) {
+					this.context.log(`The final screen of ${describe(agent)} could not be read from ${file}: ${messageOf(err)}`);
+					return { missing: 'unreadable', problem: messageOf(err) };
+				}
 			}
 			if (Date.now() >= until) {
 				return { missing: 'not_kept' };
@@ -396,18 +459,14 @@ export class Screens {
 		}
 	}
 
-	private base(agent: Agent, requested: number): Pick<ScreenRead, 'id' | 'name' | 'cli' | 'state' | 'exit' | 'requested'> {
-		return { id: agent.id, name: agent.name, cli: agent.cli, state: agent.state, ...(agent.exit ? { exit: agent.exit } : {}), requested };
+	private base(agent: Agent, requested: number): Pick<ScreenRead, 'id' | 'name' | 'cli' | 'state' | 'end' | 'requested'> {
+		return { id: agent.id, name: agent.name, cli: agent.cli, state: agent.state, ...(agent.end ? { end: agent.end } : {}), requested };
 	}
+}
 
-	/** How long after a paste an agent's CLI is given before Enter: its launch's `enterDelay`. */
-	private enterDelayOf(agent: Agent): number {
-		if (agent.enterDelay !== undefined) {
-			return agent.enterDelay;
-		}
-		const cli = this.context.cliOf(agent.cli);
-		return cli ? this.context.clis.configOf(cli).launch.enterDelay : 0;
-	}
+/** The heading of the screen as an agent's terminal ended, `lines`: blank where nothing was on it. */
+function finalHeading(lines: readonly string[]): string {
+	return lines.length ? FINAL_HEADING : BLANK_FINAL_HEADING;
 }
 
 /**

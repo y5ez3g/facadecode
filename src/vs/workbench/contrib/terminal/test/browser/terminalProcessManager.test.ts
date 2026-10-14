@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { deepStrictEqual, strictEqual } from 'assert';
+import { upcastPartial } from '../../../../../base/test/common/mock.js';
+import { IProcessDetails } from '../../../../../platform/terminal/common/terminalProcess.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { OperatingSystem } from '../../../../../base/common/platform.js';
@@ -15,6 +17,7 @@ import { ITerminalChildProcess, type ITerminalBackend } from '../../../../../pla
 import { ITerminalInstanceService, ITerminalService } from '../../browser/terminal.js';
 import { TerminalProcessManager } from '../../browser/terminalProcessManager.js';
 import { IEnvironmentVariableService } from '../../common/environmentVariable.js';
+import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
 import { workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
 
 function listenerCount(emitter: Emitter<unknown>): number {
@@ -76,6 +79,9 @@ class TestTerminalInstanceService implements Partial<ITerminalInstanceService> {
 				options: any,
 				shouldPersist: boolean
 			) => new TestTerminalChildProcess(shouldPersist),
+			// No process to attach to: the one asked for is gone - or, process 8, another window's
+			attachToProcess: async () => undefined,
+			listProcesses: async () => [{ id: 8, isOrphan: false }, { id: 9, isOrphan: true }],
 			getLatency: () => Promise.resolve([]),
 			getShellEnvironment: () => Promise.resolve({})
 		} as unknown as ITerminalBackend;
@@ -191,6 +197,27 @@ suite('Workbench - TerminalProcessManager', () => {
 				{ containsCursorHome: data.includes('\x1b[H') },
 				{ containsCursorHome: false }
 			);
+		});
+
+		test('an agent\'s run whose process is gone as the window comes back gets no shell in its place, under its last output: the attach fails, saying so (N-15)', async () => {
+			const result = await manager.createProcess({ attachPersistentProcess: upcastPartial<IProcessDetails>({ id: 7, reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }) }, 80, 24, false);
+
+			deepStrictEqual(result, { message: 'This agent\'s process ended while the window was away.' });
+		});
+
+		test('an agent\'s run whose process another window has - one opening a workspace\'s old file, its last layout or editors naming it - is not attached a second time: the attach fails, saying where it runs (N-68)', async () => {
+			const result = await manager.createProcess({ attachPersistentProcess: upcastPartial<IProcessDetails>({ id: 8, reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }) }, 80, 24, false);
+
+			deepStrictEqual(result, { message: 'This agent runs in another window: use its tab there.' });
+		});
+
+		test('an agent\'s run is not relaunched - that would run its CLI again - but ends', async () => {
+			await manager.createProcess({ executable: 'claude', reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 1 }) }, 80, 24, false);
+			const seen: { data: string[]; exits: (number | undefined)[] } = { data: [], exits: [] };
+			store.add(manager.onProcessData(e => seen.data.push(e.data)));
+			store.add(manager.onProcessExit(code => seen.exits.push(code)));
+			terminalInstanceService.ptyHostRestartEmitter.fire();
+			deepStrictEqual(seen, { data: [], exits: [-1] });
 		});
 
 		test('does not append viewport-clearing sequence on Windows when rows is 0', async () => {

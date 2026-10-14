@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { isLive } from '../record/events';
+import { describe } from '../record/events';
 import { ChatRoom } from '../record/rooms';
 
 /** Opens a chat room in an editor, at the heading of the message `message` where it has it - else at its end. */
@@ -36,8 +36,8 @@ export async function pickRoom(rooms: readonly ChatRoom[]): Promise<void> {
 	const picked = await vscode.window.showQuickPick(rooms.map(room => {
 		const time = new Date(room.lastTime).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' });
 		return {
-			label: `@${room.root.name} #a${room.root.id}`,
-			description: isLive(room.root) ? room.root.worktree : vscode.l10n.t("{0}, ended", room.root.worktree),
+			label: describe(room.root),
+			description: room.live ? room.root.worktree : vscode.l10n.t("{0}, ended", room.root.worktree),
 			detail: room.messages === 1
 				? vscode.l10n.t("1 message, at {0}", time)
 				: vscode.l10n.t("{0} messages, the last at {1}", room.messages, time),

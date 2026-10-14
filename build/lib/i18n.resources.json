@@ -647,6 +647,22 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/contrib/facadeCommands",
+			"project": "vscode-workbench"
+		},
+		{
+			"name": "vs/workbench/contrib/folderTerminals",
+			"project": "vscode-workbench"
+		},
+		{
+			"name": "vs/workbench/contrib/terminalLaunchers",
+			"project": "vscode-workbench"
+		},
+		{
+			"name": "vs/workbench/contrib/worktrees",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/services/accounts",
 			"project": "vscode-workbench"
 		},

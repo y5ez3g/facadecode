@@ -6,26 +6,16 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { FacadeError } from '../core/errors';
 import { keyOf } from '../core/keys';
 import { TerminalScreen } from '../core/ports';
+import { ScreenRead } from '../core/screens';
 import { PERSON } from '../record/events';
-import { finalScreenFile, SCREEN_LANGUAGE, screensDir } from '../record/screens';
+import { finalScreenFile, finalScreenTextFile, SCREEN_LANGUAGE, screensDir } from '../record/screens';
 import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld } from './fakes';
-import { outcomeOf, tempDir } from './util';
+import { failureOf, outcomeOf, tempDir } from './util';
 
 type World = ReturnType<typeof fakeWorld>;
-
-/** What a call failed with: its code, its message, and the facts its data holds. */
-async function failureOf(promise: Promise<unknown>): Promise<{ readonly code: string; readonly message: string; readonly data: unknown } | 'fulfilled'> {
-	try {
-		await promise;
-		return 'fulfilled';
-	} catch (err) {
-		return err instanceof FacadeError ? { code: err.code, message: err.message, data: err.data } : { code: 'none', message: String(err), data: undefined };
-	}
-}
 
 suite('Core: agents\' screens', () => {
 
@@ -47,31 +37,31 @@ suite('Core: agents\' screens', () => {
 		temp.remove();
 	});
 
-	/** The name of the terminal of the agent numbered `id`. */
+	/** The title of the terminal of the agent numbered `id`. */
 	function terminalOf(id: number): string {
-		const launch = world.terminals.launched.find(each => each.name.includes(` #${id} · `));
-		assert.ok(launch, `#${id} was launched`);
+		const launch = world.terminals.launched.find(each => each.id === id);
+		assert.ok(launch, `#a${id} was launched`);
 		return launch.name;
 	}
 
 	/** What the terminal of agent `id` shows from now on. */
 	function shows(id: number, lines: readonly string[], screen: Partial<TerminalScreen> = {}): void {
-		world.terminals.screens.set(terminalOf(id), { lines, buffer: 'normal', older: false, trimmed: false, capturedAt: 5_000, exited: false, ...screen });
+		world.terminals.screens.set(id, { lines, buffer: 'normal', older: false, trimmed: false, capturedAt: 5_000, exited: false, ...screen });
 	}
 
-	/** Writes the final screen of agent `id` as the window writes it. */
-	function keeps(id: number, screen: object): void {
+	/** Writes the final screen of agent `id` as the window writes it, or `text` in its place. */
+	function keeps(id: number, screen: object | string): void {
 		const dir = screensDir(world.table.dir);
 		fs.mkdirSync(dir, { recursive: true });
-		fs.writeFileSync(finalScreenFile(dir, id), JSON.stringify(screen));
+		fs.writeFileSync(finalScreenFile(dir, id), typeof screen === 'string' ? screen : JSON.stringify(screen));
 	}
 
 	/** A tree: the person's #1, its child #2 and grandchild #3; and the person's #4, another tree. */
 	async function twoTrees(): Promise<void> {
-		await world.spawnUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Lead.', folder: lab, name: 'lead' });
-		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Work.', name: 'worker' });
-		await world.spawnUp(callerOf(world.agent(2)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Help.', name: 'helper' });
-		await world.spawnUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Other.', folder: lab, name: 'other' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: lab, name: 'lead' });
+		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', task: 'Work.', name: 'worker' });
+		await world.startUp(callerOf(world.agent(2)), { cli: 'arg', model: 'm', effort: 'e', task: 'Help.', name: 'helper' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Other.', folder: lab, name: 'other' });
 	}
 
 	test('an agent reads another\'s screen: its bottom lines, fifty unless told, as the window drew them, with when it was read and last showed output, and whether its process ended or the terminal let go of older lines', async () => {
@@ -90,33 +80,33 @@ suite('Core: agents\' screens', () => {
 		});
 	});
 
-	test('with YOLO off, as it was launched, an agent reaches its own tree - ancestors, descendants, ended ones too - and no other, whatever the settings say later; one launched with YOLO on, every agent; the person, every agent, and has no screen of its own', async () => {
-		// Started with YOLO off: their CLI without its full access
-		world.settings.arg = { launch: { arguments: { fullAccess: null } } };
+	test('with YOLO off, as it was launched, an agent reaches its own tree - ancestors, descendants, ended ones too - and no other, whatever the switch says later; one launched with YOLO on, every agent; the person, every agent, and has no screen of its own (O1)', async () => {
+		// The person's agents started with YOLO off, and so the agents they start
+		world.switches.yolo = false;
 		await twoTrees();
-		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
 		const worker = callerOf(world.agent(2));
 		const outcomes = {
 			ancestor: (await world.facade.screens.read(worker, '#1')).id,
 			descendantEnded: (await settled(world.facade.screens.read(worker, '#3'))).source,
 			otherTree: await outcomeOf(world.facade.screens.read(worker, '#4')),
 			person: (await world.facade.screens.read(PERSON, '#4')).id,
-			personsOwn: await outcomeOf(world.facade.screens.read(worker, '@you')),
+			personsOwn: await outcomeOf(world.facade.screens.read(worker, '@human')),
 			typeOtherTree: await outcomeOf(world.facade.screens.type(worker, '#4', 'hi', false))
 		};
-		world.settings.arg = { launch: { arguments: { fullAccess: ['--yolo'] } } };
+		world.switches.yolo = true;
 		const stillOff = await outcomeOf(world.facade.screens.read(worker, '#4'));
-		await world.spawnUp(worker, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Free.', name: 'free' });
-		world.settings.arg = {};
+		// One the person starts now, with YOLO on
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Free.', folder: lab, name: 'free' });
 		const yolo = (await world.facade.screens.read(callerOf(world.agent(5)), '#4')).id;
-		const outsideYourTree = 'REFUSED: @other #a4 is outside your tree: you were started with YOLO off, so you reach only the agents of your own tree - the agent the person started it from and every agent started under it, those that ended too.';
+		const outsideYourTree = 'REFUSED: #a4 is outside your tree: your YOLO is off, and you reach only your own tree - the agents that come from the agent the person started that you come from.';
 
 		assert.deepStrictEqual({ ...outcomes, stillOff, recorded: [world.agent(2).yolo, world.agent(5).yolo], yolo }, {
 			ancestor: 1,
 			descendantEnded: 'none',
 			otherTree: outsideYourTree,
 			person: 4,
-			personsOwn: 'REFUSED: The person, @you, has no terminal of Facade\'s: these tools read and type into agents\' terminals.',
+			personsOwn: 'REFUSED: @human is the person, not an agent: they have no run to stop, read or type into. send_message reaches them.',
 			typeOtherTree: outsideYourTree,
 			stillOff: outsideYourTree,
 			recorded: [false, true],
@@ -125,12 +115,12 @@ suite('Core: agents\' screens', () => {
 	});
 
 	test('with YOLO off, a name two trees have is the one of the caller\'s own tree, as send_message takes it; a name only another tree has is out of the caller\'s reach', async () => {
-		world.settings.arg = { launch: { arguments: { fullAccess: null } } };
-		await world.spawnUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Lead.', folder: lab, name: 'lead' });
-		await world.spawnUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Twin.', name: 'twin' });
-		await world.spawnUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Other.', folder: lab, name: 'other' });
-		await world.spawnUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Twin.', name: 'twin' });
-		await world.spawnUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', prompt: 'Far.', name: 'far' });
+		world.switches.yolo = false;
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: lab, name: 'lead' });
+		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', task: 'Twin.', name: 'twin' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Other.', folder: lab, name: 'other' });
+		await world.startUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', task: 'Twin.', name: 'twin' });
+		await world.startUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', task: 'Far.', name: 'far' });
 		shows(2, ['the lead\'s twin']);
 		shows(4, ['the other\'s twin']);
 		const lead = callerOf(world.agent(1));
@@ -146,22 +136,23 @@ suite('Core: agents\' screens', () => {
 			typed: 2,
 			pressed: 2,
 			sent: ['@twin #a2'],
-			far: 'REFUSED: @far #a5 is outside your tree: you were started with YOLO off, so you reach only the agents of your own tree - the agent the person started it from and every agent started under it, those that ended too.'
+			// By its name, one out of reach is no agent the caller knows of (O2)
+			far: 'NOT_FOUND: No agent you reach is called @far: list_agents with all lists them.'
 		});
 	});
 
 	test('an agent is named as every Facade tool names one: by number, or by a name only one running agent has; a name only ended agents had gives their numbers', async () => {
 		await twoTrees();
-		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
 
 		assert.deepStrictEqual({
 			ended: await outcomeOf(world.facade.screens.read(PERSON, '@helper')),
 			none: await outcomeOf(world.facade.screens.read(PERSON, '#9')),
 			mismatched: await outcomeOf(world.facade.screens.read(PERSON, '@worker #a3'))
 		}, {
-			ended: 'NOT_FOUND: No running agent is called @helper; @helper #a3 has exited: name one by its number.',
-			none: 'NOT_FOUND: No agent is #a9: ps with all lists every agent this workspace has had.',
-			mismatched: 'INVALID: #a3 is @helper, not @worker: name it by its number alone, or by its name.'
+			ended: 'NOT_FOUND: Every agent called @helper has ended: @helper #a3. Name the one you mean by its number.',
+			none: 'NOT_FOUND: No agent is #a9: list_agents with all lists every agent you reach.',
+			mismatched: 'NOT_FOUND: No agent is both @worker and #a3: #a3 is @helper. Name it by its number alone, or by its name.'
 		});
 	});
 
@@ -210,29 +201,29 @@ suite('Core: agents\' screens', () => {
 
 	test('an agent that ended is read by its final screen: the newest lines of the screen as its terminal ended first, then the last full-screen frame while lines are left; with none to read, why', async () => {
 		await twoTrees();
-		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
 		keeps(3, { frame: ['Pick one', '[[> keep]]', '  drop'], final: { buffer: 'normal', lines: ['bye', '$'] } });
 		const worker = callerOf(world.agent(2));
 		const four = await world.facade.screens.read(worker, '#3', 4);
 		const two = await world.facade.screens.read(worker, '#3', 2);
 		const noScreen = await world.facade.screens.read(PERSON, '#4');
-		await settled(world.facade.kill(PERSON, '#4'));
+		await settled(world.facade.stopAgent(PERSON, '#4'));
 		const notKept = await world.facade.screens.read(PERSON, '#4');
 		fs.writeFileSync(finalScreenFile(screensDir(world.table.dir), 4), 'bye');
 		const unreadable = await world.facade.screens.read(PERSON, '#4');
 
 		assert.deepStrictEqual({
-			four: { source: four.source, selected: four.selected, older: four.older, text: four.text, parts: four.parts, file: four.finalScreen === finalScreenFile(screensDir(world.table.dir), 3) },
+			four: { source: four.source, selected: four.selected, older: four.older, text: four.text, parts: four.parts, file: four.finalScreen === finalScreenTextFile(screensDir(world.table.dir), 3) },
 			two: { selected: two.selected, older: two.older, text: two.text, parts: two.parts },
 			noScreen: noScreen.empty,
-			notKept: { source: notKept.source, empty: notKept.empty, exit: notKept.exit?.kind, file: notKept.finalScreen },
+			notKept: { source: notKept.source, empty: notKept.empty, end: notKept.end?.kind, file: notKept.finalScreen },
 			unreadable: { empty: unreadable.empty, problem: unreadable.problem },
 			logged: world.logs.filter(line => line.startsWith('The final screen of')).length
 		}, {
 			four: { source: 'final', selected: 4, older: true, text: '[the last full-screen frame it drew before it left it]\n[[> keep]]\n  drop\n[its screen as its terminal ended]\nbye\n$', parts: [{ kind: 'frame', lines: 2, of: 3 }, { kind: 'final', lines: 2, of: 2 }], file: true },
 			two: { selected: 2, older: true, text: 'bye\n$', parts: [{ kind: 'frame', lines: 0, of: 3 }, { kind: 'final', lines: 2, of: 2 }] },
 			noScreen: 'no_text',
-			notKept: { source: 'none', empty: 'not_kept', exit: 'killed', file: undefined },
+			notKept: { source: 'none', empty: 'not_kept', end: 'stopped', file: undefined },
 			unreadable: { empty: 'unreadable', problem: 'it is not JSON' },
 			logged: 1
 		});
@@ -240,7 +231,7 @@ suite('Core: agents\' screens', () => {
 
 	test('a final screen past eight thousand characters says how many of its own lines it leaves out: its headings are no lines of it', async () => {
 		await twoTrees();
-		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
 		keeps(3, { frame: Array.from({ length: 100 }, (_, index) => `${String(index).padStart(3, '0')} ${'x'.repeat(95)}`), final: { buffer: 'normal', lines: ['bye', '$'] } });
 		const read = await world.facade.screens.read(PERSON, '#3', 102);
 
@@ -249,6 +240,78 @@ suite('Core: agents\' screens', () => {
 			omitted: { lines: 21, chars: 2_155, partialFirstLine: false },
 			first: '021 ',
 			last: ['[its screen as its terminal ended]', 'bye', '$']
+		});
+	});
+
+	test('an agent that ended has its final screen in a file of text, which an agent\'s file reader takes whole - one screen line per line, its parts labeled - written as it is first read, and never again: that is the file a read gives, past eight thousand characters too (D2, D6; DB-01)', async () => {
+		await twoTrees();
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
+		const long = Array.from({ length: 100 }, (_, index) => `${String(index).padStart(3, '0')} ${'x'.repeat(95)}`);
+		keeps(3, { frame: ['Pick one', '[[> keep]]'], final: { buffer: 'normal', lines: long } });
+		const read = await world.facade.screens.read(PERSON, '#3', 102);
+		const file = finalScreenTextFile(screensDir(world.table.dir), 3);
+		const text = fs.readFileSync(file, 'utf8');
+		keeps(3, { final: { buffer: 'normal', lines: ['written again'] } });
+		const again = await world.facade.screens.read(PERSON, '#3');
+
+		assert.deepStrictEqual({ finalScreen: read.finalScreen, cut: !!read.omitted, text, again: [again.finalScreen, fs.readFileSync(file, 'utf8') === text] }, {
+			finalScreen: file,
+			cut: true,
+			text: ['[the last full-screen frame it drew before it left it]', 'Pick one', '[[> keep]]', '[its screen as its terminal ended]', ...long, ''].join('\n'),
+			again: [file, true]
+		});
+	});
+
+	test('a final screen whose screen as its terminal ended was blank: the frame given is labeled, and the blank screen said to be so; with no frame it is a screen kept all the same - its creator is told it was blank, not that none was kept (D6; DB-03)', async () => {
+		await twoTrees();
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
+		keeps(3, { frame: ['Pick one', '[[> keep]]'], final: { buffer: 'normal', lines: [] } });
+		const menu = await world.facade.screens.read(PERSON, '#3');
+		// @lead's child @worker clears its screen as it exits
+		keeps(2, { final: { buffer: 'normal', lines: [] } });
+		world.terminals.end(terminalOf(2), { exitCode: 1, byThePerson: false });
+		await sleep(1_000);
+		const ends = world.facadeMessagesTo(1).filter(text => text.startsWith('@worker #a2 ended'));
+		const notices = ends.map(text => text.split('\n').slice(1));
+
+		assert.deepStrictEqual({ menu: [menu.text, menu.parts], notices }, {
+			menu: ['[the last full-screen frame it drew before it left it]\nPick one\n[[> keep]]\n[its screen as its terminal ended: blank]', [{ kind: 'frame', lines: 2, of: 2 }, { kind: 'final', lines: 0, of: 0 }]],
+			notices: [['Its last screen was blank: nothing was on it as its terminal ended.']]
+		});
+	});
+
+	test('a final screen read as the window writes it - its file half written - is read again until it is whole, within the moment the window has to write it; one not whole by then cannot be read, and says why (D8; DB-04)', async () => {
+		world.timing.finalScreenWaitMs = 2_000;
+		await twoTrees();
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
+		keeps(3, '{"final":{"buffer":"nor');
+		const reading = world.facade.screens.read(PERSON, '#3');
+		await sleep(300);
+		keeps(3, { final: { buffer: 'normal', lines: ['bye'] } });
+		const whole = await settled(reading);
+		await settled(world.facade.stopAgent(PERSON, '#4'));
+		keeps(4, '');
+		const half = await settled(world.facade.screens.read(PERSON, '#4'));
+
+		assert.deepStrictEqual({ whole: [whole.source, whole.text], half: [half.empty, half.problem] }, {
+			whole: ['final', 'bye'],
+			half: ['unreadable', 'it is not JSON']
+		});
+	});
+
+	test('a final screen read says when it was taken and when its terminal last showed new output, and what the terminal no longer held - lines its scrollback had let go of, or lines past those a final screen keeps - as a read while it ran says them (D2; DB-06)', async () => {
+		await twoTrees();
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
+		keeps(3, { capturedAt: 9_000, lastOutput: 4_000, final: { buffer: 'normal', lines: ['bye', '$'], older: false, trimmed: true } });
+		const trimmed = await world.facade.screens.read(PERSON, '#3');
+		await settled(world.facade.stopAgent(PERSON, '#4'));
+		keeps(4, { capturedAt: 9_000, final: { buffer: 'normal', lines: ['$'], older: true, trimmed: true } });
+		const cut = await world.facade.screens.read(PERSON, '#4');
+		const facts = (read: ScreenRead) => ({ capturedAt: read.capturedAt, lastOutput: read.lastOutput, older: read.older, trimmed: read.trimmed, cut: read.cut });
+
+		assert.deepStrictEqual({ trimmed: facts(trimmed), cut: facts(cut) }, {
+			trimmed: { capturedAt: 9_000, lastOutput: 4_000, older: false, trimmed: true, cut: undefined },
+			cut: { capturedAt: 9_000, lastOutput: undefined, older: true, trimmed: true, cut: true }
 		});
 	});
 
@@ -266,8 +329,8 @@ suite('Core: agents\' screens', () => {
 			result: { id: 2, name: 'worker', effect: { outcome: 'applied', pasted: true, entered: true }, screen: '> yes' },
 			pressed: { outcome: 'applied', keysSent: 2 },
 			typed: [
-				`@worker #2 · Arg Code: type ${JSON.stringify(text)}, Enter after 300 ms, waiting 120000 ms at most`,
-				'@worker #2 · Arg Code: keys Down Enter, waiting 120000 ms at most'
+				`@worker #a2: type ${JSON.stringify(text)}, Enter after 300 ms, waiting 120000 ms at most`,
+				'@worker #a2: keys Down Enter, waiting 120000 ms at most'
 			],
 			logs: [
 				`@lead #a1 typing ${text.length} characters, ${shown}, and Enter, into @worker #a2's terminal.`,
@@ -309,17 +372,23 @@ suite('Core: agents\' screens', () => {
 		assert.deepStrictEqual(await failureOf(settled(world.facade.screens.type(callerOf(world.agent(1)), '#2', 'yes', true))), {
 			code: 'FAILED',
 			message: '@worker #a2\'s terminal ended partway: the text went in, without Enter. Its last lines:\nBye!',
-			data: { outcome: 'partial', reason: 'ended', pasted: true, entered: false, finalScreen: finalScreenFile(screensDir(world.table.dir), 2) }
+			data: { outcome: 'partial', reason: 'ended', pasted: true, entered: false, finalScreen: finalScreenTextFile(screensDir(world.table.dir), 2) }
 		});
 	});
 
 	test('an agent still starting has no terminal to read or type into yet; one the window has not given back after a reload is not there now; input that went in whose screen could not be read after says so', async () => {
 		await twoTrees();
 		const lead = callerOf(world.agent(1));
-		const spawning = world.facade.spawn(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'New.', folder: lab, name: 'new' });
+		// Its terminal not made yet: the window slow to make one
+		let opened = () => { };
+		world.terminals.hold = new Promise<void>(resolve => opened = resolve);
+		const spawning = world.facade.startAgent(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'New.', folder: lab, name: 'new' });
+		await until(() => world.table.get(5) !== undefined);
+		const read = await world.facade.screens.read(PERSON, '#5');
+		const starting = { read: [read.empty, read.phase], type: await failureOf(world.facade.screens.type(PERSON, '#5', 'hi', true)) };
+		world.terminals.hold = undefined;
+		opened();
 		await until(() => world.terminals.launched.length === 5);
-		world.terminals.running.delete(terminalOf(5));
-		const starting = { read: (await world.facade.screens.read(PERSON, '#5')).empty, type: await failureOf(world.facade.screens.type(PERSON, '#5', 'hi', true)) };
 		world.terminals.running.delete(terminalOf(2));
 		const notBack = { read: await outcomeOf(world.facade.screens.read(lead, '#2')), keys: await failureOf(world.facade.screens.press(lead, '#2', ['Enter'])) };
 		world.terminals.running.add(terminalOf(2));
@@ -334,7 +403,7 @@ suite('Core: agents\' screens', () => {
 
 		assert.deepStrictEqual({ starting, notBack, unread }, {
 			starting: {
-				read: 'not_created',
+				read: ['not_created', 'launching_cli'],
 				type: { code: 'REFUSED', message: '@new #a5 has no terminal yet: it is still starting. Nothing was typed.', data: { outcome: 'not_applied' } }
 			},
 			notBack: {
@@ -347,7 +416,7 @@ suite('Core: agents\' screens', () => {
 
 	test('an agent that ended takes no input, and the log says who was refused what; an agent may type into its own terminal', async () => {
 		await twoTrees();
-		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
 		const worker = callerOf(world.agent(2));
 		const own = await settled(world.facade.screens.press(worker, '#2', ['Escape']));
 
@@ -356,40 +425,39 @@ suite('Core: agents\' screens', () => {
 			logged: world.logs.filter(line => line.includes('was refused')),
 			own: own.effect
 		}, {
-			ended: { code: 'REFUSED', message: '@helper #a3 ended (killed: killed by @worker #a2): its terminal takes nothing more. read_screen shows its last screen.', data: { outcome: 'not_applied', reason: 'ended' } },
-			logged: ['@worker #a2 was refused typing 2 characters, "hi", and Enter, into "#3"\'s terminal: @helper #a3 ended (killed: killed by @worker #a2): its terminal takes nothing more. read_screen shows its last screen.'],
+			ended: { code: 'REFUSED', message: '@helper #a3 ended (stopped: with stop_agent): its terminal takes nothing more. read_screen shows its last screen.', data: { outcome: 'not_applied', reason: 'ended' } },
+			logged: ['@worker #a2 was refused typing 2 characters, "hi", and Enter, into "#3"\'s terminal: @helper #a3 ended (stopped: with stop_agent): its terminal takes nothing more. read_screen shows its last screen.'],
 			own: { outcome: 'applied', keysSent: 1 }
 		});
 	});
 
 	test('a start that failed says so with the last lines of the screen its CLI left; the notification of an agent of the person\'s that ended shows its last screen', async () => {
-		const spawning = world.facade.spawn(PERSON, { cli: 'arg', model: 'nope', effort: 'e', prompt: 'Work.', folder: lab });
+		const spawning = world.facade.startAgent(PERSON, { cli: 'arg', model: 'nope', effort: 'e', task: 'Work.', folder: lab, name: 'nope' });
 		await until(() => world.terminals.launched.length === 1);
 		keeps(1, { final: { buffer: 'normal', lines: ['Error: unknown model nope', 'exiting'] } });
 		world.terminals.end(terminalOf(1), { exitCode: 1, byThePerson: false });
 		const failed = await failureOf(settled(spawning));
-		await world.spawnUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', prompt: 'Lead.', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: lab, name: 'lead' });
 		world.terminals.end(terminalOf(2), { exitCode: 3, byThePerson: false });
 		await sleep(1_000);
-		const notice = world.person.notified.find(notification => notification.key.startsWith('ended:'));
-		world.person.press(notice?.key ?? '', 'Show');
-		await sleep(0);
 		const dir = screensDir(world.table.dir);
 
-		assert.deepStrictEqual({ failed, notice: [notice?.text, notice?.buttons], ended: world.person.ended }, {
+		// The person's notice of their agent's end (L6) - their script's start that failed too (L5) - its Show the
+		// window's, which opens what endedAgent says (D6)
+		assert.deepStrictEqual({ failed, told: world.person.told, ended: world.facade.endedAgent(2) }, {
 			failed: {
 				code: 'FAILED',
-				message: 'Arg Code did not start as @main #a1: its CLI ended with exit code 1\nThe last lines of its screen, as they were (read_screen #a1 gives up to 2000 of them):\nError: unknown model nope\nexiting',
-				data: { agent: 1, finalScreen: finalScreenFile(dir, 1) }
+				message: 'Arg Code did not start as @nope #a1: its CLI ended with exit code 1\nThe last lines of its screen, as they were (read_screen #a1 gives up to 2000 of them):\nError: unknown model nope\nexiting',
+				data: { outcome: 'failed', agent: 1, phase: 'connecting', finalScreen: finalScreenTextFile(dir, 1) }
 			},
-			notice: ['@main #a2 ended: it exited, with exit code 3.', ['Show']],
-			ended: [{ id: 2, name: 'main', terminal: '@main #2 · Arg Code', finalScreen: finalScreenFile(dir, 2), ending: 'exited: its CLI ended with exit code 3' }]
+			told: ['error: @nope #a1 did not start: its CLI ended with exit code 1. (#a1\'s terminal)', 'error: @lead #a2 exited: its CLI ended with exit code 3. (#a2\'s terminal)'],
+			ended: { id: 2, name: 'lead', finalScreen: finalScreenFile(dir, 2), ending: 'exited: its CLI ended with exit code 3' }
 		});
 	});
 
 	test('the terminals the window gives back after a reload are told again whose they are, and where their final screens go; a fresh start lets go of the screens of agents that ended before it, and says so, a reload keeps them', async () => {
 		await twoTrees();
-		await settled(world.facade.kill(callerOf(world.agent(2)), '#3'));
+		await settled(world.facade.stopAgent(callerOf(world.agent(2)), '#3'));
 		keeps(3, { final: { buffer: 'normal', lines: ['bye'] } });
 		const dir = screensDir(world.table.dir);
 		await world.facade.recover(true);
@@ -399,14 +467,103 @@ suite('Core: agents\' screens', () => {
 		// The app started again: another load of the window, the one before closed
 		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
 		await world.facade.recover(false);
-		const read = await world.facade.screens.read(PERSON, '#3');
+		// The agents that ended left the list with the window going (L12)
+		const read = await outcomeOf(world.facade.screens.read(PERSON, '#3'));
 
-		assert.deepStrictEqual({ registered, afterReload, afterRestart: fs.existsSync(finalScreenFile(dir, 3)), read: read.empty }, {
-			registered: [1, 2, 4].map(id => `${['', '@lead #1', '@worker #2', '', '@other #4'][id]} · Arg Code as #${id}: ${finalScreenFile(dir, id)}`),
+		assert.deepStrictEqual({ registered, afterReload, afterRestart: fs.existsSync(finalScreenFile(dir, 3)), read }, {
+			registered: [1, 2, 4].map(id => `#a${id} ${finalScreenFile(dir, id)}`),
 			afterReload: true,
 			afterRestart: false,
-			read: 'discarded'
+			read: 'NOT_FOUND: No agent is #a3: list_agents with all lists every agent you reach.'
 		});
+	});
+
+	test('typing or keys into an agent being stopped are refused, nothing typed; what goes into an agent\'s terminal is written into the person\'s history, agents.log, before and after - who, what, where, and what went in - a refusal not (D9)', async () => {
+		await twoTrees();
+		const lead = callerOf(world.agent(1));
+		await settled(world.facade.screens.type(lead, '#2', 'yes', true));
+		world.terminals.stubborn = true;
+		const stopping = world.facade.stopAgent(PERSON, '#4');
+		await sleep(10);
+		const refused = await failureOf(world.facade.screens.press(lead, '#4', ['Enter']));
+		world.terminals.stubborn = false;
+		await settled(stopping);
+		const history = fs.readFileSync(world.table.logFile, 'utf8').split('\n').filter(line => line.includes('  input  ')).map(line => line.replace(/^\S+ \S+ {2}/, ''));
+
+		assert.deepStrictEqual({ refused, history }, {
+			refused: { code: 'REFUSED', message: '@other #a4 is being stopped: its terminal takes nothing more.', data: { outcome: 'not_applied', reason: 'ended' } },
+			history: [
+				'input    @lead #a1 typing 3 characters, "yes", and Enter, into @worker #a2\'s terminal',
+				'input    @lead #a1 typing 3 characters, "yes", and Enter, into @worker #a2\'s terminal: the text went in, and Enter'
+			]
+		});
+	});
+
+	test('a start not confirmed in time answers with the last lines its CLI shows then, which say why as often as not (AGENT-ORCHESTRATION.md, O3)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		const starting = world.facade.startAgent(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Slow.', folder: lab, name: 'slow' });
+		await until(() => world.terminals.launched.length === 1);
+		shows(1, ['Do you trust this folder?', '> Yes', '  No']);
+		await sleep(5_000);
+		const started = await settled(starting);
+
+		assert.deepStrictEqual({ status: started.status, screen: started.screen?.text, source: started.screen?.source }, {
+			status: 'unconfirmed',
+			screen: 'Do you trust this folder?\n> Yes\n  No',
+			source: 'normal'
+		});
+	});
+
+	test('an exit code 130 just after an agent pressed Ctrl+C in a terminal is that agent\'s doing: the person hears of their agent that ended so, and who pressed it; one with no agent\'s Ctrl+C before it is the person\'s own, and nothing is said (L6)', async () => {
+		await twoTrees();
+		// Its CLI exits as the key goes in, before the call has its answer
+		const pressing = settled(world.facade.screens.press(callerOf(world.agent(1)), '@other', ['Ctrl+C']).catch(() => undefined));
+		world.terminals.end(terminalOf(4), { exitCode: 130, byThePerson: false });
+		await pressing;
+		world.terminals.end(terminalOf(3), { exitCode: 130, byThePerson: false });
+		await settled(Promise.resolve());
+
+		assert.deepStrictEqual({ told: world.person.told, ends: [3, 4].map(id => world.table.get(id)?.end?.reason) }, {
+			told: ['error: @other #a4 exited: its CLI ended with exit code 130, after @lead #a1 pressed Ctrl+C there. (#a4\'s terminal)'],
+			ends: ['its CLI ended with exit code 130', 'its CLI ended with exit code 130, after @lead #a1 pressed Ctrl+C there']
+		});
+	});
+
+	test('the creator of a child that ended is told how it ended as its record says it - after which agent\'s Ctrl+C it exited, and the exit code the window saw of a tab the person closed - and a message it had not fetched goes back saying so (M6, M8; MS-04)', async () => {
+		await twoTrees();
+		const worker = callerOf(world.agent(2));
+		await world.startUp(worker, { cli: 'arg', model: 'm', effort: 'e', task: 'Docs.', name: 'docs' });
+		await world.fetched(3);
+		await world.fetched(5);
+		world.facade.mail.send(worker, ['@helper'], 'Check it.', undefined);
+		const pressing = settled(world.facade.screens.press(callerOf(world.agent(4)), '@helper', ['Ctrl+C']).catch(() => undefined));
+		world.terminals.end(terminalOf(3), { exitCode: 130, byThePerson: false });
+		await pressing;
+		world.terminals.end(terminalOf(5), { exitCode: 129, byThePerson: true });
+		await sleep(1_000);
+		const notices = world.facadeMessagesTo(2).map(text => text.split('\n')[0]);
+
+		assert.deepStrictEqual({ notices, docs: world.table.get(5)?.end?.exitCode }, {
+			notices: [
+				'#m6 was not fetched by @helper #a3 before it ended (it exited: its CLI ended with exit code 130, after @other #a4 pressed Ctrl+C there).',
+				'@helper #a3 ended: it exited: its CLI ended with exit code 130, after @other #a4 pressed Ctrl+C there. It takes no more messages. Its last screen was not kept: read_screen #a3 says why.',
+				'@docs #a5 ended: stopped by @human: its tab was closed, its CLI ending with exit code 129. It takes no more messages. Its last screen was not kept: read_screen #a5 says why.'
+			],
+			docs: 129
+		});
+	});
+
+	test('the person\'s agents that end unexpectedly together are told in one notification, ended:<batch>, each end as it comes; one that ends later, in one of its own (M11)', async () => {
+		await twoTrees();
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Third.', folder: lab, name: 'third' });
+		world.terminals.end(terminalOf(1), { exitCode: 1, byThePerson: false });
+		await sleep(500);
+		world.terminals.end(terminalOf(4), { exitCode: 2, byThePerson: false });
+		await sleep(3_000);
+		world.terminals.end(terminalOf(5), { exitCode: 3, byThePerson: false });
+		await settled(Promise.resolve());
+
+		assert.deepStrictEqual([...world.person.endsTold.values()].map(ends => ends.map(end => `#a${end.agent} ${end.severity}`)), [['#a1 error', '#a4 error'], ['#a5 error']]);
 	});
 
 	test('a key is named as press_keys takes it: a name in any case, spaced or not, an alias, or one printable character', () => {

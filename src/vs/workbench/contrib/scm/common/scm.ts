@@ -254,6 +254,13 @@ export interface ISCMViewService {
 	 * sentences, and only one of them should offer to make a repository.
 	 */
 	readonly folderRepositories: readonly ISCMRepository[];
+
+	/**
+	 * Fires once `folderRepositories` may have changed - a repository arrived or left, or the window went to
+	 * another folder - with the change made: what heard of it from the SCM service may have heard before this
+	 * service did.
+	 */
+	readonly onDidChangeFolderRepositories: Event<void>;
 	readonly onDidChangeVisibleRepositories: Event<ISCMViewVisibleRepositoryChangeEvent>;
 
 	isVisible(repository: ISCMRepository): boolean;

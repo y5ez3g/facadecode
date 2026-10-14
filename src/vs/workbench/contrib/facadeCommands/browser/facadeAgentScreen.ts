@@ -28,7 +28,8 @@ export interface IAgentScreen {
  * lines in all.
  */
 export interface IAgentFinalScreen {
-	readonly final: { readonly buffer: AgentScreenBuffer; readonly lines: readonly string[] };
+	/** The screen as its terminal ended: `older` too where lines were left out to make room for `frame`. */
+	readonly final: IAgentScreen;
 	readonly frame?: readonly string[];
 }
 
@@ -91,10 +92,11 @@ export function readScreen(raw: RawXtermTerminal, count: number): IAgentScreen {
 export function finalScreen(raw: RawXtermTerminal, alternateFrame: readonly string[] | undefined): IAgentFinalScreen {
 	const screen = readScreen(raw, MOST_SCREEN_LINES);
 	if (screen.buffer === 'alternate' || !alternateFrame?.length) {
-		return { final: { buffer: screen.buffer, lines: screen.lines } };
+		return { final: screen };
 	}
 	const frame = alternateFrame.slice(-MOST_SCREEN_LINES);
-	return { frame, final: { buffer: screen.buffer, lines: screen.lines.slice(Math.max(0, screen.lines.length - (MOST_SCREEN_LINES - frame.length))) } };
+	const lines = screen.lines.slice(Math.max(0, screen.lines.length - (MOST_SCREEN_LINES - frame.length)));
+	return { frame, final: { ...screen, lines, older: screen.older || lines.length < screen.lines.length } };
 }
 
 /** Whether a row has nothing on it: no characters, nothing in inverse video. */

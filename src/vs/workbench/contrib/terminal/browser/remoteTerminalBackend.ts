@@ -16,7 +16,7 @@ import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IRemoteAuthorityResolverService } from '../../../../platform/remote/common/remoteAuthorityResolver.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ISerializedTerminalCommand } from '../../../../platform/terminal/common/capabilities/capabilities.js';
-import { IPtyHostLatencyMeasurement, IShellLaunchConfig, IShellLaunchConfigDto, ITerminalBackend, ITerminalBackendRegistry, ITerminalChildProcess, ITerminalEnvironment, ITerminalLogService, ITerminalProcessOptions, ITerminalProfile, ITerminalsLayoutInfo, ITerminalsLayoutInfoById, ProcessPropertyType, TerminalExtensions, TerminalIcon, TerminalSettingId, TitleEventSource, type IProcessPropertyMap } from '../../../../platform/terminal/common/terminal.js';
+import { IPtyHostLatencyMeasurement, IShellLaunchConfig, IShellLaunchConfigDto, ITerminalBackend, ITerminalBackendRegistry, ITerminalChildProcess, ITerminalEnvironment, ITerminalLogService, ITerminalProcessOptions, ITerminalProfile, ITerminalsLayoutInfo, ITerminalsLayoutInfoById, ProcessPropertyType, TerminalExtensions, TerminalIcon, TerminalSettingId, TitleEventSource, type IProcessPropertyMap, IListProcessesOptions } from '../../../../platform/terminal/common/terminal.js';
 import { IProcessDetails } from '../../../../platform/terminal/common/terminalProcess.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
@@ -242,8 +242,8 @@ class RemoteTerminalBackend extends BaseTerminalBackend implements ITerminalBack
 		return undefined;
 	}
 
-	async listProcesses(): Promise<IProcessDetails[]> {
-		return this._remoteTerminalChannel.listProcesses();
+	async listProcesses(options?: IListProcessesOptions): Promise<IProcessDetails[]> {
+		return this._remoteTerminalChannel.listProcesses(options);
 	}
 
 	async getLatency(): Promise<IPtyHostLatencyMeasurement[]> {
