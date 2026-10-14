@@ -14,6 +14,7 @@ import { Schemas } from '../../../../base/common/network.js';
 import { ResourceMap } from '../../../../base/common/map.js';
 import { basename, joinPath, toLocalResource } from '../../../../base/common/resources.js';
 import Severity from '../../../../base/common/severity.js';
+import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { EditorsOrder } from '../../../common/editor.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkingCopy } from '../../../services/workingCopy/common/workingCopy.js';
@@ -938,19 +939,22 @@ export class WorktreeService implements IWorktreeService {
 		const unsaved = this.unsavedInside(worktree);
 		const loss: IDeletionLoss = { ...check, unsaved: unsaved.map(workingCopy => this.uriIdentityService.extUri.relativePath(worktree, workingCopy.resource) ?? basename(workingCopy.resource)) };
 		const running = [...await this.terminalsInside(worktree), ...this.folderTerminalsService.terminalsOf(worktree)].some(instance => instance.hasChildProcesses);
-		if (!(await this.confirmDelete(name, branch, loss, running))) {
+		if (!(await this.confirmDelete(name, branch, loss, running, false))) {
 			return;
 		}
 
 		// 3 to 7 under one progress: a large tree takes a while to delete.
-		const force = check.files.length > 0 || check.submodules;
+		type Outcome = DeleteWorktreeAtResult | { readonly kind: 'stayed' } | { readonly kind: 'kept' } | { readonly kind: 'notRemoved'; readonly discarded: boolean } | undefined;
 		const result = await this.progressService.withProgress(
 			{ location: ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree '{0}'...", name) },
-			async (): Promise<DeleteWorktreeAtResult | undefined> => {
-				// 3  move off, to the repository's own row rather than whichever folder is next in the list (WT-8.3).
-				const active = this.activeFolderService.activeFolder;
-				if (active && this.uriIdentityService.extUri.isEqual(active.uri, worktree)) {
+			async (): Promise<Outcome> => {
+				// 3  move off, to the repository's own row (WT-8.3); a window that cannot stops the deletion
+				const isOn = () => this.uriIdentityService.extUri.isEqual(this.activeFolderService.activeFolder?.uri, worktree);
+				if (isOn()) {
 					await this.workspaceBarService.show(main);
+					if (isOn()) {
+						return { kind: 'stayed' };
+					}
 				}
 
 				// Its row goes with the window off it, rather than once git has deleted it - which takes
@@ -960,15 +964,34 @@ export class WorktreeService implements IWorktreeService {
 					// 4  discard what the confirmation named: unsaved changes and their editors
 					await this.discardInside(worktree, unsaved);
 
-					// 5  leave folders[] without asking again (WT-8.4)
-					await this.workspaceBarService.remove([worktree], { confirmed: true });
+					// 5  leave folders[] without asking again (WT-8.4); a workspace that refuses stops the deletion here
+					const removal = await this.workspaceBarService.remove([worktree], { confirmed: true });
+					if (removal.kind !== 'removed') {
+						return { kind: 'notRemoved', discarded: unsaved.length > 0 };
+					}
 
 					// 6  close the terminals still inside it; git's delete waits for their shells to let go
 					for (const instance of await this.terminalsInside(worktree)) {
 						instance.dispose(TerminalExitReason.User);
 					}
 
-					// 7  delete. `force` only when the confirmation named what it throws away.
+					// Read again: what was running may have written more since the confirmation
+					let now: DeleteWorktreeAtResult | undefined;
+					try {
+						now = await run('check');
+					} catch (err) {
+						return { kind: 'error', code: undefined, message: toErrorMessage(err) };
+					}
+					if (now?.kind !== 'checked') {
+						return now;
+					}
+					const more = newLoss(loss, now);
+					if (more && !(await this.confirmDelete(name, branch, more, false, true))) {
+						return { kind: 'kept' };
+					}
+
+					// 7  delete. `force` only when a confirmation named what it throws away.
+					const force = now.files.length > 0 || now.submodules;
 					try {
 						return await run(force ? 'force' : 'remove');
 					} catch (err) {
@@ -979,17 +1002,35 @@ export class WorktreeService implements IWorktreeService {
 				}
 			});
 
-		// 8  nothing to refresh: letting the row go read git's records again (WT-8.9, and WT-8.6 when it went wrong).
-		if (result?.kind !== 'removed') {
-			const error = result?.kind === 'error' ? result : undefined;
-			const message = gitMessage(error);
-			this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} failed: ${message}`);
-			this.notificationService.error(explainFailure(error, main) ?? localize('worktrees.deleteFailed', "Failed to delete worktree: {0}", message));
+		// Letting the row go reads git's records again: gone after a removal, back after a failure (WT-8.9).
+		if (result?.kind === 'removed') {
+			await this.forgetWorktree(main, worktree);
 			return;
 		}
 
-		// Its name, colour, place and the trust it was given go with it: they are kept by path, and the next
-		// worktree of the same branch lands on the same path.
+		this.logService.warn(`[worktrees] deleting ${worktree.toString(true)} ended as ${result?.kind ?? 'unknown'}`);
+		if (result?.kind === 'stayed') {
+			this.notificationService.error(localize('worktrees.couldNotLeave', "Could not switch to '{0}'; worktree '{1}' was not deleted.", basename(main), name));
+		} else if (result?.kind === 'kept') {
+			this.notificationService.info(localize('worktrees.kept', "Worktree '{0}' was not deleted from disk. It has been removed from the workspace. Click its row to add it back.", name));
+		} else if (result?.kind === 'notRemoved') {
+			// The workspace has said why; what was done before it is said as done (WT-8, step 5)
+			this.notificationService.error(result.discarded
+				? localize('worktrees.notOutDiscarded', "Worktree '{0}' was not deleted and could not be removed from the workspace. Unsaved changes were discarded.", name)
+				: localize('worktrees.notOut', "Worktree '{0}' was not deleted and could not be removed from the workspace.", name));
+		} else if (result?.kind === 'error') {
+			// Still registered, so its row comes back; what was done already is said (WT-8.6)
+			const failure = explainFailure(result, main) ?? localize('worktrees.deleteFailed', "Failed to delete worktree: {0}", gitMessage(result));
+			this.notificationService.error(localize('worktrees.alreadyOut', "{0} It was removed from the workspace, and its running terminals were terminated.", /[.!?]$/.test(failure) ? failure : `${failure}.`));
+		} else {
+			// No answer at all: nothing is said to have happened that cannot be seen to have.
+			this.notificationService.prompt(Severity.Error, localize('worktrees.deleteUnknown', "Unable to confirm deletion of worktree '{0}'. The workspace bar reflects the current Git status.", name),
+				[{ label: revealLabel(), run: () => this.commandService.executeCommand('revealFileInOS', worktree) }]);
+		}
+	}
+
+	/** Forgets a deleted worktree's name, colour, place and trust, which are kept by path. */
+	private async forgetWorktree(main: URI, worktree: URI): Promise<void> {
 		this.customizationService.set(worktree, {});
 		const order = this.customizationService.worktreeOrder(main);
 		if (order) {
@@ -1045,8 +1086,11 @@ export class WorktreeService implements IWorktreeService {
 		return inside;
 	}
 
-	/** Asks once, naming everything deleting the worktree loses (WT-8.1, WT-8.2). */
-	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: boolean): Promise<boolean> {
+	/**
+	 * Asks once, naming everything deleting the worktree loses (WT-8.1, WT-8.2). With `again`, asks only
+	 * about what appeared since the first time.
+	 */
+	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: boolean, again: boolean): Promise<boolean> {
 		const { files, ignoredPaths, submodules, unsaved } = loss;
 
 		// Laid out as VS Code's own delete confirmation: lists first, then one paragraph (WORKSPACE.md W10.7)
@@ -1067,18 +1111,29 @@ export class WorktreeService implements IWorktreeService {
 		list(localize('worktrees.ignored', "The following files ignored by Git will be deleted:"), ignoredPaths, LISTED_IGNORED);
 
 		const sentences: string[] = [];
-		// Deleted for good, not moved to the Recycle Bin, so in VS Code's words for that
-		sentences.push(submodules
-			? localize('worktrees.folderAndSubmodulesDeleted', "The worktree folder, including its submodules and unpushed commits, will be deleted. This action cannot be undone.")
-			: localize('worktrees.folderDeleted', "The worktree folder will be deleted from disk. This action cannot be undone."));
-		if (running) {
-			sentences.push(localize('worktrees.runningStops', "A process running in one of its terminals will be terminated."));
+		if (again) {
+			if (paragraphs.length) {
+				sentences.push(localize('worktrees.sinceAsked', "Additional files were modified since this prompt opened and will also be lost."));
+			}
+			if (submodules) {
+				sentences.push(localize('worktrees.submodulesSince', "Submodules and any unpushed commits will also be deleted."));
+			}
+		} else {
+			// Deleted for good, not moved to the Recycle Bin, so in VS Code's words for that
+			sentences.push(submodules
+				? localize('worktrees.folderAndSubmodulesDeleted', "The worktree folder, including its submodules and unpushed commits, will be deleted. This action cannot be undone.")
+				: localize('worktrees.folderDeleted', "The worktree folder will be deleted from disk. This action cannot be undone."));
+			if (running) {
+				sentences.push(localize('worktrees.runningStops', "A process running in one of its terminals will be terminated."));
+			}
+			// A worktree on a detached HEAD has no branch to keep, and is not told it has one.
+			if (branch) {
+				sentences.push(localize('worktrees.branchKeptQuoted', "The branch '{0}' will be preserved.", branch));
+			}
 		}
-		// A worktree on a detached HEAD has no branch to keep, and is not told it has one.
-		if (branch) {
-			sentences.push(localize('worktrees.branchKeptQuoted', "The branch '{0}' will be preserved.", branch));
+		if (sentences.length) {
+			paragraphs.push(sentences.join(' '));
 		}
-		paragraphs.push(sentences.join(' '));
 
 		// No Save and Delete: a file saved there would be deleted all the same
 		const discards = files.length > 0 || unsaved.length > 0;
@@ -1093,6 +1148,21 @@ export class WorktreeService implements IWorktreeService {
 
 		return confirmed;
 	}
+}
+
+/** What a second check finds that the first did not, or undefined when nothing new would be lost. */
+function newLoss(confirmed: IDeletionLoss, now: { readonly files: readonly string[]; readonly ignoredPaths: readonly string[]; readonly submodules: boolean }): IDeletionLoss | undefined {
+	const files = now.files.filter(file => !confirmed.files.includes(file));
+	const ignoredPaths = now.ignoredPaths.filter(ignored => !confirmed.ignoredPaths.includes(ignored));
+	const submodules = now.submodules && !confirmed.submodules;
+	return files.length || ignoredPaths.length || submodules ? { files, ignoredPaths, submodules, unsaved: [] } : undefined;
+}
+
+/** The platform's own words for showing a folder where it lives, as the bar's menu has them. */
+function revealLabel(): string {
+	return isWindows ? localize('worktrees.revealInWindows', "Reveal in File Explorer")
+		: isMacintosh ? localize('worktrees.revealInMac', "Reveal in Finder")
+			: localize('worktrees.revealInLinux', "Open Containing Folder");
 }
 
 /**

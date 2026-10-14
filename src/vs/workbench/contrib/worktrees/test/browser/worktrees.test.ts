@@ -151,6 +151,8 @@ suite('Worktrees - making and deleting one', () => {
 	/** The folder the window is on, which `show` moves - unless the window is `stuck` where it is. */
 	let active: URI;
 	let stuck: boolean;
+	/** Set for a workspace that does not take the edit taking a folder out of it. */
+	let editRefused: boolean;
 	/** The working copies with unsaved changes, and the editors open: filled in place by a test. */
 	const dirty: IWorkingCopy[] = [];
 	const openEditors: IEditorIdentifier[] = [];
@@ -256,6 +258,7 @@ suite('Worktrees - making and deleting one', () => {
 		repository = { kind: 'repository', main, folder: undefined, branch: 'main', members: [], worktrees: [{ uri: w2, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
 		active = w2;
 		stuck = false;
+		editRefused = false;
 		dirty.length = 0;
 		openEditors.length = 0;
 
@@ -274,9 +277,9 @@ suite('Worktrees - making and deleting one', () => {
 				restored.fire();
 				return { kind: 'shown' };
 			},
-			remove: async uris => {
-				steps.push(`remove ${uris.map(uri => uri.path).join(', ')}`);
-				return { kind: 'removed', folders: uris };
+			remove: async (uris, options) => {
+				steps.push(`remove ${uris.map(uri => uri.path).join(', ')}${options?.confirmed ? '' : ', asking'}`);
+				return editRefused ? { kind: 'failed', reason: 'failed to write the workspace configuration file' } : { kind: 'removed', folders: uris };
 			},
 			setExpanded: uri => { steps.push(`open ${uri.path}`); },
 			whenListed: async uri => { steps.push(`listed ${uri.path}`); },
@@ -307,7 +310,9 @@ suite('Worktrees - making and deleting one', () => {
 				if (missingCommands.has(id)) {
 					throw new Error(`command '${id}' not found`);
 				}
-				return answers.get(`${id} ${args.find(arg => typeof arg === 'string')}`) as T;
+				// A function answers each call afresh: a second check that finds more than the first.
+				const given = answers.get(`${id} ${args.find(arg => typeof arg === 'string')}`);
+				return (typeof given === 'function' ? given() : given) as T;
 			}
 		});
 		instantiationService.stub(IWorkingCopyService, { dirtyWorkingCopies: dirty });
@@ -833,7 +838,7 @@ suite('Worktrees - making and deleting one', () => {
 		};
 	}
 
-	test('WTA-22 deleting one with changes: asked first, then off it and its row gone, out of folders[], its terminals closed and only then git, with force; its name, colour, place and trust go with it', async () => {
+	test('WTA-22 deleting one with changes: asked first, then off it and its row gone, out of folders[], its terminals closed, read again, and only then git, with force; its name, colour, place and trust go with it', async () => {
 		trust.enabled = true;
 		answers.set('_git.deleteWorktreeAt check', checked({ files: ['a.txt'] }));
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
@@ -849,6 +854,7 @@ suite('Worktrees - making and deleting one', () => {
 				'hide /home/me/.facade/worktrees/lab/w2',
 				'remove /home/me/.facade/worktrees/lab/w2',
 				'close its terminal',
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'customize /home/me/.facade/worktrees/lab/w2 {}',
@@ -860,7 +866,7 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
-	test('WTA-24 a delete git refuses brings the row back and says why, and the worktree keeps its name, colour and trust', async () => {
+	test('WTA-24 a delete git refuses brings the row back and says why - and what was done already - and the worktree keeps its name, colour and trust', async () => {
 		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'error', code: undefined, message: 'fatal: the directory is busy' });
 
@@ -871,9 +877,10 @@ suite('Worktrees - making and deleting one', () => {
 			'hide /home/me/.facade/worktrees/lab/w2',
 			'remove /home/me/.facade/worktrees/lab/w2',
 			'close its terminal',
+			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 remove',
 			'unhide /home/me/.facade/worktrees/lab/w2',
-			'error: Failed to delete worktree: fatal: the directory is busy',
+			'error: Failed to delete worktree: fatal: the directory is busy. It was removed from the workspace, and its running terminals were terminated.',
 		]);
 	});
 
@@ -916,6 +923,58 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
+	test('WTA-35 more to lose by the time its terminals are stopped is asked about again; declined, nothing is deleted', async () => {
+		let checks = 0;
+		answers.set('_git.deleteWorktreeAt check', () => ++checks === 1 ? checked() : checked({ files: ['written meanwhile.txt'] }));
+		instantiationService.stub(IDialogService, {
+			confirm: async confirmation => {
+				steps.push('confirm');
+				confirmations.push(confirmation);
+				return { confirmed: confirmations.length === 1 };
+			}
+		});
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+
+		assert.deepStrictEqual({
+			second: (confirmations[1].detail as string).split('\n').includes('written meanwhile.txt'),
+			deleted: steps.filter(step => / (remove|force)$/.test(step)),
+			said: steps[steps.length - 1]
+		}, {
+			second: true,
+			deleted: [],
+			said: 'info: Worktree \'w2\' was not deleted from disk. It has been removed from the workspace. Click its row to add it back.'
+		});
+	});
+
+	test('WTA-35 a workspace that does not take the worktree out of it stops the delete before git is asked, and says what was done already', async () => {
+		answers.set('_git.deleteWorktreeAt check', checked());
+		dirty.push(upcastPartial<IWorkingCopy>({ resource: URI.file(`${w2.path}/src/app.ts`), revert: async () => { } }));
+		editRefused = true;
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+
+		assert.deepStrictEqual(steps.slice(steps.indexOf('confirm') + 1).filter(step => !step.startsWith('close editors')), [
+			'show /lab',
+			'hide /home/me/.facade/worktrees/lab/w2',
+			'remove /home/me/.facade/worktrees/lab/w2',
+			'unhide /home/me/.facade/worktrees/lab/w2',
+			'error: Worktree \'w2\' was not deleted and could not be removed from the workspace. Unsaved changes were discarded.',
+		]);
+	});
+
+	test('WTA-35 a window that cannot leave the worktree does not delete it', async () => {
+		answers.set('_git.deleteWorktreeAt check', checked());
+		stuck = true;
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+
+		assert.deepStrictEqual(steps.slice(steps.indexOf('confirm') + 1), [
+			'show /lab',
+			'error: Could not switch to \'lab\'; worktree \'w2\' was not deleted.',
+		]);
+	});
+
 	test('a clean worktree with submodules checked out is warned about them, and deleted with force - git takes it no other way', async () => {
 		answers.set('_git.deleteWorktreeAt check', checked({ submodules: true }));
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
@@ -930,6 +989,7 @@ suite('Worktrees - making and deleting one', () => {
 			type: 'warning',
 			said: true,
 			deleted: [
+				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 			],
