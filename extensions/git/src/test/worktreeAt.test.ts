@@ -501,6 +501,23 @@ suite('worktreeAt', () => {
 		});
 	});
 
+	test('WTA-24 check names the lock git holds on a worktree', async () => {
+		const worktree = path.join(dir, 'worktrees', 'local');
+		await createWorktreeAt(git, main, worktree, 'local');
+		const clean = await deleteWorktreeAt(git, main, worktree, 'check');
+		run(main, 'worktree', 'lock', '--reason', 'on a USB disk', worktree);
+
+		const locked = await deleteWorktreeAt(git, main, worktree, 'check');
+
+		assert.deepStrictEqual({
+			unlocked: clean.kind === 'checked' && clean.restrictions,
+			locked: locked.kind === 'checked' && locked.restrictions
+		}, {
+			unlocked: [],
+			locked: [{ kind: 'locked', reason: 'on a USB disk' }]
+		});
+	});
+
 	suite('a folder with nothing to start a worktree from', () => {
 
 		// The first commit is made in the person's name, which a machine running tests may not have:
@@ -713,7 +730,7 @@ suite('worktreeAt', () => {
 		const listed = run(main, 'worktree', 'list');
 
 		assert.deepStrictEqual({ check, remove, removes, gone: listed.includes('gone'), unmounted: listed.includes('unmounted') }, {
-			check: { kind: 'checked', files: [], submodules: false },
+			check: { kind: 'checked', files: [], submodules: false, restrictions: [] },
 			remove: { kind: 'removed' },
 			removes: [['worktree', 'remove', '--']],
 			gone: false,
@@ -740,8 +757,8 @@ suite('worktreeAt', () => {
 		const force = await deleteWorktreeAt(git, main, worktree, 'force');
 
 		assert.deepStrictEqual({ declared, checkedOut, remove: remove.kind, force, folder: existsSync(worktree) }, {
-			declared: { kind: 'checked', files: [], submodules: false },
-			checkedOut: { kind: 'checked', files: [], submodules: true },
+			declared: { kind: 'checked', files: [], submodules: false, restrictions: [] },
+			checkedOut: { kind: 'checked', files: [], submodules: true, restrictions: [] },
 			remove: 'error',
 			force: { kind: 'removed' },
 			folder: false,

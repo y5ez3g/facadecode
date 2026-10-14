@@ -809,9 +809,17 @@ suite('Worktrees - making and deleting one', () => {
 		]);
 	});
 
+	/** What `check` answers for a worktree with nothing in it beyond `changes`. */
+	function checked(changes: { files?: string[]; submodules?: boolean; locked?: string } = {}) {
+		return {
+			kind: 'checked', files: changes.files ?? [], submodules: !!changes.submodules,
+			restrictions: changes.locked !== undefined ? [{ kind: 'locked', reason: changes.locked }] : []
+		};
+	}
+
 	test('WTA-22 deleting one with changes: asked first, then off it and its row gone, out of folders[], its terminals closed and only then git, with force; its name, colour, place and trust go with it', async () => {
 		trust.enabled = true;
-		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: ['a.txt'], submodules: false });
+		answers.set('_git.deleteWorktreeAt check', checked({ files: ['a.txt'] }));
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
 		savedOrder = [w2, w3];
 
@@ -837,7 +845,7 @@ suite('Worktrees - making and deleting one', () => {
 	});
 
 	test('WTA-24 a delete git refuses brings the row back and says why, and the worktree keeps its name, colour and trust', async () => {
-		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'error', code: undefined, message: 'fatal: the directory is busy' });
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
@@ -853,8 +861,19 @@ suite('Worktrees - making and deleting one', () => {
 		]);
 	});
 
+	test('WTA-24 a locked worktree is refused before anything is asked or stopped', async () => {
+		answers.set('_git.deleteWorktreeAt check', checked({ locked: 'on a USB disk' }));
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+
+		assert.deepStrictEqual(steps, [
+			'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check',
+			'error: Worktree \'w2\' is locked: on a USB disk. Run \'git worktree unlock\' to allow deletion.',
+		]);
+	});
+
 	test('a clean worktree with submodules checked out is warned about them, and deleted with force - git takes it no other way', async () => {
-		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: true });
+		answers.set('_git.deleteWorktreeAt check', checked({ submodules: true }));
 		answers.set('_git.deleteWorktreeAt force', { kind: 'removed' });
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
@@ -881,7 +900,7 @@ suite('Worktrees - making and deleting one', () => {
 			terminal('the remote one', `${w2.path}/src`, { remoteAuthority: 'ssh-remote+box', running: true }),
 			terminal('a local one at the same path', `${w2.path}/src`, { running: true })
 		];
-		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(worktree);
@@ -897,7 +916,7 @@ suite('Worktrees - making and deleting one', () => {
 
 	test('a terminal of the worktree\'s editor area is said to be running whatever it started in: deleting the worktree stops it too', async () => {
 		editorAreaTerminals = [terminal('a server moved into its editor area', '/lab', { running: true })];
-		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
 
 		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
@@ -908,7 +927,7 @@ suite('Worktrees - making and deleting one', () => {
 	});
 
 	test('a worktree on a detached HEAD is not told it has a branch to keep', async () => {
-		answers.set('_git.deleteWorktreeAt check', { kind: 'checked', files: [], submodules: false });
+		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
 		const lastLine = () => (confirmations[confirmations.length - 1].detail as IMarkdownString).value.trim().split('\n').pop();
 

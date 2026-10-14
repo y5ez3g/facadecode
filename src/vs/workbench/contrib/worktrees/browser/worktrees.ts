@@ -220,12 +220,9 @@ const LISTED_FILES = 10;
 /** How many of the files `.worktreeinclude` could not copy a notification names. */
 const LISTED_COPY_FAILURES = 3;
 
-/**
- * What `_git.deleteWorktreeAt` returns. `checked`, for `check`: the files whose changes would be lost,
- * and whether it has submodules checked out, which git deletes only by force.
- */
+/** What `_git.deleteWorktreeAt` returns (WT-8.6). */
 type DeleteWorktreeAtResult =
-	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean }
+	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly { readonly kind: 'locked'; readonly reason: string }[] }
 	| { readonly kind: 'removed' }
 	| WorktreeAtError;
 
@@ -919,6 +916,15 @@ export class WorktreeService implements IWorktreeService {
 			const error = check?.kind === 'error' ? check : undefined;
 			this.notificationService.error(explainFailure(error, main)
 				?? localize('worktrees.checkFailed', "Failed to verify worktree state before deletion: {0}", gitMessage(error)));
+			return;
+		}
+
+		// Refused before anything is asked or stopped, rather than found out at the end (WT-8, step 1)
+		const lock = check.restrictions.find(restriction => restriction.kind === 'locked');
+		if (lock) {
+			this.notificationService.error(lock.reason
+				? localize('worktrees.lockedBecause', "Worktree '{0}' is locked: {1}. Run 'git worktree unlock' to allow deletion.", name, lock.reason)
+				: localize('worktrees.locked', "Worktree '{0}' is locked. Run 'git worktree unlock' to allow deletion.", name));
 			return;
 		}
 

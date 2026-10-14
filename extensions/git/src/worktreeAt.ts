@@ -69,13 +69,17 @@ export type WorktreeBaseAtResult =
 
 export type DeleteWorktreeMode = 'check' | 'remove' | 'force';
 
+/** A lock git holds a removal back for, with its reason. */
+interface IWorktreeRestriction {
+	readonly kind: 'locked';
+	readonly reason: string;
+}
+
 /**
- * `checked` is what `check` returns: the files whose changes removing the worktree would lose, and whether it
- * has submodules checked out - which git removes only by force, with their git directories and any
- * commits in them that were not pushed.
+ * What `check` finds a removal would lose, or how a removal ended (WORKTREE.md WT-8.1).
  */
 export type DeleteWorktreeAtResult =
-	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean }
+	| { readonly kind: 'checked'; readonly files: readonly string[]; readonly submodules: boolean; readonly restrictions: readonly IWorktreeRestriction[] }
 	| { readonly kind: 'removed' }
 	| IWorktreeAtError;
 
@@ -519,14 +523,15 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 	const present = await exists(worktreePath);
 
 	if (mode === 'check') {
-		if (!present) {
-			return { kind: 'checked', files: [], submodules: false };
-		}
-
 		try {
+			const restrictions = await restrictionsOf(git, root, worktreePath);
+			if (!present) {
+				return { kind: 'checked', files: [], submodules: false, restrictions };
+			}
+
 			// Read only, so without the index lock - as the extension's own status runs.
 			const { stdout } = await git.exec(worktreePath, ['status', '--porcelain', '-z', '--untracked-files=all'], { env: { GIT_OPTIONAL_LOCKS: '0' } });
-			return { kind: 'checked', files: parsePorcelain(stdout), submodules: await hasSubmodules(git, worktreePath) };
+			return { kind: 'checked', files: parsePorcelain(stdout), submodules: await hasSubmodules(git, worktreePath), restrictions };
 		} catch (err) {
 			return toError(err);
 		}
@@ -580,6 +585,24 @@ export async function deleteWorktreeAt(git: IWorktreeGit, root: string, worktree
 	}
 
 	return { kind: 'removed' };
+}
+
+/** The lock git holds on `worktreePath`, if any, read from `git worktree list`. */
+async function restrictionsOf(git: IWorktreeGit, root: string, worktreePath: string): Promise<IWorktreeRestriction[]> {
+	const { stdout } = await git.exec(root, ['worktree', 'list', '--porcelain']);
+	const wanted = await comparablePath(worktreePath);
+	for (const entry of stdout.split(/\r?\n\r?\n/)) {
+		const lines = entry.split(/\r?\n/);
+		const head = lines.find(line => line.startsWith('worktree '));
+		if (!head || await comparablePath(head.slice('worktree '.length)) !== wanted) {
+			continue;
+		}
+
+		const lock = lines.find(line => line === 'locked' || line.startsWith('locked '));
+		return lock !== undefined ? [{ kind: 'locked', reason: lock.slice('locked'.length).trim() }] : [];
+	}
+
+	return [];
 }
 
 /**
