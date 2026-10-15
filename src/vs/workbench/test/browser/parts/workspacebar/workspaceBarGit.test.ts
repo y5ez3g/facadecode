@@ -235,6 +235,20 @@ suite('Workspace bar - worktrees as git records them', () => {
 		}]);
 	});
 
+	test('WTA-03 a worktree git is still making, its HEAD the all-zero placeholder, is listed once git has written what it checked out', async () => {
+		await repository('/lab');
+		await worktree('/lab', 'w2', `${OWN}/w2`, '0000000000000000000000000000000000000000');
+
+		const { git, groups: making } = await read('/lab');
+		await write('/lab/.git/worktrees/w2/HEAD', 'ref: refs/heads/w2');
+		await git.refresh();
+
+		assert.deepStrictEqual({ making, made: summary(git.groups) }, {
+			making: [{ repository: '/lab', folder: '/lab', worktrees: [] }],
+			made: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: undefined }] }],
+		});
+	});
+
 	test('WTA-03 a reftable repository, whose HEAD files do not say the branch, has its worktrees named by their folders, on no branch', async () => {
 		await write('/lab/.git/HEAD', 'ref: refs/heads/.invalid');
 		await worktree('/lab', 'w2', `${OWN}/w2`, 'ref: refs/heads/.invalid');

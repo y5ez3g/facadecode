@@ -281,7 +281,8 @@ const REFTABLE_HEAD = 'refs/heads/.invalid';
 
 async function readHead(fileService: IFileService, gitDir: URI): Promise<IHead | undefined> {
 	const content = await readGitFile(fileService, joinPath(gitDir, 'HEAD'));
-	if (!content) {
+	// WT-3.3: a worktree git is still making, whose HEAD is the placeholder `git worktree add` writes first
+	if (!content || NULL_HASH.test(content)) {
 		return undefined;
 	}
 
@@ -303,6 +304,9 @@ async function readHead(fileService: IFileService, gitDir: URI): Promise<IHead |
 
 /** A commit's full name in a repository of either hash: 40 hex digits for SHA-1, 64 for SHA-256. */
 const FULL_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** No commit: what `git worktree add` writes as a new worktree's HEAD, before it checks a commit out there. */
+const NULL_HASH = /^(?:0{40}|0{64})$/;
 
 /**
  * The branch a rebase or a bisect running in `gitDir` works on, as `git status` names it: both detach HEAD until they

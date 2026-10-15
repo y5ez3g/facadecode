@@ -229,7 +229,9 @@ window changes folder, and a list built on it would flicker on every switch.
   rebase (`rebase-merge` or `rebase-apply`) or a bisect detaches HEAD while it runs; the
   row keeps the branch it works on, as `git status` names it, so a worktree an agent
   rebases before each report keeps its name rather than flashing a hash. One begun on a
-  detached HEAD shows its short hash.
+  detached HEAD shows its short hash. A worktree git is still making is not listed
+  until its HEAD names what it checked out: `git worktree add` writes the record with
+  an all-zero HEAD first, which would show as a row of zeros.
 - **WT-3.4** Watching is correlated (`IFileService.createWatcher`) and per directory:
   `<common>`, `<common>/worktrees`, and each `<common>/worktrees/<name>`. A worktree
   made, removed, pruned or moved by any tool, and a branch checked out in one, reach
@@ -659,7 +661,7 @@ injection and integrated gate.
 | --- | --- | --- | --- |
 | WTA-01 | U, I | A repository with no, one and three worktrees, made by Facade, by `git worktree add` in a terminal and by an agent; a detached scratch worktree another tool makes in a temporary folder, out of and in `folders[]`; a plain folder; a folder without its own `.git` inside a repository; a worktree of a bare repository | WT-1.1-1.3, WT-1.8, WT-3.2: two levels, the checkout is the folder row, Facade's worktrees listed and no other, another tool's in `folders[]` a folder of its own with no New Worktree, plain rows where there is no main checkout |
 | WTA-02 | U, I | Open the window with worktrees not in `folders[]`; go to one; go to it again | Listing adds nothing to the file; the first visit adds it once and shows it; the second only switches |
-| WTA-03 | U | A repository added under two spellings; `worktree.useRelativePaths`; reftable; detached HEAD; a rebase of each backend and a bisect, begun on a branch and on a detached HEAD; a recorded worktree whose folder is gone; a `.git` naming a gone git directory | WT-3.1, WT-3.3, WT-1.9, WT-3.8 |
+| WTA-03 | U | A repository added under two spellings; `worktree.useRelativePaths`; reftable; detached HEAD; a rebase of each backend and a bisect, begun on a branch and on a detached HEAD; a worktree git is still making, its HEAD all zeros; a recorded worktree whose folder is gone; a `.git` naming a gone git directory | WT-3.1, WT-3.3, WT-1.9, WT-3.8 |
 | WTA-04 | U, I | Worktrees made in the order w10, w2, w1 with one tie; move one up and down; make another; reload; switch profile | Oldest first, ties numeric; a move keeps the whole order in the profile; a new one goes after; the order follows the profile |
 | WTA-05 | U, I | Close and open a repository by its triangle, Left/Right and the menu; collapse the bar; reload; reach a worktree of a closed repository by Open Recent, `facade <path>`, Switch to Worktree and Switch Folder... | The closed set is kept per workspace across reloads; collapsing the bar changes nothing; each arrival opens the repository first, so the marked row is in sight |
 | WTA-06 | U, I | Collapse the active worktree's repository with and without the main checkout in the workspace; collapse another repository; expand again | WT-1.5: successful switch to main before collapse; add it when needed; unrelated collapse and expansion do not switch folders |
