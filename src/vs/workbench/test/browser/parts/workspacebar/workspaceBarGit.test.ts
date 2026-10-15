@@ -204,6 +204,37 @@ suite('Workspace bar - worktrees as git records them', () => {
 		}]);
 	});
 
+	test('WTA-03 a rebase or a bisect, which detaches HEAD while it runs, leaves the row on the branch it works on', async () => {
+		const commit = '0123456789abcdef0123456789abcdef01234567';
+		await repository('/lab');
+		await worktree('/lab', 'rebasing', `${OWN}/rebasing`, commit);
+		await write('/lab/.git/worktrees/rebasing/rebase-merge/head-name', 'refs/heads/fix/login');
+		await timeout(2);
+		await worktree('/lab', 'applying', `${OWN}/applying`, commit);
+		await write('/lab/.git/worktrees/applying/rebase-apply/head-name', 'refs/heads/docs');
+		await timeout(2);
+		await worktree('/lab', 'bisecting', `${OWN}/bisecting`, commit);
+		await write('/lab/.git/worktrees/bisecting/BISECT_START', 'perf');
+		await timeout(2);
+		// Begun on a detached HEAD, they have no branch to show
+		await worktree('/lab', 'detached', `${OWN}/detached`, commit);
+		await write('/lab/.git/worktrees/detached/rebase-merge/head-name', 'detached HEAD');
+		await write('/lab/.git/worktrees/detached/BISECT_START', 'fedcba9876543210fedcba9876543210fedcba98');
+
+		const { groups } = await read('/lab');
+
+		assert.deepStrictEqual(groups, [{
+			repository: '/lab',
+			folder: '/lab',
+			worktrees: [
+				{ path: `${OWN}/rebasing`, label: 'fix/login', branch: 'fix/login', exists: true, folder: undefined },
+				{ path: `${OWN}/applying`, label: 'docs', branch: 'docs', exists: true, folder: undefined },
+				{ path: `${OWN}/bisecting`, label: 'perf', branch: 'perf', exists: true, folder: undefined },
+				{ path: `${OWN}/detached`, label: '0123456', branch: undefined, exists: true, folder: undefined },
+			]
+		}]);
+	});
+
 	test('WTA-03 a reftable repository, whose HEAD files do not say the branch, has its worktrees named by their folders, on no branch', async () => {
 		await write('/lab/.git/HEAD', 'ref: refs/heads/.invalid');
 		await worktree('/lab', 'w2', `${OWN}/w2`, 'ref: refs/heads/.invalid');

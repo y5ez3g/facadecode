@@ -24,7 +24,10 @@ import { canonicalUri, FolderKey, worktreesFolderOf } from './workspaceBar.js';
 export interface IWorkspaceBarWorktree {
 	/** The worktree's folder, spelled the way git wrote it down. */
 	readonly uri: URI;
-	/** The branch checked out there, without `refs/heads/`. Undefined while its HEAD is detached. */
+	/**
+	 * The branch checked out there, without `refs/heads/`. Undefined while its HEAD is detached, but by a rebase or a
+	 * bisect, which keep the branch they work on (WT-3.3).
+	 */
 	readonly branch: string | undefined;
 	/**
 	 * What its row says: the branch, or the first seven characters of a detached HEAD. The folder's
@@ -44,7 +47,10 @@ export interface IWorkspaceBarRepository {
 	readonly main: URI;
 	/** The workspace folder the main checkout is. Undefined when only a worktree of it was added. */
 	readonly folder: IWorkspaceFolder | undefined;
-	/** The branch the main checkout is on, without `refs/heads/`. Undefined while its HEAD is detached. */
+	/**
+	 * The branch the main checkout is on, without `refs/heads/`. Undefined while its HEAD is detached, but by a rebase or
+	 * a bisect (WT-3.3).
+	 */
 	readonly branch: string | undefined;
 	/**
 	 * Every folder of folders[] on this row, in their order there: the main checkout - under each
@@ -97,6 +103,8 @@ interface IWorkspaceBarFolders {
  * <common>/HEAD                       the main checkout's HEAD
  * <common>/worktrees/<name>/HEAD      each linked worktree's HEAD
  * <common>/worktrees/<name>/gitdir    each linked worktree's folder, with /.git at the end
+ * <git dir>/rebase-merge/head-name    the branch a rebase works on, while it has HEAD detached
+ * <git dir>/BISECT_START              the branch a bisect began on, while it has HEAD detached
  * ```
  */
 export class WorkspaceBarGit extends Disposable {
@@ -279,7 +287,9 @@ async function readHead(fileService: IFileService, gitDir: URI): Promise<IHead |
 
 	const ref = /^ref:\s*(?<ref>.+)$/.exec(content)?.groups?.ref;
 	if (!ref) {
-		return { branch: undefined, label: content.slice(0, SHORT_HASH_LENGTH) };
+		// WT-3.3: a rebase or a bisect detaches HEAD while it runs, and the row stays on the branch it works on
+		const branch = await branchInProgress(fileService, gitDir);
+		return branch ? { branch, label: branch } : { branch: undefined, label: content.slice(0, SHORT_HASH_LENGTH) };
 	}
 
 	if (ref === REFTABLE_HEAD) {
@@ -289,6 +299,30 @@ async function readHead(fileService: IFileService, gitDir: URI): Promise<IHead |
 	// The prefix comes off here, once, so branch names compare the same everywhere.
 	const branch = /^refs\/heads\/(?<branch>.+)$/.exec(ref)?.groups?.branch;
 	return { branch, label: branch ?? ref };
+}
+
+/** A commit's full name in a repository of either hash: 40 hex digits for SHA-1, 64 for SHA-256. */
+const FULL_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * The branch a rebase or a bisect running in `gitDir` works on, as `git status` names it: both detach HEAD until they
+ * are done. Undefined when neither runs, or the one running began on a detached HEAD.
+ */
+async function branchInProgress(fileService: IFileService, gitDir: URI): Promise<string | undefined> {
+	const [merge, apply, bisect] = await Promise.all([
+		readGitFile(fileService, joinPath(gitDir, 'rebase-merge', 'head-name')),
+		readGitFile(fileService, joinPath(gitDir, 'rebase-apply', 'head-name')),
+		readGitFile(fileService, joinPath(gitDir, 'BISECT_START'))
+	]);
+
+	// `refs/heads/<branch>`, or "detached HEAD"
+	const rebased = /^refs\/heads\/(?<branch>.+)$/.exec(merge ?? apply ?? '')?.groups?.branch;
+	if (rebased) {
+		return rebased;
+	}
+
+	// The branch without `refs/heads/`, or the commit a bisect began at
+	return bisect && !FULL_HASH.test(bisect) ? bisect : undefined;
 }
 
 interface IRecordedWorktree {
