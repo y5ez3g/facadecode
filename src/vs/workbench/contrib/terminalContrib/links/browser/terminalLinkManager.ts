@@ -28,7 +28,7 @@ import { ITerminalCapabilityStore } from '../../../../../platform/terminal/commo
 import { ITerminalConfiguration, ITerminalProcessInfo, TERMINAL_CONFIG_SECTION } from '../../../terminal/common/terminal.js';
 import type { ILink, ILinkProvider, IViewportRange, Terminal } from '@xterm/xterm';
 import { convertBufferRangeToViewport } from './terminalLinkHelpers.js';
-import { RunOnceScheduler } from '../../../../../base/common/async.js';
+import { RunOnceScheduler, timeout } from '../../../../../base/common/async.js';
 import { ITerminalLogService } from '../../../../../platform/terminal/common/terminal.js';
 import { TerminalMultiLineLinkDetector } from './terminalMultiLineLinkDetector.js';
 import { INotificationService, Severity } from '../../../../../platform/notification/common/notification.js';
@@ -147,6 +147,8 @@ export class TerminalLinkManager extends DisposableStore {
 						return;
 					}
 				}
+				// Facade Code: once xterm is done with the click (`_waitForClickToEnd`)
+				await this._waitForClickToEnd(event);
 				this._openers.get(TerminalBuiltinLinkType.Url)?.open({
 					type: TerminalBuiltinLinkType.Url,
 					text,
@@ -199,13 +201,15 @@ export class TerminalLinkManager extends DisposableStore {
 
 	private _setupLinkDetector(id: string, detector: ITerminalLinkDetector, isExternal: boolean = false): ILinkProvider {
 		const detectorAdapter = this.add(this._instantiationService.createInstance(TerminalLinkDetectorAdapter, detector));
-		this.add(detectorAdapter.onDidActivateLink(e => {
+		this.add(detectorAdapter.onDidActivateLink(async e => {
 			// Prevent default electron link handling so Alt+Click mode works normally
 			e.event?.preventDefault();
 			// Require correct modifier on click unless event is coming from linkQuickPick selection
 			if (e.event && !(e.event instanceof TerminalLinkQuickPickEvent) && !this._isLinkActivationModifierDown(e.event)) {
 				return;
 			}
+			// Facade Code: once xterm is done with the click (`_waitForClickToEnd`)
+			await this._waitForClickToEnd(e.event);
 			// Just call the handler if there is no before listener
 			if (e.link.activate) {
 				// Custom activate call (external links only)
@@ -219,6 +223,21 @@ export class TerminalLinkManager extends DisposableStore {
 			this._standardLinkProviders.set(id, detectorAdapter);
 		}
 		return detectorAdapter;
+	}
+
+	/**
+	 * Facade Code: waits for xterm to be done with the click that activated a link, for the link to
+	 * open after. xterm gives a click to its links before it reports the release to a program that
+	 * asked for mouse events, measuring the terminal for that report. Opening a link can take the
+	 * terminal out of the page - a file, or the integrated browser for a localhost link, opened over
+	 * a terminal editor does - and a release measured out of the page goes as `ESC[<0;NaN;NaNm`,
+	 * which the program reads as typed text. Microtasks run between a click's listeners, so this
+	 * waits for a task.
+	 */
+	private async _waitForClickToEnd(event: MouseEvent | undefined): Promise<void> {
+		if (event && !(event instanceof TerminalLinkQuickPickEvent)) {
+			await timeout(0);
+		}
 	}
 
 	private async _openLink(link: ITerminalSimpleLink): Promise<void> {

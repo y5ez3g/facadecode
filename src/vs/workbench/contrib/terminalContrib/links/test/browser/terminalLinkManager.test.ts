@@ -36,6 +36,12 @@ import { IHoverService } from '../../../../../../platform/hover/browser/hover.js
 import { ILinkHoverTargetOptions } from '../../../../terminal/browser/widgets/terminalHoverWidget.js';
 import { TerminalWidgetManager } from '../../../../terminal/browser/widgets/widgetManager.js';
 import { TerminalLink } from '../../browser/terminalLink.js';
+import { isMacintosh } from '../../../../../../base/common/platform.js';
+import { IOpenerService } from '../../../../../../platform/opener/common/opener.js';
+import { ITelemetryService } from '../../../../../../platform/telemetry/common/telemetry.js';
+import { NullTelemetryService } from '../../../../../../platform/telemetry/common/telemetryUtils.js';
+import { ITerminalLogService } from '../../../../../../platform/terminal/common/terminal.js';
+import { ITerminalConfigurationService } from '../../../../terminal/browser/terminal.js';
 
 const defaultTerminalConfig: Partial<ITerminalConfiguration> = {
 	fontFamily: 'monospace',
@@ -64,6 +70,9 @@ class TestLinkManager extends TerminalLinkManager {
 	setLinks(links: IDetectedLinks): void {
 		this._links = links;
 	}
+	detectUrlLinks(y: number): Promise<ILink[] | undefined> {
+		return super._getLinksForType(y, 'url');
+	}
 }
 
 suite('TerminalLinkManager', () => {
@@ -75,6 +84,7 @@ suite('TerminalLinkManager', () => {
 	let viewDescriptorService: TestViewDescriptorService;
 	let xterm: Terminal;
 	let linkManager: TestLinkManager;
+	let opened: string[];
 
 	setup(async () => {
 		configurationService = new TestConfigurationService({
@@ -96,6 +106,19 @@ suite('TerminalLinkManager', () => {
 		instantiationService.stub(IStorageService, store.add(new TestStorageService()));
 		instantiationService.stub(IThemeService, themeService);
 		instantiationService.stub(IViewDescriptorService, viewDescriptorService);
+		instantiationService.stub(ITelemetryService, NullTelemetryService);
+		instantiationService.stub(ITerminalLogService, new NullLogService());
+		instantiationService.stub(ITerminalConfigurationService, upcastPartial<ITerminalConfigurationService>({
+			config: upcastPartial<ITerminalConfiguration>({ allowedLinkSchemes: ['http', 'https'] })
+		}));
+		// Allow intercepting link activations
+		opened = [];
+		instantiationService.stub(IOpenerService, upcastPartial<IOpenerService>({
+			async open(resource) {
+				opened.push(resource.toString());
+				return true;
+			}
+		}));
 
 		const TerminalCtor = (await importAMDNodeModule<typeof import('@xterm/xterm')>('@xterm/xterm', 'lib/xterm.js')).Terminal;
 		xterm = store.add(new TerminalCtor({ allowProposedApi: true, cols: 80, rows: 30, logger: TestXtermLogger }));
@@ -261,6 +284,30 @@ suite('TerminalLinkManager', () => {
 			onInvalidated2.fire();
 
 			deepStrictEqual(disposedAttached, [true, true]);
+		});
+	});
+
+	suite('link activation', () => {
+		// xterm reports a click's release to a program that asked for mouse events after its links have the click,
+		// measuring the terminal then; a link that opens at once can have taken the terminal out of the page
+		function click(): MouseEvent {
+			return new MouseEvent('mouseup', { ctrlKey: !isMacintosh, metaKey: isMacintosh });
+		}
+
+		test('should open a clicked link once the click is over', async () => {
+			await new Promise<void>(r => xterm.write('http://localhost:5173/', r));
+			const [link] = (await linkManager.detectUrlLinks(1))!;
+			link.activate(click(), link.text);
+			const duringClick = [...opened];
+			await timeout(0);
+			deepStrictEqual({ duringClick, afterClick: opened }, { duringClick: [], afterClick: ['http://localhost:5173/'] });
+		});
+
+		test('should open a clicked OSC 8 hyperlink once the click is over', async () => {
+			xterm.options.linkHandler!.activate(click(), 'http://localhost:5173/', { start: { x: 1, y: 1 }, end: { x: 22, y: 1 } });
+			const duringClick = [...opened];
+			await timeout(0);
+			deepStrictEqual({ duringClick, afterClick: opened }, { duringClick: [], afterClick: ['http://localhost:5173/'] });
 		});
 	});
 
