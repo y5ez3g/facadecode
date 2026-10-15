@@ -636,6 +636,28 @@ suite('Workspace bar - worktrees as git records them', () => {
 		});
 	});
 
+	test('WTA-03 a worktree git removes is never drawn marked on its way out, its folder gone a moment before its record; one deleted by hand is marked once it has stayed gone (WT-3.8)', () => runWithFakedTimers({}, async () => {
+		await repository('/lab');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
+		await timeout(2);
+		await worktree('/lab', 'w3', `${OWN}/w3`);
+		const git = open('/lab');
+		await git.refresh();
+		const drawn: unknown[] = [];
+		disposables.add(git.onDidChange(() => drawn.push(summary(git.groups))));
+
+		await fileService.del(URI.file(`${OWN}/w2`), { recursive: true });
+		await fileService.del(URI.file(`${OWN}/w3`), { recursive: true });
+		await git.refresh();
+		await fileService.del(URI.file('/lab/.git/worktrees/w2'), { recursive: true });
+		await git.refresh();
+		await timeout(1000);
+		await git.refresh();
+
+		const w3 = (exists: boolean) => ({ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w3`, label: 'w3', branch: 'w3', exists, folder: undefined }] });
+		assert.deepStrictEqual(drawn, [[w3(true)], [w3(false)]]);
+	}));
+
 	test('WTA-03 one repository added under two spellings - its own name, and a link to it - is one row, with both folders on it', async () => {
 		const linked = disposables.add(new FileService(new NullLogService()));
 		disposables.add(linked.registerProvider(Schemas.file, disposables.add(new LinkedFileSystemProvider(new Map([['/link-lab', '/lab']])))));

@@ -120,6 +120,9 @@ interface IWorkspaceBarFolders {
 /** How long a window waits for its first read before it draws the last window's groups (WT-3.7). */
 const FIRST_READ_WAIT = 500;
 
+/** How long a worktree whose folder has gone is drawn as it was before it is marked (WT-3.8). */
+const SETTLE_DELAY = 1000;
+
 /**
  * How soon a repository whose git directory cannot be reached is looked for again (WT-3.8), and how seldom at most: each
  * time it is still not there, the wait doubles, so that a repository gone for good costs nearly nothing.
@@ -202,6 +205,16 @@ export class WorkspaceBarGit extends Disposable {
 
 	/** How long `unreachableScheduler` waits next. */
 	private unreachableInterval = UNREACHABLE_INTERVAL;
+
+	/**
+	 * The worktrees whose folder has just gone, by key, and when each was first found gone: drawn as they were for
+	 * `SETTLE_DELAY` (WT-3.8). `git worktree remove` deletes the folder before it deletes the record, and a read between
+	 * the two would mark a row that is on its way out.
+	 */
+	private readonly settling = new Map<string, number>();
+
+	/** Reads again once a worktree in `settling` has stayed gone long enough to be marked. */
+	private readonly settleScheduler = this._register(new RunOnceScheduler(() => this.refresh().then(undefined, onUnexpectedError), SETTLE_DELAY));
 
 	/** Which read is the latest. A slower, older read never overwrites a newer one. */
 	private generation = 0;
@@ -345,7 +358,7 @@ export class WorkspaceBarGit extends Disposable {
 
 		// Kept even when nothing changed: a workspace edit hands out new objects for the same folders.
 		// Only the event depends on the comparison.
-		this._groups = read.groups;
+		this._groups = this.settle(read.groups);
 		if (this._groups.length) {
 			this.previous = this._groups;
 		}
@@ -404,6 +417,55 @@ export class WorkspaceBarGit extends Disposable {
 			deleted.forEach((entry, index) => this.notRemoved.set(keys[index], entry));
 			await this.refresh();
 		}
+	}
+
+	/**
+	 * `groups`, with a worktree whose folder has just gone drawn as it was for `SETTLE_DELAY` (WT-3.8): `git worktree
+	 * remove` deletes the folder first and the record after, and a read between the two would mark a row on its way
+	 * out. One still gone after that is marked: deleted by hand, or its repository out of reach.
+	 */
+	private settle(groups: readonly WorkspaceBarGroup[]): WorkspaceBarGroup[] {
+		const drawn = new Set<string>();
+		for (const group of this._waiting ? [] : this._groups) {
+			for (const worktree of group.kind === 'repository' ? group.worktrees : []) {
+				if (worktree.exists) {
+					drawn.add(this.source.key(worktree.uri));
+				}
+			}
+		}
+
+		const now = Date.now();
+		const gone = new Set<string>();
+		let pending = false;
+		const settled = groups.map(group => group.kind === 'folder' ? group : {
+			...group,
+			worktrees: group.worktrees.map(worktree => {
+				const key = this.source.key(worktree.uri);
+				if (worktree.exists || !drawn.has(key)) {
+					return worktree;
+				}
+
+				gone.add(key);
+				const since = this.settling.get(key) ?? now;
+				this.settling.set(key, since);
+				if (now - since >= SETTLE_DELAY) {
+					return worktree;
+				}
+
+				pending = true;
+				return { ...worktree, exists: true };
+			})
+		});
+
+		for (const key of [...this.settling.keys()]) {
+			if (!gone.has(key)) {
+				this.settling.delete(key);
+			}
+		}
+		if (pending) {
+			this.settleScheduler.schedule();
+		}
+		return settled;
 	}
 
 	/**
