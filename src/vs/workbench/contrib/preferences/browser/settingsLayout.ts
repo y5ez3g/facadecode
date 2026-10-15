@@ -161,7 +161,8 @@ export const tocData: ITOCEntry<string> = {
 				{
 					id: 'workbench/browser',
 					label: localize('browser', "Browser"),
-					settings: ['workbench.browser.*']
+					// Facade Code: and Facade's own, beside the setting they go with
+					settings: ['workbench.browser.*', 'facade.browser.*']
 				}
 			]
 		},
