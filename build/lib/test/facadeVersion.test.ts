@@ -31,7 +31,7 @@ suite('Facade version', () => {
 			notTheEngine: product.facadeVersion !== packageJson.version,
 			// only `releaseVersion` reads it in the build
 			readers: ['build/gulpfile.vscode.ts', 'build/gulpfile.vscode.win32.ts', 'build/gulpfile.vscode.linux.ts'].filter(file => /facadeVersion/.test(read(file)))
-		}, { release: '0.1.0', engine: '1.138.0', notTheEngine: true, readers: [] });
+		}, { release: '0.1.1', engine: '1.138.0', notTheEngine: true, readers: [] });
 	});
 
 	test('ID-18 a product.json without a release version stops the build rather than stamping the engine\'s', () => {
