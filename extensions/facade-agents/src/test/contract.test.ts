@@ -14,7 +14,7 @@ import { settled, sleep, until, useFakeClock } from './clock';
 import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
-const TOOLS = 'Tools: start_agent launches a separate CLI in a window folder or new worktree; started confirms launch readiness, not task completion. list_agents shows runs, mailboxes, and available CLIs: you, your creator, and your immediate children by default, or every reachable run with all:true. stop_agent ends a run and can delete its worktree. read_screen inspects a CLI; type_text and press_keys send terminal input and normally return the resulting screen.';
+const TOOLS = 'Tools: start_agent launches a separate CLI; started confirms launch readiness, not task completion. list_agents shows runs, mailboxes, and available CLIs: you, your creator, and your immediate children by default, or every reachable run with all:true. stop_agent ends a run and can delete its worktree. read_screen inspects a CLI; type_text and press_keys send terminal input and normally return the resulting screen.';
 const MESSAGES = 'Use send_message for tasks, questions, answers, and reports. It records each message and returns its ID without waiting for a reply. On a [facade] unread-message notice, call read_messages and show new messages in your terminal before acting. Repeated reads keep the same IDs; track which work you have handled. Before messaging @human, print the full text here. Continue independent work after sending. If you need a reply to proceed, end this turn and leave your CLI running. Agent replies trigger a doorbell; do not poll or sleep for them.';
 /** Whom each agent asks (M8): a child its creator; one the person started from the UI the person; one their script started @human. */
 const ASK_CREATOR = 'Use send_message to send questions to your creator and report when you finish or become blocked.';
@@ -30,14 +30,17 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let world: ReturnType<typeof fakeWorld>;
 	let contract: Contract;
 
 	setup(() => {
 		temp = tempDir('facade-contract-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		fs.mkdirSync(lab);
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 		contract = new Contract(world.facade);
 	});
 
@@ -65,7 +68,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	}
 
 	test('an agent\'s MCP server says hello: the agent is connected - started, running - and its model is given the tools - start_agent offering the agents this machine can start, and taking a model and an effort as those CLIs do, if given - and who it is, who started it, its tree, where it runs and its YOLO; one another agent or a script started is told to ask in words, never with a pick, and the person\'s own, from the window, is not: its question tool is theirs to answer (L4); the person acts as the person, reaching every agent', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const starting = world.facade.startAgent(callerOf(world.agent(1)), { cli: 'told', model: 'deep', effort: 'high', task: 'Plan.', name: 'planner' });
 		await until(() => world.terminals.launched.length === 2);
 		const hello = contract.hello(callerOf(world.agent(2)));
@@ -99,7 +102,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			effort: { type: 'string', description: 'CLI reasoning effort, such as low, medium, or high. Omit to use its default. Does not require model.' },
 			instructions: [
 				'You are @planner #a2, a Told Code agent in Facade Code. Creator: @lead #a1. Tree root: #a1.',
-				`Working directory: ${lab} (worktree main). You are already in this directory; no cd is needed to start work here.`,
+				`Working directory: ${work} (worktree work). You are already in this directory; no cd is needed to start work here.`,
 				'YOLO is on. You can reach every agent in this window. Children inherit YOLO on.',
 				TOOLS,
 				MESSAGES,
@@ -139,7 +142,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		fs.mkdirSync(plain);
 		const dir = path.join(temp.dir, 'workspace');
 		world.dispose();
-		world = fakeWorld(dir, { repositories: { [lab]: [] }, folders: [plain], environment: folder => folder === plain ? { ARG_DENY: '/home/.arg/settings.json' } : {} });
+		world = fakeWorld(dir, { repositories: { [lab]: ['work'] }, folders: [plain], environment: folder => folder === plain ? { ARG_DENY: '/home/.arg/settings.json' } : {} });
 		contract = new Contract(world.facade);
 		world.switches.yolo = false;
 		world.custom.review = { path: 'review', launch: { arguments: { connect: ['--mcp', '${mcpConfig}'] } } };
@@ -151,7 +154,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const said = (id: number) => contract.hello(callerOf(world.agent(id))).instructions.split('\n')[2].replace(/^YOLO is off\. You can reach only your own tree\. Children inherit YOLO off\. /, '');
 		const launched = [1, 2, 3, 4].map(said);
 		world.dispose();
-		world = fakeWorld(dir, { repositories: { [lab]: [] }, folders: [plain] });
+		world = fakeWorld(dir, { repositories: { [lab]: ['work'] }, folders: [plain] });
 		world.terminals.running.add('@own #a1');
 		await world.facade.recover(true);
 		contract = new Contract(world.facade);
@@ -189,16 +192,16 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const plain = path.join(temp.dir, 'plain');
 		fs.mkdirSync(plain);
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders: [plain] });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] }, folders: [plain] });
 		contract = new Contract(world.facade);
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
-		const lead = callerOf(world.agent(1));
-		const started = await call(lead, 'start_agent', { name: 'notes', cli: 'arg', task: 'Take notes.', folder: plain });
-		const listed = await call(lead, 'list_agents', {});
+		// The person's: an agent's own child goes in a worktree Facade made (O3)
+		const started = await call(PERSON, 'start_agent', { name: 'notes', cli: 'arg', task: 'Take notes.', folder: plain });
+		const listed = await call(PERSON, 'list_agents', {});
 		const row = (name: string) => (listed.text ?? '').split('\n').find(line => line.startsWith(`@${name} `)) ?? '';
 		const told = contract.hello(callerOf(world.agent(2))).instructions.split('\n')[1];
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders: [plain] });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] }, folders: [plain] });
 
 		assert.deepStrictEqual({
 			started: (started.text ?? '').split('\n')[0],
@@ -217,41 +220,49 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		});
 	});
 
-	test('stop_agent says what became of an agent\'s folder in one sentence each: an agent in no Git repository has a folder, not a worktree (N-57); a deletion the window refused says the window\'s words once, Facade\'s own reason is put in a sentence of its own (N-52)', async () => {
+	test('stop_agent says what became of an agent\'s folder in one sentence each: an agent in no Git repository has a folder, not a worktree (N-57); a deletion the window refused says the window\'s words once, Facade\'s own reason is put in a sentence of its own (N-52), as for a main checkout and another tool\'s worktree, which are never deleted (O5; WT-1.3)', async () => {
 		const plain = path.join(temp.dir, 'plain');
+		const scratch = path.join(temp.dir, 'scratch');
 		fs.mkdirSync(plain);
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders: [plain] });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] }, folders: [plain, scratch] });
+		// Another tool's worktree of lab, added to the workspace: a folder of its own (WT-1.3)
+		world.git.addWorktree(lab, 'scratch', scratch);
 		contract = new Contract(world.facade);
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
-		await call(lead, 'start_agent', { name: 'notes', cli: 'arg', task: 'Notes.', folder: plain });
+		// The person's in a folder, in the main checkout and in another tool's worktree: an agent's own child goes in a
+		// worktree Facade made (O3)
+		await call(PERSON, 'start_agent', { name: 'notes', cli: 'arg', task: 'Notes.', folder: plain });
 		await call(lead, 'start_agent', { name: 'w', cli: 'arg', task: 'W.', new_worktree: true });
-		await call(lead, 'start_agent', { name: 'here', cli: 'arg', task: 'Here.', folder: lab });
+		await call(PERSON, 'start_agent', { name: 'here', cli: 'arg', task: 'Here.', folder: lab });
+		await call(PERSON, 'start_agent', { name: 'other', cli: 'arg', task: 'Other.', folder: scratch });
 		const outsideGit = await call(lead, 'stop_agent', { agent: '@notes' });
 		world.git.failDelete = '~/.facade/worktrees/lab/w was not deleted: an agent of another window is working inside it, @there #a9. Stop it in that window first.';
 		const refused = await call(lead, 'stop_agent', { agent: '@w', delete_worktree: true });
 		const mainCheckout = await call(lead, 'stop_agent', { agent: '@here', delete_worktree: true });
+		const anotherTool = await call(lead, 'stop_agent', { agent: '@other', delete_worktree: true });
 
-		assert.deepStrictEqual({ outsideGit: outsideGit.text, refused: refused.text, mainCheckout: mainCheckout.text }, {
+		assert.deepStrictEqual({ outsideGit: outsideGit.text, refused: refused.text, mainCheckout: mainCheckout.text, anotherTool: anotherTool.text }, {
 			outsideGit: 'Stopped @notes #a2: its terminal closed. Its folder is unchanged.',
 			refused: 'Stopped @w #a3: its terminal closed. ~/.facade/worktrees/lab/w was not deleted: an agent of another window is working inside it, @there #a9. Stop it in that window first.',
-			mainCheckout: `Stopped @here #a4: its terminal closed. ${lab} was not deleted: it is the repository's main checkout, which cannot be deleted.`
+			mainCheckout: `Stopped @here #a4: its terminal closed. ${lab} was not deleted: it is the repository's main checkout, which cannot be deleted.`,
+			anotherTool: `Stopped @other #a5: its terminal closed. ${scratch} was not deleted: this worktree was not created by Facade.`
 		});
 	});
 
 	test('an effort given with a model whose name may carry one - Antigravity\'s - is given to the CLI as every value is, and recorded unknown, the start saying the model\'s may apply instead; an effort alone is given and recorded as it is (O3; N-64, AS-13; OR-01)', async () => {
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, toldModelCarriesEffort: true });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] }, toldModelCarriesEffort: true });
 		contract = new Contract(world.facade);
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		const both = await call(lead, 'start_agent', { name: 'both', cli: 'told', model: 'flash-high', effort: 'low' });
 		const alone = await call(lead, 'start_agent', { name: 'alone', cli: 'told', effort: 'low' });
 		const args = (n: number) => world.terminals.launched[n].args.filter(arg => ['--model', '--effort', 'flash-high', 'low'].includes(arg));
 
 		assert.deepStrictEqual({ both: both.text, bothData: (both.data as { ignored: string[] }).ignored, bothArgs: args(1), alone: (alone.data as { effort?: string; ignored: string[] }), aloneArgs: args(2) }, {
-			both: `Started @both #a2 in worktree main.\nTold Code, flash-high, effort unknown (low not applied), YOLO on, no sandbox, connected to Facade, folder ${lab}, no task.\nThe requested effort was passed to Told Code, but model flash-high may specify an overriding effort. The actual effort is unknown.`,
+			both: `Started @both #a2 in worktree work.\nTold Code, flash-high, effort unknown (low not applied), YOLO on, no sandbox, connected to Facade, folder ${work}, no task.\nThe requested effort was passed to Told Code, but model flash-high may specify an overriding effort. The actual effort is unknown.`,
 			bothData: ['effort'],
 			bothArgs: ['--model', 'flash-high', '--effort', 'low'],
 			alone: { ...(alone.data as object), effort: 'low', ignored: [] },
@@ -260,7 +271,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	});
 
 	test('start_agent answers once the child has started, in words and as data - and, where its start is not confirmed in time, why, the child left starting; stop_agent stops a child, and says of one that exited how it did; list_agents gives the caller\'s view of the agents - how many in each state, then a line each - and the same as data, where an agent the person started has no parent\'s number', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		const beside = await call(lead, 'start_agent', { name: 'tests', cli: 'arg', model: 'small', effort: 'high', task: 'Write the tests.' });
 		const inNew = await call(lead, 'start_agent', { name: 'clamp', cli: 'arg', model: 'small', effort: 'high', task: 'Clamp the widths.', new_worktree: true });
@@ -269,7 +280,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		const listed = await call(lead, 'list_agents', {});
 		const clamp = worktreeFolder(lab, 'clamp');
 		world.timing.startTimeoutMs = 5_000;
-		const starting = contract.call(lead, 'start_agent', { name: 'waits', cli: 'told', model: 'deep', effort: 'high', folder: lab }, () => undefined);
+		const starting = contract.call(lead, 'start_agent', { name: 'waits', cli: 'told', model: 'deep', effort: 'high', folder: work }, () => undefined);
 		await until(() => world.terminals.launched.length === 4);
 		await sleep(5_000);
 		const unconfirmed = await settled(starting);
@@ -281,13 +292,13 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 		assert.deepStrictEqual({ beside: { text: beside.text, data: picked(beside.data) }, inNew: inNew.text, unconfirmed: { text: unconfirmed.text, data: picked(unconfirmed.data) }, stopped: stopped.text, again: again.text, listed: listed.text.split('\n'), rows: JSON.parse(JSON.stringify(listed.data)).agents.map((row: { id: number; creator?: number }) => `${row.id}<${Object.keys(row).includes('creator') ? row.creator : 'none'}`) }, {
 			beside: {
-				text: `Started @tests #a2 in worktree main.\n${arg('small', lab, 2)}.${fetches(2)}`,
-				data: { status: 'started', id: 2, name: 'tests', creator: 1, root: 1, cli: 'arg', model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', connected: true, worktree: 'main', folder: lab, newWorktree: false, taskMessage: 2 }
+				text: `Started @tests #a2 in worktree work.\n${arg('small', work, 2)}.${fetches(2)}`,
+				data: { status: 'started', id: 2, name: 'tests', creator: 1, root: 1, cli: 'arg', model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', connected: true, worktree: 'work', folder: work, newWorktree: false, taskMessage: 2 }
 			},
 			inNew: `Started @clamp #a3 in new worktree clamp on a new branch.\n${arg('small', clamp, 3)}.${fetches(3)}`,
 			unconfirmed: {
-				text: `Start unconfirmed for @waits #a4: after 5 seconds, the CLI is open but has not connected to Facade; it may be slow or waiting at a prompt.\nphase connecting, Told Code, deep, high, YOLO on, no sandbox, not yet connected to Facade, folder ${lab}, no task.\nThis start is still pending. Inspect #a4 with list_agents or read_screen, or cancel it with stop_agent. Do not start a duplicate.`,
-				data: { status: 'unconfirmed', id: 4, name: 'waits', creator: 1, root: 1, cli: 'told', model: 'deep', effort: 'high', ignored: [], yolo: true, sandbox: 'unavailable', connected: false, worktree: 'main', folder: lab, newWorktree: false }
+				text: `Start unconfirmed for @waits #a4: after 5 seconds, the CLI is open but has not connected to Facade; it may be slow or waiting at a prompt.\nphase connecting, Told Code, deep, high, YOLO on, no sandbox, not yet connected to Facade, folder ${work}, no task.\nThis start is still pending. Inspect #a4 with list_agents or read_screen, or cancel it with stop_agent. Do not start a duplicate.`,
+				data: { status: 'unconfirmed', id: 4, name: 'waits', creator: 1, root: 1, cli: 'told', model: 'deep', effort: 'high', ignored: [], yolo: true, sandbox: 'unavailable', connected: false, worktree: 'work', folder: work, newWorktree: false }
 			},
 			stopped: 'Stopped @tests #a2: its terminal closed. Its worktree is unchanged.',
 			again: '@tests #a2 had already ended (stopped by @lead #a1: with stop_agent).',
@@ -295,8 +306,8 @@ suite('Contract: what the model sees, and what it gets back', () => {
 				'You are @lead #a1. YOLO on: you can reach every agent in this window.',
 				'3 agents: 2 running, 1 ended',
 				// Each with its mailbox (M3): @tests' task went back to @lead as it ended unfetched, in #m4 (M6)
-				`@lead #a1 (you)  creator @human  tree #a1  running  worktree main  started ${timeOfDay(world.agent(1).startTime)}  ${arg('large', lab, 1)}  mailbox: 2 unread: #m1 (from @human, 0 min ago), #m4 (from Facade, 0 min ago); 0 fetched; task #m1 not yet fetched`,
-				`@tests #a2  creator @lead #a1  tree #a1  ended at ${timeOfDay(world.agent(2).end?.time)} (stopped by @lead #a1: with stop_agent)  worktree main  started ${timeOfDay(world.agent(2).startTime)}  ${arg('small', lab, 2).replace(', connected to Facade', '')}  mailbox: no unread messages; 0 fetched; task #m2 returned without being fetched before the run ended`,
+				`@lead #a1 (you)  creator @human  tree #a1  running  worktree work  started ${timeOfDay(world.agent(1).startTime)}  ${arg('large', work, 1)}  mailbox: 2 unread: #m1 (from @human, 0 min ago), #m4 (from Facade, 0 min ago); 0 fetched; task #m1 not yet fetched`,
+				`@tests #a2  creator @lead #a1  tree #a1  ended at ${timeOfDay(world.agent(2).end?.time)} (stopped by @lead #a1: with stop_agent)  worktree work  started ${timeOfDay(world.agent(2).startTime)}  ${arg('small', work, 2).replace(', connected to Facade', '')}  mailbox: no unread messages; 0 fetched; task #m2 returned without being fetched before the run ended`,
 				`@clamp #a3  creator @lead #a1  tree #a1  running  worktree clamp  started ${timeOfDay(world.agent(3).startTime)}  ${arg('small', clamp, 3)}  mailbox: 1 unread: #m3 (from @lead #a1, 0 min ago); 0 fetched; task #m3 not yet fetched`,
 				'CLIs you can start: arg (Arg Code): supports Facade tools, task, model, effort; told (Told Code): supports Facade tools, task, model, effort.'
 			],
@@ -305,7 +316,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	});
 
 	test('with the agent framework off every call - an agent\'s or the person\'s script\'s - answers at once that it is, doing nothing', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		world.switches.framework = false;
 		const off = { text: 'Facade tools are disabled by facade.orchestration.enabled. This call had no effect; existing agents keep running.', isError: true, data: { code: 'UNAVAILABLE', reason: 'framework_disabled' } };
 		const results = [
@@ -318,7 +329,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	});
 
 	test('list_agents says in its data, as in its text, who asks, what it reaches, and how many agents are in each state (O6)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', task: 'Go.', name: 'child' });
 		await world.facade.stopAgent(lead, '#a2');
@@ -342,7 +353,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	});
 
 	test('a task is kept as it was written, its spaces and line breaks too; one with nothing in it is refused (X-56; C-CORE-27)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const result = await call(callerOf(world.agent(1)), 'start_agent', { name: 'exact', cli: 'arg', task: '  a\n' });
 		const blank = await call(callerOf(world.agent(1)), 'start_agent', { name: 'blank', cli: 'arg', task: ' \n ' });
 		const message = (result.data as { readonly taskMessage?: number } | undefined)?.taskMessage;
@@ -357,7 +368,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	test('stop_agent says of a child whose start it stopped as its worktree was being made - no terminal yet - that its start was stopped, and that git may still make its worktree: not that its terminal closed (O4; OR-05)', async () => {
 		let made = () => { };
 		world.git.making = new Promise<void>(resolve => made = resolve);
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		const starting = contract.call(lead, 'start_agent', { name: 'clamp', cli: 'arg', task: 'Clamp.', new_worktree: true }, () => undefined);
 		await until(() => world.table.get(2)?.phase === 'creating_worktree');
@@ -373,7 +384,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 	test('stop_agent says of a child whose start it stopped as its worktree was set up - no terminal yet - that its start was stopped, its worktree staying: not that its terminal closed (O4; OR-05)', async () => {
 		world.git.setup = new Promise(() => { });
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		const starting = contract.call(lead, 'start_agent', { name: 'clamp', cli: 'arg', task: 'Clamp.', new_worktree: true }, () => undefined);
 		await until(() => world.table.get(2)?.phase === 'running_setup');
@@ -387,7 +398,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	});
 
 	test('a start that failed once its agent had a number answers with what a start that started does - its name, creator, CLI, the model and effort asked for and applied, its folder and worktree, YOLO, sandbox, connection and task - status failed, in words and as data, with the agent, its outcome, the phase it had got to and the worktree made for it, which stays, in its folder (AGENT-ORCHESTRATION.md, O3, O2; OR-02)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		world.terminals.failNext = 'the window has no terminal for it';
 		const result = await call(callerOf(world.agent(1)), 'start_agent', { name: 'clamp', cli: 'arg', model: 'small', effort: 'high', task: 'Clamp.', new_worktree: true });
 		const { startTime, end } = world.agent(2);
@@ -409,7 +420,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		world.git.setup = new Promise(() => { });
 		const clamp = worktreeFolder(lab, 'clamp');
 		world.git.setupStates.set(clamp, { running: 'npm ci', lines: ['npm ci', 'npm ERR! need auth: run npm login', 'Username:'] });
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const starting = contract.call(callerOf(world.agent(1)), 'start_agent', { name: 'clamp', cli: 'arg', task: 'Clamp.', new_worktree: true }, () => undefined);
 		await sleep(6_000);
 		const result = await starting;
@@ -422,7 +433,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	});
 
 	test('a failure is a result the model reads, marked as an error, its data one of five codes: an unknown tool, an argument a tool does not take, one missing or of the wrong kind, and what the core refuses; anything else is FAILED', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		const results = [
 			await call(lead, 'send', { to: '@human' }),
@@ -466,7 +477,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 	});
 
 	test('a start is validating until its agent is recorded: its caller hears so as the call is accepted, and one refused meanwhile says so in its data - the phase, and no agent: nothing was made for it (AGENT-ORCHESTRATION.md, O4, O2; OR-18)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const heard: string[] = [];
 		const result = await contract.call(callerOf(world.agent(1)), 'start_agent', { name: 'go', cli: 'arg', task: 'Go.', folder: path.join(temp.dir, 'elsewhere') }, message => heard.push(message));
 

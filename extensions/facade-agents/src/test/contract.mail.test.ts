@@ -13,7 +13,7 @@ import { HUMAN, TEXT_IN_LINE } from '../record/messages';
 import { ResultListener } from '../transport/pipe';
 import { ToolResult } from '../transport/protocol';
 import { settled, sleep, until, useFakeClock } from './clock';
-import { callerOf, fakeWorld } from './fakes';
+import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
 /** What every result of read_messages ends with. */
@@ -27,6 +27,8 @@ suite('Contract: messages', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let world: ReturnType<typeof fakeWorld>;
 	let contract: Contract;
 	let lead: Caller;
@@ -35,10 +37,11 @@ suite('Contract: messages', () => {
 	setup(async () => {
 		temp = tempDir('facade-contract-mail-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		fs.mkdirSync(lab);
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 		contract = new Contract(world.facade);
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: work });
 		lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', name: 'lint', task: 'Lint.' });
 		lint = callerOf(world.agent(2));
@@ -73,9 +76,9 @@ suite('Contract: messages', () => {
 		const two = await call(lint, 'send_message', { to: ['@lead #a1', '@human'], text: 'Done.', reply_to: '#m2' });
 		// Started with its YOLO off, an agent keeps it so; the next tree the person starts has it on (O1)
 		world.switches.yolo = false;
-		await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'quiet', task: 'Wait.', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'quiet', task: 'Wait.', folder: work });
 		world.switches.yolo = true;
-		const other = callerOf(world.agent((await world.startUp(PERSON, { cli: 'told', model: 'small', effort: 'high', name: 'other', folder: lab })).id));
+		const other = callerOf(world.agent((await world.startUp(PERSON, { cli: 'told', model: 'small', effort: 'high', name: 'other', folder: work })).id));
 		const starting = world.facade.startAgent(lead, { cli: 'told', model: 'small', effort: 'high', name: 'slow' });
 		await until(() => world.terminals.launched.length === 5);
 		const three = await call(other, 'send_message', { to: ['@quiet', '@slow'], text: 'Hello.' });
@@ -218,7 +221,7 @@ suite('Contract: messages', () => {
 
 	test('with its YOLO off, an agent sees in list_agents its own tree only, every agent with all too', async () => {
 		world.switches.yolo = false;
-		await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'quiet', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'quiet', folder: work });
 		await world.startUp(callerOf(world.agent(3)), { cli: 'told', model: 'small', effort: 'high', name: 'helper', task: 'Help.' });
 		const rows = async (caller: Caller) => (JSON.parse(JSON.stringify((await call(caller, 'list_agents', { all: true })).data)).agents as { id: number }[]).map(row => row.id);
 

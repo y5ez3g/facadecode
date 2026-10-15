@@ -11,7 +11,7 @@ import { Fetched } from '../core/mail';
 import { Caller, isLive, PERSON } from '../record/events';
 import { HUMAN, TEXT_IN_LINE, unreadOf } from '../record/messages';
 import { sleep, useFakeClock } from './clock';
-import { callerOf, fakeWorld } from './fakes';
+import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
 type World = ReturnType<typeof fakeWorld>;
@@ -65,6 +65,8 @@ suite('Core: messages at random', () => {
 			const random = randomFrom(seed);
 			const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
 			const lab = path.join(temp.dir, 'lab');
+			// A worktree Facade made of it, where the person starts agents that start agents of their own (O3)
+			const work = worktreeFolder(lab, 'work');
 			const dir = path.join(temp.dir, 'workspace');
 			fs.mkdirSync(lab, { recursive: true });
 			let loads = 0;
@@ -81,7 +83,7 @@ suite('Core: messages at random', () => {
 
 			/** A world over the workspace, its doorbells logged as they are typed: each line with its Enter, as one input. */
 			const open = (): World => {
-				const made = fakeWorld(dir, { repositories: { [lab]: [] }, session });
+				const made = fakeWorld(dir, { repositories: { [lab]: ['work'] }, session });
 				const type = made.terminals.type.bind(made.terminals);
 				made.terminals.type = async (id, text, options) => {
 					const agent = made.table.get(id);
@@ -140,7 +142,7 @@ suite('Core: messages at random', () => {
 
 			const start = async (caller: Caller) => {
 				const name = `a${++names}`;
-				const request = { cli: random() < 0.8 ? 'arg' : 'told', model: 'm', effort: 'e', name, ...(caller.id === undefined ? { folder: lab } : { task: `Task of ${name}.` }) };
+				const request = { cli: random() < 0.8 ? 'arg' : 'told', model: 'm', effort: 'e', name, ...(caller.id === undefined ? { folder: work } : { task: `Task of ${name}.` }) };
 				await world.startUp(caller, request);
 			};
 

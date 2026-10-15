@@ -12,7 +12,7 @@ import { ScreenRead } from '../core/screens';
 import { PERSON } from '../record/events';
 import { finalScreenFile, finalScreenTextFile, SCREEN_LANGUAGE, screensDir } from '../record/screens';
 import { settled, sleep, until, useFakeClock } from './clock';
-import { callerOf, fakeWorld } from './fakes';
+import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { failureOf, outcomeOf, tempDir } from './util';
 
 type World = ReturnType<typeof fakeWorld>;
@@ -23,13 +23,16 @@ suite('Core: agents\' screens', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let world: World;
 
 	setup(() => {
 		temp = tempDir('facade-screens-core-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		fs.mkdirSync(lab);
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 	});
 
 	teardown(() => {
@@ -58,10 +61,10 @@ suite('Core: agents\' screens', () => {
 
 	/** A tree: the person's #1, its child #2 and grandchild #3; and the person's #4, another tree. */
 	async function twoTrees(): Promise<void> {
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: lab, name: 'lead' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: work, name: 'lead' });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', task: 'Work.', name: 'worker' });
 		await world.startUp(callerOf(world.agent(2)), { cli: 'arg', model: 'm', effort: 'e', task: 'Help.', name: 'helper' });
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Other.', folder: lab, name: 'other' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Other.', folder: work, name: 'other' });
 	}
 
 	test('an agent reads another\'s screen: its bottom lines, fifty unless told, as the window drew them, with when it was read and last showed output, and whether its process ended or the terminal let go of older lines', async () => {
@@ -97,7 +100,7 @@ suite('Core: agents\' screens', () => {
 		world.switches.yolo = true;
 		const stillOff = await outcomeOf(world.facade.screens.read(worker, '#4'));
 		// One the person starts now, with YOLO on
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Free.', folder: lab, name: 'free' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Free.', folder: work, name: 'free' });
 		const yolo = (await world.facade.screens.read(callerOf(world.agent(5)), '#4')).id;
 		const outsideYourTree = 'REFUSED: #a4 is outside your tree. With YOLO off, you can reach only your tree: your human-started root and all its descendants.';
 
@@ -116,9 +119,9 @@ suite('Core: agents\' screens', () => {
 
 	test('with YOLO off, a name two trees have is the one of the caller\'s own tree, as send_message takes it; a name only another tree has is out of the caller\'s reach', async () => {
 		world.switches.yolo = false;
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: lab, name: 'lead' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: work, name: 'lead' });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', task: 'Twin.', name: 'twin' });
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Other.', folder: lab, name: 'other' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Other.', folder: work, name: 'other' });
 		await world.startUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', task: 'Twin.', name: 'twin' });
 		await world.startUp(callerOf(world.agent(3)), { cli: 'arg', model: 'm', effort: 'e', task: 'Far.', name: 'far' });
 		shows(2, ['the lead\'s twin']);
@@ -382,7 +385,7 @@ suite('Core: agents\' screens', () => {
 		// Its terminal not made yet: the window slow to make one
 		let opened = () => { };
 		world.terminals.hold = new Promise<void>(resolve => opened = resolve);
-		const spawning = world.facade.startAgent(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'New.', folder: lab, name: 'new' });
+		const spawning = world.facade.startAgent(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'New.', folder: work, name: 'new' });
 		await until(() => world.table.get(5) !== undefined);
 		const read = await world.facade.screens.read(PERSON, '#5');
 		const starting = { read: [read.empty, read.phase], type: await failureOf(world.facade.screens.type(PERSON, '#5', 'hi', true)) };
@@ -432,12 +435,12 @@ suite('Core: agents\' screens', () => {
 	});
 
 	test('a start that failed says so with the last lines of the screen its CLI left; the notification of an agent of the person\'s that ended shows its last screen', async () => {
-		const spawning = world.facade.startAgent(PERSON, { cli: 'arg', model: 'nope', effort: 'e', task: 'Work.', folder: lab, name: 'nope' });
+		const spawning = world.facade.startAgent(PERSON, { cli: 'arg', model: 'nope', effort: 'e', task: 'Work.', folder: work, name: 'nope' });
 		await until(() => world.terminals.launched.length === 1);
 		keeps(1, { final: { buffer: 'normal', lines: ['Error: unknown model nope', 'exiting'] } });
 		world.terminals.end(terminalOf(1), { exitCode: 1, byThePerson: false });
 		const failed = await failureOf(settled(spawning));
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: lab, name: 'lead' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: work, name: 'lead' });
 		world.terminals.end(terminalOf(2), { exitCode: 3, byThePerson: false });
 		await sleep(1_000);
 		const dir = screensDir(world.table.dir);
@@ -465,7 +468,7 @@ suite('Core: agents\' screens', () => {
 		const afterReload = fs.existsSync(finalScreenFile(dir, 3));
 		world.dispose();
 		// The app started again: another load of the window, the one before closed
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 		await world.facade.recover(false);
 		// The agents that ended left the list with the window going (L12)
 		const read = await outcomeOf(world.facade.screens.read(PERSON, '#3'));
@@ -501,7 +504,7 @@ suite('Core: agents\' screens', () => {
 
 	test('a start not confirmed in time answers with the last lines its CLI shows then, which say why as often as not (AGENT-ORCHESTRATION.md, O3)', async () => {
 		world.timing.startTimeoutMs = 5_000;
-		const starting = world.facade.startAgent(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Slow.', folder: lab, name: 'slow' });
+		const starting = world.facade.startAgent(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Slow.', folder: work, name: 'slow' });
 		await until(() => world.terminals.launched.length === 1);
 		shows(1, ['Do you trust this folder?', '> Yes', '  No']);
 		await sleep(5_000);
@@ -555,7 +558,7 @@ suite('Core: agents\' screens', () => {
 
 	test('the person\'s agents that end unexpectedly together are told in one notification, ended:<batch>, each end as it comes; one that ends later, in one of its own (M11)', async () => {
 		await twoTrees();
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Third.', folder: lab, name: 'third' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Third.', folder: work, name: 'third' });
 		world.terminals.end(terminalOf(1), { exitCode: 1, byThePerson: false });
 		await sleep(500);
 		world.terminals.end(terminalOf(4), { exitCode: 2, byThePerson: false });

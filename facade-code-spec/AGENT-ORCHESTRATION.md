@@ -88,18 +88,29 @@ start_agent(name, cli, model?, effort?, task?, folder?, new_worktree?)
 | model | Optional; omitted uses the CLI's own default |
 | effort | Optional; omitted uses the CLI's own default |
 | task | Optional nonempty text; becomes a message under M7 |
-| folder | Optional absolute folder path, or an unambiguous branch of the caller's repository |
+| folder | Optional absolute folder path, or an unambiguous branch of the caller's repository. For an agent's child while worktree management is on, a worktree Facade made |
 | new_worktree | Boolean, false by default |
 
 A missing folder means the caller's registered launch folder. For `@human`, it
 means the selected local folder. The CLI changing its own working directory does
 not change the run's registered folder.
 
-An absolute folder must be a workspace folder, a worktree shown on the workspace
-bar, or a worktree of a repository in the window. Branch shorthand is limited to
-the caller's repository. A detached worktree must be named by path. No branch name,
-including `main` or `new`, has a special meaning. If a branch is checked out in
-multiple worktrees, return the paths and ask the caller to select one.
+While worktree management is on, an agent's child works in a worktree Facade made
+(WORKTREE.md WT-1.3): its creator's own when no folder is given and that is one,
+another of Facade's by path or branch - several agents share one as freely as
+one - or a new one with new_worktree. A main checkout, a folder outside Git and
+another tool's worktree are refused before anything is allocated, naming Facade's
+worktrees in the window and new_worktree. This is where the child is placed, not
+what it may reach: with YOLO on it reads and writes any folder, as its CLI does.
+The person's own start may use any folder of the window.
+
+An absolute folder must be a workspace folder or a worktree shown on the workspace
+bar: one Facade made of a repository in the window. Branch shorthand is limited to
+the caller's repository - its main checkout and Facade's worktrees; another tool's
+worktree is a folder, which no branch names. A detached worktree must be named by
+path. No branch name, including `main` or `new`, has a special meaning. If a
+branch is checked out in multiple worktrees, return the paths and ask the caller
+to select one.
 
 With worktree management off, ordinary starts can use existing workspace folders
 and recorded launch folders; do not restart Git discovery to resolve a new worktree
@@ -111,9 +122,10 @@ worktree of the chosen folder's repository on a new branch named name. Use the
 caller checkout's current HEAD when it is the same repository; otherwise use the
 target repository's main checkout HEAD.
 Resolve the commit when accepting the request. Uncommitted edits are not included.
-An existing branch, invalid Git branch name or repository without a commit is a
-clear rejection before creation. The caller can choose another name or an existing
-folder; Facade does not overwrite branches or silently change the requested name.
+A folder outside Git, an existing branch, an invalid Git branch name or a
+repository without a commit is a clear rejection before creation. The caller can
+choose another name or folder; Facade does not overwrite branches or silently
+change the requested name.
 
 Model and effort are passed through as values, without a maintained model whitelist.
 An effort may be supplied without a model. A custom launch without a model/effort
@@ -215,8 +227,10 @@ Changes consisting solely of Facade's recorded configuration additions are not u
 work. A file that was already dirty or has additional edits still is. Detect the
 simple unchanged-owned-content case; ambiguous edits remain visible changes.
 
-For a main checkout or a folder outside Git, stop the requested agent and report
-that no worktree was deleted. Never delete the main checkout.
+For a main checkout, a folder outside Git or a worktree Facade did not make, stop
+the requested agent and report that no worktree was deleted. Never delete the main
+checkout or another tool's worktree, which Facade takes for a folder (WORKTREE.md
+WT-1.3); the window's shared deletion refuses one too.
 
 If stopping exceeds the timeout, return pending and do not delete the worktree.
 Termination may continue, but deletion requires a later explicit stop_agent call
@@ -482,6 +496,8 @@ two agent trees and a configurable fake CLI.
 | OR-26 | Parent ends before child, or caller disappears during start | Child ownership remains; accepted work has one recorded outcome | I,V |
 | OR-27 | Delete the selected worktree, including one added to the workspace; owning folder present/absent; fail the fallback or membership edit | WT-8 orders the shared operation; view returns to the owning folder, or the previous folder if it is gone; failed prerequisites preserve processes and dirty contents | I,H |
 | OR-28 | Worktree management off: request new_worktree or delete_worktree, including deletion for a main checkout; ordinary start/stop in a known folder | WT-9 rejects the whole worktree request before allocation, injection or stopping; ordinary start/stop and discovery of live agents remain available | U,I |
+| OR-29 | With worktree management on, an agent starts a child with no folder from a main checkout, a plain folder and a worktree Facade made; in another of Facade's worktrees by path and by branch; in the main checkout, a plain folder and another tool's worktree; with new_worktree from each; the person starts in each folder | The child shares its creator's Facade worktree, or the one named; the main checkout, the plain folder and another tool's worktree are refused before allocation, naming Facade's worktrees and new_worktree; new_worktree works from the main checkout and Facade's worktree, and from the plain folder is refused, naming the same; the person's starts go where asked | U,I |
+| OR-30 | stop_agent with delete_worktree on an agent in another tool's worktree; the window's deletion command called for it | The agent stopped, nothing deleted, the reason given; the window refuses the deletion before doing anything | U,I |
 
 Use fakes and a controllable clock for ordering, timeouts and cancellation.
 Test ordinary overlap points; exhaustive scheduling of every possible filesystem

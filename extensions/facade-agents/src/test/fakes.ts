@@ -5,6 +5,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { isInsideFolder } from '../base/files';
 import { isProcessRunning } from '../base/system';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
 import { readCliConfig } from '../clis/config';
@@ -370,6 +371,11 @@ export class FakeGit implements Git {
 	async worktreesOf(main: string): Promise<readonly ListedWorktree[]> {
 		await this.hold;
 		return this.worktrees.get(main) ?? [];
+	}
+
+	isFacadeWorktree(folder: string): boolean {
+		// Where it makes them, as the window makes them in its own worktrees folder; any other is another tool's
+		return [...this.worktrees.keys()].some(main => isInsideFolder(folder, `${main}-worktrees`));
 	}
 
 	async hasBranch(main: string, branch: string): Promise<boolean> {

@@ -6,7 +6,7 @@
 import { exemptionChangedText, Facade, ToolsExemption } from '../core/facade';
 import { agentRef, Caller, describe, messageRef, PERSON } from '../record/events';
 
-const TOOLS = 'Tools: start_agent launches a separate CLI in a window folder or new worktree; started confirms launch readiness, not task completion. list_agents shows runs, mailboxes, and available CLIs: you, your creator, and your immediate children by default, or every reachable run with all:true. stop_agent ends a run and can delete its worktree. read_screen inspects a CLI; type_text and press_keys send terminal input and normally return the resulting screen.';
+const TOOLS = 'Tools: start_agent launches a separate CLI; started confirms launch readiness, not task completion. list_agents shows runs, mailboxes, and available CLIs: you, your creator, and your immediate children by default, or every reachable run with all:true. stop_agent ends a run and can delete its worktree. read_screen inspects a CLI; type_text and press_keys send terminal input and normally return the resulting screen.';
 
 /** How an agent sends and gets messages (AGENT-MESSAGES.md, M8): said where every agent reads it, its server's instructions. */
 const MESSAGES = 'Use send_message for tasks, questions, answers, and reports. It records each message and returns its ID without waiting for a reply. On a [facade] unread-message notice, call read_messages and show new messages in your terminal before acting. Repeated reads keep the same IDs; track which work you have handled. Before messaging @human, print the full text here. Continue independent work after sending. If you need a reply to proceed, end this turn and leave your CLI running. Agent replies trigger a doorbell; do not poll or sleep for them.';
@@ -208,12 +208,25 @@ export function facadeSkill(): { readonly name: string; readonly description: st
 			'{"name":"lint","cli":"codex","task":"Fix the lint errors in src/.","new_worktree":true}',
 			'```',
 			'',
-			'The default folder is yours. `folder` selects an absolute folder in this window',
-			'or a checked-out branch of your repository. `new_worktree:true` creates a branch',
-			'named after the child, from your HEAD in your repository or the main checkout\'s',
-			'HEAD in another repository. Uncommitted edits are not copied. Required work must',
-			'be in that commit; follow the user\'s Git workflow. Use separate worktrees for',
-			'concurrent edits.',
+			'With worktree management on, your child must run in a worktree created by Facade.',
+			'Omit `folder` to share your registered launch folder if it is such a worktree. To',
+			'use another, pass its absolute path in this window, or the branch checked out in it',
+			'in your repository. Agents may share a worktree. Use an absolute path for',
+			'a detached HEAD.',
+			'',
+			'With `new_worktree:true`, `folder` selects the source repository and may name its',
+			'main checkout. Omit `folder` to use your launch folder\'s repository. Facade creates',
+			'a worktree and a new branch named after the child, from your launch checkout\'s HEAD',
+			'in the same repository or the target main checkout\'s HEAD in another repository.',
+			'Uncommitted edits are not copied. Required work must be in that commit; follow the',
+			'user\'s Git workflow. Use separate worktrees for concurrent edits.',
+			'',
+			'When `facade.workspaceBar.worktrees` is false, children may use existing window',
+			'folders or recorded agent launch folders. Use an absolute path; branch lookup and',
+			'`new_worktree:true` are unavailable.',
+			'',
+			'Each child has one assigned launch folder. With YOLO on, its CLI can read and write',
+			'other folders.',
 			'',
 			'`started` confirms launch readiness, not task retrieval or completion.',
 			'`list_agents` shows task delivery. An `unconfirmed` start may still finish:',
@@ -266,10 +279,12 @@ export function facadeSkill(): { readonly name: string; readonly description: st
 			'inspect with `list_agents`. Resend an uncertain message only if you establish that',
 			'it was not recorded. Recovery advice does not authorize a broader task.',
 			'',
-			'`stop_agent` stops one reachable run; children in other folders continue.',
-			'`delete_worktree:true` also stops agents in that worktree and deletes the folder,',
-			'keeping the branch. Uncommitted or untracked work and unsaved editors block',
-			'deletion unless `discard_changes:true`. A main checkout is never deleted.',
+			'`stop_agent` stops one reachable run; children in other folders continue. With',
+			'`delete_worktree:true`, Facade stops all agents in a worktree created by Facade,',
+			'deletes its folder, and keeps its branch. For any other folder, it stops only the',
+			'requested run and reports that nothing was deleted. Uncommitted or untracked work',
+			'and unsaved editors block deletion before any stop unless `discard_changes:true`.',
+			'With worktree management off, `delete_worktree:true` is refused before any stop.',
 			'Self-stop can disconnect the caller before it receives the result.',
 			'',
 			'You already run in your assigned folder. Facade\'s injected MCP and skill files',

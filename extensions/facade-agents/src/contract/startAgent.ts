@@ -71,8 +71,9 @@ function cliParameter(available: string): object {
 }
 
 /**
- * `start_agent` (AGENT-ORCHESTRATION.md, O3): starts an agent in its own UI, in any folder of the window
- * or a new worktree. It answers with the agent's number once it has started, or that its start is not
+ * `start_agent` (AGENT-ORCHESTRATION.md, O3): starts an agent in its own UI - an agent's, while worktree management is
+ * on, in a worktree Facade made, there or new; the person's in any folder of the window; with management off, either's
+ * in any folder the window knows. It answers with the agent's number once it has started, or that its start is not
  * confirmed.
  */
 export const startAgentTool: ContractTool = {
@@ -89,8 +90,8 @@ export const startAgentTool: ContractTool = {
 				model: { type: 'string', description: 'Value for the CLI\'s --model option. Omit to use its default.' },
 				effort: { type: 'string', description: 'CLI reasoning effort, such as low, medium, or high. Omit to use its default. Does not require model.' },
 				task: { type: 'string', description: 'Nonempty task text, preserved exactly and sent from you to the child\'s mailbox. Omit to start without a task, waiting at the CLI prompt for input or mail.' },
-				folder: { type: 'string', description: 'Absolute path of a window folder or worktree, or a checked-out branch in your repository. Defaults to your launch folder; @human uses the selected folder.' },
-				new_worktree: { type: 'boolean', default: false, description: 'Create a worktree and branch using the name argument. Uses your HEAD in your repository, otherwise the target main checkout\'s HEAD. Uncommitted edits are excluded; required work must be in that commit.' }
+				folder: { type: 'string', description: 'Launch folder; with new_worktree:true, the folder whose repository will supply the new worktree. Use an absolute path in this window or a branch checked out in your repository. With worktree management on, an agent\'s child needs a worktree created by Facade unless new_worktree:true; @human may use any window folder. With new_worktree:true, a main checkout is also allowed. Defaults to your registered launch folder; @human defaults to the selected folder. Multiple agents may share a worktree. With management off, use an absolute path to an existing window folder or recorded agent launch folder; branch lookup and new_worktree:true are unavailable.' },
+				new_worktree: { type: 'boolean', default: false, description: 'Create a worktree and a new branch named name in the repository selected by folder. Uses your launch checkout\'s HEAD in the same repository, otherwise the target main checkout\'s HEAD. Uncommitted edits are excluded; required work must be in that commit. Unavailable when facade.workspaceBar.worktrees is false.' }
 			},
 			required: ['name', 'cli'],
 			additionalProperties: false

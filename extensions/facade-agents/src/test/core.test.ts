@@ -146,15 +146,16 @@ suite('Core: starting an agent, step by step', () => {
 	});
 
 	test('an agent\'s child starts beside it, in its folder, without coming in front; its first message names its parent, and it is that agent\'s', async () => {
-		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
+		const docs = worktreeFolder(lab, 'docs');
+		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: docs });
 		const started = await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', task: 'Write the tests.', name: 'tests' });
 		const launch = world.terminals.launched[1];
 
 		assert.deepStrictEqual({ started: timeless(started), name: launch.name, task: launch.args[launch.args.length - 1], cwd: launch.cwd, reveal: launch.reveal, agents: agents(world), told: world.person.told }, {
-			started: { status: 'started', id: 2, name: 'tests', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'main', folder: lab, state: 'running', startTime: 0, taskMessage: 2, newWorktree: false },
+			started: { status: 'started', id: 2, name: 'tests', creator: 1, root: 1, cli: 'arg', custom: false, model: 'small', effort: 'high', ignored: [], yolo: true, sandbox: 'off', integration: true, connected: true, worktree: 'docs', folder: docs, state: 'running', startTime: 0, taskMessage: 2, newWorktree: false },
 			name: '@tests #a2',
 			task: notice('[facade] You are @tests #a2, created by @main #a1.', 2),
-			cwd: lab,
+			cwd: docs,
 			reveal: false,
 			agents: ['#a1 @main by @human running', '#a2 @tests by #a1 running'],
 			told: []
@@ -242,7 +243,7 @@ suite('Core: starting an agent, step by step', () => {
 
 	test('an agent started through start_agent has its opening - who it is, who created it, to ask through messages - for a launch that names ${opening}, as Antigravity\'s warm-up does; the person\'s own has none (L9)', async () => {
 		world.settings.arg = { launch: { unattended: { arguments: { extra: ['--opening', '${opening}'] } } } };
-		await world.startUp(PERSON, { name: 'lead', cli: 'arg', model: 'large', effort: 'high', folder: lab });
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', model: 'large', effort: 'high', folder: worktreeFolder(lab, 'docs') });
 		await world.startUp(callerOf(world.agent(1)), { name: 'scout', cli: 'arg', model: 'small', effort: 'high' });
 		await world.facade.startForPerson('arg', lab);
 		const opening = (id: number) => {
@@ -289,29 +290,118 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('a child starts in any folder of the window: another folder of the workspace, another repository\'s, or a worktree on the workspace bar, by its absolute path; a worktree of its own repository by the branch checked out in it - main a branch like any other - and a detached one by its folder, having no branch; the window\'s folders are those the person picks from', async () => {
+	test('an agent\'s child starts in a worktree Facade made: its creator\'s where it names no folder, another by its absolute path or by the branch checked out in it, and a detached one by its folder, having no branch; a main checkout - by its path, or as main, a branch like any other - a folder outside git, another repository\'s main checkout and another tool\'s worktree are refused before anything is made, naming Facade\'s worktrees in the window, as is a child of a creator in a folder outside git, there or in a new worktree of it; no branch names another tool\'s worktree; the person starts in any folder of the window - the workspace\'s, another tool\'s worktree among them as a folder in its place, and Facade\'s worktrees of their repositories - and an agent is offered Facade\'s worktrees alone (O3; WT-1.3)', async () => {
 		const api = path.join(temp.dir, 'api');
 		const notes = path.join(temp.dir, 'notes');
+		const scratch = path.join(temp.dir, 'scratch');
 		fs.mkdirSync(api);
 		fs.mkdirSync(notes);
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs', 'spike'], [api]: [] }, folders: [notes] });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work', 'docs', 'spike'], [api]: [] }, folders: [notes, scratch] });
 		world.git.detach(lab, 'spike');
+		// Another tool's worktree of lab - a script's scratch checkout - added to the workspace: a folder of its own (WT-1.3)
+		world.git.addWorktree(lab, 'scratch', scratch);
+		const work = worktreeFolder(lab, 'work');
 		const docs = worktreeFolder(lab, 'docs');
 		const spike = worktreeFolder(lab, 'spike');
-		await world.startUp(PERSON, { name: 'lead', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: docs });
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: work });
 		const lead = callerOf(world.agent(1));
 		const places: string[] = [];
-		for (const folder of [notes, api, spike, 'main', 'docs']) {
+		for (const folder of [undefined, docs, 'docs', spike]) {
 			const started = await world.startUp(lead, { name: 'child', cli: 'arg', model: 'small', effort: 'high', folder });
 			places.push(`${started.worktree} at ${started.folder}, task ${started.taskMessage === undefined ? 'none' : `#m${started.taskMessage}`}`);
 		}
-		const detachedByBranch = await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg', model: 'small', effort: 'high', folder: 'spike' }));
+		const refused: string[] = [];
+		for (const folder of [lab, 'main', notes, api, scratch, 'scratch', 'spike']) {
+			refused.push(await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg', model: 'small', effort: 'high', folder })));
+		}
+		const byPerson: string[] = [];
+		for (const folder of [lab, notes, api, scratch]) {
+			const started = await world.startUp(PERSON, { name: 'mine', cli: 'arg', model: 'small', effort: 'high', folder });
+			byPerson.push(`${started.worktree} at ${started.folder}`);
+		}
+		// The person's agent in notes, which no worktree can be made of
+		const inNotes = callerOf(world.agent(7));
+		const fromNotes = [
+			await outcomeOf(world.facade.startAgent(inNotes, { name: 'child', cli: 'arg', model: 'small', effort: 'high' })),
+			await outcomeOf(world.facade.startAgent(inNotes, { name: 'child', cli: 'arg', model: 'small', effort: 'high', newWorktree: true }))
+		];
+		const allocated = [...world.table.state.agents.keys()];
+		const there = `folder to one of these worktrees created by Facade: ${work}, ${docs}, ${spike}.`;
+		const refusal = (folder: string, what: string) => `REFUSED: Cannot start a child in ${folder}: it is ${what}. Nothing was started. Set new_worktree:true to create a worktree in this repository, or set ${there}`;
+		const outsideGit = (cannot: string) => `REFUSED: Cannot ${cannot} ${notes}: it is not in a Git repository. Nothing was started. Set new_worktree:true and folder to a Git repository folder in this window, or set new_worktree:false and ${there}`;
+		const noBranch = (branch: string) => `NOT_FOUND: No listed worktree of lab has branch '${branch}' checked out. Known worktrees: main at ${lab}, work at ${work}, docs at ${docs}, spike at ${spike}. Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.`;
 
-		assert.deepStrictEqual({ places, detachedByBranch, folders: await world.facade.windowFolders() }, {
-			places: [`notes at ${notes}, task none`, `main at ${api}, task none`, `spike at ${spike}, task none`, `main at ${lab}, task none`, `docs at ${docs}, task none`],
-			detachedByBranch: `NOT_FOUND: No worktree of lab has branch 'spike' checked out. Available worktrees: main at ${lab}, docs at ${docs}, spike at ${spike}. Use an absolute folder path to select a folder or a worktree with a detached HEAD.`,
-			folders: [{ folder: lab, worktree: 'main' }, { folder: docs, worktree: 'docs' }, { folder: spike, worktree: 'spike' }, { folder: api, worktree: 'main' }, { folder: notes, worktree: 'notes' }]
+		assert.deepStrictEqual({ places, refused, byPerson, fromNotes, allocated, folders: await world.facade.windowFolders(), forAgent: await world.facade.windowFolders(true) }, {
+			places: [`work at ${work}, task none`, `docs at ${docs}, task none`, `docs at ${docs}, task none`, `spike at ${spike}, task none`],
+			refused: [
+				refusal(lab, 'a main checkout'),
+				refusal(lab, 'a main checkout'),
+				outsideGit('start a child in'),
+				refusal(api, 'a main checkout'),
+				refusal(scratch, 'not a worktree created by Facade'),
+				noBranch('scratch'),
+				noBranch('spike')
+			],
+			byPerson: [`main at ${lab}`, `notes at ${notes}`, `main at ${api}`, `scratch at ${scratch}`],
+			fromNotes: [outsideGit('start a child in'), outsideGit('create a worktree from')],
+			allocated: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+			folders: [{ folder: lab, worktree: 'main' }, { folder: work, worktree: 'work' }, { folder: docs, worktree: 'docs' }, { folder: spike, worktree: 'spike' }, { folder: api, worktree: 'main' }, { folder: notes, worktree: 'notes' }, { folder: scratch, worktree: 'scratch' }],
+			forAgent: [{ folder: work, worktree: 'work' }, { folder: docs, worktree: 'docs' }, { folder: spike, worktree: 'spike' }]
+		});
+	});
+
+	test('an agent\'s child refused in a main checkout or a folder outside git, in a window with no worktree Facade made, is told there is none, and to create one with new_worktree:true - never to choose from an empty list (O3)', async () => {
+		const notes = path.join(temp.dir, 'notes');
+		fs.mkdirSync(notes);
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders: [notes] });
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', task: 'Lead.', folder: lab });
+		await world.startUp(PERSON, { name: 'writer', cli: 'arg', task: 'Write.', folder: notes });
+		const lead = callerOf(world.agent(1));
+		const writer = callerOf(world.agent(2));
+		const refused = [
+			await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg' })),
+			await outcomeOf(world.facade.startAgent(writer, { name: 'child', cli: 'arg' })),
+			await outcomeOf(world.facade.startAgent(writer, { name: 'child', cli: 'arg', newWorktree: true }))
+		];
+		const none = 'Nothing was started. No worktrees created by Facade are available in this window.';
+
+		assert.deepStrictEqual({ refused, agents: agents(world) }, {
+			refused: [
+				`REFUSED: Cannot start a child in ${lab}: it is a main checkout. ${none} Set new_worktree:true to create one in this repository.`,
+				`REFUSED: Cannot start a child in ${notes}: it is not in a Git repository. ${none} Set new_worktree:true and folder to a Git repository folder in this window.`,
+				`REFUSED: Cannot create a worktree from ${notes}: it is not in a Git repository. ${none} Set new_worktree:true and folder to a Git repository folder in this window.`
+			],
+			agents: ['#a1 @lead by @human running', '#a2 @writer by @human running']
+		});
+	});
+
+	test('with worktree management off, an agent\'s child starts in any folder the window knows, as the person\'s does - its creator\'s main checkout, with no folder or by its path, a folder outside git, from a creator there too, and another tool\'s worktree: it must go in a worktree Facade made only while management is on, and on again, the same start is refused (O3; WT-9.3; OR-28)', async () => {
+		const notes = path.join(temp.dir, 'notes');
+		const scratch = path.join(temp.dir, 'scratch');
+		fs.mkdirSync(notes);
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs'] }, folders: [notes, scratch] });
+		// Another tool's worktree of lab, added to the workspace: a folder of its own (WT-1.3)
+		world.git.addWorktree(lab, 'scratch', scratch);
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', task: 'Lead.', folder: lab });
+		await world.startUp(PERSON, { name: 'writer', cli: 'arg', task: 'Write.', folder: notes });
+		const lead = callerOf(world.agent(1));
+		const writer = callerOf(world.agent(2));
+		world.switches.worktrees = false;
+		const places: string[] = [];
+		for (const [creator, folder] of [[lead, undefined], [lead, lab], [lead, notes], [lead, scratch], [writer, undefined]] as const) {
+			const started = await world.startUp(creator, { name: 'child', cli: 'arg', folder });
+			places.push(`${started.worktree} at ${started.folder}${started.outsideGit ? ', outside git' : ''}`);
+		}
+		world.switches.worktrees = true;
+		const on = await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg' }));
+
+		assert.deepStrictEqual({ places, on, agents: agents(world) }, {
+			places: [`main at ${lab}`, `main at ${lab}`, `notes at ${notes}, outside git`, `scratch at ${scratch}`, `notes at ${notes}, outside git`],
+			on: `REFUSED: Cannot start a child in ${lab}: it is a main checkout. Nothing was started. Set new_worktree:true to create a worktree in this repository, or set folder to one of these worktrees created by Facade: ${worktreeFolder(lab, 'docs')}.`,
+			agents: ['#a1 @lead by @human running', '#a2 @writer by @human running', '#a3 @child by #a1 running', '#a4 @child by #a1 running', '#a5 @child by #a1 running', '#a6 @child by #a1 running', '#a7 @child by #a2 running']
 		});
 	});
 
@@ -361,7 +451,7 @@ suite('Core: starting an agent, step by step', () => {
 		]);
 	});
 
-	test('a child in a worktree Facade did not make - the person\'s, by the branch checked out in it - is given the person\'s trust in its whole repository, as anywhere; in a folder outside any repository, in that folder', async () => {
+	test('a child in a worktree the person made with New Worktree, not for an agent - by the branch checked out in it - is given the person\'s trust in its whole repository, as anywhere; in a folder outside any repository, in that folder', async () => {
 		const notes = path.join(temp.dir, 'notes');
 		fs.mkdirSync(notes);
 		world.dispose();
@@ -381,13 +471,13 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('whatever can refuse a start refuses it before anything is made, and says what would be right: the CLI, the name - taken as it is given - and the place: a folder that is no folder of the window, a branch no worktree has checked out, or two have, and a new worktree outside any repository, on a branch that is there or that git takes for no branch, or with no commit to start at', async () => {
+	test('whatever can refuse a start refuses it before anything is made, and says what would be right: the CLI, the name - taken as it is given - and the place: a folder that is no folder of the window, a branch no worktree has checked out, or two have, an agent\'s child in its creator\'s main checkout (O3), and a new worktree outside any repository, on a branch that is there - an agent told it may reuse only a worktree Facade made, and only without new_worktree - or that git takes for no branch, or with no commit to start at', async () => {
 		const plain = path.join(temp.dir, 'plain');
 		fs.mkdirSync(plain);
 		world.dispose();
 		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs'] }, folders: [plain] });
 		world.git.addBranch(lab, 'spike');
-		world.git.addWorktree(lab, 'docs', path.join(temp.dir, 'docs-again'));
+		world.git.addWorktree(lab, 'docs', worktreeFolder(lab, 'docs-again'));
 		const lead = { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab };
 		const refusals = [
 			await outcomeOf(world.facade.startAgent(PERSON, { ...lead, cli: 'nope' })),
@@ -405,7 +495,9 @@ suite('Core: starting an agent, step by step', () => {
 		const leader = callerOf(world.agent(1));
 		refusals.push(
 			await outcomeOf(world.facade.startAgent(leader, { ...lead, folder: 'nope' })),
-			await outcomeOf(world.facade.startAgent(leader, { ...lead, folder: 'docs' }))
+			await outcomeOf(world.facade.startAgent(leader, { ...lead, folder: 'docs' })),
+			await outcomeOf(world.facade.startAgent(leader, { ...lead, folder: undefined })),
+			await outcomeOf(world.facade.startAgent(leader, { ...lead, name: 'spike', newWorktree: true }))
 		);
 		const unborn = fakeWorld(path.join(temp.dir, 'unborn'), { repositories: { [lab]: [] }, unborn: [lab] });
 		try {
@@ -421,18 +513,121 @@ suite('Core: starting an agent, step by step', () => {
 				'INVALID: Invalid agent name \'two words\'. Use 1-40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.',
 				'INVALID: Invalid agent name \'@Main\'. Use 1-40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit.',
 				'INVALID: Argument \'folder\' is required because the person has no selected folder. Provide the absolute path of a folder in this window.',
-				`NOT_FOUND: ${path.join(temp.dir, 'elsewhere')} does not identify a folder in this window. Window folders: ${lab}, ${worktreeFolder(lab, 'docs')}, ${path.join(temp.dir, 'docs-again')}, ${plain}.`,
-				'INVALID: \'docs\' is not an absolute path, and no repository is available to resolve it as a branch: the person has no selected folder. Provide the absolute path of a folder in this window.',
+				`NOT_FOUND: ${path.join(temp.dir, 'elsewhere')} does not identify a folder in this window. Nothing was started. Set folder to an absolute path from this list. Window folders: ${lab}, ${worktreeFolder(lab, 'docs')}, ${worktreeFolder(lab, 'docs-again')}, ${plain}.`,
+				'INVALID: \'docs\' cannot be resolved as a branch because the person has no selected folder. Set folder to the absolute path of a folder in this window; a detached HEAD must be selected by path.',
 				`REFUSED: Cannot create a worktree from ${plain}: it is not in a Git repository. Start the child in this folder without new_worktree:true.`,
 				'REFUSED: Branch \'spike\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for \'spike\'.',
 				'REFUSED: Cannot use \'v1..2\' for the new worktree\'s branch: git does not take "v1..2" for a branch\'s name. Choose another agent name.',
-				`NOT_FOUND: No worktree of lab has branch 'nope' checked out. Available worktrees: main at ${lab}, docs at ${worktreeFolder(lab, 'docs')}, docs at ${path.join(temp.dir, 'docs-again')}. Use an absolute folder path to select a folder or a worktree with a detached HEAD.`,
-				`INVALID: Branch 'docs' is checked out in 2 worktrees of lab: ${worktreeFolder(lab, 'docs')}, ${path.join(temp.dir, 'docs-again')}. Select a worktree by its absolute folder path.`,
+				`NOT_FOUND: No listed worktree of lab has branch 'nope' checked out. Known worktrees: main at ${lab}, docs at ${worktreeFolder(lab, 'docs')}, docs at ${worktreeFolder(lab, 'docs-again')}. Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.`,
+				`INVALID: Branch 'docs' is checked out in 2 worktrees of lab: ${worktreeFolder(lab, 'docs')}, ${worktreeFolder(lab, 'docs-again')}. Set folder to the absolute path of one created by Facade, or set new_worktree:true and choose a Git repository folder in this window.`,
+				`REFUSED: Cannot start a child in ${lab}: it is a main checkout. Nothing was started. Set new_worktree:true to create a worktree in this repository, or set folder to one of these worktrees created by Facade: ${worktreeFolder(lab, 'docs')}, ${worktreeFolder(lab, 'docs-again')}.`,
+				'REFUSED: Branch \'spike\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name. To reuse an existing worktree created by Facade, set new_worktree:false and folder to its absolute path or checked-out branch.',
 				`REFUSED: Cannot create a worktree from ${lab}: its branch has no commit yet, or Git cannot read its commit.`
 			],
 			agents: ['#a1 @lead by @human running'],
 			launched: 1,
 			steps: []
+		});
+	});
+
+	test('a folder or a branch that names no place to start is refused, nothing started, saying what to do next as who asks and how: an agent, a worktree Facade made or new_worktree; the person, a folder of the window; new_worktree:true, a Git repository folder; with worktree management off, a folder the window knows - the window\'s folders listed after a folder, and a window that has none saying who can add one, never offering an empty list (O1, O3; WT-9.3)', async () => {
+		const plain = path.join(temp.dir, 'plain');
+		const elsewhere = path.join(temp.dir, 'elsewhere');
+		const nowhere = path.join(temp.dir, 'nowhere');
+		fs.mkdirSync(plain);
+		fs.mkdirSync(elsewhere);
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs'] }, folders: [plain], activeFolder: lab });
+		const docs = worktreeFolder(lab, 'docs');
+		const again = worktreeFolder(lab, 'docs-again');
+		world.git.addWorktree(lab, 'docs', again);
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', folder: docs });
+		await world.startUp(PERSON, { name: 'writer', cli: 'arg', folder: plain });
+		const lead = callerOf(world.agent(1));
+		const writer = callerOf(world.agent(2));
+		const start = (inWorld: World, caller: Caller, folder: string | undefined, newWorktree = false) => outcomeOf(inWorld.facade.startAgent(caller, { name: 'child', cli: 'arg', folder, newWorktree }));
+		const outside = [
+			await start(world, lead, nowhere),
+			await start(world, lead, nowhere, true),
+			await start(world, PERSON, nowhere),
+			await start(world, PERSON, nowhere, true),
+			await start(world, lead, elsewhere)
+		];
+		const branches = [
+			await start(world, lead, 'nope'),
+			await start(world, lead, 'nope', true),
+			await start(world, PERSON, 'nope'),
+			await start(world, lead, 'docs'),
+			await start(world, lead, 'docs', true),
+			await start(world, PERSON, 'docs'),
+			await start(world, writer, 'docs'),
+			await start(world, writer, 'docs', true)
+		];
+		world.switches.worktrees = false;
+		const off = [
+			await start(world, lead, nowhere),
+			await start(world, PERSON, nowhere),
+			await start(world, writer, 'docs')
+		];
+		const allocated = [...world.table.state.agents.keys()];
+		// A window whose one folder went from the disk, with the agent started there: no folder to offer
+		const gone = path.join(temp.dir, 'gone');
+		fs.mkdirSync(gone);
+		const bare = fakeWorld(path.join(temp.dir, 'bare'), { folders: [gone] });
+		const empty: string[] = [];
+		try {
+			await bare.startUp(PERSON, { name: 'alone', cli: 'arg', folder: gone });
+			fs.rmSync(gone, { recursive: true });
+			const alone = callerOf(bare.agent(1));
+			empty.push(
+				await start(bare, alone, nowhere),
+				await start(bare, alone, nowhere, true),
+				await start(bare, PERSON, nowhere),
+				await start(bare, PERSON, nowhere, true),
+				await start(bare, alone, undefined)
+			);
+			bare.switches.worktrees = false;
+			empty.push(await start(bare, alone, nowhere), await start(bare, alone, undefined));
+		} finally {
+			bare.dispose();
+		}
+		const all = `${lab}, ${docs}, ${again}, ${plain}`;
+		const notFound = (next: string) => `NOT_FOUND: ${nowhere} does not identify a folder in this window. Nothing was started. ${next}`;
+		const goneFound = (next: string) => `NOT_FOUND: Cannot start an agent in ${gone}: it no longer exists on disk. Nothing was started. ${next}`;
+		const missing = (next: string) => `NOT_FOUND: No listed worktree of lab has branch 'nope' checked out. Known worktrees: main at ${lab}, docs at ${docs}, docs at ${again}. ${next}`;
+		const twice = (next: string) => `INVALID: Branch 'docs' is checked out in 2 worktrees of lab: ${docs}, ${again}. ${next}`;
+		const noRepository = (next: string) => `INVALID: 'docs' cannot be resolved as a branch because ${plain} is not in a repository. ${next}`;
+		const agentNext = 'Set folder to the absolute path of a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window.';
+		const keepNew = 'Keep new_worktree:true and set folder to the absolute path of a Git repository folder in this window.';
+		const knownNext = 'Set folder to the absolute path of an existing window folder or a recorded agent launch folder.';
+		const noGit = 'No Git repository folder is available in this window. Ask the person to add a Git repository folder.';
+		const noFolder = 'No launch folder is available in this window. Ask the person to add a folder.';
+
+		assert.deepStrictEqual({ outside, branches, off, allocated, empty }, {
+			outside: [
+				notFound(`${agentNext} Window folders: ${all}.`),
+				notFound(`${keepNew} Window folders: ${all}.`),
+				notFound(`Set folder to an absolute path from this list. Window folders: ${all}.`),
+				notFound(`${keepNew} Window folders: ${all}.`),
+				`REFUSED: ${elsewhere} is a folder outside this window. Nothing was started. ${agentNext} Window folders: ${all}.`
+			],
+			branches: [
+				missing('Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.'),
+				missing(keepNew),
+				missing('Set folder to the absolute path of a folder in this window; a detached HEAD must be selected by path.'),
+				twice('Set folder to the absolute path of one created by Facade, or set new_worktree:true and choose a Git repository folder in this window.'),
+				twice('Select a worktree by its absolute folder path.'),
+				twice('Select a worktree by its absolute folder path.'),
+				noRepository(agentNext),
+				noRepository(keepNew)
+			],
+			off: [
+				notFound(`${knownNext} Known folders: ${lab}, ${plain}, ${docs}.`),
+				notFound(`${knownNext} Known folders: ${lab}, ${plain}, ${docs}.`),
+				noRepository(knownNext)
+			],
+			allocated: [1, 2],
+			empty: [notFound(noGit), notFound(noGit), notFound(noFolder), notFound(noGit), goneFound(noGit), notFound(noFolder), goneFound(noFolder)]
 		});
 	});
 
@@ -448,7 +643,7 @@ suite('Core: starting an agent, step by step', () => {
 	});
 
 	test('nothing asks the person before a CLI\'s first agent: an agent\'s start of a CLI nobody started before starts it at once, with its creator\'s YOLO', async () => {
-		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: lab });
+		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: worktreeFolder(lab, 'docs') });
 		const first = await outcomeOf(world.startUp(callerOf(world.agent(1)), { name: 'main', cli: 'told', model: 'deep', effort: 'high', task: 'Plan.' }));
 
 		assert.deepStrictEqual({ first, agents: agents(world), told: world.person.told }, {
@@ -499,7 +694,7 @@ suite('Core: starting an agent, step by step', () => {
 
 	test('an agent\'s start that is not confirmed in time, or fails as it waits, is its creator\'s to hear of from its answer alone: the person is told nothing of it (L5: an agent-created launch reports to its creator)', async () => {
 		world.timing.startTimeoutMs = 5_000;
-		await world.startUp(PERSON, { name: 'lead', cli: 'arg', task: 'Lead.', folder: lab });
+		await world.startUp(PERSON, { name: 'lead', cli: 'arg', task: 'Lead.', folder: worktreeFolder(lab, 'docs') });
 		const lead = callerOf(world.agent(1));
 		const silent = world.facade.startAgent(lead, { name: 'silent', cli: 'arg', task: 'One.' });
 		await until(() => world.terminals.launched.length === 2);
@@ -592,7 +787,7 @@ suite('Core: starting an agent, step by step', () => {
 	});
 
 	test('an agent started through start_agent - by another agent, or by the person\'s script - runs with its launch\'s unattended part, where nobody may be watching, and is recorded so; the person\'s own, from the window, with its launch alone (L4)', async () => {
-		await world.facade.startForPerson('arg', lab);
+		await world.facade.startForPerson('arg', worktreeFolder(lab, 'docs'));
 		world.hello(1);
 		await world.startUp(PERSON, { cli: 'arg', task: 'Script.', name: 'scripted', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Child.', name: 'child' });
@@ -606,8 +801,8 @@ suite('Core: starting an agent, step by step', () => {
 
 	test('an agent started through start_agent with no task, of a CLI that keeps its question tool and takes its notice as its argument - Muse Code - is given its opening alone, which tells it to ask through Facade messages: nothing else it is sure to read does; one with a task its task\'s notice; the person\'s own nothing, at its prompt (L4; N-71)', async () => {
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, argKeepsQuestions: true });
-		await world.facade.startForPerson('arg', lab);
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs'] }, argKeepsQuestions: true });
+		await world.facade.startForPerson('arg', worktreeFolder(lab, 'docs'));
 		world.hello(1);
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', name: 'idle' });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Work.', name: 'busy' });
@@ -754,7 +949,7 @@ suite('Core: starting an agent, step by step', () => {
 	test('the person\'s YOLO is read as a start is accepted: on, the agent is given its CLI\'s yoloOn arguments, off its yoloOff - those running keeping theirs - and an agent\'s child takes its creator\'s, whatever the setting says by then; set to what is no switch, every start of the person\'s is refused before anything is made, naming it', async () => {
 		await world.startUp(PERSON, { name: 'on', cli: 'arg', folder: lab });
 		world.switches.yolo = false;
-		await world.startUp(PERSON, { name: 'off', cli: 'arg', folder: lab });
+		await world.startUp(PERSON, { name: 'off', cli: 'arg', folder: worktreeFolder(lab, 'docs') });
 		world.switches.yolo = true;
 		await world.startUp(callerOf(world.agent(2)), { name: 'child', cli: 'arg' });
 		world.switches.yolo = 'yes';
@@ -822,13 +1017,16 @@ suite('Core: list_agents and stop_agent', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let world: World;
 
 	setup(() => {
 		temp = tempDir('facade-core-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		fs.mkdirSync(lab);
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 	});
 
 	teardown(() => {
@@ -862,7 +1060,7 @@ suite('Core: list_agents and stop_agent', () => {
 	});
 
 	test('list_agents shows the caller, its creator and the agents it started, ended ones too, and every agent with all; an agent whose creator ended keeps it as its creator, and nobody takes it in', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'A.', name: 'a' });
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'B.', name: 'b' });
@@ -890,7 +1088,7 @@ suite('Core: list_agents and stop_agent', () => {
 	});
 
 	test('an agent stops any agent it reaches - with YOLO on, every agent of the window - and @human any; the person is nobody\'s to stop; an agent is named by its number, as #a7, #7, a7 or 7, by a name one agent that has not ended has, or as Facade\'s words name it, its name that number\'s; a name more than one such agent has is refused, naming them; one that ended already says how', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'One.', name: 'twin' });
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Two.', name: 'twin' });
@@ -942,7 +1140,7 @@ suite('Core: list_agents and stop_agent', () => {
 
 	test('with YOLO off an agent reaches its own tree only - its creator, its children, its siblings and theirs, ended ones too - and is refused any other, saying why; with YOLO on it reaches every agent of the window; a child takes its creator\'s YOLO, whatever the setting says by then', async () => {
 		world.switches.yolo = false;
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', task: 'A.', name: 'a' });
 		world.switches.yolo = true;
@@ -971,7 +1169,7 @@ suite('Core: list_agents and stop_agent', () => {
 	});
 
 	test('a reference names an agent as #a7, #7, a7, 7, @name or @name #a7; a number of another kind, the person, and a bare number that an agent that has not exited is also called are refused, saying what they could be', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		for (const name of ['b', 'c', 'd', 'e', 'f', 'a3']) {
 			await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Wait.', name });
@@ -1020,13 +1218,16 @@ suite('Core: exits', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let world: World;
 
 	setup(() => {
 		temp = tempDir('facade-core-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		fs.mkdirSync(lab);
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 	});
 
 	teardown(() => {
@@ -1035,7 +1236,7 @@ suite('Core: exits', () => {
 	});
 
 	test('a terminal the person closes is a stop by the person, of which they are not told; one that ends by itself is an exit, with its CLI\'s exit code where it is known, and the person hears of their own child\'s, as of a failure (N-73); an agent\'s child\'s exit its creator sees in list_agents', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'A.', name: 'a', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'A.', name: 'a', folder: work });
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'B.', name: 'b', folder: lab });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'small', effort: 'high', task: 'C.', name: 'c' });
 		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'D.', name: 'd', folder: lab });
@@ -1056,7 +1257,7 @@ suite('Core: exits', () => {
 	});
 
 	test('an agent whose folder the person removed from the workspace was stopped by them, saying so, and they are not told; one whose folder went from the disk - a worktree removed outside Facade - was stopped by no one Facade knows: the person hears of their own, as of a stop they did not ask for, and a child\'s creator of its child, with that reason (L6; M8; LA-06)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		await world.fetched(1);
 		await world.startUp(PERSON, { cli: 'arg', task: 'Removed.', name: 'removed', folder: lab });
 		await world.startUp(PERSON, { cli: 'arg', task: 'Gone.', name: 'gone', folder: lab });
@@ -1090,7 +1291,7 @@ suite('Core: exits', () => {
 	});
 
 	test('an agent that exits leaves the agents it started running, itself still their creator: nobody takes them in, and nobody is told of them - nor of an exit with code 0; one that exits while its child comes up leaves the child to come up all the same', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'A.', name: 'a' });
 		const coming = world.facade.startAgent(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'B.', name: 'b' });
@@ -1114,15 +1315,18 @@ suite('Core: after a reload', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let dir: string;
 	let world: World;
 
 	setup(() => {
 		temp = tempDir('facade-core-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		dir = path.join(temp.dir, 'workspace');
 		fs.mkdirSync(lab);
-		world = fakeWorld(dir, { repositories: { [lab]: [] } });
+		world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 	});
 
 	teardown(() => {
@@ -1136,7 +1340,7 @@ suite('Core: after a reload', () => {
 	 */
 	function reopen(...running: string[]): World {
 		world.dispose();
-		world = fakeWorld(dir, { repositories: { [lab]: [] } });
+		world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 		for (const name of running) {
 			world.terminals.running.add(name);
 		}
@@ -1147,7 +1351,7 @@ suite('Core: after a reload', () => {
 	function crash(): World {
 		world.dispose();
 		fs.writeFileSync(path.join(dir, 'ledger.lock'), '424242 0123456789ab');
-		world = fakeWorld(dir, { repositories: { [lab]: [] }, isRunning: () => false });
+		world = fakeWorld(dir, { repositories: { [lab]: ['work'] }, isRunning: () => false });
 		return world;
 	}
 
@@ -1257,7 +1461,7 @@ suite('Core: after a reload', () => {
 	});
 
 	test('a message of the person\'s its recipient had not fetched as the window the person closed took it goes back to them at the next start - every run ended first, so that nothing goes back to an agent that went too (M6, M10; MS-02)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Lint.', name: 'lint' });
 		await world.fetched(1);
 		await world.fetched(2);
@@ -1474,12 +1678,12 @@ suite('Core: after a reload', () => {
 	});
 
 	test('a window that comes back after its renderer crashed - an agent of it came back - begins no new list: an agent that had ended stays listed (L12; N-36; REC-12)', async () => {
-		await world.startUp(PERSON, { name: 'main', cli: 'arg', task: 'Lead.', folder: lab });
+		await world.startUp(PERSON, { name: 'main', cli: 'arg', task: 'Lead.', folder: work });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', task: 'Clamp.', name: 'clamp' });
 		world.terminals.end('@clamp #a2', { byThePerson: false, exitCode: 0 });
 		fs.writeFileSync(path.join(dir, 'ledger.lock'), '424242 0123456789ab');
 		world.dispose();
-		world = fakeWorld(dir, { repositories: { [lab]: [] }, isRunning: pid => pid !== 424242 });
+		world = fakeWorld(dir, { repositories: { [lab]: ['work'] }, isRunning: pid => pid !== 424242 });
 		world.terminals.running.add('@main #a1');
 		await world.facade.recover();
 
@@ -1519,7 +1723,7 @@ suite('Core: after a reload', () => {
 	});
 
 	test('quitting and starting again begins a new list - the agents since, numbered on from the last - which a reload keeps; the log has every start, launch, connection, start completed and end, of this list and those before, in order, each agent named as Facade names it - the lifecycle audit log (L5; PS-01; N-81)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Test.', name: 'tests' });
 		await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Lint.', name: 'lint' });
@@ -1539,15 +1743,15 @@ suite('Core: after a reload', () => {
 			newList: [],
 			list: ['#a4 @again by @human running'],
 			history: [
-				`recorded @lead #a1  arg large high  YOLO on  creator @human  folder ${lab}`,
+				`recorded @lead #a1  arg large high  YOLO on  creator @human  folder ${work}`,
 				'launched @lead #a1',
 				'connected @lead #a1',
 				'running  @lead #a1',
-				`recorded @tests #a2  arg small high  YOLO on  creator @lead #a1  folder ${lab}`,
+				`recorded @tests #a2  arg small high  YOLO on  creator @lead #a1  folder ${work}`,
 				'launched @tests #a2',
 				'connected @tests #a2',
 				'running  @tests #a2',
-				`recorded @lint #a3  arg small high  YOLO on  creator @lead #a1  folder ${lab}`,
+				`recorded @lint #a3  arg small high  YOLO on  creator @lead #a1  folder ${work}`,
 				'launched @lint #a3',
 				'connected @lint #a3',
 				'running  @lint #a3',
@@ -2300,13 +2504,16 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let world: World;
 
 	setup(() => {
 		temp = tempDir('facade-core-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		fs.mkdirSync(lab);
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 	});
 
 	teardown(() => {
@@ -2496,9 +2703,9 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 
 	test('a stop whose process outlives its time answers that it is still stopping, and goes on: termination, then a kill it cannot ignore; its end recorded as the stop\'s (X-22)', async () => {
 		world.timing.startTimeoutMs = 5_000;
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
-		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: lab });
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: work });
 		world.terminals.stubborn = true;
 		const stopping = outcomeOf(world.facade.stopAgent(lead, '#a2'));
 		await sleep(6_000);
@@ -2586,14 +2793,16 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		const made = await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'fresh', newWorktree: true }));
 		const deleted = await outcomeOf(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true }));
 		const mainDeleted = await outcomeOf(world.facade.stopAgent(PERSON, '#a1', { deleteWorktree: true }));
+		// An agent's child in its creator's main checkout: only while worktree management is on must it go in a worktree
+		// Facade made (O3)
 		const beside = await world.startUp(lead, { cli: 'arg', name: 'beside', folder: lab });
 		const again = await world.startUp(lead, { cli: 'arg', name: 'again', folder: clamp });
 		const stopped = await world.facade.stopAgent(lead, '#a3');
 
 		assert.deepStrictEqual({ made, deleted, mainDeleted, beside: beside.status, again: again.status, stopped: stopped.stopped.map(each => each.id), agents: agents(world), steps: world.git.steps.slice(steps), exists: fs.existsSync(clamp) }, {
-			made: 'UNAVAILABLE: Cannot use new_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was started. Start the agent in an existing folder without new_worktree, or ask the person to turn the setting on.',
-			deleted: 'UNAVAILABLE: Cannot use delete_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to turn the setting on.',
-			mainDeleted: 'UNAVAILABLE: Cannot use delete_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to turn the setting on.',
+			made: 'UNAVAILABLE: Cannot use new_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was started. Set new_worktree:false to use an existing window folder or recorded agent launch folder, or ask the person to enable the setting.',
+			deleted: 'UNAVAILABLE: Cannot use delete_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to enable the setting.',
+			mainDeleted: 'UNAVAILABLE: Cannot use delete_worktree:true: worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to enable the setting.',
 			beside: 'started',
 			again: 'started',
 			stopped: [3],
@@ -2630,7 +2839,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 	test('with worktree management off, git is not asked for worktrees: a worktree no agent of the list was started in is refused by its path, naming the setting, and a branch is not resolved to its worktree; on again, both are found (WT-9.3; O3; OR-28)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
-		const other = path.join(temp.dir, 'other');
+		const other = worktreeFolder(lab, 'other');
 		world.git.addWorktree(lab, 'other', other);
 		world.switches.worktrees = false;
 		const byPath = await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'path', folder: other }));
@@ -2640,18 +2849,18 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		const onByBranch = await world.startUp(lead, { cli: 'arg', name: 'branch', folder: 'other' });
 
 		assert.deepStrictEqual({ byPath, byBranch, on: [onByPath.status, onByBranch.status], folders: [world.agent(2).folder, world.agent(3).folder] }, {
-			byPath: `REFUSED: ${other} is outside this window, and worktree management is turned off by the setting facade.workspaceBar.worktrees. Start in a window folder or in a folder where an agent in this window was started. Window folders: ${lab}.`,
-			byBranch: 'UNAVAILABLE: \'other\' is not an absolute path, and branches cannot be resolved to worktrees while worktree management is turned off by the setting facade.workspaceBar.worktrees. Provide the absolute path of a folder in this window.',
+			byPath: `REFUSED: ${other} is outside this window, and worktree management is turned off by the setting facade.workspaceBar.worktrees. Nothing was started. Set folder to the absolute path of an existing window folder or a recorded agent launch folder. Known folders: ${lab}.`,
+			byBranch: 'UNAVAILABLE: \'other\' is not an absolute path, and branches cannot be resolved to worktrees while worktree management is turned off by the setting facade.workspaceBar.worktrees. Set folder to the absolute path of an existing window folder or a recorded agent launch folder.',
 			on: ['started', 'started'],
 			folders: [other, other]
 		});
 	});
 
 	test('a starting child that someone other than its creator stops is reported to its waiting creator once - its start\'s answer, its task given back - and by no notice of its end besides (M8; XS-09)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		await world.fetched(1);
-		const starting = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: lab }));
+		const starting = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: work }));
 		await until(() => world.terminals.launched.length === 2);
 		await world.facade.stopAgent(PERSON, '#a2');
 		const answer = await starting;
@@ -2801,11 +3010,11 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 	});
 
 	test('a stop that comes while a start opens its terminal ends the start: the terminal is closed once it is open, never left running, and the start says why; a second stop of an agent stopping joins the first, which says who stopped it and why', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		let open = () => { };
 		world.terminals.hold = new Promise<void>(resolve => open = resolve);
-		const start = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: lab }));
+		const start = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: work }));
 		await sleep(0);
 		const stop = world.facade.stopAgent(lead, '#a2');
 		const joined = world.facade.stopAgent(PERSON, '#a2');
@@ -2824,11 +3033,11 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 
 	test('a stop\'s time counts from its acceptance: a launch it waits for to open its terminal is within it, and past it the stop answers that it is still stopping - the terminal closed once it opens, the end recorded as the stop\'s (X-15)', async () => {
 		world.timing.startTimeoutMs = 5_000;
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		let open = () => { };
 		world.terminals.hold = new Promise<void>(resolve => open = resolve);
-		const start = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: lab }));
+		const start = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', folder: work }));
 		await sleep(0);
 		const stop = outcomeOf(world.facade.stopAgent(lead, '#a2'));
 		await sleep(6_000);
@@ -2864,10 +3073,10 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 
 	test('an agent working in a worktree it was not started in - its CLI, or a shell it runs, cd\'d there, as its processes say - is one of its agents: out of a YOLO-off caller\'s reach it refuses the deletion, named, nobody stopped; a YOLO-on caller stops it too and names it; one of another record the window sees there refuses it (X-74)', async () => {
 		world.switches.yolo = false;
-		await world.startUp(PERSON, { cli: 'arg', task: 'B.', name: 'b', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'B.', name: 'b', folder: work });
 		const b = callerOf(world.agent(1));
 		await world.startUp(b, { cli: 'arg', task: 'B1.', name: 'b1', newWorktree: true });
-		await world.startUp(b, { cli: 'arg', task: 'B2.', name: 'b2', folder: lab });
+		await world.startUp(b, { cli: 'arg', task: 'B2.', name: 'b2', folder: work });
 		const w = worktreeFolder(lab, 'b1');
 		world.switches.yolo = true;
 		await world.startUp(PERSON, { cli: 'arg', task: 'X.', name: 'x', folder: lab });
@@ -2953,6 +3162,24 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		});
 	});
 
+	test('delete_worktree never deletes a worktree another tool made, which Facade takes for a folder: the agent alone stops - another there goes on - and the answer says why; git is asked neither to check nor to delete it (O5; WT-1.3)', async () => {
+		const scratch = path.join(temp.dir, 'scratch');
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders: [scratch] });
+		world.git.addWorktree(lab, 'scratch', scratch);
+		await world.startUp(PERSON, { cli: 'arg', task: 'Try.', name: 'try', folder: scratch });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Beside.', name: 'beside', folder: scratch });
+		const stopped = await world.facade.stopAgent(PERSON, '#a1', { deleteWorktree: true });
+
+		assert.deepStrictEqual({ stopped: stopped.stopped.map(each => each.id), worktree: stopped.worktree, agents: agents(world), steps: world.git.steps, exists: fs.existsSync(scratch) }, {
+			stopped: [1],
+			worktree: { folder: scratch, deleted: false, why: 'this worktree was not created by Facade' },
+			agents: ['#a1 @try by @human stopped by @human: with stop_agent', '#a2 @beside by @human running'],
+			steps: [],
+			exists: true
+		});
+	});
+
 	test('what came of a worktree\'s removal with stop_agent is kept in the record, whatever it was and whoever\'s call was cut as it went: one that failed - who asked, and git\'s reason - in the ledger, read again after a reload, the person\'s history and the facts of the agents of that folder, until one succeeds (O5, O11; OR-15)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
 		const lead = callerOf(world.agent(1));
@@ -2963,7 +3190,7 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		world.git.failDelete = undefined;
 		const failed = world.facade.facts(2)?.worktreeRemoval;
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 		world.terminals.running.add('@lead #a1');
 		await world.facade.recover(true);
 		const reloaded = world.facade.facts(2)?.worktreeRemoval;
@@ -2999,9 +3226,11 @@ suite('Core: custom agents', () => {
 	});
 
 	test('a custom agent starts as a built-in does, by its name, from the person or an agent: its launch is the person\'s alone - each group they filled in given where it applies, none of Facade\'s - and ${mcpConfig} names a file of its run with Facade\'s server; what its launch has no group for is not given: a model or an effort is left out, recorded and said, and a task is refused before anything is made', async () => {
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 		world.custom.review = { path: 'review', launch: { arguments: { connect: ['--mcp', '${mcpConfig}'], yoloOn: ['--auto'], task: ['--prompt', '${task}'] } } };
 		world.custom.plain = { path: 'plain' };
-		await world.facade.startForPerson('review', lab);
+		await world.facade.startForPerson('review', worktreeFolder(lab, 'work'));
 		world.hello(1);
 		const lead = callerOf(world.agent(1));
 		const child = await world.startUp(lead, { name: 'reviewer', cli: 'review', model: 'big', effort: 'high', task: 'Review.' });
@@ -3132,7 +3361,7 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 
 		assert.deepStrictEqual({ there: there.status, named, worktree: deleted.worktree, made: world.table.madeWorktree(there.folder) }, {
 			there: 'started',
-			named: `NOT_FOUND: Cannot start an agent in ${gone}: this window's folder no longer exists on disk. Window folders: ${lab}, ${there.folder}.`,
+			named: `NOT_FOUND: Cannot start an agent in ${gone}: this window's folder no longer exists on disk. Nothing was started. Set folder to the absolute path of a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window. Window folders: ${lab}, ${there.folder}.`,
 			worktree: { folder: there.folder, deleted: false, why: 'the folder no longer exists, so there is nothing to delete' },
 			made: undefined
 		});
@@ -3157,7 +3386,9 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 	});
 
 	test('a model or an effort no CLI can be given as it is - one a CLI would read as an option of its own, a NUL, half of a character - is refused before anything is made; one joined to its option, as --model=-x, goes as it is (L10; X-08, N-10)', async () => {
-		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: worktreeFolder(lab, 'work') });
 		const lead = callerOf(world.agent(1));
 		const refused = [
 			await outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'dash', model: '-x' })),
@@ -3213,7 +3444,7 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		assert.deepStrictEqual({ second, allocated, after }, {
 			second: `REFUSED: Branch 'clamp' is already being created in lab for another start. Choose another agent name.`,
 			allocated: [1, 2],
-			after: `REFUSED: Branch 'clamp' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for 'clamp'.`
+			after: 'REFUSED: Branch \'clamp\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name. To reuse an existing worktree created by Facade, set new_worktree:false and folder to its absolute path or checked-out branch.'
 		});
 	});
 

@@ -13,7 +13,7 @@ import { Caller, PERSON } from '../record/events';
 import { HUMAN, TEXT_IN_LINE } from '../record/messages';
 import { finalScreenFile, screensDir } from '../record/screens';
 import { settled, sleep, until, useFakeClock } from './clock';
-import { callerOf, endFakeProcess, fakeWorld, startFakeProcess } from './fakes';
+import { callerOf, endFakeProcess, fakeWorld, startFakeProcess, worktreeFolder } from './fakes';
 import { outcomeOf, tempDir } from './util';
 
 /** Enter, as a terminal takes it in. */
@@ -49,15 +49,18 @@ suite('Core: messages', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let dir: string;
 	let world: World;
 
 	setup(() => {
 		temp = tempDir('facade-mail-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		dir = path.join(temp.dir, 'workspace');
 		fs.mkdirSync(lab);
-		world = fakeWorld(dir, { repositories: { [lab]: [] } });
+		world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 	});
 
 	teardown(() => {
@@ -91,7 +94,7 @@ suite('Core: messages', () => {
 	 * its children, each started with a task it has fetched, a minute ago.
 	 */
 	async function team(...children: string[]): Promise<{ readonly lead: Caller; readonly children: readonly Caller[] }> {
-		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: work });
 		const lead = callerOf(world.agent(1));
 		const made: Caller[] = [];
 		for (const name of children) {
@@ -178,7 +181,7 @@ suite('Core: messages', () => {
 			yoloOff();
 			const { lead } = await team('lint');
 			world.switches.yolo = true;
-			await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'lint', folder: lab });
+			await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'lint', folder: work });
 			const mine = world.facade.mail.send(lead, ['@lint'], 'Yours.', undefined);
 			const theirs = outcome(() => world.facade.mail.send(callerOf(world.agent(3)), ['@lint'], 'Whose?', undefined));
 
@@ -255,8 +258,8 @@ suite('Core: messages', () => {
 			await world.facade.stopAgent(lead, '@stopped');
 			await sleep(1_000);
 			const fetched = await world.fetched(1);
-			await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'solo', folder: lab });
-			await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'boom', folder: lab });
+			await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'solo', folder: work });
+			await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'boom', folder: work });
 			world.terminals.end(terminalOf(6), { exitCode: 0, byThePerson: false });
 			world.terminals.end(terminalOf(7), { exitCode: 2, byThePerson: false });
 			await sleep(1_000);
@@ -383,7 +386,7 @@ suite('Core: messages', () => {
 			yoloOff();
 			const { children: [lint] } = await team('lint');
 			world.switches.yolo = true;
-			const other = callerOf(world.agent((await world.startUp(PERSON, { cli: 'told', model: 'small', effort: 'high', name: 'other', folder: lab })).id));
+			const other = callerOf(world.agent((await world.startUp(PERSON, { cli: 'told', model: 'small', effort: 'high', name: 'other', folder: work })).id));
 			const out = outcome(() => world.facade.mail.send(lint, ['@lead', '@other'], 'Hi.', undefined));
 			const within = world.facade.mail.send(lint, ['@lead', '@human'], 'Up.', undefined);
 			const fromOther = world.facade.mail.send(other, ['@lint'], 'From the other tree.', undefined);
@@ -516,9 +519,9 @@ suite('Core: messages', () => {
 			const { lead } = await team('lint');
 			world.facade.mail.send(lead, ['@lint'], 'Old.', undefined);
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			await world.facade.recover();
-			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: lab });
+			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: work });
 			const refused = await world.fetched(3, { ids: ['#m2'] }).then(() => 'fetched', err => messageOf(err));
 			const none = await world.fetched(3, { ids: ['#m9'] }).then(() => 'fetched', err => messageOf(err));
 
@@ -534,9 +537,9 @@ suite('Core: messages', () => {
 			world.facade.mail.send(callerOf(world.agent(1)), ['@human'], 'Old.', undefined);
 			world.facade.mail.deleteRooms();
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			await world.facade.recover();
-			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: lab });
+			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: work });
 			const gone = await world.fetched(2, { ids: ['#m1'] }).then(() => 'fetched', err => messageOf(err));
 
 			assert.deepStrictEqual({ none, gone }, {
@@ -793,7 +796,7 @@ suite('Core: messages', () => {
 		test('a launch\'s task delay holds back the line that types an agent\'s task alone: one given its task as its argument is rung for a message 2 seconds after it came, however long that delay; one told of its task in its terminal is typed it once the delay is over (M5, M7)', async () => {
 			world.settings.arg = { launch: { taskDelay: 30_000 } };
 			world.settings.told = { launch: { taskDelay: 30_000 } };
-			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: lab });
+			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: work });
 			const lead = callerOf(world.agent(1));
 			await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', name: 'lint', task: 'Lint.' });
 			await world.fetched(2);
@@ -830,7 +833,7 @@ suite('Core: messages', () => {
 			world.timing.startTimeoutMs = 30_000;
 			const { lead } = await team();
 			const child = await world.startUp(lead, { cli: 'arg', model: 'small', effort: 'high', name: 'stuck', task: 'Stuck.' });
-			const own = await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'mine', task: 'Mine.', folder: lab });
+			const own = await world.startUp(PERSON, { cli: 'arg', model: 'small', effort: 'high', name: 'mine', task: 'Mine.', folder: work });
 			await sleep(31_000);
 			const told = await world.fetched(1);
 			await sleep(5 * 60_000);
@@ -1006,7 +1009,7 @@ suite('Core: messages', () => {
 			const { lead } = await team();
 			const failing = world.facade.startAgent(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Fail.', name: 'fails' });
 			await until(() => world.terminals.launched.length === 2);
-			const rootFailing = world.facade.startAgent(PERSON, { cli: 'arg', model: 'small', effort: 'high', task: 'Fail too.', name: 'alone', folder: lab });
+			const rootFailing = world.facade.startAgent(PERSON, { cli: 'arg', model: 'small', effort: 'high', task: 'Fail too.', name: 'alone', folder: work });
 			await until(() => world.terminals.launched.length === 3);
 			const closing = world.facade.startAgent(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Closed.', name: 'closed' });
 			await until(() => world.terminals.launched.length === 4);
@@ -1093,13 +1096,13 @@ suite('Core: messages', () => {
 
 		test('a child still starting as the window reloads, which then fails, is told of to its creator - its end, and its task back - as any child: the call that waited for it went with the window (M6, M8)', async () => {
 			world.timing.startTimeoutMs = 60_000;
-			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: lab });
+			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'lead', folder: work });
 			const lead = callerOf(world.agent(1));
 			const starting = world.facade.startAgent(lead, { cli: 'arg', model: 'small', effort: 'high', task: 'Lint.', name: 'lint' });
 			starting.catch(() => undefined);
 			await until(() => world.terminals.launched.length === 2);
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			world.timing.startTimeoutMs = 60_000;
 			world.terminals.running.add(terminalOf(1));
 			world.terminals.running.add(terminalOf(2));
@@ -1116,7 +1119,7 @@ suite('Core: messages', () => {
 		test('what waits unfetched is told of on the clock the ledger has, which a reload does not start again; told of, it is not told of again after another', async () => {
 			const reload = async () => {
 				world.dispose();
-				world = fakeWorld(dir, { repositories: { [lab]: [] } });
+				world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 				world.timing.startTimeoutMs = 30_000;
 				for (const id of [1, 2, 3]) {
 					world.terminals.running.add(terminalOf(id));
@@ -1148,7 +1151,7 @@ suite('Core: messages', () => {
 			const firstRing = ringsOf(2).length;
 			await world.facade.mail.fetch(lint, {}, () => undefined);
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			world.terminals.running.add(terminalOf(1));
 			world.terminals.running.add(terminalOf(2));
 			await world.facade.recover(true);
@@ -1169,9 +1172,9 @@ suite('Core: messages', () => {
 			const { lead } = await team('lint');
 			world.facade.mail.send(lead, ['@lint'], 'Unread.', undefined);
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			await world.facade.recover();
-			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: lab, task: 'Next.' });
+			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: work, task: 'Next.' });
 			const room = fs.readFileSync(path.join(dir, 'rooms', 'lead-a1.md'), 'utf8');
 
 			assert.deepStrictEqual({ mailboxes: [...world.table.state.mail.mailboxes.keys()], next: world.table.state.mail.lastMessage, notes: room.split('\n').filter(line => line.startsWith('>')) }, {
@@ -1184,12 +1187,12 @@ suite('Core: messages', () => {
 		test('Facade off: no doorbell rings; on again, they go on, and an agent that ended meanwhile is told of to its creator, its unread messages returned', async () => {
 			// The same load of the window: Facade turned off and on in it
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] }, session: 'this-window' });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] }, session: 'this-window' });
 			const { lead } = await team('lint', 'docs');
 			world.facade.mail.send(lead, ['@lint', '@docs'], 'While off.', undefined);
 			world.dispose('facade');
 			await sleep(5 * 60_000);
-			world = fakeWorld(dir, { repositories: { [lab]: [] }, session: 'this-window' });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] }, session: 'this-window' });
 			world.terminals.running.add(terminalOf(1));
 			world.terminals.running.add(terminalOf(2));
 			await world.facade.recover();
@@ -1287,7 +1290,7 @@ suite('Core: messages', () => {
 			const id = sent[0].id;
 			const whileOff = { shown: world.person.notified.length, state: world.table.state.mail.entries.get(id)?.state };
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			world.switches.framework = false;
 			world.terminals.running.add(terminalOf(1));
 			await world.facade.recover(true);
@@ -1332,9 +1335,9 @@ suite('Core: messages', () => {
 			const { lead } = await team('lint');
 			world.facade.mail.send(lead, ['@lint'], 'Old.', undefined);
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			await world.facade.recover();
-			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: lab });
+			await world.startUp(PERSON, { cli: 'arg', model: 'large', effort: 'high', name: 'next', folder: work });
 			const refused = await world.fetched(3, { ids: ['#m2'] }).then(() => 'fetched', err => messageOf(err));
 
 			assert.deepStrictEqual({
@@ -1357,14 +1360,14 @@ suite('Core: messages', () => {
 			world.facade.mail.send(lead, ['@human'], 'e'.repeat(TEXT_IN_LINE + 1), undefined);
 			world.facade.mail.deleteRooms();
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			world.terminals.running.add(terminalOf(1));
 			world.terminals.running.add(terminalOf(2));
 			await world.facade.recover(true);
 			const fetched = await world.fetched(2);
 			const files = fs.readdirSync(path.join(dir, 'messages'));
 			world.dispose();
-			world = fakeWorld(dir, { repositories: { [lab]: [] } });
+			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			await world.facade.recover();
 
 			assert.deepStrictEqual({ rooms: fs.existsSync(path.join(dir, 'rooms')), files, text: fetched.messages[0]?.length, deleted: world.table.state.mail.roomsDeletedUpTo, person: HUMAN, fresh: fs.readdirSync(path.join(dir, 'messages')) }, {

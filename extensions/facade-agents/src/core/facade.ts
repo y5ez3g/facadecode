@@ -294,6 +294,58 @@ type Place =
 	| { readonly kind: 'new'; readonly repository: Repository; readonly head: string; readonly branch: string };
 
 /**
+ * Who asks for a place to start, and how, on which what to do next after a refusal depends: the caller, whether it asks
+ * for a new worktree, and whether worktree management was on as the start was accepted (AGENT-ORCHESTRATION.md, O3;
+ * WORKTREE.md WT-9.3).
+ */
+interface PlaceRequest {
+	readonly caller: Caller;
+	readonly newWorktree: boolean;
+	readonly managed: boolean;
+}
+
+/**
+ * What a start's `folder` names that is no place to start: a folder - not the window's, or gone from the disk - a branch
+ * that no listed worktree has checked out, or that cannot be looked up, a branch two have, or no repository to look in.
+ */
+type PlaceProblem = 'folder' | 'branch' | 'branches' | 'repository';
+
+/**
+ * What a start refused for `problem` says to do next, as `request` asks: while worktree management is on, an agent's child
+ * goes in a worktree created by Facade, a new worktree is made of a Git repository folder, and the person may start in any
+ * folder of the window; with it off, a folder the window knows is the one choice (AGENT-ORCHESTRATION.md, O3; WORKTREE.md
+ * WT-9.3). A folder that is no place to start is answered with the window's `folders` - or, where it has none, with who can
+ * add one, never with an empty list to choose from.
+ */
+function placeRecovery(request: PlaceRequest, problem: PlaceProblem, folders: readonly string[] = []): string {
+	const byAgent = request.caller.id !== undefined;
+	const { newWorktree, managed } = request;
+	const listed = problem === 'folder';
+	if (listed && !folders.length) {
+		return managed && (byAgent || newWorktree)
+			? 'No Git repository folder is available in this window. Ask the person to add a Git repository folder.'
+			: 'No launch folder is available in this window. Ask the person to add a folder.';
+	}
+	let next: string;
+	if (!managed) {
+		next = 'Set folder to the absolute path of an existing window folder or a recorded agent launch folder.';
+	} else if (problem === 'branches') {
+		next = byAgent && !newWorktree
+			? 'Set folder to the absolute path of one created by Facade, or set new_worktree:true and choose a Git repository folder in this window.'
+			: 'Select a worktree by its absolute folder path.';
+	} else if (newWorktree) {
+		next = 'Keep new_worktree:true and set folder to the absolute path of a Git repository folder in this window.';
+	} else if (byAgent) {
+		next = problem === 'branch'
+			? 'Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.'
+			: 'Set folder to the absolute path of a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window.';
+	} else {
+		next = listed ? 'Set folder to an absolute path from this list.' : 'Set folder to the absolute path of a folder in this window; a detached HEAD must be selected by path.';
+	}
+	return listed ? `${next} ${managed ? 'Window' : 'Known'} folders: ${folders.join(', ')}.` : next;
+}
+
+/**
  * Facade, the kernel of AGENT-LAUNCHER.md and AGENT-ORCHESTRATION.md: it starts agents, keeps their list,
  * and stops them. An agent has a number no other gets, a creator that never changes - the person, who has
  * no number, or another agent - a tree, the agent the person started that it comes from, and a YOLO it
@@ -560,15 +612,16 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * The folders of the window an agent can start in: its workspace's, and every worktree of their
-	 * repositories - those the workspace bar lists - each once, with the worktree it is. With worktree management
-	 * off, git is not asked for worktrees: the workspace's folders, and those agents of its list were started in
-	 * (AGENT-ORCHESTRATION.md, O3; WORKTREE.md WT-9.3).
+	 * The folders of the window an agent can start in: its workspace's, and the worktrees Facade made of their
+	 * repositories - those the workspace bar lists - each once, with the worktree it is. For one an agent starts, Facade's
+	 * worktrees alone: while worktree management is on, an agent's child works in one, never in the person's checkout, a
+	 * folder or another tool's worktree (AGENT-ORCHESTRATION.md, O3; WORKTREE.md WT-1.3). With worktree management off,
+	 * git is not asked for worktrees: the workspace's folders, and those agents of its list were started in (WT-9.3).
 	 */
-	async windowFolders(): Promise<readonly WindowFolder[]> {
+	async windowFolders(forAgent = false): Promise<readonly WindowFolder[]> {
 		const found: WindowFolder[] = [];
 		const add = (folder: string, worktree: string) => {
-			if (!found.some(each => isEqualPath(each.folder, folder))) {
+			if ((!forAgent || this.ports.git.isFacadeWorktree(folder)) && !found.some(each => isEqualPath(each.folder, folder))) {
 				found.push({ folder, worktree });
 			}
 		};
@@ -581,7 +634,9 @@ export class Facade implements Disposable {
 			const repository = await this.ports.git.repositoryOf(folder);
 			add(folder, repository?.worktree ?? path.basename(folder));
 			for (const listed of repository && managed ? await this.ports.git.worktreesOf(repository.main) : []) {
-				add(listed.folder, listed.name);
+				if (this.ports.git.isFacadeWorktree(listed.folder)) {
+					add(listed.folder, listed.name);
+				}
 			}
 		}
 		if (!managed) {
@@ -750,7 +805,7 @@ export class Facade implements Disposable {
 		// Facade makes no worktree with worktree management off: the call is refused whole, before anything is made for it
 		// (WORKTREE.md WT-9.3; O3)
 		if (request.newWorktree === true && !this.ports.workspace.worktreesManaged()) {
-			throw new FacadeError('UNAVAILABLE', `Cannot use new_worktree:true: worktree management is turned off by the setting ${WORKTREES_SETTING}. Nothing was started. Start the agent in an existing folder without new_worktree, or ask the person to turn the setting on.`);
+			throw new FacadeError('UNAVAILABLE', `Cannot use new_worktree:true: worktree management is turned off by the setting ${WORKTREES_SETTING}. Nothing was started. Set new_worktree:false to use an existing window folder or recorded agent launch folder, or ask the person to enable the setting.`);
 		}
 		// The person's settings are read once, as the call is accepted: a change applies to the next start.
 		const yolo = this.yolo(caller);
@@ -1059,7 +1114,7 @@ export class Facade implements Disposable {
 		// Nor does it delete one: the call is refused whole, its agent left running - not turned into a stop alone, a main
 		// checkout's and a folder's outside git included (WORKTREE.md WT-9.3; O5)
 		if (options.deleteWorktree && !this.ports.workspace.worktreesManaged()) {
-			throw new FacadeError('UNAVAILABLE', `Cannot use delete_worktree:true: worktree management is turned off by the setting ${WORKTREES_SETTING}. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to turn the setting on.`);
+			throw new FacadeError('UNAVAILABLE', `Cannot use delete_worktree:true: worktree management is turned off by the setting ${WORKTREES_SETTING}. Nothing was stopped or deleted. Call stop_agent without delete_worktree to stop only the agent, or ask the person to enable the setting.`);
 		}
 		const agent = this.agentNamed(target, caller);
 		this.assertReaches(caller, agent);
@@ -1140,6 +1195,14 @@ export class Facade implements Disposable {
 		const root = repository ? await this.ports.git.worktreeRootOf(folder) : undefined;
 		if (root !== undefined && !isEqualPath(root, folder)) {
 			folder = root;
+		}
+		// Nor one another tool made: Facade takes it for a folder, and deletes no worktree but its own (WORKTREE.md WT-1.3)
+		if (repository && !this.ports.git.isFacadeWorktree(folder)) {
+			if (!alreadyEnded) {
+				await this.stopOne(agent, by, 'with stop_agent');
+			}
+			const now = this.factsOf(this.table.get(agent.id) ?? agent);
+			return { agent: now, alreadyEnded, stopped: alreadyEnded ? [] : [now], worktree: { folder, deleted: false, why: 'this worktree was not created by Facade' } };
 		}
 		// A worktree that is one of the window's folders, the one the window is on too - its first, or its only - is
 		// deleted as any other, by the same preflight: the window moves off it to its repository's folder, or back to
@@ -1870,25 +1933,42 @@ export class Facade implements Disposable {
 	/**
 	 * Where a child of the caller starts: a folder of the window - by its absolute path, or in the caller's own
 	 * repository by the branch checked out there - the caller's own folder where none is named, or a new
-	 * worktree of that folder's repository on the branch `name`. Refused before anything is made: what names
-	 * no folder of the window, a branch checked out in two worktrees, a worktree being deleted, and a new
-	 * worktree outside any repository, on a branch that is there or that git takes for no branch, or with no
-	 * commit to start at.
+	 * worktree of that folder's repository on the branch `name`. Refused before anything is made, saying what to
+	 * do next as the caller and its request call for: what names no folder of the window, a branch checked out in
+	 * two worktrees, a worktree being deleted, an agent's child anywhere but in a worktree Facade made while
+	 * worktree management is on, and a new worktree outside any repository, on a branch that is there or that git
+	 * takes for no branch, or with no commit to start at.
 	 */
 	private async placeOf(caller: Caller, named: string | undefined, newWorktree: boolean, name: string): Promise<Place> {
+		// Worktree management as the start is accepted, as new_worktree's refusal read it (WORKTREE.md WT-9.3)
+		const request: PlaceRequest = { caller, newWorktree, managed: this.ports.workspace.worktreesManaged() };
 		const own = this.agentOf(caller)?.folder;
 		// The person's own is the folder on their screen (AGENT-ORCHESTRATION.md, O3).
 		const here = own ?? (caller.id === undefined ? await this.ports.workspace.activeFolder() : undefined);
 		const wanted = named?.trim();
-		const folder = !wanted ? here : path.isAbsolute(wanted) ? await this.windowFolderAt(wanted) : await this.worktreeOnBranch(here, wanted);
+		const folder = !wanted ? here : path.isAbsolute(wanted) ? await this.windowFolderAt(wanted, request) : await this.worktreeOnBranch(here, wanted, request);
 		if (folder === undefined) {
 			throw new FacadeError('INVALID', 'Argument \'folder\' is required because the person has no selected folder. Provide the absolute path of a folder in this window.');
 		}
 		this.assertNotDeleting(folder);
 		if (!fs.existsSync(folder)) {
-			throw new FacadeError('NOT_FOUND', `Cannot start an agent in ${folder}: it no longer exists on disk. Provide the absolute path of an existing folder in this window.`);
+			const folders = (await this.windowFolders()).map(each => each.folder);
+			throw new FacadeError('NOT_FOUND', `Cannot start an agent in ${folder}: it no longer exists on disk. Nothing was started. ${placeRecovery(request, 'folder', folders)}`);
 		}
 		const repository = await this.ports.git.repositoryOf(folder);
+		// O3: while worktree management is on, an agent's child works in one of Facade's worktrees - a new one, or one that
+		// is there, its own among them. A folder outside Git has none to make either: a new one is made of a folder of a Git
+		// repository. With management off, it starts in any folder the window knows, as the person's does (WT-9.3)
+		if (caller.id !== undefined && request.managed && (!repository || (!newWorktree && (repository.mainCheckout || !this.ports.git.isFacadeWorktree(folder))))) {
+			const worktrees = (await this.windowFolders(true)).map(each => each.folder).join(', ');
+			// What to do next: one of the worktrees Facade made in the window - where there are none, it says so - or a new one
+			const reuse = `folder to one of these worktrees created by Facade: ${worktrees}.`;
+			const none = 'No worktrees created by Facade are available in this window.';
+			const fromRepository = 'Set new_worktree:true and folder to a Git repository folder in this window';
+			throw new FacadeError('REFUSED', !repository
+				? `Cannot ${newWorktree ? 'create a worktree from' : 'start a child in'} ${folder}: it is not in a Git repository. Nothing was started. ${worktrees ? `${fromRepository}, or set new_worktree:false and ${reuse}` : `${none} ${fromRepository}.`}`
+				: `Cannot start a child in ${folder}: it is ${repository.mainCheckout ? 'a main checkout' : 'not a worktree created by Facade'}. Nothing was started. ${worktrees ? `Set new_worktree:true to create a worktree in this repository, or set ${reuse}` : `${none} Set new_worktree:true to create one in this repository.`}`);
+		}
 		if (!newWorktree) {
 			return { kind: 'folder', folder, worktree: repository?.worktree ?? path.basename(folder), main: repository?.main ?? folder, outsideGit: !repository };
 		}
@@ -1912,7 +1992,10 @@ export class Facade implements Disposable {
 			throw new FacadeError('REFUSED', `Cannot use '${name}' for the new worktree's branch: ${notABranch}. Choose another agent name.`);
 		}
 		if (await this.ports.git.hasBranch(repository.main, name)) {
-			throw new FacadeError('REFUSED', `Branch '${name}' already exists in ${path.basename(repository.main)}. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for '${name}'.`);
+			// An agent's child goes in an existing worktree only without new_worktree, and only in one Facade created (O3)
+			throw new FacadeError('REFUSED', `Branch '${name}' already exists in ${path.basename(repository.main)}. A new worktree needs a new branch named after the child. ${caller.id !== undefined
+				? 'Choose another agent name. To reuse an existing worktree created by Facade, set new_worktree:false and folder to its absolute path or checked-out branch.'
+				: `Choose another agent name, or use folder to start in the existing worktree for '${name}'.`}`);
 		}
 		if (this.branchesBeingMade.some(each => isEqualPath(each.main, repository.main) && each.branch === name)) {
 			throw new FacadeError('REFUSED', `Branch '${name}' is already being created in ${path.basename(repository.main)} for another start. Choose another agent name.`);
@@ -1921,50 +2004,52 @@ export class Facade implements Disposable {
 	}
 
 	/**
-	 * The folder of the window that is `folder`. Where none is, refused, naming the window's folders: a folder,
-	 * or a file, that is there and that its window does not have, `REFUSED` - it exists, and is out of reach;
-	 * one that is not there at all, `NOT_FOUND` (AGENT-ORCHESTRATION.md, O2).
+	 * The folder of the window that is `folder`. Where none is, refused, saying what to do next as `request` asks, with
+	 * the window's folders: a folder, or a file, that is there and that its window does not have, `REFUSED` - it exists,
+	 * and is out of reach; one that is not there at all, `NOT_FOUND` (AGENT-ORCHESTRATION.md, O2).
 	 */
-	private async windowFolderAt(folder: string): Promise<string> {
+	private async windowFolderAt(folder: string, request: PlaceRequest): Promise<string> {
 		const folders = await this.windowFolders();
 		const found = folders.find(each => isEqualPath(each.folder, folder));
 		if (!found) {
-			const listed = `Window folders: ${folders.map(each => each.folder).join(', ')}.`;
+			const next = placeRecovery(request, 'folder', folders.map(each => each.folder));
 			if (this.ports.workspace.folders().some(each => isEqualPath(each, folder)) && !fs.existsSync(folder)) {
-				throw new FacadeError('NOT_FOUND', `Cannot start an agent in ${folder}: this window's folder no longer exists on disk. ${listed}`);
+				throw new FacadeError('NOT_FOUND', `Cannot start an agent in ${folder}: this window's folder no longer exists on disk. Nothing was started. ${next}`);
 			}
 			// A worktree the window does not have, with worktree management off, is none git is asked for (WT-9.3)
-			if (fs.existsSync(folder) && !this.ports.workspace.worktreesManaged()) {
-				throw new FacadeError('REFUSED', `${folder} is outside this window, and worktree management is turned off by the setting ${WORKTREES_SETTING}. Start in a window folder or in a folder where an agent in this window was started. ${listed}`);
+			if (fs.existsSync(folder) && !request.managed) {
+				throw new FacadeError('REFUSED', `${folder} is outside this window, and worktree management is turned off by the setting ${WORKTREES_SETTING}. Nothing was started. ${next}`);
 			}
 			if (fs.existsSync(folder)) {
-				throw new FacadeError('REFUSED', `${folder} is ${fs.statSync(folder).isDirectory() ? 'a folder' : 'a file'} outside this window. Start in a window folder, one of its worktrees, or a new worktree. ${listed}`);
+				throw new FacadeError('REFUSED', `${folder} is ${fs.statSync(folder).isDirectory() ? 'a folder' : 'a file'} outside this window. Nothing was started. ${next}`);
 			}
-			throw new FacadeError('NOT_FOUND', `${folder} does not identify a folder in this window. ${listed}`);
+			throw new FacadeError('NOT_FOUND', `${folder} does not identify a folder in this window. Nothing was started. ${next}`);
 		}
 		return found.folder;
 	}
 
 	/**
 	 * The worktree of the repository of the caller's folder `own` that has `branch` checked out; refused where
-	 * the caller has no repository, no worktree has the branch, or git was forced to check it out in two.
+	 * the caller has no repository, no worktree has the branch, or git was forced to check it out in two - saying
+	 * what to do next as `request` asks.
 	 */
-	private async worktreeOnBranch(own: string | undefined, branch: string): Promise<string> {
+	private async worktreeOnBranch(own: string | undefined, branch: string, request: PlaceRequest): Promise<string> {
 		const repository = own === undefined ? undefined : await this.ports.git.repositoryOf(own);
 		if (!repository) {
-			throw new FacadeError('INVALID', `'${branch}' is not an absolute path, and no repository is available to resolve it as a branch: ${own === undefined ? 'the person has no selected folder' : `${own} is not in a repository`}. Provide the absolute path of a folder in this window.`);
+			throw new FacadeError('INVALID', `'${branch}' cannot be resolved as a branch because ${own === undefined ? 'the person has no selected folder' : `${own} is not in a repository`}. ${placeRecovery(request, 'repository')}`);
 		}
 		// Finding the worktree of a branch asks git for them, which worktree management off does not (WT-9.3; O3)
-		if (!this.ports.workspace.worktreesManaged()) {
-			throw new FacadeError('UNAVAILABLE', `'${branch}' is not an absolute path, and branches cannot be resolved to worktrees while worktree management is turned off by the setting ${WORKTREES_SETTING}. Provide the absolute path of a folder in this window.`);
+		if (!request.managed) {
+			throw new FacadeError('UNAVAILABLE', `'${branch}' is not an absolute path, and branches cannot be resolved to worktrees while worktree management is turned off by the setting ${WORKTREES_SETTING}. ${placeRecovery(request, 'branch')}`);
 		}
-		const listed = await this.ports.git.worktreesOf(repository.main);
+		// The main checkout and Facade's worktrees: another tool's is a folder, which no branch names (WT-1.3; O3)
+		const listed = (await this.ports.git.worktreesOf(repository.main)).filter(each => isEqualPath(each.folder, repository.main) || this.ports.git.isFacadeWorktree(each.folder));
 		const on = listed.filter(each => each.branch === branch);
 		if (on.length > 1) {
-			throw new FacadeError('INVALID', `Branch '${branch}' is checked out in ${on.length} worktrees of ${path.basename(repository.main)}: ${on.map(each => each.folder).join(', ')}. Select a worktree by its absolute folder path.`);
+			throw new FacadeError('INVALID', `Branch '${branch}' is checked out in ${on.length} worktrees of ${path.basename(repository.main)}: ${on.map(each => each.folder).join(', ')}. ${placeRecovery(request, 'branches')}`);
 		}
 		if (!on.length) {
-			throw new FacadeError('NOT_FOUND', `No worktree of ${path.basename(repository.main)} has branch '${branch}' checked out. Available worktrees: ${listed.map(each => `${each.name} at ${each.folder}`).join(', ')}. Use an absolute folder path to select a folder or a worktree with a detached HEAD.`);
+			throw new FacadeError('NOT_FOUND', `No listed worktree of ${path.basename(repository.main)} has branch '${branch}' checked out. Known worktrees: ${listed.map(each => `${each.name} at ${each.folder}`).join(', ')}. ${placeRecovery(request, 'branch')}`);
 		}
 		return on[0].folder;
 	}
