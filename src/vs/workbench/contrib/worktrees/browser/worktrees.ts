@@ -1069,9 +1069,9 @@ export class WorktreeService implements IWorktreeService {
 		const customization: IFolderCustomization = color ? { ...given, color } : given;
 
 		// Before git writes its record, which the bar reads a row from while the files are still being
-		// checked out. Written even when nothing was chosen: customizations are kept by path, and one left
-		// by a worktree deleted outside the bar would otherwise be worn by this one. Taken back if none is made.
-		this.customizationService.set(worktree, customization);
+		// checked out - in every window. Written even when nothing was chosen: looks are kept by path, and one
+		// left by a worktree deleted outside the bar would otherwise be worn by this one. Taken back if none is made.
+		this.customizationService.setMade(worktree, customization);
 
 		// WT-5.4: not cancellable - a half-made worktree is worse than waiting. The start point only when
 		// there is one: the git extension's command takes HEAD without it.
@@ -1083,12 +1083,12 @@ export class WorktreeService implements IWorktreeService {
 				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree '{0}'...", customization.name || branch) },
 				create);
 		} catch (err) {
-			this.customizationService.set(worktree, {});
+			this.customizationService.forget(worktree);
 			return { kind: 'failed', worktree, result: undefined, unreachable: gitUnreachable('_git.createWorktreeAt', err) };
 		}
 
 		if (!result || result.kind === 'error') {
-			this.customizationService.set(worktree, {});
+			this.customizationService.forget(worktree);
 			this.logService.warn(`[worktrees] Failed to create worktree at '${worktree.toString(true)}': ${result?.message ?? 'no response'}`);
 			return { kind: 'failed', worktree, result };
 		}
@@ -1927,7 +1927,7 @@ export class WorktreeService implements IWorktreeService {
 	 * recorded for that path: a worktree's own is its repository's now (WORKTREE.md).
 	 */
 	private async forgetWorktree(main: URI, worktree: URI): Promise<void> {
-		this.customizationService.set(worktree, {});
+		this.customizationService.forget(worktree);
 		const order = this.customizationService.worktreeOrder(main);
 		if (order) {
 			this.customizationService.setWorktreeOrder(main, order.filter(candidate => !this.uriIdentityService.extUri.isEqual(candidate, worktree)));

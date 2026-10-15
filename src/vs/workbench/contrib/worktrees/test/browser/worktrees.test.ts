@@ -390,6 +390,8 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(IWorkspaceBarCustomizationService, {
 			get: () => undefined,
 			set: (uri, customization) => { steps.push(`customize ${uri.path} ${JSON.stringify(customization)}`); },
+			setMade: (uri, look) => { steps.push(`made ${uri.path} ${JSON.stringify(look)}`); },
+			forget: uri => { steps.push(`forget ${uri.path}`); },
 			worktreeOrder: () => savedOrder,
 			setWorktreeOrder: (_repository, worktrees) => { steps.push(`order ${worktrees.map(uri => uri.path).join(', ')}`); }
 		});
@@ -595,7 +597,7 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual(steps, [
 			'_git.prepareWorktreeBaseAt /lab inspect',
 			'ask',
-			'customize /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"red"}',
+			'made /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"red"}',
 			'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
 			'listed /home/me/.facade/worktrees/lab/w3',
 			'open /lab',
@@ -717,7 +719,7 @@ suite('Worktrees - making and deleting one', () => {
 			made: '/home/me/.facade/worktrees/lab/w3',
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
-				'customize /home/me/.facade/worktrees/lab/w3 {"color":"red"}',
+				'made /home/me/.facade/worktrees/lab/w3 {"color":"red"}',
 				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
 				'listed /home/me/.facade/worktrees/lab/w3',
 			],
@@ -1138,10 +1140,10 @@ suite('Worktrees - making and deleting one', () => {
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
 				'ask',
-				'customize /home/me/.facade/worktrees/lab/w2 {"name":"Two","color":"red"}',
+				'made /home/me/.facade/worktrees/lab/w2 {"name":"Two","color":"red"}',
 				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 w2',
 				// Nothing was made at that path: the name given for it is taken back.
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 				'prompt: Branch \'w2\' is already checked out in \'/home/me/.facade/worktrees/lab/w2\'.',
 				'show /home/me/.facade/worktrees/lab/w2',
 			],
@@ -1238,7 +1240,7 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 				'order /home/me/.facade/worktrees/lab/w3',
 				'untrust /home/me/.facade/worktrees/lab/w2',
 			],
@@ -1441,7 +1443,7 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual({
 			said: steps.filter(step => step.startsWith('prompt:')),
 			choices: prompted.map(choice => ({ label: choice.label, keepOpen: !!choice.keepOpen })).slice(0, 2),
-			forgotten: steps.includes(`customize ${w2.path} {}`),
+			forgotten: steps.includes(`forget ${w2.path}`),
 			retried: steps.filter(step => step.startsWith('_git.deleteWorktreeAt')).pop()
 		}, {
 			said: ['prompt: Worktree was removed from Git, but its folder could not be deleted: C:\\left\\w2. EBUSY: resource busy or locked'],
@@ -1474,7 +1476,7 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 				'order /home/me/.facade/worktrees/lab/w3',
 				'untrust /home/me/.facade/worktrees/lab/w2',
 			],
@@ -1578,7 +1580,7 @@ suite('Worktrees - making and deleting one', () => {
 				'writable /home/me/.facade/worktrees/lab/w2/src/a.ts',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 			]
 		});
 	});
@@ -1722,7 +1724,7 @@ suite('Worktrees - making and deleting one', () => {
 			'writable /home/me/.facade/worktrees/lab/w2/src/a.ts, /home/me/.facade/worktrees/lab/w2/b.ts',
 			'unhide /home/me/.facade/worktrees/lab/w2',
 			'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-			'customize /home/me/.facade/worktrees/lab/w2 {}'
+			'forget /home/me/.facade/worktrees/lab/w2'
 		]);
 	});
 
@@ -1827,7 +1829,7 @@ suite('Worktrees - making and deleting one', () => {
 		const done = 'It was removed from the workspace.\nTerminals associated with this worktree were closed and active processes terminated: npm run dev.';
 		assert.deepStrictEqual({ refused, partly }, {
 			refused: { why: `Failed to delete worktree: cannot remove a locked working tree\n${done}`, steps: cleanup },
-			partly: { why: `Worktree was removed from Git, but its folder could not be deleted: /home/me/.facade/worktrees/lab/w2. EBUSY: resource busy or locked\n${done}`, steps: [...cleanup, 'customize /home/me/.facade/worktrees/lab/w2 {}'] }
+			partly: { why: `Worktree was removed from Git, but its folder could not be deleted: /home/me/.facade/worktrees/lab/w2. EBUSY: resource busy or locked\n${done}`, steps: [...cleanup, 'forget /home/me/.facade/worktrees/lab/w2'] }
 		});
 	});
 
@@ -1858,7 +1860,7 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 cleanup leftover-1',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 			],
 			unknown: '\'/home/me/.facade/worktrees/lab/w4\' was not recognized as a worktree folder left behind by a deletion in this window, so it was not deleted. Delete it manually if needed.',
 			gone: 'deleted',

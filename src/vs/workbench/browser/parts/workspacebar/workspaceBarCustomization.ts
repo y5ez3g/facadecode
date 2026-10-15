@@ -79,7 +79,10 @@ export interface IWorkspaceBarCustomizationService {
 	/** Fires for every change, with the folder that changed. */
 	readonly onDidChange: Event<URI>;
 
-	/** What has been set for this folder, if anything. */
+	/**
+	 * What has been set for this folder, if anything: in this workspace, else - a worktree's - what it was given as Facade
+	 * made it (`setMade`).
+	 */
 	get(uri: URI): IFolderCustomization | undefined;
 
 	/** The one name every surface draws for a folder: its `folders[].name`, else a customized or default one (WORKSPACE.md W9.8). */
@@ -91,8 +94,18 @@ export interface IWorkspaceBarCustomizationService {
 	 */
 	setDefaultNames(names: readonly { readonly uri: URI; readonly name: string }[]): void;
 
-	/** Sets, or clears what is left out. */
+	/** Sets, or clears what is left out, in this workspace. */
 	set(uri: URI, customization: IFolderCustomization): void;
+
+	/**
+	 * What a worktree is given as Facade makes it - the name and colour New Worktree was given, else a colour of its own
+	 * - which every workspace shows until somebody changes it in theirs (WORKTREE.md WT-1.12). What was kept for an
+	 * earlier worktree at its path goes, in every workspace.
+	 */
+	setMade(uri: URI, look: IFolderCustomization): void;
+
+	/** Forgets a worktree that is gone: what it was made with, and what this workspace set for it (WORKTREE.md WT-8.1). */
+	forget(uri: URI): void;
 
 	/**
 	 * The order somebody put a repository's worktrees in with Move Worktree Up and Down (WORKTREE.md
@@ -173,9 +186,28 @@ const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
 const ORIGIN_STORAGE_KEY = 'facade.workspaceBar.customization.origin';
 
 /**
+ * Where what a worktree was made with is kept, for every workspace of every profile on this machine (`setMade`): one key
+ * per worktree, so that two windows making worktrees at once each write their own.
+ */
+const MADE_STORAGE_PREFIX = 'facade.workspaceBar.madeWith/';
+
+/** What a worktree was made with, and when: what tells it from an earlier worktree at its path. */
+interface IMadeWith {
+	readonly uri: URI;
+	readonly look: IFolderCustomization;
+	readonly made: number;
+}
+
+/** What a workspace set for a folder; for a worktree, the `made` of the worktree it was set for. */
+interface IWorkspaceCustomization extends IFolderCustomization {
+	readonly made?: number;
+}
+
+/**
  * Each folder's colour and icon, the names of rows not in the list, and each repository's worktree order,
  * kept per workspace: what somebody sets in one workspace's bar is that workspace's (WORKSPACE.md W2). A
- * folder in the list is named by its `folders[].name` (WORKSPACE.md W9.7).
+ * folder in the list is named by its `folders[].name` (WORKSPACE.md W9.7). What a worktree is made with is
+ * the worktree's, in every workspace, until one sets its own (WORKTREE.md WT-1.12).
  */
 export class WorkspaceBarCustomizationService extends Disposable implements IWorkspaceBarCustomizationService {
 
@@ -184,7 +216,8 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	private readonly _onDidChange = this._register(new Emitter<URI>());
 	readonly onDidChange = this._onDidChange.event;
 
-	private readonly byFolder = new Map<string, IFolderCustomization>();
+	private readonly byFolder = new Map<string, IWorkspaceCustomization>();
+	private readonly madeWith: Map<string, IMadeWith>;
 	private readonly worktreesByRepository = new Map<string, readonly URI[]>();
 	/** `setDefaultNames`, by folder: read from git's files, so never stored. */
 	private defaultNames = new Map<string, { readonly uri: URI; readonly name: string }>();
@@ -201,6 +234,27 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 		this.inherited = this.adoptEarlierRecords();
 		this.load();
 		this.loadWorktreeOrder();
+		this.madeWith = this.loadMadeWith();
+
+		// A worktree another window made, or forgot: its look here too
+		this._register(this.storageService.onDidChangeValue(StorageScope.APPLICATION, undefined, this._store)(e => {
+			if (!e.external || !e.key.startsWith(MADE_STORAGE_PREFIX)) {
+				return;
+			}
+
+			const key = e.key.slice(MADE_STORAGE_PREFIX.length);
+			const before = this.madeWith.get(key);
+			const after = this.readMadeWith(e.key);
+			if (after) {
+				this.madeWith.set(key, after);
+			} else {
+				this.madeWith.delete(key);
+			}
+			const entry = after ?? before;
+			if (entry && before?.made !== after?.made) {
+				this._onDidChange.fire(entry.uri);
+			}
+		}));
 
 		this._register(this.contextService.onDidChangeWorkspaceFolders(e => this.moveNamesIntoWorkspace(e.added)));
 	}
@@ -274,14 +328,16 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 
 				// ⚠️ Each field checked on the way in. A colour that is no longer in the palette, or a
 				// name that somebody hand-edited into a number, would otherwise reach the renderer.
-				const { name, color, icon } = value as { name?: unknown; color?: unknown; icon?: unknown };
-				const customization: IFolderCustomization = {
+				const { name, color, icon, made } = value as { name?: unknown; color?: unknown; icon?: unknown; made?: unknown };
+				const customization: IWorkspaceCustomization = {
 					name: typeof name === 'string' && name.length > 0 ? name : undefined,
 					color: isFolderColor(color) ? color : undefined,
-					icon: isFolderIcon(icon) ? icon : undefined
+					icon: isFolderIcon(icon) ? icon : undefined,
+					made: typeof made === 'number' ? made : undefined
 				};
 
-				if (customization.name || customization.color || customization.icon) {
+				// Nothing set but for a worktree made with a look: that look cleared in this workspace
+				if (customization.name || customization.color || customization.icon || customization.made !== undefined) {
 					this.byFolder.set(key, customization);
 				}
 			}
@@ -302,7 +358,14 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	}
 
 	get(uri: URI): IFolderCustomization | undefined {
-		return this.byFolder.get(this.key(uri));
+		const key = this.key(uri);
+		const own = this.byFolder.get(key);
+		const madeWith = this.madeWith.get(key);
+		// WT-1.12: what was set here for an earlier worktree at this path is not this one's
+		if (own && own.made === madeWith?.made) {
+			return { name: own.name, color: own.color, icon: own.icon };
+		}
+		return madeWith?.look;
 	}
 
 	nameFor(folder: IWorkspaceFolder): string {
@@ -337,22 +400,75 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 		const name = customization.name?.trim() || undefined;
 		const color = customization.color;
 		const icon = customization.icon;
+		// For a worktree Facade made, the one it was made as; clearing every field then clears its look in this workspace
+		const made = this.madeWith.get(key)?.made;
 
-		if (!name && !color && !icon) {
+		if (!name && !color && !icon && made === undefined) {
 			if (!this.byFolder.delete(key)) {
 				return;
 			}
 		} else {
 			const before = this.byFolder.get(key);
-			if (before?.name === name && before?.color === color && before?.icon === icon) {
+			if (before?.name === name && before?.color === color && before?.icon === icon && before?.made === made) {
 				return;
 			}
 
-			this.byFolder.set(key, { name, color, icon });
+			this.byFolder.set(key, { name, color, icon, made });
 		}
 
 		this.save();
 		this._onDidChange.fire(uri);
+	}
+
+	setMade(uri: URI, look: IFolderCustomization): void {
+		const key = this.key(uri);
+		const entry: IMadeWith = { uri, look: { name: look.name?.trim() || undefined, color: look.color }, made: Date.now() };
+		this.madeWith.set(key, entry);
+		// This machine's paths, for every workspace on it
+		this.storageService.store(`${MADE_STORAGE_PREFIX}${key}`, JSON.stringify({ uri: uri.toString(), ...entry.look, made: entry.made }), StorageScope.APPLICATION, StorageTarget.MACHINE);
+		if (this.byFolder.delete(key)) {
+			this.save();
+		}
+		this._onDidChange.fire(uri);
+	}
+
+	forget(uri: URI): void {
+		const key = this.key(uri);
+		const made = this.madeWith.delete(key);
+		const own = this.byFolder.delete(key);
+		if (made) {
+			this.storageService.remove(`${MADE_STORAGE_PREFIX}${key}`, StorageScope.APPLICATION);
+		}
+		if (own) {
+			this.save();
+		}
+		if (made || own) {
+			this._onDidChange.fire(uri);
+		}
+	}
+
+	private loadMadeWith(): Map<string, IMadeWith> {
+		const madeWith = new Map<string, IMadeWith>();
+		for (const storageKey of this.storageService.keys(StorageScope.APPLICATION, StorageTarget.MACHINE)) {
+			const entry = storageKey.startsWith(MADE_STORAGE_PREFIX) ? this.readMadeWith(storageKey) : undefined;
+			if (entry) {
+				madeWith.set(storageKey.slice(MADE_STORAGE_PREFIX.length), entry);
+			}
+		}
+		return madeWith;
+	}
+
+	/** What one worktree was made with, each field checked on the way in as in `load`; undefined where none can be read. */
+	private readMadeWith(storageKey: string): IMadeWith | undefined {
+		try {
+			const { uri, name, color, made }: { uri?: unknown; name?: unknown; color?: unknown; made?: unknown } = JSON.parse(this.storageService.get(storageKey, StorageScope.APPLICATION, '{}')) ?? {};
+			if (typeof uri === 'string' && typeof made === 'number') {
+				return { uri: URI.parse(uri), look: { name: typeof name === 'string' && name.length > 0 ? name : undefined, color: isFolderColor(color) ? color : undefined }, made };
+			}
+		} catch {
+			// A record that cannot be read costs what that worktree was made with: it looks as its workspace has it
+		}
+		return undefined;
 	}
 
 	worktreeOrder(repository: URI): readonly URI[] | undefined {

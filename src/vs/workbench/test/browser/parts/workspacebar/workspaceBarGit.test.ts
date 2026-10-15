@@ -658,6 +658,46 @@ suite('Workspace bar - worktrees as git records them', () => {
 		assert.deepStrictEqual(drawn, [[w3(true)], [w3(false)]]);
 	}));
 
+	test('WT-1.12 a worktree of Facade\'s whose record git drops - another tool removing it - is forgotten, once; one git is still making, another tool\'s, and a read that is not whole forget nothing', async () => {
+		await repository('/lab');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
+		await worktree('/lab', 'w3', `${OWN}/w3`);
+		await worktree('/lab', 'scratch', '/tmp/scratch');
+		const forgotten: string[][] = [];
+		const git = open('/lab');
+		disposables.add(git.onDidDropWorktrees(worktrees => forgotten.push(worktrees.map(uri => uri.path))));
+		await git.refresh();
+		// One git is making: its record has no HEAD yet
+		await write('/lab/.git/worktrees/w4/gitdir', `${OWN}/w4/.git`);
+		await git.refresh();
+		// Removed, Facade's and another tool's, while git writes a record: that read is not whole
+		await fileService.del(URI.file('/lab/.git/worktrees/w2'), { recursive: true });
+		await fileService.del(URI.file('/lab/.git/worktrees/scratch'), { recursive: true });
+		await write('/lab/.git/worktrees/w5/HEAD', 'ref: refs/heads/w5');
+		await git.refresh();
+		const notWhole = [...forgotten];
+		await fileService.del(URI.file('/lab/.git/worktrees/w5'), { recursive: true });
+		await git.refresh();
+		await git.refresh();
+
+		assert.deepStrictEqual({ notWhole, forgotten }, { notWhole: [], forgotten: [[`${OWN}/w2`]] });
+	});
+
+	test('WT-1.12 a worktree of Facade\'s whose record git dropped while no window was open is forgotten by the next window\'s first whole read', async () => {
+		await repository('/lab');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
+		await worktree('/lab', 'w3', `${OWN}/w3`);
+		await read('/lab');
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+		await fileService.del(URI.file('/lab/.git/worktrees/w2'), { recursive: true });
+		const forgotten: string[][] = [];
+		const git = open('/lab');
+		disposables.add(git.onDidDropWorktrees(worktrees => forgotten.push(worktrees.map(uri => uri.path))));
+		await git.refresh();
+
+		assert.deepStrictEqual(forgotten, [[`${OWN}/w2`]]);
+	});
+
 	test('WTA-03 one repository added under two spellings - its own name, and a link to it - is one row, with both folders on it', async () => {
 		const linked = disposables.add(new FileService(new NullLogService()));
 		disposables.add(linked.registerProvider(Schemas.file, disposables.add(new LinkedFileSystemProvider(new Map([['/link-lab', '/lab']])))));

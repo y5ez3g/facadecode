@@ -186,7 +186,7 @@ suite('Workspace bar - removing folders', () => {
 		instantiationService.stub(IActiveFolderService, {
 			get activeFolder() { return window.folders.find(folder => folder.uri.path === (options.active ?? options.folders[0])); }
 		});
-		instantiationService.stub(IWorkspaceBarCustomizationService, { nameFor: (folder: IWorkspaceFolder) => options.names?.get(folder.uri.path) ?? folder.name, get: () => undefined });
+		instantiationService.stub(IWorkspaceBarCustomizationService, { nameFor: (folder: IWorkspaceFolder) => options.names?.get(folder.uri.path) ?? folder.name, get: () => undefined, forget: (uri: URI) => { steps.push(`forget ${uri.path}`); } });
 
 		const model = upcastPartial<WorkspaceBarModel>({
 			resolve: async (uri: URI) => window.folders.find(folder => isEqual(folder.uri, uri)),
@@ -469,7 +469,7 @@ suite('Workspace bar - removing folders', () => {
 		return { result, steps, said, folders: window.folders.map(folder => folder.uri.path), marked };
 	}
 
-	test('WT-3.8 worktrees git no longer records leave at once, nothing asked and not as a removal, so that what runs in them goes to the panel; the window on one goes to its repository\'s row first, and says why once it has left', async () => {
+	test('WT-3.8 worktrees git no longer records leave at once, nothing asked and not as a removal, so that what runs in them goes to the panel, and what they were made with goes with them (WT-1.12); the window on one goes to its repository\'s row first, and says why once it has left', async () => {
 		const outcome = await removeDeleted(['w2', 'w3'], {
 			folders: ['/lab', '/w/w2', '/w/w3'],
 			active: '/w/w2',
@@ -480,7 +480,7 @@ suite('Workspace bar - removing folders', () => {
 
 		assert.deepStrictEqual(outcome, {
 			result: true,
-			steps: ['switch /lab', 'edit -/w/w2 -/w/w3'],
+			steps: ['switch /lab', 'edit -/w/w2 -/w/w3', 'forget /w/w2', 'forget /w/w3'],
 			said: ['Worktree \'feature/w2\' was deleted and removed from the workspace.'],
 			folders: ['/lab'],
 			marked: [false, false]
@@ -492,8 +492,8 @@ suite('Workspace bar - removing folders', () => {
 		const noRepository = await removeDeleted(['w2'], { folders: ['/notes', '/w/w2'], active: '/w/w2' });
 
 		assert.deepStrictEqual({ elsewhere, noRepository }, {
-			elsewhere: { result: true, steps: ['edit -/w/w2'], said: [], folders: ['/lab'], marked: [false] },
-			noRepository: { result: true, steps: ['edit -/w/w2'], said: ['Worktree \'w2\' was deleted and removed from the workspace.'], folders: ['/notes'], marked: [false] }
+			elsewhere: { result: true, steps: ['edit -/w/w2', 'forget /w/w2'], said: [], folders: ['/lab'], marked: [false] },
+			noRepository: { result: true, steps: ['edit -/w/w2', 'forget /w/w2'], said: ['Worktree \'w2\' was deleted and removed from the workspace.'], folders: ['/notes'], marked: [false] }
 		});
 	});
 
@@ -504,7 +504,7 @@ suite('Workspace bar - removing folders', () => {
 		assert.deepStrictEqual({ result, steps, said }, { result: true, steps: [], said: [] });
 	});
 
-	test('WT-3.8 a window on one folder has nothing to take it out of, and a workspace that does not take the edit keeps it: both answer that it did not leave, and the window on it is not told it left', async () => {
+	test('WT-3.8 a window on one folder has nothing to take it out of, and a workspace that does not take the edit keeps it: both answer that it did not leave, the window on it is not told it left, and what it was made with stays', async () => {
 		const folder = await removeDeleted(['w2'], { folders: ['/w/w2'], state: WorkbenchState.FOLDER });
 		const failing = await removeDeleted(['w2'], { folders: ['/lab', '/w/w2'], active: '/lab', editFails: true });
 		const failingOnIt = await removeDeleted(['w2'], { folders: ['/lab', '/w/w2'], active: '/w/w2', editFails: true });

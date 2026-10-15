@@ -222,6 +222,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 				return this.removal.removeDeleted(deleted, async uri => { await this.switcher?.switchTo(uri); });
 			})
 		}));
+		// WT-1.12: one another tool removed takes what it was made with along, as one Facade deletes does
+		this._register(this.git.onDidDropWorktrees(worktrees => worktrees.forEach(uri => customizationService.forget(uri))));
 		// Switching worktrees off is a read too: one of no folders
 		this.onDidChangeRepositories = this.git.onDidChange;
 

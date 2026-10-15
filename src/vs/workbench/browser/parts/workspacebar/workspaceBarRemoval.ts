@@ -169,7 +169,7 @@ export class WorkspaceBarRemoval {
 	 * leaves where nothing could ask (WORKSPACE.md W9.6): nothing asked, and not marked as removing, so that the disk is
 	 * left alone, unsaved editors are kept and what runs in them moves to the panel. The window on one goes to its
 	 * repository's row first, through `switchTo`, where that is in the workspace, and once it has left the person is
-	 * told why. Resolves with whether they left.
+	 * told why. What each was made with goes with it (WT-1.12). Resolves with whether they left.
 	 */
 	async removeDeleted(deleted: readonly IDeletedWorktree[], switchTo: (folder: URI) => Promise<void>): Promise<boolean> {
 		// A window on one folder has no workspace to take it out of
@@ -208,6 +208,7 @@ export class WorkspaceBarRemoval {
 			return false;
 		}
 
+		members.forEach(({ folder }) => this.customizationService.forget(folder.uri));
 		if (name) {
 			this.notificationService.info(localize('workspaceBar.worktreeDeleted', "Worktree '{0}' was deleted and removed from the workspace.", name));
 		}

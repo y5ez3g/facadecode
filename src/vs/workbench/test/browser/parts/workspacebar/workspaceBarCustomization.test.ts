@@ -19,6 +19,7 @@ import { FOLDER_COLORS, FOLDER_ICONS, freeWorktreeColor, WorkspaceBarCustomizati
 
 const STORAGE_KEY = 'facade.workspaceBar.customization';
 const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
+const MADE_STORAGE_PREFIX = 'facade.workspaceBar.madeWith/';
 
 class TestFileService extends mock<IFileService>() {
 	override onDidChangeFileSystemProviderCapabilities = Event.None;
@@ -122,6 +123,12 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		});
 	});
 
+	/** What one window wrote of what worktrees were made with, reaching another window's as storage that changed elsewhere does. */
+	function deliver(from: ISetup, to: ISetup): void {
+		const made = from.storage.keys(StorageScope.APPLICATION, StorageTarget.MACHINE).filter(key => key.startsWith(MADE_STORAGE_PREFIX));
+		to.storage.storeAll(made.map(key => ({ key, value: from.storage.get(key, StorageScope.APPLICATION), scope: StorageScope.APPLICATION, target: StorageTarget.MACHINE })), true);
+	}
+
 	test('W2 a workspace opened before takes a copy of what an earlier build kept for every workspace, once: cleared there, it stays cleared; a workspace made since starts with none, in its later windows too, and keeps its own, as does one that keeps a record of its own already', () => {
 		const shared = JSON.stringify({ [URI.file('/w/api').toString()]: { color: 'teal', icon: 'server' } });
 		const order = JSON.stringify({ [URI.file('/w/api').toString()]: ['file:///wt/b', 'file:///wt/a'] });
@@ -179,6 +186,64 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 			kept: ['teal', 2],
 			trimmed: [undefined, undefined],
 		});
+	});
+
+	test('WT-1.12 what a worktree is made with is its look in every workspace until one sets its own there; made again at its path, what was set for the earlier one is not worn', async () => {
+		const worktree = URI.file('/wt/w2');
+		const a = setup();
+		const b = setup();
+		const heard: string[] = [];
+		disposables.add(b.service.onDidChange(uri => heard.push(uri.path)));
+		a.service.setMade(worktree, { name: 'Payments', color: 'teal' });
+		deliver(a, b);
+		const inB = b.service.get(worktree);
+		b.service.set(worktree, { name: 'Payments', color: 'red' });
+		const setInB = b.service.get(worktree);
+		const stillInA = a.service.get(worktree);
+
+		// Deleted, and made again at that path, in the first workspace
+		await timeout(2);
+		a.service.forget(worktree);
+		a.service.setMade(worktree, { color: 'blue' });
+		deliver(a, b);
+
+		assert.deepStrictEqual({ inB, setInB, stillInA, madeAgainInB: b.reopen().get(worktree), heard }, {
+			inB: { name: 'Payments', color: 'teal' },
+			setInB: { name: 'Payments', color: 'red', icon: undefined },
+			stillInA: { name: 'Payments', color: 'teal' },
+			madeAgainInB: { name: undefined, color: 'blue' },
+			// Made, set there, and made again: each once
+			heard: ['/wt/w2', '/wt/w2', '/wt/w2'],
+		});
+	});
+
+	test('WT-1.12 WT-8.1 a made worktree\'s look cleared in one workspace is cleared there alone; a forgotten one has none anywhere', () => {
+		const worktree = URI.file('/wt/w2');
+		const { service, storage, reopen } = setup();
+		service.setMade(worktree, { color: 'teal' });
+		service.set(worktree, {});
+		const cleared = reopen().get(worktree);
+		service.forget(worktree);
+
+		assert.deepStrictEqual({ cleared, forgotten: reopen().get(worktree), made: storage.keys(StorageScope.APPLICATION, StorageTarget.MACHINE).filter(key => key.startsWith(MADE_STORAGE_PREFIX)) }, {
+			cleared: { name: undefined, color: undefined, icon: undefined },
+			forgotten: undefined,
+			made: [],
+		});
+	});
+
+	test('WT-1.12 two windows making worktrees at once each keep what theirs was made with: neither writes over the other\'s', () => {
+		const w1 = URI.file('/wt/w1');
+		const w2 = URI.file('/wt/w2');
+		const a = setup();
+		const b = setup();
+		// At once: neither has heard of the other's when it writes its own
+		a.service.setMade(w1, { color: 'teal' });
+		b.service.setMade(w2, { color: 'red' });
+		deliver(a, b);
+		deliver(b, a);
+
+		assert.deepStrictEqual([a, b].map(window => [window.service.get(w1)?.color, window.service.get(w2)?.color]), [['teal', 'red'], ['teal', 'red']]);
 	});
 
 	test('⭐ a value that is no longer in the palette does not reach the renderer', () => {

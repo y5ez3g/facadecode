@@ -140,7 +140,14 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   branch) and a colour, which paints the dot. No icon to choose: the dot is what says
   worktree. A new worktree gets a colour none of its repository's other worktrees has,
   the first of WORKSPACE.md W10.6's ten in their order while one is left, so the dots
-  of one repository can be told apart at a glance, collapsed too.
+  of one repository can be told apart at a glance, collapsed too. What it is made with -
+  that colour, or the name and colour New Worktree was given - is the worktree's, kept
+  for every workspace on the machine: the same worktree is told apart by the same dot
+  in each window. Changed with Customize, it changes in that workspace alone (WORKSPACE.md
+  W2). One made again at a path an earlier worktree had wears what it is made with, not
+  what any workspace set for the earlier one. What it was made with is forgotten with
+  the worktree, whichever tool removes it, once a window that has read its repository
+  finds its record gone.
 - **WT-1.13** A folder's row ends in one button, styled as the header's `+` and
   standing under it: `+`, New Worktree..., there while it can be used. A repository
   with worktrees has its triangle in its icon's slot, drawn over the icon and taking
@@ -591,8 +598,9 @@ Prepare and perform a deletion in this order:
 - **WT-8.5** A leftover directory is handled only under WT-4.5. Never use recursive
   deletion to bypass a Git refusal while its worktree record remains.
 - **WT-8.6** Report one of these outcomes:
-  - Removed: Git no longer lists it and the directory is gone. Clear customization,
-    saved order and any trust an earlier build recorded for that path.
+  - Removed: Git no longer lists it and the directory is gone. Clear customization -
+    what it was made with, for every workspace, and what this one set (WT-1.12) - saved
+    order and any trust an earlier build recorded for that path.
   - Removal failed with the worktree still registered: restore its ordinary row and
     retained customization. Membership may already have been removed and
     processes stopped; say so rather than pretending those effects were undone.

@@ -153,6 +153,13 @@ export class WorkspaceBarGit extends Disposable {
 	/** Fires when the groups changed. Not when a read found what the last one did. */
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
+	private readonly _onDidDropWorktrees = this._register(new Emitter<readonly URI[]>());
+	/**
+	 * Fires with the worktrees Facade made whose records git has dropped since the last whole read of their repository,
+	 * this window's or the last one's: removed by Facade or by another tool (WORKTREE.md WT-1.12).
+	 */
+	readonly onDidDropWorktrees: Event<readonly URI[]> = this._onDidDropWorktrees.event;
+
 	private _groups: readonly WorkspaceBarGroup[] = [];
 
 	/**
@@ -250,6 +257,12 @@ export class WorkspaceBarGit extends Disposable {
 	 */
 	private readonly lastLabels = new Map<string, IWorktreeLabel>();
 
+	/**
+	 * The worktrees Facade made that each repository's records named at its last whole read, by its shared git directory's
+	 * key: one named no more has been removed, by Facade or by another tool (`onDidDropWorktrees`).
+	 */
+	private readonly recorded = new Map<string, ReadonlyMap<string, URI>>();
+
 	/** Where Facade makes worktrees (`worktreesFolderOf`), worked out once. */
 	private own: Promise<URI> | undefined;
 
@@ -286,6 +299,10 @@ export class WorkspaceBarGit extends Disposable {
 		for (const deleted of keptNotRemoved(this.storageService.get(NOT_REMOVED_STORAGE_KEY, StorageScope.WORKSPACE), this.source.folders, this.source.key)) {
 			this.notRemoved.set(this.source.key(deleted.folder.uri), deleted);
 		}
+		// WT-1.12: what the last window's whole reads named, so that a worktree removed while no window was open is dropped
+		for (const [common, named] of keptRecorded(this.storageService.get(RECORDED_STORAGE_KEY, StorageScope.WORKSPACE))) {
+			this.recorded.set(common, named);
+		}
 		this._register(this.storageService.onWillSaveState(() => this.saveState()));
 
 		// A change of folders is read at once; the batching is for git's own writes.
@@ -305,6 +322,7 @@ export class WorkspaceBarGit extends Disposable {
 	private saveState(): void {
 		this.storeOrRemove(GROUPS_STORAGE_KEY, this._ready && this._groups.length ? storedGroupsOf(this._groups) : undefined);
 		this.storeOrRemove(NOT_REMOVED_STORAGE_KEY, this.notRemoved.size ? storedNotRemovedOf(this.notRemoved) : undefined);
+		this.storeOrRemove(RECORDED_STORAGE_KEY, this.recorded.size ? storedRecordedOf(this.recorded) : undefined);
 	}
 
 	/** Keeps `value` under `key` in the workspace's storage, this machine's paths; none removes it. */
@@ -374,6 +392,7 @@ export class WorkspaceBarGit extends Disposable {
 			this.previous = this._groups;
 		}
 		this.rememberLabels(present);
+		const dropped = this.dropped(read.recorded);
 
 		// The bar draws once it stops waiting, whatever this read found
 		const signature = signatureOf(this._groups, this.source.key);
@@ -382,6 +401,11 @@ export class WorkspaceBarGit extends Disposable {
 			this._waiting = false;
 			this.signature = signature;
 			this._onDidChange.fire();
+		}
+
+		// WT-1.12: what was kept for a worktree that is gone, in every workspace
+		if (dropped.length) {
+			this._onDidDropWorktrees.fire(dropped);
 		}
 
 		// WT-3.8: a worktree git no longer records leaves the workspace, drawn nowhere meanwhile
@@ -405,6 +429,23 @@ export class WorkspaceBarGit extends Disposable {
 				this.lastLabels.delete(key);
 			}
 		}
+	}
+
+	/**
+	 * The worktrees Facade made that a repository's records named at its last whole read and name no more, keeping what
+	 * `recorded` - its whole reads now - names. A read that is not whole says nothing either way.
+	 */
+	private dropped(recorded: ReadonlyMap<string, ReadonlyMap<string, URI>>): URI[] {
+		const dropped: URI[] = [];
+		for (const [common, named] of recorded) {
+			for (const [key, uri] of this.recorded.get(common) ?? []) {
+				if (!named.has(key)) {
+					dropped.push(uri);
+				}
+			}
+			this.recorded.set(common, named);
+		}
+		return dropped;
 	}
 
 	/**
@@ -684,6 +725,8 @@ interface IRead {
 	readonly deleted: IDeletedWorktree[];
 	/** Whether a repository's git directory could not be reached, whose rows are drawn as the last read had them. */
 	readonly unreachable: boolean;
+	/** For each repository read whole, by its shared git directory's key: the worktrees Facade made that its records name. */
+	readonly recorded: ReadonlyMap<string, ReadonlyMap<string, URI>>;
 }
 
 /** What a read goes by besides the folders it reads. */
@@ -790,7 +833,7 @@ async function readRepository(context: IReadContext, commonDir: URI, members: IR
 	};
 }
 
-/** The groups for `folders`, the directories to watch, and the folders to take out of the workspace. */
+/** The groups for `folders`, the directories to watch, the folders to take out of the workspace and what each repository read whole records. */
 async function readGroups(context: IReadContext, folders: readonly IWorkspaceFolder[]): Promise<IRead> {
 	const { fileService, key, previous, notRemoved } = context;
 	const [locations, canonicals] = await Promise.all([
@@ -868,7 +911,8 @@ async function readGroups(context: IReadContext, folders: readonly IWorkspaceFol
 		watch: placed.watch,
 		// Not one that could not leave already: it is not handed over again until it has left and come back
 		deleted: [...placed.places].flatMap(([entry, place]) => place.kind === 'deleted' && !notRemoved.has(key(entry.folder.uri)) ? [{ folder: entry.folder, main: place.main }] : []),
-		unreachable: placed.unreachable
+		unreachable: placed.unreachable,
+		recorded: placed.recorded
 	};
 }
 
@@ -895,7 +939,7 @@ type UnlocatedPlace =
  * Any other is a folder of its own, marked as not on disk once it is gone (W9.3): nothing says that git dropped it.
  * The rows come back with every repository's, those of `reads` with their folders found by their records added.
  */
-async function placeUnlocated(context: IReadContext, unlocated: readonly IUnlocatedFolder[], reads: ReadonlyMap<string, IRepositoryRead | undefined>): Promise<{ places: Map<IUnlocatedFolder, UnlocatedPlace>; repositories: Map<string, IWorkspaceBarRepository>; watch: URI[]; unreachable: boolean }> {
+async function placeUnlocated(context: IReadContext, unlocated: readonly IUnlocatedFolder[], reads: ReadonlyMap<string, IRepositoryRead | undefined>): Promise<{ places: Map<IUnlocatedFolder, UnlocatedPlace>; repositories: Map<string, IWorkspaceBarRepository>; watch: URI[]; unreachable: boolean; recorded: Map<string, ReadonlyMap<string, URI>> }> {
 	const { fileService, key, extUri, previous, notRemoved, labels } = context;
 	// What each was in the last read: the repository whose row it was on, and the worktree it was there
 	const lastRead = new Map<string, { readonly repository: IWorkspaceBarRepository; readonly worktree: IWorkspaceBarWorktree | undefined }>();
@@ -939,9 +983,13 @@ async function placeUnlocated(context: IReadContext, unlocated: readonly IUnloca
 	}));
 
 	const repositories = new Map<string, IWorkspaceBarRepository>();
+	const recorded = new Map<string, ReadonlyMap<string, URI>>();
 	for (const [common, read] of reads) {
 		if (read) {
 			repositories.set(common, read.group);
+			if (read.complete) {
+				recorded.set(common, read.named);
+			}
 		}
 	}
 	const watch = [...reads.values()].flatMap(read => read?.watch ?? []);
@@ -985,6 +1033,9 @@ async function placeUnlocated(context: IReadContext, unlocated: readonly IUnloca
 
 			read = await readRepository(context, commonDir, []);
 			watch.push(...read?.watch ?? []);
+			if (read?.complete) {
+				recorded.set(common, read.named);
+			}
 		}
 		if (!read) {
 			// A bare repository's, or one whose git directory lives elsewhere: no main checkout to hang them under (WT-3.2)
@@ -1038,7 +1089,7 @@ async function placeUnlocated(context: IReadContext, unlocated: readonly IUnloca
 		}
 	}
 
-	return { places, repositories, watch, unreachable: isUnreachable };
+	return { places, repositories, watch, unreachable: isUnreachable, recorded };
 }
 
 /**
@@ -1085,6 +1136,9 @@ export const GROUPS_STORAGE_KEY = 'facade.workspaceBar.groups';
 
 /** Where the folders that could not leave the workspace are kept, for the window that opens next (WT-3.8). */
 const NOT_REMOVED_STORAGE_KEY = 'facade.workspaceBar.notRemoved';
+
+/** Where what each repository's records named at the last whole read is kept, for the window that opens next (WT-1.12). */
+const RECORDED_STORAGE_KEY = 'facade.workspaceBar.recorded';
 
 /** A worktree as it is kept: its URI as a string, and its folder by its URI. */
 interface IStoredWorktree {
@@ -1208,5 +1262,25 @@ function keptNotRemoved(value: string | undefined, folders: readonly IWorkspaceF
 		})) : [];
 	} catch {
 		return [];
+	}
+}
+
+function storedRecordedOf(recorded: ReadonlyMap<string, ReadonlyMap<string, URI>>): Record<string, [string, string][]> {
+	return Object.fromEntries([...recorded].map(([common, named]) => [common, [...named].map(([key, uri]): [string, string] => [key, uri.toString()])]));
+}
+
+/** What each repository's records named at the last window's last whole read of it, by key; nothing from a record that cannot be read. */
+function keptRecorded(value: string | undefined): Map<string, Map<string, URI>> {
+	try {
+		const stored: unknown = JSON.parse(value ?? '{}');
+		const recorded = new Map<string, Map<string, URI>>();
+		for (const [common, named] of Object.entries(isObject(stored) ? stored : {})) {
+			if (Array.isArray(named) && named.every(entry => Array.isArray(entry) && entry.length === 2 && entry.every(isString))) {
+				recorded.set(common, new Map(named.map(([key, uri]: string[]) => [key, URI.parse(uri)])));
+			}
+		}
+		return recorded;
+	} catch {
+		return new Map();
 	}
 }
