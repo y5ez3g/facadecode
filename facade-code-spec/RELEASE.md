@@ -1,7 +1,7 @@
 # Release
 
 How to make a copy of Facade Code that opens on somebody else's computer: a disk image for
-macOS, an installer for Windows.
+macOS, an installer for Windows, a `.deb` package for Ubuntu.
 
 # macOS
 
@@ -287,3 +287,80 @@ included, and warns that some languages lack its download messages. A good run e
 
 **Smart App Control still blocks something.** Event Viewer → Applications and Services Logs →
 Microsoft → Windows → CodeIntegrity → Operational, events 3033 and 3077, names the file.
+
+# Ubuntu
+
+```sh
+export PERL5LIB=<jammy's Dpkg modules>/usr/share/perl5     # once per terminal; see below
+export FACADE_DEB_DEPENDENCIES=warn
+npm run gulp vscode-linux-x64-min
+npm run gulp vscode-linux-x64-prepare-deb
+npm run gulp vscode-linux-x64-build-deb
+```
+
+The package lands inside the repository, the application one directory above it:
+
+```
+.build/linux/deb/amd64/deb/facade_<version>-<timestamp>_amd64.deb     what you hand out
+../VSCode-linux-x64/                                                  what it installs
+```
+
+⚠️ **Step 2 deletes `.build/linux/deb/amd64` first, the last package with it.** Copy a package
+out before running it again.
+
+A `.deb` is not signed: `sudo apt install ./facade_<version>-<timestamp>_amd64.deb` installs it,
+and its dependencies with it, on any other Ubuntu.
+
+## What it does
+
+```
+1  vscode-linux-x64-min           compile and package the application            ~7 min
+2  vscode-linux-x64-prepare-deb   lay out the package, work out its dependencies  ~20 s
+3  vscode-linux-x64-build-deb     check the version, compress with xz              ~3 min
+```
+
+Step 2 finds the shared libraries each binary needs with Chromium's copy of `dpkg-shlibdeps`,
+against the sysroots it downloads (`build/linux/debian/install-sysroot.ts`), and writes them
+into `DEBIAN/control` as `Depends`. Step 3 reads the version back against IDENTITY.md's table
+before `dpkg-deb` runs.
+
+## One-time setup
+
+Node 24 and `npm install`, as for any build, and `fakeroot` and `dpkg-deb`, which Ubuntu has.
+
+Chromium's `dpkg-shlibdeps.pl` runs on the system's Perl `Dpkg` modules, and Ubuntu's newer than
+22.04's no longer fit it. Take 22.04's from its package, unpacked, not installed:
+
+```sh
+mkdir -p ~/facade-dpkg-perl && cd ~/facade-dpkg-perl
+curl -O https://archive.ubuntu.com/ubuntu/pool/main/d/dpkg/libdpkg-perl_1.21.1ubuntu2.6_all.deb
+dpkg-deb -x libdpkg-perl_1.21.1ubuntu2.6_all.deb root
+export PERL5LIB=~/facade-dpkg-perl/root/usr/share/perl5
+```
+
+## The dependency list
+
+Step 2 compares the dependencies it found with `build/linux/debian/dep-lists.ts`, the list
+upstream's CI produces, and by default fails when they differ. A build made here always
+differs, for two reasons:
+
+- **No tunnel.** Facade Code ships no `facade-tunnel` (IDENTITY.md), so the dependencies
+  upstream's tunnel brings - `libc6 (>= 2.16)`, `libc6 (>= 2.2.5)` - are not there.
+- **Native modules built here.** `npm install` compiles them against this machine's glibc and
+  libstdc++, not the glibc 2.28 sysroot CI builds against, so they ask for newer ones:
+  `libc6 (>= 2.29)`, `libstdc++6 (>= 9)`. The package needs Ubuntu 20.04 or later.
+
+`FACADE_DEB_DEPENDENCIES=warn` prints the difference and goes on, so `Depends` is what this
+build's binaries actually need. Read the printed list: anything beyond these two reasons is a
+real new dependency.
+
+## When it goes wrong
+
+**`Can't use an undefined value as a HASH reference at .../Dpkg/Shlibs/SymbolFile.pm`.**
+`PERL5LIB` is not set in this terminal; see One-time setup.
+
+**`dpkg-shlibdeps.pl: error: cannot read .../bin/facade-tunnel`.** The build predates the
+change that leaves the missing tunnel out; pull.
+
+**`The dependencies list has changed.`** `FACADE_DEB_DEPENDENCIES=warn` is not set in this
+terminal.
