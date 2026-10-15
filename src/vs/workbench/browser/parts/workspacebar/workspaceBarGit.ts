@@ -173,6 +173,16 @@ export class WorkspaceBarGit extends Disposable {
 		return this._ready;
 	}
 
+	private _hasRead = false;
+
+	/**
+	 * Whether `groups` are a read of this window's own, not the last window's (WT-3.7), which a worktree made or deleted
+	 * while no window was open is not on.
+	 */
+	get hasRead(): boolean {
+		return this._hasRead;
+	}
+
 	private _waiting = false;
 
 	/**
@@ -359,6 +369,7 @@ export class WorkspaceBarGit extends Disposable {
 		// Kept even when nothing changed: a workspace edit hands out new objects for the same folders.
 		// Only the event depends on the comparison.
 		this._groups = this.settle(read.groups);
+		this._hasRead = true;
 		if (this._groups.length) {
 			this.previous = this._groups;
 		}

@@ -780,7 +780,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		});
 	});
 
-	test('WTA-11 a first read slow in coming: the bar draws the last window\'s groups after a moment, and a first read that finds the same changes nothing (WT-3.7)', () => runWithFakedTimers({}, async () => {
+	test('WTA-11 a first read slow in coming: the bar draws the last window\'s groups after a moment, not taken for a read of this window\'s, and a first read that finds the same changes nothing (WT-3.7)', () => runWithFakedTimers({}, async () => {
 		await repository('/lab');
 		await worktree('/lab', 'w2', `${OWN}/w2`);
 		await read('/lab');
@@ -791,16 +791,16 @@ suite('Workspace bar - worktrees as git records them', () => {
 		const git = disposables.add(new WorkspaceBarGit({ folders: workspaceFolders('/lab'), onDidChange: Event.None, key: uri => uri.toString() }, fileService, storage, slow, disposables.add(new UriIdentityService(fileService))));
 		let fired = 0;
 		disposables.add(git.onDidChange(() => fired++));
-		const before = git.waiting;
+		const before = { waiting: git.waiting, hasRead: git.hasRead };
 		await timeout(500);
-		const after = { waiting: git.waiting, fired, groups: summary(git.groups) };
+		const after = { waiting: git.waiting, hasRead: git.hasRead, fired, groups: summary(git.groups) };
 		home.complete(URI.file('/home'));
 		await git.refresh();
 
-		assert.deepStrictEqual({ before, after, fired }, {
-			before: true,
-			after: { waiting: false, fired: 1, groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: undefined }] }] },
-			fired: 1
+		assert.deepStrictEqual({ before, after, read: { hasRead: git.hasRead, fired } }, {
+			before: { waiting: true, hasRead: false },
+			after: { waiting: false, hasRead: false, fired: 1, groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: undefined }] }] },
+			read: { hasRead: true, fired: 1 }
 		});
 	}));
 

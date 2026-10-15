@@ -233,6 +233,16 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 			: []));
 		setDefaultNames();
 		this._register(this.git.onDidChange(setDefaultNames));
+
+		// WORKSPACE.md W9.7: what a workspace took over from the record an earlier build kept for every workspace, kept to
+		// the rows it shows - once this window has read them, with worktrees listed: the last window's may miss a worktree
+		this._register(this.git.onDidChange(() => {
+			if (areWorktreesShown(this.configurationService) && this.git.hasRead) {
+				customizationService.trimInherited(this.git.groups.flatMap(group => group.kind === 'folder'
+					? [group.folder.uri]
+					: [group.main, ...group.members.map(member => member.uri), ...group.worktrees.map(worktree => worktree.uri)]));
+			}
+		}));
 	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {
@@ -310,10 +320,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	/**
 	 * Whatever took a folder out of the workspace, its editors go with it.
 	 *
-	 * ⚠️ Its display name and colour do **not**. Those live in `StorageScope.PROFILE` because they
-	 * are about the folder rather than about this window, so pruning them against one workspace's
-	 * list would throw away a colour set in another. A folder taken out and put back is the same
-	 * folder and comes back the colour it was.
+	 * ⚠️ Its display name and colour do **not**: a folder taken out and put back is the same folder,
+	 * and comes back the colour it was in this workspace.
 	 */
 	private pruneEditors(): void {
 		void this.editors?.prune(this.model.folders.map(folder => folder.uri), folder => this.isRemoving(folder));
