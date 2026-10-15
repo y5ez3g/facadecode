@@ -105,7 +105,8 @@ Use "workspace bar" in the UI, `Parts.WORKSPACEBAR_PART` for the part,
 | display name of a row not in the list, colour, icon | workspace storage, this machine, by path | reload, restart, Save Workspace As, and a removal | cleared by the person; a worktree's when it is deleted (WT-8.1) |
 | what a worktree was made with: its colour, and a name New Worktree was given | application storage, this machine, by path | every workspace and profile on the machine, until one sets its own (WORKTREE.md WT-1.12) | the worktree deleted, or made again at its path |
 | worktree order | workspace storage, this machine | reload, restart, Save Workspace As | WT-1.7 |
-| bar collapsed, bar width | profile storage | every workspace of the profile | the toggle, a drag |
+| bar collapsed | workspace storage, this machine | reload, restart; a workspace opened before takes the profile's, once | the toggle |
+| bar width | profile storage | every workspace of the profile | a drag |
 
 Facade writes folder membership and names using VS Code's standard fields. Keep its
 private navigation state in storage instead of adding a private workspace-file
@@ -530,10 +531,13 @@ spelled with `-` for `/` (WT-2.2). Writing the branch into the file would freeze
 The title bar's first button collapses the bar to a column of icons and opens it
 again. Collapsed, it is the same tree without its words (WT-1.10): each row keeps its
 icon in its colour - the one chosen for it, else the folder icon - and a worktree its
-dot. Pointing at a row names it at once, in a card to the right of the icon. The state and the open width are kept per profile. A profile that has never
-touched the toggle starts open. Dragging its edge resizes the bar alone: the side bar keeps
-its width, and the editor area gives or takes the difference, as it does when the bar is
-collapsed or opened.
+dot. Pointing at a row names it at once, in a card to the right of the icon. Whether
+it is collapsed is kept per workspace, as VS Code keeps whether its side bar is shown,
+and the open width per profile, as VS Code keeps the side bar's width. A workspace
+that has never touched the toggle starts open; one opened before the state was kept
+per workspace starts as the bar was everywhere then. Dragging its edge resizes the bar
+alone: the side bar keeps its width, and the editor area gives or takes the
+difference, as it does when the bar is collapsed or opened.
 
 ### W9.10 Zen Mode
 
@@ -742,7 +746,7 @@ Code's in-window ones do: on Windows the primary button first, on macOS and Linu
 | Renderer crash with surviving processes | Reconnect using the recorded process/run identities. Preserve unsaved backups; do not relaunch an agent or replay setup merely because its UI was restored |
 | Save Workspace As | Transfer active folder, editor sets, scope and collapsed repositories to the new workspace storage; keep the file in the ordinary format |
 | Open the same workspace from another window | Bring the existing window forward, as stock |
-| Switch profile | Use that profile's width and collapsed state; retain workspace membership, names, colors, icons, worktree order and active folder |
+| Switch profile | Use that profile's width; retain workspace membership, names, colors, icons, worktree order, collapsed state and active folder |
 | File > Close Workspace | Apply the same checks before disposing this workspace, then make the window EMPTY |
 | Use a remote window | Match folder and terminal URIs by scheme and authority. A caller needing a local path must not receive a remote folder |
 
@@ -935,7 +939,7 @@ unchanged across both documents.
 | WS-32 | U, I | Move Folder Up/Down through the middle, the ends and the first position, on a repository with worktrees in the workspace; edit the file meanwhile | Whole rows move; ends do not wrap; every entry stays byte for byte; no extension-host restart |
 | WS-33 | U, I | Remove Folder - from the row, from the palette's Remove Folder from Workspace, and by `facade --remove` - on a plain idle folder, a repository with worktrees, a folder running an agent, a folder with a running terminal, a folder holding unsaved files shown and put away, and the folder the window is on with a new file never saved (Ctrl+N) on screen | Idle: removed at once. Otherwise one dialog naming everything that would be lost, the Ctrl+N file among it; with Remove and Discard Changes / Cancel when files are unsaved; the same from all three paths; nothing on disk changes; the repository takes its row's folders; no "do not ask again" and no setting |
 | WS-34 | U, I | Customize name, colour and icon; clear them; reload; switch profile; open the same folder in a second workspace; remove and re-add the folder; open the file in stock VS Code; open a workspace from before the change, holding folders of its own and of another workspace's, and a new one, twice; add the other workspace's folder to it; make a worktree in one workspace of a repository two have, recolour it in the second, delete it and make another at its path; make worktrees in two windows at once | The name is in `folders[].name`, and stock VS Code, `${workspaceFolder:name}` and the folder pickers show it; colour and icon kept per workspace, through a profile switch and through removal, and not shown in the other workspace; the old workspace keeps the look of its own rows, and the other workspace's folder joins it plain; the new one has none, the second time too; cleared means forgotten; the worktree's colour from its making shows in both, the second's own colour there alone, and the new worktree wears neither the deleted one's nor that; both windows' worktrees keep their colours |
-| WS-35 | U, I, H | Collapse and open the bar, drag its width, reload, switch profile, enter Zen Mode; collapsed, look at folders with and without icons | Pinned at 36 collapsed; width and state per profile; instant name card collapsed; every row keeps its icon in its colour; Zen hides bar and toggle and persists nothing |
+| WS-35 | U, I, H | Collapse and open the bar, drag its width, reload, switch profile, open a second workspace, and a new one twice, enter Zen Mode; collapsed, look at folders with and without icons | Pinned at 36 collapsed; width per profile, collapsed state per workspace, a second workspace keeping its own, the new one open both times; instant name card collapsed; every row keeps its icon in its colour; Zen hides bar and toggle and persists nothing |
 | WS-36 | I, H | Every key and command of W9.11, and Shift+F10, with the list focused and unfocused | Each does what W9.11 says; palette commands act on the focused row, else the active folder |
 | WS-37 | I | A screen reader's labels for a plain folder, a missing folder, a worktree, and a closed repository with agents | W9.14's labels |
 | WS-38 | I | Reload, then separately quit and restart, with editors, terminals, scope and collapsed state | Restore workspace/editor state in both cases. Reload reconnects surviving processes; restart never presents a revived shell as the old live agent. The first drawing groups cached worktrees |

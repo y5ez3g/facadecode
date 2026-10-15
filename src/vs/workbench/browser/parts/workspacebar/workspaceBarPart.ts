@@ -68,6 +68,21 @@ export const WORKSPACEBAR_COLLAPSED_WIDTH = 36;
 
 const COLLAPSED_STORAGE_KEY = 'facade.workspaceBar.collapsed';
 
+/**
+ * Whether the bar starts collapsed to its icons: as it was left in this workspace, as VS Code keeps whether its side bar
+ * is shown (WORKSPACE.md W2). A workspace that has none yet has it decided and kept at once: one opened before this was
+ * kept per workspace starts as the bar was everywhere then, and one made since starts open - in its later windows too,
+ * where it is no longer new.
+ */
+export function restoreCollapsed(storageService: IStorageService): boolean {
+	let collapsed = storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.WORKSPACE);
+	if (collapsed === undefined) {
+		collapsed = !storageService.isNew(StorageScope.WORKSPACE) && storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, false);
+		storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+	}
+	return collapsed;
+}
+
 /** Where the folders the window has been on are kept, most recent first (`recentRows`). */
 const RECENT_STORAGE_KEY = 'facade.workspaceBar.recentRows';
 
@@ -196,10 +211,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 		// ⚠️ Read here, before the grid asks what this column's width may be. Restored in `layout`
 		// instead, the first layout happens at the open width and the column snaps a frame later.
-		//
-		// Open until somebody collapses it: a profile that has never touched the toggle starts with the
-		// whole bar, and the choice is remembered from the first time it is made.
-		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, false);
+		this._collapsed = restoreCollapsed(this.storageService);
 		this.recent = readRecent(this.storageService.get(RECENT_STORAGE_KEY, StorageScope.WORKSPACE));
 		this.collapsedContext = WorkspaceBarCollapsedContext.bindTo(contextKeyService);
 		this.collapsedContext.set(this._collapsed);
@@ -311,7 +323,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this._collapsed = collapsed;
 		this.collapsedContext.set(collapsed);
 
-		this.storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.PROFILE, StorageTarget.USER);
+		this.storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		this.element?.classList.toggle('collapsed', collapsed);
 		this._onDidChangeCollapsed.fire();
 
