@@ -1606,6 +1606,21 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
+	test('WT-1.3 deleted without asking - an agent\'s stop_agent - a worktree created outside Facade, or what is left of one, is refused, saying so, before anything is done (O5)', async () => {
+		gitIsRunning();
+		// A script's scratch checkout, which the bar does not list
+		instantiationService.stub(IWorkspaceBarService, 'repositoryFor', () => undefined);
+		const service = instantiationService.createInstance(WorktreeService);
+		const scratch = URI.file('/tmp/verify/b162069');
+		const refused = await service.removeWorktree(scratch, { main }).then(() => 'deleted', (err: Error) => err.message);
+		const lossRefused = await service.removalLoss(scratch, { main }).then(() => 'checked', (err: Error) => err.message);
+		// What a deletion left of it, were it one
+		const leftoverRefused = await service.removeWorktree(scratch, { main, leftover: true }).then(() => 'deleted', (err: Error) => err.message);
+
+		const said = '/tmp/verify/b162069 is a worktree created outside Facade, which Facade never deletes.';
+		assert.deepStrictEqual({ refused, lossRefused, leftoverRefused, steps }, { refused: said, lossRefused: said, leftoverRefused: said, steps: [] });
+	});
+
 	test('deleted without asking, it can be looked at first - for an agent\'s deletion, before any agent is stopped - which names what deleting it would lose as its refusal names it, the caller\'s own files as it wrote them going with it, and does nothing else: nothing stopped, closed, moved or removed (O5; OR-04)', async () => {
 		gitIsRunning();
 		answers.set('_git.deleteWorktreeAt check', checked({ files: ['.mcp.json', 'build/out.js'], submodules: true }));

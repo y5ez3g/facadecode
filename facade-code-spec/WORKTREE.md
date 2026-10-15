@@ -545,9 +545,12 @@ facts; it is not treated as a successful Facade delete.
 
 Prepare and perform a deletion in this order:
 
-1. Verify that Git records this exact linked worktree and that it is not the main
-   checkout. Read tracked changes, untracked files, ignored local paths, submodule
-   state and deletion restrictions. Reject a known lock before stopping any work.
+1. Verify that Git records this exact linked worktree, that it is not the main
+   checkout, and that Facade made it: another tool's worktree is a folder to Facade
+   (WT-1.3), and a request to delete one - an agent's stop_agent among them
+   (AGENT-ORCHESTRATION.md, O5) - is refused before anything is done. Read tracked
+   changes, untracked files, ignored local paths, submodule state and deletion
+   restrictions. Reject a known lock before stopping any work.
 2. In the workbench, collect dirty editors whose resources are inside the directory,
    including editors visible in another folder context and hidden editors. Also
    identify affected folder-owned editors and all related terminals/agents.

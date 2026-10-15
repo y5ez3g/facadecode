@@ -736,13 +736,13 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	async removeWorktree(target: URI, options: IRemoveWorktreeOptions = {}): Promise<void> {
-		const { main, worktree, name } = this.toRemove(target, options);
+		const { main, worktree, name } = await this.toRemove(target, options);
 		// One at a time, as Delete Worktree: a second waits for the first, and finds no worktree there
 		await this.runInTurn(worktree, () => this.doRemoveWorktree(main, worktree, name, options));
 	}
 
 	async removalLoss(target: URI, options: IRemoveWorktreeOptions = {}): Promise<readonly string[]> {
-		const { main, worktree, name } = this.toRemove(target, options);
+		const { main, worktree, name } = await this.toRemove(target, options);
 		// The deletion's own first look, the caller's own files applied as it applies them (O5)
 		const loss = await this.undecidedLoss(main, worktree, await this.checkToRemove(main, worktree, name, options), options);
 		return loss ? [...lostFiles(loss), ...(loss.submodules ? [localize('worktrees.submodulesLost', "its submodules (including any unpushed commits)")] : [])] : [];
@@ -750,15 +750,16 @@ export class WorktreeService implements IWorktreeService {
 
 	/**
 	 * What `removeWorktree` deletes for `target`: the worktree, of the main checkout `main`, and its name - or, thrown,
-	 * why it deletes nothing.
+	 * why it deletes nothing. Never one Facade did not make (WT-1.3; AGENT-ORCHESTRATION.md, O5).
 	 */
-	private toRemove(target: URI, options: IRemoveWorktreeOptions): { readonly main: URI; readonly worktree: URI; readonly name: string } {
+	private async toRemove(target: URI, options: IRemoveWorktreeOptions): Promise<{ readonly main: URI; readonly worktree: URI; readonly name: string }> {
 		const extUri = this.uriIdentityService.extUri;
 		if (options.leftover) {
 			const main = options.main;
 			if (!main || extUri.isEqual(main, target)) {
 				throw new Error(this.notAWorktree(target));
 			}
+			await this.refuseAnotherTools(target);
 			return { main, worktree: target, name: basename(target) };
 		}
 		const repository = this.workspaceBarService.repositoryFor(target);
@@ -772,7 +773,18 @@ export class WorktreeService implements IWorktreeService {
 				: this.notAWorktree(target));
 		}
 		const uri = worktree?.uri ?? target;
+		await this.refuseAnotherTools(uri);
 		return { main, worktree: uri, name: worktree ? worktreeNameFor(this.customizationService, worktree) : basename(uri) };
+	}
+
+	/**
+	 * Throws for a worktree another tool made, which is a folder to Facade: it deletes none but its own, what is left of
+	 * one included (WT-1.3).
+	 */
+	private async refuseAnotherTools(worktree: URI): Promise<void> {
+		if (!await this.inWorktreesFolder(worktree)) {
+			throw new Error(localize('worktrees.notDeletedNotFacades', "{0} is a worktree created outside Facade, which Facade never deletes.", this.labelService.getUriLabel(worktree)));
+		}
 	}
 
 	/**
@@ -2028,13 +2040,13 @@ export class WorktreeService implements IWorktreeService {
 
 	/** Whether `folder` is a worktree Facade did not make: a linked worktree outside `WORKTREES_FOLDER` (WT-1.3). */
 	private async isAnotherToolsWorktree(folder: URI): Promise<boolean> {
-		const extUri = this.uriIdentityService.extUri;
-		if (!await worktreeRepositoryOf(this.fileService, extUri, folder)) {
-			return false;
-		}
+		return !!await worktreeRepositoryOf(this.fileService, this.uriIdentityService.extUri, folder) && !await this.inWorktreesFolder(folder);
+	}
 
+	/** Whether `folder` is in `WORKTREES_FOLDER`, where Facade makes worktrees (WT-2.1), its links followed. */
+	private async inWorktreesFolder(folder: URI): Promise<boolean> {
 		const [canonical, own] = await Promise.all([canonicalUri(this.fileService, folder), worktreesFolderOf(this.fileService, this.pathService)]);
-		return !extUri.isEqualOrParent(canonical, own);
+		return this.uriIdentityService.extUri.isEqualOrParent(canonical, own);
 	}
 
 	/** That `target` is no worktree the workspace knows. */
