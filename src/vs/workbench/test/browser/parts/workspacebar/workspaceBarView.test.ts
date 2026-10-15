@@ -310,7 +310,7 @@ suite('Workspace bar - the view', () => {
 	 * The bar's view over `groups`, with the window on `active` and `contextKeys` set: what it asked the
 	 * commands and the switcher to do, and its rows as a screen reader hears them.
 	 */
-	function view(folders: IWorkspaceFolder[], groups: WorkspaceBarGroup[], active: URI, names = new Map<string, string>(), contextKeys: Record<string, ContextKeyValue> = {}, storage?: IStorageService, agents = new Map<string, readonly ThemeIcon[]>(), look: { collapsed?: boolean; customizations?: Map<string, IFolderCustomization>; unavailable?: Map<string, 'missing' | 'unreadable'> } = {}) {
+	function view(folders: IWorkspaceFolder[], groups: WorkspaceBarGroup[], active: URI, names = new Map<string, string>(), contextKeys: Record<string, ContextKeyValue> = {}, storage?: IStorageService, agents = new Map<string, readonly ThemeIcon[]>(), look: { collapsed?: boolean; customizations?: Map<string, IFolderCustomization>; unavailable?: Map<string, 'missing' | 'unreadable'>; waiting?: boolean } = {}) {
 		// Real context keys and menus: what a row's toolbar offers is decided by them.
 		const instantiationService = workbenchInstantiationService({ contextKeyService: () => store.add(new ContextKeyService(new TestConfigurationService())) }, store);
 		if (storage) {
@@ -342,12 +342,14 @@ suite('Workspace bar - the view', () => {
 		});
 
 		let current = groups;
+		let waiting = !!look.waiting;
 		const gitChanged = store.add(new Emitter<void>());
 		// Reads of git's files, which the test finishes (`read`).
 		const reads: DeferredPromise<void>[] = [];
 		const git = upcastPartial<WorkspaceBarGit>({
 			get groups() { return current; },
 			ready: true,
+			get waiting() { return waiting; },
 			onDidChange: gitChanged.event,
 			refresh: () => {
 				const read = new DeferredPromise<void>();
@@ -398,6 +400,11 @@ suite('Workspace bar - the view', () => {
 				current = groups;
 				gitChanged.fire();
 			},
+			/** The bar's wait for the first read over (WT-3.7). */
+			stopWaiting: () => {
+				waiting = false;
+				gitChanged.fire();
+			},
 			/** Says that `folder` now runs `icons`, as the agent launchers do when a terminal comes or goes. */
 			runs: (folder: string, icons: readonly ThemeIcon[]) => {
 				agents.set(folder, icons);
@@ -438,6 +445,18 @@ suite('Workspace bar - the view', () => {
 		});
 
 		assert.deepStrictEqual(bar.rows(), ['lab, folder cannot be read', 'notes, folder does not exist on disk']);
+	});
+
+	test('WTA-11 while the bar waits for the first read it draws no rows, and then what that read found; the rows it answers for meanwhile are the folders, in their order (WT-3.7)', () => {
+		const bar = view([lab, notes], [repository(undefined), { kind: 'folder', folder: notes }], lab.uri, undefined, undefined, undefined, undefined, { waiting: true });
+		const order = () => bar.barView.rowOrder().map(uri => uri.path);
+		const waiting = { rows: bar.rows(), order: order() };
+		bar.stopWaiting();
+
+		assert.deepStrictEqual({ waiting, drawn: { rows: bar.rows(), order: order() } }, {
+			waiting: { rows: [], order: ['/lab', '/notes'] },
+			drawn: { rows: ['lab', 'w2, worktree', 'notes'], order: ['/lab', '/wt/w2', '/notes'] }
+		});
 	});
 
 	test('WS-17 a folder holding unsaved editors out of sight looks and reads as any other: no mark at its row\'s end, nothing more read out', () => {

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { coalesce } from '../../../../base/common/arrays.js';
-import { RunOnceScheduler } from '../../../../base/common/async.js';
+import { disposableTimeout, RunOnceScheduler } from '../../../../base/common/async.js';
 import { compareFileNames } from '../../../../base/common/comparers.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
@@ -90,6 +90,9 @@ interface IWorkspaceBarFolders {
 	readonly key: FolderKey;
 }
 
+/** How long a window waits for its first read before it draws the last window's groups (WT-3.7). */
+const FIRST_READ_WAIT = 500;
+
 /**
  * Which folders of the workspace are one repository, and which worktrees git records for it.
  *
@@ -133,6 +136,17 @@ export class WorkspaceBarGit extends Disposable {
 		return this._ready;
 	}
 
+	private _waiting = false;
+
+	/**
+	 * Whether the bar waits a moment for the first read with the last window's groups in hand (WT-3.7): it draws no rows
+	 * meanwhile, rather than rows the first read may change at once. Everything else goes by the last window's groups,
+	 * the window's title among them.
+	 */
+	get waiting(): boolean {
+		return this._waiting;
+	}
+
 	/** The directories git writes to, one watcher each, keyed like folders. */
 	private readonly watchers = this._register(new DisposableMap<string>());
 
@@ -160,20 +174,31 @@ export class WorkspaceBarGit extends Disposable {
 	) {
 		super();
 
-		// WT-3.7: the rows the last window had, until this one's first read is in. That read comes after
-		// the bar is first drawn, and a bar drawn without it showed every folder flat until then - a
-		// worktree as a folder, then under its repository. One that finds the same changes nothing.
+		// WT-3.7: the rows the last window had, for a first read that is slow in coming. That read comes after the bar
+		// is first drawn, and a bar drawn without it showed every folder flat until then - a worktree as a folder, then
+		// under its repository. It is waited for a moment first: it is quick, and it is what is there now, which the
+		// last window's rows may not be - a worktree deleted since would be drawn, then gone.
 		const kept = keptGroups(this.storageService.get(GROUPS_STORAGE_KEY, StorageScope.WORKSPACE), this.source.folders, this.source.key);
 		if (kept) {
 			this._groups = kept;
 			this._ready = true;
+			this._waiting = true;
 			this.signature = signatureOf(kept, this.source.key);
+			this._register(disposableTimeout(() => this.stopWaiting(), FIRST_READ_WAIT));
 		}
 		this._register(this.storageService.onWillSaveState(() => this.saveState()));
 
 		// A change of folders is read at once; the batching is for git's own writes.
 		this._register(this.source.onDidChange(() => this.refresh().then(undefined, onUnexpectedError)));
 		this.refresh().then(undefined, onUnexpectedError);
+	}
+
+	/** Has the bar draw the last window's groups, the first read not in yet (WT-3.7). A first read that finds the same changes nothing. */
+	private stopWaiting(): void {
+		if (this._waiting) {
+			this._waiting = false;
+			this._onDidChange.fire();
+		}
 	}
 
 	/** Keeps the last read for the window that opens next (WT-3.7). */
@@ -214,9 +239,11 @@ export class WorkspaceBarGit extends Disposable {
 		// Only the event depends on the comparison.
 		this._groups = groups;
 
+		// The bar draws once it stops waiting, whatever this read found
 		const signature = signatureOf(groups, this.source.key);
-		if (!this._ready || signature !== this.signature) {
+		if (!this._ready || this._waiting || signature !== this.signature) {
 			this._ready = true;
+			this._waiting = false;
 			this.signature = signature;
 			this._onDidChange.fire();
 		}

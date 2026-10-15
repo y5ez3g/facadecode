@@ -4,12 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { timeout } from '../../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Event } from '../../../../../base/common/event.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
+import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { FileSystemProviderCapabilities } from '../../../../../platform/files/common/files.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
@@ -18,6 +20,7 @@ import { StorageScope, StorageTarget, WillSaveStateReason } from '../../../../..
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { GROUPS_STORAGE_KEY, WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
+import { IPathService } from '../../../../services/path/common/pathService.js';
 import { TestStorageService } from '../../../common/workbenchTestServices.js';
 import { TestPathService } from '../../workbenchTestServices.js';
 
@@ -95,10 +98,14 @@ suite('Workspace bar - worktrees as git records them', () => {
 		}
 	}
 
+	/** The workspace folders at `paths`, in that order. */
+	function workspaceFolders(...paths: string[]): WorkspaceFolder[] {
+		return paths.map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) }));
+	}
+
 	/** The reader of a window onto `paths`, as the window makes it: its first read started, not finished. */
 	function open(...paths: string[]): WorkspaceBarGit {
-		const folders = paths.map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) }));
-		return reader({ folders, onDidChange: Event.None, key: uri => uri.toString() });
+		return reader({ folders: workspaceFolders(...paths), onDidChange: Event.None, key: uri => uri.toString() });
 	}
 
 	async function read(...paths: string[]): Promise<{ git: WorkspaceBarGit; groups: unknown[] }> {
@@ -378,7 +385,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		assert.deepStrictEqual(groupsWhenOlderResolved, summary(git.groups));
 	});
 
-	test('WTA-11 the next window has the groups the last one read before its own first read, which finds the same and fires nothing (WT-3.7)', async () => {
+	test('WTA-11 the next window has the groups the last one read before its own first read, for everything but the bar, which waits a moment for that read (WT-3.7)', async () => {
 		await repository('/lab');
 		await worktree('/lab', 'w2', `${OWN}/w2`);
 		await read('/lab', `${OWN}/w2`);
@@ -387,17 +394,44 @@ suite('Workspace bar - worktrees as git records them', () => {
 		const git = open('/lab', `${OWN}/w2`);
 		let fired = 0;
 		disposables.add(git.onDidChange(() => fired++));
-		const drawn = { ready: git.ready, groups: summary(git.groups) };
+		const kept = { ready: git.ready, waiting: git.waiting, groups: summary(git.groups) };
 		await git.refresh();
 
-		assert.deepStrictEqual({ drawn, fired }, {
-			drawn: {
+		// The bar waits a moment for the first read, which it then draws once
+		assert.deepStrictEqual({ kept, waiting: git.waiting, fired }, {
+			kept: {
 				ready: true,
+				waiting: true,
 				groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: `${OWN}/w2` }] }]
 			},
-			fired: 0
+			waiting: false,
+			fired: 1
 		});
 	});
+
+	test('WTA-11 a first read slow in coming: the bar draws the last window\'s groups after a moment, and a first read that finds the same changes nothing (WT-3.7)', () => runWithFakedTimers({}, async () => {
+		await repository('/lab');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
+		await read('/lab');
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		const home = new DeferredPromise<URI>();
+		const slow = upcastPartial<IPathService>({ userHome: (() => home.p) as IPathService['userHome'] });
+		const git = disposables.add(new WorkspaceBarGit({ folders: workspaceFolders('/lab'), onDidChange: Event.None, key: uri => uri.toString() }, fileService, storage, slow, disposables.add(new UriIdentityService(fileService))));
+		let fired = 0;
+		disposables.add(git.onDidChange(() => fired++));
+		const before = git.waiting;
+		await timeout(500);
+		const after = { waiting: git.waiting, fired, groups: summary(git.groups) };
+		home.complete(URI.file('/home'));
+		await git.refresh();
+
+		assert.deepStrictEqual({ before, after, fired }, {
+			before: true,
+			after: { waiting: false, fired: 1, groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: undefined }] }] },
+			fired: 1
+		});
+	}));
 
 	test('WTA-11 a folder that left the workspace between two windows is not on the kept groups, nor a repository none of whose folders is left', async () => {
 		await repository('/lab');

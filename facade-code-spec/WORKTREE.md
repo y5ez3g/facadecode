@@ -245,12 +245,16 @@ window changes folder, and a list built on it would flicker on every switch.
   batched: its row never shows at the end first.
 - **WT-3.7** A window's first read comes after the bar is first drawn, so the last
   read is kept for the next window of the workspace (workspace storage, this machine
-  only) and the bar is drawn from it until then. Without it a reload drew every folder
-  flat first: a worktree as a folder of its own, then as a dot under its repository.
-  The kept read is an old read like any other (WT-3.6): a folder that has left the
+  only). Without it a reload drew every folder flat first: a worktree as a folder of
+  its own, then as a dot under its repository. The bar waits up to half a second for
+  the first read, drawing no rows meanwhile, and draws the kept read only if the first
+  read has not come by then: the first read is what is there now, and a worktree
+  deleted while the window was closed is not drawn, then taken away. Everything else -
+  the window's title among it - goes by the kept read until the first read is in. The
+  kept read is an old read like any other (WT-3.6): a folder that has left the
   workspace since is not on it, and one that joined since is drawn where git's records
-  put it. A first read that finds the same redraws nothing. A record that cannot be
-  read is not drawn from, and the bar starts flat, as with none kept.
+  put it. A first read that finds what a drawn kept read did redraws nothing. A record
+  that cannot be read is not drawn from, and the bar starts flat, as with none kept.
 - **WT-3.8** A folder of `folders[]` that git no longer records - its worktree removed
   or pruned by another tool, its repository moved, its `.git` naming a git directory
   that is gone - is a plain row in its place, marked as not on disk when its directory
@@ -669,7 +673,7 @@ injection and integrated gate.
 | WTA-08 | I, H | Point at rows and read them: the triangle, the `+`, the count badge, agent logos with four agents, the collapsed dot, hover, screen reader labels; with reduced motion | WT-1.12-1.15 and WT-1.14 |
 | WTA-09 | U | Each row kind's menu and keys, another tool's worktree's row among them, with worktrees on and off | WT-1.11 groups and items, and no New Worktree on another tool's worktree; Alt+Up/Down move the right kind of row |
 | WTA-10 | I | From a terminal: `git worktree add`, `remove`, `prune`, `move`, and a branch checkout inside a worktree; then switch folders | WT-3.4: each reaches the bar without a reload; no row flickers on a switch |
-| WTA-11 | U, I | Reload with worktrees in and out of `folders[]`, another tool's among them; a folder that left and one that joined between windows; a corrupt kept read | WT-3.7: the first drawing is grouped, another tool's worktree a folder of its own; a first read that finds the same redraws nothing; a corrupt kept read starts flat |
+| WTA-11 | U, I | Reload with worktrees in and out of `folders[]`, another tool's among them; a folder that left and one that joined between windows; a first read slower than half a second; Switch Folder during the wait; a corrupt kept read | WT-3.7: no rows until the first read, which is drawn at once, or the kept read after half a second, grouped, another tool's worktree a folder of its own; Switch Folder lists the folders meanwhile; a first read that finds what the drawn kept read did redraws nothing; a corrupt kept read starts flat |
 | WTA-12 | U | Branch names with `/`, each forbidden character, leading and trailing spaces, device names, an empty name; a taken path; a case-insensitive disk | WT-2.2, WT-2.3: one folder name on every OS, device names refused with a reason, `-1` and `-2` |
 | WTA-13 | I, H | Type in the New Worktree dialog: an empty name, a valid one, a taken one, a forbidden one; add a name and a colour | WT-5.2: one field for the branch and no start point to choose; the location line follows the typing; errors in the error colour; Create disabled until the name can be made |
 | WTA-14 | U, I | Create from the row button, repository menu and palette, including a focused worktree and a plain folder | WT-5.6 order; record read before membership, name/color present on first row, setup waits for this worktree's completed activation |

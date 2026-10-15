@@ -756,6 +756,12 @@ export class WorkspaceBarView extends Disposable {
 	/** Rebuilds the tree. */
 	private refresh(): void {
 		this.empty.classList.toggle('hidden', this.model.folders.length > 0);
+		// WT-3.7: no rows for the moment the first read is waited for, rather than rows it may change at once
+		if (this.git.waiting) {
+			this.tree.setChildren(null, []);
+			return;
+		}
+
 		this.tree.setChildren(null, workspaceBarRows({
 			folders: this.model.folders,
 			// Each repository's worktrees in the order somebody put them in, if they have (WT-1.7).
@@ -901,8 +907,16 @@ export class WorkspaceBarView extends Disposable {
 		}
 	}
 
-	/** Every row's folder, top to bottom, a closed repository's worktrees included: `IWorkspaceBarService.rowOrder`. */
+	/**
+	 * Every row's folder, top to bottom, a closed repository's worktrees included: `IWorkspaceBarService.rowOrder`. While
+	 * the bar waits for the first read and draws no rows (WT-3.7), its folders in their order: Switch Folder and the
+	 * agent picker go by them.
+	 */
 	rowOrder(): URI[] {
+		if (this.git.waiting) {
+			return this.model.folders.map(folder => folder.uri);
+		}
+
 		return this.tree.getNode().children
 			.flatMap(node => [node, ...node.children])
 			.flatMap(node => node.element ? [uriOf(node.element)] : []);
