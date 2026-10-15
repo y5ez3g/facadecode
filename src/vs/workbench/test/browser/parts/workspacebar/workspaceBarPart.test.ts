@@ -8,7 +8,8 @@ import { ISerializedNode } from '../../../../../base/browser/ui/grid/grid.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
-import { isWorkspaceBarFirstInMiddleRow } from '../../../../browser/parts/workspacebar/workspaceBarPart.js';
+import { InMemoryStorageService, IS_NEW_KEY, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
+import { isWorkspaceBarFirstInMiddleRow, restoreCollapsed } from '../../../../browser/parts/workspacebar/workspaceBarPart.js';
 import { Parts, shouldShowCustomTitleBar } from '../../../../services/layout/browser/layoutService.js';
 
 const leaf = (type: Parts): ISerializedNode => ({ type: 'leaf', data: { type }, size: 100 });
@@ -59,5 +60,40 @@ suite('Workspace bar - its toggle keeps the title bar', () => {
 
 	test('asking for no custom title bar still gets none', () => {
 		assert.strictEqual(shouldShowCustomTitleBar(settings('never'), mainWindow), false);
+	});
+});
+
+suite('Workspace bar - collapsed or not, in each workspace', () => {
+
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	/** A workspace's storage: one opened before, unless `isNew`, with `profile` the toggle as an earlier build kept it everywhere. */
+	function storage(isNew: boolean, profile?: boolean, workspace?: boolean): InMemoryStorageService {
+		const storage = disposables.add(new InMemoryStorageService());
+		if (isNew) {
+			storage.store(IS_NEW_KEY, true, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		}
+		if (profile !== undefined) {
+			storage.store('facade.workspaceBar.collapsed', profile, StorageScope.PROFILE, StorageTarget.USER);
+		}
+		if (workspace !== undefined) {
+			storage.store('facade.workspaceBar.collapsed', workspace, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		}
+		return storage;
+	}
+
+	test('WS-35 as it was left in the workspace; else as an earlier build left it everywhere, in a workspace opened before; else open - in a workspace made since, in its later windows too', () => {
+		const madeSince = storage(true, true);
+		const first = restoreCollapsed(madeSince);
+		// Its next window, where storage no longer says it is new
+		madeSince.store(IS_NEW_KEY, false, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+
+		assert.deepStrictEqual({
+			leftOpenHere: restoreCollapsed(storage(false, true, false)),
+			leftCollapsedHere: restoreCollapsed(storage(true, false, true)),
+			openedBefore: restoreCollapsed(storage(false, true)),
+			madeSince: [first, restoreCollapsed(madeSince)],
+			neverTouched: restoreCollapsed(storage(false)),
+		}, { leftOpenHere: false, leftCollapsedHere: true, openedBefore: true, madeSince: [false, false], neverTouched: false });
 	});
 });

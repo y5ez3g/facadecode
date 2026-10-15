@@ -11,13 +11,15 @@ import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
-import { InMemoryStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
+import { InMemoryStorageService, IS_NEW_KEY, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspaceContextService, IWorkspaceFolder, IWorkspaceFoldersChangeEvent, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
 import { FOLDER_COLORS, FOLDER_ICONS, freeWorktreeColor, WorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 
 const STORAGE_KEY = 'facade.workspaceBar.customization';
+const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
+const MADE_STORAGE_PREFIX = 'facade.workspaceBar.madeWith/';
 
 class TestFileService extends mock<IFileService>() {
 	override onDidChangeFileSystemProviderCapabilities = Event.None;
@@ -43,11 +45,14 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		state: WorkbenchState;
 	}
 
-	function setup(stored?: string): ISetup {
+	/**
+	 * The service over a workspace's storage that holds `stored`; `storage` is that of a workspace opened before, unless
+	 * given.
+	 */
+	function setup(stored?: string, storage = disposables.add(new InMemoryStorageService())): ISetup {
 		const store = disposables.add(new DisposableStore());
-		const storage = store.add(new InMemoryStorageService());
 		if (stored !== undefined) {
-			storage.store(STORAGE_KEY, stored, StorageScope.PROFILE, 0 /* USER */);
+			storage.store(STORAGE_KEY, stored, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		}
 
 		const uriIdentityService = store.add(new UriIdentityService(new TestFileService()));
@@ -97,7 +102,148 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		service.set(folder.uri, {});
 
 		assert.strictEqual(service.get(folder.uri), undefined);
-		assert.strictEqual(storage.get(STORAGE_KEY, StorageScope.PROFILE), undefined, 'an empty record was left behind');
+		assert.strictEqual(storage.get(STORAGE_KEY, StorageScope.WORKSPACE), undefined, 'an empty record was left behind');
+	});
+
+	test('W2 what is set in one workspace\'s bar is kept in that workspace, and another workspace does not show it', () => {
+		const { service, storage, folder } = setup();
+		service.set(folder.uri, { color: 'teal', icon: 'server' });
+		service.setWorktreeOrder(folder.uri, [URI.file('/wt/b'), URI.file('/wt/a')]);
+
+		const other = setup().service;
+
+		assert.deepStrictEqual({
+			workspace: [storage.get(STORAGE_KEY, StorageScope.WORKSPACE), storage.get(WORKTREE_ORDER_STORAGE_KEY, StorageScope.WORKSPACE)],
+			profile: [storage.get(STORAGE_KEY, StorageScope.PROFILE), storage.get(WORKTREE_ORDER_STORAGE_KEY, StorageScope.PROFILE)],
+			other: [other.get(folder.uri), other.worktreeOrder(folder.uri)],
+		}, {
+			workspace: [JSON.stringify({ [folder.uri.toString()]: { color: 'teal', icon: 'server' } }), JSON.stringify({ [folder.uri.toString()]: ['file:///wt/b', 'file:///wt/a'] })],
+			profile: [undefined, undefined],
+			other: [undefined, undefined],
+		});
+	});
+
+	/** What one window wrote of what worktrees were made with, reaching another window's as storage that changed elsewhere does. */
+	function deliver(from: ISetup, to: ISetup): void {
+		const made = from.storage.keys(StorageScope.APPLICATION, StorageTarget.MACHINE).filter(key => key.startsWith(MADE_STORAGE_PREFIX));
+		to.storage.storeAll(made.map(key => ({ key, value: from.storage.get(key, StorageScope.APPLICATION), scope: StorageScope.APPLICATION, target: StorageTarget.MACHINE })), true);
+	}
+
+	test('W2 a workspace opened before takes a copy of what an earlier build kept for every workspace, once: cleared there, it stays cleared; a workspace made since starts with none, in its later windows too, and keeps its own, as does one that keeps a record of its own already', () => {
+		const shared = JSON.stringify({ [URI.file('/w/api').toString()]: { color: 'teal', icon: 'server' } });
+		const order = JSON.stringify({ [URI.file('/w/api').toString()]: ['file:///wt/b', 'file:///wt/a'] });
+		const withShared = (isNew: boolean) => {
+			const storage = disposables.add(new InMemoryStorageService());
+			storage.store(STORAGE_KEY, shared, StorageScope.PROFILE, StorageTarget.USER);
+			storage.store(WORKTREE_ORDER_STORAGE_KEY, order, StorageScope.PROFILE, StorageTarget.MACHINE);
+			if (isNew) {
+				storage.store(IS_NEW_KEY, true, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+			}
+			return storage;
+		};
+
+		const opened = setup(undefined, withShared(false));
+		const copied = { looks: opened.service.get(opened.folder.uri), order: opened.service.worktreeOrder(opened.folder.uri)?.map(uri => uri.path) };
+		opened.service.set(opened.folder.uri, {});
+		const cleared = opened.reopen().get(opened.folder.uri);
+
+		const made = setup(undefined, withShared(true));
+		const first = [made.service.get(made.folder.uri), made.service.worktreeOrder(made.folder.uri)];
+		// Its own, for a folder it shows no more by its next window
+		made.service.set(URI.file('/w/x'), { color: 'red' });
+		// Its next window, where storage no longer says it is new
+		made.storage.store(IS_NEW_KEY, false, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		const next = made.reopen();
+		next.trimInherited([made.folder.uri]);
+		// Its own looks and no order, the order the earlier record has not copied in beside them
+		const ownAlready = setup(JSON.stringify({ [URI.file('/w/x').toString()]: { color: 'red' } }), withShared(false));
+		ownAlready.service.trimInherited([ownAlready.folder.uri]);
+
+		assert.deepStrictEqual({ copied, cleared, made: { first, next: [next.get(made.folder.uri), next.worktreeOrder(made.folder.uri), next.get(URI.file('/w/x'))?.color] }, ownAlready: [ownAlready.service.worktreeOrder(ownAlready.folder.uri), ownAlready.service.get(URI.file('/w/x'))?.color] }, {
+			copied: { looks: { name: undefined, color: 'teal', icon: 'server' }, order: ['/wt/b', '/wt/a'] },
+			cleared: undefined,
+			made: { first: [undefined, undefined], next: [undefined, undefined, 'red'] },
+			ownAlready: [undefined, 'red'],
+		});
+	});
+
+	test('W9.7 what a workspace took over from the record kept for every workspace is trimmed to the rows it shows, once: a folder set up in another workspace joins this one plain', () => {
+		const api = URI.file('/w/api');
+		const other = URI.file('/w/other');
+		const storage = disposables.add(new InMemoryStorageService());
+		storage.store(STORAGE_KEY, JSON.stringify({ [api.toString()]: { color: 'teal' }, [other.toString()]: { color: 'red', icon: 'rocket' } }), StorageScope.PROFILE, StorageTarget.USER);
+		storage.store(WORKTREE_ORDER_STORAGE_KEY, JSON.stringify({ [api.toString()]: ['file:///wt/b', 'file:///wt/a'], [other.toString()]: ['file:///wt/c'] }), StorageScope.PROFILE, StorageTarget.MACHINE);
+		const { service, reopen } = setup(undefined, storage);
+
+		const before = [service.get(other)?.color, service.worktreeOrder(other)?.length];
+		service.trimInherited([api]);
+		// Once: rows read again later trim nothing more
+		service.trimInherited([]);
+		const after = reopen();
+
+		assert.deepStrictEqual({ before, kept: [after.get(api)?.color, after.worktreeOrder(api)?.length], trimmed: [after.get(other), after.worktreeOrder(other)] }, {
+			before: ['red', 1],
+			kept: ['teal', 2],
+			trimmed: [undefined, undefined],
+		});
+	});
+
+	test('WT-1.12 what a worktree is made with is its look in every workspace until one sets its own there; made again at its path, what was set for the earlier one is not worn', async () => {
+		const worktree = URI.file('/wt/w2');
+		const a = setup();
+		const b = setup();
+		const heard: string[] = [];
+		disposables.add(b.service.onDidChange(uri => heard.push(uri.path)));
+		a.service.setMade(worktree, { name: 'Payments', color: 'teal' });
+		deliver(a, b);
+		const inB = b.service.get(worktree);
+		b.service.set(worktree, { name: 'Payments', color: 'red' });
+		const setInB = b.service.get(worktree);
+		const stillInA = a.service.get(worktree);
+
+		// Deleted, and made again at that path, in the first workspace
+		await timeout(2);
+		a.service.forget(worktree);
+		a.service.setMade(worktree, { color: 'blue' });
+		deliver(a, b);
+
+		assert.deepStrictEqual({ inB, setInB, stillInA, madeAgainInB: b.reopen().get(worktree), heard }, {
+			inB: { name: 'Payments', color: 'teal' },
+			setInB: { name: 'Payments', color: 'red', icon: undefined },
+			stillInA: { name: 'Payments', color: 'teal' },
+			madeAgainInB: { name: undefined, color: 'blue' },
+			// Made, set there, and made again: each once
+			heard: ['/wt/w2', '/wt/w2', '/wt/w2'],
+		});
+	});
+
+	test('WT-1.12 WT-8.1 a made worktree\'s look cleared in one workspace is cleared there alone; a forgotten one has none anywhere', () => {
+		const worktree = URI.file('/wt/w2');
+		const { service, storage, reopen } = setup();
+		service.setMade(worktree, { color: 'teal' });
+		service.set(worktree, {});
+		const cleared = reopen().get(worktree);
+		service.forget(worktree);
+
+		assert.deepStrictEqual({ cleared, forgotten: reopen().get(worktree), made: storage.keys(StorageScope.APPLICATION, StorageTarget.MACHINE).filter(key => key.startsWith(MADE_STORAGE_PREFIX)) }, {
+			cleared: { name: undefined, color: undefined, icon: undefined },
+			forgotten: undefined,
+			made: [],
+		});
+	});
+
+	test('WT-1.12 two windows making worktrees at once each keep what theirs was made with: neither writes over the other\'s', () => {
+		const w1 = URI.file('/wt/w1');
+		const w2 = URI.file('/wt/w2');
+		const a = setup();
+		const b = setup();
+		// At once: neither has heard of the other's when it writes its own
+		a.service.setMade(w1, { color: 'teal' });
+		b.service.setMade(w2, { color: 'red' });
+		deliver(a, b);
+		deliver(b, a);
+
+		assert.deepStrictEqual([a, b].map(window => [window.service.get(w1)?.color, window.service.get(w2)?.color]), [['teal', 'red'], ['teal', 'red']]);
 	});
 
 	test('⭐ a value that is no longer in the palette does not reach the renderer', () => {
@@ -217,9 +363,9 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		service.setWorktreeOrder(repository, [b, a, c]);   // the same thing again
 		const reloaded = reopen().worktreeOrder(repository)?.map(uri => uri.path);
 		service.setWorktreeOrder(repository, []);   // its last worktree deleted
-		const emptied = { order: service.worktreeOrder(repository), stored: storage.get('facade.workspaceBar.worktreeOrder', StorageScope.PROFILE) };
+		const emptied = { order: service.worktreeOrder(repository), stored: storage.get(WORKTREE_ORDER_STORAGE_KEY, StorageScope.WORKSPACE) };
 
-		storage.store('facade.workspaceBar.worktreeOrder', '{not json', StorageScope.PROFILE, StorageTarget.MACHINE);
+		storage.store(WORKTREE_ORDER_STORAGE_KEY, '{not json', StorageScope.WORKSPACE, StorageTarget.MACHINE);
 
 		assert.deepStrictEqual({
 			reloaded,

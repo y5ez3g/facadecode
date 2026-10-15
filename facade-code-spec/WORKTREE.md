@@ -40,7 +40,7 @@ AGENT-ORCHESTRATION.md's beyond how they are made (WT-5.11).
 | the branch | kept when its worktree is removed |
 | cleanup | nothing automatic |
 | long paths | nothing special; git's own error is shown |
-| listing | git's own files, read as upstream's `getWorktreesFS` reads them |
+| listing | the worktrees Facade made, from git's own files, read as upstream's `getWorktreesFS` reads them |
 
 Each choice follows what most tools that manage worktrees do. Two go further, because
 worktrees fail without them: skipping the LFS smudge (a repository with a missing LFS
@@ -71,9 +71,14 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
 
 - **WT-1.1** Two levels: folder, then worktree. No third level.
 - **WT-1.2** The main checkout has no row of its own. It is the folder row.
-- **WT-1.3** The second level lists every worktree git records for the repository, in
-  `folders[]` or not - including ones made on the command line or by another tool. The
-  list comes from git's own files (WT-3), never from `ISCMService`.
+- **WT-1.3** The second level lists the repository's worktrees that Facade made - in
+  its worktrees folder (WT-2.1), by New Worktree or for an agent - in `folders[]` or
+  not. One another tool made is never listed: a script's scratch checkout of a commit
+  to test before a merge, another agent's own, one made on the command line. It is that
+  tool's, and comes and goes with its work. Added to the workspace, it is a folder of
+  its own, in its place in `folders[]`, and offered nothing of a worktree: no New
+  Worktree, Delete or Move Worktree. The list comes from git's own files (WT-3), never
+  from `ISCMService`.
 - **WT-1.4** A worktree that is not in `folders[]` joins it the first time somebody
   goes to it (`IWorkspaceBarService.show`). Listing a worktree never adds it.
 - **WT-1.5** Clicking a row selects its directory. Collapsing a repository while
@@ -92,13 +97,15 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
 - **WT-1.7** Worktrees are listed oldest first, by the creation time of git's record of
   each (`.git/worktrees/<name>`); ties by name, numerically (`w2` before `w10`). Once
   somebody moves one (Move Worktree Up / Down, Alt+Up / Alt+Down, always within its
-  repository), the repository keeps their order, in the profile; a worktree made
-  later goes after it.
+  repository), the repository keeps their order, in the workspace's storage
+  (WORKSPACE.md W2); a worktree made later goes after it.
 - **WT-1.8** Only a repository with worktrees opens: no triangle and no Expand or
   Collapse otherwise, and none for a folder without its own `.git`. Every folder row
-  offers the first worktree on its `+` (WT-5.8).
-- **WT-1.9** A worktree git records whose folder is gone is listed, greyed, and can be
-  deleted, which forgets git's record of it alone.
+  but another tool's worktree (WT-1.3) offers the first worktree on its `+` (WT-5.8).
+- **WT-1.9** A listed worktree whose folder is gone while git still records it is
+  listed in its place, dimmed and struck through, and can be deleted, which forgets
+  git's record of it alone. In `folders[]` and the only folder of its repository
+  there, it keeps the repository's row (WT-3.8).
 - **WT-1.10** Collapsed to its icons, the bar is the same tree without its words: an
   open repository shows its worktrees as dots, a closed one only their count on its
   icon (WT-1.15). Collapsing the bar never opens or closes a repository, and which
@@ -133,7 +140,14 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   branch) and a colour, which paints the dot. No icon to choose: the dot is what says
   worktree. A new worktree gets a colour none of its repository's other worktrees has,
   the first of WORKSPACE.md W10.6's ten in their order while one is left, so the dots
-  of one repository can be told apart at a glance, collapsed too.
+  of one repository can be told apart at a glance, collapsed too. What it is made with -
+  that colour, or the name and colour New Worktree was given - is the worktree's, kept
+  for every workspace on the machine: the same worktree is told apart by the same dot
+  in each window. Changed with Customize, it changes in that workspace alone (WORKSPACE.md
+  W2). One made again at a path an earlier worktree had wears what it is made with, not
+  what any workspace set for the earlier one. What it was made with is forgotten with
+  the worktree, whichever tool removes it, once a window that has read its repository
+  finds its record gone.
 - **WT-1.13** A folder's row ends in one button, styled as the header's `+` and
   standing under it: `+`, New Worktree..., there while it can be used. A repository
   with worktrees has its triangle in its icon's slot, drawn over the icon and taking
@@ -209,6 +223,8 @@ window changes folder, and a list built on it would flicker on every switch.
 <common>/HEAD                          the main checkout's branch
 <common>/worktrees/<name>/HEAD         each worktree's branch
 <common>/worktrees/<name>/gitdir       each worktree's path, with /.git at the end
+<git dir>/rebase-merge/head-name       the branch a rebase works on, HEAD detached
+<git dir>/BISECT_START                 the branch a bisect began on, HEAD detached
 ```
 
 - **WT-3.1** Rows are grouped by the common git directory, canonicalised the way the
@@ -218,7 +234,13 @@ window changes folder, and a list built on it would flicker on every switch.
   directory is named `.git`. A bare repository has no main checkout, so a worktree of
   one is a plain folder row.
 - **WT-3.3** A branch is shown without `refs/heads/`. A detached HEAD shows its short
-  hash, and a HEAD that names no branch (a reftable repository) the folder's name.
+  hash, and a HEAD that names no branch (a reftable repository) the folder's name. A
+  rebase (`rebase-merge` or `rebase-apply`) or a bisect detaches HEAD while it runs; the
+  row keeps the branch it works on, as `git status` names it, so a worktree an agent
+  rebases before each report keeps its name rather than flashing a hash. One begun on a
+  detached HEAD shows its short hash. A worktree git is still making is not listed
+  until its HEAD names what it checked out: `git worktree add` writes the record with
+  an all-zero HEAD first, which would show as a row of zeros.
 - **WT-3.4** Watching is correlated (`IFileService.createWatcher`) and per directory:
   `<common>`, `<common>/worktrees`, and each `<common>/worktrees/<name>`. A worktree
   made, removed, pruned or moved by any tool, and a branch checked out in one, reach
@@ -232,17 +254,55 @@ window changes folder, and a list built on it would flicker on every switch.
   batched: its row never shows at the end first.
 - **WT-3.7** A window's first read comes after the bar is first drawn, so the last
   read is kept for the next window of the workspace (workspace storage, this machine
-  only) and the bar is drawn from it until then. Without it a reload drew every folder
-  flat first: a worktree as a folder of its own, then as a dot under its repository.
-  The kept read is an old read like any other (WT-3.6): a folder that has left the
+  only). Without it a reload drew every folder flat first: a worktree as a folder of
+  its own, then as a dot under its repository. The bar waits up to half a second for
+  the first read, drawing no rows meanwhile, and draws the kept read only if the first
+  read has not come by then: the first read is what is there now, and a worktree
+  deleted while the window was closed is not drawn, then taken away. Everything else -
+  the window's title among it - goes by the kept read until the first read is in. The
+  kept read is an old read like any other (WT-3.6): a folder that has left the
   workspace since is not on it, and one that joined since is drawn where git's records
-  put it. A first read that finds the same redraws nothing. A record that cannot be
-  read is not drawn from, and the bar starts flat, as with none kept.
-- **WT-3.8** A folder of `folders[]` that git no longer records - its worktree removed
-  or pruned by another tool, its repository moved, its `.git` naming a git directory
-  that is gone - is a plain row in its place, marked as not on disk when its directory
-  is gone (W9.3). Facade never takes it out of `folders[]` by itself, as VS Code leaves
-  a folder that is gone.
+  put it. A first read that finds what a drawn kept read did redraws nothing. A record
+  that cannot be read is not drawn from, and the bar starts flat, as with none kept.
+- **WT-3.8** A worktree of Facade's in `folders[]` that git no longer records -
+  removed or pruned by another tool, such as an agent cleaning up after a merge, or
+  its repository made again - leaves the workspace by itself, as one Facade deletes
+  does: a row for a worktree git has dropped is a reference to nothing. Gone means
+  gone on disk, never a read that merely missed a file git was rewriting: the
+  repository's git directory is there, every record in it was read, and none names the
+  folder. A record names its folder by its `gitdir`, so one whose HEAD git never wrote -
+  its `git worktree add` killed - is read whole and holds nothing up. The repository is
+  the one its `.git` names, else the one the last read had it on (WT-3.7's kept read
+  included), else, for one that could not leave, the one it was handed over with, else -
+  gone from Facade's worktrees folder (WT-2.1), `<repository>/<name>` - the repository
+  of that name in the window whose records name it. Nothing else is evidence: a folder
+  inside a worktree, or a worktree of one of two repositories that share a name, is a
+  folder of its own when nothing names its repository, marked as not on disk once it is
+  gone (WORKSPACE.md W9.3), and never leaves by itself. A main checkout the last read had
+  stays its repository's while the repository can be read, though its own `.git` cannot
+  be read for a moment.
+
+  While it leaves its row is drawn nowhere, so that it is never a folder of its own. It
+  leaves as a folder leaves where nothing could ask (WORKSPACE.md W9.6): the disk
+  untouched, unsaved editors kept, what runs in it moved to the panel. If the window is
+  on it, the window goes first to its repository's row, when that is in the workspace,
+  and once it has left a notification says why. One that cannot leave - the window is
+  on that one folder, or the workspace cannot be edited - is drawn in its place under
+  its repository, its repository's row drawn for it where the workspace has no other
+  folder of it, dimmed and struck through, and is not handed over again, in that
+  window or the next, until it has left and come back.
+
+  Nothing else changes a worktree's row by itself. Its folder gone while git still
+  records it, it stays in its place, marked (WT-1.9) - after a second drawn as it was:
+  `git worktree remove` deletes the folder before the record, and a row on its way out
+  is never marked. A repository whose git directory cannot be reached - a drive not
+  mounted, the repository moved - says nothing about its worktrees: it is drawn as the
+  last read had it, every worktree marked, nothing leaves, and it is looked for again
+  after ten seconds, then twice as long each time it is still not there, up to five
+  minutes, until it is back. A repository whose folder is there without a
+  `.git` was deleted, its records with it: its worktrees leave, and its main checkout
+  is a folder of its own. Another tool's worktree is a folder whatever becomes of it
+  (WT-1.3), marked as not on disk once it is gone (W9.3).
 - **WT-3.9** A worktree's trust is its repository's. A folder is a worktree of a
   repository only when git's files say so both ways: its `.git` names a record of the
   repository's own, `<common>/worktrees/<name>`, and that record's `gitdir` names the
@@ -394,7 +454,7 @@ palette (New Worktree...).
   that repository's main checkout's HEAD. It is refused, with the reason, in an
   untrusted workspace or repository and in a folder with no commit, rather than
   trusted or prepared (WT-5.8). It does not join `folders[]` and the window stays where
-  it is: the worktree shows on the bar as any worktree git records while worktree
+  it is: the worktree shows on the bar as any worktree Facade made while worktree
   management is enabled (WT-1.3, WT-9). Setup runs
   at once, in a terminal of its own held under the worktree's row, not revealed, once
   the repository's queue (WT-5.10) has moved on. The command answers once the worktree
@@ -485,9 +545,12 @@ facts; it is not treated as a successful Facade delete.
 
 Prepare and perform a deletion in this order:
 
-1. Verify that Git records this exact linked worktree and that it is not the main
-   checkout. Read tracked changes, untracked files, ignored local paths, submodule
-   state and deletion restrictions. Reject a known lock before stopping any work.
+1. Verify that Git records this exact linked worktree, that it is not the main
+   checkout, and that Facade made it: another tool's worktree is a folder to Facade
+   (WT-1.3), and a request to delete one - an agent's stop_agent among them
+   (AGENT-ORCHESTRATION.md, O5) - is refused before anything is done. Read tracked
+   changes, untracked files, ignored local paths, submodule state and deletion
+   restrictions. Reject a known lock before stopping any work.
 2. In the workbench, collect dirty editors whose resources are inside the directory,
    including editors visible in another folder context and hidden editors. Also
    identify affected folder-owned editors and all related terminals/agents.
@@ -538,8 +601,9 @@ Prepare and perform a deletion in this order:
 - **WT-8.5** A leftover directory is handled only under WT-4.5. Never use recursive
   deletion to bypass a Git refusal while its worktree record remains.
 - **WT-8.6** Report one of these outcomes:
-  - Removed: Git no longer lists it and the directory is gone. Clear customization,
-    saved order and any trust an earlier build recorded for that path.
+  - Removed: Git no longer lists it and the directory is gone. Clear customization -
+    what it was made with, for every workspace, and what this one set (WT-1.12) - saved
+    order and any trust an earlier build recorded for that path.
   - Removal failed with the worktree still registered: restore its ordinary row and
     retained customization. Membership may already have been removed and
     processes stopped; say so rather than pretending those effects were undone.
@@ -646,17 +710,17 @@ injection and integrated gate.
 
 | ID | Level | Setup and action | Required observation |
 | --- | --- | --- | --- |
-| WTA-01 | U, I | A repository with no, one and three worktrees, made by Facade, by `git worktree add` in a terminal and by an agent; a plain folder; a folder without its own `.git` inside a repository; a worktree of a bare repository | WT-1.1-1.3, WT-1.8, WT-3.2: two levels, the checkout is the folder row, every worktree listed, plain rows where there is no main checkout |
+| WTA-01 | U, I | A repository with no, one and three worktrees, made by Facade, by `git worktree add` in a terminal and by an agent; a detached scratch worktree another tool makes in a temporary folder, out of and in `folders[]`; a plain folder; a folder without its own `.git` inside a repository; a worktree of a bare repository | WT-1.1-1.3, WT-1.8, WT-3.2: two levels, the checkout is the folder row, Facade's worktrees listed and no other, another tool's in `folders[]` a folder of its own with no New Worktree, plain rows where there is no main checkout |
 | WTA-02 | U, I | Open the window with worktrees not in `folders[]`; go to one; go to it again | Listing adds nothing to the file; the first visit adds it once and shows it; the second only switches |
-| WTA-03 | U | A repository added under two spellings; `worktree.useRelativePaths`; reftable; detached HEAD; a recorded worktree whose folder is gone; a `.git` naming a gone git directory | WT-3.1, WT-3.3, WT-1.9, WT-3.8 |
-| WTA-04 | U, I | Worktrees made in the order w10, w2, w1 with one tie; move one up and down; make another; reload; switch profile | Oldest first, ties numeric; a move keeps the whole order in the profile; a new one goes after; the order follows the profile |
+| WTA-03 | U | A repository added under two spellings; `worktree.useRelativePaths`; reftable; detached HEAD; a rebase of each backend and a bisect, begun on a branch and on a detached HEAD; a worktree git is still making, its HEAD all zeros; a recorded worktree whose folder is gone; a `.git` naming a gone git directory; worktrees in `folders[]` removed by `git worktree remove`, emptied as on Windows and deleted while the window was closed, with and without a kept read; another tool's worktree removed by it; a workspace that cannot be edited, and a window on the worktree alone; a repository on a drive taken away and brought back; a record git is rewriting, the folder deleted meanwhile; a record a killed `git worktree add` left; a main checkout whose `.git` cannot be read for a moment; a folder inside a worktree, gone with a checkout; two repositories of one name, with nothing kept; a folder deleted by hand | WT-3.1, WT-3.3, WT-1.9, WT-3.8: the deleted worktrees leave `folders[]`, drawn nowhere meanwhile and never as folders of their own; another tool's stays a folder, marked; one that cannot leave is drawn in its place under its repository, marked, and not handed over again; an unreachable repository's worktrees stay, marked, come back with it, and it is looked for less often each time; a record being rewritten or left by a killed `git worktree add` takes nothing out and holds nothing up; the main checkout stays; the inner folder and the worktree of the repository not in the window stay folders of their own, marked; git's own removal draws no mark, a folder deleted by hand is marked after a second |
+| WTA-04 | U, I | Worktrees made in the order w10, w2, w1 with one tie; move one up and down; make another; reload; switch profile; open the repository in a second workspace | Oldest first, ties numeric; a move keeps the whole order in the workspace; a new one goes after; the order stays through a profile switch, and the second workspace keeps its own |
 | WTA-05 | U, I | Close and open a repository by its triangle, Left/Right and the menu; collapse the bar; reload; reach a worktree of a closed repository by Open Recent, `facade <path>`, Switch to Worktree and Switch Folder... | The closed set is kept per workspace across reloads; collapsing the bar changes nothing; each arrival opens the repository first, so the marked row is in sight |
 | WTA-06 | U, I | Collapse the active worktree's repository with and without the main checkout in the workspace; collapse another repository; expand again | WT-1.5: successful switch to main before collapse; add it when needed; unrelated collapse and expansion do not switch folders |
 | WTA-07 | U, I | Move Folder Up/Down a repository whose worktrees are in `folders[]`; add a worktree to `folders[]`; a repository only a worktree of which is in `folders[]` | WT-1.6: the row moves with its folders; an added worktree never moves a folder row; the repository sits where its first member is |
 | WTA-08 | I, H | Point at rows and read them: the triangle, the `+`, the count badge, agent logos with four agents, the collapsed dot, hover, screen reader labels; with reduced motion | WT-1.12-1.15 and WT-1.14 |
-| WTA-09 | U | Each row kind's menu and keys, with worktrees on and off | WT-1.11 groups and items; Alt+Up/Down move the right kind of row |
+| WTA-09 | U | Each row kind's menu and keys, another tool's worktree's row among them, with worktrees on and off | WT-1.11 groups and items, and no New Worktree on another tool's worktree; Alt+Up/Down move the right kind of row |
 | WTA-10 | I | From a terminal: `git worktree add`, `remove`, `prune`, `move`, and a branch checkout inside a worktree; then switch folders | WT-3.4: each reaches the bar without a reload; no row flickers on a switch |
-| WTA-11 | U, I | Reload with worktrees in and out of `folders[]`; a folder that left and one that joined between windows; a corrupt kept read | WT-3.7: the first drawing is grouped; a first read that finds the same redraws nothing; a corrupt kept read starts flat |
+| WTA-11 | U, I | Reload with worktrees in and out of `folders[]`, another tool's among them; a folder that left and one that joined between windows; a worktree deleted while the window was closed; a first read slower than half a second; Switch Folder during the wait; a corrupt kept read | WT-3.7: no rows until the first read, which is drawn at once, or the kept read after half a second, grouped, another tool's worktree a folder of its own; Switch Folder lists the folders meanwhile; the deleted worktree never drawn; a first read that finds what the drawn kept read did redraws nothing; a corrupt kept read starts flat |
 | WTA-12 | U | Branch names with `/`, each forbidden character, leading and trailing spaces, device names, an empty name; a taken path; a case-insensitive disk | WT-2.2, WT-2.3: one folder name on every OS, device names refused with a reason, `-1` and `-2` |
 | WTA-13 | I, H | Type in the New Worktree dialog: an empty name, a valid one, a taken one, a forbidden one; add a name and a colour | WT-5.2: one field for the branch and no start point to choose; the location line follows the typing; errors in the error colour; Create disabled until the name can be made |
 | WTA-14 | U, I | Create from the row button, repository menu and palette, including a focused worktree and a plain folder | WT-5.6 order; record read before membership, name/color present on first row, setup waits for this worktree's completed activation |

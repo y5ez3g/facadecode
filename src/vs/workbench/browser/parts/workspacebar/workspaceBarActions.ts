@@ -79,6 +79,13 @@ export const WorkspaceBarFocusContext = new RawContextKey<boolean>('facadeWorksp
 export const WorkspaceBarRowKindContext = new RawContextKey<'folder' | 'repository' | 'worktree'>('facadeWorkspaceBarRowKind', 'folder', localize('workspaceBar.rowKindContext', "Whether the focused row is a folder, repository, or worktree"));
 
 /**
+ * Whether the focused row offers a worktree of its own (WORKTREE.md WT-1.8): every folder's row while the bar lists
+ * worktrees, but a worktree another tool made, which Facade takes for a folder (WT-1.3). Set by the view beside
+ * `WorkspaceBarRowKindContext`.
+ */
+export const WorkspaceBarRowOffersWorktreeContext = new RawContextKey<boolean>('facadeWorkspaceBarRowOffersWorktree', true, localize('workspaceBar.rowOffersWorktreeContext', "Whether the focused row offers a new worktree"));
+
+/**
  * Whether the bar is collapsed to its column of icons - what its toggle in the title bar says it
  * will do: collapse it, or expand it again. Set by `WorkspaceBarPart`.
  */

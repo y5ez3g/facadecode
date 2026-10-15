@@ -79,7 +79,10 @@ export interface IWorkspaceBarCustomizationService {
 	/** Fires for every change, with the folder that changed. */
 	readonly onDidChange: Event<URI>;
 
-	/** What has been set for this folder, if anything. */
+	/**
+	 * What has been set for this folder, if anything: in this workspace, else - a worktree's - what it was given as Facade
+	 * made it (`setMade`).
+	 */
 	get(uri: URI): IFolderCustomization | undefined;
 
 	/** The one name every surface draws for a folder: its `folders[].name`, else a customized or default one (WORKSPACE.md W9.8). */
@@ -91,8 +94,18 @@ export interface IWorkspaceBarCustomizationService {
 	 */
 	setDefaultNames(names: readonly { readonly uri: URI; readonly name: string }[]): void;
 
-	/** Sets, or clears what is left out. */
+	/** Sets, or clears what is left out, in this workspace. */
 	set(uri: URI, customization: IFolderCustomization): void;
+
+	/**
+	 * What a worktree is given as Facade makes it - the name and colour New Worktree was given, else a colour of its own
+	 * - which every workspace shows until somebody changes it in theirs (WORKTREE.md WT-1.12). What was kept for an
+	 * earlier worktree at its path goes, in every workspace.
+	 */
+	setMade(uri: URI, look: IFolderCustomization): void;
+
+	/** Forgets a worktree that is gone: what it was made with, and what this workspace set for it (WORKTREE.md WT-8.1). */
+	forget(uri: URI): void;
 
 	/**
 	 * The order somebody put a repository's worktrees in with Move Worktree Up and Down (WORKTREE.md
@@ -103,6 +116,13 @@ export interface IWorkspaceBarCustomizationService {
 
 	/** Keeps `worktrees` - the whole list, as it now stands - as a repository's order. */
 	setWorktreeOrder(repository: URI, worktrees: readonly URI[]): void;
+
+	/**
+	 * The rows this workspace's bar shows, once it has read them. What the workspace took over from the record an earlier
+	 * build kept for every workspace keeps only what it says of them, so that a folder set up in another workspace does
+	 * not bring that look along when it joins this one (WORKSPACE.md W9.7). Does nothing after the first time.
+	 */
+	trimInherited(rows: readonly URI[]): void;
 }
 
 /** The folder's `name` in the workspace file, which VS Code's own surfaces read too (WORKSPACE.md W9.7). */
@@ -160,8 +180,34 @@ const STORAGE_KEY = 'facade.workspaceBar.customization';
 const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
 
 /**
+ * How this workspace's records began, decided the first time it is opened since they are kept per workspace
+ * (`adoptEarlierRecords`): `inherited` while they are a copy of an earlier build's not yet trimmed to its rows, else `own`.
+ */
+const ORIGIN_STORAGE_KEY = 'facade.workspaceBar.customization.origin';
+
+/**
+ * Where what a worktree was made with is kept, for every workspace of every profile on this machine (`setMade`): one key
+ * per worktree, so that two windows making worktrees at once each write their own.
+ */
+const MADE_STORAGE_PREFIX = 'facade.workspaceBar.madeWith/';
+
+/** What a worktree was made with, and when: what tells it from an earlier worktree at its path. */
+interface IMadeWith {
+	readonly uri: URI;
+	readonly look: IFolderCustomization;
+	readonly made: number;
+}
+
+/** What a workspace set for a folder; for a worktree, the `made` of the worktree it was set for. */
+interface IWorkspaceCustomization extends IFolderCustomization {
+	readonly made?: number;
+}
+
+/**
  * Each folder's colour and icon, the names of rows not in the list, and each repository's worktree order,
- * kept per profile. A folder in the list is named by its `folders[].name` (WORKSPACE.md W9.7).
+ * kept per workspace: what somebody sets in one workspace's bar is that workspace's (WORKSPACE.md W2). A
+ * folder in the list is named by its `folders[].name` (WORKSPACE.md W9.7). What a worktree is made with is
+ * the worktree's, in every workspace, until one sets its own (WORKTREE.md WT-1.12).
  */
 export class WorkspaceBarCustomizationService extends Disposable implements IWorkspaceBarCustomizationService {
 
@@ -170,10 +216,13 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 	private readonly _onDidChange = this._register(new Emitter<URI>());
 	readonly onDidChange = this._onDidChange.event;
 
-	private readonly byFolder = new Map<string, IFolderCustomization>();
+	private readonly byFolder = new Map<string, IWorkspaceCustomization>();
+	private readonly madeWith: Map<string, IMadeWith>;
 	private readonly worktreesByRepository = new Map<string, readonly URI[]>();
 	/** `setDefaultNames`, by folder: read from git's files, so never stored. */
 	private defaultNames = new Map<string, { readonly uri: URI; readonly name: string }>();
+	/** Whether the records are a copy of the shared ones still to be trimmed to this workspace's rows (`trimInherited`). */
+	private inherited: boolean;
 
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
@@ -182,8 +231,30 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
 	) {
 		super();
+		this.inherited = this.adoptEarlierRecords();
 		this.load();
 		this.loadWorktreeOrder();
+		this.madeWith = this.loadMadeWith();
+
+		// A worktree another window made, or forgot: its look here too
+		this._register(this.storageService.onDidChangeValue(StorageScope.APPLICATION, undefined, this._store)(e => {
+			if (!e.external || !e.key.startsWith(MADE_STORAGE_PREFIX)) {
+				return;
+			}
+
+			const key = e.key.slice(MADE_STORAGE_PREFIX.length);
+			const before = this.madeWith.get(key);
+			const after = this.readMadeWith(e.key);
+			if (after) {
+				this.madeWith.set(key, after);
+			} else {
+				this.madeWith.delete(key);
+			}
+			const entry = after ?? before;
+			if (entry && before?.made !== after?.made) {
+				this._onDidChange.fire(entry.uri);
+			}
+		}));
 
 		this._register(this.contextService.onDidChangeWorkspaceFolders(e => this.moveNamesIntoWorkspace(e.added)));
 	}
@@ -210,8 +281,36 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 		return this.uriIdentityService.extUri.getComparisonKey(uri);
 	}
 
+	/**
+	 * Whether this workspace holds a copy of what an earlier build kept for every workspace, still to be trimmed to its
+	 * rows (`trimInherited`). Decided the first time it is opened since these are kept per workspace, and kept: one opened
+	 * before takes the copy, both records at once, so that nothing it shows looks different; one made since takes none,
+	 * in its later windows either, where it is no longer new, nor does one that keeps a record of its own already
+	 * (WORKSPACE.md W9.7).
+	 */
+	private adoptEarlierRecords(): boolean {
+		const origin = this.storageService.get(ORIGIN_STORAGE_KEY, StorageScope.WORKSPACE);
+		if (origin !== undefined) {
+			return origin === 'inherited';
+		}
+
+		let inherited = false;
+		const keys = [STORAGE_KEY, WORKTREE_ORDER_STORAGE_KEY];
+		if (!this.storageService.isNew(StorageScope.WORKSPACE) && keys.every(key => this.storageService.get(key, StorageScope.WORKSPACE) === undefined)) {
+			for (const key of keys) {
+				const shared = this.storageService.get(key, StorageScope.PROFILE);
+				if (shared !== undefined) {
+					this.storageService.store(key, shared, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+					inherited = true;
+				}
+			}
+		}
+		this.storageService.store(ORIGIN_STORAGE_KEY, inherited ? 'inherited' : 'own', StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		return inherited;
+	}
+
 	private load(): void {
-		const raw = this.storageService.get(STORAGE_KEY, StorageScope.PROFILE);
+		const raw = this.storageService.get(STORAGE_KEY, StorageScope.WORKSPACE);
 		if (!raw) {
 			return;
 		}
@@ -229,14 +328,16 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 
 				// ⚠️ Each field checked on the way in. A colour that is no longer in the palette, or a
 				// name that somebody hand-edited into a number, would otherwise reach the renderer.
-				const { name, color, icon } = value as { name?: unknown; color?: unknown; icon?: unknown };
-				const customization: IFolderCustomization = {
+				const { name, color, icon, made } = value as { name?: unknown; color?: unknown; icon?: unknown; made?: unknown };
+				const customization: IWorkspaceCustomization = {
 					name: typeof name === 'string' && name.length > 0 ? name : undefined,
 					color: isFolderColor(color) ? color : undefined,
-					icon: isFolderIcon(icon) ? icon : undefined
+					icon: isFolderIcon(icon) ? icon : undefined,
+					made: typeof made === 'number' ? made : undefined
 				};
 
-				if (customization.name || customization.color || customization.icon) {
+				// Nothing set but for a worktree made with a look: that look cleared in this workspace
+				if (customization.name || customization.color || customization.icon || customization.made !== undefined) {
 					this.byFolder.set(key, customization);
 				}
 			}
@@ -248,15 +349,23 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 
 	private save(): void {
 		if (this.byFolder.size === 0) {
-			this.storageService.remove(STORAGE_KEY, StorageScope.PROFILE);
+			this.storageService.remove(STORAGE_KEY, StorageScope.WORKSPACE);
 			return;
 		}
 
-		this.storageService.store(STORAGE_KEY, JSON.stringify(Object.fromEntries(this.byFolder)), StorageScope.PROFILE, StorageTarget.USER);
+		// This machine's paths
+		this.storageService.store(STORAGE_KEY, JSON.stringify(Object.fromEntries(this.byFolder)), StorageScope.WORKSPACE, StorageTarget.MACHINE);
 	}
 
 	get(uri: URI): IFolderCustomization | undefined {
-		return this.byFolder.get(this.key(uri));
+		const key = this.key(uri);
+		const own = this.byFolder.get(key);
+		const madeWith = this.madeWith.get(key);
+		// WT-1.12: what was set here for an earlier worktree at this path is not this one's
+		if (own && own.made === madeWith?.made) {
+			return { name: own.name, color: own.color, icon: own.icon };
+		}
+		return madeWith?.look;
 	}
 
 	nameFor(folder: IWorkspaceFolder): string {
@@ -291,22 +400,75 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 		const name = customization.name?.trim() || undefined;
 		const color = customization.color;
 		const icon = customization.icon;
+		// For a worktree Facade made, the one it was made as; clearing every field then clears its look in this workspace
+		const made = this.madeWith.get(key)?.made;
 
-		if (!name && !color && !icon) {
+		if (!name && !color && !icon && made === undefined) {
 			if (!this.byFolder.delete(key)) {
 				return;
 			}
 		} else {
 			const before = this.byFolder.get(key);
-			if (before?.name === name && before?.color === color && before?.icon === icon) {
+			if (before?.name === name && before?.color === color && before?.icon === icon && before?.made === made) {
 				return;
 			}
 
-			this.byFolder.set(key, { name, color, icon });
+			this.byFolder.set(key, { name, color, icon, made });
 		}
 
 		this.save();
 		this._onDidChange.fire(uri);
+	}
+
+	setMade(uri: URI, look: IFolderCustomization): void {
+		const key = this.key(uri);
+		const entry: IMadeWith = { uri, look: { name: look.name?.trim() || undefined, color: look.color }, made: Date.now() };
+		this.madeWith.set(key, entry);
+		// This machine's paths, for every workspace on it
+		this.storageService.store(`${MADE_STORAGE_PREFIX}${key}`, JSON.stringify({ uri: uri.toString(), ...entry.look, made: entry.made }), StorageScope.APPLICATION, StorageTarget.MACHINE);
+		if (this.byFolder.delete(key)) {
+			this.save();
+		}
+		this._onDidChange.fire(uri);
+	}
+
+	forget(uri: URI): void {
+		const key = this.key(uri);
+		const made = this.madeWith.delete(key);
+		const own = this.byFolder.delete(key);
+		if (made) {
+			this.storageService.remove(`${MADE_STORAGE_PREFIX}${key}`, StorageScope.APPLICATION);
+		}
+		if (own) {
+			this.save();
+		}
+		if (made || own) {
+			this._onDidChange.fire(uri);
+		}
+	}
+
+	private loadMadeWith(): Map<string, IMadeWith> {
+		const madeWith = new Map<string, IMadeWith>();
+		for (const storageKey of this.storageService.keys(StorageScope.APPLICATION, StorageTarget.MACHINE)) {
+			const entry = storageKey.startsWith(MADE_STORAGE_PREFIX) ? this.readMadeWith(storageKey) : undefined;
+			if (entry) {
+				madeWith.set(storageKey.slice(MADE_STORAGE_PREFIX.length), entry);
+			}
+		}
+		return madeWith;
+	}
+
+	/** What one worktree was made with, each field checked on the way in as in `load`; undefined where none can be read. */
+	private readMadeWith(storageKey: string): IMadeWith | undefined {
+		try {
+			const { uri, name, color, made }: { uri?: unknown; name?: unknown; color?: unknown; made?: unknown } = JSON.parse(this.storageService.get(storageKey, StorageScope.APPLICATION, '{}')) ?? {};
+			if (typeof uri === 'string' && typeof made === 'number') {
+				return { uri: URI.parse(uri), look: { name: typeof name === 'string' && name.length > 0 ? name : undefined, color: isFolderColor(color) ? color : undefined }, made };
+			}
+		} catch {
+			// A record that cannot be read costs what that worktree was made with: it looks as its workspace has it
+		}
+		return undefined;
 	}
 
 	worktreeOrder(repository: URI): readonly URI[] | undefined {
@@ -327,19 +489,45 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 			this.worktreesByRepository.delete(key);
 		}
 
-		// This machine's paths, so kept off Settings Sync.
-		if (this.worktreesByRepository.size > 0) {
-			this.storageService.store(WORKTREE_ORDER_STORAGE_KEY,
-				JSON.stringify(Object.fromEntries([...this.worktreesByRepository].map(([repositoryKey, uris]) => [repositoryKey, uris.map(uri => uri.toString())]))),
-				StorageScope.PROFILE, StorageTarget.MACHINE);
-		} else {
-			this.storageService.remove(WORKTREE_ORDER_STORAGE_KEY, StorageScope.PROFILE);
-		}
+		this.saveWorktreeOrder();
 		this._onDidChange.fire(repository);
 	}
 
+	private saveWorktreeOrder(): void {
+		if (this.worktreesByRepository.size === 0) {
+			this.storageService.remove(WORKTREE_ORDER_STORAGE_KEY, StorageScope.WORKSPACE);
+			return;
+		}
+
+		// This machine's paths
+		this.storageService.store(WORKTREE_ORDER_STORAGE_KEY,
+			JSON.stringify(Object.fromEntries([...this.worktreesByRepository].map(([repositoryKey, uris]) => [repositoryKey, uris.map(uri => uri.toString())]))),
+			StorageScope.WORKSPACE, StorageTarget.MACHINE);
+	}
+
+	trimInherited(rows: readonly URI[]): void {
+		if (!this.inherited) {
+			return;
+		}
+		this.inherited = false;
+		this.storageService.store(ORIGIN_STORAGE_KEY, 'own', StorageScope.WORKSPACE, StorageTarget.MACHINE);
+
+		// Nothing that is shown changes: what goes is what no row here draws
+		const shown = new Set(rows.map(uri => this.key(uri)));
+		const looks = [...this.byFolder.keys()].filter(key => !shown.has(key));
+		const orders = [...this.worktreesByRepository.keys()].filter(key => !shown.has(key));
+		looks.forEach(key => this.byFolder.delete(key));
+		orders.forEach(key => this.worktreesByRepository.delete(key));
+		if (looks.length) {
+			this.save();
+		}
+		if (orders.length) {
+			this.saveWorktreeOrder();
+		}
+	}
+
 	private loadWorktreeOrder(): void {
-		const raw = this.storageService.get(WORKTREE_ORDER_STORAGE_KEY, StorageScope.PROFILE);
+		const raw = this.storageService.get(WORKTREE_ORDER_STORAGE_KEY, StorageScope.WORKSPACE);
 		if (!raw) {
 			return;
 		}

@@ -42,7 +42,7 @@ import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../..
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, IWorkspaceTrustUriInfo } from '../../../../../platform/workspace/common/workspaceTrust.js';
 // For the keys every focused list has, which the bar's own have to win over.
 import '../../../../browser/actions/listCommands.js';
-import { WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
+import { WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IBranchDescription, INewWorktreeAnswer, INewWorktreePreparation, IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
@@ -390,6 +390,8 @@ suite('Worktrees - making and deleting one', () => {
 		instantiationService.stub(IWorkspaceBarCustomizationService, {
 			get: () => undefined,
 			set: (uri, customization) => { steps.push(`customize ${uri.path} ${JSON.stringify(customization)}`); },
+			setMade: (uri, look) => { steps.push(`made ${uri.path} ${JSON.stringify(look)}`); },
+			forget: uri => { steps.push(`forget ${uri.path}`); },
 			worktreeOrder: () => savedOrder,
 			setWorktreeOrder: (_repository, worktrees) => { steps.push(`order ${worktrees.map(uri => uri.path).join(', ')}`); }
 		});
@@ -595,7 +597,7 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual(steps, [
 			'_git.prepareWorktreeBaseAt /lab inspect',
 			'ask',
-			'customize /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"red"}',
+			'made /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"red"}',
 			'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
 			'listed /home/me/.facade/worktrees/lab/w3',
 			'open /lab',
@@ -717,7 +719,7 @@ suite('Worktrees - making and deleting one', () => {
 			made: '/home/me/.facade/worktrees/lab/w3',
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
-				'customize /home/me/.facade/worktrees/lab/w3 {"color":"red"}',
+				'made /home/me/.facade/worktrees/lab/w3 {"color":"red"}',
 				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
 				'listed /home/me/.facade/worktrees/lab/w3',
 			],
@@ -1138,15 +1140,32 @@ suite('Worktrees - making and deleting one', () => {
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
 				'ask',
-				'customize /home/me/.facade/worktrees/lab/w2 {"name":"Two","color":"red"}',
+				'made /home/me/.facade/worktrees/lab/w2 {"name":"Two","color":"red"}',
 				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 w2',
 				// Nothing was made at that path: the name given for it is taken back.
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 				'prompt: Branch \'w2\' is already checked out in \'/home/me/.facade/worktrees/lab/w2\'.',
 				'show /home/me/.facade/worktrees/lab/w2',
 			],
 			choices: ['Switch to Worktree'],
 		});
+	});
+
+	test('WTA-01 New Worktree on a worktree another tool made says so and does nothing else: Facade takes it for a folder (WT-1.3)', async () => {
+		// A script's scratch checkout of a commit, in a folder of its own: a worktree of /lab outside Facade's worktrees folder
+		files.set('/tmp/scratch/.git', 'gitdir: /lab/.git/worktrees/scratch');
+		files.set('/lab/.git/worktrees/scratch/commondir', '../..');
+		files.set('/lab/.git/worktrees/scratch/gitdir', '/tmp/scratch/.git');
+		instantiationService.stub(IFileService, 'stat', async (uri: URI) => {
+			if (!files.has(uri.path)) {
+				throw new Error('not there');
+			}
+			return upcastPartial<IFileStat>({ resource: uri, isDirectory: false });
+		});
+
+		await instantiationService.createInstance(WorktreeService).createWorktree(URI.file('/tmp/scratch'));
+
+		assert.deepStrictEqual(steps, ['info: \'/tmp/scratch\' is a worktree created outside Facade. Create a worktree from its repository\'s main checkout instead.']);
 	});
 
 	test('WTA-15 in Restricted Mode, trust is asked for before git is, and nothing runs without it; the question offers trust and nothing but Cancel besides', async () => {
@@ -1221,7 +1240,7 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 				'order /home/me/.facade/worktrees/lab/w3',
 				'untrust /home/me/.facade/worktrees/lab/w2',
 			],
@@ -1424,7 +1443,7 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual({
 			said: steps.filter(step => step.startsWith('prompt:')),
 			choices: prompted.map(choice => ({ label: choice.label, keepOpen: !!choice.keepOpen })).slice(0, 2),
-			forgotten: steps.includes(`customize ${w2.path} {}`),
+			forgotten: steps.includes(`forget ${w2.path}`),
 			retried: steps.filter(step => step.startsWith('_git.deleteWorktreeAt')).pop()
 		}, {
 			said: ['prompt: Worktree was removed from Git, but its folder could not be deleted: C:\\left\\w2. EBUSY: resource busy or locked'],
@@ -1457,7 +1476,7 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 force',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 				'order /home/me/.facade/worktrees/lab/w3',
 				'untrust /home/me/.facade/worktrees/lab/w2',
 			],
@@ -1561,7 +1580,7 @@ suite('Worktrees - making and deleting one', () => {
 				'writable /home/me/.facade/worktrees/lab/w2/src/a.ts',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 			]
 		});
 	});
@@ -1585,6 +1604,21 @@ suite('Worktrees - making and deleting one', () => {
 			refused: '\'/home/me/.facade/worktrees/lab/w2\' has changes that would be lost if it were deleted: README.md (unsaved). Nothing was deleted.',
 			discarded: ['revert /tmp/link/README.md', 'close editors /tmp/link/README.md']
 		});
+	});
+
+	test('WT-1.3 deleted without asking - an agent\'s stop_agent - a worktree created outside Facade, or what is left of one, is refused, saying so, before anything is done (O5)', async () => {
+		gitIsRunning();
+		// A script's scratch checkout, which the bar does not list
+		instantiationService.stub(IWorkspaceBarService, 'repositoryFor', () => undefined);
+		const service = instantiationService.createInstance(WorktreeService);
+		const scratch = URI.file('/tmp/verify/b162069');
+		const refused = await service.removeWorktree(scratch, { main }).then(() => 'deleted', (err: Error) => err.message);
+		const lossRefused = await service.removalLoss(scratch, { main }).then(() => 'checked', (err: Error) => err.message);
+		// What a deletion left of it, were it one
+		const leftoverRefused = await service.removeWorktree(scratch, { main, leftover: true }).then(() => 'deleted', (err: Error) => err.message);
+
+		const said = '/tmp/verify/b162069 is a worktree created outside Facade, which Facade never deletes.';
+		assert.deepStrictEqual({ refused, lossRefused, leftoverRefused, steps }, { refused: said, lossRefused: said, leftoverRefused: said, steps: [] });
 	});
 
 	test('deleted without asking, it can be looked at first - for an agent\'s deletion, before any agent is stopped - which names what deleting it would lose as its refusal names it, the caller\'s own files as it wrote them going with it, and does nothing else: nothing stopped, closed, moved or removed (O5; OR-04)', async () => {
@@ -1705,7 +1739,7 @@ suite('Worktrees - making and deleting one', () => {
 			'writable /home/me/.facade/worktrees/lab/w2/src/a.ts, /home/me/.facade/worktrees/lab/w2/b.ts',
 			'unhide /home/me/.facade/worktrees/lab/w2',
 			'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-			'customize /home/me/.facade/worktrees/lab/w2 {}'
+			'forget /home/me/.facade/worktrees/lab/w2'
 		]);
 	});
 
@@ -1810,7 +1844,7 @@ suite('Worktrees - making and deleting one', () => {
 		const done = 'It was removed from the workspace.\nTerminals associated with this worktree were closed and active processes terminated: npm run dev.';
 		assert.deepStrictEqual({ refused, partly }, {
 			refused: { why: `Failed to delete worktree: cannot remove a locked working tree\n${done}`, steps: cleanup },
-			partly: { why: `Worktree was removed from Git, but its folder could not be deleted: /home/me/.facade/worktrees/lab/w2. EBUSY: resource busy or locked\n${done}`, steps: [...cleanup, 'customize /home/me/.facade/worktrees/lab/w2 {}'] }
+			partly: { why: `Worktree was removed from Git, but its folder could not be deleted: /home/me/.facade/worktrees/lab/w2. EBUSY: resource busy or locked\n${done}`, steps: [...cleanup, 'forget /home/me/.facade/worktrees/lab/w2'] }
 		});
 	});
 
@@ -1841,7 +1875,7 @@ suite('Worktrees - making and deleting one', () => {
 				'_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 cleanup leftover-1',
 				'unhide /home/me/.facade/worktrees/lab/w2',
 				'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
-				'customize /home/me/.facade/worktrees/lab/w2 {}',
+				'forget /home/me/.facade/worktrees/lab/w2',
 			],
 			unknown: '\'/home/me/.facade/worktrees/lab/w4\' was not recognized as a worktree folder left behind by a deletion in this window, so it was not deleted. Delete it manually if needed.',
 			gone: 'deleted',
@@ -2026,10 +2060,14 @@ suite('Worktrees - the row menu and its keys', () => {
 		return store.add(new ContextKeyService(new TestConfigurationService({ facade: { workspaceBar: { worktrees: true } } })));
 	}
 
-	/** What a row of `kind` has on its menu, its groups in the order the menu draws them, with worktrees listed. */
-	function menu(kind: 'folder' | 'repository' | 'worktree', expansion: '' | 'expanded' | 'collapsed'): string[] {
+	/**
+	 * What a row of `kind` has on its menu, its groups in the order the menu draws them, with worktrees listed.
+	 * `offersWorktree` as the view sets it: false for a worktree's row, and for another tool's worktree (WT-1.3).
+	 */
+	function menu(kind: 'folder' | 'repository' | 'worktree', expansion: '' | 'expanded' | 'collapsed', offersWorktree = kind !== 'worktree'): string[] {
 		const contextKeyService = contextKeys();
 		WorkspaceBarRowKindContext.bindTo(contextKeyService).set(kind);
+		WorkspaceBarRowOffersWorktreeContext.bindTo(contextKeyService).set(offersWorktree);
 		WorkspaceBarRowExpansionContext.bindTo(contextKeyService).set(expansion);
 		const rank = (group: string | undefined) => group === 'navigation' ? '' : group ?? '';
 
@@ -2041,9 +2079,16 @@ suite('Worktrees - the row menu and its keys', () => {
 	}
 
 	test('WTA-09 each kind of row has the three groups of WT-1.11: what is in it, how it stands in the list, and whether it stays', () => {
-		assert.deepStrictEqual({ folder: menu('folder', ''), repository: menu('repository', 'expanded'), worktree: menu('worktree', '') }, {
+		assert.deepStrictEqual({ folder: menu('folder', ''), anotherToolsWorktree: menu('folder', '', false), repository: menu('repository', 'expanded'), worktree: menu('worktree', '') }, {
 			folder: [
 				'navigation facade.workspaceBar.newWorktree',
+				'navigation facade.workspaceBar.revealFolder',
+				'2_arrange facade.workspaceBar.customizeFolder',
+				'2_arrange facade.workspaceBar.moveFolderUp',
+				'2_arrange facade.workspaceBar.moveFolderDown',
+				'9_remove facade.workspaceBar.removeFolder',
+			],
+			anotherToolsWorktree: [
 				'navigation facade.workspaceBar.revealFolder',
 				'2_arrange facade.workspaceBar.customizeFolder',
 				'2_arrange facade.workspaceBar.moveFolderUp',

@@ -277,6 +277,12 @@ export interface Git {
 	worktreeRootOf(folder: string): Promise<string | undefined>;
 	/** The worktrees of the repository whose main checkout is `main`, main included. */
 	worktreesOf(main: string): Promise<readonly ListedWorktree[]>;
+	/**
+	 * Whether `folder` is in a worktree Facade made: in its worktrees folder, `~/.facade/worktrees` (WORKTREE.md WT-2.1).
+	 * Another tool's worktree is a folder to Facade, which starts no agent of an agent's in it and never deletes it
+	 * (WT-1.3; AGENT-ORCHESTRATION.md, O3, O5).
+	 */
+	isFacadeWorktree(folder: string): boolean;
 	/** Whether the repository whose main checkout is `main` has a branch called `branch`. */
 	hasBranch(main: string, branch: string): Promise<boolean>;
 	/** Why `branch` cannot be a branch's name, as git says; undefined where it can. */

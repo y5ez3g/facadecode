@@ -26,12 +26,12 @@ export const stopAgentTool: ContractTool = {
 	definition: {
 		name: 'stop_agent',
 		title: 'Stop an agent',
-		description: 'Stop a reachable run and close its terminal; children in other folders continue. delete_worktree:true also stops agents in that worktree and deletes the folder, keeping its branch. Uncommitted/untracked work or unsaved editors block deletion before any stop unless discard_changes:true. Main checkouts cannot be deleted. No confirmation dialog opens. Stopping yourself or deleting your worktree may disconnect this call. Inspect uncertain effects before retrying.',
+		description: 'Stop a reachable run and close its terminal; children in other folders continue. With delete_worktree:true, delete a worktree created by Facade after stopping all agents in it; keep its branch. For any other folder, stop only the requested run and report that nothing was deleted. Uncommitted/untracked work or unsaved editors block deletion before any stop unless discard_changes:true. With worktree management off, delete_worktree:true is refused before any stop. No confirmation dialog opens. Stopping yourself or deleting your worktree may disconnect this call. Inspect uncertain effects before retrying.',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				agent: { type: 'string', description: 'Run ID (#a7) or unique active @name. Use IDs for ended runs. @human has no run.' },
-				delete_worktree: { type: 'boolean', default: false, description: 'Also stop agents in the target worktree, then delete its folder and keep its branch.' },
+				delete_worktree: { type: 'boolean', default: false, description: 'Delete the target\'s worktree if Facade created it, stopping all agents in it first and keeping its branch. For any other folder, stop only the target and report no deletion. Unavailable when facade.workspaceBar.worktrees is false.' },
 				discard_changes: { type: 'boolean', default: false, description: 'With delete_worktree:true, allow discarding uncommitted/untracked work and unsaved edits. Otherwise refuse deletion that would lose work. True requires delete_worktree:true.' }
 			},
 			required: ['agent'],

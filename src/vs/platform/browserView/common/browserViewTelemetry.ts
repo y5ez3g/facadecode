@@ -27,6 +27,9 @@ export type IntegratedBrowserOpenSource =
 	 * is enabled. This happens when clicking localhost (e.g., `localhost`, `127.0.0.1`, `[::1]`) or all-interfaces
 	 * links (e.g., `0.0.0.0`, `[::]`) from the terminal, chat, or other sources. */
 	| 'localhostLinkOpener'
+	/** Facade Code: opened via the localhost link opener for a link the `facade.browser.openInIntegratedBrowser`
+	 * setting names, from the terminal, chat, or other sources. */
+	| 'namedLinkOpener'
 	/** Opened when clicking a link inside the Integrated Browser that opens in a new focused editor
 	 * (e.g., links with target="_blank"). */
 	| 'browserLinkForeground'

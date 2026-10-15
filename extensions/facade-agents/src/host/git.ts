@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -26,6 +27,11 @@ interface WindowDeletion {
  */
 export class HostGit implements Git {
 
+	/** Where the window makes every worktree Facade makes: `~/.facade/worktrees` (WORKTREE.md WT-2.1). */
+	private readonly worktreesFolder = path.join(os.homedir(), '.facade', 'worktrees');
+	/** Its real path, worked out once it is there: it is under this machine's home, which does not change. */
+	private realWorktreesFolder: string | undefined;
+
 	/** `workspace` is the id of the record the agents are in: their runs are known by it. */
 	constructor(private readonly workspace: string) { }
 
@@ -41,6 +47,15 @@ export class HostGit implements Git {
 		return worktreesIn(await gitPath(), main);
 	}
 
+	isFacadeWorktree(folder: string): boolean {
+		// Their real paths, as the window compares them: a link to the folder is the folder. Until the worktrees folder is
+		// there, nothing is in it, and its path as given serves as well as its real one
+		if (this.realWorktreesFolder === undefined && fs.existsSync(this.worktreesFolder)) {
+			this.realWorktreesFolder = canonicalFolder(this.worktreesFolder);
+		}
+		return isInsideFolder(canonicalFolder(folder), this.realWorktreesFolder ?? this.worktreesFolder);
+	}
+
 	async hasBranch(main: string, branch: string): Promise<boolean> {
 		return hasBranchIn(await gitPath(), main, branch);
 	}
@@ -50,7 +65,7 @@ export class HostGit implements Git {
 	}
 
 	plannedWorktreeFolder(main: string, branch: string): string {
-		return path.join(os.homedir(), '.facade', 'worktrees', path.basename(main), worktreeFolderName(branch));
+		return path.join(this.worktreesFolder, path.basename(main), worktreeFolderName(branch));
 	}
 
 	async makeWorktree(main: string, branch: string, startPoint: string): Promise<MadeWorktreeFolder> {

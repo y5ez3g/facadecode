@@ -102,9 +102,11 @@ Use "workspace bar" in the UI, `Parts.WORKSPACEBAR_PART` for the part,
 | folder scope | workspace storage, this machine | reload, restart | Show All Folders |
 | closed repositories, last git read | workspace storage, this machine | reload, restart | WT-1.10, WT-3.7 |
 | display name of a folder in the list | the workspace file, `folders[].name` - VS Code's own field for naming a root | everything; stock VS Code and extensions read it too | Customize, or the file edited by hand (W9.7) |
-| display name of a row not in the list, colour, icon | profile storage, by path | every workspace of the profile, and a removal | cleared by the person; a worktree's when it is deleted (WT-8.1) |
-| worktree order | profile storage | every workspace of the profile | WT-1.7 |
-| bar collapsed, bar width | profile storage | every workspace of the profile | the toggle, a drag |
+| display name of a row not in the list, colour, icon | workspace storage, this machine, by path | reload, restart, Save Workspace As, and a removal | cleared by the person; a worktree's when it is deleted (WT-8.1) |
+| what a worktree was made with: its colour, and a name New Worktree was given | application storage, this machine, by path | every workspace and profile on the machine, until one sets its own (WORKTREE.md WT-1.12) | the worktree deleted, or made again at its path |
+| worktree order | workspace storage, this machine | reload, restart, Save Workspace As | WT-1.7 |
+| bar collapsed | workspace storage, this machine | reload, restart; a workspace opened before takes the profile's, once | the toggle |
+| bar width | profile storage | every workspace of the profile | a drag |
 
 Facade writes folder membership and names using VS Code's standard fields. Keep its
 private navigation state in storage instead of adding a private workspace-file
@@ -432,7 +434,8 @@ folder already in the workspace is not added again and costs no edit.
 It is dimmed and struck through, never hidden: its row is the only place to remove
 it from. Whether each folder exists is read when the window starts, when `folders[]`
 changes, and when a switch to it fails. It is not watched. A folder that comes back
-stops being marked at the next read.
+stops being marked at the next read. A worktree git no longer records is not such a
+folder: it leaves the workspace (WORKTREE.md WT-3.8).
 
 ### W9.4 Going to a row
 
@@ -498,11 +501,20 @@ Customize..., also F2 while the list has focus, opens a dialog (W10.7) for a dis
 name, a colour and an icon (W10.6). It is the only way to rename a row: there is no
 inline edit. The name of a folder in the list is written to its `folders[].name`, VS
 Code's own field for naming a root, so stock VS Code, `${workspaceFolder:name}` and
-extensions call it the same; a row not in the list - a worktree that has not joined,
-a repository whose checkout has not - keeps its name in the profile until it joins.
-Colour and icon are kept per profile, by folder. Clearing every field forgets them
-rather than storing an empty record. `folder` is the default icon and is stored as
-nothing. A worktree's dialog has a name and a colour and no icon (WT-1.12).
+extensions call it the same; a row not in the list - a worktree that has not joined, a
+repository whose checkout has not - keeps its name in the workspace's storage until it
+joins. Colour and icon are kept per workspace, by folder: what is set in one
+workspace's bar shows in that workspace alone, as its names do, and the same folder in
+another workspace keeps the look it has there. What a worktree is made with is the
+worktree's and shows in every workspace until one sets its own (WORKTREE.md WT-1.12).
+A workspace opened before an earlier build kept these per profile takes a copy of that
+shared record the first time, so nothing it shows looks different, and keeps only what
+the copy says of its own rows once they are read: a folder set up in another workspace
+joins it plain. It keeps its own from then on; a workspace made since starts with
+none. Clearing every field forgets them rather than storing an empty record; a
+worktree's, what it was made with too, in that workspace alone. `folder` is the
+default icon and is stored as nothing. A worktree's dialog has a name and a colour and
+no icon (WT-1.12).
 
 ### W9.8 One name
 
@@ -519,10 +531,13 @@ spelled with `-` for `/` (WT-2.2). Writing the branch into the file would freeze
 The title bar's first button collapses the bar to a column of icons and opens it
 again. Collapsed, it is the same tree without its words (WT-1.10): each row keeps its
 icon in its colour - the one chosen for it, else the folder icon - and a worktree its
-dot. Pointing at a row names it at once, in a card to the right of the icon. The state and the open width are kept per profile. A profile that has never
-touched the toggle starts open. Dragging its edge resizes the bar alone: the side bar keeps
-its width, and the editor area gives or takes the difference, as it does when the bar is
-collapsed or opened.
+dot. Pointing at a row names it at once, in a card to the right of the icon. Whether
+it is collapsed is kept per workspace, as VS Code keeps whether its side bar is shown,
+and the open width per profile, as VS Code keeps the side bar's width. A workspace
+that has never touched the toggle starts open; one opened before the state was kept
+per workspace starts as the bar was everywhere then. Dragging its edge resizes the bar
+alone: the side bar keeps its width, and the editor area gives or takes the
+difference, as it does when the bar is collapsed or opened.
 
 ### W9.10 Zen Mode
 
@@ -731,7 +746,7 @@ Code's in-window ones do: on Windows the primary button first, on macOS and Linu
 | Renderer crash with surviving processes | Reconnect using the recorded process/run identities. Preserve unsaved backups; do not relaunch an agent or replay setup merely because its UI was restored |
 | Save Workspace As | Transfer active folder, editor sets, scope and collapsed repositories to the new workspace storage; keep the file in the ordinary format |
 | Open the same workspace from another window | Bring the existing window forward, as stock |
-| Switch profile | Use that profile's colors, icons, worktree order, width and collapsed state; retain workspace membership, names and active folder |
+| Switch profile | Use that profile's width; retain workspace membership, names, colors, icons, worktree order, collapsed state and active folder |
 | File > Close Workspace | Apply the same checks before disposing this workspace, then make the window EMPTY |
 | Use a remote window | Match folder and terminal URIs by scheme and authority. A caller needing a local path must not receive a remote folder |
 
@@ -757,7 +772,7 @@ not be the only owner of operations needed by command-line and agent callers.
 | `IFolderScopeService` (`services/folderScope`) | One shared search/picker/Problems scope; filter presentation rather than markers or extension-host data |
 | `WorkspaceBarModel`, `WorkspaceBarView`, `WorkspaceBarGit` | Canonical directory comparison and availability; rows, selection, ordering and collapsed state; git's records read and watched (WT-3) |
 | `IWorkspaceBarService` (`workspaceBarService.ts`), `openOrShow` | `show`, `add`, `addAndShow`, `remove` and the other entry points every caller uses - row, palette, command line, agents |
-| `workspaceBarCustomization.ts`, `IWorkspaceBarDialogService` (`workspaceBarCustomize.ts`), `IWorkspaceBarAgentsService` | Colours, icons and names of rows not in the list, worktree order, per profile; the New Worktree and Customize forms; what runs on each row |
+| `workspaceBarCustomization.ts`, `IWorkspaceBarDialogService` (`workspaceBarCustomize.ts`), `IWorkspaceBarAgentsService` | Colours, icons and names of rows not in the list, worktree order, per workspace; the New Worktree and Customize forms; what runs on each row |
 | `IWorktreeService` (`contrib/worktrees`), `extensions/git/src/worktreeAt.ts` | The create, setup and delete operations of WORKTREE.md; git and the filesystem in the git extension |
 | `windowsMainService.joinsTheOpenWindow`, the hook in `WorkspaceChangeExtHostRelauncher`, the trust gate | W4/W5 routing for dialogs, drops, the command line and extension commands; no restart on a `folders[0]` change; W5's trust question |
 
@@ -781,8 +796,8 @@ keys to accomplish this; add a narrow API where required.
 
 Keep worktree setup in a contribution because it uses terminals. The workspace bar's
 browser layer must not import terminal contributions. Git execution stays in the
-Git extension. Profile customization and repository reads remain separate from
-workspace-file membership.
+Git extension. Customization kept in workspace storage and repository reads remain
+separate from workspace-file membership.
 
 ## W13. Performance
 
@@ -923,8 +938,8 @@ unchanged across both documents.
 | WS-31 | U, I | Delete a listed folder on disk, start the window, then restore the folder | Struck through, never hidden, still removable; unmarked after it returns and the list is read |
 | WS-32 | U, I | Move Folder Up/Down through the middle, the ends and the first position, on a repository with worktrees in the workspace; edit the file meanwhile | Whole rows move; ends do not wrap; every entry stays byte for byte; no extension-host restart |
 | WS-33 | U, I | Remove Folder - from the row, from the palette's Remove Folder from Workspace, and by `facade --remove` - on a plain idle folder, a repository with worktrees, a folder running an agent, a folder with a running terminal, a folder holding unsaved files shown and put away, and the folder the window is on with a new file never saved (Ctrl+N) on screen | Idle: removed at once. Otherwise one dialog naming everything that would be lost, the Ctrl+N file among it; with Remove and Discard Changes / Cancel when files are unsaved; the same from all three paths; nothing on disk changes; the repository takes its row's folders; no "do not ask again" and no setting |
-| WS-34 | U, I | Customize name, colour and icon; clear them; reload; switch profile; remove and re-add the folder; open the file in stock VS Code | The name is in `folders[].name`, and stock VS Code, `${workspaceFolder:name}` and the folder pickers show it; colour and icon kept per profile and through removal; cleared means forgotten |
-| WS-35 | U, I, H | Collapse and open the bar, drag its width, reload, switch profile, enter Zen Mode; collapsed, look at folders with and without icons | Pinned at 36 collapsed; width and state per profile; instant name card collapsed; every row keeps its icon in its colour; Zen hides bar and toggle and persists nothing |
+| WS-34 | U, I | Customize name, colour and icon; clear them; reload; switch profile; open the same folder in a second workspace; remove and re-add the folder; open the file in stock VS Code; open a workspace from before the change, holding folders of its own and of another workspace's, and a new one, twice; add the other workspace's folder to it; make a worktree in one workspace of a repository two have, recolour it in the second, delete it and make another at its path; make worktrees in two windows at once | The name is in `folders[].name`, and stock VS Code, `${workspaceFolder:name}` and the folder pickers show it; colour and icon kept per workspace, through a profile switch and through removal, and not shown in the other workspace; the old workspace keeps the look of its own rows, and the other workspace's folder joins it plain; the new one has none, the second time too; cleared means forgotten; the worktree's colour from its making shows in both, the second's own colour there alone, and the new worktree wears neither the deleted one's nor that; both windows' worktrees keep their colours |
+| WS-35 | U, I, H | Collapse and open the bar, drag its width, reload, switch profile, open a second workspace, and a new one twice, enter Zen Mode; collapsed, look at folders with and without icons | Pinned at 36 collapsed; width per profile, collapsed state per workspace, a second workspace keeping its own, the new one open both times; instant name card collapsed; every row keeps its icon in its colour; Zen hides bar and toggle and persists nothing |
 | WS-36 | I, H | Every key and command of W9.11, and Shift+F10, with the list focused and unfocused | Each does what W9.11 says; palette commands act on the focused row, else the active folder |
 | WS-37 | I | A screen reader's labels for a plain folder, a missing folder, a worktree, and a closed repository with agents | W9.14's labels |
 | WS-38 | I | Reload, then separately quit and restart, with editors, terminals, scope and collapsed state | Restore workspace/editor state in both cases. Reload reconnects surviving processes; restart never presents a revived shell as the old live agent. The first drawing groups cached worktrees |

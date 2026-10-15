@@ -31,6 +31,7 @@ import { IConfigurationRegistry, Extensions as ConfigurationExtensions, Configur
 import { workbenchConfigurationNodeBase } from '../../../../common/configuration.js';
 import { IExternalOpener, IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { isLocalhostAuthority, isAllInterfacesAuthority } from '../../../../../platform/url/common/trustedDomains.js';
+import { testUrlMatchesGlob } from '../../../../../platform/url/common/urlGlob.js';
 import { IConfigurationService, isConfigured } from '../../../../../platform/configuration/common/configuration.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
@@ -567,9 +568,16 @@ class BrowserEditorOpenContextKeyContribution extends Disposable implements IWor
 registerWorkbenchContribution2(BrowserEditorOpenContextKeyContribution.ID, BrowserEditorOpenContextKeyContribution, WorkbenchPhase.AfterRestored);
 
 /**
- * Opens localhost URLs and all-interfaces URLs in the Integrated Browser when the setting is enabled.
+ * Facade Code: the setting naming the links that open in the Integrated Browser besides localhost's, as URL patterns
+ * like trusted domains'.
  */
-class LocalhostLinkOpenerContribution extends Disposable implements IWorkbenchContribution, IExternalOpener {
+const OpenInIntegratedBrowserSettingId = 'facade.browser.openInIntegratedBrowser';
+
+/**
+ * Opens localhost URLs and all-interfaces URLs in the Integrated Browser when the setting is enabled.
+ * Facade Code: and the URLs `facade.browser.openInIntegratedBrowser` names, whatever that setting is.
+ */
+export class LocalhostLinkOpenerContribution extends Disposable implements IWorkbenchContribution, IExternalOpener {
 	static readonly ID = 'workbench.contrib.localhostLinkOpener';
 
 	constructor(
@@ -585,7 +593,11 @@ class LocalhostLinkOpenerContribution extends Disposable implements IWorkbenchCo
 	}
 
 	async openExternal(href: string, ctx: { sourceUri: URI; preferredOpenerId?: string }, _token: CancellationToken): Promise<boolean> {
-		if (!this.configurationService.getValue<boolean>('workbench.browser.openLocalhostLinks')) {
+		const openLocalhostLinks = this.configurationService.getValue<boolean>('workbench.browser.openLocalhostLinks');
+		// Facade Code: the links the person named - only the patterns, as settings.json can hold anything there
+		const namedLinks = this.configurationService.getValue<string[] | undefined>(OpenInIntegratedBrowserSettingId);
+		const patterns = Array.isArray(namedLinks) ? namedLinks.filter(pattern => typeof pattern === 'string') : [];
+		if (!openLocalhostLinks && !patterns.length) {
 			return false;
 		}
 
@@ -594,23 +606,27 @@ class LocalhostLinkOpenerContribution extends Disposable implements IWorkbenchCo
 			href = ctx.sourceUri.toString();
 		}
 
+		let named: boolean;
 		try {
 			const parsed = new URL(href);
 			if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
 				return false;
 			}
-			if (!isLocalhostAuthority(parsed.host) && !isAllInterfacesAuthority(parsed.host)) {
+			named = patterns.some(pattern => testUrlMatchesGlob(href, pattern));
+			const isLocalhost = isLocalhostAuthority(parsed.host) || isAllInterfacesAuthority(parsed.host);
+			if (!named && !(openLocalhostLinks && isLocalhost)) {
 				return false;
 			}
 		} catch {
 			return false;
 		}
 
-		logBrowserOpen(this.telemetryService, 'localhostLinkOpener');
+		logBrowserOpen(this.telemetryService, named ? 'namedLinkOpener' : 'localhostLinkOpener');
 
 		// Check whether the setting was explicitly set by the user or is still at its default value.
 		// When it is a default, tag the viewState so that the hint pill can be shown.
-		const isDefaultLinkOpen = !isConfigured(this.configurationService.inspect('workbench.browser.openLocalhostLinks'));
+		// Facade Code: a link the person named was not opened by default.
+		const isDefaultLinkOpen = !named && !isConfigured(this.configurationService.inspect('workbench.browser.openLocalhostLinks'));
 
 		const browserUri = BrowserViewUri.forId(generateUuid());
 		await this.editorService.openEditor({ resource: browserUri, options: { pinned: true, viewState: { url: href, isDefaultLinkOpen } } }, await this.browserViewWorkbenchService.getPreferredGroup());
@@ -901,6 +917,16 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 				'When enabled, localhost links (`localhost`, `127.0.0.1`, `[::1]`) and all-interfaces links (`0.0.0.0`, `[0:0:0:0:0:0:0:0]`, `[::]`) from the terminal, chat, and other sources will open in the Integrated Browser instead of the system browser.'
 			),
 			agentsWindow: { default: true },
+		},
+		// Facade Code: see `LocalhostLinkOpenerContribution`
+		[OpenInIntegratedBrowserSettingId]: {
+			type: 'array',
+			items: { type: 'string' },
+			default: [],
+			markdownDescription: localize(
+				{ comment: ['This is the description for a setting.'], key: 'browser.openInIntegratedBrowser' },
+				"Links from the terminal, chat, and other sources that open in the Integrated Browser instead of the system browser, whatever `#workbench.browser.openLocalhostLinks#` is set to. Each entry is a URL pattern: `example.com` matches the pages of that domain, `*.example.com` the domain and its subdomains, `https://example.com/docs` the pages under that path with that scheme, and `example.com:*` any port."
+			),
 		},
 		[BrowserNewTabPlacementSettingId]: {
 			type: 'string',

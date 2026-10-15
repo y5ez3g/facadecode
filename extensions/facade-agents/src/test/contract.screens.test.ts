@@ -16,7 +16,7 @@ import { Caller, PERSON } from '../record/events';
 import { finalScreenFile, finalScreenTextFile, screensDir } from '../record/screens';
 import { ToolResult } from '../transport/protocol';
 import { settled, sleep, useFakeClock } from './clock';
-import { callerOf, fakeWorld } from './fakes';
+import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
 suite('Contract: agents\' screens, typing and keys', () => {
@@ -25,6 +25,8 @@ suite('Contract: agents\' screens, typing and keys', () => {
 
 	let temp: { dir: string; remove(): void };
 	let lab: string;
+	/** A worktree Facade made of `lab`, where the person starts agents that start agents of their own (O3). */
+	let work: string;
 	let world: ReturnType<typeof fakeWorld>;
 	let contract: Contract;
 	let lead: Caller;
@@ -32,10 +34,11 @@ suite('Contract: agents\' screens, typing and keys', () => {
 	setup(async () => {
 		temp = tempDir('facade-screens-contract-');
 		lab = path.join(temp.dir, 'lab');
+		work = worktreeFolder(lab, 'work');
 		fs.mkdirSync(lab);
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] } });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['work'] } });
 		contract = new Contract(world.facade);
-		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: lab, name: 'lead' });
+		await world.startUp(PERSON, { cli: 'arg', model: 'm', effort: 'e', task: 'Lead.', folder: work, name: 'lead' });
 		await world.startUp(callerOf(world.agent(1)), { cli: 'arg', model: 'm', effort: 'e', task: 'Work.', name: 'worker' });
 		lead = callerOf(world.agent(1));
 	});

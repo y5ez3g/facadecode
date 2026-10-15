@@ -7,6 +7,7 @@ import './media/workspacebarpart.css';
 import { $, append } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
 import { coalesce } from '../../../../base/common/arrays.js';
+import { Sequencer } from '../../../../base/common/async.js';
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -23,6 +24,7 @@ import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Part } from '../../part.js';
 import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
@@ -65,6 +67,21 @@ const WORKSPACEBAR_MAXIMUM_WIDTH = 480;
 export const WORKSPACEBAR_COLLAPSED_WIDTH = 36;
 
 const COLLAPSED_STORAGE_KEY = 'facade.workspaceBar.collapsed';
+
+/**
+ * Whether the bar starts collapsed to its icons: as it was left in this workspace, as VS Code keeps whether its side bar
+ * is shown (WORKSPACE.md W2). A workspace that has none yet has it decided and kept at once: one opened before this was
+ * kept per workspace starts as the bar was everywhere then, and one made since starts open - in its later windows too,
+ * where it is no longer new.
+ */
+export function restoreCollapsed(storageService: IStorageService): boolean {
+	let collapsed = storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.WORKSPACE);
+	if (collapsed === undefined) {
+		collapsed = !storageService.isNew(StorageScope.WORKSPACE) && storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, false);
+		storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+	}
+	return collapsed;
+}
 
 /** Where the folders the window has been on are kept, most recent first (`recentRows`). */
 const RECENT_STORAGE_KEY = 'facade.workspaceBar.recentRows';
@@ -179,6 +196,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@INotificationService private readonly notificationService: INotificationService,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IHostService private readonly hostService: IHostService,
+		@ILifecycleService lifecycleService: ILifecycleService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -193,10 +211,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 		// ⚠️ Read here, before the grid asks what this column's width may be. Restored in `layout`
 		// instead, the first layout happens at the open width and the column snaps a frame later.
-		//
-		// Open until somebody collapses it: a profile that has never touched the toggle starts with the
-		// whole bar, and the choice is remembered from the first time it is made.
-		this._collapsed = this.storageService.getBoolean(COLLAPSED_STORAGE_KEY, StorageScope.PROFILE, false);
+		this._collapsed = restoreCollapsed(this.storageService);
 		this.recent = readRecent(this.storageService.get(RECENT_STORAGE_KEY, StorageScope.WORKSPACE));
 		this.collapsedContext = WorkspaceBarCollapsedContext.bindTo(contextKeyService);
 		this.collapsedContext.set(this._collapsed);
@@ -207,22 +222,41 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 		// Repositories and their worktrees from git's own files, read before the first drawing (WORKTREE.md WT-3)
 		const model = this.model;
+		const leaving = new Sequencer();
 		this.git = this._register(this.instantiationService.createInstance(WorkspaceBarGit, {
 			get folders() { return areWorktreesShown(configurationService) ? model.folders : []; },
 			onDidChange: Event.any(model.onDidChange, Event.signal(Event.filter(this.configurationService.onDidChangeConfiguration, e => e.affectsConfiguration(SHOW_WORKTREES)))),
-			key: model.key
+			key: model.key,
+			// WT-3.8: one read's at a time - two can find one worktree gone - and once the window has restored its folder and
+			// editors, which a switch off a deleted worktree waits on
+			removeDeleted: deleted => leaving.queue(async () => {
+				await lifecycleService.when(LifecyclePhase.Restored);
+				return this.removal.removeDeleted(deleted, async uri => { await this.switcher?.switchTo(uri); });
+			})
 		}));
+		// WT-1.12: one another tool removed takes what it was made with along, as one Facade deletes does
+		this._register(this.git.onDidDropWorktrees(worktrees => worktrees.forEach(uri => customizationService.forget(uri))));
 		// Switching worktrees off is a read too: one of no folders
 		this.onDidChangeRepositories = this.git.onDidChange;
 
 		// WT-1.12: a worktree in folders[] that nobody has named is called by its branch - in the window's
 		// title as in the bar, both through `nameFor`. Named at once from the groups kept from the last
-		// window as well (WT-3.7): a first read that finds the same fires nothing.
+		// window as well (WT-3.7), while the bar waits for the first read.
 		const setDefaultNames = () => customizationService.setDefaultNames(this.git.groups.flatMap(group => group.kind === 'repository'
 			? coalesce(group.worktrees.map(worktree => worktree.folder && { uri: worktree.folder.uri, name: worktree.label }))
 			: []));
 		setDefaultNames();
 		this._register(this.git.onDidChange(setDefaultNames));
+
+		// WORKSPACE.md W9.7: what a workspace took over from the record an earlier build kept for every workspace, kept to
+		// the rows it shows - once this window has read them, with worktrees listed: the last window's may miss a worktree
+		this._register(this.git.onDidChange(() => {
+			if (areWorktreesShown(this.configurationService) && this.git.hasRead) {
+				customizationService.trimInherited(this.git.groups.flatMap(group => group.kind === 'folder'
+					? [group.folder.uri]
+					: [group.main, ...group.members.map(member => member.uri), ...group.worktrees.map(worktree => worktree.uri)]));
+			}
+		}));
 	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {
@@ -289,7 +323,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		this._collapsed = collapsed;
 		this.collapsedContext.set(collapsed);
 
-		this.storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.PROFILE, StorageTarget.USER);
+		this.storageService.store(COLLAPSED_STORAGE_KEY, collapsed, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		this.element?.classList.toggle('collapsed', collapsed);
 		this._onDidChangeCollapsed.fire();
 
@@ -300,10 +334,8 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 	/**
 	 * Whatever took a folder out of the workspace, its editors go with it.
 	 *
-	 * ⚠️ Its display name and colour do **not**. Those live in `StorageScope.PROFILE` because they
-	 * are about the folder rather than about this window, so pruning them against one workspace's
-	 * list would throw away a colour set in another. A folder taken out and put back is the same
-	 * folder and comes back the colour it was.
+	 * ⚠️ Its display name and colour do **not**: a folder taken out and put back is the same folder,
+	 * and comes back the colour it was in this workspace.
 	 */
 	private pruneEditors(): void {
 		void this.editors?.prune(this.model.folders.map(folder => folder.uri), folder => this.isRemoving(folder));

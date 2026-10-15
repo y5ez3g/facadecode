@@ -38,8 +38,8 @@ import { TerminalExitReason, TerminalSettingId } from '../../../../platform/term
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, WorkspaceTrustRequestButton } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IWorkspaceContextService, isSingleFolderWorkspaceIdentifier, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
-import { unreachable } from '../../../browser/parts/workspacebar/workspaceBar.js';
-import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
+import { canonicalUri, unreachable, WORKTREES_FOLDER, worktreesFolderOf } from '../../../browser/parts/workspacebar/workspaceBar.js';
+import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IRunningWork } from '../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
@@ -52,6 +52,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IFilesConfigurationService } from '../../../services/filesConfiguration/common/filesConfigurationService.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IWorkingCopy } from '../../../services/workingCopy/common/workingCopy.js';
+import { worktreeRepositoryOf } from '../../../services/workspaces/common/gitFiles.js';
 import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
 import { IFacadeRunsService } from '../../facadeCommands/browser/facadeRuns.js';
 import { facadeRunOf, IFacadeRun } from '../../facadeCommands/common/facadeRun.js';
@@ -69,9 +70,6 @@ import { IWorkbenchContribution } from '../../../common/contributions.js';
  * rather than part of the bar, because setup runs in a terminal and `vs/workbench/browser` may not
  * import `contrib/terminal`.
  */
-
-/** Where the product puts worktrees: `<home>/.facade/worktrees/<repository>/<name>` (WT-2.1). */
-const WORKTREES = ['.facade', 'worktrees'];
 
 /** Windows device names, refused as a worktree's folder on every OS (WT-2.2). */
 const DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
@@ -642,6 +640,12 @@ export class WorktreeService implements IWorktreeService {
 			return;
 		}
 
+		// WT-1.3: another tool's worktree is a folder to Facade, which makes no worktree of it
+		if (await this.isAnotherToolsWorktree(target)) {
+			this.notificationService.info(localize('worktrees.anotherToolsWorktree', "'{0}' is a worktree created outside Facade. Create a worktree from its repository's main checkout instead.", this.labelService.getUriLabel(target)));
+			return;
+		}
+
 		const repository = this.workspaceBarService.repositoryFor(target);
 		const main = repository?.main ?? target;
 		if (this.newWorktrees.has(main)) {
@@ -732,13 +736,13 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	async removeWorktree(target: URI, options: IRemoveWorktreeOptions = {}): Promise<void> {
-		const { main, worktree, name } = this.toRemove(target, options);
+		const { main, worktree, name } = await this.toRemove(target, options);
 		// One at a time, as Delete Worktree: a second waits for the first, and finds no worktree there
 		await this.runInTurn(worktree, () => this.doRemoveWorktree(main, worktree, name, options));
 	}
 
 	async removalLoss(target: URI, options: IRemoveWorktreeOptions = {}): Promise<readonly string[]> {
-		const { main, worktree, name } = this.toRemove(target, options);
+		const { main, worktree, name } = await this.toRemove(target, options);
 		// The deletion's own first look, the caller's own files applied as it applies them (O5)
 		const loss = await this.undecidedLoss(main, worktree, await this.checkToRemove(main, worktree, name, options), options);
 		return loss ? [...lostFiles(loss), ...(loss.submodules ? [localize('worktrees.submodulesLost', "its submodules (including any unpushed commits)")] : [])] : [];
@@ -746,15 +750,16 @@ export class WorktreeService implements IWorktreeService {
 
 	/**
 	 * What `removeWorktree` deletes for `target`: the worktree, of the main checkout `main`, and its name - or, thrown,
-	 * why it deletes nothing.
+	 * why it deletes nothing. Never one Facade did not make (WT-1.3; AGENT-ORCHESTRATION.md, O5).
 	 */
-	private toRemove(target: URI, options: IRemoveWorktreeOptions): { readonly main: URI; readonly worktree: URI; readonly name: string } {
+	private async toRemove(target: URI, options: IRemoveWorktreeOptions): Promise<{ readonly main: URI; readonly worktree: URI; readonly name: string }> {
 		const extUri = this.uriIdentityService.extUri;
 		if (options.leftover) {
 			const main = options.main;
 			if (!main || extUri.isEqual(main, target)) {
 				throw new Error(this.notAWorktree(target));
 			}
+			await this.refuseAnotherTools(target);
 			return { main, worktree: target, name: basename(target) };
 		}
 		const repository = this.workspaceBarService.repositoryFor(target);
@@ -768,7 +773,18 @@ export class WorktreeService implements IWorktreeService {
 				: this.notAWorktree(target));
 		}
 		const uri = worktree?.uri ?? target;
+		await this.refuseAnotherTools(uri);
 		return { main, worktree: uri, name: worktree ? worktreeNameFor(this.customizationService, worktree) : basename(uri) };
+	}
+
+	/**
+	 * Throws for a worktree another tool made, which is a folder to Facade: it deletes none but its own, what is left of
+	 * one included (WT-1.3).
+	 */
+	private async refuseAnotherTools(worktree: URI): Promise<void> {
+		if (!await this.inWorktreesFolder(worktree)) {
+			throw new Error(localize('worktrees.notDeletedNotFacades', "{0} is a worktree created outside Facade, which Facade never deletes.", this.labelService.getUriLabel(worktree)));
+		}
 	}
 
 	/**
@@ -888,11 +904,11 @@ export class WorktreeService implements IWorktreeService {
 			blocked: base.identity === false ? noIdentityMessage() : undefined
 		};
 
-		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES, basename(main));
+		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES_FOLDER, basename(main));
 
 		// From the home folder, so the part the branch makes fits on the dialog's line.
 		const separator = this.labelService.getSeparator(parent.scheme, parent.authority);
-		const parentLabel = ['~', ...WORKTREES, basename(main)].join(separator) + separator;
+		const parentLabel = ['~', ...WORKTREES_FOLDER, basename(main)].join(separator) + separator;
 
 		// The names already taken, so the Path line shows the `-1` the worktree will get.
 		const caseSensitive = this.fileService.hasCapability(parent, FileSystemProviderCapabilities.PathCaseSensitive);
@@ -1020,7 +1036,7 @@ export class WorktreeService implements IWorktreeService {
 			throw new Error(localize('worktrees.noBaseUnasked', "Repository '{0}' contains no commits. Create an initial commit first.", basename(main)));
 		}
 
-		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES, basename(main));
+		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES_FOLDER, basename(main));
 		// The agent's caller says what could not be copied and how a hook failed: the person is not told of it
 		const created = await this.createDecided(main, branch, name, parent, {}, options.startPoint, true);
 		if (created.kind === 'failed') {
@@ -1065,9 +1081,9 @@ export class WorktreeService implements IWorktreeService {
 		const customization: IFolderCustomization = color ? { ...given, color } : given;
 
 		// Before git writes its record, which the bar reads a row from while the files are still being
-		// checked out. Written even when nothing was chosen: customizations are kept by path, and one left
-		// by a worktree deleted outside the bar would otherwise be worn by this one. Taken back if none is made.
-		this.customizationService.set(worktree, customization);
+		// checked out - in every window. Written even when nothing was chosen: looks are kept by path, and one
+		// left by a worktree deleted outside the bar would otherwise be worn by this one. Taken back if none is made.
+		this.customizationService.setMade(worktree, customization);
 
 		// WT-5.4: not cancellable - a half-made worktree is worse than waiting. The start point only when
 		// there is one: the git extension's command takes HEAD without it.
@@ -1079,12 +1095,12 @@ export class WorktreeService implements IWorktreeService {
 				{ location: ProgressLocation.Notification, title: localize('worktrees.creating', "Creating worktree '{0}'...", customization.name || branch) },
 				create);
 		} catch (err) {
-			this.customizationService.set(worktree, {});
+			this.customizationService.forget(worktree);
 			return { kind: 'failed', worktree, result: undefined, unreachable: gitUnreachable('_git.createWorktreeAt', err) };
 		}
 
 		if (!result || result.kind === 'error') {
-			this.customizationService.set(worktree, {});
+			this.customizationService.forget(worktree);
 			this.logService.warn(`[worktrees] Failed to create worktree at '${worktree.toString(true)}': ${result?.message ?? 'no response'}`);
 			return { kind: 'failed', worktree, result };
 		}
@@ -1923,7 +1939,7 @@ export class WorktreeService implements IWorktreeService {
 	 * recorded for that path: a worktree's own is its repository's now (WORKTREE.md).
 	 */
 	private async forgetWorktree(main: URI, worktree: URI): Promise<void> {
-		this.customizationService.set(worktree, {});
+		this.customizationService.forget(worktree);
 		const order = this.customizationService.worktreeOrder(main);
 		if (order) {
 			this.customizationService.setWorktreeOrder(main, order.filter(candidate => !this.uriIdentityService.extUri.isEqual(candidate, worktree)));
@@ -2020,6 +2036,17 @@ export class WorktreeService implements IWorktreeService {
 		}));
 		hold(this.workingCopyService.workingCopies.map(workingCopy => workingCopy.resource));
 		return store;
+	}
+
+	/** Whether `folder` is a worktree Facade did not make: a linked worktree outside `WORKTREES_FOLDER` (WT-1.3). */
+	private async isAnotherToolsWorktree(folder: URI): Promise<boolean> {
+		return !!await worktreeRepositoryOf(this.fileService, this.uriIdentityService.extUri, folder) && !await this.inWorktreesFolder(folder);
+	}
+
+	/** Whether `folder` is in `WORKTREES_FOLDER`, where Facade makes worktrees (WT-2.1), its links followed. */
+	private async inWorktreesFolder(folder: URI): Promise<boolean> {
+		const [canonical, own] = await Promise.all([canonicalUri(this.fileService, folder), worktreesFolderOf(this.fileService, this.pathService)]);
+		return this.uriIdentityService.extUri.isEqualOrParent(canonical, own);
 	}
 
 	/** That `target` is no worktree the workspace knows. */
@@ -2221,9 +2248,9 @@ export class NewWorktreeAction extends Action2 {
 			precondition: ContextKeyExpr.and(WORKTREES_SHOWN, GIT_AVAILABLE),
 			menu: [{
 				// First in the menu, as the explorer puts New File first. On every folder's row: a folder
-				// without a repository is made one first (WT-5.8).
+				// without a repository is made one first (WT-5.8). Not on another tool's worktree (WT-1.3).
 				id: WorkspaceBarContextMenu, group: 'navigation', order: 1,
-				when: ContextKeyExpr.and(WorkspaceBarRowKindContext.notEqualsTo('worktree'), WORKTREES_SHOWN)
+				when: ContextKeyExpr.and(WorkspaceBarRowKindContext.notEqualsTo('worktree'), WorkspaceBarRowOffersWorktreeContext, WORKTREES_SHOWN)
 			}, {
 				// The row's `+`, there only while it can be used (WT-5.1, WT-5.5). A worktree's row has none.
 				id: WorkspaceBarRowToolbar, group: 'navigation', order: 1,
