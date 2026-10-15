@@ -432,7 +432,8 @@ folder already in the workspace is not added again and costs no edit.
 It is dimmed and struck through, never hidden: its row is the only place to remove
 it from. Whether each folder exists is read when the window starts, when `folders[]`
 changes, and when a switch to it fails. It is not watched. A folder that comes back
-stops being marked at the next read.
+stops being marked at the next read. A worktree git no longer records is not such a
+folder: it leaves the workspace (WORKTREE.md WT-3.8).
 
 ### W9.4 Going to a row
 

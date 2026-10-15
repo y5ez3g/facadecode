@@ -176,8 +176,9 @@ export function workspaceBarRows(input: {
 	const rows: IObjectTreeElement<WorkspaceBarRow>[] = [];
 	for (const group of input.groups) {
 		if (group.kind === 'folder') {
+			// One on its way out of the workspace is drawn nowhere, at the end neither (WT-3.8)
 			const folder = stillIn(group.folder);
-			if (folder) {
+			if (folder && !group.leaving) {
 				rows.push(flat(folder, group.foreign));
 			}
 			continue;

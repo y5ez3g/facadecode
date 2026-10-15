@@ -15,7 +15,7 @@ import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IRunningWork, IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
@@ -126,6 +126,8 @@ suite('Workspace bar - removing folders', () => {
 		readonly whileAsked?: (window: { folders: IWorkspaceFolder[]; work: Map<string, IRunningWork[]> }) => void;
 		/** The workspace not taking the edit, as one whose file cannot be written. */
 		readonly editFails?: boolean;
+		/** A window on a workspace, unless said. */
+		readonly state?: WorkbenchState;
 	}
 
 	interface IOutcome {
@@ -138,7 +140,8 @@ suite('Workspace bar - removing folders', () => {
 		readonly said: string[];
 	}
 
-	async function remove(paths: readonly string[], options: IWindowOptions, removeOptions?: IRemoveOptions, during?: (removal: WorkspaceBarRemoval) => void): Promise<IOutcome> {
+	/** The window `options` describe, and the removal of folders from it. */
+	function windowWith(options: IWindowOptions, during?: (removal: WorkspaceBarRemoval) => void) {
 		const steps: string[] = [];
 		const said: string[] = [];
 		const asked: IOutcome['asked'] = [];
@@ -151,6 +154,7 @@ suite('Workspace bar - removing folders', () => {
 
 		const instantiationService = store.add(new TestInstantiationService());
 		instantiationService.stub(IWorkspaceContextService, {
+			getWorkbenchState: () => options.state ?? WorkbenchState.WORKSPACE,
 			getWorkspace: () => upcastPartial<IWorkspace>({ id: 'test', folders: window.folders }),
 			getWorkspaceFolder: (resource: URI) => window.folders.filter(folder => extUri.isEqualOrParent(resource, folder.uri)).sort((a, b) => b.uri.path.length - a.uri.path.length)[0] ?? null
 		});
@@ -172,7 +176,7 @@ suite('Workspace bar - removing folders', () => {
 			}
 		});
 		instantiationService.stub(ILabelService, { getUriLabel: (uri: URI) => uri.path });
-		instantiationService.stub(INotificationService, { warn: (message: string) => { said.push(message); }, error: (message: string) => { said.push(message); } });
+		instantiationService.stub(INotificationService, { info: (message: string) => { said.push(message); }, warn: (message: string) => { said.push(message); }, error: (message: string) => { said.push(message); } });
 		instantiationService.stub(IUriIdentityService, { extUri });
 		instantiationService.stub(ILogService, new NullLogService());
 		instantiationService.stub(IPutAwayEditorsService, {
@@ -197,7 +201,11 @@ suite('Workspace bar - removing folders', () => {
 		});
 		const repository = options.repository;
 		const removal = instantiationService.createInstance(WorkspaceBarRemoval, model, (uri: URI) => repository && (isEqual(repository.main, uri) || repository.members.some(folder => isEqual(folder.uri, uri)) || repository.worktrees.some(worktree => isEqual(worktree.uri, uri))) ? repository : undefined);
+		return { removal, window, steps, said, asked };
+	}
 
+	async function remove(paths: readonly string[], options: IWindowOptions, removeOptions?: IRemoveOptions, during?: (removal: WorkspaceBarRemoval) => void): Promise<IOutcome> {
+		const { removal, window, steps, said, asked } = windowWith(options, during);
 		const result = await removal.remove(paths.map(path => URI.file(path)), removeOptions);
 		return {
 			result: result.kind === 'removed' ? `removed ${result.folders.map(uri => uri.path).join(' ')}` : result,
@@ -450,5 +458,61 @@ suite('Workspace bar - removing folders', () => {
 		}, { confirmed: true });
 
 		assert.deepStrictEqual({ result: outcome.result, asked: outcome.asked.length, steps: outcome.steps }, { result: 'removed /wt/w2', asked: 0, steps: ['edit -/wt/w2'] });
+	});
+
+	/** `removeDeleted` in the window `options` describe, its folders `/w/<name>`, and every worktree of `/lab`. */
+	async function removeDeleted(names: readonly string[], options: IWindowOptions, main = '/lab'): Promise<{ result: boolean; steps: string[]; said: string[]; folders: string[]; marked: boolean[] }> {
+		const marked: boolean[] = [];
+		const { removal, window, steps, said } = windowWith(options, removal => marked.push(...names.map(name => removal.isRemoving(URI.file(`/w/${name}`)) || removal.isDeleting(URI.file(`/w/${name}`)))));
+		const deleted = names.map(name => ({ folder: window.folders.find(folder => folder.uri.path === `/w/${name}`)!, main: URI.file(main) }));
+		const result = await removal.removeDeleted(deleted, async uri => { steps.push(`switch ${uri.path}`); });
+		return { result, steps, said, folders: window.folders.map(folder => folder.uri.path), marked };
+	}
+
+	test('WT-3.8 worktrees git no longer records leave at once, nothing asked and not as a removal, so that what runs in them goes to the panel; the window on one goes to its repository\'s row first, and says why once it has left', async () => {
+		const outcome = await removeDeleted(['w2', 'w3'], {
+			folders: ['/lab', '/w/w2', '/w/w3'],
+			active: '/w/w2',
+			names: new Map([['/w/w2', 'feature/w2']]),
+			work: new Map([['/w/w2', [agent(1, 'Claude Code')]]]),
+			unsaved: [{ path: '/w/w2/todo.md' }]
+		});
+
+		assert.deepStrictEqual(outcome, {
+			result: true,
+			steps: ['switch /lab', 'edit -/w/w2 -/w/w3'],
+			said: ['Worktree \'feature/w2\' was deleted and removed from the workspace.'],
+			folders: ['/lab'],
+			marked: [false, false]
+		});
+	});
+
+	test('WT-3.8 the window on another folder stays, and is told nothing; one whose repository\'s row is not in the workspace is left where W6.1 puts it', async () => {
+		const elsewhere = await removeDeleted(['w2'], { folders: ['/lab', '/w/w2'], active: '/lab' });
+		const noRepository = await removeDeleted(['w2'], { folders: ['/notes', '/w/w2'], active: '/w/w2' });
+
+		assert.deepStrictEqual({ elsewhere, noRepository }, {
+			elsewhere: { result: true, steps: ['edit -/w/w2'], said: [], folders: ['/lab'], marked: [false] },
+			noRepository: { result: true, steps: ['edit -/w/w2'], said: ['Worktree \'w2\' was deleted and removed from the workspace.'], folders: ['/notes'], marked: [false] }
+		});
+	});
+
+	test('WT-3.8 a folder another read has taken out already is not taken out again', async () => {
+		const { removal, steps, said } = windowWith({ folders: ['/lab'], active: '/lab' });
+		const result = await removal.removeDeleted([{ folder: member('/w/w2'), main: URI.file('/lab') }], async uri => { steps.push(`switch ${uri.path}`); });
+
+		assert.deepStrictEqual({ result, steps, said }, { result: true, steps: [], said: [] });
+	});
+
+	test('WT-3.8 a window on one folder has nothing to take it out of, and a workspace that does not take the edit keeps it: both answer that it did not leave, and the window on it is not told it left', async () => {
+		const folder = await removeDeleted(['w2'], { folders: ['/w/w2'], state: WorkbenchState.FOLDER });
+		const failing = await removeDeleted(['w2'], { folders: ['/lab', '/w/w2'], active: '/lab', editFails: true });
+		const failingOnIt = await removeDeleted(['w2'], { folders: ['/lab', '/w/w2'], active: '/w/w2', editFails: true });
+
+		assert.deepStrictEqual({ folder, failing, failingOnIt }, {
+			folder: { result: false, steps: [], said: [], folders: ['/w/w2'], marked: [] },
+			failing: { result: false, steps: ['edit -/w/w2'], said: [], folders: ['/lab', '/w/w2'], marked: [false] },
+			failingOnIt: { result: false, steps: ['switch /lab', 'edit -/w/w2'], said: [], folders: ['/lab', '/w/w2'], marked: [false] }
+		});
 	});
 });

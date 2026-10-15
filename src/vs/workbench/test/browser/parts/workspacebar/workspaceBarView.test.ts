@@ -459,6 +459,12 @@ suite('Workspace bar - the view', () => {
 		});
 	});
 
+	test('WTA-03 a worktree on its way out of the workspace has no row, at the end neither (WT-3.8)', () => {
+		const bar = view([lab, notes, w2], [repository(undefined), { kind: 'folder', folder: notes }, { kind: 'folder', folder: w2, leaving: true }], lab.uri);
+
+		assert.deepStrictEqual(bar.rows(), ['lab', 'w2, worktree', 'notes']);
+	});
+
 	test('WS-17 a folder holding unsaved editors out of sight looks and reads as any other: no mark at its row\'s end, nothing more read out', () => {
 		const bar = view([lab, notes], [], lab.uri);
 		const draft = store.add(new TestWorkingCopy(URI.file('/lab/draft.ts'), true));

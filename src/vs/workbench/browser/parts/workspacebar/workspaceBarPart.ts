@@ -7,6 +7,7 @@ import './media/workspacebarpart.css';
 import { $, append } from '../../../../base/browser/dom.js';
 import { ISerializedNode, LayoutPriority } from '../../../../base/browser/ui/grid/grid.js';
 import { coalesce } from '../../../../base/common/arrays.js';
+import { Sequencer } from '../../../../base/common/async.js';
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -23,6 +24,7 @@ import { contrastBorder } from '../../../../platform/theme/common/colorRegistry.
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Part } from '../../part.js';
 import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
@@ -179,6 +181,7 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@INotificationService private readonly notificationService: INotificationService,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IHostService private readonly hostService: IHostService,
+		@ILifecycleService lifecycleService: ILifecycleService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -207,10 +210,17 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 
 		// Repositories and their worktrees from git's own files, read before the first drawing (WORKTREE.md WT-3)
 		const model = this.model;
+		const leaving = new Sequencer();
 		this.git = this._register(this.instantiationService.createInstance(WorkspaceBarGit, {
 			get folders() { return areWorktreesShown(configurationService) ? model.folders : []; },
 			onDidChange: Event.any(model.onDidChange, Event.signal(Event.filter(this.configurationService.onDidChangeConfiguration, e => e.affectsConfiguration(SHOW_WORKTREES)))),
-			key: model.key
+			key: model.key,
+			// WT-3.8: one read's at a time - two can find one worktree gone - and once the window has restored its folder and
+			// editors, which a switch off a deleted worktree waits on
+			removeDeleted: deleted => leaving.queue(async () => {
+				await lifecycleService.when(LifecyclePhase.Restored);
+				return this.removal.removeDeleted(deleted, async uri => { await this.switcher?.switchTo(uri); });
+			})
 		}));
 		// Switching worktrees off is a read too: one of no folders
 		this.onDidChangeRepositories = this.git.onDidChange;

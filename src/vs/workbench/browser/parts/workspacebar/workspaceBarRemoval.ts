@@ -13,14 +13,14 @@ import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceContextService, IWorkspaceFolder, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { EditorsOrder } from '../../../common/editor.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkingCopy } from '../../../services/workingCopy/common/workingCopy.js';
 import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
 import { IRunningWork, IWorkspaceBarAgentsService } from './workspaceBarAgents.js';
 import { IWorkspaceBarCustomizationService } from './workspaceBarCustomization.js';
-import { IWorkspaceBarRepository } from './workspaceBarGit.js';
+import { IDeletedWorktree, IWorkspaceBarRepository } from './workspaceBarGit.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 import { agentsFirst, discardedHeading, fileLine, listedFiles, listedSessions, placeNameFor, terminatedHeading, workLine } from './workspaceBarQuestions.js';
 import { IRemoveOptions, RemoveResult } from './workspaceBarService.js';
@@ -162,6 +162,56 @@ export class WorkspaceBarRemoval {
 
 		await this.closeUnsaved(discarded);
 		return { kind: 'removed', folders: leaving.map(folder => folder.uri) };
+	}
+
+	/**
+	 * Takes out of the workspace the folders that were worktrees git no longer records (WORKTREE.md WT-3.8), as a folder
+	 * leaves where nothing could ask (WORKSPACE.md W9.6): nothing asked, and not marked as removing, so that the disk is
+	 * left alone, unsaved editors are kept and what runs in them moves to the panel. The window on one goes to its
+	 * repository's row first, through `switchTo`, where that is in the workspace, and once it has left the person is
+	 * told why. Resolves with whether they left.
+	 */
+	async removeDeleted(deleted: readonly IDeletedWorktree[], switchTo: (folder: URI) => Promise<void>): Promise<boolean> {
+		// A window on one folder has no workspace to take it out of
+		if (this.contextService.getWorkbenchState() !== WorkbenchState.WORKSPACE) {
+			return false;
+		}
+
+		// Another read's may have taken them out already
+		const members = deleted.filter(({ folder }) => this.isMember(folder.uri));
+		if (!members.length) {
+			return true;
+		}
+
+		const active = this.activeFolderService.activeFolder?.uri;
+		const onScreen = active && members.find(({ folder }) => this.uriIdentityService.extUri.isEqual(folder.uri, active));
+		// Named as the window shows it now: once it has left, nothing names it
+		const name = onScreen && this.customizationService.nameFor(onScreen.folder);
+		if (onScreen) {
+			const main = await this.model.resolve(onScreen.main);
+			if (main) {
+				await switchTo(main.uri);
+			}
+		}
+
+		const uris = members.map(({ folder }) => folder.uri);
+		this.logService.info(`[workspaceBar] Removing worktrees git no longer records: ${uris.map(uri => uri.toString(true)).join(', ')}`);
+		try {
+			await this.model.remove(uris);
+		} catch (error) {
+			this.notificationService.error(localize('workspaceBar.notRemoved', "Failed to update workspace: {0}", toErrorMessage(error)));
+			return false;
+		}
+
+		// The edit did not apply, and the workspace has reported why
+		if (uris.some(uri => this.isMember(uri))) {
+			return false;
+		}
+
+		if (name) {
+			this.notificationService.info(localize('workspaceBar.worktreeDeleted', "Worktree '{0}' was deleted and removed from the workspace.", name));
+		}
+		return true;
 	}
 
 	/** The requested workspace folders, and every workspace folder that leaves with them (`foldersToRemove`). */
