@@ -15,9 +15,11 @@ import { FileService } from '../../../../../platform/files/common/fileService.js
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { StorageScope, StorageTarget, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
+import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { GROUPS_STORAGE_KEY, WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { TestStorageService } from '../../../common/workbenchTestServices.js';
+import { TestPathService } from '../../workbenchTestServices.js';
 
 /** The in-memory disk, with links: each of `links` resolves to the path it maps to, as a disk's real path. */
 class LinkedFileSystemProvider extends InMemoryFileSystemProvider {
@@ -50,6 +52,10 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
+	/** Where the product makes `/lab`'s worktrees: `<home>/.facade/worktrees/<repository>` (WT-2.1). */
+	const OWN = '/home/.facade/worktrees/lab';
+	const pathService = new TestPathService(URI.file('/home'));
+
 	let fileService: FileService;
 	/** The workspace's storage, which every window of the workspace in a test shares. */
 	let storage: TestStorageService;
@@ -59,6 +65,11 @@ suite('Workspace bar - worktrees as git records them', () => {
 		disposables.add(fileService.registerProvider(Schemas.file, disposables.add(new InMemoryFileSystemProvider())));
 		storage = disposables.add(new TestStorageService());
 	});
+
+	/** The reader over `source`, on `files` - the in-memory disk, unless a test brings its own. */
+	function reader(source: ConstructorParameters<typeof WorkspaceBarGit>[0], files: FileService = fileService): WorkspaceBarGit {
+		return disposables.add(new WorkspaceBarGit(source, files, storage, pathService, disposables.add(new UriIdentityService(files))));
+	}
 
 	async function write(path: string, content: string): Promise<void> {
 		await fileService.writeFile(URI.file(path), VSBuffer.fromString(`${content}\n`));
@@ -87,7 +98,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 	/** The reader of a window onto `paths`, as the window makes it: its first read started, not finished. */
 	function open(...paths: string[]): WorkspaceBarGit {
 		const folders = paths.map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) }));
-		return disposables.add(new WorkspaceBarGit({ folders, onDidChange: Event.None, key: uri => uri.toString() }, fileService, storage));
+		return reader({ folders, onDidChange: Event.None, key: uri => uri.toString() });
 	}
 
 	async function read(...paths: string[]): Promise<{ git: WorkspaceBarGit; groups: unknown[] }> {
@@ -99,7 +110,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 	function summary(groups: readonly WorkspaceBarGroup[]): unknown[] {
 		return groups.map(group => group.kind === 'folder'
-			? { folder: group.folder.uri.path }
+			? { folder: group.folder.uri.path, ...group.foreign ? { foreign: true } : {} }
 			: {
 				repository: group.main.path,
 				folder: group.folder?.uri.path,
@@ -113,15 +124,15 @@ suite('Workspace bar - worktrees as git records them', () => {
 			});
 	}
 
-	test('WTA-01 WTA-02 a main checkout lists every worktree git records, oldest first, none of them added', async () => {
+	test('WTA-01 WTA-02 a main checkout lists the product\'s worktrees of it, oldest first, none of them added', async () => {
 		// ⚠️ A moment between each, so that each record is made at a time of its own: the order is the
 		// creation time of git's record, and the in-memory disk stamps it to the millisecond.
 		await repository('/lab');
-		await worktree('/lab', 'w10', '/wt/w10');
+		await worktree('/lab', 'w10', `${OWN}/w10`);
 		await timeout(2);
-		await worktree('/lab', 'w2', '/wt/w2');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
 		await timeout(2);
-		await worktree('/lab', 'feat-x', '/wt/feat-x', 'ref: refs/heads/feat/x');
+		await worktree('/lab', 'feat-x', `${OWN}/feat-x`, 'ref: refs/heads/feat/x');
 
 		const { groups } = await read('/lab');
 
@@ -129,40 +140,57 @@ suite('Workspace bar - worktrees as git records them', () => {
 			repository: '/lab',
 			folder: '/lab',
 			worktrees: [
-				{ path: '/wt/w10', label: 'w10', branch: 'w10', exists: true, folder: undefined },
-				{ path: '/wt/w2', label: 'w2', branch: 'w2', exists: true, folder: undefined },
-				{ path: '/wt/feat-x', label: 'feat/x', branch: 'feat/x', exists: true, folder: undefined },
+				{ path: `${OWN}/w10`, label: 'w10', branch: 'w10', exists: true, folder: undefined },
+				{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: undefined },
+				{ path: `${OWN}/feat-x`, label: 'feat/x', branch: 'feat/x', exists: true, folder: undefined },
 			]
 		}]);
 	});
 
+	test('WTA-01 a worktree another tool made is listed under no repository: in the workspace, it is a folder of its own that offers no worktree', async () => {
+		// An agent's scratch checkout of a commit, made in its own temporary folder to test it before a merge
+		await repository('/lab');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
+		await timeout(2);
+		await worktree('/lab', 'b162069', '/tmp/verify/b162069', 'b162069e6ad6bb3c2e2f60a2e27e8e5c1d3fa1b0');
+
+		const { groups: alone } = await read('/lab');
+		const { groups: added } = await read('/tmp/verify/b162069', '/lab');
+
+		const lab = { repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: undefined }] };
+		assert.deepStrictEqual({ alone, added }, {
+			alone: [lab],
+			added: [{ folder: '/tmp/verify/b162069', foreign: true }, lab],
+		});
+	});
+
 	test('WTA-01 a worktree in the workspace joins its repository, which sits where its first member is', async () => {
 		await repository('/lab');
-		await worktree('/lab', 'w2', '/wt/w2');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
 
-		const { groups } = await read('/notes', '/wt/w2', '/lab');
+		const { groups } = await read('/notes', `${OWN}/w2`, '/lab');
 
 		assert.deepStrictEqual(groups, [
 			{ folder: '/notes' },
-			{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/w2', label: 'w2', branch: 'w2', exists: true, folder: '/wt/w2' }] },
+			{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: `${OWN}/w2` }] },
 		]);
 	});
 
 	test('WTA-07 a worktree added on its own still makes its repository the row, without adding the repository', async () => {
 		await repository('/lab');
-		await worktree('/lab', 'w2', '/wt/w2');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
 
-		const { groups } = await read('/wt/w2');
+		const { groups } = await read(`${OWN}/w2`);
 
 		assert.deepStrictEqual(groups, [
-			{ repository: '/lab', folder: undefined, worktrees: [{ path: '/wt/w2', label: 'w2', branch: 'w2', exists: true, folder: '/wt/w2' }] },
+			{ repository: '/lab', folder: undefined, worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: `${OWN}/w2` }] },
 		]);
 	});
 
 	test('WTA-03 a detached HEAD shows its short hash, and a worktree whose folder is gone is still listed', async () => {
 		await repository('/lab');
-		await worktree('/lab', 'probe', '/wt/probe', '0123456789abcdef0123456789abcdef01234567');
-		await worktree('/lab', 'gone', '/wt/gone', 'ref: refs/heads/gone', false);
+		await worktree('/lab', 'probe', `${OWN}/probe`, '0123456789abcdef0123456789abcdef01234567');
+		await worktree('/lab', 'gone', `${OWN}/gone`, 'ref: refs/heads/gone', false);
 
 		const { groups } = await read('/lab');
 
@@ -170,38 +198,39 @@ suite('Workspace bar - worktrees as git records them', () => {
 			repository: '/lab',
 			folder: '/lab',
 			worktrees: [
-				{ path: '/wt/probe', label: '0123456', branch: undefined, exists: true, folder: undefined },
-				{ path: '/wt/gone', label: 'gone', branch: 'gone', exists: false, folder: undefined },
+				{ path: `${OWN}/probe`, label: '0123456', branch: undefined, exists: true, folder: undefined },
+				{ path: `${OWN}/gone`, label: 'gone', branch: 'gone', exists: false, folder: undefined },
 			]
 		}]);
 	});
 
 	test('WTA-03 a reftable repository, whose HEAD files do not say the branch, has its worktrees named by their folders, on no branch', async () => {
 		await write('/lab/.git/HEAD', 'ref: refs/heads/.invalid');
-		await worktree('/lab', 'w2', '/wt/w2', 'ref: refs/heads/.invalid');
+		await worktree('/lab', 'w2', `${OWN}/w2`, 'ref: refs/heads/.invalid');
 
 		const { git, groups } = await read('/lab');
 
 		assert.deepStrictEqual({ groups, branch: git.groups[0].kind === 'repository' ? git.groups[0].branch : 'not a repository' }, {
-			groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/w2', label: 'w2', branch: undefined, exists: true, folder: undefined }] }],
+			groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: undefined, exists: true, folder: undefined }] }],
 			branch: undefined,
 		});
 	});
 
 	test('WTA-03 a worktree in the workspace whose folder was deleted by hand is one row, under its repository', async () => {
 		await repository('/lab');
-		await worktree('/lab', 'gone', '/wt/gone', 'ref: refs/heads/gone', false);
+		await worktree('/lab', 'gone', `${OWN}/gone`, 'ref: refs/heads/gone', false);
 
-		const { groups } = await read('/lab', '/wt/gone');
+		const { groups } = await read('/lab', `${OWN}/gone`);
 		// Listed before its repository and another folder, it takes the repository's row up with it (WT-1.6).
-		const { groups: listedFirst } = await read('/wt/gone', '/notes', '/lab');
+		const { groups: listedFirst } = await read(`${OWN}/gone`, '/notes', '/lab');
 
+		const gone = { path: `${OWN}/gone`, label: 'gone', branch: 'gone', exists: false, folder: `${OWN}/gone` };
 		assert.deepStrictEqual({ groups, listedFirst }, {
 			groups: [
-				{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/gone', label: 'gone', branch: 'gone', exists: false, folder: '/wt/gone' }] },
+				{ repository: '/lab', folder: '/lab', worktrees: [gone] },
 			],
 			listedFirst: [
-				{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/gone', label: 'gone', branch: 'gone', exists: false, folder: '/wt/gone' }] },
+				{ repository: '/lab', folder: '/lab', worktrees: [gone] },
 				{ folder: '/notes' },
 			],
 		});
@@ -215,7 +244,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 			await linked.writeFile(URI.file(`${root}/.git/HEAD`), VSBuffer.fromString('ref: refs/heads/main\n'));
 		}
 		const folders = ['/lab', '/link-lab'].map((path, index) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(1) }));
-		const git = disposables.add(new WorkspaceBarGit({ folders, onDidChange: Event.None, key: uri => uri.toString() }, linked, storage));
+		const git = reader({ folders, onDidChange: Event.None, key: uri => uri.toString() }, linked);
 		await git.refresh();
 
 		assert.deepStrictEqual(git.groups.map(group => group.kind === 'repository'
@@ -245,15 +274,15 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 	test('WTA-03 relative paths, as worktree.useRelativePaths writes them, resolve against the file they are in', async () => {
 		await repository('/lab');
-		await write('/lab/.git/worktrees/w3/gitdir', '../../../../wt/w3/.git');
+		await write('/lab/.git/worktrees/w3/gitdir', `../../../..${OWN}/w3/.git`);
 		await write('/lab/.git/worktrees/w3/HEAD', 'ref: refs/heads/w3');
 		await write('/lab/.git/worktrees/w3/commondir', '../..');
-		await write('/wt/w3/.git', 'gitdir: ../../lab/.git/worktrees/w3');
+		await write(`${OWN}/w3/.git`, 'gitdir: ../../../../../lab/.git/worktrees/w3');
 
-		const { groups } = await read('/wt/w3');
+		const { groups } = await read(`${OWN}/w3`);
 
 		assert.deepStrictEqual(groups, [
-			{ repository: '/lab', folder: undefined, worktrees: [{ path: '/wt/w3', label: 'w3', branch: 'w3', exists: true, folder: '/wt/w3' }] },
+			{ repository: '/lab', folder: undefined, worktrees: [{ path: `${OWN}/w3`, label: 'w3', branch: 'w3', exists: true, folder: `${OWN}/w3` }] },
 		]);
 	});
 
@@ -266,7 +295,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 		const { groups } = await read('/wt/b');
 
-		assert.deepStrictEqual(groups, [{ folder: '/wt/b' }]);
+		assert.deepStrictEqual(groups, [{ folder: '/wt/b', foreign: true }]);
 	});
 
 	test('WTA-11 a read that finds what the last one found does not fire; a new worktree does', async () => {
@@ -277,7 +306,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		disposables.add(git.onDidChange(() => fired++));
 
 		await git.refresh();
-		await worktree('/lab', 'w2', '/wt/w2');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
 		await git.refresh();
 
 		assert.strictEqual(fired, 1);
@@ -285,17 +314,17 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 	test('a read overtaken by a newer one resolves once the newer one is in, so the groups are current', async () => {
 		await repository('/lab');
-		await worktree('/lab', 'w2', '/wt/w2');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
 		const folder = (path: string, index: number) => new WorkspaceFolder({ uri: URI.file(path), index, name: path.slice(path.lastIndexOf('/') + 1) });
 		const source = { folders: [folder('/lab', 0)], onDidChange: Event.None, key: (uri: URI) => uri.toString() };
-		const git = disposables.add(new WorkspaceBarGit(source, fileService, storage));
+		const git = reader(source);
 		await git.refresh();
 
 		// Two reads in flight, the way a folder added to the workspace starts one and the window's move
 		// onto it waits on another (`WorkspaceBarPart.show`) - the newer one over more folders, and so
 		// the slower of the two, as it is when a worktree has just been added.
 		const older = git.refresh();
-		source.folders = ['/lab', '/wt/w2', '/a', '/b', '/c', '/d', '/e', '/f'].map(folder);
+		source.folders = ['/lab', `${OWN}/w2`, '/a', '/b', '/c', '/d', '/e', '/f'].map(folder);
 		const newer = git.refresh();
 		await older;
 		const groupsWhenOlderResolved = summary(git.groups);
@@ -306,11 +335,11 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 	test('WTA-11 the next window has the groups the last one read before its own first read, which finds the same and fires nothing (WT-3.7)', async () => {
 		await repository('/lab');
-		await worktree('/lab', 'w2', '/wt/w2');
-		await read('/lab', '/wt/w2');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
+		await read('/lab', `${OWN}/w2`);
 		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
 
-		const git = open('/lab', '/wt/w2');
+		const git = open('/lab', `${OWN}/w2`);
 		let fired = 0;
 		disposables.add(git.onDidChange(() => fired++));
 		const drawn = { ready: git.ready, groups: summary(git.groups) };
@@ -319,7 +348,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 		assert.deepStrictEqual({ drawn, fired }, {
 			drawn: {
 				ready: true,
-				groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/w2', label: 'w2', branch: 'w2', exists: true, folder: '/wt/w2' }] }]
+				groups: [{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: `${OWN}/w2` }] }]
 			},
 			fired: 0
 		});
@@ -327,9 +356,9 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 	test('WTA-11 a folder that left the workspace between two windows is not on the kept groups, nor a repository none of whose folders is left', async () => {
 		await repository('/lab');
-		await worktree('/lab', 'w2', '/wt/w2');
+		await worktree('/lab', 'w2', `${OWN}/w2`);
 		await repository('/other');
-		await read('/lab', '/wt/w2', '/other');
+		await read('/lab', `${OWN}/w2`, '/other');
 		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
 
 		const git = open('/lab');
@@ -337,8 +366,21 @@ suite('Workspace bar - worktrees as git records them', () => {
 		await git.refresh();
 
 		assert.deepStrictEqual(drawn, [
-			{ repository: '/lab', folder: '/lab', worktrees: [{ path: '/wt/w2', label: 'w2', branch: 'w2', exists: true, folder: undefined }] },
+			{ repository: '/lab', folder: '/lab', worktrees: [{ path: `${OWN}/w2`, label: 'w2', branch: 'w2', exists: true, folder: undefined }] },
 		]);
+	});
+
+	test('WTA-11 a worktree another tool made, in the workspace, is kept as the folder of its own it was, which offers no worktree (WT-1.3)', async () => {
+		await repository('/lab');
+		await worktree('/lab', 'scratch', '/tmp/scratch');
+		await read('/lab', '/tmp/scratch');
+		storage.testEmitWillSaveState(WillSaveStateReason.SHUTDOWN);
+
+		const git = open('/lab', '/tmp/scratch');
+		const drawn = summary(git.groups);
+		await git.refresh();
+
+		assert.deepStrictEqual(drawn, [{ repository: '/lab', folder: '/lab', worktrees: [] }, { folder: '/tmp/scratch', foreign: true }]);
 	});
 
 	test('WTA-11 a kept record that cannot be read, or names none of the folders, is not drawn from: the bar starts flat, as with none kept', async () => {

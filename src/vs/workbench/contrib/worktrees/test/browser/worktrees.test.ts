@@ -42,7 +42,7 @@ import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../..
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, IWorkspaceTrustUriInfo } from '../../../../../platform/workspace/common/workspaceTrust.js';
 // For the keys every focused list has, which the bar's own have to win over.
 import '../../../../browser/actions/listCommands.js';
-import { WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
+import { WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IBranchDescription, INewWorktreeAnswer, INewWorktreePreparation, IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
@@ -1149,6 +1149,23 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
+	test('WTA-01 New Worktree on a worktree another tool made says so and does nothing else: Facade takes it for a folder (WT-1.3)', async () => {
+		// A script's scratch checkout of a commit, in a folder of its own: a worktree of /lab outside Facade's worktrees folder
+		files.set('/tmp/scratch/.git', 'gitdir: /lab/.git/worktrees/scratch');
+		files.set('/lab/.git/worktrees/scratch/commondir', '../..');
+		files.set('/lab/.git/worktrees/scratch/gitdir', '/tmp/scratch/.git');
+		instantiationService.stub(IFileService, 'stat', async (uri: URI) => {
+			if (!files.has(uri.path)) {
+				throw new Error('not there');
+			}
+			return upcastPartial<IFileStat>({ resource: uri, isDirectory: false });
+		});
+
+		await instantiationService.createInstance(WorktreeService).createWorktree(URI.file('/tmp/scratch'));
+
+		assert.deepStrictEqual(steps, ['info: \'/tmp/scratch\' is a worktree created outside Facade. Create a worktree from its repository\'s main checkout instead.']);
+	});
+
 	test('WTA-15 in Restricted Mode, trust is asked for before git is, and nothing runs without it; the question offers trust and nothing but Cancel besides', async () => {
 		trust = { enabled: true, trusted: false, granted: false };
 
@@ -2026,10 +2043,14 @@ suite('Worktrees - the row menu and its keys', () => {
 		return store.add(new ContextKeyService(new TestConfigurationService({ facade: { workspaceBar: { worktrees: true } } })));
 	}
 
-	/** What a row of `kind` has on its menu, its groups in the order the menu draws them, with worktrees listed. */
-	function menu(kind: 'folder' | 'repository' | 'worktree', expansion: '' | 'expanded' | 'collapsed'): string[] {
+	/**
+	 * What a row of `kind` has on its menu, its groups in the order the menu draws them, with worktrees listed.
+	 * `offersWorktree` as the view sets it: false for a worktree's row, and for another tool's worktree (WT-1.3).
+	 */
+	function menu(kind: 'folder' | 'repository' | 'worktree', expansion: '' | 'expanded' | 'collapsed', offersWorktree = kind !== 'worktree'): string[] {
 		const contextKeyService = contextKeys();
 		WorkspaceBarRowKindContext.bindTo(contextKeyService).set(kind);
+		WorkspaceBarRowOffersWorktreeContext.bindTo(contextKeyService).set(offersWorktree);
 		WorkspaceBarRowExpansionContext.bindTo(contextKeyService).set(expansion);
 		const rank = (group: string | undefined) => group === 'navigation' ? '' : group ?? '';
 
@@ -2041,9 +2062,16 @@ suite('Worktrees - the row menu and its keys', () => {
 	}
 
 	test('WTA-09 each kind of row has the three groups of WT-1.11: what is in it, how it stands in the list, and whether it stays', () => {
-		assert.deepStrictEqual({ folder: menu('folder', ''), repository: menu('repository', 'expanded'), worktree: menu('worktree', '') }, {
+		assert.deepStrictEqual({ folder: menu('folder', ''), anotherToolsWorktree: menu('folder', '', false), repository: menu('repository', 'expanded'), worktree: menu('worktree', '') }, {
 			folder: [
 				'navigation facade.workspaceBar.newWorktree',
+				'navigation facade.workspaceBar.revealFolder',
+				'2_arrange facade.workspaceBar.customizeFolder',
+				'2_arrange facade.workspaceBar.moveFolderUp',
+				'2_arrange facade.workspaceBar.moveFolderDown',
+				'9_remove facade.workspaceBar.removeFolder',
+			],
+			anotherToolsWorktree: [
 				'navigation facade.workspaceBar.revealFolder',
 				'2_arrange facade.workspaceBar.customizeFolder',
 				'2_arrange facade.workspaceBar.moveFolderUp',

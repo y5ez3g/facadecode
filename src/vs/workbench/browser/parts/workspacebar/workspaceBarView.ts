@@ -32,7 +32,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { defaultCountBadgeStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { asCssVariable } from '../../../../platform/theme/common/colorUtils.js';
 import { FolderKey, orderWorktrees } from './workspaceBar.js';
-import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
+import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
 import { IWorkspaceBarAgentsService } from './workspaceBarAgents.js';
 import { FACADE_AGENT_BADGE_BACKGROUND, FACADE_AGENT_BADGE_FOREGROUND } from './workspaceBarColors.js';
 import { folderGlyphFor, folderRowNameFor, IWorkspaceBarCustomizationService, worktreeIcon, worktreeNameFor } from './workspaceBarCustomization.js';
@@ -72,8 +72,8 @@ interface IFolderRow {
 	readonly worktrees: readonly URI[];
 	/**
 	 * Whether its row offers `New Worktree...` - every folder while the bar lists worktrees, a folder
-	 * with no repository of its own included, which becomes one first (WT-5.8). None while they are
-	 * switched off: the bar is then the list it was before them.
+	 * with no repository of its own included, which becomes one first (WT-5.8), but a worktree another
+	 * tool made (WT-1.3). None while they are switched off: the bar is then the list it was before them.
 	 */
 	readonly offersWorktree: boolean;
 }
@@ -148,11 +148,11 @@ export function workspaceBarRows(input: {
 	/** Whether a worktree is being deleted: its row is left out while git still records it (WT-8.9). */
 	readonly leaving?: (worktree: URI) => boolean;
 }): IObjectTreeElement<WorkspaceBarRow>[] {
-	const flat = (folder: IWorkspaceFolder): IObjectTreeElement<WorkspaceBarRow> =>
-		({ element: { kind: 'folder', uri: folder.uri, folder, repository: false, worktrees: [], offersWorktree: input.worktrees }, collapsible: false });
+	const flat = (folder: IWorkspaceFolder, foreign?: boolean): IObjectTreeElement<WorkspaceBarRow> =>
+		({ element: { kind: 'folder', uri: folder.uri, folder, repository: false, worktrees: [], offersWorktree: input.worktrees && !foreign }, collapsible: false });
 
 	if (!input.worktrees) {
-		return input.folders.map(flat);
+		return input.folders.map(folder => flat(folder));
 	}
 
 	const present = new Map(input.folders.map(folder => [input.key(folder.uri), folder]));
@@ -178,7 +178,7 @@ export function workspaceBarRows(input: {
 		if (group.kind === 'folder') {
 			const folder = stillIn(group.folder);
 			if (folder) {
-				rows.push(flat(folder));
+				rows.push(flat(folder, group.foreign));
 			}
 			continue;
 		}
@@ -518,6 +518,7 @@ export class WorkspaceBarView extends Disposable {
 	private readonly tree: WorkbenchObjectTree<WorkspaceBarRow, void>;
 	private readonly empty: HTMLElement;
 	private readonly rowKind: IContextKey<'folder' | 'repository' | 'worktree'>;
+	private readonly rowOffersWorktree: IContextKey<boolean>;
 	private readonly rowExpansion: IContextKey<'' | 'expanded' | 'collapsed'>;
 	/** The repositories somebody closed, by their main checkout's key (`CLOSED_STORAGE_KEY`). */
 	private readonly closed: Set<string>;
@@ -699,6 +700,7 @@ export class WorkspaceBarView extends Disposable {
 		// around the tree is not among its parents.
 		WorkspaceBarFocusContext.bindTo(this.tree.contextKeyService).set(true);
 		this.rowKind = WorkspaceBarRowKindContext.bindTo(this.tree.contextKeyService);
+		this.rowOffersWorktree = WorkspaceBarRowOffersWorktreeContext.bindTo(this.tree.contextKeyService);
 		this.rowExpansion = WorkspaceBarRowExpansionContext.bindTo(this.tree.contextKeyService);
 		this._register(this.tree.onDidChangeFocus(e => this.setRowKind(e.elements[0] ?? undefined)));
 
@@ -850,11 +852,13 @@ export class WorkspaceBarView extends Disposable {
 	private setRowKind(row: WorkspaceBarRow | undefined): void {
 		if (!row) {
 			this.rowKind.set('folder');
+			this.rowOffersWorktree.reset();
 			this.rowExpansion.set('');
 			return;
 		}
 
 		this.rowKind.set(row.kind === 'worktree' ? 'worktree' : row.repository ? 'repository' : 'folder');
+		this.rowOffersWorktree.set(row.kind === 'folder' && row.offersWorktree);
 		this.rowExpansion.set(this.expansionOf(row));
 	}
 

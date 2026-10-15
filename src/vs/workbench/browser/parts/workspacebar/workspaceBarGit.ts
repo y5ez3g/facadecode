@@ -14,9 +14,11 @@ import { isBoolean, isObject, isString } from '../../../../base/common/types.js'
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
+import { IPathService } from '../../../services/path/common/pathService.js';
 import { gitPathToUri, IGitLocation, locateGitDirectories, readGitFile } from '../../../services/workspaces/common/gitFiles.js';
-import { canonicalUri, FolderKey } from './workspaceBar.js';
+import { canonicalUri, FolderKey, worktreesFolderOf } from './workspaceBar.js';
 
 /** A linked worktree of a repository, as git records it. */
 export interface IWorkspaceBarWorktree {
@@ -35,7 +37,7 @@ export interface IWorkspaceBarWorktree {
 	readonly folder: IWorkspaceFolder | undefined;
 }
 
-/** A repository: its main checkout, which is the folder row, and every worktree git records for it. */
+/** A repository: its main checkout, which is the folder row, and the worktrees of it that Facade made (WT-1.3). */
 export interface IWorkspaceBarRepository {
 	readonly kind: 'repository';
 	/** The main checkout. */
@@ -49,7 +51,10 @@ export interface IWorkspaceBarRepository {
 	 * spelling it was added by, as a folder is never two rows - and its worktrees in the workspace.
 	 */
 	readonly members: readonly IWorkspaceFolder[];
-	/** In the order they were made, oldest first (WT-1.7). */
+	/**
+	 * Those Facade made, in the order they were made, oldest first (WT-1.3, WT-1.7). Never one another tool made, in
+	 * `folders[]` or not: a script's scratch checkout, another agent's own.
+	 */
 	readonly worktrees: readonly IWorkspaceBarWorktree[];
 }
 
@@ -58,10 +63,15 @@ export function findWorktree(repository: IWorkspaceBarRepository | undefined, ur
 	return repository?.worktrees.find(worktree => extUri.isEqual(worktree.uri, uri));
 }
 
-/** A folder with no repository of its own. */
+/** A folder with no repository of its own, or a worktree another tool made. */
 interface IWorkspaceBarPlainFolder {
 	readonly kind: 'folder';
 	readonly folder: IWorkspaceFolder;
+	/**
+	 * A worktree another tool made (WT-1.3). Facade takes it for a folder: it is on no repository's row, and is
+	 * offered no worktree of its own.
+	 */
+	readonly foreign?: boolean;
 }
 
 /** A row of the bar's first level. */
@@ -137,6 +147,8 @@ export class WorkspaceBarGit extends Disposable {
 		private readonly source: IWorkspaceBarFolders,
 		@IFileService private readonly fileService: IFileService,
 		@IStorageService private readonly storageService: IStorageService,
+		@IPathService private readonly pathService: IPathService,
+		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 	) {
 		super();
 
@@ -179,7 +191,8 @@ export class WorkspaceBarGit extends Disposable {
 	}
 
 	private async read(generation: number): Promise<void> {
-		const { groups, watch } = await readGroups(this.fileService, this.source.key, this.source.folders);
+		const own = await worktreesFolderOf(this.fileService, this.pathService);
+		const { groups, watch } = await readGroups(this.fileService, this.source.key, this.uriIdentityService.extUri, this.source.folders, own);
 		if (this._store.isDisposed) {
 			return;
 		}
@@ -328,10 +341,17 @@ interface IRepositoryDraft {
 	readonly members: { readonly folder: IWorkspaceFolder; readonly location: IGitLocation }[];
 }
 
-/** The groups for `folders`, and the directories to watch to know when they change. */
-async function readGroups(fileService: IFileService, key: FolderKey, folders: readonly IWorkspaceFolder[]): Promise<{ groups: WorkspaceBarGroup[]; watch: URI[] }> {
+/**
+ * The groups for `folders`, and the directories to watch to know when they change. `own` is where Facade makes
+ * worktrees (WT-2.1), canonical: a worktree anywhere else is another tool's (WT-1.3).
+ */
+async function readGroups(fileService: IFileService, key: FolderKey, extUri: IExtUri, folders: readonly IWorkspaceFolder[], own: URI): Promise<{ groups: WorkspaceBarGroup[]; watch: URI[] }> {
 	const canonicalKey = async (uri: URI) => key(await canonicalUri(fileService, uri));
-	const locations = await Promise.all(folders.map(folder => locateGitDirectories(fileService, folder.uri)));
+	const isOwn = (canonical: URI) => extUri.isEqualOrParent(canonical, own);
+	const [locations, canonicals] = await Promise.all([
+		Promise.all(folders.map(folder => locateGitDirectories(fileService, folder.uri))),
+		Promise.all(folders.map(folder => canonicalUri(fileService, folder.uri)))
+	]);
 	const commonKeys = await Promise.all(locations.map(location => location && canonicalKey(location.commonDir)));
 
 	// First pass, in folders[] order: a plain folder is its own row, and every folder of one
@@ -345,6 +365,12 @@ async function readGroups(fileService: IFileService, key: FolderKey, folders: re
 		const common = commonKeys[index];
 		if (!location || common === undefined) {
 			order.push({ kind: 'folder', folder });
+			continue;
+		}
+
+		// WT-1.3: a worktree another tool made is a folder to the bar, wherever its repository is
+		if (!location.isMain && !isOwn(canonicals[index])) {
+			order.push({ kind: 'folder', folder, foreign: true });
 			continue;
 		}
 
@@ -387,12 +413,20 @@ async function readGroups(fileService: IFileService, key: FolderKey, folders: re
 			}
 		});
 
-		const recordedKeys = await Promise.all(recorded.map(worktree => canonicalKey(worktree.uri)));
-		const worktrees: IWorkspaceBarWorktree[] = recorded.map((worktree, index) => {
+		const recordedUris = await Promise.all(recorded.map(worktree => canonicalUri(fileService, worktree.uri)));
+		const recordedKeys = recordedUris.map(uri => key(uri));
+		const worktrees: IWorkspaceBarWorktree[] = [];
+		recorded.forEach((worktree, index) => {
+			// WT-1.3: Facade's own alone. One another tool makes for itself - a script's scratch checkout of a commit
+			// to test, another agent's own - is that tool's, and comes and goes with its work.
+			if (!isOwn(recordedUris[index])) {
+				return;
+			}
+
 			// A worktree in the workspace goes by the workspace's spelling: git records the path with its
 			// links resolved, and rows look up their mark, name and colour by the workspace's.
 			const folder = membersByKey.get(recordedKeys[index]);
-			return { uri: folder?.uri ?? worktree.uri, branch: worktree.branch, label: worktree.label, exists: worktree.exists, folder };
+			worktrees.push({ uri: folder?.uri ?? worktree.uri, branch: worktree.branch, label: worktree.label, exists: worktree.exists, folder });
 		});
 
 		// A linked worktree in folders[] that git's own list does not carry yet: git writes the folder
@@ -482,7 +516,7 @@ async function adoptMissingWorktrees(groups: WorkspaceBarGroup[], canonicalKey: 
 /** Everything a row draws, so that a read which found the same thing does not redraw the bar. */
 function signatureOf(groups: readonly WorkspaceBarGroup[], key: FolderKey): string {
 	return JSON.stringify(groups.map(group => group.kind === 'folder'
-		? [key(group.folder.uri), group.folder.name]
+		? [key(group.folder.uri), group.folder.name, !!group.foreign]
 		: [key(group.main), group.folder?.name, group.worktrees.map(worktree => [key(worktree.uri), worktree.label, worktree.exists, worktree.folder?.name])]));
 }
 
@@ -500,12 +534,12 @@ interface IStoredWorktree {
 
 /** A group as it is kept: URIs as strings, and folders by their URI, found again in `folders[]` when read back. */
 type StoredGroup =
-	| { readonly kind: 'folder'; readonly folder: string }
+	| { readonly kind: 'folder'; readonly folder: string; readonly foreign?: boolean }
 	| { readonly kind: 'repository'; readonly main: string; readonly folder?: string; readonly branch?: string; readonly members: readonly string[]; readonly worktrees: readonly IStoredWorktree[] };
 
 function storedGroupsOf(groups: readonly WorkspaceBarGroup[]): StoredGroup[] {
 	return groups.map<StoredGroup>(group => group.kind === 'folder'
-		? { kind: 'folder', folder: group.folder.uri.toString() }
+		? { kind: 'folder', folder: group.folder.uri.toString(), foreign: group.foreign }
 		: {
 			kind: 'repository',
 			main: group.main.toString(),
@@ -534,9 +568,9 @@ function isStoredGroup(candidate: unknown): candidate is StoredGroup {
 		return false;
 	}
 
-	const { kind, folder, main, branch, members, worktrees } = candidate as Record<string, unknown>;
+	const { kind, folder, foreign, main, branch, members, worktrees } = candidate as Record<string, unknown>;
 	if (kind === 'folder') {
-		return isString(folder);
+		return isString(folder) && (foreign === undefined || isBoolean(foreign));
 	}
 
 	return kind === 'repository' && isString(main) && isOptionalString(folder) && isOptionalString(branch)
@@ -570,7 +604,7 @@ function keptGroups(value: string | undefined, folders: readonly IWorkspaceFolde
 			if (group.kind === 'folder') {
 				const folder = folderAt(group.folder);
 				if (folder) {
-					groups.push({ kind: 'folder', folder });
+					groups.push({ kind: 'folder', folder, foreign: group.foreign });
 				}
 				continue;
 			}

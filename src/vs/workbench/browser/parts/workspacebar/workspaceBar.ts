@@ -8,6 +8,7 @@ import { basename, dirname, isEqual, joinPath } from '../../../../base/common/re
 import { URI } from '../../../../base/common/uri.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
+import { IPathService } from '../../../services/path/common/pathService.js';
 
 /**
  * Whether two paths name one folder. ⚠️ Not `uri.toString()`: a file system that ignores case gives
@@ -18,6 +19,9 @@ export type FolderKey = (uri: URI) => string;
 export function folderKey(uriIdentityService: IUriIdentityService, uri: URI): string {
 	return uriIdentityService.extUri.getComparisonKey(uri);
 }
+
+/** Where the product makes worktrees, under the home folder: `<home>/.facade/worktrees/<repository>/<name>` (WORKTREE.md WT-2.1). */
+export const WORKTREES_FOLDER: readonly string[] = ['.facade', 'worktrees'];
 
 /**
  * A repository's worktrees in the order the bar draws them (WORKTREE.md WT-1.7): the ones somebody has
@@ -144,5 +148,13 @@ export async function canonicalUri(fileService: IFileService, uri: URI): Promise
 	// Nothing on the way up could be resolved. The uri as given still makes a row, and a folder that
 	// is gone shows as one that is gone.
 	return uri;
+}
+
+/**
+ * `WORKTREES_FOLDER` under the home folder, canonical. A worktree inside it is one Facade made; any other is another
+ * tool's, which Facade takes for a folder and never acts on as a worktree (WORKTREE.md WT-1.3).
+ */
+export async function worktreesFolderOf(fileService: IFileService, pathService: IPathService): Promise<URI> {
+	return canonicalUri(fileService, joinPath(await pathService.userHome(), ...WORKTREES_FOLDER));
 }
 

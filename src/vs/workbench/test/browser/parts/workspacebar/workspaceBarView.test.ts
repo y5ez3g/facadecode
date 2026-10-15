@@ -86,6 +86,19 @@ suite('Workspace bar - the rows it draws', () => {
 		]);
 	});
 
+	test('WTA-01 a worktree another tool made is a folder of its own, and offers no worktree (WT-1.3)', () => {
+		const scratch = folder('/tmp/scratch', 2);
+		const rows = workspaceBarRows({ folders: [notes, lab, scratch], groups: [...groups.slice(0, 2), { kind: 'folder', folder: scratch, foreign: true }], worktrees: true, key });
+
+		assert.deepStrictEqual(summary(rows), [
+			'folder /notes +',
+			'repository /lab +',
+			'  worktree w2',
+			'  worktree w10',
+			'folder /tmp/scratch',
+		]);
+	});
+
 	test('a repository with no worktrees has nothing under it, and offers the first on its row', () => {
 		const solo = folder('/solo');
 		const rows = workspaceBarRows({
