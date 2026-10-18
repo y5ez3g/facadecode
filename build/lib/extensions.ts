@@ -483,15 +483,45 @@ export function packageCopilotExtensionStream(disableMangle: boolean): Stream {
 			.pipe(rename(p => p.dirname = `extensions/copilot/${p.dirname}`))
 	);
 
-	const productionDependencies = getProductionDependencies('extensions/copilot');
-	const dependenciesSrc = productionDependencies.map(d => path.relative(root, d)).map(d => [`${d}/**`, `!${d}/**/{test,tests}/**`]).flat();
+	// Copilot's esbuild script writes into its node_modules, so list them once it has run.
+	const localExtensionsDone = new Promise<void>(resolve => localExtensionsStream.once('end', resolve));
 
 	return es.merge(
 		localExtensionsStream,
-		gulp.src(dependenciesSrc, { base: '.' })
+		copilotDependenciesStream(extensionPath, localExtensionsDone)
 			.pipe(util2.cleanNodeModules(path.join(root, 'build', '.moduleignore')))
 			.pipe(util2.cleanNodeModules(path.join(root, 'build', `.moduleignore.${process.platform}`)))
 	).pipe(util2.setExecutableBit(['**/*.sh']));
+}
+
+/**
+ * Streams the dependency files a VSIX of the copilot extension ships: its .vscodeignore keeps
+ * only what the bundle in dist/ still loads at runtime. Copying every production dependency
+ * instead nests paths past Windows' 260-character limit for longer user names, and the
+ * installer then fails to rename those files.
+ */
+function copilotDependenciesStream(extensionPath: string, after: Promise<void>): Stream {
+	const vsce = require('@vscode/vsce') as typeof import('@vscode/vsce');
+	const result = es.through();
+
+	after
+		.then(() => vsce.listFiles({ cwd: extensionPath, packageManager: vsce.PackageManager.Npm }))
+		.then(fileNames => {
+			const files = fileNames
+				.filter(fileName => fileName.split(/[\\/]/)[0] === 'node_modules')
+				.map(fileName => path.join(extensionPath, fileName))
+				.map(filePath => new File({
+					path: filePath,
+					stat: fs.statSync(filePath),
+					base: root,
+					contents: fs.createReadStream(filePath)
+				}));
+
+			es.readArray(files).pipe(result);
+		})
+		.catch(err => result.emit('error', err));
+
+	return result;
 }
 
 export function packageMarketplaceExtensionsStream(forWeb: boolean): Stream {
