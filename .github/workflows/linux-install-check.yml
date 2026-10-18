@@ -1,0 +1,132 @@
+name: Linux Install Check
+
+# Installs a release's .deb (the latest unless a tag is given) the way a person would on Ubuntu's
+# GNOME desktop, and keeps screenshots of the icon and of the first launch as a build artifact. Run by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to install (empty for the latest release)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      OUT: ${{ github.workspace }}/out
+      DISPLAY: ':99'
+      DEBIAN_FRONTEND: noninteractive
+      XDG_SESSION_TYPE: x11
+      XDG_CURRENT_DESKTOP: 'ubuntu:GNOME'
+      GNOME_SHELL_SESSION_MODE: ubuntu
+    steps:
+      - name: Check out the source icon
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: resources/linux/code.png
+          sparse-checkout-cone-mode: false
+
+      - name: Start Ubuntu's GNOME desktop
+        run: |
+          mkdir -p "$OUT"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends xvfb dbus-x11 gnome-shell gnome-session ubuntu-session gnome-shell-extension-ubuntu-dock gnome-settings-daemon yaru-theme-gnome-shell yaru-theme-gtk yaru-theme-icon imagemagick desktop-file-utils xdotool > /dev/null
+          Xvfb :99 -screen 0 1280x800x24 +extension GLX &
+          sleep 3
+          eval "$(dbus-launch --sh-syntax)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          nohup gnome-shell --x11 --replace > "$RUNNER_TEMP/gnome-shell.log" 2>&1 &
+          sleep 25
+          import -window root "$OUT/00-desktop.png"
+
+      - name: Download the deb
+        run: |
+          mkdir -p deb
+          gh release download ${TAG:+"$TAG"} -R "$GITHUB_REPOSITORY" -p '*linux-x64.deb' -D deb
+          { lsb_release -d; echo; ls -la deb; } | tee "$OUT/system.txt"
+
+      - name: Install
+        run: |
+          DEB=$(ls deb/*.deb | head -1)
+          sudo apt-get install -y "./$DEB" 2>&1 | tee "$OUT/install.log"
+          echo "PACKAGE=$(dpkg-deb -f "$DEB" Package)" >> "$GITHUB_ENV"
+
+      - name: Record the icon, desktop entry and package files
+        run: |
+          DESKTOP=$(dpkg -L "$PACKAGE" | grep -E '^/usr/share/applications/[^/]+\.desktop$' | grep -v url-handler | head -1)
+          ICON_NAME=$(grep -m1 '^Icon=' "$DESKTOP" | cut -d= -f2)
+          APP_DIR=$(dirname "$(dpkg -L "$PACKAGE" | grep -m1 '/chrome-sandbox$')")
+          {
+            echo '== Package'
+            dpkg -s "$PACKAGE" | grep -E '^(Package|Version|Installed-Size|Depends):'
+            echo
+            echo "== Desktop entry: $DESKTOP"
+            cat "$DESKTOP"
+            echo
+            echo '== desktop-file-validate'
+            desktop-file-validate "$DESKTOP" 2>&1 || true
+            echo
+            echo "== Icon files named $ICON_NAME"
+            find /usr/share/pixmaps /usr/share/icons -name "$ICON_NAME.*" -exec ls -la {} \; 2>/dev/null
+            echo
+            echo '== Package icon vs resources/linux/code.png'
+            cmp -s "/usr/share/pixmaps/$ICON_NAME.png" resources/linux/code.png && echo 'same file' || echo 'different files'
+            echo
+            echo '== chrome-sandbox'
+            ls -la "$APP_DIR/chrome-sandbox"
+          } > "$OUT/bundle.txt"
+          cat "$OUT/bundle.txt"
+          { echo '```'; cat "$OUT/bundle.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          cp "/usr/share/pixmaps/$ICON_NAME.png" "$OUT/icon-in-package.png" || true
+          { echo "DESKTOP=$DESKTOP"; echo "APP_DIR=$APP_DIR"; } >> "$GITHUB_ENV"
+
+      - name: Search for the app and open it from the search
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          xdotool key Escape
+          sleep 2
+          xdotool key super
+          sleep 3
+          xdotool type --delay 150 facade
+          sleep 4
+          import -window root "$OUT/01-search.png"
+          xdotool key Return
+          sleep 30
+          import -window root "$OUT/02-first-launch.png"
+          if ! pgrep -f "$APP_DIR/" > /dev/null; then
+            EXEC=$(grep -m1 '^Exec=' "$DESKTOP" | cut -d= -f2- | sed 's/ %[A-Za-z]//g')
+            echo "The search did not start the app; launching: $EXEC"
+            nohup sh -c "$EXEC" > "$OUT/launch.log" 2>&1 &
+            sleep 25
+            import -window root "$OUT/02-first-launch-direct.png"
+          fi
+          pgrep -fa "$APP_DIR/" > "$OUT/processes.txt" || echo 'The app is not running.' > "$OUT/processes.txt"
+          head -3 "$OUT/processes.txt"
+          pkill -f "$APP_DIR/" || true
+
+      - name: Collect the app's logs
+        if: always()
+        run: |
+          LOGS="$HOME/.config/Facade Code/logs"
+          if [ -d "$LOGS" ]; then cp -R "$LOGS" "$OUT/logs"; fi
+          cp "$RUNNER_TEMP/gnome-shell.log" "$OUT/" || true
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-install-${{ matrix.os }}
+          path: out
