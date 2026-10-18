@@ -1,0 +1,134 @@
+name: Mac Install Check
+
+# Installs a release's macOS package (the latest unless a tag is given) the way a person would,
+# and keeps screenshots of the icon and of the first launch as a build artifact. Run by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to install (empty for the latest release)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      OUT: ${{ github.workspace }}/out
+    steps:
+      - name: Check out the source icon
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: resources/darwin/code.icns
+          sparse-checkout-cone-mode: false
+
+      - name: Download the dmg
+        run: |
+          mkdir -p "$OUT" dmg
+          gh release download ${TAG:+"$TAG"} -R "$GITHUB_REPOSITORY" -p '*darwin-arm64.dmg' -D dmg
+          { sw_vers; echo; ls -la dmg; } | tee "$OUT/system.txt"
+
+      - name: Open the dmg and copy the app to Applications
+        run: |
+          MOUNT=$(hdiutil attach dmg/*.dmg | awk -F'\t' '/\/Volumes\// { print $NF }' | tail -1)
+          open "$MOUNT"
+          sleep 5
+          screencapture -x "$OUT/01-dmg-window.png"
+          APP_NAME=$(basename "$(ls -d "$MOUNT"/*.app | head -1)")
+          ditto "$MOUNT/$APP_NAME" "/Applications/$APP_NAME"
+          hdiutil detach "$MOUNT"
+          echo "APP=/Applications/$APP_NAME" >> "$GITHUB_ENV"
+
+      - name: Record the bundle's icon, signature and Gatekeeper verdict
+        run: |
+          PLIST="$APP/Contents/Info.plist"
+          ICON_FILE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST")
+          ICON="$APP/Contents/Resources/${ICON_FILE%.icns}.icns"
+          {
+            echo '== Icon keys in Info.plist'
+            echo "CFBundleIconFile: $ICON_FILE"
+            echo "CFBundleIconName: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$PLIST" 2>&1)"
+            echo
+            echo '== Icon files in the bundle'
+            ls -la "$APP/Contents/Resources" | grep -Ei '\.(icns|car)$' || true
+            echo
+            echo '== Bundle icon vs resources/darwin/code.icns'
+            cmp -s "$ICON" resources/darwin/code.icns && echo 'same file' || echo 'different files'
+            echo
+            echo '== codesign'
+            codesign -dvv "$APP" 2>&1 || true
+            codesign --verify --deep --strict -vv "$APP" 2>&1 || true
+            echo
+            echo '== Gatekeeper'
+            spctl -a -vv -t exec "$APP" 2>&1 || true
+          } > "$OUT/bundle.txt"
+          cat "$OUT/bundle.txt"
+          { echo '```'; cat "$OUT/bundle.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          iconutil -c iconset "$ICON" -o "$OUT/icon-in-app.iconset" || sips -s format png "$ICON" --out "$OUT/icon-in-app.png"
+          iconutil -c iconset resources/darwin/code.icns -o "$OUT/icon-in-source.iconset" || sips -s format png resources/darwin/code.icns --out "$OUT/icon-in-source.png"
+
+      - name: Screenshot the icon as Finder draws it
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          perl -e 'alarm shift; exec @ARGV' 60 osascript -l JavaScript -e '
+            ObjC.import("AppKit");
+            function run(argv) {
+              const image = $.NSWorkspace.sharedWorkspace.iconForFile(argv[0]);
+              image.size = $.NSMakeSize(512, 512);
+              const rep = $.NSBitmapImageRep.imageRepWithData(image.TIFFRepresentation);
+              rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({})).writeToFileAtomically(argv[1], true);
+            }' "$APP" "$OUT/02-icon-as-finder-draws-it.png" || true
+          defaults write com.apple.finder FXPreferredViewStyle -string icnv
+          killall Finder || true
+          sleep 3
+          open -R "$APP"
+          sleep 5
+          screencapture -x "$OUT/03-applications-folder.png"
+
+      - name: Launch the app for the first time
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          open "$APP"
+          sleep 25
+          screencapture -x "$OUT/04-first-launch.png"
+          pgrep -fl "$APP/Contents/MacOS/" > "$OUT/processes.txt" || echo 'The app is not running.' > "$OUT/processes.txt"
+          cat "$OUT/processes.txt"
+          pkill -f "$APP/Contents/MacOS/" || true
+          sleep 5
+
+      - name: Open the app the way a downloaded copy opens
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" "$APP"
+          open "$APP" || true
+          sleep 10
+          screencapture -x "$OUT/05-open-as-downloaded.png"
+          pkill -x CoreServicesUIAgent || true
+          pkill -f "$APP/Contents/MacOS/" || true
+
+      - name: Collect the app's logs
+        if: always()
+        run: |
+          LOGS="$HOME/Library/Application Support/Facade Code/logs"
+          if [ -d "$LOGS" ]; then cp -R "$LOGS" "$OUT/logs"; fi
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-install-${{ matrix.os }}
+          path: out
