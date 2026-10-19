@@ -151,6 +151,9 @@ export const config = {
 	copyright: `Copyright (C) 2026 Microsoft Corporation and ${product.nameLong} contributors. All rights reserved.`,
 	darwinExecutable: product.nameShort,
 	darwinIcon: 'resources/darwin/code.icns',
+	// ⚠️ What macOS 26 and later draw the app icon from; without it they put the `.icns` on a grey
+	// plate. Compiled from `code.icon` by `build/lib/facade/assetsCar.ts`.
+	darwinAssetsCar: 'resources/darwin/Assets.car',
 	darwinBundleIdentifier: product.darwinBundleIdentifier,
 	darwinApplicationCategoryType: 'public.app-category.developer-tools',
 	darwinHelpBookFolder: `${product.nameLong} HelpBook`,
