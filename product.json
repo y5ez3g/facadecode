@@ -1,7 +1,7 @@
 {
 	"nameShort": "Facade Code",
 	"nameLong": "Facade Code",
-	"facadeVersion": "0.1.1",
+	"facadeVersion": "0.1.2",
 	"applicationName": "facade",
 	"dataFolderName": ".facade",
 	"sharedDataFolderName": ".facade-shared",
