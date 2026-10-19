@@ -102,7 +102,8 @@ the empty editor's watermark. A picture of something else - a theme's preview, a
 language's icon - stays upstream's.
 
 ```text
-app          opaque square, generous margin   -> resources/darwin/code.icns
+app          opaque square, generous margin   -> resources/darwin/code.icon -> Assets.car
+                                              -> resources/darwin/code.icns, rounded body
 web-icon     transparent outside and in gaps  -> linux, server, win32, favicon
 web-inline   silhouette only                  -> the empty editor's watermark
 ```
@@ -110,10 +111,14 @@ web-inline   silhouette only                  -> the empty editor's watermark
 Each target keeps its existing set of sizes. The watermark keeps its depth: each layer's
 ink against white, normalised to the frontmost, as `fill-opacity`; 0.15 in light themes
 and 0.45 in dark ones; fixed colours in high contrast. An app icon is checked as the
-system renders it: macOS 26 clips icons to a rounded superellipse and insets them, so
-judge colour and geometry, and after a change `touch` the bundle, register it again
-with `lsregister -f` and restart the Dock. How the `.icns` is built, and why its 16px
-and 32px slots hold no PNG of their own, is in `build/lib/facade/icns.ts`.
+system renders it: macOS 26 and later draw it from `Assets.car` and clip the square to a
+rounded superellipse, while macOS 15 and earlier draw the rounded pictures `actool`
+renders into the same catalog; so judge colour and geometry on both, and after a change
+`touch` the bundle, register it again with `lsregister -f` and restart the Dock. An app
+whose bundle has only an `.icns` is put on a grey plate by macOS 26 when that `.icns` has
+a shape of its own. How `Assets.car` is compiled is in `build/lib/facade/assetsCar.ts`;
+how the `.icns` is built, and why its 16px and 32px slots hold no PNG of their own, is in
+`build/lib/facade/icns.ts`.
 
 ## I5. What the operating system keeps
 
