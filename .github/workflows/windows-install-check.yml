@@ -1,0 +1,241 @@
+name: Windows Install Check
+
+# Installs a release's Windows user setup (the latest unless a tag is given) the way a person would,
+# and keeps screenshots of the icon and of the first launch as a build artifact. Run by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to install (empty for the latest release)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      OUT: ${{ github.workspace }}\out
+      SHOT: ${{ github.workspace }}\screenshot.ps1
+    steps:
+      - name: Check out the source icon
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: resources/win32/code.ico
+          sparse-checkout-cone-mode: false
+
+      - name: Download the setup
+        run: |
+          New-Item -ItemType Directory -Force $env:OUT, setup | Out-Null
+          # A string splatted with @ becomes one argument per character, so collect the tag in an array.
+          $tagArgs = @()
+          if ($env:TAG) { $tagArgs += $env:TAG }
+          gh release download @tagArgs -R $env:GITHUB_REPOSITORY -p '*win32-x64-user-setup.exe' -D setup
+          $setup = (Get-ChildItem setup\*.exe | Select-Object -First 1).FullName
+          "SETUP=$setup" >> $env:GITHUB_ENV
+          & { Get-ComputerInfo -Property OsName, OsVersion, OsBuildNumber | Format-List; Get-ChildItem setup } *>&1 | Tee-Object "$env:OUT\system.txt"
+          Set-Content -Path $env:SHOT -Value @'
+          param([string] $Path)
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+          $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+          '@
+
+      - name: Click through the setup wizard
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+          Add-Type -TypeDefinition @'
+          using System.Runtime.InteropServices;
+          public static class Mouse {
+            [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, System.UIntPtr extra);
+            public static void Click(int x, int y) {
+              SetCursorPos(x, y);
+              mouse_event(0x0002, 0, 0, 0, System.UIntPtr.Zero);
+              mouse_event(0x0004, 0, 0, 0, System.UIntPtr.Zero);
+            }
+          }
+          '@
+          $automation = [System.Windows.Automation.AutomationElement]
+          $tree = [System.Windows.Automation.TreeScope]
+          $any = [System.Windows.Automation.Condition]::TrueCondition
+          "This script runs in session $([System.Diagnostics.Process]::GetCurrentProcess().SessionId); explorer runs in session(s) $((Get-Process explorer -ErrorAction SilentlyContinue).SessionId -join ', ')"
+          $process = Start-Process $env:SETUP -ArgumentList "/LOG=`"$env:OUT\setup-wizard.log`"" -PassThru
+          $name = $process.ProcessName
+          $page = 0
+          $wizardFailed = $false
+          $lastPage = ''
+          for ($tick = 0; $tick -lt 75; $tick++) {
+            Start-Sleep 2
+            $ids = @(Get-Process -Name "$name*" -ErrorAction SilentlyContinue).Id
+            if (-not $ids) { 'The setup has closed.'; break }
+            $windows = @($automation::RootElement.FindAll($tree::Children, $any) | Where-Object { $ids -contains $_.Current.ProcessId })
+            if (-not $windows) {
+              if ($tick % 10 -eq 0) {
+                "No setup window yet; setup processes: $(@(Get-Process -Name "$name*" | ForEach-Object { "$($_.Id) in session $($_.SessionId)" }) -join ', ')"
+                "Top-level windows: $(@($automation::RootElement.FindAll($tree::Children, $any) | ForEach-Object { "'$($_.Current.Name)' ($($_.Current.ProcessId))" }) -join ', ')"
+                & $env:SHOT ("$env:OUT\00-no-setup-window-{0:D3}.png" -f $tick)
+              }
+              continue
+            }
+            # The setup's controls all show up as Panes, so they are found by name and clicked with the mouse.
+            $elements = @($windows | ForEach-Object { $_.FindAll($tree::Descendants, $any) } | Where-Object { $_.Current.Name -and -not $_.Current.IsOffscreen })
+            # The installing page names each file it extracts; leave paths out so it counts as one page.
+            $names = @($elements | ForEach-Object { $_.Current.Name } | Where-Object { $_ -notmatch '\\' })
+            $signature = "$(($windows | ForEach-Object { $_.Current.Name }) -join ', ') | $($names -join ' / ')"
+            if ($signature -ne $lastPage) {
+              $page++
+              $lastPage = $signature
+              $clicked = @{}
+              "Page ${page}: $(($windows | ForEach-Object { $_.Current.Name }) -join ', ')"
+              $elements | ForEach-Object { "  $($_.Current.ControlType.ProgrammaticName) '$($_.Current.Name)' enabled=$($_.Current.IsEnabled)" }
+              & $env:SHOT ("$env:OUT\01-setup-{0:D2}.png" -f $page)
+            }
+            $errorWindow = $elements | Where-Object { $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Window' -and $_.Current.Name -eq 'Error' } | Select-Object -First 1
+            if ($errorWindow) {
+              if (-not $wizardFailed) { '::error::The setup wizard showed an error; see the 01-setup screenshots and the page listing above.' }
+              $wizardFailed = $true
+              # Cancel as a person would, so the setup rolls back what it installed.
+              $cancel = $elements | Where-Object { $_.Current.Name -eq 'Cancel installation' } | Select-Object -First 1
+              if ($cancel) {
+                '  clicking Cancel installation'
+                $bounds = $cancel.Current.BoundingRectangle
+                [Mouse]::Click([int]($bounds.X + $bounds.Width / 2), [int]($bounds.Y + $bounds.Height / 2))
+              }
+              continue
+            }
+            # Choices a person makes once on a page: accept the license, add a desktop icon.
+            $choices = $elements | Where-Object { $_.Current.Name -match '^I accept the agreement$|desktop' -and -not $clicked[$_.Current.Name] }
+            foreach ($choice in $choices) {
+              "  choosing $($choice.Current.Name)"
+              $clicked[$choice.Current.Name] = $true
+              $bounds = $choice.Current.BoundingRectangle
+              [Mouse]::Click([int]($bounds.X + 10), [int]($bounds.Y + $bounds.Height / 2))
+              Start-Sleep 1
+            }
+            if ($choices) { continue }
+            $button = $elements | Where-Object { $_.Current.IsEnabled -and $_.Current.Name -match '^(OK|Yes|Next|Install|Finish)\b' } | Select-Object -First 1
+            if ($button) {
+              "  clicking $($button.Current.Name)"
+              Start-Sleep 1
+              $bounds = $button.Current.BoundingRectangle
+              [Mouse]::Click([int]($bounds.X + $bounds.Width / 2), [int]($bounds.Y + $bounds.Height / 2))
+            }
+          }
+          $finished = -not (Get-Process -Name "$name*" -ErrorAction SilentlyContinue)
+          Stop-Process -Name "$name*" -Force -ErrorAction SilentlyContinue
+          Start-Sleep 3
+          "WIZARD_INSTALLED=$($finished -and -not $wizardFailed)" >> $env:GITHUB_ENV
+
+      - name: Install silently if the wizard did not
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Facade Code'
+          if ($env:WIZARD_INSTALLED -ne 'True') {
+            # A short folder keeps the remaining checks running when the default folder's paths are too long.
+            $dir = 'C:\Facade'
+            "::warning::The wizard did not install the app; installing silently into $dir."
+            $process = Start-Process $env:SETUP -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/MERGETASKS=!runcode,desktopicon', "/DIR=`"$dir`"", "/LOG=`"$env:OUT\setup-silent.log`"" -PassThru -Wait
+            "Setup exit code: $($process.ExitCode)"
+            # Show what happened just before the setup started to roll back.
+            $log = @(Get-Content "$env:OUT\setup-silent.log" -ErrorAction SilentlyContinue)
+            $rollback = 0..($log.Count - 1) | Where-Object { $log[$_] -match 'Rolling back|Message box|Exception|Got EAbort|Fatal' } | Select-Object -First 1
+            if ($null -ne $rollback) { $log[[Math]::Max(0, $rollback - 30)..[Math]::Min($log.Count - 1, $rollback + 10)] } else { $log | Select-Object -Last 30 }
+          }
+          $exe = Get-ChildItem $dir -Filter *.exe | Where-Object Name -notlike 'unins*' | Select-Object -First 1
+          "APP_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Record the icon, signature, shortcuts and uninstall entry
+        run: |
+          $shell = New-Object -ComObject WScript.Shell
+          $shortcutFolders = "$env:APPDATA\Microsoft\Windows\Start Menu", [Environment]::GetFolderPath('Desktop')
+          & {
+            '== Signatures'
+            foreach ($file in $env:SETUP, $env:APP_EXE) {
+              $signature = Get-AuthenticodeSignature $file
+              "$(Split-Path $file -Leaf): $($signature.Status)"
+              "  signer: $($signature.SignerCertificate.Subject)"
+              "  timestamp: $($signature.TimeStamperCertificate.Subject)"
+            }
+            ''
+            '== Shortcuts'
+            Get-ChildItem $shortcutFolders -Recurse -Filter '*Facade*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
+              $link = $shell.CreateShortcut($_.FullName)
+              $_.FullName
+              "  target: $($link.TargetPath)"
+              "  icon: $($link.IconLocation)"
+            }
+            ''
+            '== Uninstall entry'
+            Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+              Where-Object DisplayName -like 'Facade*' |
+              Format-List DisplayName, DisplayVersion, Publisher, DisplayIcon, InstallLocation
+          } *>&1 | Out-String -Width 200 | Tee-Object "$env:OUT\bundle.txt"
+          "``````", (Get-Content "$env:OUT\bundle.txt" -Raw), "``````" | Add-Content $env:GITHUB_STEP_SUMMARY
+          Add-Type -AssemblyName System.Drawing
+          foreach ($size in 256, 48, 32, 16) {
+            try { $icon = [System.Drawing.Icon]::ExtractIcon($env:APP_EXE, 0, $size) } catch { $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:APP_EXE) }
+            $icon.ToBitmap().Save("$env:OUT\icon-in-app-$size.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          Copy-Item resources\win32\code.ico "$env:OUT\icon-in-source.ico"
+
+      - name: Screenshot the desktop and the Start menu
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          (New-Object -ComObject Shell.Application).MinimizeAll()
+          Start-Sleep 3
+          & $env:SHOT "$env:OUT\02-desktop.png"
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.SendKeys]::SendWait('^{ESC}')
+          Start-Sleep 4
+          & $env:SHOT "$env:OUT\03-start-menu.png"
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+
+      - name: Launch the app for the first time
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          Start-Process $env:APP_EXE
+          Start-Sleep 25
+          & $env:SHOT "$env:OUT\04-first-launch.png"
+          $name = [IO.Path]::GetFileNameWithoutExtension($env:APP_EXE)
+          $processes = Get-Process -Name $name -ErrorAction SilentlyContinue
+          $(if ($processes) { "$($processes.Count) processes named $name" } else { 'The app is not running.' }) | Tee-Object "$env:OUT\processes.txt"
+          $processes | Stop-Process -Force -ErrorAction SilentlyContinue
+
+      - name: Collect the app's logs
+        if: always()
+        run: |
+          $logs = "$env:APPDATA\Facade Code\logs"
+          if (Test-Path $logs) { Copy-Item $logs "$env:OUT\logs" -Recurse }
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-install-${{ matrix.os }}
+          path: out
+
+      - name: Fail if the setup wizard could not install the app
+        if: env.WIZARD_INSTALLED != 'True'
+        run: |
+          '::error::The setup wizard did not install the app; the checks above ran on a silent install into C:\Facade.'
+          exit 1
