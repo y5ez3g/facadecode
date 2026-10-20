@@ -1,0 +1,893 @@
+{
+	"vscode": {
+		"vs/editor/browser/widget/multiDiffEditor/diffEditorItemTemplate": {
+			"binaryFileChanged": "İkili dosya değişti",
+			"openBinaryDiff": "Farkı Aç"
+		},
+		"vs/editor/common/config/editorOptions": {
+			"fullwidthCharacterWidth": "Tam genişlikli karakterleri işlemek için kullanılan genişliği denetler.",
+			"fullwidthCharacterWidth.font": "Tam genişlikli karakterleri yazı tipinin tanımladığı genişlikle işle.",
+			"fullwidthCharacterWidth.twoCells": "Tam genişlikli karakterleri tam olarak iki karakter hücresinin ortasında işle. Yalnızca tek aralıklı yazı tipleri için geçerlidir. Birden çok kod noktasından oluşan tam genişlikli karakterlere ve GPU ile işlemeye uygulanmaz. Bunun satır işleme performansı üzerinde etkisi vardır."
+		},
+		"vs/editor/common/editorContextKeys": {
+			"diffEditorAutomaticRenderSideBySide": "Otomatik fark düzenleyicisi düzeninin yan yana işlenip işlenmeyeceği",
+			"diffEditorTemporaryInlineMode": "Fark düzenleyicisi el ile yeniden boyutlandırıldıktan sonra satır içi modun geçici olarak etkin olup olmadığı"
+		},
+		"vs/platform/contextkey/common/contextkeys": {
+			"isChromeOS": "İşletim sisteminin ChromeOS olup olmadığını belirtir",
+			"productQualityType": "{0} kalite türü"
+		},
+		"vs/platform/extensionManagement/node/extensionManagementService": {
+			"restartCode": "{0} öğesini yeniden yüklemeden önce lütfen {1}'u yeniden başlatın."
+		},
+		"vs/platform/externalTerminal/node/externalTerminalService": {
+			"console.title": "{0} Konsolu"
+		},
+		"vs/platform/product/common/releaseVersion": {
+			"releaseVersion": "{0} (VS Code {1} tabanlı)"
+		},
+		"vs/platform/terminal/common/terminalPlatformConfiguration": {
+			"terminal.integrated.inheritEnv": "Yeni kabukların ortamlarını {0}'dan devralıp devralmayacağını belirtir; bu sırada $PATH ve diğer geliştirme değişkenlerinin başlatıldığından emin olmak için bir oturum açma kabuğu kaynak olarak kullanılabilir. Bunun Windows üzerinde hiçbir etkisi yoktur."
+		},
+		"vs/platform/update/common/update.config.contribution": {
+			"default": "Otomatik güncelleştirme denetimlerini etkinleştir. Code, güncelleştirmeleri otomatik olarak ve düzenli aralıklarla denetler."
+		},
+		"vs/workbench/api/browser/mainThreadMcp": {
+			"mcp.enterpriseManaged.issuerMissing": "Kurumsal olarak yönetilen MCP kimlik doğrulaması, `mcp.enterpriseManagedAuth.idp.issuer` öğesinin yapılandırılmasını gerektirir. Bunu kurumsal ilke (Windows Grup İlkesi / macOS tarafından yönetilen tercihler / Linux `/etc/facade/policy.json`) aracılığıyla veya yerel test için `settings.json` dosyasını el ile düzenleyerek ayarlayın."
+		},
+		"vs/workbench/api/common/configurationExtensionPoint": {
+			"scope.deprecationMessageSeverity": "Kullanım dışı bırakma iletisini göstermek için kullanılan önem derecesini denetler.",
+			"scope.deprecationMessageSeverity.info": "Kullanım dışı bırakma iletisini bilgilendirme biçiminde gösterir.",
+			"scope.deprecationMessageSeverity.warning": "Kullanım dışı bırakma iletisini standart uyarı biçiminde gösterir."
+		},
+		"vs/workbench/browser/actions/layoutActions": {
+			"layoutDensity": "Düzen Yoğunluğu",
+			"layoutDensityCompact": "Sıkıştırılmış",
+			"layoutDensityCompactIcon": "Sıkıştırılmış düzen yoğunluğunu temsil eder",
+			"layoutDensityDefault": "Varsayılan",
+			"layoutDensityDefaultIcon": "Varsayılan düzen yoğunluğunu temsil eder"
+		},
+		"vs/workbench/browser/chatPills": {
+			"chatPills.open": "{0} öğesini aç"
+		},
+		"vs/workbench/browser/parts/activitybar/activitybarPart": {
+			"miToolbarActivityBar": "&&Araç Çubuğu",
+			"positionActivityBarToolbar": "Etkinlik Çubuğunu Başlık Çubuğuna Taşı",
+			"toolbar": "Araç Çubuğu"
+		},
+		"vs/workbench/browser/parts/dialogs/facadeDialogColors": {
+			"facadeDialogBorder": "Facade iletişim kutularındaki kenarlık rengi: iletişim kutusunun dış çizgisi, düğmelerin üstündeki ayırıcı ve bildirim kutuları.",
+			"facadeDialogControlBackground": "Facade iletişim kutularındaki simge seçicilerin arka plan rengi.",
+			"facadeDialogControlBorder": "Facade iletişim kutularındaki simge seçicilerin ve renk sıfırlama düğmelerinin kenarlık rengi.",
+			"facadeDialogFooterBackground": "Facade iletişim kutularındaki alt bilgi düğme alanının arka plan rengi."
+		},
+		"vs/workbench/browser/parts/editor/editor.contribution": {
+			"diffView": "Fark Görünümü",
+			"diffView.automaticInline": "Otomatik (Şu Anda Satır İçi)",
+			"diffView.automaticSideBySide": "Otomatik (Şu Anda Yan Yana)",
+			"diffView.inline": "Satır İçi",
+			"diffView.inlineTemporary": "Satır İçi (Geçici)",
+			"diffView.sideBySide": "Yan Yana"
+		},
+		"vs/workbench/browser/parts/titlebar/titlebarAppIcon": {
+			"titleBar.showAppIcon": "Uygulama simgesinin özel başlık çubuğunda gösterilip gösterilmeyeceğini denetler. Devre dışı bırakıldığında köşe, çalışma alanı çubuğunu açıp kapatan düğmeye ayrılır. Yalnızca Windows ve Linux'taki özel başlık çubukları için geçerlidir; etkili olması için yeni bir pencere gerekir."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarActions": {
+			"workspaceBar.category": "Çalışma Alanı",
+			"workspaceBar.collapse": "Çalışma Alanı Çubuğunu Daralt",
+			"workspaceBar.collapseFolder": "Daralt",
+			"workspaceBar.collapsedContext": "Çalışma alanı çubuğunun simgelere daraltılmış olup olmadığı",
+			"workspaceBar.customizeFolder": "Özelleştir...",
+			"workspaceBar.expand": "Çalışma Alanı Çubuğunu Genişlet",
+			"workspaceBar.expandFolder": "Genişlet",
+			"workspaceBar.focus": "Çalışma Alanı Çubuğuna Odaklan",
+			"workspaceBar.focusContext": "Çalışma alanı klasör listesinin klavye odağına sahip olup olmadığı",
+			"workspaceBar.moveFolderDown": "Klasörü Aşağı Taşı",
+			"workspaceBar.moveFolderUp": "Klasörü Yukarı Taşı",
+			"workspaceBar.moveWorktreeDown": "Çalışma Ağacını Aşağı Taşı",
+			"workspaceBar.moveWorktreeUp": "Çalışma Ağacını Yukarı Taşı",
+			"workspaceBar.openFolder": "Klasör Aç...",
+			"workspaceBar.openFolderButton": "Ekle",
+			"workspaceBar.openFolderTitle": "Klasör Aç",
+			"workspaceBar.removeFolder": "Klasörü Çalışma Alanından Kaldır",
+			"workspaceBar.revealInLinux": "İçeren Klasörü Aç",
+			"workspaceBar.revealInMac": "Finder'da Göster",
+			"workspaceBar.revealInWindows": "Dosya Gezgini'nde Göster",
+			"workspaceBar.rowExpansionContext": "Odaklanılan depo satırında çalışma ağaçlarının genişletilmiş olup olmadığı",
+			"workspaceBar.rowKindContext": "Odaklanılan satırın klasör mü, depo mu, yoksa çalışma ağacı mı olduğu",
+			"workspaceBar.rowOffersWorktreeContext": "Odaklanılan satırın yeni bir çalışma ağacı sunup sunmadığı",
+			"workspaceBar.toggleCollapsed": "Çalışma Alanı Çubuğunu Aç/Kapat",
+			"workspaceBar.toggleIcon": "Çalışma alanı çubuğunu daraltma ve genişletme simgesi.",
+			"workspaceBar.worktrees": "Çalışma alanı çubuğunun her deponun altında Git çalışma ağaçlarını gösterip göstermeyeceğini denetler."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarColors": {
+			"facadeAgentBadgeBackground": "Çalışma alanı satırlarındaki ve başlık çubuğundaki ajan düğmesindeki ajan rozeti göstergelerinin arka plan rengi.",
+			"facadeAgentBadgeForeground": "Ajan rozetindeki sayı metninin ön plan rengi.",
+			"facadeBarActiveBorder": "Çalışma alanı çubuğunda geçerli klasör satırındaki etkin göstergenin rengi.",
+			"facadeBarBackground": "Çalışma alanı çubuğunun arka plan rengi. Çalışma alanı çubuğu, pencerenin sol kenarı boyunca uzanan klasör sütunudur.",
+			"facadeBarBorder": "Çalışma alanı çubuğunu bitişik görünümlerden ayıran kenarlık rengi.",
+			"facadeBarFolderBlue": "Çalışma alanı çubuğundaki klasörler için mavi vurgu rengi.",
+			"facadeBarFolderGreen": "Çalışma alanı çubuğundaki klasörler için yeşil vurgu rengi.",
+			"facadeBarFolderIndigo": "Çalışma alanı çubuğundaki klasörler için çivit mavisi vurgu rengi.",
+			"facadeBarFolderLime": "Çalışma alanı çubuğundaki klasörler için limon yeşili vurgu rengi.",
+			"facadeBarFolderOrange": "Çalışma alanı çubuğundaki klasörler için turuncu vurgu rengi.",
+			"facadeBarFolderPink": "Çalışma alanı çubuğundaki klasörler için pembe vurgu rengi.",
+			"facadeBarFolderPurple": "Çalışma alanı çubuğundaki klasörler için mor vurgu rengi.",
+			"facadeBarFolderRed": "Çalışma alanı çubuğundaki klasörler için kırmızı vurgu rengi.",
+			"facadeBarFolderTeal": "Çalışma alanı çubuğundaki klasörler için deniz mavisi vurgu rengi.",
+			"facadeBarFolderYellow": "Çalışma alanı çubuğundaki klasörler için sarı vurgu rengi.",
+			"facadeBarForeground": "Çalışma alanı çubuğunun ön plan rengi.",
+			"facadeBarInactiveForeground": "Çalışma alanı çubuğundaki etkin olmayan satırların ön plan rengi.",
+			"facadeBarTitleForeground": "Çalışma alanı çubuğu üst bilgisinin ön plan rengi."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomization": {
+			"workspaceBar.worktreeIcon": "Çalışma alanı çubuğundaki bir çalışma ağacının simgesi."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomize": {
+			"workspaceBar.branch": "Dal",
+			"workspaceBar.branchAria": "Yeni çalışma ağacının dalı",
+			"workspaceBar.branchPlaceholder": "Dal adı",
+			"workspaceBar.cancel": "İptal",
+			"workspaceBar.color": "Renk",
+			"workspaceBar.colorAria": "Klasör rengi",
+			"workspaceBar.colorBlue": "Mavi",
+			"workspaceBar.colorGreen": "Yeşil",
+			"workspaceBar.colorIndigo": "Çivit Mavisi",
+			"workspaceBar.colorLime": "Limon Yeşili",
+			"workspaceBar.colorNone": "Renk Yok",
+			"workspaceBar.colorOrange": "Turuncu",
+			"workspaceBar.colorPink": "Pembe",
+			"workspaceBar.colorPurple": "Mor",
+			"workspaceBar.colorRed": "Kırmızı",
+			"workspaceBar.colorTeal": "Deniz Mavisi",
+			"workspaceBar.colorYellow": "Sarı",
+			"workspaceBar.create": "Oluştur",
+			"workspaceBar.customizeAbout": "'{0}' için görünen adı, rengi ve simgeyi yapılandırın. Diskteki klasörün adı değiştirilmez.",
+			"workspaceBar.customizeTitle": "Klasörü Özelleştir",
+			"workspaceBar.customizeWorktreeAbout": "'{0}' için görünen adı ve rengi yapılandırın. Diskteki dalın ve klasörün adı değiştirilmez.",
+			"workspaceBar.customizeWorktreeTitle": "Çalışma Ağacını Özelleştir",
+			"workspaceBar.displayName": "Görünen Ad",
+			"workspaceBar.displayNameAria": "Bu klasörün görünen adı",
+			"workspaceBar.displayNameDefault": "Varsayılan '{0}' adını kullanmak için boş bırakın.",
+			"workspaceBar.displayNameHintBranch": "Dal adını kullanmak için boş bırakın.",
+			"workspaceBar.icon": "Simge",
+			"workspaceBar.iconAria": "Klasör simgesi",
+			"workspaceBar.iconBeaker": "Beher",
+			"workspaceBar.iconBook": "Kitap",
+			"workspaceBar.iconDatabase": "Veritabanı",
+			"workspaceBar.iconDevice": "Cihaz",
+			"workspaceBar.iconFolder": "Klasör",
+			"workspaceBar.iconGlobe": "Küre",
+			"workspaceBar.iconPackage": "Paket",
+			"workspaceBar.iconRocket": "Roket",
+			"workspaceBar.iconServer": "Sunucu",
+			"workspaceBar.iconTools": "Araçlar",
+			"workspaceBar.newWorktreeAbout": "'{0}' için yeni bir Git çalışma ağacı ve dal oluşturun.",
+			"workspaceBar.newWorktreeTitle": "'{0}' İçinde Yeni Çalışma Ağacı",
+			"workspaceBar.save": "Kaydet",
+			"workspaceBar.worktreeColorAria": "Çalışma ağacı rengi",
+			"workspaceBar.worktreeDisplayNameAria": "Bu çalışma ağacının görünen adı"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarEditors": {
+			"workspaceBar.editorsNotClosed": "Açık düzenleyiciler kapatılamadı."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarPart": {
+			"workspaceBar.couldNotAdd": "'{0}' klasörü çalışma alanına eklenemedi: {1}",
+			"workspaceBar.gone": "'{0}' klasörü artık diskte yok.",
+			"workspaceBar.goneReason": "artık diskte yok",
+			"workspaceBar.moreActions": "Diğer Eylemler...",
+			"workspaceBar.notTaken": "klasör çalışma alanına eklenmedi",
+			"workspaceBar.title": "Çalışma Alanı"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarQuestions": {
+			"workspaceBar.agentLine": "Ajan {0}",
+			"workspaceBar.agentLineAt": "Ajan {0} · {1}",
+			"workspaceBar.agentTerminated": "Şu ajan sonlandırılacak:",
+			"workspaceBar.agentsAndTerminalsTerminated": "Şu ajanlar ve terminaller sonlandırılacak:",
+			"workspaceBar.agentsTerminated": "Şu ajanlar sonlandırılacak:",
+			"workspaceBar.fileDiscarded": "Şu dosyada atılacak kaydedilmemiş değişiklikler var:",
+			"workspaceBar.fileLineAt": "{0} · {1}",
+			"workspaceBar.filesDiscarded": "Şu dosyalarda atılacak kaydedilmemiş değişiklikler var:",
+			"workspaceBar.moreFiles": "...gösterilmeyen {0} dosya daha",
+			"workspaceBar.moreSessions": "...gösterilmeyen {0} oturum daha",
+			"workspaceBar.oneMoreFile": "...gösterilmeyen 1 dosya daha",
+			"workspaceBar.oneMoreSession": "...gösterilmeyen 1 oturum daha",
+			"workspaceBar.terminalLine": "Terminal ({0})",
+			"workspaceBar.terminalLineAt": "Terminal ({0}) · {1}",
+			"workspaceBar.terminalTerminated": "Şu terminal sonlandırılacak:",
+			"workspaceBar.terminalsTerminated": "Şu terminaller sonlandırılacak:",
+			"workspaceBar.worktreePlace": "{0} (çalışma ağacı: {1})"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarRemoval": {
+			"workspaceBar.notRemoved": "Çalışma alanı güncelleştirilemedi: {0}",
+			"workspaceBar.notRemovedReason": "çalışma alanı yapılandırma dosyası yazılamadı",
+			"workspaceBar.removeAndDiscard": "&&Kaldır ve Değişiklikleri At",
+			"workspaceBar.removeFolderAndWorktree": "'{0}' öğesini ve çalışma ağacını çalışma alanından kaldırmak istediğinizden emin misiniz?",
+			"workspaceBar.removeFolderAndWorktrees": "'{0}' öğesini ve {1} çalışma ağacını çalışma alanından kaldırmak istediğinizden emin misiniz?",
+			"workspaceBar.removeFolderButton": "&&Kaldır",
+			"workspaceBar.removeFolderQuestion": "'{0}' öğesini çalışma alanından kaldırmak istediğinizden emin misiniz?",
+			"workspaceBar.removeFoldersQuestion": "Aşağıdaki {0} klasörü çalışma alanından kaldırmak istediğinizden emin misiniz?",
+			"workspaceBar.removeKeepsDisk": "Diskteki dosyalar silinmeyecek.",
+			"workspaceBar.worktreeDeleted": "'{0}' çalışma ağacı silindi ve çalışma alanından kaldırıldı."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitchFolder": {
+			"workspaceBar.switchFolder": "Klasör Değiştir...",
+			"workspaceBar.switchFolderNext": "Klasör Değiştir'de Sonraki Klasörü Seç",
+			"workspaceBar.switchFolderPlaceholder": "Geçiş yapılacak bir klasör seçin"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitcher": {
+			"workspaceBar.addedNotShown": "'{0}' klasörü çalışma alanına eklendi ancak bu klasöre geçilemedi.",
+			"workspaceBar.addedNotShownOf": "Çalışma alanına eklenen klasörler: {0}. '{1}' klasörüne geçilemedi.",
+			"workspaceBar.couldNotLeave": "Klasör değiştirilemedi: Etkin klasörün düzenleyici durumu kaydedilemedi. {0}",
+			"workspaceBar.couldNotRestore": "Bu klasördeki bazı düzenleyiciler geri yüklenemedi. {0}",
+			"workspaceBar.gone": "'{0}' klasörü artık diskte yok.",
+			"workspaceBar.goneReason": "artık diskte yok",
+			"workspaceBar.unreadable": "'{0}' klasörü okunamadı: {1}"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
+			"workspaceBar.openInNewWindow": "Yeni Pencerede Aç",
+			"workspaceBar.trustAndAdd": "&&Güven ve Ekle",
+			"workspaceBar.trustParent": "'{0}' üst klasöründeki tüm dosyaları oluşturanlara güven",
+			"workspaceBar.untrustedConsequence": "Bu çalışma alanına güveniliyor. Güvenilmeyen bir klasör eklemek, çalışma alanının tamamını ve etkin ajanları Kısıtlı Mod'a geçirir.",
+			"workspaceBar.untrustedConsequenceMany": "Bu çalışma alanına güveniliyor. Güvenilmeyen klasörler eklemek, çalışma alanının tamamını ve etkin ajanları Kısıtlı Mod'a geçirir.",
+			"workspaceBar.untrustedLinks": "Daha fazla bilgi için [belgelerimize](https://aka.ms/vscode-workspace-trust) bakın veya Kısıtlı Mod'da [yeni bir pencerede açın]({0}).",
+			"workspaceBar.untrustedLinksMany": "Daha fazla bilgi için [belgelerimize](https://aka.ms/vscode-workspace-trust) bakın veya Kısıtlı Mod'da [{0} klasörün tümünü yeni bir pencerede açın]({1}).",
+			"workspaceBar.untrustedMessage": "Bu klasördeki dosyaları oluşturanlara güveniyor musunuz?",
+			"workspaceBar.untrustedMessageMany": "Bu {0} klasördeki dosyaları oluşturanlara güveniyor musunuz?",
+			"workspaceBar.untrustedMore": "ve {0} tane daha",
+			"workspaceBar.untrustedTakenOut": "'{0}' klasörüne güvenilmediği ve çalışma alanını Kısıtlı Mod'a geçireceği için klasör kaldırıldı."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
+			"workspaceBar.agentsAria": "{0} ajan",
+			"workspaceBar.ariaLabel": "Çalışma Alanı Klasörleri",
+			"workspaceBar.collapse": "Daralt",
+			"workspaceBar.empty": "Buraya bir klasör sürükleyin veya + düğmesine tıklayın.",
+			"workspaceBar.expand": "Genişlet",
+			"workspaceBar.moreAgents": "{0} ajan daha",
+			"workspaceBar.oneAgentAria": "1 ajan",
+			"workspaceBar.oneMoreAgent": "1 ajan daha",
+			"workspaceBar.oneWorktreeAria": "1 çalışma ağacı",
+			"workspaceBar.unavailableAria": "{0}, klasör diskte yok",
+			"workspaceBar.unreadableAria": "{0}, klasör okunamıyor",
+			"workspaceBar.worktreeAria": "{0}, çalışma ağacı",
+			"workspaceBar.worktreesAria": "{0} çalışma ağacı"
+		},
+		"vs/workbench/browser/workbench.contribution": {
+			"appName": "`${appName}`: örneğin, {0}.",
+			"workbench.activityBar.location.toolbar": "Etkinlik Çubuğunu başlık çubuğunda, düzen denetimlerinin yanında gösterin."
+		},
+		"vs/workbench/common/contextkeys": {
+			"inAutomation": "{0}'un otomasyon/duman testi altında çalışıp çalışmadığı"
+		},
+		"vs/workbench/common/theme": {
+			"modernPanelBorder": "Modern kullanıcı arabirimi etkinleştirildiğinde panel yüzeyinin kenarlık rengi.",
+			"modernSashGripForeground": "Modern kullanıcı arabirimi etkinleştirildiğinde, çalışma ekranı bölümleri arasındaki yeniden boyutlandırılabilir sınırları işaretleyen tutamaçların rengi.",
+			"modernUIInactiveShellBackground": "Pencere etkin değilken ve modern kullanıcı arabirimi etkinleştirildiğinde, kayan çalışma ekranı yüzeylerinin çevresinde görünen kabuğun arka plan rengi.",
+			"modernUIShellBackground": "Modern kullanıcı arabirimi etkinleştirildiğinde, kayan çalışma ekranı yüzeylerinin çevresinde görünen kabuğun arka plan rengi.",
+			"statusBarInactiveBackground": "Bir çalışma alanı veya klasör açıkken ve pencere etkin değilken durum çubuğu arka plan rengi. Hata ayıklama ve diğer arka plan geçersiz kılmaları önceliklidir. Ayarlanmazsa geçerli durum çubuğu arka planı kullanılır."
+		},
+		"vs/workbench/contrib/accessibility/browser/accessibilityConfiguration": {
+			"verbosity.customizationMigrations.description": "Özelleştirme geçişi denetim listesi için erişilebilirlik yardımına nasıl erişileceği hakkında bilgi sağlayın."
+		},
+		"vs/workbench/contrib/browserView/common/browserView": {
+			"browserView.openShareableCopy.cancel": "İptal",
+			"browserView.openShareableCopy.confirm": "&&Aç ve Paylaş",
+			"browserView.openShareableCopy.detail": "Bu sekme, ajanlarla paylaşım için gereken yapılandırılmış ilke kısıtlamalarını uygulamıyor.\n\nAjanlarla paylaşmak için sayfayı yeni bir sekmede açın.",
+			"browserView.openShareableCopy.message": "Paylaşım İçin Yeni Sekme Açılsın mı?"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/browserViewWorkbenchService": {
+			"browser.networkFilteringEnabled": "Ağ filtreleme etkinleştirildiği için ajanların tarayıcı sekmelerine erişimi iptal edildi."
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserDataStorageFeatures": {
+			"browser.clearAgentStorageAction": "Depolamayı Temizle (Ajan)",
+			"browser.dataStorage.agent": "Tarayıcı görünümleri, uygulama kapatıldığında temizlenen tek bir bellek içi oturumu paylaşır. Bu oturum, ajanların açtığı tarayıcı sayfalarıyla paylaşılır; bu nedenle **yerel depolama ve çerezler dahil tüm verilere ajanlar erişebilir.** Ajan ağ filtrelemesi etkinleştirildiğinde, bu oturumdan gelen istekler yapılandırılmış ağ etki alanı ilkesiyle kısıtlanır."
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorChatFeatures": {
+			"browser.shareWithAgent.blockedByNetworkPolicy": "Ağ etki alanı ilkesi nedeniyle ajanlarla paylaşılamıyor.",
+			"browser.shareWithAgent.failed": "Tarayıcı Sekmesi Paylaşılamadı",
+			"browser.shareWithAgent.isolated": "Ajanla Paylaş (Yalıtılmış Sekme Açar)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorEmulationFeatures": {
+			"browser.userAgent.prompt": "Kullanıcı aracısı dizesi ({0} varsayılanı için boş bırakın)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorErrorFeatures": {
+			"browser.networkPolicyErrorExtraWarning": "İstek büyük olasılıkla ağ etki alanı ilkesi tarafından engellendi.\nYapılandırılmış izin verilen ve reddedilen ağ etki alanlarını denetleyin."
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserTabManagementFeatures": {
+			"browser.openInIntegratedBrowser": "Terminalden, sohbetten ve diğer kaynaklardan gelip `#workbench.browser.openLocalhostLinks#` ayarı ne olursa olsun sistem tarayıcısı yerine Tümleşik Tarayıcı'da açılan bağlantılar. Her girdi bir URL desenidir: `example.com` o etki alanının sayfalarıyla, `*.example.com` etki alanı ve alt etki alanlarıyla, `https://example.com/docs` o şemayla o yolun altındaki sayfalarla, `example.com:*` ise herhangi bir bağlantı noktasıyla eşleşir."
+		},
+		"vs/workbench/contrib/chat/browser/chat.shared.contribution": {
+			"autoApprove3.description": "\"YOLO modu\" olarak da bilinen genel otomatik onay, tüm çalışma alanlarındaki tüm araçlar için el ile onayı tamamen devre dışı bırakır ve ajanın tamamen otonom hareket etmesine olanak tanır. Bu son derece tehlikelidir ve *hiçbir zaman* önerilmez; Codespaces ve Dev Containers gibi kapsayıcılı ortamlarda bile kullanıcı anahtarları kapsayıcıya iletilir ve ele geçirilebilir.\n\nBu özellik kritik güvenlik korumalarını devre dışı bırakır ve bir saldırganın makineyi ele geçirmesini çok daha kolay hale getirir.\n\nNot: Bu ayar yalnızca araç onayını denetler, ajanın soru sormasını engellemez. Ajanın sorularını otomatik olarak yanıtlamak için `#chat.autoReply#` ayarını kullanın.",
+			"mcp.enterpriseManagedAuth.idp": "(Önizleme) Kurumsal olarak yönetilen Model Bağlam Protokolü (MCP) sunucuları için kullanılan OAuth/OIDC IdP yapılandırması. Genellikle kurumsal ilke aracılığıyla sağlanır (Windows Grup İlkesi / macOS tarafından yönetilen tercihler / Linux `/etc/facade/policy.json`); geliştiriciler yerel test için `settings.json` dosyasını el ile düzenleyebilir. Özellikler: `issuer` (HTTPS URL), `clientId`, `clientSecret`."
+		},
+		"vs/workbench/contrib/codeEditor/browser/diffEditorAccessibilityHelp": {
+			"msg6": "Satır içi, yan yana veya otomatik düzeni seçmek için düzenleyici başlık alanındaki Diğer Eylemler menüsünde Fark Görünümü'nü kullanın."
+		},
+		"vs/workbench/contrib/debug/browser/debugAdapterManager": {
+			"debugServer": "Yalnızca hata ayıklama uzantısı geliştirme için: Bir bağlantı noktası belirtilirse {0}, sunucu modunda çalışan bir hata ayıklama bağdaştırıcısına bağlanmaya çalışır"
+		},
+		"vs/workbench/contrib/extensions/browser/extensions.contribution": {
+			"extensions.gallery.authProvider": "Uzantılar Marketi için kimlik doğrulama sağlayıcısını yapılandırın",
+			"extensions.gallery.authProvider.github": "Uzantılar Marketi'nde GitHub ile kimlik doğrulaması yapın.",
+			"extensions.gallery.authProvider.microsoft": "Uzantılar Marketi'nde Microsoft (Entra ID) hesabıyla kimlik doğrulaması yapın.",
+			"notInstalled": "'{0}' uzantısı yüklü değil. Yayımcı da dahil olmak üzere tam uzantı kimliğini kullandığınızdan emin olun; örneğin: ms-dotnettools.csharp.",
+			"workbench.extensions.installExtension.option.donotSync": "Etkinleştirildiğinde {0}, Ayarlar Eşitleme açıkken bu uzantıyı eşitlemez.",
+			"workbench.extensions.installExtension.option.installOnlyNewlyAddedFromExtensionPackVSIX": "Etkinleştirildiğinde {0}, uzantı paketi VSIX'inden yalnızca yeni eklenen uzantıları yükler. Bu seçenek yalnızca bir VSIX yüklenirken dikkate alınır.",
+			"workbench.extensions.installExtension.option.installPreReleaseVersion": "Etkinleştirildiğinde {0}, varsa uzantının yayın öncesi sürümünü yükler."
+		},
+		"vs/workbench/contrib/extensions/browser/extensionsActions": {
+			"deprecated with alternate settings message": "Bu işlev artık {0} içinde yerleşik olduğundan bu uzantı kullanım dışıdır.",
+			"deprecated with alternate settings tooltip": "Bu işlev artık {1} içinde yerleşik olduğundan bu uzantı kullanım dışıdır. Bu işlevi kullanmak için bu {0} öğesini yapılandırın.",
+			"disableForWorkspaceActionToolTip": "Bu uzantıyı yalnızca bu çalışma alanında devre dışı bırak. Bu, penceredeki tüm klasörler için geçerlidir.",
+			"enableForWorkspaceActionToolTip": "Bu uzantıyı yalnızca bu çalışma alanında etkinleştir. Bu, penceredeki tüm klasörler için geçerlidir."
+		},
+		"vs/workbench/contrib/extensions/common/extensionsFileTemplate": {
+			"app.extensions.json.unwantedRecommendations": "{0} tarafından önerilen ancak bu çalışma alanının kullanıcılarına önerilmemesi gereken uzantıların listesi. Bir uzantının tanımlayıcısı her zaman '${publisher}.${name}' şeklindedir. Örneğin: 'vscode.csharp'."
+		},
+		"vs/workbench/contrib/externalUriOpener/common/configuration": {
+			"externalUriOpeners.defaultId": "{0}'un standart açıcısını kullanarak açın."
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
+			"facadeNotificationSource": "Facade Ajanları"
+		},
+		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
+			"changeAndRestart": "Değiştir ve Yeniden Başlat",
+			"dontShowAgain": "Tekrar Gösterme",
+			"suggestDisplayLanguage": "{0} {1} olarak da kullanılabilir. Görüntüleme dilini değiştirip yeniden başlatmak istiyor musunuz?",
+			"suggestDisplayLanguageSetting": "Henüz bir görüntüleme dili seçilmemişken, işletim sisteminin dili için yerleşik bir dil paketi varsa pencerenin o dile geçmeyi önerip önermeyeceğini denetler."
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminalActions": {
+			"facade.terminal.openTab": "Terminal"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals": {
+			"folderTerminals.keptRunning": "'{0}' klasörü çalışma alanından kaldırıldı. Etkin terminaller panelde çalışmaya devam ediyor: {1}.",
+			"folderTerminals.stop": "Durdur"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals.contribution": {
+			"terminal.followFolder": "Düzenleyici alanındaki terminallerin geçerli klasörü izleyip izlemeyeceğini denetler. Etkinleştirildiğinde, klasör değiştirmek diğer klasörlerin terminallerini gizler ve o klasörlere döndüğünüzde terminalleri geri getirir. Devre dışı bırakıldığında terminaller, klasör değiştirildiğinde de görünür kalır."
+		},
+		"vs/workbench/contrib/github/browser/githubLinkPresentation.contribution": {
+			"github.authenticationRequired": "Çekme isteği durumunu ve diğer GitHub bağlantı ayrıntılarını yüklemek için GitHub'da oturum açın.",
+			"github.authenticationRequired.signIn": "Oturum Aç"
+		},
+		"vs/workbench/contrib/issue/browser/baseIssueReporterService": {
+			"handlesIssuesElsewhere": "Bu uzantı, {0} dışındaki sorunlarla ilgilenir"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterOverlay": {
+			"screenshotsSubtitle": "En fazla {0} ekran görüntüsü veya video ekleyebilirsiniz. {1}'da gezinin ve ne zaman yakalayacağınızı seçin."
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterPage": {
+			"acknowledgements": "{0} sürümümün güncel olmadığını ve bu sorunun kapatılabileceğini kabul ediyorum."
+		},
+		"vs/workbench/contrib/localization/common/localizationsActions": {
+			"configureLocaleDescription": "Yüklü dil paketlerine göre {0}'un yerel ayarını değiştirir. Yaygın diller arasında Fransızca, Çince, İspanyolca, Japonca, Almanca, Korece ve daha fazlası bulunur."
+		},
+		"vs/workbench/contrib/multiDiffEditor/browser/actions": {
+			"diffView": "Fark Görünümü"
+		},
+		"vs/workbench/contrib/preferences/browser/preferencesWidgets": {
+			"workspaceSettingsAllFolders": "Çalışma Alanı: Bu penceredeki tüm klasörler için geçerlidir."
+		},
+		"vs/workbench/contrib/preferences/browser/settingsTree": {
+			"setting.deprecationMessageSeverity.info": "Bilgi",
+			"setting.deprecationMessageSeverity.warning": "Uyarı"
+		},
+		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
+			"progress.turnOn.final.noLink": "Uzak Tünel Erişimi {0} için etkinleştirildi. Bu erişimi {3} Hesaplar menüsünden [yapılandırabilir](command:{1}) veya [kapatabilirsiniz](command:{2}).",
+			"remoteTunnel.actions.rename": "Tüneli Yeniden Adlandır",
+			"renameTunnel.invalidName": "Ad yalnızca harf, rakam, alt çizgi ve tireden oluşmalıdır. Tireyle başlamamalıdır.",
+			"renameTunnel.maxLength": "Ad {0} karakterden uzun olmamalıdır.",
+			"renameTunnel.placeholder": "Bu makinenin konak adını kullanmak için boş bırakın.",
+			"renameTunnel.prompt": "Bu tünel için bir ad girin.",
+			"renameTunnel.title": "Tüneli Yeniden Adlandır"
+		},
+		"vs/workbench/contrib/scm/browser/scm.contribution": {
+			"no repository in folder": "Bu klasörde kaynak denetimi deposu yok."
+		},
+		"vs/workbench/contrib/search/browser/search.common.contribution": {
+			"exclude": "Tam metin aramalarında ve hızlı açmadaki dosya aramasında dosya ve klasörleri dışlamak için [glob desenlerini](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options) yapılandırın. Hızlı açmada dosyaları son açılanlar listesinden dışlamak için desenler mutlak olmalıdır (örneğin `**/node_modules/**`). `#files.exclude#` ayarından tüm glob desenlerini devralır.",
+			"exclude.boolean": "Dosya yollarının eşleştirileceği glob deseni. Deseni etkinleştirmek veya devre dışı bırakmak için true ya da false olarak ayarlayın.",
+			"exclude.when": "Eşleşen bir dosyanın eşdüzey öğeleri üzerindeki ek denetim. Eşleşen dosya adı için değişken olarak \\$(basename) kullanın.",
+			"search.followSymlinks": "Arama sırasında sembolik bağlantıların takip edilip edilmeyeceğini denetler.",
+			"search.maxResults": "Maksimum arama sonucu sayısını denetler. Bu, sınırsız sonuç döndürmek için `null` (boş) olarak ayarlanabilir.",
+			"search.ripgrep.maxThreads": "Arama için kullanılacak iş parçacığı sayısı. 0 olarak ayarlandığında, altyapı bu değeri otomatik olarak belirler.",
+			"search.smartCase": "Desenin tümü küçük harf ise büyük/küçük harfe duyarsız olarak; aksi takdirde büyük/küçük harfe duyarlı olarak ara.",
+			"search.sortOrder": "Arama sonuçlarının sıralama düzenini denetler.",
+			"searchSortOrder.countAscending": "Sonuçlar dosya başına sayıya göre, artan düzende sıralanır.",
+			"searchSortOrder.countDescending": "Sonuçlar dosya başına sayıya göre, azalan düzende sıralanır.",
+			"searchSortOrder.default": "Sonuçlar, klasör ve dosya adlarına göre alfabetik düzende sıralanır.",
+			"searchSortOrder.filesOnly": "Sonuçlar, klasör sırası yoksayılarak dosya adlarına göre alfabetik düzende sıralanır.",
+			"searchSortOrder.modified": "Sonuçlar, dosyanın son değiştirilme tarihine göre azalan düzende sıralanır.",
+			"searchSortOrder.type": "Sonuçlar, dosya uzantılarına göre alfabetik düzende sıralanır.",
+			"useGlobalIgnoreFiles": "Dosya aranırken genel gitignore dosyanızın (örneğin `$HOME/.config/git/ignore` konumundaki) kullanılıp kullanılmayacağını denetler. {0} öğesinin etkinleştirilmesini gerektirir.",
+			"useIgnoreFiles": "Dosya aranırken `.gitignore` ve `.ignore` dosyalarının kullanılıp kullanılmayacağını denetler.",
+			"useParentIgnoreFiles": "Dosya aranırken üst dizinlerdeki `.gitignore` ve `.ignore` dosyalarının kullanılıp kullanılmayacağını denetler. {0} öğesinin etkinleştirilmesini gerektirir."
+		},
+		"vs/workbench/contrib/tasks/browser/abstractTaskService": {
+			"TerminateAction.noProcess": "Başlatılan işlem artık mevcut değil. Görev arka plan görevleri oluşturduysa {0}'dan çıkmak sahipsiz işlemlere neden olabilir."
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchemaCommon": {
+			"JsonSchema.promptOnClose": "Arka planda çalışan bir görev varken {0} kapatıldığında kullanıcıya sorulup sorulmayacağı.",
+			"JsonSchema.tasks.promptOnClose": "Çalışan bir görev varken {0} kapatıldığında kullanıcıya sorulup sorulmayacağı."
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchema_v2": {
+			"JsonSchema.tasks.promptOnClose": "Çalışan bir görev varken {0} kapatıldığında kullanıcıya sorulup sorulmayacağı."
+		},
+		"vs/workbench/contrib/tasks/common/taskDefinitionRegistry": {
+			"TaskDefinition.required": "Bu türde bir görevin eşleşme olarak kabul edilmesi için sağlanması gereken `properties` nesnesindeki özellik adları. Bir `tasks.json` girdisini kayıtlı bir görev sağlayıcısıyla ilişkilendirmek için {0} tarafından kullanılır."
+		},
+		"vs/workbench/contrib/tasks/electron-browser/taskService": {
+			"TaskSystem.noProcess": "Başlatılan görev artık mevcut değil. Görev arka plan işlemleri oluşturduysa {0}'dan çıkmak sahipsiz işlemlere neden olabilir. Bunu önlemek için son arka plan işlemini bir bekleme bayrağıyla başlatın."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalActions": {
+			"facade.terminal.newInFolder": "Başka Bir Klasörde Yeni Terminal Oluştur..."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalProcessManager": {
+			"facade.agentElsewhere": "Bu ajan başka bir pencerede çalışıyor. Oradaki sekmesine geçin.",
+			"facade.agentProcessGone": "Bu ajanın işlemi, pencere kapalıyken veya yeniden yüklenirken sona erdi."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalView": {
+			"terminal.monospaceOnly": "Terminal yalnızca tek aralıklı yazı tiplerini destekler. Bu yeni yüklenmiş bir yazı tipiyse {0}'u yeniden başlattığınızdan emin olun."
+		},
+		"vs/workbench/contrib/terminal/common/terminalConfiguration": {
+			"terminal.integrated.allowChords": "Terminalde akor tuş bağlamalarına izin verilip verilmeyeceğini belirtir. Bu true olduğunda ve tuş vuruşu bir akorla sonuçlandığında {0} atlanır; bunu false olarak ayarlamak, ctrl+k tuşunun kabuğunuza ({1} yerine) gitmesini istediğinizde özellikle yararlıdır.",
+			"terminal.integrated.commandsToSkipShell": "Tuş bağlamaları kabuğa gönderilmeyen, bunun yerine her zaman {2} tarafından işlenen bir dizi komut kimliği. Bu, normalde kabuk tarafından tüketilen tuş bağlamalarının, terminale odaklanılmadığında olduğu gibi davranmasını sağlar; örneğin Hızlı Aç'ı başlatmak için `Ctrl+P`.\n\n&nbsp;\n\nBirçok komut varsayılan olarak atlanır. Bir varsayılanı geçersiz kılıp o komutun tuş bağlamasını kabuğa geçirmek için komutu başına `-` karakteri koyarak ekleyin. Örneğin `Ctrl+P` tuşunun kabuğa ulaşmasına izin vermek için `-workbench.action.quickOpen` ekleyin.\n\n&nbsp;\n\nVarsayılan olarak atlanan komutların aşağıdaki listesi Ayarlar Düzenleyicisi'nde görüntülendiğinde kısaltılır. Tam listeyi görmek için {1} ve aşağıdaki listedeki ilk komutu arayın.\n\n&nbsp;\n\nVarsayılan Atlanan Komutlar:\n\n{0}",
+			"terminal.integrated.detectLocale": "{0}'un terminali yalnızca kabuktan gelen UTF-8 kodlu verileri desteklediğinden, `$LANG` ortam değişkeninin algılanıp UTF-8 uyumlu bir seçeneğe ayarlanıp ayarlanmayacağını denetler.",
+			"terminal.integrated.env.linux": "Linux üzerinde terminal tarafından kullanılacak {0} işlemine eklenecek ortam değişkenlerini içeren nesne. Ortam değişkenini silmek için `null` olarak ayarlayın.",
+			"terminal.integrated.env.osx": "macOS üzerinde terminal tarafından kullanılacak {0} işlemine eklenecek ortam değişkenlerini içeren nesne. Ortam değişkenini silmek için `null` olarak ayarlayın.",
+			"terminal.integrated.env.windows": "Windows üzerinde terminal tarafından kullanılacak {0} işlemine eklenecek ortam değişkenlerini içeren nesne. Ortam değişkenini silmek için `null` olarak ayarlayın.",
+			"terminal.integrated.gpuAcceleration.auto": "En iyi deneyimi hangi işleyicinin sunacağını {0}'un algılamasına izin verin.",
+			"terminal.integrated.shellIntegration.enabled": "Gelişmiş komut izleme ve geçerli çalışma dizini algılama gibi özellikleri desteklemek için kabuk tümleştirmesinin otomatik olarak eklenip eklenmeyeceğini belirler. \n\nKabuk tümleştirmesi, kabuğa bir başlangıç betiği ekleyerek çalışır. Betik, {2}'a terminalde neler olduğu hakkında bilgi verir.\n\nDesteklenen kabuklar:\n\n- Linux/macOS: bash, fish, pwsh, zsh\n - Windows: pwsh, git bash\n\nBu ayar yalnızca terminaller oluşturulurken uygulanır; bu nedenle etkili olması için terminallerinizi yeniden başlatmanız gerekir.\n\n Terminal profilinde tanımlı özel bağımsız değişkenleriniz varsa, {1} etkinse, [karmaşık bir bash `PROMPT_COMMAND`](https://code.visualstudio.com/docs/editor/integrated-terminal#_complex-bash-promptcommand) veya desteklenmeyen başka bir kurulumunuz varsa betik eklemenin çalışmayabileceğini unutmayın. Süslemeleri devre dışı bırakmak için bkz. {0}",
+			"terminal.integrated.windowsUseConptyDll": "Windows ile birlikte gelen yerine {0} ile birlikte gelen conpty.dll (v1.25.260303002) dosyasının kullanılıp kullanılmayacağını belirtir."
+		},
+		"vs/workbench/contrib/terminal/common/terminalContextKey": {
+			"facadeAgentTerminalContextKey": "Etkin terminal düzenleyicisinin ajan menüsünden başlatılıp başlatılmadığı",
+			"facadeRunTerminalContextKey": "Etkin terminalin Facade tarafından başlatılmış bir ajanı çalıştırıp çalıştırmadığı."
+		},
+		"vs/workbench/contrib/terminalContrib/autoReplies/common/terminalAutoRepliesConfiguration": {
+			"terminal.integrated.autoReplies": "Terminalde karşılaşıldığında otomatik olarak yanıtlanacak bir ileti kümesi. İleti yeterince belirgin olduğunda bu, sık verilen yanıtları otomatikleştirmeye yardımcı olabilir.\n\nAçıklamalar:\n\n- Windows'ta toplu işi sonlandır istemine otomatik olarak yanıt vermek için {0} kullanın.\n- İleti kaçış dizileri içerdiğinden yanıt, biçimlendirilmiş metinde gerçekleşmeyebilir.\n- Her yanıt saniyede yalnızca bir kez gerçekleşebilir.\n- Enter tuşunu belirtmek için yanıtta {1} kullanın.\n- Varsayılan bir anahtarın ayarını kaldırmak için değeri null olarak ayarlayın.\n- Yeni yanıtlar uygulanmazsa {2}'u yeniden başlatın."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherActions": {
+			"facade.agent.configure": "Ajanları Yapılandır...",
+			"facade.agent.menu": "Ajan",
+			"facade.agent.oneActive": "{0} - 1 etkin ajan",
+			"facade.agent.showActive": "Etkin Ajanları Göster...",
+			"facade.agent.showMenu": "Ajan Menüsünü Göster",
+			"facade.agent.someActive": "{0} - {1} etkin ajan",
+			"facade.agent.startRestricted": "Ajan Başlat...",
+			"facade.agents.category": "Ajanlar"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
+			"facade.agent.noneFound": "Ajan Bulunamadı: Ajanları Yapılandır..."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
+			"agentPicker.agentAndTitle": "{0} · {1}",
+			"agentPicker.close": "Ajanı Kapat",
+			"agentPicker.creatingWorktree": "çalışma ağacı oluşturuluyor",
+			"agentPicker.empty": "Etkin ajan yok",
+			"agentPicker.panel": "Panel",
+			"agentPicker.placeholder": "Bir ajan seçin",
+			"agentPicker.preparing": "{0} · {1}",
+			"agentPicker.runningSetup": "çalışma ağacı kuruluyor",
+			"agentPicker.untitled": "Ajan"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherService": {
+			"facade.agent.trustToStart": "Ajanlar bu çalışma alanının klasörlerinde çalışır. {0} ajanını başlatmak için çalışma alanına güvenin.",
+			"facade.agent.trustToStartAny": "Ajanlar bu çalışma alanının klasörlerinde çalışır. Bir ajan başlatmak için çalışma alanına güvenin."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherShutdown": {
+			"runningWork.agent": "1 ajanı sonlandırmak istiyor musunuz?",
+			"runningWork.agentAndTerminal": "1 ajanı ve 1 terminali sonlandırmak istiyor musunuz?",
+			"runningWork.agentAndTerminals": "1 ajanı ve {0} terminali sonlandırmak istiyor musunuz?",
+			"runningWork.agents": "{0} ajanı sonlandırmak istiyor musunuz?",
+			"runningWork.agentsAndTerminal": "{0} ajanı ve 1 terminali sonlandırmak istiyor musunuz?",
+			"runningWork.agentsAndTerminals": "{0} ajanı ve {1} terminali sonlandırmak istiyor musunuz?"
+		},
+		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
+			"agentIcon.antigravity": "Antigravity çalıştıran bir terminalin simgesi.",
+			"agentIcon.claude": "Claude Code çalıştıran bir terminalin simgesi.",
+			"agentIcon.codex": "Codex çalıştıran bir terminalin simgesi.",
+			"agentIcon.grok": "Grok Build çalıştıran bir terminalin simgesi.",
+			"agentIcon.muse": "Muse Code çalıştıran bir terminalin simgesi."
+		},
+		"vs/workbench/contrib/webview/browser/webviewFindAccessibilityHelp": {
+			"webview.importantDesc": "Bazı webview'lar, klavye girişini {0}'un Bul özelliği kullanamadan önce yakalar. Enter veya Shift+Enter tuşları eşleşmeler arasında gezinmiyorsa, bu tuşları webview işliyor olabilir. Webview'in odakta olduğundan emin olmak için önce webview içeriğine tıklamayı veya Sekme tuşuyla içeriğe geçmeyi deneyin, ardından Bul'u yeniden açıp gezinmeyi tekrar deneyin."
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution": {
+			"minWelcomeDescription": "{0}'u kullanmaya başlamanıza yardımcı olacak bir Kılavuz açar.",
+			"workbench.startupEditor.welcomePage": "{0} ve uzantıları kullanmaya başlarken yardımcı olacak içeriğe sahip Giriş sayfasını açın."
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedExtensionPoint": {
+			"walkthroughs.steps.completionEvents.onCommand": "Belirli bir komut {0} içinde herhangi bir yerde yürütüldüğünde adımı işaretleyin."
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent": {
+			"gettingStarted.commandPalette.description.interpolated": "{1}'da herhangi bir görevi gerçekleştirmek için farenize uzanmadan komutları çalıştırın.\n{0}",
+			"gettingStarted.commandPaletteAccessibility.description.interpolated": "{1}'da herhangi bir görevi gerçekleştirmek için farenize uzanmadan komutları çalıştırın.\n{0}",
+			"gettingStarted.extensions.description.interpolated": "Uzantılar, {1}'u güçlendiren özelliklerdir. Kullanıma hazır özellikleri genişleten kullanışlı üretkenlik çözümlerinden tamamen yeni yetenekler eklemeye kadar uzanırlar.\n{0}",
+			"gettingStarted.settingsAndSync.description.interpolated": "{1}'un her yönünü özelleştirin ve özelleştirmeleri cihazlar arasında [eşitleyin](command:workbench.userDataSync.actions.turnOn).\n{0}",
+			"gettingStarted.setup.title": "{0}'u Kullanmaya Başlayın",
+			"gettingStarted.setup.walkthroughPageTitle": "{0}'u Kur",
+			"gettingStarted.setupAccessibility.description": "{0}'u erişilebilir kılan araçları ve kısayolları öğrenin. Bazı eylemlerin kılavuz bağlamından gerçekleştirilemeyeceğini unutmayın.",
+			"gettingStarted.setupAccessibility.walkthroughPageTitle": "{0} Erişilebilirliğini Kur",
+			"gettingStarted.videoTutorial.description.interpolated": "{1}'un önemli özelliklerine yönelik kısa ve pratik video öğreticileri serisinin ilkini izleyin.\n{0}"
+		},
+		"vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA": {
+			"onboarding.personalize.tip.suffix": " tüm {0} komutlarına erişmek için.",
+			"onboarding.signIn.heroTitle": "{0}'a hoş geldiniz"
+		},
+		"vs/workbench/contrib/workspace/browser/workspace.contribution": {
+			"workspace.trust.description": "Çalışma Alanı Güveni'nin {0} içinde etkinleştirilip etkinleştirilmeyeceğini denetler.",
+			"workspace.trust.emptyWindow.description": "{1} içinde boş pencereye varsayılan olarak güvenilip güvenilmeyeceğini denetler. `#{0}#` ile birlikte kullanıldığında, boş bir pencerede sormadan {1}'un tüm işlevlerini etkinleştirebilirsiniz."
+		},
+		"vs/workbench/contrib/worktrees/browser/worktrees": {
+			"worktrees.agentElsewhere": "Başka bir penceredeki bir ajan içinde çalıştığı için '{0}' silinmedi ({1}). Önce o ajanı kendi penceresinde durdurun.",
+			"worktrees.agentInside": "Bu silme işleminin durdurmadığı bir ajan içinde çalıştığı için '{0}' silinmedi ({1}). Önce o ajanı durdurun.",
+			"worktrees.alreadyOut": "{0} Çalışma alanından kaldırıldı ve çalışan terminalleri sonlandırıldı.",
+			"worktrees.anotherToolsWorktree": "'{0}', Facade dışında oluşturulmuş bir çalışma ağacıdır. Bunun yerine çalışma ağacını deposunun ana çalışma ağacından oluşturun.",
+			"worktrees.badName": "'{0}', Windows'da geçerli bir klasör adı değil.",
+			"worktrees.badSetup": ".facade/worktrees.json ayrıştırılamadı: setup anahtarları komut dizelerinden oluşan bir dizi içermelidir. Hiçbir komut yürütülmedi.",
+			"worktrees.beingDeleted": "Çalışma ağacı siliniyor.",
+			"worktrees.branchCheckedOut": "'{0}' dalı zaten '{1}' içinde kullanıma alınmış.",
+			"worktrees.branchExists": "'{0}' adlı bir dal zaten var. Lütfen farklı bir ad seçin.",
+			"worktrees.branchKeptQuoted": "'{0}' dalı korunacak.",
+			"worktrees.changedMeanwhile": "'{0}' silinmedi çünkü silme sırasında içinde kaybolacak yeni değişiklikler oluştu: {1}.",
+			"worktrees.changedSinceCheck": "Çalışma ağacındaki dosyalar doğrulamadan sonra değiştirildi. Lütfen değişiklikleri gözden geçirip yeniden deneyin.",
+			"worktrees.checkFailed": "Silmeden önce çalışma ağacının durumu doğrulanamadı: {0}",
+			"worktrees.copyFailed": ".worktreeinclude içinde belirtilen {0} dosya çalışma ağacına kopyalanamadı: {1}",
+			"worktrees.couldNotLeave": "'{0}' öğesine geçilemedi; '{1}' çalışma ağacı silinmedi.",
+			"worktrees.createFailed": "Çalışma ağacı oluşturulamadı: {0}",
+			"worktrees.createdForAgent": "Çalışma ağacı '{0}' konumunda oluşturuldu ancak {1} başarısız oldu: {2}",
+			"worktrees.createdNotOpened": "Çalışma ağacı '{0}' konumunda oluşturuldu ancak {1} başarısız oldu: {2}",
+			"worktrees.creating": "'{0}' çalışma ağacı oluşturuluyor...",
+			"worktrees.deleteButton": "&&Sil",
+			"worktrees.deleteDiscardButton": "&&Sil ve Değişiklikleri At",
+			"worktrees.deleteFailed": "Çalışma ağacı silinemedi: {0}",
+			"worktrees.deleteQuestion": "'{0}' çalışma ağacını silmek istediğinizden emin misiniz?",
+			"worktrees.deleteUnknown": "'{0}' çalışma ağacının silindiği doğrulanamadı. Çalışma alanı çubuğu geçerli Git durumunu yansıtır.",
+			"worktrees.deleteWorktree": "Çalışma Ağacını Sil...",
+			"worktrees.deleting": "'{0}' çalışma ağacı siliniyor...",
+			"worktrees.folder": "Yol: {0}",
+			"worktrees.folderAndSubmodulesDeleted": "Alt modülleri ve gönderilmemiş commit'leri dahil olmak üzere çalışma ağacı klasörü silinecek. Bu eylem geri alınamaz.",
+			"worktrees.folderDeleted": "Çalışma ağacı klasörü diskten silinecek. Bu eylem geri alınamaz.",
+			"worktrees.goThere": "Çalışma Ağacına Geç",
+			"worktrees.hookFailed": "Çalışma ağacı oluşturuldu ancak bir Git kancası başarısız oldu: {0}",
+			"worktrees.ignored": "Git tarafından yoksayılan şu dosyalar silinecek:",
+			"worktrees.ignoredFile": "{0} (Git tarafından yoksayıldı)",
+			"worktrees.inheritedEnvironment": "Bu pencere GIT_DIR, GIT_WORK_TREE veya GIT_INDEX_FILE ayarlıyken başlatıldı ve bu, Git'i başka bir depoya yönlendiriyor. Lütfen klasörü yeni bir pencerede açın.",
+			"worktrees.initialBranch": "İlk commit '{0}' dalında. Lütfen yeni çalışma ağacı için farklı bir dal adı seçin.",
+			"worktrees.initializeAndCreate": "Başlat ve Oluştur",
+			"worktrees.inspectFailed": "Git, '{0}' deposunu okuyamadı: {1}",
+			"worktrees.inspecting": "'{0}' deposu okunuyor...",
+			"worktrees.invalidBranchName": "'{0}' geçerli bir dal adı değil.",
+			"worktrees.kept": "'{0}' çalışma ağacı diskten silinmedi. Çalışma alanından kaldırıldı. Geri eklemek için satırına tıklayın.",
+			"worktrees.keptOutside": "'{0}' çalışma ağacı diskten silinmedi.",
+			"worktrees.leftover": "Çalışma ağacı Git'ten kaldırıldı ancak klasörü silinemedi: {0}. {1}",
+			"worktrees.leftoverRefused": "Klasör silinemedi: {0}",
+			"worktrees.leftoverUnknown": "'{0}', bu pencerede yapılan bir silme işleminden kalan bir çalışma ağacı klasörü olarak tanınmadığı için silinmedi. Gerekirse el ile silin.",
+			"worktrees.locked": "'{0}' çalışma ağacı kilitli. Silmeye izin vermek için 'git worktree unlock' komutunu çalıştırın.",
+			"worktrees.lockedBecause": "'{0}' çalışma ağacı kilitli: {1}. Silmeye izin vermek için 'git worktree unlock' komutunu çalıştırın.",
+			"worktrees.loses": "Şu işlenmemiş değişiklikler kaybolacak:",
+			"worktrees.mainNotDeleted": "{0}, deposunun ana çalışma ağacıdır ve hiçbir zaman silinmez.",
+			"worktrees.namedMore": "{0} ve {1} tane daha",
+			"worktrees.newWorktree": "Yeni Çalışma Ağacı...",
+			"worktrees.nextSentence": "{0} {1}",
+			"worktrees.noAnswer": "Git işlemi yanıt vermedi.",
+			"worktrees.noBaseUnasked": "'{0}' deposunda hiç commit yok. Önce bir ilk commit oluşturun.",
+			"worktrees.noBranch": "Çalışma ağacı oluşturmak için bir dal adı gereklidir.",
+			"worktrees.noGit": "Çalışma ağacını oluşturacak Git komutu yürütülemedi: {0}",
+			"worktrees.noGitDelete": "Çalışma ağacını silecek Git komutu yürütülemedi: {0}",
+			"worktrees.noGitExtension": "Çalışma ağacı işlemleri, bu pencerede etkin olmayan yerleşik Git uzantısını gerektirir.",
+			"worktrees.noIdentity": "Git yazar kimliği yapılandırılmamış. '{0}' ve '{1}' değerlerini '{2}' ile ayarlayın, ardından yeniden deneyin.",
+			"worktrees.notARepository": "'{0}', geçerli bir Git deposu olarak okunamayan bir .git klasörü içeriyor.",
+			"worktrees.notDeletedNotFacades": "{0}, Facade dışında oluşturulmuş bir çalışma ağacıdır; Facade bu tür çalışma ağaçlarını hiçbir zaman silmez.",
+			"worktrees.notOnDisk": "'{0}', diskte geçerli bir klasör değil.",
+			"worktrees.notOut": "'{0}' çalışma ağacı çalışma alanından kaldırılamadığı için silinmedi.",
+			"worktrees.notRepositoryUnasked": "'{0}' klasörü bir Git deposu değil. Önce depoyu başlatın.",
+			"worktrees.notWorktree": "'{0}', bu çalışma alanında tanınan bir çalışma ağacı değil.",
+			"worktrees.openWorktree": "Çalışma Ağacını Aç",
+			"worktrees.outOfWorkspace": "Çalışma alanından kaldırıldı.",
+			"worktrees.pathExists": "'{0}' konumunda zaten bir dosya veya klasör var.",
+			"worktrees.prepare.folderEmpty": "Bu klasör bir Git deposu değil. Devam ederseniz klasör başlatılacak ('git init') ve boş bir ilk commit oluşturulacak.",
+			"worktrees.prepare.folderMany": "Bu klasör bir Git deposu değil. Devam ederseniz klasör başlatılacak ('git init') ve {0} dosya içeren bir ilk commit oluşturulacak.",
+			"worktrees.prepare.folderOne": "Bu klasör bir Git deposu değil. Devam ederseniz klasör başlatılacak ('git init') ve 1 dosya içeren bir ilk commit oluşturulacak.",
+			"worktrees.prepare.insideEmpty": "Bu klasör '{0}' Git deposunun içinde ancak deponun kökü değil. Devam ederseniz burada ayrı bir depo başlatılacak ('git init') ve boş bir ilk commit oluşturulacak.",
+			"worktrees.prepare.insideMany": "Bu klasör '{0}' Git deposunun içinde ancak deponun kökü değil. Devam ederseniz burada ayrı bir depo başlatılacak ('git init') ve {1} dosya içeren bir ilk commit oluşturulacak.",
+			"worktrees.prepare.insideOne": "Bu klasör '{0}' Git deposunun içinde ancak deponun kökü değil. Devam ederseniz burada ayrı bir depo başlatılacak ('git init') ve 1 dosya içeren bir ilk commit oluşturulacak.",
+			"worktrees.prepare.unbornEmpty": "Bu depoda henüz commit yok. Devam ederseniz boş bir ilk commit oluşturulacak.",
+			"worktrees.prepare.unbornMany": "Bu depoda henüz commit yok. Devam ederseniz {0} dosya içeren bir ilk commit oluşturulacak.",
+			"worktrees.prepare.unbornOne": "Bu depoda henüz commit yok. Devam ederseniz 1 dosya içeren bir ilk commit oluşturulacak.",
+			"worktrees.prepareFailed": "'{0}' için ilk commit oluşturulamadı: {1}",
+			"worktrees.preparing": "'{0}' içinde ilk commit oluşturuluyor...",
+			"worktrees.restricted": "Çalışma ağaçları Git işlemleri gerektirir ve bu işlemler Kısıtlı Mod'da devre dışıdır.",
+			"worktrees.restrictedUnasked": "Çalışma alanı Kısıtlı Mod'da. Git işlemlerini çalıştırmak için lütfen çalışma alanına güvenin.",
+			"worktrees.retry": "Yeniden Dene",
+			"worktrees.revealInLinux": "İçeren Klasörü Aç",
+			"worktrees.revealInMac": "Finder'da Göster",
+			"worktrees.revealInWindows": "Dosya Gezgini'nde Göster",
+			"worktrees.runSetupAgain": "Kurulumu Yeniden Çalıştır",
+			"worktrees.setupTerminal": "Çalışma Ağacı Kurulumu",
+			"worktrees.setupUnfinished": "'{0}' çalışma ağacının kurulum betiği, pencerenin yeniden yüklenmesi veya kapatılması nedeniyle yarıda kesilmiş olabilir. Yeniden denemeden önce terminal çıktısını denetleyin.",
+			"worktrees.shellEnded": "Kabuk bu komuttan sonra çıktığı için sonraki komutlar çalışmadı.",
+			"worktrees.sinceAsked": "Bu iletişim kutusu açıldığından beri başka dosyalar da değiştirildi ve bunlar da kaybolacak.",
+			"worktrees.startingGit": "Git başlatılıyor...",
+			"worktrees.startsAt": "'{0}' öğesinin HEAD'inden oluşturuldu.",
+			"worktrees.startsAtFirst": "İlk commit'ten oluşturuldu.",
+			"worktrees.stepOpen": "çalışma ağacını açma",
+			"worktrees.stepRecord": "Git çalışma ağacı meta verilerini okuma",
+			"worktrees.stillStopping": "Şu ajanlar henüz durmadığı için '{0}' çalışma ağacı silinmedi: {1}. Durduklarında yeniden silin.",
+			"worktrees.stillStoppingOut": "Şu ajanlar henüz durmadığı için '{0}' çalışma ağacı silinmedi: {1}. Çalışma alanından kaldırıldı. Durduklarında yeniden silin.",
+			"worktrees.submodulesLost": "alt modülleri (gönderilmemiş commit'ler dahil)",
+			"worktrees.submodulesMeanwhile": "Silme sırasında '{0}' öğesine alt modüller eklendiği için silinmedi; silinmesi, bunların gönderilmemiş commit'lerinin kaybolmasına neden olurdu.",
+			"worktrees.submodulesSince": "Alt modüller ve gönderilmemiş commit'ler de silinecek.",
+			"worktrees.superseded": "açma tamamlanmadan önce klasör değiştirme istendi",
+			"worktrees.terminalsEnded": "Bu çalışma ağacıyla ilişkili terminaller kapatıldı ve etkin işlemler sonlandırıldı: {0}.",
+			"worktrees.terminalsTerminated": "{0} Çalışan terminalleri sonlandırıldı.",
+			"worktrees.trustFolder": "Klasöre &&Güven ve Devam Et",
+			"worktrees.trustWorkspace": "Çalışma Alanına &&Güven ve Devam Et",
+			"worktrees.unbornBranch": "'{0}' deposunun geçerli dalında commit yok. Önce bir commit oluşturun veya dal değiştirin.",
+			"worktrees.unsafeRepository": "Git, başka bir kullanıcıya ait olduğu için '{0}' öğesini açamıyor. Güvenli olarak işaretlemek için '{1}' komutunu çalıştırın, ardından yeniden deneyin.",
+			"worktrees.unsavedFile": "{0} (kaydedilmemiş)",
+			"worktrees.untrusted": "Çalışma ağacı, güveni '{0}' üst deposundan devralır. Lütfen önce üst depoya güvenin.",
+			"worktrees.untrustedUnasked": "'{0}' deposuna güvenilmiyor. Lütfen çalışma ağacı oluşturmadan önce depoya güvenin.",
+			"worktrees.wouldLose": "'{0}' içinde, silinirse kaybolacak değişiklikler var: {1}. Hiçbir şey silinmedi.",
+			"worktrees.wouldLoseSubmodules": "'{0}' alt modüller içeriyor; silinmesi, bunların gönderilmemiş commit'lerinin kaybolmasına neden olur. Hiçbir şey silinmedi."
+		},
+		"vs/workbench/electron-browser/actions/windowActions": {
+			"openDefaultWorkspace": "Varsayılan Çalışma Alanını Aç"
+		},
+		"vs/workbench/electron-browser/desktop.contribution": {
+			"argv.disableChromiumSandbox": "Chromium korumalı alanını devre dışı bırakır. Bu, {0}'u Linux'ta yükseltilmiş olarak çalıştırırken ve Windows'ta Applocker altında çalıştırırken kullanışlıdır.",
+			"argv.useInMemorySecretStorage": "Gizli depolama için işletim sisteminin kimlik bilgisi deposu yerine bellek içi bir deponun kullanılmasını sağlar. Bu genellikle {0} uzantı testlerini çalıştırırken veya kimlik bilgisi deposuyla ilgili sorunlar yaşadığınızda kullanılır.",
+			"miOpenDefaultWorkspace": "&&Varsayılan Çalışma Alanını Aç"
+		},
+		"vs/workbench/electron-browser/window": {
+			"notOpenedWithoutFolder": "Pencere bunları içeren klasöre geçemediği için {0} açılamadı."
+		},
+		"vs/workbench/services/dialogs/electron-browser/fileDialogService": {
+			"openFileOrFolder.title": "Dosya veya Klasör Aç",
+			"openFolder.title": "Klasör Aç"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryAccountService": {
+			"marketplace.pickAccount": "Uzantılar Marketi için kullanılacak hesabı seçin",
+			"marketplace.signInDifferentAccount": "Farklı Bir Hesapla Oturum Aç…"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryManifestService": {
+			"extensionGalleryManifestService.configurationChange": "Uzantılar Marketi yapılandırması değişti. Değişiklikleri uygulamak için lütfen yeniden başlatın."
+		},
+		"vs/workbench/services/extensions/common/extensionsRegistry": {
+			"vscode.extension.capabilities.agentsWindow": "Uzantının Ajanlar penceresinde etkinleştirilip etkinleştirilmeyeceğini bildirir. `agentsWindowActivation` API teklifini ve deneysel Ajanlar penceresi özelliği ayarını gerektirir.",
+			"vscode.extension.capabilities.agentsWindow.supported": "Uzantının Ajanlar penceresinde çalışmayı destekleyip desteklemediğini bildirir. Bu özelliğin etkili olması için uzantının `agentsWindowActivation` API teklifini ve `extensions.experimental.enableAgentsWindowCapability` ayarını etkinleştirmesi gerekir."
+		},
+		"vs/workbench/services/extensions/electron-browser/nativeExtensionService": {
+			"relaunch": "{0}'u Yeniden Başlat"
+		},
+		"vs/workbench/services/folderScope/browser/folderScope.contribution": {
+			"allFoldersIcon": "Görünüm kapsamını geçerli klasör ile tüm çalışma alanı arasında değiştirme simgesi.",
+			"facadeCategory": "Çalışma Alanı",
+			"toggleFolderScope": "Tüm Klasörleri Göster",
+			"toggleFolderScope.toggled": "Tüm Klasörler Gösteriliyor"
+		},
+		"vs/workbench/services/folderScope/common/folderScope": {
+			"facadeFolderScope": "Görünümlerin kapsamının geçerli klasör mü yoksa tüm çalışma alanı mı olduğu",
+			"folderScope.searchingAll": "Tüm klasörlerde aranıyor. Yalnızca geçerli klasörde aramak için tıklayın.",
+			"folderScope.searchingFolder": "Geçerli klasörde aranıyor. Tüm çalışma alanı klasörlerinde aramak için tıklayın."
+		},
+		"vs/workbench/services/userDataProfile/browser/userDataProfileManagement": {
+			"reload message": "Profil değiştirmek için {0}'un yeniden yüklenmesi gerekir."
+		}
+	},
+	"vscode.configuration-editing": {
+		"bundle": {
+			"The name of the folder opened in {0} without any slashes (/)": "{0} içinde açılan klasörün eğik çizgi (/) içermeyen adı",
+			"The path of the folder opened in {0}": "{0} içinde açılan klasörün yolu",
+			"e.g. {0}": "örneğin, {0}"
+		}
+	},
+	"vscode.css-language-features": {
+		"package": {
+			"css.completion.triggerPropertyValueCompletion.desc": "Varsayılan olarak Facade Code, bir CSS özelliği seçildikten sonra özellik değeri tamamlamayı tetikler. Bu davranışı devre dışı bırakmak için bu ayarı kullanın.",
+			"css.trace.server.desc": "Facade Code ile CSS dil sunucusu arasındaki iletişimi izler.",
+			"less.completion.triggerPropertyValueCompletion.desc": "Varsayılan olarak Facade Code, bir CSS özelliği seçildikten sonra özellik değeri tamamlamayı tetikler. Bu davranışı devre dışı bırakmak için bu ayarı kullanın.",
+			"scss.completion.triggerPropertyValueCompletion.desc": "Varsayılan olarak Facade Code, bir CSS özelliği seçildikten sonra özellik değeri tamamlamayı tetikler. Bu davranışı devre dışı bırakmak için bu ayarı kullanın."
+		}
+	},
+	"vscode.facade-agents": {
+		"bundle": {
+			"1 message, at {0}": "1 mesaj ({0})",
+			"@{0} #a{1} · last screen": "@{0} #a{1} · son ekran",
+			"Agent management for this workspace has been transferred to another Facade window.": "Bu çalışma alanının ajan yönetimi başka bir Facade penceresine devredildi.",
+			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Bu çalışma alanının ajanları başka bir pencerede yönetiliyor. Sohbet odalarını o pencerede silin.",
+			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Bu çalışma alanının ajanları başka bir pencerede yönetiliyor. Sohbet odalarını o pencerede açın.",
+			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Bu çalışma alanında sizinle ajanlarınız arasındaki tüm mesajlar silinecek. Bu eylem geri alınamaz.",
+			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Ajan menüsünden veya Ajan Başlat ile başlattığınız bir ajan, CLI'ının kendi sorularını ve güncellemelerini korur; onayları ise YOLO'nun belirlediği gibidir. Başka bir ajanın veya betiğinizin start_agent ile başlattığı ve kimsenin izlemiyor olabileceği bir ajan, başlatma yapılandırmasının gözetimsiz kısmıyla çalışır (onun grupları başlatma yapılandırmasının gruplarının yerini alır; ortamı ve ayarları başlatma yapılandırmasınınkilerin üzerine uygulanır); böylece CLI'ının izin verdiği ölçüde hiçbir şey yanıt beklemez. whenYouStartIt ve throughStartAgent, her birinin ne aldığını gösterir.",
+			"Another Facade window manages this workspace's agents. Start agents in that window.": "Bu çalışma alanının ajanlarını başka bir Facade penceresi yönetiyor. Ajanları o pencerede başlatın.",
+			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Bu çalışma alanının ajanlarını başka bir Facade penceresi yönetiyor. O pencereyi kullanın ya da ajanları burada yönetmek için o pencereyi kapatıp bu pencereyi yeniden yükleyin.",
+			"Are you sure you want to delete all chat rooms in this workspace?": "Bu çalışma alanındaki tüm sohbet odalarını silmek istediğinizden emin misiniz?",
+			"Configure Agents": "Ajanları Yapılandır",
+			"Could not delete all chat rooms: {0}": "Sohbet odalarının tümü silinemedi: {0}",
+			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Zaten çalışmakta olan ajanlara yeniden bağlanılamadı. Bu ajanlar Facade araçlarını kullanamaz ancak bundan sonra başlatılan ajanlar normal şekilde çalışır.",
+			"Delete": "Sil",
+			"Each chat room holds every message of an agent you started and of the agents it started": "Her sohbet odası, başlattığınız bir ajanın ve onun başlattığı ajanların tüm mesajlarını tutar",
+			"Facade Agents": "Facade Ajanları",
+			"Facade Agents could not start in this window. See the Facade Agents output for details.": "Facade Ajanları bu pencerede başlatılamadı. Ayrıntılar için Facade Ajanları çıktısına bakın.",
+			"Facade Agents could not start: {0}": "Facade Ajanları başlatılamadı: {0}",
+			"Facade Agents stopped in this window.": "Facade Ajanları bu pencerede durdu.",
+			"Facade cannot read this workspace's agent record while one of its agents may still be running. See the Facade Agents output for details.": "Ajanlarından biri hâlâ çalışıyor olabilirken Facade bu çalışma alanının ajan kaydını okuyamıyor. Ayrıntılar için Facade Ajanları çıktısına bakın.",
+			"Facade cannot read this workspace's agent record: {0}": "Facade bu çalışma alanının ajan kaydını okuyamıyor: {0}",
+			"Facade could not confirm that {0} started: {1}.": "Facade, {0} ajanının başladığını doğrulayamadı: {1}.",
+			"Facade could not read this workspace's agent record ({0}), so it started a new one. No action is needed: agents start as before, and their numbering continues. Their history is in {1}; the unreadable record is kept as {2}. Delete it once you no longer need it.": "Facade bu çalışma alanının ajan kaydını ({0}) okuyamadığı için yeni bir kayıt başlattı. Herhangi bir işlem yapmanız gerekmez: Ajanlar eskisi gibi başlar ve numaralandırmaları devam eder. Geçmişleri {1} içindedir; okunamayan kayıt {2} olarak saklanır. Artık ihtiyacınız kalmadığında onu silin.",
+			"Facade could not read {0}, which tells running agents how to reach this window. Agents that were already running can no longer use Facade tools; agents started from now on can.": "Facade, çalışan ajanlara bu pencereye nasıl ulaşacaklarını bildiren {0} dosyasını okuyamadı. Zaten çalışmakta olan ajanlar artık Facade araçlarını kullanamaz; bundan sonra başlatılan ajanlar kullanabilir.",
+			"Facade: {0}": "Facade: {0}",
+			"Message #m{0} is no longer available because the chat rooms were deleted.": "Sohbet odaları silindiği için #m{0} mesajı artık kullanılamıyor.",
+			"No agent has been started in this workspace yet.": "Bu çalışma alanında henüz hiçbir ajan başlatılmadı.",
+			"No agents are available: none of the built-in agent CLIs were found on this machine, and no custom agents are configured.": "Kullanılabilir ajan yok: Bu makinede yerleşik ajan CLI'larının hiçbiri bulunamadı ve hiçbir özel ajan yapılandırılmamış.",
+			"No agents are available: the built-in agent CLIs found on this machine are disabled in your settings ({0}), and no custom agents are configured.": "Kullanılabilir ajan yok: Bu makinede bulunan yerleşik ajan CLI'ları ayarlarınızda devre dışı bırakılmış ({0}) ve hiçbir özel ajan yapılandırılmamış.",
+			"No chat rooms have messages yet. A chat room is created when an agent is started.": "Henüz hiçbir sohbet odasında mesaj yok. Bir ajan başlatıldığında bir sohbet odası oluşturulur.",
+			"Open Chat Room": "Sohbet Odasını Aç",
+			"Open a local folder to start an agent.": "Ajan başlatmak için yerel bir klasör açın.",
+			"Select an agent to start": "Başlatılacak bir ajan seçin",
+			"Show": "Göster",
+			"Start Agent": "Ajan Başlat",
+			"Terminal screen content upon exit:": "Çıkış sırasındaki terminal ekranı içeriği:",
+			"The agent could not start: {0}": "Ajan başlatılamadı: {0}",
+			"The agent framework is off: the warmUp, connect, and messages groups do not apply, and nothing of Facade's is added to a launch.": "Ajan çerçevesi kapalı: warmUp, connect ve messages grupları uygulanmaz ve başlatma yapılandırmasına Facade'dan hiçbir şey eklenmez.",
+			"The agent framework is on: the warmUp, connect, and messages groups apply, and Facade tools, skills, and files are added to each launch.": "Ajan çerçevesi açık: warmUp, connect ve messages grupları uygulanır ve her başlatma yapılandırmasına Facade araçları, becerileri ve dosyaları eklenir.",
+			"The last full-screen frame rendered before leaving full screen:": "Tam ekrandan çıkmadan önce işlenen son tam ekran karesi:",
+			"This document only shows the launch. To change it, set what you want to change in your settings. An agent with wrongSettings does not start until they are fixed; cannotStart lists anything else that would prevent its start here.": "Bu belge yalnızca başlatma yapılandırmasını gösterir. Değiştirmek için değiştirmek istediğiniz şeyi ayarlarınızda belirleyin. wrongSettings içeren bir ajan, bunlar düzeltilene kadar başlamaz; cannotStart, burada başlamasını engelleyecek diğer her şeyi listeler.",
+			"What Facade starts each agent with now, for an agent in {0}: the program a terminal there runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "{0} içindeki bir ajan için Facade'ın şu anda her ajanı neyle başlattığı: oradaki bir terminalin çalıştırdığı program ve başlatma yapılandırması; bu, Facade'ın varsayılanının üzerine facade.agents ayarlarınızın uygulanmış hâlidir.",
+			"What Facade starts each agent with now: the program it runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "Facade'ın şu anda her ajanı neyle başlattığı: ajanın çalıştırdığı program ve başlatma yapılandırması; bu, Facade'ın varsayılanının üzerine facade.agents ayarlarınızın uygulanmış hâlidir.",
+			"YOLO is off: each agent gets its yoloOff arguments, with its sandbox on where it has one and Facade tools exempted from approval where its CLI allows it. facadeTools and approvalsWithYoloOff show, for each agent, what is asked and what is denied.": "YOLO kapalı: Her ajan kendi yoloOff bağımsız değişkenlerini alır; korumalı alanı varsa açıktır ve CLI'ı izin veriyorsa Facade araçları onaydan muaf tutulur. facadeTools ve approvalsWithYoloOff, her ajan için neyin sorulduğunu ve neyin reddedildiğini gösterir.",
+			"YOLO is on: each agent gets its yoloOn arguments, with its sandbox off and nothing asked. Turning off facade.agents.yolo applies to agents started afterward.": "YOLO açık: Her ajan kendi yoloOn bağımsız değişkenlerini alır; korumalı alanı kapalıdır ve hiçbir şey sorulmaz. facade.agents.yolo ayarını kapatmak, sonradan başlatılan ajanlara uygulanır.",
+			"YOLO: {0}. No agent starts until this is fixed.": "YOLO: {0}. Bu düzeltilene kadar hiçbir ajan başlamaz.",
+			"anything that would ask is denied without asking": "soru soracak her şey sorulmadan reddedilir",
+			"as set by your launch's questions group": "başlatma yapılandırmanızın questions grubunun belirlediği gibi",
+			"as set by your launch's yoloOff group": "başlatma yapılandırmanızın yoloOff grubunun belirlediği gibi",
+			"as set by your launch's {0} and {1} groups: Facade's defaults exempt its server from approval, and you changed them": "başlatma yapılandırmanızın {0} ve {1} gruplarının belirlediği gibi: Facade'ın varsayılanları kendi sunucusunu onaydan muaf tutar ve siz bunları değiştirdiniz",
+			"as set by your launch's {0} group: Facade's default exempts its server from approval, and you changed it": "başlatma yapılandırmanızın {0} grubunun belirlediği gibi: Facade'ın varsayılanı kendi sunucusunu onaydan muaf tutar ve siz bunu değiştirdiniz",
+			"asks you, as its CLI does": "CLI'ının yaptığı gibi size sorar",
+			"cannot be granted: {0}": "verilemez: {0}",
+			"custom": "özel",
+			"denied: {0}": "reddedildi: {0}",
+			"edits in its folder are allowed without asking; anything else asks you, as its CLI does": "klasöründeki düzenlemelere sormadan izin verilir; diğer her şey için CLI'ının yaptığı gibi size sorar",
+			"edits in its folder are allowed without asking; anything else that would ask is denied without asking": "klasöründeki düzenlemelere sormadan izin verilir; soru soracak diğer her şey sorulmadan reddedilir",
+			"kept: it can show a question for you to answer, as it does outside Facade": "korunur: Facade dışında olduğu gibi yanıtlamanız için bir soru gösterebilir",
+			"kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question": "korunur: Hiçbir başlatma yapılandırması soru aracını kaldıramaz; bu yüzden başlangıçta aldığı yönergeler ona Facade mesajlarıyla sormasını söyler; o araç adıyla istenirse yine de bir soru gösterebilir",
+			"kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer": "korunur: Başlatma yapılandırmanız questions grubunu boşaltır; bu yüzden birinin bir yanıt seçmesini bekleyen bir soru gösterebilir",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; it has no sandbox": "hiç sorulmaz: Yalnızca Facade'ın sunucusunu muaf tutamadığından YOLO kapalıyken hiçbir şey sormaz; korumalı alanı yoktur",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is as your launch's groups set it": "hiç sorulmaz: Yalnızca Facade'ın sunucusunu muaf tutamadığından YOLO kapalıyken hiçbir şey sormaz; korumalı alanı, başlatma yapılandırmanızın gruplarının belirlediği gibidir",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is off, as your launch sets it": "hiç sorulmaz: Yalnızca Facade'ın sunucusunu muaf tutamadığından YOLO kapalıyken hiçbir şey sormaz; korumalı alanı, başlatma yapılandırmanızın belirlediği gibi kapalıdır",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox stays on": "hiç sorulmaz: Yalnızca Facade'ın sunucusunu muaf tutamadığından YOLO kapalıyken hiçbir şey sormaz; korumalı alanı açık kalır",
+			"never asked: its launch exempts only Facade's server from approval": "hiç sorulmaz: Başlatma yapılandırması yalnızca Facade'ın sunucusunu onaydan muaf tutar",
+			"none: the CLI asks whether you trust the folder": "yok: CLI, klasöre güvenip güvenmediğinizi sorar",
+			"not found: {0}": "bulunamadı: {0}",
+			"not yet": "henüz değil",
+			"nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off": "hiçbir şey sorulmaz, hiçbir şey reddedilmez: Yalnızca Facade araçlarını muaf tutamadığından onayları kapalıdır",
+			"permanently: Facade never removes it": "kalıcı olarak: Facade bunu hiçbir zaman kaldırmaz",
+			"removed by its launch's questions group: it asks through Facade messages": "başlatma yapılandırmasının questions grubu tarafından kaldırıldı: Facade mesajlarıyla sorar",
+			"task: argument - its task notice is passed as an argument; typed - its task notice is typed into its terminal once it connects; none - it takes no task.": "task: argument - görev bildirimi bağımsız değişken olarak geçirilir; typed - görev bildirimi, ajan bağlandıktan sonra terminaline yazılır; none - görev almaz.",
+			"trust: a file entry is merged in as if you had answered the CLI yourself, and it stays: Facade never removes it. Arguments trust the folder for that launch only.": "trust: Bir dosya girdisi, CLI'ı kendiniz yanıtlamışsınız gibi birleştirilir ve kalır: Facade bunu hiçbir zaman kaldırmaz. Bağımsız değişkenler, klasöre yalnızca o başlatma için güvenir.",
+			"with YOLO off, none turned off: this folder's .mcp.json has no server that you have not approved for its project": "YOLO kapalıyken hiçbiri kapatılmadı: Bu klasörün .mcp.json dosyasında, projesi için onaylamadığınız bir sunucu yok",
+			"with YOLO off, the servers in its folder's .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them": "YOLO kapalıyken, klasörünün .mcp.json dosyasında bulunan ve projesi için onaylamadığınız sunucular, ajan bunlar hakkında sormak için durmasın diye bu çalıştırma boyunca kapatılır",
+			"with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: {0}": "YOLO kapalıyken, bu proje için onaylamadığınızdan, ajan bunlar hakkında sormak için durmasın diye bu çalıştırma boyunca kapatıldı: {0}",
+			"{0} (ended)": "{0} (sona erdi)",
+			"{0} ended unexpectedly: {1}.": "{0} beklenmedik şekilde sona erdi: {1}.",
+			"{0} exited: {1}.": "{0} çıktı: {1}.",
+			"{0} failed to start: {1}.": "{0} başlatılamadı: {1}.",
+			"{0} is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.": "{0} açık ancak Facade'a bağlanmadı; bu yüzden henüz Facade araçları yok. Yavaş başlıyor veya terminalinde bir yanıt bekliyor olabilir.",
+			"{0} messages, latest at {1}": "{0} mesaj, sonuncusu: {1}",
+			"{0} of your agents ended. {1}": "Ajanlarınızdan {0} tanesi sona erdi. {1}",
+			"{0} sent you a message: {1}": "{0} size bir mesaj gönderdi: {1}",
+			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "{0}, Facade kendi kısmını ekledikten sonra, penceresi kapanırken değiştirildi. Önceki içeriği {1} konumunda saklanıyor.",
+			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0}, ajanlar onu kullanırken değiştirildi ve artık Facade'ın kısmını içermiyor; bu yüzden olduğu gibi bırakıldı. Önceki içeriği {1} konumunda saklanıyor.",
+			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "Orada başka bir ajan başladığında {0} eksikti. Facade'ın değişikliklerinden önceki içeriği {1} konumunda saklanıyor.",
+			"{0} was missing when its agents ended. Its content from before Facade's changes is kept at {1}.": "Ajanları sona erdiğinde {0} eksikti. Facade'ın değişikliklerinden önceki içeriği {1} konumunda saklanıyor.",
+			"{0} was stopped by {1}.": "{0}, {1} tarafından durduruldu.",
+			"{0} was stopped: {1}.": "{0} durduruldu: {1}.",
+			"{0}, saved when its terminal closed. How it ended: {1}.": "{0}, terminali kapandığında kaydedildi. Nasıl sona erdiği: {1}.",
+			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: '{1}' son ekran dosyası okunamadı: {2}. Nasıl sona erdiği: {3}.",
+			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: Son ekran kaydedilmedi. Nasıl sona erdiği: {1}. Son ekran yalnızca pencere açıkken bir ajanın terminali kapandığında kaydedilir.",
+			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO kapalıyken {1}, Facade araçlarını reddeder",
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+		},
+		"package": {
+			"command.category": "Ajanlar",
+			"command.deleteChatRooms": "Sohbet Odalarını Sil...",
+			"command.openChatRoom": "Sohbet Odasını Aç...",
+			"command.showLaunch": "Ajan Başlatma Yapılandırmasını Göster",
+			"command.showLog": "Ajan Günlüğünü Göster",
+			"command.startAgent": "Ajan Başlat...",
+			"config.antigravity.enabled": "Antigravity'nin ajan menüsünde ve ajanlara sunulup sunulmayacağını denetler.",
+			"config.antigravity.launch": "Gelişmiş: Facade'ın Antigravity'yi nasıl başlattığı. Yalnızca değiştirmek istediğiniz şeyi ayarlayın: settings.json içinde, Facade'ın varsayılanını doldurmak için süslü ayraçların içindeki önerilerden bir kısım seçin, ardından düzenleyin; `null`, Facade'ın kısımlarından birini kaldırır. **Ajanlar: Ajan Başlatma Yapılandırmasını Göster**, her ajanın şu anda neyle başlatıldığını gösterir.",
+			"config.antigravity.path": "Çalıştırılacak Antigravity programı. PATH'inizdeki `agy` komutunu kullanmak için boş bırakın.",
+			"config.antigravity.title": "Antigravity",
+			"config.claude.enabled": "Claude Code'un ajan menüsünde ve ajanlara sunulup sunulmayacağını denetler.",
+			"config.claude.launch": "Gelişmiş: Facade'ın Claude Code'u nasıl başlattığı. Yalnızca değiştirmek istediğiniz şeyi ayarlayın: settings.json içinde, Facade'ın varsayılanını doldurmak için süslü ayraçların içindeki önerilerden bir kısım seçin, ardından düzenleyin; `null`, Facade'ın kısımlarından birini kaldırır. **Ajanlar: Ajan Başlatma Yapılandırmasını Göster**, her ajanın şu anda neyle başlatıldığını gösterir.",
+			"config.claude.launch.settings": "Her ajan için kendi ayarlarınızın üzerine anahtar anahtar birleştirilen Claude Code ayarları; `null`, Facade'ınkilerden birini kaldırır. Değerlerden birinin türünü Claude Code kabul etmezse Claude Code bunların hepsini yok sayar.",
+			"config.claude.path": "Çalıştırılacak Claude Code programı. PATH'inizdeki `claude` komutunu kullanmak için boş bırakın.",
+			"config.claude.title": "Claude Code",
+			"config.codex.enabled": "Codex'in ajan menüsünde ve ajanlara sunulup sunulmayacağını denetler.",
+			"config.codex.launch": "Gelişmiş: Facade'ın Codex'i nasıl başlattığı. Yalnızca değiştirmek istediğiniz şeyi ayarlayın: settings.json içinde, Facade'ın varsayılanını doldurmak için süslü ayraçların içindeki önerilerden bir kısım seçin, ardından düzenleyin; `null`, Facade'ın kısımlarından birini kaldırır. **Ajanlar: Ajan Başlatma Yapılandırmasını Göster**, her ajanın şu anda neyle başlatıldığını gösterir.",
+			"config.codex.path": "Çalıştırılacak Codex programı. PATH'inizdeki `codex` komutunu kullanmak için boş bırakın.",
+			"config.codex.title": "Codex",
+			"config.custom": "Ada göre kendi ajanlarınız: `{ \"<name>\": { \"path\": \"...\", \"launch\": { ... } } }`. Her biri yerleşik bir ajan gibi kendi terminalinde başlar. Başlatma yapılandırması yerleşik bir ajanınkiyle aynı kısımlara sahiptir (gruplara göre bağımsız değişkenler, ortam, güven ve gecikmeler), ancak Facade bunların hiçbirini doldurmaz: Dışarıda bıraktığınız bir grup hiçbir şey eklemez. Bağımsız değişkenlerde `${mcpConfig}`, `connect` grubunuz için Facade'ın MCP sunucusunu `mcpServers` biçiminde tutan bir dosyayı belirtir; `${folder}`, `${repository}`, `${home}`, `${messagesDir}`, `${screensDir}`, `${model}`, `${effort}`, `${task}` ve `${opening}` yerleşik bir ajandaki gibi doldurulur.",
+			"config.custom.launch": "Facade'ın bu ajanı, yerleşik bir ajanın başlatma yapılandırması gibi kısım kısım nasıl başlattığı. Yalnızca doldurduğunuz gruplar kullanılır.",
+			"config.custom.name": "Özel bir ajanın adı, harf veya rakamla başlayan, 1 ile 40 arasında küçük harf, rakam, nokta, tire veya alt çizgiden oluşmalıdır. Yerleşik bir ajanın kimliği (claude, codex, agy, muse) veya ayrılmış bir ad (human, you, me, facade, all, everyone, init, kernel) olamaz.",
+			"config.custom.path": "Çalıştırılacak program: bir dosya yolu veya terminallerin aldığı PATH üzerindeki bir komut.",
+			"config.custom.title": "Özel Ajanlar",
+			"config.enabled": "Ajan çerçevesinin etkin olup olmadığını denetler. Etkinleştirildiğinde ajanlar, Facade araçlarıyla başka ajanları başlatabilir, listeleyebilir ve durdurabilir. Devre dışı bırakıldığında ajanlar yine her zamanki gibi başlar, çalışır ve sona erer, ancak Facade araçları olmadan.",
+			"config.launch.arguments": "Gruplara göre, şu sırayla komut satırı bağımsız değişkenleri: `warmUp`, `connect`, `quiet`, `questions`, `messages`, `yoloOn`, `yoloOff`, `model`, `effort`, `extra` (sizinkiler) ve `task`. Ayarladığınız bir grup Facade'ınkinin yerini alır; `null` grubu dışarıda bırakır. `yoloOn` yalnızca YOLO açıkken, `yoloOff` yalnızca kapalıyken; `warmUp`, `connect` ve `messages` yalnızca ajan çerçevesi açıkken; `model`, `effort` ve `task` ise yalnızca bir ajan bunları belirttiğinde kullanılır. Facade her ajan için şu değişkenleri doldurur: `${folder}`, `${repository}` (ana çalışma ağacı), `${home}`, `${messagesDir}` ve `${screensDir}` (uzun mesajların ve ajan ekranlarının kaydedildiği yer), `${model}`, `${effort}`, `${task}` (ajanın görevini belirten ilk satırı), `${opening}` (`start_agent` ile başlatılan bir ajan için: kim olduğu ve ısınmanın ona söylediği gibi Facade mesajlarıyla sorması gerektiği) ve diğerleri.",
+			"config.launch.enterDelay": "Ajanın terminaline bir satır yazmak ile Enter tuşuna basmak arasındaki gecikmeyi milisaniye cinsinden denetler. Bu gecikme olmadan CLI, hızlı yazmayı yapıştırma olarak algılayabilir.",
+			"config.launch.environment": "Facade'ın her ajan için ayarladığı ortam değişkenleri. Ayarladığınız bir değişken Facade'ınkinin yerini alır; `null`, Facade'ınkilerden birini kaldırır.",
+			"config.launch.taskDelay": "Ajanın CLI'ı Facade'a bağlandıktan sonra, ajanın görevini belirten ilk satırı terminaline yazılmadan önceki gecikmeyi milisaniye cinsinden denetler. Yalnızca görevini bu şekilde alan CLI'lar için geçerlidir.",
+			"config.launch.trust": "Facade'ın, CLI güvenip güvenmediğinizi sormak için durmasın diye bir ajanın başladığı klasöre ve deposunun tamamına nasıl güvendiği: `arguments` yalnızca o çalıştırma için geçirilir ya da `merge`, CLI'ın kendi `file` dosyasına yazılır ve orada kalır. `null`: Facade güven vermez ve CLI terminalinde sorar.",
+			"config.launch.unattended": "`start_agent` ile, başka bir ajan veya betiğiniz tarafından başlatılan bir ajanın, kimsenin izlemiyor olabileceği sırada hiçbir şey yanıt beklemesin diye başlatma yapılandırması yerine kullandığı ayarlar. `arguments` grupları, başlatma yapılandırmasının aynı adlı gruplarının yerini alır; `environment` ve `settings` ise başlatma yapılandırmasındakilerin üzerine uygulanır. Ajan menüsünden başlattığınız bir ajan yalnızca başlatma yapılandırmasıyla çalışır.",
+			"config.launch.unattended.arguments": "`start_agent` ile başlatılan bir ajan için bağımsız değişken grupları; her biri başlatma yapılandırmasının aynı adlı grubunun yerini alır. Ayarladığınız bir grup Facade'ınkinin yerini alır; `null`, o ajan için grubu dışarıda bırakır.",
+			"config.launch.unattended.environment": "`start_agent` ile başlatılan bir ajan için, başlatma yapılandırmasındakilerin üzerine uygulanan ortam değişkenleri. Ayarladığınız bir değişken Facade'ınkinin yerini alır; `null`, başlatma yapılandırmasındaki de dahil olmak üzere değişkeni kaldırır.",
+			"config.launch.unattended.settings": "`start_agent` ile başlatılan bir ajan için, başlatma yapılandırmasının ayarlarının üzerine anahtar anahtar birleştirilen Claude Code ayarları. `null`, başlatma yapılandırmasındaki de dahil olmak üzere bir anahtarı kaldırır.",
+			"config.muse.enabled": "Muse Code'un ajan menüsünde ve ajanlara sunulup sunulmayacağını denetler.",
+			"config.muse.launch": "Gelişmiş: Facade'ın Muse Code'u nasıl başlattığı. Yalnızca değiştirmek istediğiniz şeyi ayarlayın: settings.json içinde, Facade'ın varsayılanını doldurmak için süslü ayraçların içindeki önerilerden bir kısım seçin, ardından düzenleyin; `null`, Facade'ın kısımlarından birini kaldırır. **Ajanlar: Ajan Başlatma Yapılandırmasını Göster**, her ajanın şu anda neyle başlatıldığını gösterir.",
+			"config.muse.path": "Çalıştırılacak Muse Code programı. PATH'inizdeki `muse` komutunu kullanmak için boş bırakın.",
+			"config.muse.title": "Muse Code",
+			"config.timeout": "Gelişmiş: Facade'ın denetiminde olmayan işlemler için bekleme süresi (saniye): yeni bir ajanın bağlanması, durdurulan bir ajanın işleminin sona ermesi, bu pencerenin bir ajanın MCP sunucusuna yanıt vermesi, yeniden yüklemeden sonra terminallerin geri yüklenmesi ve başka bir ajanın terminaline gönderilen metin veya tuşların kuyrukta sırası gelip terminale yazılması. Bu süre, bir görev veya mesaj alınmadan kaldığında Facade'ın gönderene bildirim göndermeden önce ne kadar bekleyeceğini de belirler.",
+			"config.title": "Ajanlar",
+			"config.yolo": "Başlattığınız ajanların YOLO modunda çalışıp çalışmayacağını denetler. Etkinleştirildiğinde ajanın CLI'ı korumalı alanı kapalı olarak çalışır ve hiçbir zaman onay istemez. Devre dışı bırakıldığında, CLI'da varsa korumalı alan açıktır ve CLI kendi komutlarını ve düzenlemelerini çalıştırmadan önce sorar, ancak Facade araçlarını çağırmadan önce hiçbir zaman sormaz. Bir ajan başlatıldığı YOLO modunu korur ve başlattığı ajanlar da bu modu devralır.",
+			"description": "Kendi ajanlarınız da dahil olmak üzere kodlama ajanı CLI'larını pencerenin içindeki terminallerde çalıştırır. Ajanlar bir MCP sunucusu aracılığıyla birbirini başlatır, listeler ve durdurur, birbirine ve size mesaj gönderir ve birbirinin terminallerini okur.",
+			"displayName": "Facade Ajanları"
+		}
+	},
+	"vscode.git": {
+		"package": {
+			"config.terminalAuthentication": "Facade Code'un, tümleşik terminalde oluşturulan Git işlemleri için kimlik doğrulama işleyicisi olmasının etkinleştirilip etkinleştirilmeyeceğini denetler. Not: Bu ayardaki bir değişikliğin uygulanması için terminallerin yeniden başlatılması gerekir.",
+			"config.terminalGitEditor": "Facade Code'un, tümleşik terminalde oluşturulan Git işlemleri için Git düzenleyicisi olmasının etkinleştirilip etkinleştirilmeyeceğini denetler. Not: Bu ayardaki bir değişikliğin uygulanması için terminallerin yeniden başlatılması gerekir.",
+			"view.workbench.scm.workspaceFolder": "Şu anda açık olan klasörde Git deposu yok. Git tarafından desteklenen kaynak denetimi özelliklerini etkinleştirecek bir depo başlatabilirsiniz.\n[Depoyu Başlat](command:git.init)\nFacade Code'da Git ve kaynak denetimini kullanma hakkında daha fazla bilgi edinmek için [belgelerimizi okuyun](https://aka.ms/vscode-scm)."
+		}
+	},
+	"vscode.github": {
+		"package": {
+			"config.gitAuthentication": "Facade Code içindeki git komutları için otomatik GitHub kimlik doğrulamasının etkinleştirilip etkinleştirilmeyeceğini denetler."
+		}
+	},
+	"vscode.html-language-features": {
+		"package": {
+			"html.trace.server.desc": "Facade Code ile HTML dil sunucusu arasındaki iletişimi izler."
+		}
+	},
+	"vscode.json-language-features": {
+		"package": {
+			"json.tracing.desc": "Facade Code ile JSON dil sunucusu arasındaki iletişimi izler."
+		}
+	},
+	"vscode.markdown-language-features": {
+		"package": {
+			"markdown.trace.server.desc": "Facade Code ile Markdown dil sunucusu arasındaki iletişimi izler."
+		}
+	},
+	"vscode.media-preview": {
+		"bundle": {
+			"Open file using {0}'s standard text/binary editor?": "Dosya, {0}'un standart metin/ikili düzenleyicisi kullanılarak açılsın mı?"
+		}
+	},
+	"vscode.mermaid-markdown-features": {
+		"package": {
+			"config.markdown-mermaid.theme.vscode.description": "Geçerli Facade Code renk temasından türetilen Mermaid teması."
+		}
+	},
+	"vscode.typescript-language-features": {
+		"bundle": {
+			"Please open a folder in {0} to use a TypeScript or JavaScript project": "TypeScript veya JavaScript projesi kullanmak için lütfen {0} içinde bir klasör açın",
+			"TS Server logging is off. Please set 'js/ts.tsserver.log' and restart the TS server to enable logging": "TS Sunucusu günlük kaydı kapalı. Günlük kaydını etkinleştirmek için lütfen 'js/ts.tsserver.log' değerini ayarlayın ve TS sunucusunu yeniden başlatın",
+			"Use {0}'s Version": "{0}'un Sürümünü Kullan",
+			"{0}'s tsserver was deleted by another application such as a misbehaving virus detection tool. Please reinstall {0}.": "{0}'un tsserver'ı, hatalı çalışan bir virüs algılama aracı gibi başka bir uygulama tarafından silindi. Lütfen {0}'u yeniden yükleyin."
+		},
+		"package": {
+			"configuration.tsserver.nodePath": "TS Sunucusunu özel bir Node kurulumunda çalıştırın. Bu, bir Node yürütülebilir dosyasının yolu olabilir veya Facade Code'un bir Node kurulumunu algılamasını istiyorsanız `node` olabilir.",
+			"configuration.tsserver.useVsCodeWatcher": "TypeScript'inkiler yerine Facade Code'un dosya izleyicilerini kullanın. Çalışma alanında TypeScript 5.4+ kullanılmasını gerektirir.",
+			"configuration.tsserver.watchOptions.vscode": "TypeScript'inkiler yerine Facade Code'un dosya izleyicilerini kullanın. Çalışma alanında TypeScript 5.4+ kullanılmasını gerektirir.",
+			"configuration.tsserver.web.projectWideIntellisense.enabled": "Web üzerinde proje genelinde IntelliSense'i etkinleştirin/devre dışı bırakın. Facade Code'un güvenilen bir bağlamda çalışmasını gerektirir.",
+			"typescript.locale": "JavaScript ve TypeScript hatalarını bildirmek için kullanılan yerel ayarı belirler. Varsayılan olarak Facade Code'un yerel ayarı kullanılır.",
+			"typescript.locale.auto": "Facade Code'un yapılandırılmış görüntüleme dilini kullanın.",
+			"typescript.updateImportsOnFileMove.enabled": "Facade Code içinde bir dosyayı yeniden adlandırdığınızda veya taşıdığınızda içeri aktarma yollarının otomatik olarak güncelleştirilmesini etkinleştirin/devre dışı bırakın.",
+			"walkthroughs.nodejsWelcome.debugJsFile.description": "Node.js'yi yükledikten sonra ``node your-file-name.js`` girerek bir terminalde JavaScript programlarını çalıştırabilirsiniz\nNode.js programlarını çalıştırmanın bir diğer kolay yolu da kodunuzu çalıştırmanıza, farklı noktalarda duraklatmanıza ve neler olduğunu adım adım anlamanıza yardımcı olan Facade Code hata ayıklayıcısını kullanmaktır.\n[Hata Ayıklamayı Başlat](command:javascript-walkthrough.commands.debugJsFile)"
+		}
+	}
+}

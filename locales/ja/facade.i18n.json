@@ -1,0 +1,893 @@
+{
+	"vscode": {
+		"vs/editor/browser/widget/multiDiffEditor/diffEditorItemTemplate": {
+			"binaryFileChanged": "バイナリ ファイルが変更されました",
+			"openBinaryDiff": "差分を開く"
+		},
+		"vs/editor/common/config/editorOptions": {
+			"fullwidthCharacterWidth": "全角文字のレンダリングに使用する幅を制御します。",
+			"fullwidthCharacterWidth.font": "フォントで定義された幅で全角文字をレンダリングします。",
+			"fullwidthCharacterWidth.twoCells": "全角文字を、ちょうど 2 文字分のセルの中央に配置してレンダリングします。等幅フォントにのみ適用されます。複数のコード ポイントからなる全角文字や GPU レンダリングには適用されません。行のレンダリングのパフォーマンスに影響します。"
+		},
+		"vs/editor/common/editorContextKeys": {
+			"diffEditorAutomaticRenderSideBySide": "自動の差分エディター レイアウトで横並びに表示されるかどうか",
+			"diffEditorTemporaryInlineMode": "差分エディターを手動でサイズ変更した後、一時的にインライン モードがアクティブになっているかどうか"
+		},
+		"vs/platform/contextkey/common/contextkeys": {
+			"isChromeOS": "オペレーティング システムが ChromeOS かどうか",
+			"productQualityType": "{0} の品質の種類"
+		},
+		"vs/platform/extensionManagement/node/extensionManagementService": {
+			"restartCode": "{0} を再インストールする前に、{1} を再起動してください。"
+		},
+		"vs/platform/externalTerminal/node/externalTerminalService": {
+			"console.title": "{0} コンソール"
+		},
+		"vs/platform/product/common/releaseVersion": {
+			"releaseVersion": "{0} (VS Code {1} ベース)"
+		},
+		"vs/platform/terminal/common/terminalPlatformConfiguration": {
+			"terminal.integrated.inheritEnv": "新しいシェルが {0} から環境を継承するかどうか。$PATH やその他の開発変数を初期化するために、ログイン シェルが読み込まれる場合があります。これは Windows には影響しません。"
+		},
+		"vs/platform/update/common/update.config.contribution": {
+			"default": "自動更新の確認を有効にします。Code は自動的かつ定期的に更新を確認します。"
+		},
+		"vs/workbench/api/browser/mainThreadMcp": {
+			"mcp.enterpriseManaged.issuerMissing": "エンタープライズ マネージド MCP 認証では、`mcp.enterpriseManagedAuth.idp.issuer` を構成する必要があります。エンタープライズ ポリシー (Windows グループ ポリシー / macOS 管理対象環境設定 / Linux の `/etc/facade/policy.json`) を使用して設定するか、ローカル テストの場合は `settings.json` を手動で編集して設定してください。"
+		},
+		"vs/workbench/api/common/configurationExtensionPoint": {
+			"scope.deprecationMessageSeverity": "非推奨メッセージの表示に使用する重大度を制御します。",
+			"scope.deprecationMessageSeverity.info": "非推奨メッセージを情報として表示します。",
+			"scope.deprecationMessageSeverity.warning": "非推奨メッセージを標準の警告として表示します。"
+		},
+		"vs/workbench/browser/actions/layoutActions": {
+			"layoutDensity": "レイアウトの密度",
+			"layoutDensityCompact": "コンパクト",
+			"layoutDensityCompactIcon": "コンパクトなレイアウト密度を表します",
+			"layoutDensityDefault": "既定",
+			"layoutDensityDefaultIcon": "既定のレイアウト密度を表します"
+		},
+		"vs/workbench/browser/chatPills": {
+			"chatPills.open": "{0} を開く"
+		},
+		"vs/workbench/browser/parts/activitybar/activitybarPart": {
+			"miToolbarActivityBar": "ツール バー(&&T)",
+			"positionActivityBarToolbar": "アクティビティ バーをタイトル バーに移動する",
+			"toolbar": "ツール バー"
+		},
+		"vs/workbench/browser/parts/dialogs/facadeDialogColors": {
+			"facadeDialogBorder": "Facade ダイアログの境界線の色: ダイアログの輪郭、ボタンの上の区切り線、通知ボックスに使用されます。",
+			"facadeDialogControlBackground": "Facade ダイアログのアイコン セレクターの背景色。",
+			"facadeDialogControlBorder": "Facade ダイアログのアイコン セレクターと色のリセット ボタンの境界線の色。",
+			"facadeDialogFooterBackground": "Facade ダイアログのフッターのボタン領域の背景色。"
+		},
+		"vs/workbench/browser/parts/editor/editor.contribution": {
+			"diffView": "差分ビュー",
+			"diffView.automaticInline": "自動 (現在はインライン)",
+			"diffView.automaticSideBySide": "自動 (現在は横並び)",
+			"diffView.inline": "インライン",
+			"diffView.inlineTemporary": "インライン (一時的)",
+			"diffView.sideBySide": "横並び"
+		},
+		"vs/workbench/browser/parts/titlebar/titlebarAppIcon": {
+			"titleBar.showAppIcon": "カスタム タイトル バーにアプリケーション アイコンを表示するかどうかを制御します。無効にすると、その角はワークスペース バーの切り替えボタン用になります。Windows と Linux のカスタム タイトル バーにのみ適用されます。有効にするには新しいウィンドウが必要です。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarActions": {
+			"workspaceBar.category": "ワークスペース",
+			"workspaceBar.collapse": "ワークスペース バーを折りたたむ",
+			"workspaceBar.collapseFolder": "折りたたむ",
+			"workspaceBar.collapsedContext": "ワークスペース バーがアイコンだけに折りたたまれているかどうか",
+			"workspaceBar.customizeFolder": "カスタマイズ...",
+			"workspaceBar.expand": "ワークスペース バーを展開する",
+			"workspaceBar.expandFolder": "展開する",
+			"workspaceBar.focus": "ワークスペース バーにフォーカス",
+			"workspaceBar.focusContext": "ワークスペース フォルダーの一覧にキーボード フォーカスがあるかどうか",
+			"workspaceBar.moveFolderDown": "フォルダーを下に移動",
+			"workspaceBar.moveFolderUp": "フォルダーを上に移動",
+			"workspaceBar.moveWorktreeDown": "作業ツリーを下に移動",
+			"workspaceBar.moveWorktreeUp": "作業ツリーを上に移動",
+			"workspaceBar.openFolder": "フォルダーを開く...",
+			"workspaceBar.openFolderButton": "追加",
+			"workspaceBar.openFolderTitle": "フォルダーを開く",
+			"workspaceBar.removeFolder": "ワークスペースからフォルダーを削除",
+			"workspaceBar.revealInLinux": "1 つ上のフォルダーを開く",
+			"workspaceBar.revealInMac": "Finder で表示する",
+			"workspaceBar.revealInWindows": "エクスプローラーで表示する",
+			"workspaceBar.rowExpansionContext": "フォーカスされているリポジトリ行で作業ツリーが展開されているかどうか",
+			"workspaceBar.rowKindContext": "フォーカスされている行がフォルダー、リポジトリ、作業ツリーのいずれであるか",
+			"workspaceBar.rowOffersWorktreeContext": "フォーカスされている行で新しい作業ツリーを作成できるかどうか",
+			"workspaceBar.toggleCollapsed": "ワークスペース バーの切り替え",
+			"workspaceBar.toggleIcon": "ワークスペース バーの折りたたみと展開に使用するアイコン。",
+			"workspaceBar.worktrees": "ワークスペース バーで、各リポジトリの下に Git の作業ツリーを表示するかどうかを制御します。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarColors": {
+			"facadeAgentBadgeBackground": "ワークスペースの行とタイトル バーのエージェント ボタンに表示されるエージェント バッジの背景色。",
+			"facadeAgentBadgeForeground": "エージェント バッジの数のテキストの前景色。",
+			"facadeBarActiveBorder": "ワークスペース バーで現在のフォルダー行を示すアクティブ インジケーターの色。",
+			"facadeBarBackground": "ワークスペース バーの背景色。ワークスペース バーは、ウィンドウの左端に沿って並ぶフォルダーの列です。",
+			"facadeBarBorder": "ワークスペース バーを隣接するビューと区切る境界線の色。",
+			"facadeBarFolderBlue": "ワークスペース バーのフォルダーに使用する青のアクセント カラー。",
+			"facadeBarFolderGreen": "ワークスペース バーのフォルダーに使用する緑のアクセント カラー。",
+			"facadeBarFolderIndigo": "ワークスペース バーのフォルダーに使用するインディゴのアクセント カラー。",
+			"facadeBarFolderLime": "ワークスペース バーのフォルダーに使用するライムのアクセント カラー。",
+			"facadeBarFolderOrange": "ワークスペース バーのフォルダーに使用するオレンジのアクセント カラー。",
+			"facadeBarFolderPink": "ワークスペース バーのフォルダーに使用するピンクのアクセント カラー。",
+			"facadeBarFolderPurple": "ワークスペース バーのフォルダーに使用する紫のアクセント カラー。",
+			"facadeBarFolderRed": "ワークスペース バーのフォルダーに使用する赤のアクセント カラー。",
+			"facadeBarFolderTeal": "ワークスペース バーのフォルダーに使用するティールのアクセント カラー。",
+			"facadeBarFolderYellow": "ワークスペース バーのフォルダーに使用する黄のアクセント カラー。",
+			"facadeBarForeground": "ワークスペース バーの前景色。",
+			"facadeBarInactiveForeground": "ワークスペース バーの非アクティブな行の前景色。",
+			"facadeBarTitleForeground": "ワークスペース バーのヘッダーの前景色。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomization": {
+			"workspaceBar.worktreeIcon": "ワークスペース バーの作業ツリーのアイコン。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomize": {
+			"workspaceBar.branch": "ブランチ",
+			"workspaceBar.branchAria": "新しい作業ツリーのブランチ",
+			"workspaceBar.branchPlaceholder": "ブランチ名",
+			"workspaceBar.cancel": "キャンセル",
+			"workspaceBar.color": "色",
+			"workspaceBar.colorAria": "フォルダーの色",
+			"workspaceBar.colorBlue": "青",
+			"workspaceBar.colorGreen": "緑",
+			"workspaceBar.colorIndigo": "インディゴ",
+			"workspaceBar.colorLime": "ライム",
+			"workspaceBar.colorNone": "色なし",
+			"workspaceBar.colorOrange": "オレンジ",
+			"workspaceBar.colorPink": "ピンク",
+			"workspaceBar.colorPurple": "紫",
+			"workspaceBar.colorRed": "赤",
+			"workspaceBar.colorTeal": "ティール",
+			"workspaceBar.colorYellow": "黄",
+			"workspaceBar.create": "作成",
+			"workspaceBar.customizeAbout": "'{0}' の表示名、色、アイコンを構成します。ディスク上のフォルダーの名前は変更されません。",
+			"workspaceBar.customizeTitle": "フォルダーのカスタマイズ",
+			"workspaceBar.customizeWorktreeAbout": "'{0}' の表示名と色を構成します。ブランチとディスク上のフォルダーの名前は変更されません。",
+			"workspaceBar.customizeWorktreeTitle": "作業ツリーのカスタマイズ",
+			"workspaceBar.displayName": "表示名",
+			"workspaceBar.displayNameAria": "このフォルダーの表示名",
+			"workspaceBar.displayNameDefault": "既定の名前 '{0}' を使用するには、空のままにします。",
+			"workspaceBar.displayNameHintBranch": "ブランチ名を使用するには、空のままにします。",
+			"workspaceBar.icon": "アイコン",
+			"workspaceBar.iconAria": "フォルダーのアイコン",
+			"workspaceBar.iconBeaker": "ビーカー",
+			"workspaceBar.iconBook": "本",
+			"workspaceBar.iconDatabase": "データベース",
+			"workspaceBar.iconDevice": "デバイス",
+			"workspaceBar.iconFolder": "フォルダー",
+			"workspaceBar.iconGlobe": "地球儀",
+			"workspaceBar.iconPackage": "パッケージ",
+			"workspaceBar.iconRocket": "ロケット",
+			"workspaceBar.iconServer": "サーバー",
+			"workspaceBar.iconTools": "ツール",
+			"workspaceBar.newWorktreeAbout": "'{0}' に新しい Git 作業ツリーとブランチを作成します。",
+			"workspaceBar.newWorktreeTitle": "'{0}' の新しい作業ツリー",
+			"workspaceBar.save": "保存",
+			"workspaceBar.worktreeColorAria": "作業ツリーの色",
+			"workspaceBar.worktreeDisplayNameAria": "この作業ツリーの表示名"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarEditors": {
+			"workspaceBar.editorsNotClosed": "開いているエディターを閉じることができませんでした。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarPart": {
+			"workspaceBar.couldNotAdd": "フォルダー '{0}' をワークスペースに追加できませんでした: {1}",
+			"workspaceBar.gone": "フォルダー '{0}' はディスク上に存在しなくなりました。",
+			"workspaceBar.goneReason": "ディスク上に存在しなくなりました",
+			"workspaceBar.moreActions": "その他の操作...",
+			"workspaceBar.notTaken": "フォルダーはワークスペースに追加されませんでした",
+			"workspaceBar.title": "ワークスペース"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarQuestions": {
+			"workspaceBar.agentLine": "エージェント {0}",
+			"workspaceBar.agentLineAt": "エージェント {0} · {1}",
+			"workspaceBar.agentTerminated": "次のエージェントを終了します:",
+			"workspaceBar.agentsAndTerminalsTerminated": "次のエージェントとターミナルを終了します:",
+			"workspaceBar.agentsTerminated": "次のエージェントを終了します:",
+			"workspaceBar.fileDiscarded": "次のファイルには保存されていない変更があり、破棄されます:",
+			"workspaceBar.fileLineAt": "{0} · {1}",
+			"workspaceBar.filesDiscarded": "次のファイルには保存されていない変更があり、破棄されます:",
+			"workspaceBar.moreFiles": "...ほか {0} 個のファイルは表示されていません",
+			"workspaceBar.moreSessions": "...ほか {0} 個のセッションは表示されていません",
+			"workspaceBar.oneMoreFile": "...ほか 1 個のファイルは表示されていません",
+			"workspaceBar.oneMoreSession": "...ほか 1 個のセッションは表示されていません",
+			"workspaceBar.terminalLine": "ターミナル ({0})",
+			"workspaceBar.terminalLineAt": "ターミナル ({0}) · {1}",
+			"workspaceBar.terminalTerminated": "次のターミナルを終了します:",
+			"workspaceBar.terminalsTerminated": "次のターミナルを終了します:",
+			"workspaceBar.worktreePlace": "{0} (作業ツリー: {1})"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarRemoval": {
+			"workspaceBar.notRemoved": "ワークスペースを更新できませんでした: {0}",
+			"workspaceBar.notRemovedReason": "ワークスペース構成ファイルに書き込めませんでした",
+			"workspaceBar.removeAndDiscard": "削除して変更を破棄(&&R)",
+			"workspaceBar.removeFolderAndWorktree": "'{0}' とその作業ツリーをワークスペースから削除しますか?",
+			"workspaceBar.removeFolderAndWorktrees": "'{0}' とその {1} 個の作業ツリーをワークスペースから削除しますか?",
+			"workspaceBar.removeFolderButton": "削除(&&R)",
+			"workspaceBar.removeFolderQuestion": "'{0}' をワークスペースから削除しますか?",
+			"workspaceBar.removeFoldersQuestion": "次の {0} 個のフォルダーをワークスペースから削除しますか?",
+			"workspaceBar.removeKeepsDisk": "ディスク上のファイルは削除されません。",
+			"workspaceBar.worktreeDeleted": "作業ツリー '{0}' を削除し、ワークスペースからも削除しました。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitchFolder": {
+			"workspaceBar.switchFolder": "フォルダーの切り替え...",
+			"workspaceBar.switchFolderNext": "[フォルダーの切り替え] で次のフォルダーを選択",
+			"workspaceBar.switchFolderPlaceholder": "切り替え先のフォルダーを選択してください"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitcher": {
+			"workspaceBar.addedNotShown": "フォルダー '{0}' はワークスペースに追加されましたが、切り替えることができませんでした。",
+			"workspaceBar.addedNotShownOf": "フォルダーをワークスペースに追加しました: {0}。'{1}' に切り替えることができませんでした。",
+			"workspaceBar.couldNotLeave": "フォルダーを切り替えられませんでした: アクティブなフォルダーのエディターの状態を保存できませんでした。{0}",
+			"workspaceBar.couldNotRestore": "このフォルダーの一部のエディターを復元できませんでした。{0}",
+			"workspaceBar.gone": "フォルダー '{0}' はディスク上に存在しなくなりました。",
+			"workspaceBar.goneReason": "ディスク上に存在しなくなりました",
+			"workspaceBar.unreadable": "フォルダー '{0}' を読み取れませんでした: {1}"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
+			"workspaceBar.openInNewWindow": "新しいウィンドウで開く",
+			"workspaceBar.trustAndAdd": "信頼して追加(&&T)",
+			"workspaceBar.trustParent": "親フォルダー '{0}' 内のすべてのファイルの作成者を信頼します",
+			"workspaceBar.untrustedConsequence": "このワークスペースは信頼されています。信頼されていないフォルダーを追加すると、ワークスペース全体と実行中のエージェントが制限モードに切り替わります。",
+			"workspaceBar.untrustedConsequenceMany": "このワークスペースは信頼されています。信頼されていないフォルダーを追加すると、ワークスペース全体と実行中のエージェントが制限モードに切り替わります。",
+			"workspaceBar.untrustedLinks": "詳細については、[ドキュメント](https://aka.ms/vscode-workspace-trust) を参照してください。制限モードで [新しいウィンドウで開く]({0}) こともできます。",
+			"workspaceBar.untrustedLinksMany": "詳細については、[ドキュメント](https://aka.ms/vscode-workspace-trust) を参照してください。制限モードで [{0} 個のフォルダーをすべて新しいウィンドウで開く]({1}) こともできます。",
+			"workspaceBar.untrustedMessage": "このフォルダー内のファイルの作成者を信頼しますか?",
+			"workspaceBar.untrustedMessageMany": "これらの {0} 個のフォルダー内のファイルの作成者を信頼しますか?",
+			"workspaceBar.untrustedMore": "ほか {0} 個",
+			"workspaceBar.untrustedTakenOut": "フォルダー '{0}' は信頼されておらず、ワークスペースが制限モードに切り替わるため、ワークスペースから削除されました。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
+			"workspaceBar.agentsAria": "{0} 個のエージェント",
+			"workspaceBar.ariaLabel": "ワークスペース フォルダー",
+			"workspaceBar.collapse": "折りたたむ",
+			"workspaceBar.empty": "ここにフォルダーをドラッグするか、+ をクリックします。",
+			"workspaceBar.expand": "展開する",
+			"workspaceBar.moreAgents": "ほか {0} 個のエージェント",
+			"workspaceBar.oneAgentAria": "1 個のエージェント",
+			"workspaceBar.oneMoreAgent": "ほか 1 個のエージェント",
+			"workspaceBar.oneWorktreeAria": "1 個の作業ツリー",
+			"workspaceBar.unavailableAria": "{0}、フォルダーがディスク上に存在しません",
+			"workspaceBar.unreadableAria": "{0}、フォルダーを読み取れません",
+			"workspaceBar.worktreeAria": "{0}、作業ツリー",
+			"workspaceBar.worktreesAria": "{0} 個の作業ツリー"
+		},
+		"vs/workbench/browser/workbench.contribution": {
+			"appName": "`${appName}`: 例: {0}。",
+			"workbench.activityBar.location.toolbar": "タイトル バーのレイアウト コントロールの隣にアクティビティ バーを表示します。"
+		},
+		"vs/workbench/common/contextkeys": {
+			"inAutomation": "{0} が自動化/スモーク テストで実行されているかどうか"
+		},
+		"vs/workbench/common/theme": {
+			"modernPanelBorder": "モダン UI が有効な場合の、パネル サーフェスの境界線の色。",
+			"modernSashGripForeground": "モダン UI が有効な場合に、ワークベンチの各部分の間でサイズ変更できる境界を示すグリップ ハンドルの色。",
+			"modernUIInactiveShellBackground": "ウィンドウが非アクティブでモダン UI が有効な場合に、フローティングのワークベンチ サーフェスの周囲に見えるシェルの背景色。",
+			"modernUIShellBackground": "モダン UI が有効な場合に、フローティングのワークベンチ サーフェスの周囲に見えるシェルの背景色。",
+			"statusBarInactiveBackground": "ワークスペースまたはフォルダーが開かれていて、ウィンドウが非アクティブなときのステータス バーの背景色。デバッグなどによる背景の上書きが優先されます。設定されていない場合は、現在のステータス バーの背景色が使用されます。"
+		},
+		"vs/workbench/contrib/accessibility/browser/accessibilityConfiguration": {
+			"verbosity.customizationMigrations.description": "カスタマイズの移行チェックリストのアクセシビリティ ヘルプにアクセスする方法に関する情報を提供します。"
+		},
+		"vs/workbench/contrib/browserView/common/browserView": {
+			"browserView.openShareableCopy.cancel": "キャンセル",
+			"browserView.openShareableCopy.confirm": "開いて共有(&&O)",
+			"browserView.openShareableCopy.detail": "このタブには、エージェントとの共有に必要な、構成済みのポリシー制限が適用されていません。\n\nエージェントと共有するには、新しいタブでページを開いてください。",
+			"browserView.openShareableCopy.message": "共有用に新しいタブを開きますか?"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/browserViewWorkbenchService": {
+			"browser.networkFilteringEnabled": "ネットワーク フィルタリングが有効になったため、ブラウザー タブへのエージェントのアクセスは取り消されました。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserDataStorageFeatures": {
+			"browser.clearAgentStorageAction": "ストレージをクリア (エージェント)",
+			"browser.dataStorage.agent": "ブラウザー ビューは、アプリケーションを閉じるとクリーンアップされる 1 つのメモリ内セッションを共有します。このセッションはエージェントが開いたブラウザー ページとも共有されるため、**ローカル ストレージや Cookie を含むすべてのデータにエージェントがアクセスできます。** エージェントのネットワーク フィルタリングが有効な場合、このセッションからの要求は、構成されたネットワーク ドメイン ポリシーによって制限されます。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorChatFeatures": {
+			"browser.shareWithAgent.blockedByNetworkPolicy": "ネットワーク ドメイン ポリシーにより、エージェントと共有できません。",
+			"browser.shareWithAgent.failed": "ブラウザー タブを共有できません",
+			"browser.shareWithAgent.isolated": "エージェントと共有 (分離されたタブで開く)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorEmulationFeatures": {
+			"browser.userAgent.prompt": "ユーザー エージェント文字列 ({0} の既定値を使用する場合は空のままにします)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorErrorFeatures": {
+			"browser.networkPolicyErrorExtraWarning": "この要求は、ネットワーク ドメイン ポリシーによってブロックされた可能性があります。\n構成されている許可および拒否されたネットワーク ドメインを確認してください。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserTabManagementFeatures": {
+			"browser.openInIntegratedBrowser": "ターミナル、チャット、その他のソースからのリンクのうち、`#workbench.browser.openLocalhostLinks#` の設定にかかわらず、システム ブラウザーではなく統合ブラウザーで開くもの。各エントリは URL パターンです: `example.com` はそのドメインのページ、`*.example.com` はそのドメインとサブドメイン、`https://example.com/docs` はそのスキームでそのパス以下のページ、`example.com:*` は任意のポートに一致します。"
+		},
+		"vs/workbench/contrib/chat/browser/chat.shared.contribution": {
+			"autoApprove3.description": "グローバル自動承認 (\"YOLO モード\" とも呼ばれます) は、すべてのワークスペースのすべてのツールに対する手動承認を完全に無効にし、エージェントが完全に自律的に動作できるようにします。これは非常に危険であり、*決して*推奨されません。Codespaces や開発コンテナーなどのコンテナー化された環境でも、ユーザー キーがコンテナー内に転送され、侵害される可能性があります。\n\nこの機能により、重要なセキュリティ保護が無効になり、攻撃者がマシンを侵害しやすくなります。\n\nメモ: この設定はツールの承認のみを制御し、エージェントが質問することを防ぐものではありません。エージェントの質問に自動的に回答するには、`#chat.autoReply#` 設定を使用します。",
+			"mcp.enterpriseManagedAuth.idp": "(プレビュー) エンタープライズ管理のモデル コンテキスト プロトコル (MCP) サーバーで使用される OAuth/OIDC IdP 構成。通常、エンタープライズ ポリシー (Windows グループ ポリシー / macOS 管理対象設定 / Linux `/etc/facade/policy.json`) を通じて提供されます。開発者は、ローカル テスト用に `settings.json` を手動で編集できます。プロパティ: `issuer` (HTTPS URL)、`clientId`、`clientSecret`。"
+		},
+		"vs/workbench/contrib/codeEditor/browser/diffEditorAccessibilityHelp": {
+			"msg6": "エディター タイトル領域の [その他の操作] メニューにある [差分ビュー] を使用して、インライン、横並び、自動のいずれかのレイアウトを選択します。"
+		},
+		"vs/workbench/contrib/debug/browser/debugAdapterManager": {
+			"debugServer": "デバッグ拡張機能の開発専用: ポートが指定されている場合、{0} はサーバー モードで実行中のデバッグ アダプターへの接続を試みます"
+		},
+		"vs/workbench/contrib/extensions/browser/extensions.contribution": {
+			"extensions.gallery.authProvider": "拡張機能マーケットプレースの認証プロバイダーを構成します",
+			"extensions.gallery.authProvider.github": "GitHub を使用して拡張機能マーケットプレースに認証します。",
+			"extensions.gallery.authProvider.microsoft": "Microsoft (Entra ID) アカウントを使用して拡張機能マーケットプレースに認証します。",
+			"notInstalled": "拡張機能 '{0}' はインストールされていません。パブリッシャーを含む完全な拡張機能 ID (例: ms-dotnettools.csharp) を使用していることを確認してください。",
+			"workbench.extensions.installExtension.option.donotSync": "有効にすると、設定の同期がオンの場合に {0} はこの拡張機能を同期しません。",
+			"workbench.extensions.installExtension.option.installOnlyNewlyAddedFromExtensionPackVSIX": "有効にすると、{0} は拡張機能パックの VSIX から新しく追加された拡張機能のみをインストールします。このオプションは、VSIX のインストール中にのみ考慮されます。",
+			"workbench.extensions.installExtension.option.installPreReleaseVersion": "有効にすると、拡張機能のプレリリース版が使用可能な場合、{0} はそれをインストールします。"
+		},
+		"vs/workbench/contrib/extensions/browser/extensionsActions": {
+			"deprecated with alternate settings message": "この機能は現在 {0} に組み込まれているため、この拡張機能は非推奨です。",
+			"deprecated with alternate settings tooltip": "この機能は現在 {1} に組み込まれているため、この拡張機能は非推奨です。この機能を使用するには、これらの {0} を構成してください。",
+			"disableForWorkspaceActionToolTip": "このワークスペースでのみこの拡張機能を無効にします。このウィンドウ内のすべてのフォルダーに適用されます。",
+			"enableForWorkspaceActionToolTip": "このワークスペースでのみこの拡張機能を有効にします。このウィンドウ内のすべてのフォルダーに適用されます。"
+		},
+		"vs/workbench/contrib/extensions/common/extensionsFileTemplate": {
+			"app.extensions.json.unwantedRecommendations": "{0} が推奨する拡張機能のうち、このワークスペースのユーザーには推奨しない拡張機能のリスト。拡張機能の ID は常に '${publisher}.${name}' です。例: 'vscode.csharp'。"
+		},
+		"vs/workbench/contrib/externalUriOpener/common/configuration": {
+			"externalUriOpeners.defaultId": "{0} の標準のオープナーを使用して開きます。"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
+			"facadeNotificationSource": "Facade エージェント"
+		},
+		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
+			"changeAndRestart": "変更して再起動",
+			"dontShowAgain": "今後表示しない",
+			"suggestDisplayLanguage": "{0} は{1}でも利用できます。表示言語を変更して再起動しますか?",
+			"suggestDisplayLanguageSetting": "表示言語が選択されていない間、オペレーティング システムの言語に対応する組み込み言語パックがあれば、その言語への切り替えをウィンドウで提案するかどうかを制御します。"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminalActions": {
+			"facade.terminal.openTab": "ターミナル"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals": {
+			"folderTerminals.keptRunning": "フォルダー '{0}' はワークスペースから削除されました。アクティブなターミナルはパネルで引き続き実行されます: {1}。",
+			"folderTerminals.stop": "停止"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals.contribution": {
+			"terminal.followFolder": "エディター領域のターミナルが現在のフォルダーに追従するかどうかを制御します。有効にすると、フォルダーを切り替えたときにほかのフォルダーのターミナルが非表示になり、そのフォルダーに戻ると復元されます。無効にすると、フォルダーを切り替えてもターミナルは表示されたままになります。"
+		},
+		"vs/workbench/contrib/github/browser/githubLinkPresentation.contribution": {
+			"github.authenticationRequired": "pull request の状態やその他の GitHub リンクの詳細を読み込むには、GitHub にサインインしてください。",
+			"github.authenticationRequired.signIn": "サインイン"
+		},
+		"vs/workbench/contrib/issue/browser/baseIssueReporterService": {
+			"handlesIssuesElsewhere": "この拡張機能は、{0} の外部で問題を処理します"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterOverlay": {
+			"screenshotsSubtitle": "最大 {0} 個のスクリーンショットまたはビデオを追加できます。{1} を操作し、キャプチャするタイミングを選択します。"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterPage": {
+			"acknowledgements": "{0} のバージョンが最新ではないため、この問題がクローズされる可能性があることを了承します。"
+		},
+		"vs/workbench/contrib/localization/common/localizationsActions": {
+			"configureLocaleDescription": "インストールされている言語パックに基づいて、{0} のロケールを変更します。一般的な言語には、フランス語、中国語、スペイン語、日本語、ドイツ語、韓国語などがあります。"
+		},
+		"vs/workbench/contrib/multiDiffEditor/browser/actions": {
+			"diffView": "差分ビュー"
+		},
+		"vs/workbench/contrib/preferences/browser/preferencesWidgets": {
+			"workspaceSettingsAllFolders": "ワークスペース: このウィンドウ内のすべてのフォルダーに適用されます。"
+		},
+		"vs/workbench/contrib/preferences/browser/settingsTree": {
+			"setting.deprecationMessageSeverity.info": "情報",
+			"setting.deprecationMessageSeverity.warning": "警告"
+		},
+		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
+			"progress.turnOn.final.noLink": "{0} のリモート トンネル アクセスが有効になりました。{3} の [アカウント] メニューから、このアクセスを [構成](command:{1}) または [オフ](command:{2}) にできます。",
+			"remoteTunnel.actions.rename": "トンネルの名前を変更",
+			"renameTunnel.invalidName": "名前には、英字、数字、アンダースコア、ダッシュのみを使用できます。ダッシュで始めることはできません。",
+			"renameTunnel.maxLength": "名前は {0} 文字以内にしてください。",
+			"renameTunnel.placeholder": "このマシンのホスト名を使用するには、空のままにします。",
+			"renameTunnel.prompt": "このトンネルの名前を入力してください。",
+			"renameTunnel.title": "トンネルの名前を変更"
+		},
+		"vs/workbench/contrib/scm/browser/scm.contribution": {
+			"no repository in folder": "このフォルダーにはソース管理リポジトリがありません。"
+		},
+		"vs/workbench/contrib/search/browser/search.common.contribution": {
+			"exclude": "フルテキスト検索と Quick Open のファイル検索でファイルとフォルダーを除外するための [glob パターン](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options) を構成します。Quick Open の最近開いた項目の一覧からファイルを除外するには、パターンを絶対パス (例: `**/node_modules/**`) にする必要があります。`#files.exclude#` 設定からすべての glob パターンを継承します。",
+			"exclude.boolean": "ファイル パスの照合基準となる glob パターン。これを true または false に設定すると、パターンがそれぞれ有効/無効になります。",
+			"exclude.when": "一致するファイルの兄弟をさらにチェックします。一致するファイル名の変数として \\$(basename) を使用します。",
+			"search.followSymlinks": "検索中にシンボリック リンクをたどるかどうかを制御します。",
+			"search.maxResults": "検索結果の最大数を制御します。`null` (空) に設定すると、結果を無制限に返します。",
+			"search.ripgrep.maxThreads": "検索に使用するスレッドの数。0 に設定すると、エンジンによってこの値が自動的に決定されます。",
+			"search.smartCase": "すべて小文字のパターンの場合、大文字と小文字を区別しないで検索し、そうでない場合は大文字と小文字を区別して検索します。",
+			"search.sortOrder": "検索結果の並べ替え順序を制御します。",
+			"searchSortOrder.countAscending": "結果は、ファイルごとの数で昇順に並べ替えられます。",
+			"searchSortOrder.countDescending": "結果は、ファイルごとの数で降順に並べ替えられます。",
+			"searchSortOrder.default": "結果はフォルダー名とファイル名でアルファベット順に並べ替えられます。",
+			"searchSortOrder.filesOnly": "結果はフォルダーの順序を無視したファイル名でアルファベット順に並べ替えられます。",
+			"searchSortOrder.modified": "結果は、ファイルの最終更新日で降順に並べ替えられます。",
+			"searchSortOrder.type": "結果は、ファイル拡張子でアルファベット順に並べ替えられます。",
+			"useGlobalIgnoreFiles": "ファイルを検索するときに、グローバル gitignore ファイル (たとえば `$HOME/.config/git/ignore`) を使用するかどうかを制御します。{0} を有効にする必要があります。",
+			"useIgnoreFiles": "ファイルを検索するときに、`.gitignore` ファイルと `.ignore` ファイルを使用するかどうかを制御します。",
+			"useParentIgnoreFiles": "ファイルを検索するときに、親ディレクトリにある `.gitignore` ファイルと `.ignore` ファイルを使用するかどうかを制御します。{0} を有効にする必要があります。"
+		},
+		"vs/workbench/contrib/tasks/browser/abstractTaskService": {
+			"TerminateAction.noProcess": "起動したプロセスは既に存在しません。タスクがバックグラウンド タスクを生成していた場合、{0} を終了すると孤立したプロセスが残る可能性があります。"
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchemaCommon": {
+			"JsonSchema.promptOnClose": "バックグラウンド タスクの実行中に {0} を閉じるときに、ユーザーに確認メッセージを表示するかどうか。",
+			"JsonSchema.tasks.promptOnClose": "タスクの実行中に {0} を閉じるときに、ユーザーに確認メッセージを表示するかどうか。"
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchema_v2": {
+			"JsonSchema.tasks.promptOnClose": "タスクの実行中に {0} を閉じるときに、ユーザーに確認メッセージを表示するかどうか。"
+		},
+		"vs/workbench/contrib/tasks/common/taskDefinitionRegistry": {
+			"TaskDefinition.required": "この種類のタスクが一致と見なされるために指定する必要がある `properties` オブジェクトのプロパティ名です。{0} はこれを使用して、`tasks.json` のエントリを登録済みのタスク プロバイダーに関連付けます。"
+		},
+		"vs/workbench/contrib/tasks/electron-browser/taskService": {
+			"TaskSystem.noProcess": "起動したタスクは既に存在しません。タスクがバックグラウンド プロセスを生成していた場合、{0} を終了すると孤立したプロセスが残る可能性があります。これを回避するには、最後のバックグラウンド プロセスを待機フラグ付きで開始してください。"
+		},
+		"vs/workbench/contrib/terminal/browser/terminalActions": {
+			"facade.terminal.newInFolder": "別のフォルダーに新しいターミナルを作成..."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalProcessManager": {
+			"facade.agentElsewhere": "このエージェントは別のウィンドウで実行されています。そのウィンドウでエージェントのタブに切り替えてください。",
+			"facade.agentProcessGone": "ウィンドウが閉じているか再読み込み中に、このエージェントのプロセスが終了しました。"
+		},
+		"vs/workbench/contrib/terminal/browser/terminalView": {
+			"terminal.monospaceOnly": "ターミナルでは等幅フォントのみがサポートされています。新しくインストールしたフォントの場合は、{0} を再起動してください。"
+		},
+		"vs/workbench/contrib/terminal/common/terminalConfiguration": {
+			"terminal.integrated.allowChords": "ターミナルでコード キー バインドを許可するかどうか。これが true でキーストロークがコードになる場合、{0} はバイパスされることに注意してください。これを false に設定すると、ctrl+k を ({1} ではなく) シェルに送りたい場合に特に便利です。",
+			"terminal.integrated.commandsToSkipShell": "キー バインドがシェルに送信されず、代わりに常に {2} で処理されるコマンド ID のセット。これにより、通常はシェルによって使用されるキー バインドが、ターミナルにフォーカスがないときと同じように動作します。たとえば、`Ctrl+P` で Quick Open を起動できます。\n\n&nbsp;\n\n既定では、多くのコマンドがスキップされます。既定値をオーバーライドし、代わりにそのコマンドのキー バインドをシェルに渡すには、先頭に `-` 文字を付けてコマンドを追加します。たとえば、`-workbench.action.quickOpen` を追加すると、`Ctrl+P` がシェルに届くようになります。\n\n&nbsp;\n\n既定でスキップされる以下のコマンドの一覧は、設定エディターで表示すると切り詰められます。完全な一覧を表示するには、{1} して、下の一覧の最初のコマンドを検索します。\n\n&nbsp;\n\n既定でスキップされるコマンド:\n\n{0}",
+			"terminal.integrated.detectLocale": "{0} のターミナルはシェルからの UTF-8 エンコード データのみをサポートしているため、`$LANG` 環境変数を検出して UTF-8 準拠のオプションに設定するかどうかを制御します。",
+			"terminal.integrated.env.linux": "Linux 上のターミナルで使用される {0} プロセスに追加される環境変数を含むオブジェクト。環境変数を削除するには、`null` に設定します。",
+			"terminal.integrated.env.osx": "macOS 上のターミナルで使用される {0} プロセスに追加される環境変数を含むオブジェクト。環境変数を削除するには、`null` に設定します。",
+			"terminal.integrated.env.windows": "Windows 上のターミナルで使用される {0} プロセスに追加される環境変数を含むオブジェクト。環境変数を削除するには、`null` に設定します。",
+			"terminal.integrated.gpuAcceleration.auto": "最適なエクスペリエンスを提供するレンダラーを {0} に検出させます。",
+			"terminal.integrated.shellIntegration.enabled": "強化されたコマンド追跡や現在の作業ディレクトリの検出などの機能をサポートするために、シェル統合を自動的に挿入するかどうかを決定します。\n\nシェル統合は、スタートアップ スクリプトをシェルに挿入することで機能します。このスクリプトにより、{2} はターミナル内で何が起きているかを把握できます。\n\nサポートされているシェル:\n\n- Linux/macOS: bash、fish、pwsh、zsh\n - Windows: pwsh、git bash\n\nこの設定はターミナルの作成時にのみ適用されるため、有効にするにはターミナルを再起動する必要があります。\n\n ターミナル プロファイルでカスタム引数を定義している場合、{1} を有効にしている場合、[複雑な bash の `PROMPT_COMMAND`](https://code.visualstudio.com/docs/editor/integrated-terminal#_complex-bash-promptcommand) がある場合、またはその他のサポートされていないセットアップの場合は、スクリプトの挿入が機能しないことがあります。デコレーションを無効にするには、{0} を参照してください",
+			"terminal.integrated.windowsUseConptyDll": "Windows に付属の conpty.dll ではなく、{0} に付属の conpty.dll (v1.25.260303002) を使用するかどうか。"
+		},
+		"vs/workbench/contrib/terminal/common/terminalContextKey": {
+			"facadeAgentTerminalContextKey": "アクティブなターミナル エディターがエージェント メニューから起動されたかどうか",
+			"facadeRunTerminalContextKey": "アクティブなターミナルで、Facade が起動したエージェントが実行されているかどうか。"
+		},
+		"vs/workbench/contrib/terminalContrib/autoReplies/common/terminalAutoRepliesConfiguration": {
+			"terminal.integrated.autoReplies": "ターミナルで検出されたときに自動的に応答されるメッセージのセットです。メッセージが十分に具体的であれば、一般的な応答を自動化するのに役立ちます。\n\n注釈:\n\n- {0} を使用すると、Windows でバッチ ジョブの終了プロンプトに自動的に応答します。\n- メッセージにはエスケープ シーケンスが含まれるため、スタイル付きのテキストでは応答が行われない可能性があります。\n- 各応答は 1 秒に 1 回のみ行えます。\n- 応答で Enter キーを表すには、{1} を使用します。\n- 既定のキーの設定を解除するには、値を null に設定します。\n- 新しい応答が適用されない場合は、{2} を再起動します。"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherActions": {
+			"facade.agent.configure": "エージェントの構成...",
+			"facade.agent.menu": "エージェント",
+			"facade.agent.oneActive": "{0} - アクティブなエージェント 1 個",
+			"facade.agent.showActive": "アクティブなエージェントを表示...",
+			"facade.agent.showMenu": "エージェント メニューを表示",
+			"facade.agent.someActive": "{0} - アクティブなエージェント {1} 個",
+			"facade.agent.startRestricted": "エージェントを起動...",
+			"facade.agents.category": "エージェント"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
+			"facade.agent.noneFound": "エージェントが見つかりません: エージェントの構成..."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
+			"agentPicker.agentAndTitle": "{0} · {1}",
+			"agentPicker.close": "エージェントを閉じる",
+			"agentPicker.creatingWorktree": "作業ツリーを作成中",
+			"agentPicker.empty": "アクティブなエージェントはありません",
+			"agentPicker.panel": "パネル",
+			"agentPicker.placeholder": "エージェントを選択してください",
+			"agentPicker.preparing": "{0} · {1}",
+			"agentPicker.runningSetup": "作業ツリーをセットアップ中",
+			"agentPicker.untitled": "エージェント"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherService": {
+			"facade.agent.trustToStart": "エージェントはこのワークスペースのフォルダーで作業します。{0} を起動するには、ワークスペースを信頼してください。",
+			"facade.agent.trustToStartAny": "エージェントはこのワークスペースのフォルダーで作業します。エージェントを起動するには、ワークスペースを信頼してください。"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherShutdown": {
+			"runningWork.agent": "1 個のエージェントを終了しますか?",
+			"runningWork.agentAndTerminal": "1 個のエージェントと 1 個のターミナルを終了しますか?",
+			"runningWork.agentAndTerminals": "1 個のエージェントと {0} 個のターミナルを終了しますか?",
+			"runningWork.agents": "{0} 個のエージェントを終了しますか?",
+			"runningWork.agentsAndTerminal": "{0} 個のエージェントと 1 個のターミナルを終了しますか?",
+			"runningWork.agentsAndTerminals": "{0} 個のエージェントと {1} 個のターミナルを終了しますか?"
+		},
+		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
+			"agentIcon.antigravity": "Antigravity を実行しているターミナルのアイコン。",
+			"agentIcon.claude": "Claude Code を実行しているターミナルのアイコン。",
+			"agentIcon.codex": "Codex を実行しているターミナルのアイコン。",
+			"agentIcon.grok": "Grok Build を実行しているターミナルのアイコン。",
+			"agentIcon.muse": "Muse Code を実行しているターミナルのアイコン。"
+		},
+		"vs/workbench/contrib/webview/browser/webviewFindAccessibilityHelp": {
+			"webview.importantDesc": "一部の Web ビューは、{0} の検索機能が使用する前にキーボード入力を処理します。Enter キーや Shift+Enter キーで一致項目を移動できない場合は、Web ビューがこれらのキーを処理している可能性があります。まず Web ビューのコンテンツをクリックするか Tab キーで移動して、Web ビューにフォーカスがあることを確認してから、再度検索を開き、もう一度移動を試してください。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution": {
+			"minWelcomeDescription": "{0} の使用を開始するためのチュートリアルを開きます。",
+			"workbench.startupEditor.welcomePage": "ウェルカム ページを開き、{0} と拡張機能を使い始めるのに役立つコンテンツを表示します。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedExtensionPoint": {
+			"walkthroughs.steps.completionEvents.onCommand": "指定したコマンドが {0} のいずれかの場所で実行されたときに、ステップをチェック済みにします。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent": {
+			"gettingStarted.commandPalette.description.interpolated": "マウスを使わずにコマンドを実行して、{1} のあらゆるタスクを実行します。\n{0}",
+			"gettingStarted.commandPaletteAccessibility.description.interpolated": "マウスを使わずにコマンドを実行して、{1} のあらゆるタスクを実行します。\n{0}",
+			"gettingStarted.extensions.description.interpolated": "拡張機能は {1} を強化します。生産性を上げる便利なコツから、標準機能の拡張、まったく新しい機能の追加まで、多岐にわたります。\n{0}",
+			"gettingStarted.settingsAndSync.description.interpolated": "{1} のあらゆる側面をカスタマイズし、カスタマイズ内容をデバイス間で [同期](command:workbench.userDataSync.actions.turnOn) できます。\n{0}",
+			"gettingStarted.setup.title": "{0} の使用を開始する",
+			"gettingStarted.setup.walkthroughPageTitle": "{0} のセットアップ",
+			"gettingStarted.setupAccessibility.description": "{0} をより使いやすくするツールとショートカットについて説明します。チュートリアル内からは実行できない操作もあります。",
+			"gettingStarted.setupAccessibility.walkthroughPageTitle": "{0} のアクセシビリティのセットアップ",
+			"gettingStarted.videoTutorial.description.interpolated": "{1} の主要な機能を紹介する、短く実践的なビデオ チュートリアル シリーズの第 1 回をご覧ください。\n{0}"
+		},
+		"vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA": {
+			"onboarding.personalize.tip.suffix": " で、{0} のすべてのコマンドにアクセスできます。",
+			"onboarding.signIn.heroTitle": "{0} へようこそ"
+		},
+		"vs/workbench/contrib/workspace/browser/workspace.contribution": {
+			"workspace.trust.description": "{0} 内でワークスペースの信頼を有効にするかどうかを制御します。",
+			"workspace.trust.emptyWindow.description": "空のウィンドウを {1} 内で既定で信頼するかどうかを制御します。`#{0}#` と共に使用すると、空のウィンドウでプロンプトを表示せずに、{1} のすべての機能を有効にすることができます。"
+		},
+		"vs/workbench/contrib/worktrees/browser/worktrees": {
+			"worktrees.agentElsewhere": "別のウィンドウのエージェントが '{0}' で作業しているため ({1})、削除されませんでした。先にそのウィンドウでエージェントを停止してください。",
+			"worktrees.agentInside": "この削除では停止しないエージェントが '{0}' で作業しているため ({1})、削除されませんでした。先にそのエージェントを停止してください。",
+			"worktrees.alreadyOut": "{0} ワークスペースからは削除され、実行中のターミナルは終了しました。",
+			"worktrees.anotherToolsWorktree": "'{0}' は Facade の外部で作成された作業ツリーです。代わりに、そのリポジトリのメイン チェックアウトから作業ツリーを作成してください。",
+			"worktrees.badName": "'{0}' は Windows で有効なフォルダー名ではありません。",
+			"worktrees.badSetup": ".facade/worktrees.json を解析できませんでした: setup キーにはコマンド文字列の配列を指定する必要があります。コマンドは実行されませんでした。",
+			"worktrees.beingDeleted": "作業ツリーを削除しています。",
+			"worktrees.branchCheckedOut": "ブランチ '{0}' は既に '{1}' でチェックアウトされています。",
+			"worktrees.branchExists": "'{0}' という名前のブランチは既に存在します。別の名前を選択してください。",
+			"worktrees.branchKeptQuoted": "ブランチ '{0}' は保持されます。",
+			"worktrees.changedMeanwhile": "削除中に '{0}' で新しい変更が発生し、削除すると失われるため、削除されませんでした: {1}。",
+			"worktrees.changedSinceCheck": "確認の後で作業ツリー内のファイルが変更されました。変更を確認して、もう一度お試しください。",
+			"worktrees.checkFailed": "削除前に作業ツリーの状態を確認できませんでした: {0}",
+			"worktrees.copyFailed": ".worktreeinclude で指定された {0} 個のファイルを作業ツリーにコピーできませんでした: {1}",
+			"worktrees.couldNotLeave": "'{0}' に切り替えられなかったため、作業ツリー '{1}' は削除されませんでした。",
+			"worktrees.createFailed": "作業ツリーを作成できませんでした: {0}",
+			"worktrees.createdForAgent": "作業ツリーは '{0}' に作成されましたが、{1} に失敗しました: {2}",
+			"worktrees.createdNotOpened": "作業ツリーは '{0}' に作成されましたが、{1} に失敗しました: {2}",
+			"worktrees.creating": "作業ツリー '{0}' を作成しています...",
+			"worktrees.deleteButton": "削除(&&D)",
+			"worktrees.deleteDiscardButton": "削除して変更を破棄(&&D)",
+			"worktrees.deleteFailed": "作業ツリーを削除できませんでした: {0}",
+			"worktrees.deleteQuestion": "作業ツリー '{0}' を削除しますか?",
+			"worktrees.deleteUnknown": "作業ツリー '{0}' が削除されたかどうかを確認できません。ワークスペース バーには現在の Git の状態が反映されています。",
+			"worktrees.deleteWorktree": "作業ツリーを削除...",
+			"worktrees.deleting": "作業ツリー '{0}' を削除しています...",
+			"worktrees.folder": "パス: {0}",
+			"worktrees.folderAndSubmodulesDeleted": "作業ツリーのフォルダーが、サブモジュールとプッシュされていないコミットを含めて削除されます。この操作は元に戻せません。",
+			"worktrees.folderDeleted": "作業ツリーのフォルダーがディスクから削除されます。この操作は元に戻せません。",
+			"worktrees.goThere": "作業ツリーに切り替え",
+			"worktrees.hookFailed": "作業ツリーは作成されましたが、Git フックが失敗しました: {0}",
+			"worktrees.ignored": "Git で無視されている次のファイルが削除されます:",
+			"worktrees.ignoredFile": "{0} (Git で無視)",
+			"worktrees.inheritedEnvironment": "このウィンドウは GIT_DIR、GIT_WORK_TREE、または GIT_INDEX_FILE が設定された状態で起動されたため、Git が別のリポジトリにリダイレクトされています。新しいウィンドウでフォルダーを開いてください。",
+			"worktrees.initialBranch": "初期コミットはブランチ '{0}' にあります。新しい作業ツリーには別のブランチ名を選択してください。",
+			"worktrees.initializeAndCreate": "初期化して作成",
+			"worktrees.inspectFailed": "Git がリポジトリ '{0}' を読み取れませんでした: {1}",
+			"worktrees.inspecting": "リポジトリ '{0}' を読み取っています...",
+			"worktrees.invalidBranchName": "'{0}' は有効なブランチ名ではありません。",
+			"worktrees.kept": "作業ツリー '{0}' はディスクから削除されませんでした。ワークスペースからは削除されています。行をクリックすると、もう一度追加できます。",
+			"worktrees.keptOutside": "作業ツリー '{0}' はディスクから削除されませんでした。",
+			"worktrees.leftover": "作業ツリーは Git から削除されましたが、フォルダーを削除できませんでした: {0}。{1}",
+			"worktrees.leftoverRefused": "フォルダーを削除できませんでした: {0}",
+			"worktrees.leftoverUnknown": "'{0}' は、このウィンドウでの削除で残された作業ツリーのフォルダーとして認識されなかったため、削除されませんでした。必要に応じて手動で削除してください。",
+			"worktrees.locked": "作業ツリー '{0}' はロックされています。削除できるようにするには、'git worktree unlock' を実行してください。",
+			"worktrees.lockedBecause": "作業ツリー '{0}' はロックされています: {1}。削除できるようにするには、'git worktree unlock' を実行してください。",
+			"worktrees.loses": "コミットされていない次の変更が失われます:",
+			"worktrees.mainNotDeleted": "{0} はリポジトリのメイン チェックアウトであり、削除されることはありません。",
+			"worktrees.namedMore": "{0} ほか {1} 個",
+			"worktrees.newWorktree": "新しい作業ツリー...",
+			"worktrees.nextSentence": "{0}{1}",
+			"worktrees.noAnswer": "Git プロセスが応答しませんでした。",
+			"worktrees.noBaseUnasked": "リポジトリ '{0}' にはコミットがありません。先に初期コミットを作成してください。",
+			"worktrees.noBranch": "作業ツリーを作成するには、ブランチ名が必要です。",
+			"worktrees.noGit": "作業ツリーを作成する Git コマンドを実行できませんでした: {0}",
+			"worktrees.noGitDelete": "作業ツリーを削除する Git コマンドを実行できませんでした: {0}",
+			"worktrees.noGitExtension": "作業ツリーの操作には組み込みの Git 拡張機能が必要ですが、このウィンドウではアクティブになっていません。",
+			"worktrees.noIdentity": "Git の作成者 ID が構成されていません。'{2}' で '{0}' と '{1}' を設定してから、もう一度お試しください。",
+			"worktrees.notARepository": "'{0}' には、有効な Git リポジトリとして読み取れない .git フォルダーがあります。",
+			"worktrees.notDeletedNotFacades": "{0} は Facade の外部で作成された作業ツリーです。Facade がこれを削除することはありません。",
+			"worktrees.notOnDisk": "'{0}' はディスク上の有効なフォルダーではありません。",
+			"worktrees.notOut": "作業ツリー '{0}' をワークスペースから削除できなかったため、作業ツリーは削除されていません。",
+			"worktrees.notRepositoryUnasked": "フォルダー '{0}' は Git リポジトリではありません。先にリポジトリを初期化してください。",
+			"worktrees.notWorktree": "'{0}' は、このワークスペースで認識されている作業ツリーではありません。",
+			"worktrees.openWorktree": "作業ツリーを開く",
+			"worktrees.outOfWorkspace": "ワークスペースからは削除されました。",
+			"worktrees.pathExists": "'{0}' には既にファイルまたはフォルダーが存在します。",
+			"worktrees.prepare.folderEmpty": "このフォルダーは Git リポジトリではありません。続行すると、リポジトリを初期化し ('git init')、空の初期コミットを作成します。",
+			"worktrees.prepare.folderMany": "このフォルダーは Git リポジトリではありません。続行すると、リポジトリを初期化し ('git init')、{0} 個のファイルを含む初期コミットを作成します。",
+			"worktrees.prepare.folderOne": "このフォルダーは Git リポジトリではありません。続行すると、リポジトリを初期化し ('git init')、1 個のファイルを含む初期コミットを作成します。",
+			"worktrees.prepare.insideEmpty": "このフォルダーは Git リポジトリ '{0}' の中にありますが、そのルートではありません。続行すると、ここに別のリポジトリを初期化し ('git init')、空の初期コミットを作成します。",
+			"worktrees.prepare.insideMany": "このフォルダーは Git リポジトリ '{0}' の中にありますが、そのルートではありません。続行すると、ここに別のリポジトリを初期化し ('git init')、{1} 個のファイルを含む初期コミットを作成します。",
+			"worktrees.prepare.insideOne": "このフォルダーは Git リポジトリ '{0}' の中にありますが、そのルートではありません。続行すると、ここに別のリポジトリを初期化し ('git init')、1 個のファイルを含む初期コミットを作成します。",
+			"worktrees.prepare.unbornEmpty": "このリポジトリにはまだコミットがありません。続行すると、空の初期コミットを作成します。",
+			"worktrees.prepare.unbornMany": "このリポジトリにはまだコミットがありません。続行すると、{0} 個のファイルを含む初期コミットを作成します。",
+			"worktrees.prepare.unbornOne": "このリポジトリにはまだコミットがありません。続行すると、1 個のファイルを含む初期コミットを作成します。",
+			"worktrees.prepareFailed": "'{0}' の初期コミットを作成できませんでした: {1}",
+			"worktrees.preparing": "'{0}' に初期コミットを作成しています...",
+			"worktrees.restricted": "作業ツリーには Git の操作が必要ですが、制限モードでは無効になっています。",
+			"worktrees.restrictedUnasked": "ワークスペースは制限モードです。Git の操作を実行するには、ワークスペースを信頼してください。",
+			"worktrees.retry": "再試行",
+			"worktrees.revealInLinux": "1 つ上のフォルダーを開く",
+			"worktrees.revealInMac": "Finder で表示する",
+			"worktrees.revealInWindows": "エクスプローラーで表示する",
+			"worktrees.runSetupAgain": "セットアップを再実行",
+			"worktrees.setupTerminal": "作業ツリーのセットアップ",
+			"worktrees.setupUnfinished": "作業ツリー '{0}' のセットアップ スクリプトは、ウィンドウの再読み込みまたは終了によって中断された可能性があります。再試行する前に、ターミナルの出力を確認してください。",
+			"worktrees.shellEnded": "このコマンドの後でシェルが終了したため、後続のコマンドは実行されませんでした。",
+			"worktrees.sinceAsked": "この確認を開いた後にほかのファイルも変更されており、それらも失われます。",
+			"worktrees.startingGit": "Git を起動しています...",
+			"worktrees.startsAt": "'{0}' の HEAD から作成されます。",
+			"worktrees.startsAtFirst": "初期コミットから作成されます。",
+			"worktrees.stepOpen": "作業ツリーを開く処理",
+			"worktrees.stepRecord": "Git 作業ツリーのメタデータの読み取り",
+			"worktrees.stillStopping": "次のエージェントがまだ停止していないため、作業ツリー '{0}' は削除されませんでした: {1}。停止したら、もう一度削除してください。",
+			"worktrees.stillStoppingOut": "次のエージェントがまだ停止していないため、作業ツリー '{0}' は削除されませんでした: {1}。ワークスペースからは削除されました。停止したら、もう一度削除してください。",
+			"worktrees.submodulesLost": "サブモジュール (プッシュされていないコミットを含む)",
+			"worktrees.submodulesMeanwhile": "削除中に '{0}' にサブモジュールが追加されたため、削除されませんでした。削除すると、サブモジュールのプッシュされていないコミットが失われます。",
+			"worktrees.submodulesSince": "サブモジュールとプッシュされていないコミットも削除されます。",
+			"worktrees.superseded": "開く処理が完了する前にフォルダーの切り替えが要求されました",
+			"worktrees.terminalsEnded": "この作業ツリーに関連付けられたターミナルを閉じ、アクティブなプロセスを終了しました: {0}。",
+			"worktrees.terminalsTerminated": "{0} 実行中のターミナルは終了しました。",
+			"worktrees.trustFolder": "フォルダーを信頼して続行(&&T)",
+			"worktrees.trustWorkspace": "ワークスペースを信頼して続行(&&T)",
+			"worktrees.unbornBranch": "リポジトリ '{0}' の現在のブランチにはコミットがありません。先にコミットを作成するか、ブランチを切り替えてください。",
+			"worktrees.unsafeRepository": "'{0}' は別のユーザーが所有しているため、Git で開けません。'{1}' を実行して安全とマークしてから、もう一度お試しください。",
+			"worktrees.unsavedFile": "{0} (未保存)",
+			"worktrees.untrusted": "作業ツリーは親リポジトリ '{0}' の信頼を継承します。先に親リポジトリを信頼してください。",
+			"worktrees.untrustedUnasked": "リポジトリ '{0}' は信頼されていません。作業ツリーを作成する前に、リポジトリを信頼してください。",
+			"worktrees.wouldLose": "'{0}' には、削除すると失われる変更があります: {1}。何も削除されていません。",
+			"worktrees.wouldLoseSubmodules": "'{0}' にはサブモジュールがあります。削除すると、サブモジュールのプッシュされていないコミットが失われます。何も削除されていません。"
+		},
+		"vs/workbench/electron-browser/actions/windowActions": {
+			"openDefaultWorkspace": "既定のワークスペースを開く"
+		},
+		"vs/workbench/electron-browser/desktop.contribution": {
+			"argv.disableChromiumSandbox": "Chromium サンドボックスを無効にします。これは、Linux で {0} を管理者特権で実行する場合や、Windows で Applocker の下で実行する場合に便利です。",
+			"argv.useInMemorySecretStorage": "OS の資格情報ストアを使用する代わりに、メモリ内ストアがシークレット ストレージに使用されるようにします。これは、{0} の拡張機能テストを実行する場合、または資格情報ストアで問題が発生している場合によく使用されます。",
+			"miOpenDefaultWorkspace": "既定のワークスペースを開く(&&D)"
+		},
+		"vs/workbench/electron-browser/window": {
+			"notOpenedWithoutFolder": "ウィンドウがそれらを含むフォルダーに切り替えられなかったため、{0} を開けませんでした。"
+		},
+		"vs/workbench/services/dialogs/electron-browser/fileDialogService": {
+			"openFileOrFolder.title": "ファイルまたはフォルダーを開く",
+			"openFolder.title": "フォルダーを開く"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryAccountService": {
+			"marketplace.pickAccount": "拡張機能マーケットプレースで使用するアカウントを選択してください",
+			"marketplace.signInDifferentAccount": "別のアカウントでサインイン…"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryManifestService": {
+			"extensionGalleryManifestService.configurationChange": "拡張機能マーケットプレースの構成が変更されました。変更を適用するには再起動してください。"
+		},
+		"vs/workbench/services/extensions/common/extensionsRegistry": {
+			"vscode.extension.capabilities.agentsWindow": "拡張機能をエージェント ウィンドウで有効にするかどうかを宣言します。`agentsWindowActivation` API 提案と、試験的なエージェント ウィンドウ機能の設定が必要です。",
+			"vscode.extension.capabilities.agentsWindow.supported": "拡張機能がエージェント ウィンドウでの実行をサポートするかどうかを宣言します。このプロパティを有効にするには、拡張機能で `agentsWindowActivation` API 提案を有効にし、`extensions.experimental.enableAgentsWindowCapability` 設定を有効にする必要があります。"
+		},
+		"vs/workbench/services/extensions/electron-browser/nativeExtensionService": {
+			"relaunch": "{0} を再起動"
+		},
+		"vs/workbench/services/folderScope/browser/folderScope.contribution": {
+			"allFoldersIcon": "ビューの範囲を現在のフォルダーとワークスペース全体で切り替えるためのアイコン。",
+			"facadeCategory": "ワークスペース",
+			"toggleFolderScope": "すべてのフォルダーを表示",
+			"toggleFolderScope.toggled": "すべてのフォルダーを表示中"
+		},
+		"vs/workbench/services/folderScope/common/folderScope": {
+			"facadeFolderScope": "ビューの範囲が現在のフォルダーかワークスペース全体か",
+			"folderScope.searchingAll": "すべてのフォルダーを検索しています。現在のフォルダーのみを検索するには、クリックします。",
+			"folderScope.searchingFolder": "現在のフォルダーを検索しています。ワークスペースのすべてのフォルダーを検索するには、クリックします。"
+		},
+		"vs/workbench/services/userDataProfile/browser/userDataProfileManagement": {
+			"reload message": "プロファイルを切り替えるには、{0} の再読み込みが必要です。"
+		}
+	},
+	"vscode.configuration-editing": {
+		"bundle": {
+			"The name of the folder opened in {0} without any slashes (/)": "{0} で開いているフォルダーの名前 (スラッシュ (/) なし)",
+			"The path of the folder opened in {0}": "{0} で開いているフォルダーのパス",
+			"e.g. {0}": "例: {0}"
+		}
+	},
+	"vscode.css-language-features": {
+		"package": {
+			"css.completion.triggerPropertyValueCompletion.desc": "既定では、Facade Code は CSS プロパティの選択後にプロパティ値の補完をトリガーします。この動作を無効にするには、この設定を使用します。",
+			"css.trace.server.desc": "Facade Code と CSS 言語サーバー間の通信をトレースします。",
+			"less.completion.triggerPropertyValueCompletion.desc": "既定では、Facade Code は CSS プロパティの選択後にプロパティ値の補完をトリガーします。この動作を無効にするには、この設定を使用します。",
+			"scss.completion.triggerPropertyValueCompletion.desc": "既定では、Facade Code は CSS プロパティの選択後にプロパティ値の補完をトリガーします。この動作を無効にするには、この設定を使用します。"
+		}
+	},
+	"vscode.facade-agents": {
+		"bundle": {
+			"1 message, at {0}": "メッセージ 1 件、{0}",
+			"@{0} #a{1} · last screen": "@{0} #a{1} · 最後の画面",
+			"Agent management for this workspace has been transferred to another Facade window.": "このワークスペースのエージェント管理は、別の Facade ウィンドウに移りました。",
+			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "このワークスペースのエージェントは別のウィンドウで管理されています。チャット ルームはそのウィンドウで削除してください。",
+			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "このワークスペースのエージェントは別のウィンドウで管理されています。チャット ルームはそのウィンドウで開いてください。",
+			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "このワークスペースで、あなたとエージェントの間で交わされたすべてのメッセージが削除されます。この操作は元に戻せません。",
+			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "エージェント メニューまたは [エージェントを起動] から起動したエージェントでは、CLI 自身の質問と更新はそのまま残り、承認は YOLO の設定に従います。ほかのエージェントやスクリプトが start_agent で起動したエージェントは、誰も見ていない可能性があるため、起動構成の unattended 部分を使って実行されます (そのグループが起動構成のグループを置き換え、環境と設定は起動構成の上に適用されます)。これにより、CLI が許す範囲で、応答を待つものはなくなります。whenYouStartIt と throughStartAgent に、それぞれに適用される内容が表示されます。",
+			"Another Facade window manages this workspace's agents. Start agents in that window.": "このワークスペースのエージェントは別の Facade ウィンドウで管理されています。エージェントはそのウィンドウで起動してください。",
+			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "このワークスペースのエージェントは別の Facade ウィンドウで管理されています。そのウィンドウを使用してください。ここで管理するには、そのウィンドウを閉じてから、このウィンドウを再読み込みします。",
+			"Are you sure you want to delete all chat rooms in this workspace?": "このワークスペースのすべてのチャット ルームを削除しますか?",
+			"Configure Agents": "エージェントの構成",
+			"Could not delete all chat rooms: {0}": "すべてのチャット ルームを削除できませんでした: {0}",
+			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "既に実行中だったエージェントに再接続できませんでした。それらのエージェントは Facade ツールを使用できませんが、これから起動するエージェントは正常に動作します。",
+			"Delete": "削除",
+			"Each chat room holds every message of an agent you started and of the agents it started": "各チャット ルームには、あなたが起動したエージェントと、そのエージェントが起動したエージェントのすべてのメッセージが保存されます",
+			"Facade Agents": "Facade エージェント",
+			"Facade Agents could not start in this window. See the Facade Agents output for details.": "このウィンドウで Facade エージェントを開始できませんでした。詳細については、Facade エージェントの出力を参照してください。",
+			"Facade Agents could not start: {0}": "Facade エージェントを開始できませんでした: {0}",
+			"Facade Agents stopped in this window.": "このウィンドウで Facade エージェントが停止しました。",
+			"Facade cannot read this workspace's agent record while one of its agents may still be running. See the Facade Agents output for details.": "Facade はこのワークスペースのエージェント記録を読み取れません。また、そのエージェントのいずれかがまだ実行中の可能性があります。詳細については、Facade エージェントの出力を参照してください。",
+			"Facade cannot read this workspace's agent record: {0}": "Facade はこのワークスペースのエージェント記録を読み取れません: {0}",
+			"Facade could not confirm that {0} started: {1}.": "Facade は {0} が起動したことを確認できませんでした: {1}。",
+			"Facade could not read this workspace's agent record ({0}), so it started a new one. No action is needed: agents start as before, and their numbering continues. Their history is in {1}; the unreadable record is kept as {2}. Delete it once you no longer need it.": "Facade はこのワークスペースのエージェント記録を読み取れなかったため ({0})、新しい記録を開始しました。操作は必要ありません: エージェントはこれまでどおり起動し、番号も引き続き付けられます。履歴は {1} にあり、読み取れなかった記録は {2} として保持されています。不要になったら削除してください。",
+			"Facade could not read {0}, which tells running agents how to reach this window. Agents that were already running can no longer use Facade tools; agents started from now on can.": "Facade は、実行中のエージェントにこのウィンドウへの接続方法を伝える {0} を読み取れませんでした。既に実行中だったエージェントは Facade ツールを使用できなくなりましたが、これから起動するエージェントは使用できます。",
+			"Facade: {0}": "Facade: {0}",
+			"Message #m{0} is no longer available because the chat rooms were deleted.": "チャット ルームが削除されたため、メッセージ #m{0} は利用できなくなりました。",
+			"No agent has been started in this workspace yet.": "このワークスペースでは、まだエージェントが起動されていません。",
+			"No agents are available: none of the built-in agent CLIs were found on this machine, and no custom agents are configured.": "使用できるエージェントがありません: このマシンには組み込みのエージェント CLI が見つからず、カスタム エージェントも構成されていません。",
+			"No agents are available: the built-in agent CLIs found on this machine are disabled in your settings ({0}), and no custom agents are configured.": "使用できるエージェントがありません: このマシンで見つかった組み込みのエージェント CLI は設定で無効になっており ({0})、カスタム エージェントも構成されていません。",
+			"No chat rooms have messages yet. A chat room is created when an agent is started.": "メッセージのあるチャット ルームはまだありません。チャット ルームはエージェントの起動時に作成されます。",
+			"Open Chat Room": "チャット ルームを開く",
+			"Open a local folder to start an agent.": "エージェントを起動するには、ローカル フォルダーを開いてください。",
+			"Select an agent to start": "起動するエージェントを選択してください",
+			"Show": "表示",
+			"Start Agent": "エージェントを起動",
+			"Terminal screen content upon exit:": "終了時のターミナル画面の内容:",
+			"The agent could not start: {0}": "エージェントを起動できませんでした: {0}",
+			"The agent framework is off: the warmUp, connect, and messages groups do not apply, and nothing of Facade's is added to a launch.": "エージェント フレームワークはオフです: warmUp、connect、messages の各グループは適用されず、Facade のものは起動構成に何も追加されません。",
+			"The agent framework is on: the warmUp, connect, and messages groups apply, and Facade tools, skills, and files are added to each launch.": "エージェント フレームワークはオンです: warmUp、connect、messages の各グループが適用され、Facade のツール、スキル、ファイルが各起動構成に追加されます。",
+			"The last full-screen frame rendered before leaving full screen:": "全画面表示を終了する前に最後にレンダリングされた全画面のフレーム:",
+			"This document only shows the launch. To change it, set what you want to change in your settings. An agent with wrongSettings does not start until they are fixed; cannotStart lists anything else that would prevent its start here.": "このドキュメントは起動構成を表示するだけです。変更するには、変更したい内容を設定で指定してください。wrongSettings があるエージェントは、それが修正されるまで起動しません。cannotStart には、ここでの起動を妨げるその他の要因が表示されます。",
+			"What Facade starts each agent with now, for an agent in {0}: the program a terminal there runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "{0} のエージェントについて、Facade が現在各エージェントを起動する内容: そこでターミナルが実行するプログラムと、その起動構成です。起動構成は、Facade の既定値に facade.agents の設定を適用したものです。",
+			"What Facade starts each agent with now: the program it runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "Facade が現在各エージェントを起動する内容: 実行するプログラムと、その起動構成です。起動構成は、Facade の既定値に facade.agents の設定を適用したものです。",
+			"YOLO is off: each agent gets its yoloOff arguments, with its sandbox on where it has one and Facade tools exempted from approval where its CLI allows it. facadeTools and approvalsWithYoloOff show, for each agent, what is asked and what is denied.": "YOLO はオフです: 各エージェントには yoloOff 引数が渡されます。サンドボックスがあるエージェントではサンドボックスがオンになり、CLI が許す場合は Facade ツールが承認の対象外になります。facadeTools と approvalsWithYoloOff には、エージェントごとに、何が確認され、何が拒否されるかが表示されます。",
+			"YOLO is on: each agent gets its yoloOn arguments, with its sandbox off and nothing asked. Turning off facade.agents.yolo applies to agents started afterward.": "YOLO はオンです: 各エージェントには yoloOn 引数が渡され、サンドボックスはオフになり、何も確認されません。facade.agents.yolo をオフにすると、その後に起動するエージェントに適用されます。",
+			"YOLO: {0}. No agent starts until this is fixed.": "YOLO: {0}。これが修正されるまで、エージェントは起動しません。",
+			"anything that would ask is denied without asking": "確認が必要な操作は、確認せずに拒否されます",
+			"as set by your launch's questions group": "起動構成の questions グループの設定どおり",
+			"as set by your launch's yoloOff group": "起動構成の yoloOff グループの設定どおり",
+			"as set by your launch's {0} and {1} groups: Facade's defaults exempt its server from approval, and you changed them": "起動構成の {0} グループと {1} グループの設定どおり: Facade の既定値では Facade のサーバーは承認の対象外ですが、あなたが変更しています",
+			"as set by your launch's {0} group: Facade's default exempts its server from approval, and you changed it": "起動構成の {0} グループの設定どおり: Facade の既定値では Facade のサーバーは承認の対象外ですが、あなたが変更しています",
+			"asks you, as its CLI does": "CLI の通常の動作どおり、あなたに確認します",
+			"cannot be granted: {0}": "付与できません: {0}",
+			"custom": "カスタム",
+			"denied: {0}": "拒否: {0}",
+			"edits in its folder are allowed without asking; anything else asks you, as its CLI does": "フォルダー内の編集は確認なしで許可されます。それ以外は、CLI の通常の動作どおり、あなたに確認します",
+			"edits in its folder are allowed without asking; anything else that would ask is denied without asking": "フォルダー内の編集は確認なしで許可されます。それ以外で確認が必要な操作は、確認せずに拒否されます",
+			"kept: it can show a question for you to answer, as it does outside Facade": "保持: Facade の外部と同様に、あなたが答える質問を表示できます",
+			"kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question": "保持: どの起動構成でも質問ツールを削除できないため、起動時の指示で Facade メッセージを通じて質問するよう伝えます。ツール名を指定して求められた場合は、引き続き質問を表示できます",
+			"kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer": "保持: 起動構成で questions グループが空になっているため、誰かが回答を選ぶまで待機する質問を表示できます",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; it has no sandbox": "確認なし: Facade のサーバーだけを承認の対象外にできないため、YOLO がオフでも何も確認しません。サンドボックスはありません",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is as your launch's groups set it": "確認なし: Facade のサーバーだけを承認の対象外にできないため、YOLO がオフでも何も確認しません。サンドボックスは起動構成のグループの設定どおりです",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is off, as your launch sets it": "確認なし: Facade のサーバーだけを承認の対象外にできないため、YOLO がオフでも何も確認しません。起動構成の設定どおり、サンドボックスはオフです",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox stays on": "確認なし: Facade のサーバーだけを承認の対象外にできないため、YOLO がオフでも何も確認しません。サンドボックスはオンのままです",
+			"never asked: its launch exempts only Facade's server from approval": "確認なし: 起動構成で Facade のサーバーだけが承認の対象外になっています",
+			"none: the CLI asks whether you trust the folder": "なし: フォルダーを信頼するかどうかを CLI が確認します",
+			"not found: {0}": "見つかりません: {0}",
+			"not yet": "まだありません",
+			"nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off": "確認なし、拒否なし: Facade ツールだけを承認の対象外にできないため、承認はオフです",
+			"permanently: Facade never removes it": "永続: Facade が削除することはありません",
+			"removed by its launch's questions group: it asks through Facade messages": "起動構成の questions グループにより削除: Facade メッセージを通じて質問します",
+			"task: argument - its task notice is passed as an argument; typed - its task notice is typed into its terminal once it connects; none - it takes no task.": "task: argument - タスクの通知が引数として渡されます。typed - 接続後にタスクの通知がターミナルに入力されます。none - タスクを受け取りません。",
+			"trust: a file entry is merged in as if you had answered the CLI yourself, and it stays: Facade never removes it. Arguments trust the folder for that launch only.": "trust: あなたが自分で CLI に回答したかのようにファイルのエントリがマージされ、そのまま残ります: Facade が削除することはありません。引数の場合は、その起動に限りフォルダーを信頼します。",
+			"with YOLO off, none turned off: this folder's .mcp.json has no server that you have not approved for its project": "YOLO がオフの場合、オフになるものはありません: このフォルダーの .mcp.json には、そのプロジェクトで未承認のサーバーはありません",
+			"with YOLO off, the servers in its folder's .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them": "YOLO がオフの場合、フォルダーの .mcp.json にあるサーバーのうち、そのプロジェクトで承認していないものは、確認のために止まらないよう、この実行ではオフになります",
+			"with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: {0}": "YOLO がオフの場合、このプロジェクトで承認していないため、確認のために止まらないよう、この実行ではオフになります: {0}",
+			"{0} (ended)": "{0} (終了)",
+			"{0} ended unexpectedly: {1}.": "{0} が予期せず終了しました: {1}。",
+			"{0} exited: {1}.": "{0} が終了しました: {1}。",
+			"{0} failed to start: {1}.": "{0} を起動できませんでした: {1}。",
+			"{0} is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.": "{0} は開いていますが Facade に接続していないため、まだ Facade ツールを使用できません。起動に時間がかかっているか、ターミナルで応答を待っている可能性があります。",
+			"{0} messages, latest at {1}": "メッセージ {0} 件、最新 {1}",
+			"{0} of your agents ended. {1}": "エージェントのうち {0} 個が終了しました。{1}",
+			"{0} sent you a message: {1}": "{0} からメッセージが届きました: {1}",
+			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "ウィンドウを閉じている間に、Facade が自身の部分を追加した後で {0} が変更されました。以前の内容は {1} に保持されています。",
+			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "エージェントが使用している間に {0} が変更され、Facade の部分が含まれなくなったため、そのままにしました。以前の内容は {1} に保持されています。",
+			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "そこで別のエージェントが起動したとき、{0} が見つかりませんでした。Facade が変更する前の内容は {1} に保持されています。",
+			"{0} was missing when its agents ended. Its content from before Facade's changes is kept at {1}.": "エージェントが終了したとき、{0} が見つかりませんでした。Facade が変更する前の内容は {1} に保持されています。",
+			"{0} was stopped by {1}.": "{0} は {1} によって停止されました。",
+			"{0} was stopped: {1}.": "{0} は停止されました: {1}。",
+			"{0}, saved when its terminal closed. How it ended: {1}.": "{0}。ターミナルが閉じたときに保存されました。終了理由: {1}。",
+			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: 最後の画面のファイル '{1}' を読み取れませんでした: {2}。終了理由: {3}。",
+			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: 最後の画面は保存されていません。終了理由: {1}。最後の画面は、ウィンドウが開いている間にエージェントのターミナルが閉じた場合にのみ保存されます。",
+			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO がオフの場合、{1} が Facade ツールを拒否します",
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}"
+		},
+		"package": {
+			"command.category": "エージェント",
+			"command.deleteChatRooms": "チャット ルームを削除...",
+			"command.openChatRoom": "チャット ルームを開く...",
+			"command.showLaunch": "エージェントの起動構成を表示",
+			"command.showLog": "エージェントのログを表示",
+			"command.startAgent": "エージェントを起動...",
+			"config.antigravity.enabled": "エージェント メニューとエージェントに Antigravity を提供するかどうかを制御します。",
+			"config.antigravity.launch": "詳細設定: Facade が Antigravity を起動する方法。変更したい部分だけを設定します: settings.json で波かっこ内の候補から部分を選ぶと Facade の既定値が入力されるので、それを編集します。`null` は Facade の部分を削除します。各エージェントが現在どのように起動されるかは、**エージェント: エージェントの起動構成を表示** で確認できます。",
+			"config.antigravity.path": "実行する Antigravity プログラム。PATH の `agy` を使用するには、空のままにします。",
+			"config.antigravity.title": "Antigravity",
+			"config.claude.enabled": "エージェント メニューとエージェントに Claude Code を提供するかどうかを制御します。",
+			"config.claude.launch": "詳細設定: Facade が Claude Code を起動する方法。変更したい部分だけを設定します: settings.json で波かっこ内の候補から部分を選ぶと Facade の既定値が入力されるので、それを編集します。`null` は Facade の部分を削除します。各エージェントが現在どのように起動されるかは、**エージェント: エージェントの起動構成を表示** で確認できます。",
+			"config.claude.launch.settings": "各エージェントの Claude Code 設定。あなた自身の設定にキーごとにマージされます。`null` は Facade の設定を削除します。値の 1 つでも Claude Code が受け付けない型の場合、Claude Code はすべての値を無視します。",
+			"config.claude.path": "実行する Claude Code プログラム。PATH の `claude` を使用するには、空のままにします。",
+			"config.claude.title": "Claude Code",
+			"config.codex.enabled": "エージェント メニューとエージェントに Codex を提供するかどうかを制御します。",
+			"config.codex.launch": "詳細設定: Facade が Codex を起動する方法。変更したい部分だけを設定します: settings.json で波かっこ内の候補から部分を選ぶと Facade の既定値が入力されるので、それを編集します。`null` は Facade の部分を削除します。各エージェントが現在どのように起動されるかは、**エージェント: エージェントの起動構成を表示** で確認できます。",
+			"config.codex.path": "実行する Codex プログラム。PATH の `codex` を使用するには、空のままにします。",
+			"config.codex.title": "Codex",
+			"config.custom": "名前ごとに指定する独自のエージェント: `{ \"<name>\": { \"path\": \"...\", \"launch\": { ... } } }`。それぞれ組み込みのエージェントと同様に、専用のターミナルで起動します。起動構成には組み込みのエージェントと同じ部分 (グループごとの引数、環境、信頼、遅延) がありますが、Facade はどれも入力しません: 省略したグループは何も追加しません。引数では、`${mcpConfig}` は Facade の MCP サーバーを `mcpServers` 形式で保持するファイルを指し、`connect` グループで使用します。`${folder}`、`${repository}`、`${home}`、`${messagesDir}`、`${screensDir}`、`${model}`、`${effort}`、`${task}`、`${opening}` は、組み込みのエージェントと同様に入力されます。",
+			"config.custom.launch": "Facade がこのエージェントを起動する方法。組み込みのエージェントの起動構成と同様に、部分ごとに指定します。入力したグループのみが使用されます。",
+			"config.custom.name": "カスタム エージェントの名前は、1 から 40 文字の英小文字、数字、ドット、ダッシュ、アンダースコアで構成し、英字または数字で始める必要があります。組み込みのエージェントの ID (claude、codex、agy、muse) や予約名 (human、you、me、facade、all、everyone、init、kernel) は使用できません。",
+			"config.custom.path": "実行するプログラム: ファイル パス、またはターミナルが使用する PATH 上のコマンド。",
+			"config.custom.title": "カスタム エージェント",
+			"config.enabled": "エージェント フレームワークを有効にするかどうかを制御します。有効にすると、エージェントは Facade ツールを使って、ほかのエージェントを起動、一覧表示、停止できます。無効にしても、エージェントは通常どおり起動、実行、終了しますが、Facade ツールは使用できません。",
+			"config.launch.arguments": "コマンド ライン引数。グループごとに、次の順序で指定します: `warmUp`、`connect`、`quiet`、`questions`、`messages`、`yoloOn`、`yoloOff`、`model`、`effort`、`extra` (独自の引数)、`task`。設定したグループは Facade のものを置き換え、`null` を指定するとそのグループは省略されます。`yoloOn` は YOLO がオンの間のみ、`yoloOff` はオフの間のみ使用されます。`warmUp`、`connect`、`messages` はエージェント フレームワークがオンの間のみ、`model`、`effort`、`task` はエージェントで指定された場合のみ使用されます。Facade は各エージェントについて次の変数を入力します: `${folder}`、`${repository}` (メイン チェックアウト)、`${home}`、`${messagesDir}` と `${screensDir}` (長いメッセージとエージェントの画面の保存先)、`${model}`、`${effort}`、`${task}` (タスクを示す、エージェントの最初の行)、`${opening}` (`start_agent` で起動したエージェントの場合: そのエージェントが誰であるかと、ウォームアップでの指示どおり Facade メッセージを通じて質問すること)、その他。",
+			"config.launch.enterDelay": "エージェントのターミナルに行を入力してから Enter キーを押すまでの遅延をミリ秒単位で制御します。遅延がないと、CLI が高速な入力を貼り付けとして扱う場合があります。",
+			"config.launch.environment": "Facade が各エージェントに設定する環境変数。設定した変数は Facade のものを置き換え、`null` は Facade の変数を削除します。",
+			"config.launch.taskDelay": "エージェントの CLI が Facade に接続してから、タスクを示す最初の行がターミナルに入力されるまでの遅延をミリ秒単位で制御します。この方法でタスクを受け取る CLI にのみ適用されます。",
+			"config.launch.trust": "エージェントが起動するフォルダーとそのリポジトリ全体を Facade が信頼済みにする方法。これにより、CLI がフォルダーを信頼するかどうかを確認して止まることがなくなります:`arguments` はその実行に限り渡され、`merge` は CLI 自身の `file` に書き込まれてそのまま残ります。`null`: Facade は信頼を与えず、CLI がターミナルで確認します。",
+			"config.launch.unattended": "ほかのエージェントやスクリプトによって `start_agent` で起動されたエージェントが、起動構成の代わりに使用するもの。誰も見ていない可能性があっても、応答を待つものがないようにします。その `arguments` グループは起動構成の同名のグループを置き換え、`environment` と `settings` は起動構成の上に適用されます。エージェント メニューから起動したエージェントは、起動構成だけで実行されます。",
+			"config.launch.unattended.arguments": "`start_agent` で起動したエージェントの引数グループ。それぞれ起動構成の同名のグループを置き換えます。設定したグループは Facade のものを置き換え、`null` を指定するとそのエージェントではそのグループが省略されます。",
+			"config.launch.unattended.environment": "`start_agent` で起動したエージェントの環境変数。起動構成の上に適用されます。設定した変数は Facade のものを置き換え、`null` は起動構成のものも含めてその変数を削除します。",
+			"config.launch.unattended.settings": "`start_agent` で起動したエージェントの Claude Code 設定。起動構成の設定にキーごとにマージされます。`null` は起動構成のものも含めてそのキーを削除します。",
+			"config.muse.enabled": "エージェント メニューとエージェントに Muse Code を提供するかどうかを制御します。",
+			"config.muse.launch": "詳細設定: Facade が Muse Code を起動する方法。変更したい部分だけを設定します: settings.json で波かっこ内の候補から部分を選ぶと Facade の既定値が入力されるので、それを編集します。`null` は Facade の部分を削除します。各エージェントが現在どのように起動されるかは、**エージェント: エージェントの起動構成を表示** で確認できます。",
+			"config.muse.path": "実行する Muse Code プログラム。PATH の `muse` を使用するには、空のままにします。",
+			"config.muse.title": "Muse Code",
+			"config.timeout": "詳細設定: Facade が制御できない事象を待つ秒数です。対象は、新しいエージェントの接続、停止したエージェントのプロセスの終了、このウィンドウからエージェントの MCP サーバーへの応答、再読み込み後のターミナルの復元、別のエージェントのターミナルに送ったテキストやキー入力がキューで順番を待って入力されるまでです。タスクやメッセージが取得されない場合に Facade が送信者へ通知するまでの時間も、この秒数で決まります。",
+			"config.title": "エージェント",
+			"config.yolo": "起動するエージェントを YOLO モードで実行するかどうかを制御します。有効にすると、エージェントの CLI はサンドボックスをオフにして実行され、承認を求めることはありません。無効にすると、CLI にサンドボックスがある場合はオンになり、自身のコマンドや編集を実行する前には確認しますが、Facade ツールを呼び出す前に確認することはありません。エージェントは起動時の YOLO モードを維持し、そのエージェントが起動するエージェントにも引き継がれます。",
+			"description": "独自のものを含むコーディング エージェント CLI を、ウィンドウ内のターミナルで実行します。エージェントは MCP サーバーを通じて、互いに起動、一覧表示、停止し、互いやあなたにメッセージを送り、互いのターミナルを読み取ります。",
+			"displayName": "Facade エージェント"
+		}
+	},
+	"vscode.git": {
+		"package": {
+			"config.terminalAuthentication": "統合ターミナルで生成される Git プロセスの認証ハンドラーとして Facade Code を有効にするかどうかを制御します。注意: この設定の変更を反映させるには、ターミナルを再起動する必要があります。",
+			"config.terminalGitEditor": "統合ターミナルで生成される Git プロセスの Git エディターとして Facade Code を有効にするかどうかを制御します。注意: この設定の変更を反映させるには、ターミナルを再起動する必要があります。",
+			"view.workbench.scm.workspaceFolder": "現在開いているフォルダーには Git リポジトリがありません。リポジトリを初期化すると、Git を利用したソース管理機能が有効になります。\n[リポジトリを初期化する](command:git.init)\nFacade Code で Git とソース管理を使用する方法の詳細については、[ドキュメントを参照してください](https://aka.ms/vscode-scm)。"
+		}
+	},
+	"vscode.github": {
+		"package": {
+			"config.gitAuthentication": "Facade Code 内で Git コマンドの自動 GitHub 認証を有効にするかどうかを制御します。"
+		}
+	},
+	"vscode.html-language-features": {
+		"package": {
+			"html.trace.server.desc": "Facade Code と HTML 言語サーバー間の通信をトレースします。"
+		}
+	},
+	"vscode.json-language-features": {
+		"package": {
+			"json.tracing.desc": "Facade Code と JSON 言語サーバー間の通信をトレースします。"
+		}
+	},
+	"vscode.markdown-language-features": {
+		"package": {
+			"markdown.trace.server.desc": "Facade Code と Markdown 言語サーバー間の通信をトレースします。"
+		}
+	},
+	"vscode.media-preview": {
+		"bundle": {
+			"Open file using {0}'s standard text/binary editor?": "{0} の標準テキスト/バイナリ エディターを使用してファイルを開きますか?"
+		}
+	},
+	"vscode.mermaid-markdown-features": {
+		"package": {
+			"config.markdown-mermaid.theme.vscode.description": "現在の Facade Code のカラー テーマから派生した Mermaid テーマ。"
+		}
+	},
+	"vscode.typescript-language-features": {
+		"bundle": {
+			"Please open a folder in {0} to use a TypeScript or JavaScript project": "TypeScript または JavaScript プロジェクトを使用するには、{0} でフォルダーを開いてください",
+			"TS Server logging is off. Please set 'js/ts.tsserver.log' and restart the TS server to enable logging": "TS サーバーのログがオフになっています。'js/ts.tsserver.log' を設定し、TS サーバーを再起動してログを有効にしてください",
+			"Use {0}'s Version": "{0} のバージョンを使用",
+			"{0}'s tsserver was deleted by another application such as a misbehaving virus detection tool. Please reinstall {0}.": "{0} の tsserver が、正しく動作しないウイルス検出ツールなどの他のアプリケーションによって削除されました。{0} を再インストールしてください。"
+		},
+		"package": {
+			"configuration.tsserver.nodePath": "カスタムの Node インストールで TS サーバーを実行します。Node 実行可能ファイルへのパスを指定するか、Facade Code に Node インストールを検出させる場合は `node` を指定します。",
+			"configuration.tsserver.useVsCodeWatcher": "TypeScript のファイル ウォッチャーの代わりに Facade Code のファイル ウォッチャーを使用します。ワークスペースで TypeScript 5.4 以降を使用する必要があります。",
+			"configuration.tsserver.watchOptions.vscode": "TypeScript のファイル ウォッチャーの代わりに Facade Code のファイル ウォッチャーを使用します。ワークスペースで TypeScript 5.4 以降を使用する必要があります。",
+			"configuration.tsserver.web.projectWideIntellisense.enabled": "Web 上でプロジェクト全体の IntelliSense を有効または無効にします。Facade Code が信頼されたコンテキストで実行されている必要があります。",
+			"typescript.locale": "JavaScript と TypeScript のエラーを報告するために使用するロケールを設定します。既定では Facade Code のロケールを使用します。",
+			"typescript.locale.auto": "Facade Code で構成されている表示言語を使用します。",
+			"typescript.updateImportsOnFileMove.enabled": "Facade Code でファイルの名前を変更または移動したときに、インポート パスを自動的に更新するかどうかを有効または無効にします。",
+			"walkthroughs.nodejsWelcome.debugJsFile.description": "Node.js をインストールしたら、ターミナルで ``node your-file-name.js`` と入力して JavaScript プログラムを実行できます\nNode.js プログラムを実行するもう 1 つの簡単な方法は、Facade Code のデバッガーを使用することです。デバッガーでは、コードを実行し、さまざまな箇所で一時停止して、何が起きているかを段階的に理解できます。\n[デバッグの開始](command:javascript-walkthrough.commands.debugJsFile)"
+		}
+	}
+}

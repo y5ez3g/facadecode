@@ -158,7 +158,9 @@ export class HostPerson implements Person {
 		const severity = ends.some(end => end.severity === 'error') ? 'error' : ends.some(end => end.severity === 'warning') ? 'warning' : 'information';
 		const text = ends.length === 1
 			? firstLineOf(newest.text)
-			: vscode.l10n.t("{0} of your agents ended. {1}", ends.length, ends.map(end => firstLineOf(end.text)).join(' '));
+			: vscode.l10n.t("{0} of your agents ended. {1}", ends.length, ends.map(end => firstLineOf(end.text)).reduce((before, next) =>
+				// A space between sentences is the language's to give: Chinese and Japanese have none
+				vscode.l10n.t({ message: "{0} {1}", args: [before, next], comment: ['{0} is one or more sentences, {1} the sentence that follows them'] })));
 		const pressed = await vscode.commands.executeCommand<unknown>('_facade.notification.show', `ended:${batch}`, text, [show], null, severity);
 		if (pressed !== show) {
 			return;
