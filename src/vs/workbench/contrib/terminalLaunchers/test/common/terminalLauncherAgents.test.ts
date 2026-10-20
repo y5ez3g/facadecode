@@ -11,12 +11,13 @@ suite('Terminal launchers - the agents the menu offers', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('the built-ins are Claude Code, Codex, Antigravity and Muse Code, in that order, each by the id Start Agent takes and its settings', () => {
+	test('the built-ins are Claude Code, Codex, Antigravity, Muse Code and Qwen Code, in that order, each by the id Start Agent takes and its settings', () => {
 		assert.deepStrictEqual(BUILT_IN_LAUNCHERS.map(launcher => [launcher.id, launcher.label, launcher.command, launcher.setting]), [
 			['claude', 'Claude Code', 'claude', 'facade.agents.claude'],
 			['codex', 'Codex', 'codex', 'facade.agents.codex'],
 			['agy', 'Antigravity', 'agy', 'facade.agents.antigravity'],
-			['muse', 'Muse Code', 'muse', 'facade.agents.muse']
+			['muse', 'Muse Code', 'muse', 'facade.agents.muse'],
+			['qwen', 'Qwen Code', 'qwen', 'facade.agents.qwen']
 		]);
 	});
 

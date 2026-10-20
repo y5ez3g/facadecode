@@ -6,7 +6,7 @@
 
 **Sizin ve yapay zekâ ekibiniz için tek bir IDE.**
 
-VS Code üzerine kurulu. Claude Code, Codex, Antigravity ve Muse Code gibi yerel ajan CLI'larınızı doğrudan çalıştırır.
+VS Code üzerine kurulu. Claude Code, Codex, Antigravity, Muse Code ve Qwen Code gibi yerel ajan CLI'larınızı doğrudan çalıştırır.
 
 [İndir](https://github.com/y5ez3g/facadecode/releases) ·
 [Spesifikasyonlar](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code, VS Code'un bir fork'udur. Her sağlayıcının yerel ajanları proj
 
 En son sürümü [Releases](https://github.com/y5ez3g/facadecode/releases) sayfasından indirin: macOS (Apple silicon) için `.dmg`, Windows (x64) için bir yükleyici veya Ubuntu (x64) için `.deb`.
 
-**Ön koşullar**: Kullanmak istediğiniz ajan CLI'larını kurun ve oturum açın (Claude Code, Codex, Antigravity veya Muse Code'un herhangi bir birleşimi). Facade Code bunları kendi yerel kimlik doğrulamaları ve abonelikleriyle doğrudan çalıştırır.
+**Ön koşullar**: Kullanmak istediğiniz ajan CLI'larını kurun ve oturum açın (Claude Code, Codex, Antigravity, Muse Code veya Qwen Code'un herhangi bir birleşimi). Facade Code bunları kendi yerel kimlik doğrulamaları ve abonelikleriyle doğrudan çalıştırır.
 
 Facade Code, VS Code'un yanına kurulur ve onunla hiçbir şey paylaşmaz: ayarlar, eklentiler ve `facade` komut satırı aracı tamamen ayrıdır.
 
@@ -76,7 +76,7 @@ Bir özellik çoğu zaman birden fazla ajana ihtiyaç duyar. Kodu yazan ajan, ya
 
 ### Her sağlayıcıdan bir ekip
 
-- **Kendi aboneliklerinizle yerel CLI'lar**: Claude Code, Codex, Muse Code ve Antigravity, mevcut aboneliklerinizi kullanarak kendi tümleşik terminallerinde çalışır.
+- **Kendi aboneliklerinizle yerel CLI'lar**: Claude Code, Codex, Muse Code, Antigravity ve Qwen Code, mevcut aboneliklerinizi kullanarak kendi tümleşik terminallerinde çalışır.
 - **Ajanlar ajan başlatır**: Bir ajan, mevcut özellikte ya da yeni bir worktree'de başka ajanlar (herhangi bir sağlayıcının CLI'ı veya modeliyle) başlatabilir ve onlara görev atayabilir. Bkz. [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) ve [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md).
 - **Mesajlaşma**: Ajanlar birbirine mesaj gönderir, sonuçları kendilerini çağırana bildirir ve bir karar insan onayı gerektirdiğinde size haber verir. Bkz. [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md).
 - **Takılan ajanlara yardım**: Bir ajan, başka bir ajanın terminalini okuyabilir, istemlerini yanıtlayabilir ve tuş vuruşları göndererek takılan bir çalışana sizi rahatsız etmeden yardım edebilir. Bkz. [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md).

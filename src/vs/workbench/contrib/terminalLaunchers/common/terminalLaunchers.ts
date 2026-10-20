@@ -30,6 +30,7 @@ const AGENT_ICONS: ReadonlyMap<string, ThemeIcon> = new Map([
 	['codex', registerIcon('agent-codex', Codicon.openai, localize('agentIcon.codex', "Icon for a terminal running Codex."))],
 	['agy', registerIcon('agent-antigravity', Codicon.robot, localize('agentIcon.antigravity', "Icon for a terminal running Antigravity."))],
 	['muse', registerIcon('agent-muse', Codicon.robot, localize('agentIcon.muse', "Icon for a terminal running Muse Code."))],
+	['qwen', registerIcon('agent-qwen', Codicon.robot, localize('agentIcon.qwen', "Icon for a terminal running Qwen Code."))],
 	['grok', registerIcon('agent-grok', Codicon.xai, localize('agentIcon.grok', "Icon for a terminal running Grok Build."))]
 ]);
 
@@ -176,7 +177,7 @@ export interface ITerminalLauncher {
 
 /**
  * The built-in agents, in the order the agent menu lists them (AGENT-LAUNCHER.md, L3): Claude Code, Codex,
- * Antigravity, Muse Code - each by the id Start Agent takes, its settings, and the command looked for.
+ * Antigravity, Muse Code, Qwen Code - each by the id Start Agent takes, its settings, and the command looked for.
  *
  * Nothing about where the thing is installed: where a tool lives is what the terminal's own `PATH`
  * answers, on every platform, or the person's path setting.
@@ -185,7 +186,8 @@ export const BUILT_IN_LAUNCHERS: readonly ITerminalLauncher[] = [
 	{ id: 'claude', label: 'Claude Code', command: 'claude', setting: 'facade.agents.claude' },
 	{ id: 'codex', label: 'Codex', command: 'codex', setting: 'facade.agents.codex' },
 	{ id: 'agy', label: 'Antigravity', command: 'agy', setting: 'facade.agents.antigravity' },
-	{ id: 'muse', label: 'Muse Code', command: 'muse', setting: 'facade.agents.muse' }
+	{ id: 'muse', label: 'Muse Code', command: 'muse', setting: 'facade.agents.muse' },
+	{ id: 'qwen', label: 'Qwen Code', command: 'qwen', setting: 'facade.agents.qwen' }
 ];
 
 /** The setting that holds the person's custom agents, by name: `{ "<name>": { "path": "...", "launch": { ... } } }`. */

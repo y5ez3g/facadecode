@@ -6,7 +6,7 @@
 
 **One IDE for you and your AI team.**
 
-Built on VS Code. Runs your native agent CLIs, like Claude Code, Codex, Antigravity, and Muse Code.
+Built on VS Code. Runs your native agent CLIs, like Claude Code, Codex, Antigravity, Muse Code, and Qwen Code.
 
 [Download](https://github.com/y5ez3g/facadecode/releases) ·
 [Specs](facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code is a fork of VS Code where native agents from every vendor collabora
 
 Download the latest release from [Releases](https://github.com/y5ez3g/facadecode/releases): a `.dmg` for macOS (Apple silicon), an installer for Windows (x64), or a `.deb` for Ubuntu (x64).
 
-**Prerequisites**: Install and log into the agent CLIs you want to use (any combination of Claude Code, Codex, Antigravity, or Muse Code). Facade Code runs them directly using their native authentication and subscriptions.
+**Prerequisites**: Install and log into the agent CLIs you want to use (any combination of Claude Code, Codex, Antigravity, Muse Code, or Qwen Code). Facade Code runs them directly using their native authentication and subscriptions.
 
 Facade Code installs alongside VS Code and shares nothing with it: settings, extensions, and the `facade` command-line tool are completely separate.
 
@@ -76,7 +76,7 @@ A feature often needs more than one agent. The one that writes the code may not 
 
 ### A team from every vendor
 
-- **Native CLIs on your own plans**: Claude Code, Codex, Muse Code, and Antigravity run in their own integrated terminals, using your existing subscriptions.
+- **Native CLIs on your own plans**: Claude Code, Codex, Muse Code, Antigravity, and Qwen Code run in their own integrated terminals, using your existing subscriptions.
 - **Agents launch agents**: An agent can start other agents (using any vendor CLI or model) in the current feature or a new worktree, and assign tasks. See [`AGENT-LAUNCHER.md`](facade-code-spec/AGENT-LAUNCHER.md) and [`AGENT-ORCHESTRATION.md`](facade-code-spec/AGENT-ORCHESTRATION.md).
 - **Messaging**: Agents send messages to each other, report results back to their caller, and notify you when a decision needs human approval. See [`AGENT-MESSAGES.md`](facade-code-spec/AGENT-MESSAGES.md).
 - **Unsticking each other**: An agent can read another agent's terminal, answer prompts, and send keystrokes to help a blocked worker without interrupting you. See [`AGENT-DEBUGGING.md`](facade-code-spec/AGENT-DEBUGGING.md).

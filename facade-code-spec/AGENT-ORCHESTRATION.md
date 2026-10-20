@@ -84,7 +84,7 @@ start_agent(name, cli, model?, effort?, task?, folder?, new_worktree?)
 | Argument | Contract |
 | --- | --- |
 | name | Required; follows L2. Also the branch name when creating a worktree |
-| cli | Required; claude, codex, muse, agy, or a configured custom name |
+| cli | Required; claude, codex, muse, agy, qwen, or a configured custom name |
 | model | Optional; omitted uses the CLI's own default |
 | effort | Optional; omitted uses the CLI's own default |
 | task | Optional nonempty text; becomes a message under M7 |
@@ -393,7 +393,7 @@ and FACADE_AGENTS_WAIT_MS from each process's environment. FACADE_AGENTS_TOKEN i
 a path, not a token value. Without those variables, a manually launched CLI gets
 no Facade tools and no startup noise.
 
-Keep existing per-CLI startup methods: launch arguments for Claude Code/Codex,
+Keep existing per-CLI startup methods: launch arguments for Claude Code/Codex/Qwen Code,
 project configuration where required by Muse Code/Antigravity, and Antigravity's
 warm-up. Do not add hook delivery, native conversation APIs or per-vendor message
 queues. Launch settings and terminal timing are the only vendor-specific inputs

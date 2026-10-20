@@ -6,7 +6,7 @@
 
 **一个 IDE，装下你和你的 AI 团队。**
 
-基于 VS Code。直接运行各家原生的 agent CLI，比如 Claude Code、Codex、Antigravity 和 Muse Code。
+基于 VS Code。直接运行各家原生的 agent CLI，比如 Claude Code、Codex、Antigravity、Muse Code 和 Qwen Code。
 
 [下载](https://github.com/y5ez3g/facadecode/releases) ·
 [规格文档](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code 是 VS Code 的一个分支（fork）。各家厂商的原生 agent 
 
 从 [Releases](https://github.com/y5ez3g/facadecode/releases) 下载最新版本：macOS（Apple 芯片）用 `.dmg`，Windows（x64）用安装程序，Ubuntu（x64）用 `.deb`。
 
-**前提**：先安装并登录你想用的 agent CLI（Claude Code、Codex、Antigravity、Muse Code，任意组合）。Facade Code 直接运行它们，用的是它们原生的登录和订阅。
+**前提**：先安装并登录你想用的 agent CLI（Claude Code、Codex、Antigravity、Muse Code、Qwen Code，任意组合）。Facade Code 直接运行它们，用的是它们原生的登录和订阅。
 
 Facade Code 和 VS Code 可以同时安装，两者什么都不共享：设置、扩展和 `facade` 命令行工具完全独立。
 
@@ -74,7 +74,7 @@ https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
 
 ### 一支来自各家厂商的团队
 
-- **原生 CLI，用你自己的订阅**：Claude Code、Codex、Muse Code 和 Antigravity 各自运行在自己的集成终端里。
+- **原生 CLI，用你自己的订阅**：Claude Code、Codex、Muse Code、Antigravity 和 Qwen Code 各自运行在自己的集成终端里。
 - **Agent 启动 agent**：一个 agent 可以在当前功能或新的 worktree 里启动其他 agent（任意厂商的 CLI 或模型），并给它们派任务。见 [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) 和 [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md)。
 - **消息**：agent 之间互发消息，把结果汇报给派活的一方，遇到需要人来拍板的事就通知你。见 [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md)。
 - **互相解围**：一个 agent 可以读另一个 agent 的终端、回答它的提示、给它发按键，帮卡住的工程师脱困，不用打扰你。见 [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md)。

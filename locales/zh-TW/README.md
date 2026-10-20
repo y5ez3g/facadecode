@@ -6,7 +6,7 @@
 
 **一個 IDE，裝下你和你的 AI 團隊。**
 
-以 VS Code 為基礎。直接執行各家原生的 agent CLI，例如 Claude Code、Codex、Antigravity 和 Muse Code。
+以 VS Code 為基礎。直接執行各家原生的 agent CLI，例如 Claude Code、Codex、Antigravity、Muse Code 和 Qwen Code。
 
 [下載](https://github.com/y5ez3g/facadecode/releases) ·
 [規格文件](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code 是 VS Code 的分支（fork）。各家廠商的原生 agent 在這
 
 從 [Releases](https://github.com/y5ez3g/facadecode/releases) 下載最新版本：macOS（Apple 晶片）用 `.dmg`，Windows（x64）用安裝程式，Ubuntu（x64）用 `.deb`。
 
-**事前準備**：先安裝並登入你想用的 agent CLI（Claude Code、Codex、Antigravity、Muse Code，任意組合）。Facade Code 直接執行它們，沿用它們原生的登入和訂閱。
+**事前準備**：先安裝並登入你想用的 agent CLI（Claude Code、Codex、Antigravity、Muse Code、Qwen Code，任意組合）。Facade Code 直接執行它們，沿用它們原生的登入和訂閱。
 
 Facade Code 可以和 VS Code 同時安裝，兩者不共用任何東西：設定、擴充功能和 `facade` 命令列工具完全分開。
 
@@ -74,7 +74,7 @@ https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
 
 ### 一支來自各家廠商的團隊
 
-- **原生 CLI，用你自己的訂閱方案**：Claude Code、Codex、Muse Code 和 Antigravity 各自在自己的整合式終端機裡執行。
+- **原生 CLI，用你自己的訂閱方案**：Claude Code、Codex、Muse Code、Antigravity 和 Qwen Code 各自在自己的整合式終端機裡執行。
 - **Agent 啟動 agent**：一個 agent 可以在目前的功能或新的 worktree 裡啟動其他 agent（任何廠商的 CLI 或模型），並指派任務給它們。請參閱 [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) 和 [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md)。
 - **訊息**：agent 之間互傳訊息，把結果回報給指派工作的一方，遇到需要人來決定的事就通知你。請參閱 [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md)。
 - **互相解圍**：一個 agent 可以讀取另一個 agent 的終端機、回答它的提示、送出按鍵，幫卡住的工程師脫困，不必打擾你。請參閱 [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md)。

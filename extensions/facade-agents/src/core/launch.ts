@@ -9,8 +9,8 @@ import * as l10n from '@vscode/l10n';
 import { DeferredPromise } from '../base/async';
 import { clauseOf, messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
-import { AgentCli, capabilitiesOf, Connection, connectionFor, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec, launchFor, sandboxOf } from '../clis/cli';
-import { launchTarget, unsafeForCmd } from '../clis/executable';
+import { AgentCli, capabilitiesOf, Connection, connectionFor, effectiveSandbox, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec, launchFor } from '../clis/cli';
+import { launchTargetOf, unsafeForCmd } from '../clis/executable';
 import { trustTarget } from '../clis/trust';
 import { AgentTable, agentName, StartedAgent } from '../record/agents';
 import { Agent, Caller, describe, Ignored, isLive, PERSON, SetupState, StartPhase } from '../record/events';
@@ -275,8 +275,9 @@ export class Launcher implements Disposable {
 				runDir: table.runsDir,
 				slug: 'check'
 			}, env);
-			trustTarget(installed.cli, launchFor(installed.config, run.unattended), { folder: run.folder, repository: run.repository }, env);
-			conflict = installed.cli.conflict?.(spec.args, run.folder, env);
+			const config = launchFor(installed.config, run.unattended);
+			trustTarget(installed.cli, config, { folder: run.folder, repository: run.repository }, env);
+			conflict = installed.cli.conflict?.(spec.args, run.folder, env, config);
 			injected = spec.injected;
 		} catch (err) {
 			throw new FacadeError('UNAVAILABLE', `Cannot start ${installed.cli.displayName} with its current settings: ${messageOf(err)}`);
@@ -344,8 +345,9 @@ export class Launcher implements Disposable {
 			ignored: run.ignored,
 			yolo: run.yolo,
 			...(run.unattended ? { unattended: true } : {}),
-			// As the launch the person has set up leaves it: never on where its file is left out (X-07)
-			sandbox: sandboxOf(cli, launchFor(installed.config, run.unattended), { framework: run.integration, yolo: run.yolo, model: given.model !== undefined, effort: given.effort !== undefined, task: run.task !== undefined, trust: true }),
+			// As the launch the person has set up leaves it: never on where its file is left out (X-07); on where it leaves the
+			// CLI's own as the person turned it on (L4)
+			sandbox: effectiveSandbox(cli, launchFor(installed.config, run.unattended), { framework: run.integration, yolo: run.yolo, model: given.model !== undefined, effort: given.effort !== undefined, task: run.task !== undefined, trust: true }, run.env ?? process.env, run.folder),
 			integration: run.integration,
 			worktree: run.worktree,
 			...(run.outsideGit ? { outsideGit: true } : {}),
@@ -487,7 +489,7 @@ export class Launcher implements Disposable {
 				this.assertStarting(agent);
 				this.context.log(`Starting ${label} (${cli.displayName}) in ${folder}, ${run.outsideGit ? 'not a Git repository' : `worktree ${run.worktree}`}, YOLO ${run.yolo ? 'on' : 'off'}${run.integration ? '' : ', without Facade tools'}${throughCmd ? ', through cmd.exe' : ''}.`);
 				// The person's history says what it runs: its command line and the settings it is given (UI-14)
-				table.launching(agent.id, { program: spec.executable, args, environment: spec.env, files: spec.files.filter(file => args.some(arg => arg.includes(file.path))) });
+				table.launching(agent.id, { program: spec.executable, args, environment: spec.env, files: spec.files.filter(file => [...args, ...Object.values(spec.env)].some(arg => arg.includes(file.path))) });
 				options.progress?.(`Launching ${label}.`);
 				const { processId } = await ports.terminals.launch({ id: agent.id, name: label, command: cli.custom ? spec.executable : cli.command, ...(cli.custom ? { custom: true } : {}), executable: spec.executable, args, env, cwd: spec.cwd, reveal: caller.id === undefined && !options.wait, finalScreen: this.context.finalScreenOf(agent) });
 				// Its first line, its launch argument, rang for its task: a doorbell does not name the task again (M7)
@@ -623,9 +625,11 @@ export class Launcher implements Disposable {
 	private launchOf(installed: InstalledCli, input: Omit<LaunchInput, 'config'>, env: Environment | undefined): { readonly spec: LaunchSpec; readonly args: readonly string[]; readonly throughCmd: boolean } {
 		const { cli } = installed;
 		// Found as its terminal finds it, and as Show Agent Launch says: in the environment it starts with (L10)
-		const target = launchTarget(installed.executable, this.context.platform ?? process.platform, env ?? process.env);
+		const target = launchTargetOf(cli, installed.executable, this.context.platform ?? process.platform, env ?? process.env);
 		// The launch of its starter: an agent's, or the person's (L4)
-		const spec = cli.launch({ ...input, config: launchFor(installed.config, input.unattended) }, target.executable);
+		const launched = cli.launch({ ...input, ...(env ? { env } : {}), config: launchFor(installed.config, input.unattended) }, target.executable);
+		// What the launcher it stands in for sets, under what its launch sets
+		const spec = target.env ? { ...launched, env: { ...target.env, ...launched.env } } : launched;
 		const args = [...target.args, ...spec.args];
 		const unsafe = target.throughCmd ? args.find(unsafeForCmd) : undefined;
 		if (unsafe !== undefined) {

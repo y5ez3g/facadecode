@@ -57,7 +57,7 @@ interface IFacadeTerminalOptions {
 	readonly cwd?: string | URI;
 	/**
 	 * The command of the agent's CLI that runs in it, as `PATH` knows it - `claude`, `codex`, `muse`,
-	 * `agy`. That makes it an agent's terminal, drawn with the CLI's logo as the agent button draws one
+	 * `agy`, `qwen`. That makes it an agent's terminal, drawn with the CLI's logo as the agent button draws one
 	 * (the robot for a CLI without one), and counted and kept as agents' terminals are, its name kept as
 	 * its title across a reload.
 	 */

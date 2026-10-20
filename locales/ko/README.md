@@ -6,7 +6,7 @@
 
 **당신과 AI 팀을 위한 하나의 IDE.**
 
-VS Code 기반. Claude Code, Codex, Antigravity, Muse Code 같은 네이티브 에이전트 CLI를 그대로 실행합니다.
+VS Code 기반. Claude Code, Codex, Antigravity, Muse Code, Qwen Code 같은 네이티브 에이전트 CLI를 그대로 실행합니다.
 
 [다운로드](https://github.com/y5ez3g/facadecode/releases) ·
 [사양](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code는 VS Code의 포크입니다. 모든 벤더의 네이티브 에이�
 
 [Releases](https://github.com/y5ez3g/facadecode/releases)에서 최신 버전을 내려받으세요. macOS(Apple 실리콘)용 `.dmg`, Windows(x64)용 설치 프로그램, Ubuntu(x64)용 `.deb`가 있습니다.
 
-**사전 준비**: 사용하려는 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code 중 원하는 조합)를 설치하고 로그인해 두세요. Facade Code는 각 CLI의 네이티브 인증과 구독을 그대로 사용해 직접 실행합니다.
+**사전 준비**: 사용하려는 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, Qwen Code 중 원하는 조합)를 설치하고 로그인해 두세요. Facade Code는 각 CLI의 네이티브 인증과 구독을 그대로 사용해 직접 실행합니다.
 
 Facade Code는 VS Code와 나란히 설치되며 아무것도 공유하지 않습니다. 설정, 확장, `facade` 명령줄 도구가 모두 완전히 분리되어 있습니다.
 
@@ -75,7 +75,7 @@ https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
 
 ### 모든 벤더로 꾸린 팀
 
-- **당신의 요금제로 도는 네이티브 CLI**: Claude Code, Codex, Muse Code, Antigravity가 각자의 통합 터미널에서, 이미 가진 구독으로 실행됩니다.
+- **당신의 요금제로 도는 네이티브 CLI**: Claude Code, Codex, Muse Code, Antigravity, Qwen Code가 각자의 통합 터미널에서, 이미 가진 구독으로 실행됩니다.
 - **에이전트가 에이전트를 실행**: 에이전트는 현재 기능이나 새 worktree에서 다른 에이전트(어느 벤더의 CLI나 모델이든)를 실행하고 작업을 맡길 수 있습니다. [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md)와 [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md)를 참고하세요.
 - **메시지**: 에이전트끼리 메시지를 주고받고, 결과를 요청한 쪽에 보고하며, 사람의 승인이 필요한 결정이 있으면 당신에게 알립니다. [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md)를 참고하세요.
 - **서로 막힌 곳 풀어 주기**: 에이전트는 다른 에이전트의 터미널을 읽고, 프롬프트에 답하고, 키 입력을 보내서, 당신을 방해하지 않고 막힌 작업자를 돕습니다. [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md)를 참고하세요.

@@ -6,7 +6,7 @@
 
 **Satu IDE untuk Anda dan tim AI Anda.**
 
-Dibangun di atas VS Code. Menjalankan CLI agen native Anda, seperti Claude Code, Codex, Antigravity, dan Muse Code.
+Dibangun di atas VS Code. Menjalankan CLI agen native Anda, seperti Claude Code, Codex, Antigravity, Muse Code, dan Qwen Code.
 
 [Unduh](https://github.com/y5ez3g/facadecode/releases) ·
 [Spesifikasi](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code adalah fork VS Code tempat agen native dari semua vendor berkolabora
 
 Unduh rilis terbaru dari [Releases](https://github.com/y5ez3g/facadecode/releases): `.dmg` untuk macOS (Apple silicon), installer untuk Windows (x64), atau `.deb` untuk Ubuntu (x64).
 
-**Prasyarat**: Instal dan login ke CLI agen yang ingin Anda gunakan (kombinasi apa pun dari Claude Code, Codex, Antigravity, atau Muse Code). Facade Code menjalankannya secara langsung dengan autentikasi dan langganan native masing-masing.
+**Prasyarat**: Instal dan login ke CLI agen yang ingin Anda gunakan (kombinasi apa pun dari Claude Code, Codex, Antigravity, Muse Code, atau Qwen Code). Facade Code menjalankannya secara langsung dengan autentikasi dan langganan native masing-masing.
 
 Facade Code terpasang berdampingan dengan VS Code dan tidak berbagi apa pun dengannya: pengaturan, ekstensi, dan alat baris perintah `facade` sepenuhnya terpisah.
 
@@ -77,7 +77,7 @@ Sebuah fitur sering membutuhkan lebih dari satu agen. Agen yang menulis kode bel
 
 ### Tim dari semua vendor
 
-- **CLI native dengan langganan Anda sendiri**: Claude Code, Codex, Muse Code, dan Antigravity berjalan di terminal terintegrasi masing-masing, memakai langganan yang sudah Anda miliki.
+- **CLI native dengan langganan Anda sendiri**: Claude Code, Codex, Muse Code, Antigravity, dan Qwen Code berjalan di terminal terintegrasi masing-masing, memakai langganan yang sudah Anda miliki.
 - **Agen menjalankan agen**: Sebuah agen dapat menjalankan agen lain (dengan CLI atau model dari vendor mana pun) di fitur saat ini atau di worktree baru, lalu memberikan tugas. Lihat [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) dan [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md).
 - **Pesan**: Agen saling berkirim pesan, melaporkan hasil kepada pemanggilnya, dan memberi tahu Anda ketika sebuah keputusan memerlukan persetujuan manusia. Lihat [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md).
 - **Saling membantu saat macet**: Agen dapat membaca terminal agen lain, menjawab prompt, dan mengirim input keyboard untuk membantu agen lain yang macet tanpa mengganggu Anda. Lihat [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md).

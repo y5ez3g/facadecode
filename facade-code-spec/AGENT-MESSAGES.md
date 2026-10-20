@@ -277,8 +277,8 @@ The initial prompt is a short generated notice:
 Call read_messages to fetch it, then carry it out.
 ```
 
-The actual emitted notice is one line. Claude Code, Codex and Muse Code receive
-it in the launch's task argument group. A compatible custom agent does the same.
+The actual emitted notice is one line. Claude Code, Codex, Muse Code and Qwen Code
+receive it in the launch's task argument group. A compatible custom agent does the same.
 Antigravity receives it by terminal typing after its existing MCP warm-up and
 taskDelay. Use the normal input queue and guard.
 

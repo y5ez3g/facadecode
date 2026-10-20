@@ -10,9 +10,10 @@ import { AgentCli, CliConfig, Environment, InstalledCli } from './cli';
 import { codexCli } from './codex';
 import { homeOf, which } from './executable';
 import { museCli } from './muse';
+import { qwenCli } from './qwen';
 
 /** The built-ins, in the order the agent menu lists them (AGENT-LAUNCHER.md, L3). */
-const AGENT_CLIS: readonly AgentCli[] = [claudeCli, codexCli, antigravityCli, museCli];
+const AGENT_CLIS: readonly AgentCli[] = [claudeCli, codexCli, antigravityCli, museCli, qwenCli];
 
 /** Every built-in Facade knows, installed or not. */
 export function knownClis(): readonly AgentCli[] {

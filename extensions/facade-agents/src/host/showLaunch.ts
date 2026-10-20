@@ -10,7 +10,7 @@ import { AgentCli, CliConfig, Environment, InstalledCli } from '../clis/cli';
 import { whyNotInstalled } from '../clis/config';
 import { CUSTOM_AGENTS_SETTING } from '../clis/custom';
 import { DescribedCli, launchDocument, starterFacts } from '../clis/describe';
-import { launchTarget } from '../clis/executable';
+import { launchTargetOf } from '../clis/executable';
 import { knownClis, locateCli } from '../clis/registry';
 import { repositoryAt } from './git';
 import { configFor, customAgents, frameworkOn, yolo } from './settings';
@@ -95,9 +95,10 @@ async function describedCli(cli: AgentCli, config: CliConfig, yours: unknown, fo
 		cli,
 		config,
 		yours,
-		program: found ? { target: launchTarget(found.executable, process.platform, env) } : { missing: whyNotInstalled(cli, config, folder === undefined ? undefined : 'the PATH used by a terminal in that folder') },
+		program: found ? { target: launchTargetOf(cli, found.executable, process.platform, env) } : { missing: whyNotInstalled(cli, config, folder === undefined ? undefined : 'the PATH used by a terminal in that folder') },
 		trust: theirs.trust,
 		...(theirs.overridden !== undefined ? { overridden: theirs.overridden } : {}),
+		...(theirs.ownSandbox !== undefined ? { ownSandbox: theirs.ownSandbox } : {}),
 		throughStartAgent: starterFacts(cli, config, place, terminal, true),
 		...(problems.length ? { problems } : {})
 	};
