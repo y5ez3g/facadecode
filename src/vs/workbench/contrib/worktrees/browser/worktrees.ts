@@ -2124,7 +2124,8 @@ export class WorktreeService implements IWorktreeService {
 			}
 		}
 		if (sentences.length) {
-			paragraphs.push(sentences.join(' '));
+			// A space between sentences is the language's to give: Chinese and Japanese have none
+			paragraphs.push(sentences.reduce((before, next) => localize({ key: 'worktrees.nextSentence', comment: ['{0} is one or more sentences, {1} the sentence that follows them'] }, "{0} {1}", before, next)));
 		}
 
 		// No Save and Delete: a file saved there would be deleted all the same

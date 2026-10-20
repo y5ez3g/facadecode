@@ -117,6 +117,7 @@ import './contrib/logs/electron-browser/logs.contribution.js';
 
 // Localizations
 import './contrib/localization/electron-browser/localization.contribution.js';
+import './contrib/facadeLocalization/electron-browser/facadeLocalization.contribution.js';
 
 // Explorer
 import './contrib/files/electron-browser/fileActions.contribution.js';

@@ -88,6 +88,11 @@ class NativeLocaleService implements ILocaleService {
 	async setLocale(languagePackItem: ILanguagePackItem, skipDialog = false): Promise<void> {
 		const locale = languagePackItem.id;
 		if (locale === Language.value() || (!locale && Language.isDefaultVariant())) {
+			// Facade Code: choosing the language the window already speaks is still a choice, which
+			// ends the first start's question (`facadeDisplayLanguageWhenChosen`, LOCALIZATION.md LC4).
+			if (this.productService.facadeDisplayLanguageWhenChosen) {
+				await this.writeLocaleValue(locale || LANGUAGE_DEFAULT);
+			}
 			return;
 		}
 		const installedLanguages = await this.languagePackService.getInstalledLanguages();

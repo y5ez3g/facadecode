@@ -40,6 +40,7 @@ import { spawnTsgo } from './lib/tsgo.ts';
 import { runEsbuildTranspile, runEsbuildBundle } from './lib/esbuild.ts';
 import { releaseVersion, withBundleVersion } from './lib/facade/releaseVersion.ts';
 import { appVersionFields, bundleVersionFields, checkVersionFields, executableVersionFields } from './lib/facade/versionCheck.ts';
+import { buildLanguagePacks } from './lib/facade/languagePacks.ts';
 
 
 const glob = promisify(globCallback);
@@ -786,6 +787,14 @@ BUILD_TARGETS.forEach(buildTarget => {
 
 		const packageTasks: task.Task[] = [
 			compileNativeExtensionsBuildTask,
+			// Facade Code: the built-in language packs (LOCALIZATION.md LC6), into .build/extensions
+			task.define(`facade-language-packs${dashed(minified)}`, async () => {
+				await buildLanguagePacks({
+					root,
+					outFolder: path.join(root, sourceFolderName),
+					extensionsFolder: path.join(root, '.build', 'extensions'),
+				});
+			}),
 			util.rimraf(path.join(buildRoot, destinationFolderName)),
 			packageTask(platform, arch, sourceFolderName, destinationFolderName, opts),
 			prepareCopilotRipgrepShimTask(platform, arch, destinationFolderName)

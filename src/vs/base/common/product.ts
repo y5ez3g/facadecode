@@ -103,6 +103,12 @@ export interface IProductConfiguration {
 	 * engine's, which extensions are checked against and which stays upstream's (IDENTITY.md I7).
 	 */
 	readonly facadeVersion?: string;
+	/**
+	 * Facade Code: when set, the window speaks English until a display language is chosen, instead of
+	 * following the operating system's language whenever a pack for it is installed - every pack is built
+	 * in, so it would switch without being asked (LOCALIZATION.md LC4). Unset is upstream's behavior.
+	 */
+	readonly facadeDisplayLanguageWhenChosen?: boolean;
 	readonly date?: string;
 	readonly quality?: string;
 	readonly commit?: string;

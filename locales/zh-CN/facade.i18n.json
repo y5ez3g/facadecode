@@ -1,0 +1,893 @@
+{
+	"vscode": {
+		"vs/editor/browser/widget/multiDiffEditor/diffEditorItemTemplate": {
+			"binaryFileChanged": "二进制文件已更改",
+			"openBinaryDiff": "打开差异"
+		},
+		"vs/editor/common/config/editorOptions": {
+			"fullwidthCharacterWidth": "控制呈现全角字符时使用的宽度。",
+			"fullwidthCharacterWidth.font": "按字体定义的宽度呈现全角字符。",
+			"fullwidthCharacterWidth.twoCells": "将全角字符居中呈现在恰好两个字符单元格中。仅适用于等宽字体。不适用于由多个码位组成的全角字符，也不适用于 GPU 呈现。这会影响行呈现的性能。"
+		},
+		"vs/editor/common/editorContextKeys": {
+			"diffEditorAutomaticRenderSideBySide": "差异编辑器的自动布局是否会并排呈现",
+			"diffEditorTemporaryInlineMode": "手动调整差异编辑器大小后，内联模式是否暂时处于活动状态"
+		},
+		"vs/platform/contextkey/common/contextkeys": {
+			"isChromeOS": "操作系统是否为 ChromeOS",
+			"productQualityType": "{0} 的质量类型"
+		},
+		"vs/platform/extensionManagement/node/extensionManagementService": {
+			"restartCode": "请在重新安装 {0} 之前重新启动 {1}。"
+		},
+		"vs/platform/externalTerminal/node/externalTerminalService": {
+			"console.title": "{0} 控制台"
+		},
+		"vs/platform/product/common/releaseVersion": {
+			"releaseVersion": "{0} (基于 VS Code {1})"
+		},
+		"vs/platform/terminal/common/terminalPlatformConfiguration": {
+			"terminal.integrated.inheritEnv": "新 shell 是否应从 {0} 继承其环境，这可能会生成登录 shell，以确保初始化 $PATH 和其他开发变量。这对 Windows 不起作用。"
+		},
+		"vs/platform/update/common/update.config.contribution": {
+			"default": "启用自动更新检查。启用后将定期自动检查更新。"
+		},
+		"vs/workbench/api/browser/mainThreadMcp": {
+			"mcp.enterpriseManaged.issuerMissing": "企业管理的 MCP 身份验证要求配置 `mcp.enterpriseManagedAuth.idp.issuer`。请通过企业策略(Windows 组策略/macOS 托管首选项/Linux `/etc/facade/policy.json`)进行设置；如用于本地测试，也可以手动编辑 `settings.json`。"
+		},
+		"vs/workbench/api/common/configurationExtensionPoint": {
+			"scope.deprecationMessageSeverity": "控制显示弃用消息时使用的严重性。",
+			"scope.deprecationMessageSeverity.info": "以信息样式显示弃用消息。",
+			"scope.deprecationMessageSeverity.warning": "以标准警告样式显示弃用消息。"
+		},
+		"vs/workbench/browser/actions/layoutActions": {
+			"layoutDensity": "布局密度",
+			"layoutDensityCompact": "紧凑",
+			"layoutDensityCompactIcon": "表示紧凑布局密度",
+			"layoutDensityDefault": "默认",
+			"layoutDensityDefaultIcon": "表示默认布局密度"
+		},
+		"vs/workbench/browser/chatPills": {
+			"chatPills.open": "打开 {0}"
+		},
+		"vs/workbench/browser/parts/activitybar/activitybarPart": {
+			"miToolbarActivityBar": "工具栏(&&T)",
+			"positionActivityBarToolbar": "将活动栏移至标题栏",
+			"toolbar": "工具栏"
+		},
+		"vs/workbench/browser/parts/dialogs/facadeDialogColors": {
+			"facadeDialogBorder": "Facade 对话框中的边框颜色: 对话框轮廓、按钮上方的分隔线和提示框。",
+			"facadeDialogControlBackground": "Facade 对话框中图标选择器的背景色。",
+			"facadeDialogControlBorder": "Facade 对话框中图标选择器和颜色重置按钮的边框颜色。",
+			"facadeDialogFooterBackground": "Facade 对话框中底部按钮区域的背景色。"
+		},
+		"vs/workbench/browser/parts/editor/editor.contribution": {
+			"diffView": "差异视图",
+			"diffView.automaticInline": "自动(当前为内联)",
+			"diffView.automaticSideBySide": "自动(当前为并排)",
+			"diffView.inline": "内联",
+			"diffView.inlineTemporary": "内联(临时)",
+			"diffView.sideBySide": "并排"
+		},
+		"vs/workbench/browser/parts/titlebar/titlebarAppIcon": {
+			"titleBar.showAppIcon": "控制是否在自定义标题栏中显示应用程序图标。禁用后，该角落留给工作区栏切换按钮。仅适用于 Windows 和 Linux 上的自定义标题栏；需要打开新窗口才能生效。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarActions": {
+			"workspaceBar.category": "工作区",
+			"workspaceBar.collapse": "折叠工作区栏",
+			"workspaceBar.collapseFolder": "折叠",
+			"workspaceBar.collapsedContext": "工作区栏是否已折叠为图标",
+			"workspaceBar.customizeFolder": "自定义...",
+			"workspaceBar.expand": "展开工作区栏",
+			"workspaceBar.expandFolder": "展开",
+			"workspaceBar.focus": "将焦点放在工作区栏上",
+			"workspaceBar.focusContext": "工作区文件夹列表是否具有键盘焦点",
+			"workspaceBar.moveFolderDown": "下移文件夹",
+			"workspaceBar.moveFolderUp": "上移文件夹",
+			"workspaceBar.moveWorktreeDown": "下移工作树",
+			"workspaceBar.moveWorktreeUp": "上移工作树",
+			"workspaceBar.openFolder": "打开文件夹...",
+			"workspaceBar.openFolderButton": "添加",
+			"workspaceBar.openFolderTitle": "打开文件夹",
+			"workspaceBar.removeFolder": "将文件夹从工作区删除",
+			"workspaceBar.revealInLinux": "打开所在的文件夹",
+			"workspaceBar.revealInMac": "在 Finder 中显示",
+			"workspaceBar.revealInWindows": "在文件资源管理器中显示",
+			"workspaceBar.rowExpansionContext": "具有焦点的存储库行是否已展开其工作树",
+			"workspaceBar.rowKindContext": "具有焦点的行是文件夹、存储库还是工作树",
+			"workspaceBar.rowOffersWorktreeContext": "具有焦点的行是否可以新建工作树",
+			"workspaceBar.toggleCollapsed": "切换工作区栏",
+			"workspaceBar.toggleIcon": "用于折叠和展开工作区栏的图标。",
+			"workspaceBar.worktrees": "控制工作区栏是否在每个存储库下显示 Git 工作树。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarColors": {
+			"facadeAgentBadgeBackground": "工作区行和标题栏 agent 按钮上 agent 徽章指示器的背景色。",
+			"facadeAgentBadgeForeground": "Agent 徽章计数文本的前景色。",
+			"facadeBarActiveBorder": "工作区栏中当前文件夹行上活动指示器的颜色。",
+			"facadeBarBackground": "工作区栏的背景色。工作区栏是沿窗口左边缘排列文件夹的那一列。",
+			"facadeBarBorder": "将工作区栏与相邻视图分隔开的边框颜色。",
+			"facadeBarFolderBlue": "工作区栏中文件夹的蓝色强调色。",
+			"facadeBarFolderGreen": "工作区栏中文件夹的绿色强调色。",
+			"facadeBarFolderIndigo": "工作区栏中文件夹的靛蓝色强调色。",
+			"facadeBarFolderLime": "工作区栏中文件夹的黄绿色强调色。",
+			"facadeBarFolderOrange": "工作区栏中文件夹的橙色强调色。",
+			"facadeBarFolderPink": "工作区栏中文件夹的粉色强调色。",
+			"facadeBarFolderPurple": "工作区栏中文件夹的紫色强调色。",
+			"facadeBarFolderRed": "工作区栏中文件夹的红色强调色。",
+			"facadeBarFolderTeal": "工作区栏中文件夹的蓝绿色强调色。",
+			"facadeBarFolderYellow": "工作区栏中文件夹的黄色强调色。",
+			"facadeBarForeground": "工作区栏的前景色。",
+			"facadeBarInactiveForeground": "工作区栏中非活动行的前景色。",
+			"facadeBarTitleForeground": "工作区栏标题的前景色。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomization": {
+			"workspaceBar.worktreeIcon": "工作区栏中工作树的图标。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomize": {
+			"workspaceBar.branch": "分支",
+			"workspaceBar.branchAria": "新工作树的分支",
+			"workspaceBar.branchPlaceholder": "分支名称",
+			"workspaceBar.cancel": "取消",
+			"workspaceBar.color": "颜色",
+			"workspaceBar.colorAria": "文件夹颜色",
+			"workspaceBar.colorBlue": "蓝色",
+			"workspaceBar.colorGreen": "绿色",
+			"workspaceBar.colorIndigo": "靛蓝色",
+			"workspaceBar.colorLime": "黄绿色",
+			"workspaceBar.colorNone": "无颜色",
+			"workspaceBar.colorOrange": "橙色",
+			"workspaceBar.colorPink": "粉色",
+			"workspaceBar.colorPurple": "紫色",
+			"workspaceBar.colorRed": "红色",
+			"workspaceBar.colorTeal": "蓝绿色",
+			"workspaceBar.colorYellow": "黄色",
+			"workspaceBar.create": "创建",
+			"workspaceBar.customizeAbout": "配置“{0}”的显示名称、颜色和图标。不会重命名磁盘上的文件夹。",
+			"workspaceBar.customizeTitle": "自定义文件夹",
+			"workspaceBar.customizeWorktreeAbout": "配置“{0}”的显示名称和颜色。不会重命名分支和磁盘上的文件夹。",
+			"workspaceBar.customizeWorktreeTitle": "自定义工作树",
+			"workspaceBar.displayName": "显示名称",
+			"workspaceBar.displayNameAria": "此文件夹的显示名称",
+			"workspaceBar.displayNameDefault": "留空则使用默认名称“{0}”。",
+			"workspaceBar.displayNameHintBranch": "留空则使用分支名称。",
+			"workspaceBar.icon": "图标",
+			"workspaceBar.iconAria": "文件夹图标",
+			"workspaceBar.iconBeaker": "烧杯",
+			"workspaceBar.iconBook": "书",
+			"workspaceBar.iconDatabase": "数据库",
+			"workspaceBar.iconDevice": "设备",
+			"workspaceBar.iconFolder": "文件夹",
+			"workspaceBar.iconGlobe": "地球",
+			"workspaceBar.iconPackage": "包",
+			"workspaceBar.iconRocket": "火箭",
+			"workspaceBar.iconServer": "服务器",
+			"workspaceBar.iconTools": "工具",
+			"workspaceBar.newWorktreeAbout": "为“{0}”创建新的 Git 工作树和分支。",
+			"workspaceBar.newWorktreeTitle": "在“{0}”中新建工作树",
+			"workspaceBar.save": "保存",
+			"workspaceBar.worktreeColorAria": "工作树颜色",
+			"workspaceBar.worktreeDisplayNameAria": "此工作树的显示名称"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarEditors": {
+			"workspaceBar.editorsNotClosed": "无法关闭打开的编辑器。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarPart": {
+			"workspaceBar.couldNotAdd": "未能将文件夹“{0}”添加到工作区: {1}",
+			"workspaceBar.gone": "文件夹“{0}”在磁盘上已不存在。",
+			"workspaceBar.goneReason": "在磁盘上已不存在",
+			"workspaceBar.moreActions": "更多操作...",
+			"workspaceBar.notTaken": "文件夹未添加到工作区",
+			"workspaceBar.title": "工作区"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarQuestions": {
+			"workspaceBar.agentLine": "Agent {0}",
+			"workspaceBar.agentLineAt": "Agent {0} · {1}",
+			"workspaceBar.agentTerminated": "将终止以下 agent:",
+			"workspaceBar.agentsAndTerminalsTerminated": "将终止以下 agent 和终端:",
+			"workspaceBar.agentsTerminated": "将终止以下 agent:",
+			"workspaceBar.fileDiscarded": "以下文件有未保存的更改，这些更改将被放弃:",
+			"workspaceBar.fileLineAt": "{0} · {1}",
+			"workspaceBar.filesDiscarded": "以下文件有未保存的更改，这些更改将被放弃:",
+			"workspaceBar.moreFiles": "...另有 {0} 个文件未显示",
+			"workspaceBar.moreSessions": "...另有 {0} 个会话未显示",
+			"workspaceBar.oneMoreFile": "...另有 1 个文件未显示",
+			"workspaceBar.oneMoreSession": "...另有 1 个会话未显示",
+			"workspaceBar.terminalLine": "终端({0})",
+			"workspaceBar.terminalLineAt": "终端({0}) · {1}",
+			"workspaceBar.terminalTerminated": "将终止以下终端:",
+			"workspaceBar.terminalsTerminated": "将终止以下终端:",
+			"workspaceBar.worktreePlace": "{0} (工作树: {1})"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarRemoval": {
+			"workspaceBar.notRemoved": "未能更新工作区: {0}",
+			"workspaceBar.notRemovedReason": "未能写入工作区配置文件",
+			"workspaceBar.removeAndDiscard": "移除并放弃更改(&&R)",
+			"workspaceBar.removeFolderAndWorktree": "确定要从工作区中移除“{0}”及其工作树吗？",
+			"workspaceBar.removeFolderAndWorktrees": "确定要从工作区中移除“{0}”及其 {1} 个工作树吗？",
+			"workspaceBar.removeFolderButton": "移除(&&R)",
+			"workspaceBar.removeFolderQuestion": "确定要从工作区中移除“{0}”吗？",
+			"workspaceBar.removeFoldersQuestion": "确定要从工作区中移除以下 {0} 个文件夹吗？",
+			"workspaceBar.removeKeepsDisk": "不会删除磁盘上的文件。",
+			"workspaceBar.worktreeDeleted": "工作树“{0}”已删除，并已从工作区中移除。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitchFolder": {
+			"workspaceBar.switchFolder": "切换文件夹...",
+			"workspaceBar.switchFolderNext": "在“切换文件夹”中选择下一个文件夹",
+			"workspaceBar.switchFolderPlaceholder": "选择要切换到的文件夹"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitcher": {
+			"workspaceBar.addedNotShown": "文件夹“{0}”已添加到工作区，但无法切换到该文件夹。",
+			"workspaceBar.addedNotShownOf": "已将文件夹添加到工作区: {0}。未能切换到“{1}”。",
+			"workspaceBar.couldNotLeave": "未能切换文件夹: 无法保存当前文件夹的编辑器状态。{0}",
+			"workspaceBar.couldNotRestore": "无法为此文件夹还原部分编辑器。{0}",
+			"workspaceBar.gone": "文件夹“{0}”在磁盘上已不存在。",
+			"workspaceBar.goneReason": "在磁盘上已不存在",
+			"workspaceBar.unreadable": "未能读取文件夹“{0}”: {1}"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
+			"workspaceBar.openInNewWindow": "在新窗口中打开",
+			"workspaceBar.trustAndAdd": "信任并添加(&&T)",
+			"workspaceBar.trustParent": "信任上级文件夹“{0}”中所有文件的作者",
+			"workspaceBar.untrustedConsequence": "此工作区受信任。添加不受信任的文件夹会使整个工作区和活动的 agent 切换到受限模式。",
+			"workspaceBar.untrustedConsequenceMany": "此工作区受信任。添加不受信任的文件夹会使整个工作区和活动的 agent 切换到受限模式。",
+			"workspaceBar.untrustedLinks": "请参阅[我们的文档](https://aka.ms/vscode-workspace-trust)了解详细信息，或在受限模式下[在新窗口中打开]({0})。",
+			"workspaceBar.untrustedLinksMany": "请参阅[我们的文档](https://aka.ms/vscode-workspace-trust)了解详细信息，或在受限模式下[在新窗口中打开全部 {0} 个文件夹]({1})。",
+			"workspaceBar.untrustedMessage": "是否信任此文件夹中的文件的作者？",
+			"workspaceBar.untrustedMessageMany": "是否信任这 {0} 个文件夹中的文件的作者？",
+			"workspaceBar.untrustedMore": "以及其他 {0} 个",
+			"workspaceBar.untrustedTakenOut": "已移除文件夹“{0}”，因为它不受信任，会使工作区切换到受限模式。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
+			"workspaceBar.agentsAria": "{0} 个 agent",
+			"workspaceBar.ariaLabel": "工作区文件夹",
+			"workspaceBar.collapse": "折叠",
+			"workspaceBar.empty": "将文件夹拖到此处或单击 +。",
+			"workspaceBar.expand": "展开",
+			"workspaceBar.moreAgents": "另外 {0} 个 agent",
+			"workspaceBar.oneAgentAria": "1 个 agent",
+			"workspaceBar.oneMoreAgent": "另外 1 个 agent",
+			"workspaceBar.oneWorktreeAria": "1 个工作树",
+			"workspaceBar.unavailableAria": "{0}，磁盘上不存在该文件夹",
+			"workspaceBar.unreadableAria": "{0}，无法读取该文件夹",
+			"workspaceBar.worktreeAria": "{0}，工作树",
+			"workspaceBar.worktreesAria": "{0} 个工作树"
+		},
+		"vs/workbench/browser/workbench.contribution": {
+			"appName": "`${appName}`: 例如 {0}。",
+			"workbench.activityBar.location.toolbar": "在标题栏中的布局控件旁边显示活动栏。"
+		},
+		"vs/workbench/common/contextkeys": {
+			"inAutomation": "{0} 是否在自动化或冒烟测试中运行"
+		},
+		"vs/workbench/common/theme": {
+			"modernPanelBorder": "启用新式 UI 时面板表面的边框颜色。",
+			"modernSashGripForeground": "启用新式 UI 时，标记工作台各部分之间可调整大小的边界的拖动手柄颜色。",
+			"modernUIInactiveShellBackground": "窗口处于非活动状态且启用新式 UI 时，浮动工作台表面周围可见的外壳背景色。",
+			"modernUIShellBackground": "启用新式 UI 时，浮动工作台表面周围可见的外壳背景色。",
+			"statusBarInactiveBackground": "打开工作区或文件夹且窗口处于非活动状态时状态栏的背景色。调试及其他背景替代设置优先。如果未设置，则使用当前状态栏背景色。"
+		},
+		"vs/workbench/contrib/accessibility/browser/accessibilityConfiguration": {
+			"verbosity.customizationMigrations.description": "提供有关如何访问自定义项迁移清单的辅助功能帮助的信息。"
+		},
+		"vs/workbench/contrib/browserView/common/browserView": {
+			"browserView.openShareableCopy.cancel": "取消",
+			"browserView.openShareableCopy.confirm": "打开并共享(&&O)",
+			"browserView.openShareableCopy.detail": "此标签页不强制执行与 agent 共享所需的已配置策略限制。\n\n请在新标签页中打开该页面，以便与 agent 共享。",
+			"browserView.openShareableCopy.message": "是否打开新标签页以共享？"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/browserViewWorkbenchService": {
+			"browser.networkFilteringEnabled": "由于已启用网络筛选，agent 对浏览器标签页的访问权限已被撤销。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserDataStorageFeatures": {
+			"browser.clearAgentStorageAction": "清除存储(Agent)",
+			"browser.dataStorage.agent": "浏览器视图共享一个内存中会话，该会话会在应用程序关闭时清除。此会话与 agent 打开的浏览器页面共享，因此 **agent 可以访问包括本地存储和 Cookie 在内的所有数据。** 启用 agent 网络筛选后，来自此会话的请求将受已配置的网络域策略限制。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorChatFeatures": {
+			"browser.shareWithAgent.blockedByNetworkPolicy": "由于网络域策略，无法与 agent 共享。",
+			"browser.shareWithAgent.failed": "无法共享浏览器标签页",
+			"browser.shareWithAgent.isolated": "与 agent 共享(打开隔离的标签页)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorEmulationFeatures": {
+			"browser.userAgent.prompt": "用户代理字符串(留空则使用 {0} 默认值)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorErrorFeatures": {
+			"browser.networkPolicyErrorExtraWarning": "该请求很可能已被网络域策略阻止。\n请检查已配置的允许和拒绝的网络域。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserTabManagementFeatures": {
+			"browser.openInIntegratedBrowser": "在集成浏览器(而不是系统浏览器)中打开的、来自终端、聊天和其他来源的链接，不受 `#workbench.browser.openLocalhostLinks#` 设置的影响。每个条目都是一个 URL 模式: `example.com` 匹配该域的页面，`*.example.com` 匹配该域及其子域，`https://example.com/docs` 匹配该路径下使用该协议的页面，`example.com:*` 匹配任意端口。"
+		},
+		"vs/workbench/contrib/chat/browser/chat.shared.contribution": {
+			"autoApprove3.description": "全局自动批准也称为“YOLO 模式”，它会完全禁用所有工作区中所有工具的手动审批，使 agent 能够完全自主地执行操作。这极其危险，*绝不*建议使用，即使是 Codespaces 和开发容器等容器化环境，也会将用户密钥转发到容器中，而这些密钥可能遭到泄露。\n\n此功能会禁用关键安全保护，使攻击者更容易入侵计算机。\n\n注意: 此设置仅控制工具审批，不会阻止 agent 提问。要自动回答 agent 的问题，请使用 `#chat.autoReply#` 设置。",
+			"mcp.enterpriseManagedAuth.idp": "(预览)用于企业管理的模型上下文协议(MCP)服务器的 OAuth/OIDC IdP 配置。通常通过企业策略(Windows 组策略/macOS 托管首选项/Linux `/etc/facade/policy.json`)提供；开发人员可以手动编辑 `settings.json` 以进行本地测试。属性: `issuer` (HTTPS URL)、`clientId`、`clientSecret`。"
+		},
+		"vs/workbench/contrib/codeEditor/browser/diffEditorAccessibilityHelp": {
+			"msg6": "使用编辑器标题区域“更多操作”菜单中的“差异视图”，选择内联、并排或自动布局。"
+		},
+		"vs/workbench/contrib/debug/browser/debugAdapterManager": {
+			"debugServer": "仅用于调试扩展开发: 如果指定了端口，{0} 会尝试连接到以服务器模式运行的调试适配器"
+		},
+		"vs/workbench/contrib/extensions/browser/extensions.contribution": {
+			"extensions.gallery.authProvider": "配置扩展市场的身份验证提供程序",
+			"extensions.gallery.authProvider.github": "使用 GitHub 向扩展市场进行身份验证。",
+			"extensions.gallery.authProvider.microsoft": "使用 Microsoft (Entra ID) 帐户向扩展市场进行身份验证。",
+			"notInstalled": "未安装扩展“{0}”。请确保使用包括发布者在内的完整扩展 ID，例如 ms-dotnettools.csharp。",
+			"workbench.extensions.installExtension.option.donotSync": "启用后，{0} 在启用“设置同步”时不同步此扩展。",
+			"workbench.extensions.installExtension.option.installOnlyNewlyAddedFromExtensionPackVSIX": "启用后，{0} 仅安装扩展包 VSIX 中新添加的扩展。仅在安装 VSIX 时才考虑此选项。",
+			"workbench.extensions.installExtension.option.installPreReleaseVersion": "启用后，{0} 将安装扩展的预发布版本(如果可用)。"
+		},
+		"vs/workbench/contrib/extensions/browser/extensionsActions": {
+			"deprecated with alternate settings message": "此扩展已弃用，因为此功能现已内置于 {0}。",
+			"deprecated with alternate settings tooltip": "此扩展已弃用，因为此功能现已内置于 {1}。配置这些 {0} 以使用此功能。",
+			"disableForWorkspaceActionToolTip": "仅在此工作区中禁用此扩展。这适用于此窗口中的所有文件夹。",
+			"enableForWorkspaceActionToolTip": "仅在此工作区中启用此扩展。这适用于此窗口中的所有文件夹。"
+		},
+		"vs/workbench/contrib/extensions/common/extensionsFileTemplate": {
+			"app.extensions.json.unwantedRecommendations": "由 {0} 推荐、但不应向此工作区的用户推荐的扩展列表。扩展的标识符始终为“${publisher}.${name}”。例如: “vscode.csharp”。"
+		},
+		"vs/workbench/contrib/externalUriOpener/common/configuration": {
+			"externalUriOpeners.defaultId": "使用 {0} 的标准打开器打开。"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
+			"facadeNotificationSource": "Facade Agents"
+		},
+		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
+			"changeAndRestart": "切换并重启",
+			"dontShowAgain": "不再显示",
+			"suggestDisplayLanguage": "{0} 也提供{1}界面。要切换显示语言并重启吗？",
+			"suggestDisplayLanguageSetting": "控制在尚未选择显示语言时，如果有适用于操作系统语言的内置语言包，窗口是否提议切换到该语言。"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminalActions": {
+			"facade.terminal.openTab": "终端"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals": {
+			"folderTerminals.keptRunning": "文件夹“{0}”已从工作区中移除。活动终端会继续在面板中运行: {1}。",
+			"folderTerminals.stop": "停止"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals.contribution": {
+			"terminal.followFolder": "控制编辑器区域中的终端是否跟随当前文件夹。启用后，切换文件夹会隐藏其他文件夹的终端，并在你切换回来时还原它们。禁用后，终端在切换文件夹时始终可见。"
+		},
+		"vs/workbench/contrib/github/browser/githubLinkPresentation.contribution": {
+			"github.authenticationRequired": "登录 GitHub 以加载拉取请求状态和其他 GitHub 链接详细信息。",
+			"github.authenticationRequired.signIn": "登录"
+		},
+		"vs/workbench/contrib/issue/browser/baseIssueReporterService": {
+			"handlesIssuesElsewhere": "此扩展在 {0} 之外处理问题"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterOverlay": {
+			"screenshotsSubtitle": "最多可添加 {0} 个屏幕截图或视频。在 {1} 中操作并选择捕获时机。"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterPage": {
+			"acknowledgements": "我确认我的 {0} 版本未更新，并且此问题可能会被关闭。"
+		},
+		"vs/workbench/contrib/localization/common/localizationsActions": {
+			"configureLocaleDescription": "根据已安装的语言包更改 {0} 的区域设置。常用语言包括法语、中文、西班牙语、日语、德语、韩语等。"
+		},
+		"vs/workbench/contrib/multiDiffEditor/browser/actions": {
+			"diffView": "差异视图"
+		},
+		"vs/workbench/contrib/preferences/browser/preferencesWidgets": {
+			"workspaceSettingsAllFolders": "工作区: 适用于此窗口中的所有文件夹。"
+		},
+		"vs/workbench/contrib/preferences/browser/settingsTree": {
+			"setting.deprecationMessageSeverity.info": "信息",
+			"setting.deprecationMessageSeverity.warning": "警告"
+		},
+		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
+			"progress.turnOn.final.noLink": "已为 {0} 启用远程隧道访问。可以通过“{3} 帐户”菜单[配置](command:{1})或[关闭](command:{2})此访问权限。",
+			"remoteTunnel.actions.rename": "重命名隧道",
+			"renameTunnel.invalidName": "名称只能由字母、数字、下划线和短划线组成。不得以短划线开头。",
+			"renameTunnel.maxLength": "名称不得超过 {0} 个字符。",
+			"renameTunnel.placeholder": "留空则使用此计算机的主机名。",
+			"renameTunnel.prompt": "输入此隧道的名称。",
+			"renameTunnel.title": "重命名隧道"
+		},
+		"vs/workbench/contrib/scm/browser/scm.contribution": {
+			"no repository in folder": "此文件夹中没有源代码管理存储库。"
+		},
+		"vs/workbench/contrib/search/browser/search.common.contribution": {
+			"exclude": "配置 [glob 模式](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options)，以在全文搜索和快速打开的文件搜索中排除文件和文件夹。若要从快速打开的最近打开列表中排除文件，模式必须为绝对路径(例如 `**/node_modules/**`)。从 `#files.exclude#` 设置继承所有 glob 模式。",
+			"exclude.boolean": "匹配文件路径所依据的 glob 模式。设置为 true 或 false 可启用或禁用该模式。",
+			"exclude.when": "对匹配文件的同级文件进行额外检查。使用 \\$(basename) 作为匹配文件名的变量。",
+			"search.followSymlinks": "控制是否在搜索中跟随符号链接。",
+			"search.maxResults": "控制搜索结果的最大数目，可将其设置为 `null` (空)以返回无限结果。",
+			"search.ripgrep.maxThreads": "用于搜索的线程数。设置为 0 时，引擎将自动确定此值。",
+			"search.smartCase": "若模式全为小写，则不区分大小写进行搜索，否则区分大小写进行搜索。",
+			"search.sortOrder": "控制搜索结果的排序顺序。",
+			"searchSortOrder.countAscending": "结果按每个文件的计数升序排序。",
+			"searchSortOrder.countDescending": "结果按每个文件的计数降序排序。",
+			"searchSortOrder.default": "结果按文件夹和文件名的字母顺序排序。",
+			"searchSortOrder.filesOnly": "结果按文件名的字母顺序排序，忽略文件夹顺序。",
+			"searchSortOrder.modified": "结果按文件的上次修改日期降序排序。",
+			"searchSortOrder.type": "结果按文件扩展名的字母顺序排序。",
+			"useGlobalIgnoreFiles": "控制在搜索文件时是否使用全局 gitignore 文件(例如，来自 `$HOME/.config/git/ignore`)。需要启用 {0}。",
+			"useIgnoreFiles": "控制在搜索文件时是否使用 `.gitignore` 和 `.ignore` 文件。",
+			"useParentIgnoreFiles": "控制在搜索文件时是否使用父目录中的 `.gitignore` 和 `.ignore` 文件。需要启用 {0}。"
+		},
+		"vs/workbench/contrib/tasks/browser/abstractTaskService": {
+			"TerminateAction.noProcess": "启动的进程已不存在。如果任务生成了后台任务，退出 {0} 可能会导致出现孤立的进程。"
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchemaCommon": {
+			"JsonSchema.promptOnClose": "在有正在运行的后台任务时关闭 {0}，是否提示用户。",
+			"JsonSchema.tasks.promptOnClose": "在有正在运行的任务时关闭 {0}，是否提示用户。"
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchema_v2": {
+			"JsonSchema.tasks.promptOnClose": "在有正在运行的任务时关闭 {0}，是否提示用户。"
+		},
+		"vs/workbench/contrib/tasks/common/taskDefinitionRegistry": {
+			"TaskDefinition.required": "要使此类型的任务被视为匹配，必须提供的 `properties` 对象中的属性名称。{0} 用它们将 `tasks.json` 条目与已注册的任务提供程序关联。"
+		},
+		"vs/workbench/contrib/tasks/electron-browser/taskService": {
+			"TaskSystem.noProcess": "启动的任务已不存在。如果任务生成了后台进程，退出 {0} 可能会导致出现孤立的进程。若要避免此情况，请使用等待标志启动最后一个后台进程。"
+		},
+		"vs/workbench/contrib/terminal/browser/terminalActions": {
+			"facade.terminal.newInFolder": "在另一个文件夹中新建终端..."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalProcessManager": {
+			"facade.agentElsewhere": "此 agent 正在另一个窗口中运行。请切换到该窗口中它的选项卡。",
+			"facade.agentProcessGone": "此 agent 的进程在窗口关闭或重新加载期间已结束。"
+		},
+		"vs/workbench/contrib/terminal/browser/terminalView": {
+			"terminal.monospaceOnly": "终端仅支持等宽字体。如果这是新安装的字体，请务必重新启动 {0}。"
+		},
+		"vs/workbench/contrib/terminal/common/terminalConfiguration": {
+			"terminal.integrated.allowChords": "是否允许终端中的组合键绑定。请注意，如果此值为 true，并且击键导致一个组合，则它将绕过 {0}；当你希望 ctrl+k 转到 shell (而不是 {1})时，将此设置为 false 特别有用。",
+			"terminal.integrated.commandsToSkipShell": "一组命令 ID，其键绑定不会发送到 shell，而是始终由 {2} 处理。这样，通常会被 shell 使用的键绑定的行为可如同焦点不在终端上时一样，例如按 `Ctrl+P` 启动“快速打开”。\n\n&nbsp;\n\n默认会跳过许多命令。要替代默认值并将相关命令的键绑定改为传递给 shell，请添加以 `-` 字符为前缀的命令。例如，添加 `-workbench.action.quickOpen` 可使 `Ctrl+P` 到达 shell。\n\n&nbsp;\n\n在设置编辑器中查看时，下面的默认跳过命令列表会被截断。要查看完整列表，请 {1}，然后搜索下面列表中的第一个命令。\n\n&nbsp;\n\n默认跳过的命令:\n\n{0}",
+			"terminal.integrated.detectLocale": "控制是否检测 `$LANG` 环境变量并将其设置为符合 UTF-8 的选项，因为 {0} 的终端仅支持来自 shell 的 UTF-8 编码数据。",
+			"terminal.integrated.env.linux": "具有环境变量的对象，这些变量将添加到 Linux 上的终端要使用的 {0} 进程。设置为 `null` 可删除该环境变量。",
+			"terminal.integrated.env.osx": "具有环境变量的对象，这些变量将添加到 macOS 上的终端要使用的 {0} 进程。设置为 `null` 可删除该环境变量。",
+			"terminal.integrated.env.windows": "具有环境变量的对象，这些变量将添加到 Windows 上的终端要使用的 {0} 进程。设置为 `null` 可删除该环境变量。",
+			"terminal.integrated.gpuAcceleration.auto": "让 {0} 检测哪个呈现器能提供最佳体验。",
+			"terminal.integrated.shellIntegration.enabled": "确定是否自动注入 shell 集成，以支持增强型命令跟踪和当前工作目录检测等功能。\n\nshell 集成通过向 shell 注入启动脚本来工作。该脚本使 {2} 能够了解终端中发生的情况。\n\n支持的 shell:\n\n- Linux/macOS: bash、fish、pwsh、zsh\n- Windows: pwsh、git bash\n\n此设置仅在创建终端时适用，因此需要重启终端才能生效。\n\n请注意，如果在终端配置文件中定义了自定义参数、已启用 {1}、具有[复杂的 bash `PROMPT_COMMAND`](https://code.visualstudio.com/docs/editor/integrated-terminal#_complex-bash-promptcommand)或其他不受支持的设置，则脚本注入可能不起作用。若要禁用修饰，请参阅 {0}",
+			"terminal.integrated.windowsUseConptyDll": "是否使用 {0} 附带的 conpty.dll (v1.25.260303002)，而不是 Windows 自带的版本。"
+		},
+		"vs/workbench/contrib/terminal/common/terminalContextKey": {
+			"facadeAgentTerminalContextKey": "活动终端编辑器是否从 Agent 菜单启动",
+			"facadeRunTerminalContextKey": "活动终端是否在运行由 Facade 启动的 agent。"
+		},
+		"vs/workbench/contrib/terminalContrib/autoReplies/common/terminalAutoRepliesConfiguration": {
+			"terminal.integrated.autoReplies": "一组消息，在终端中遇到这些消息时将自动予以回复。如果消息足够具体，这有助于自动完成常见的回复。\n\n备注:\n\n- 使用 {0} 自动回复 Windows 上的终止批处理作业提示。\n- 消息包括转义序列，因此带样式的文本可能无法触发回复。\n- 每条回复每秒最多只能触发一次。\n- 在回复中使用 {1} 表示 Enter 键。\n- 要取消设置默认键，请将该值设置为 null。\n- 如果新的回复不生效，请重启 {2}。"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherActions": {
+			"facade.agent.configure": "配置 agent...",
+			"facade.agent.menu": "Agent",
+			"facade.agent.oneActive": "{0} - 1 个活动的 agent",
+			"facade.agent.showActive": "显示活动的 agent...",
+			"facade.agent.showMenu": "显示 Agent 菜单",
+			"facade.agent.someActive": "{0} - {1} 个活动的 agent",
+			"facade.agent.startRestricted": "启动 agent...",
+			"facade.agents.category": "Agent"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
+			"facade.agent.noneFound": "未找到 agent: 配置 agent..."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
+			"agentPicker.agentAndTitle": "{0} · {1}",
+			"agentPicker.close": "关闭 agent",
+			"agentPicker.creatingWorktree": "正在创建其工作树",
+			"agentPicker.empty": "没有活动的 agent",
+			"agentPicker.panel": "面板",
+			"agentPicker.placeholder": "选择 agent",
+			"agentPicker.preparing": "{0} · {1}",
+			"agentPicker.runningSetup": "正在初始化其工作树",
+			"agentPicker.untitled": "Agent"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherService": {
+			"facade.agent.trustToStart": "Agent 会在此工作区的文件夹中工作。请信任此工作区以启动 {0}。",
+			"facade.agent.trustToStartAny": "Agent 会在此工作区的文件夹中工作。请信任此工作区以启动 agent。"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherShutdown": {
+			"runningWork.agent": "是否要终止 1 个 agent？",
+			"runningWork.agentAndTerminal": "是否要终止 1 个 agent 和 1 个终端？",
+			"runningWork.agentAndTerminals": "是否要终止 1 个 agent 和 {0} 个终端？",
+			"runningWork.agents": "是否要终止 {0} 个 agent？",
+			"runningWork.agentsAndTerminal": "是否要终止 {0} 个 agent 和 1 个终端？",
+			"runningWork.agentsAndTerminals": "是否要终止 {0} 个 agent 和 {1} 个终端？"
+		},
+		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
+			"agentIcon.antigravity": "运行 Antigravity 的终端的图标。",
+			"agentIcon.claude": "运行 Claude Code 的终端的图标。",
+			"agentIcon.codex": "运行 Codex 的终端的图标。",
+			"agentIcon.grok": "运行 Grok Build 的终端的图标。",
+			"agentIcon.muse": "运行 Muse Code 的终端的图标。"
+		},
+		"vs/workbench/contrib/webview/browser/webviewFindAccessibilityHelp": {
+			"webview.importantDesc": "某些 Web 视图会在 {0} 的“查找”使用键盘输入之前将其截获。如果按 Enter 或 Shift+Enter 无法在匹配项之间导航，则可能是 Web 视图正在处理这些键。请先单击 Web 视图内容或按 Tab 键进入其中，确保 Web 视图具有焦点，然后重新打开“查找”并再次尝试导航。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution": {
+			"minWelcomeDescription": "打开演练，帮助你开始使用 {0}。",
+			"workbench.startupEditor.welcomePage": "打开欢迎页面，其中包含帮助你开始使用 {0} 和扩展的内容。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedExtensionPoint": {
+			"walkthroughs.steps.completionEvents.onCommand": "在 {0} 中的任何位置执行给定命令时，勾选步骤。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent": {
+			"gettingStarted.commandPalette.description.interpolated": "在 {1} 中运行命令，无需动用鼠标即可完成任何任务。\n{0}",
+			"gettingStarted.commandPaletteAccessibility.description.interpolated": "在 {1} 中运行命令，无需动用鼠标即可完成任何任务。\n{0}",
+			"gettingStarted.extensions.description.interpolated": "扩展是 {1} 的强力加持，从便捷的效率技巧、对开箱即用功能的扩展，到全新的能力，应有尽有。\n{0}",
+			"gettingStarted.settingsAndSync.description.interpolated": "自定义 {1} 的方方面面，并跨设备[同步](command:workbench.userDataSync.actions.turnOn)自定义项。\n{0}",
+			"gettingStarted.setup.title": "开始使用 {0}",
+			"gettingStarted.setup.walkthroughPageTitle": "设置 {0}",
+			"gettingStarted.setupAccessibility.description": "了解让 {0} 易于访问的工具和快捷方式。请注意，某些操作无法在演练中执行。",
+			"gettingStarted.setupAccessibility.walkthroughPageTitle": "设置 {0} 辅助功能",
+			"gettingStarted.videoTutorial.description.interpolated": "观看系列简短实用视频教程的第一课，了解 {1} 的主要功能。\n{0}"
+		},
+		"vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA": {
+			"onboarding.personalize.tip.suffix": " 以访问所有 {0} 命令。",
+			"onboarding.signIn.heroTitle": "欢迎使用 {0}"
+		},
+		"vs/workbench/contrib/workspace/browser/workspace.contribution": {
+			"workspace.trust.description": "控制是否在 {0} 中启用工作区信任。",
+			"workspace.trust.emptyWindow.description": "控制空窗口在 {1} 中是否默认受信任。与 `#{0}#` 一起使用时，可以在空窗口中启用 {1} 的完整功能，而无需提示。"
+		},
+		"vs/workbench/contrib/worktrees/browser/worktrees": {
+			"worktrees.agentElsewhere": "未删除“{0}”，因为另一个窗口中的 agent 正在其中工作({1})。请先在该窗口中停止该 agent。",
+			"worktrees.agentInside": "未删除“{0}”，因为有一个不会因此次删除而停止的 agent 正在其中工作({1})。请先停止该 agent。",
+			"worktrees.alreadyOut": "{0} 它已从工作区中移除，其正在运行的终端已终止。",
+			"worktrees.anotherToolsWorktree": "“{0}”是在 Facade 之外创建的工作树。请改为从其存储库的主工作树创建工作树。",
+			"worktrees.badName": "“{0}”不是 Windows 上的有效文件夹名称。",
+			"worktrees.badSetup": "未能解析 .facade/worktrees.json: setup 键必须包含命令字符串数组。未执行任何命令。",
+			"worktrees.beingDeleted": "正在删除该工作树。",
+			"worktrees.branchCheckedOut": "分支“{0}”已在“{1}”中签出。",
+			"worktrees.branchExists": "已存在名为“{0}”的分支。请选择其他名称。",
+			"worktrees.branchKeptQuoted": "将保留分支“{0}”。",
+			"worktrees.changedMeanwhile": "未删除“{0}”，因为删除期间其中出现了新的更改，删除会丢失这些更改: {1}。",
+			"worktrees.changedSinceCheck": "工作树中的文件在验证后被修改。请检查更改，然后重试。",
+			"worktrees.checkFailed": "删除前未能验证工作树状态: {0}",
+			"worktrees.copyFailed": "未能将 .worktreeinclude 中指定的 {0} 个文件复制到工作树: {1}",
+			"worktrees.couldNotLeave": "无法切换到“{0}”；未删除工作树“{1}”。",
+			"worktrees.createFailed": "未能创建工作树: {0}",
+			"worktrees.createdForAgent": "已在“{0}”创建工作树，但{1}时失败: {2}",
+			"worktrees.createdNotOpened": "已在“{0}”创建工作树，但{1}时失败: {2}",
+			"worktrees.creating": "正在创建工作树“{0}”...",
+			"worktrees.deleteButton": "删除(&&D)",
+			"worktrees.deleteDiscardButton": "删除并放弃更改(&&D)",
+			"worktrees.deleteFailed": "未能删除工作树: {0}",
+			"worktrees.deleteQuestion": "确定要删除工作树“{0}”吗？",
+			"worktrees.deleteUnknown": "无法确认工作树“{0}”是否已删除。工作区栏反映的是当前的 Git 状态。",
+			"worktrees.deleteWorktree": "删除工作树...",
+			"worktrees.deleting": "正在删除工作树“{0}”...",
+			"worktrees.folder": "路径: {0}",
+			"worktrees.folderAndSubmodulesDeleted": "将删除工作树文件夹，包括其子模块和未推送的提交。此操作无法撤消。",
+			"worktrees.folderDeleted": "将从磁盘中删除工作树文件夹。此操作无法撤消。",
+			"worktrees.goThere": "切换到工作树",
+			"worktrees.hookFailed": "已创建工作树，但 Git 挂钩失败: {0}",
+			"worktrees.ignored": "将删除以下被 Git 忽略的文件:",
+			"worktrees.ignoredFile": "{0} (被 Git 忽略)",
+			"worktrees.inheritedEnvironment": "此窗口启动时设置了 GIT_DIR、GIT_WORK_TREE 或 GIT_INDEX_FILE，这会将 Git 重定向到另一个存储库。请在新窗口中打开该文件夹。",
+			"worktrees.initialBranch": "初始提交位于分支“{0}”上。请为新工作树选择其他分支名称。",
+			"worktrees.initializeAndCreate": "初始化并创建",
+			"worktrees.inspectFailed": "Git 未能读取存储库“{0}”: {1}",
+			"worktrees.inspecting": "正在读取存储库“{0}”...",
+			"worktrees.invalidBranchName": "“{0}”不是有效的分支名称。",
+			"worktrees.kept": "未从磁盘中删除工作树“{0}”。它已从工作区中移除。单击其所在行可将其重新添加。",
+			"worktrees.keptOutside": "未从磁盘中删除工作树“{0}”。",
+			"worktrees.leftover": "已从 Git 中移除工作树，但无法删除其文件夹: {0}。{1}",
+			"worktrees.leftoverRefused": "未能删除文件夹: {0}",
+			"worktrees.leftoverUnknown": "“{0}”未被识别为此窗口中的删除操作遗留的工作树文件夹，因此未将其删除。如有需要，请手动删除。",
+			"worktrees.locked": "工作树“{0}”已锁定。请运行“git worktree unlock”以允许删除。",
+			"worktrees.lockedBecause": "工作树“{0}”已锁定: {1}。请运行“git worktree unlock”以允许删除。",
+			"worktrees.loses": "以下未提交的更改将丢失:",
+			"worktrees.mainNotDeleted": "{0} 是其存储库的主工作树，永远不会被删除。",
+			"worktrees.namedMore": "{0} 及其他 {1} 个",
+			"worktrees.newWorktree": "新建工作树...",
+			"worktrees.nextSentence": "{0}{1}",
+			"worktrees.noAnswer": "Git 进程没有响应。",
+			"worktrees.noBaseUnasked": "存储库“{0}”中没有任何提交。请先创建初始提交。",
+			"worktrees.noBranch": "创建工作树需要分支名称。",
+			"worktrees.noGit": "未能执行用于创建工作树的 Git 命令: {0}",
+			"worktrees.noGitDelete": "未能执行用于删除工作树的 Git 命令: {0}",
+			"worktrees.noGitExtension": "工作树操作需要内置的 Git 扩展，但它在此窗口中未处于活动状态。",
+			"worktrees.noIdentity": "未配置 Git 作者身份。请通过“{2}”设置“{0}”和“{1}”，然后重试。",
+			"worktrees.notARepository": "“{0}”包含一个无法作为有效 Git 存储库读取的 .git 文件夹。",
+			"worktrees.notDeletedNotFacades": "{0} 是在 Facade 之外创建的工作树，Facade 从不删除此类工作树。",
+			"worktrees.notOnDisk": "“{0}”不是磁盘上的有效文件夹。",
+			"worktrees.notOut": "无法从工作区中移除工作树“{0}”，因此未将其删除。",
+			"worktrees.notRepositoryUnasked": "文件夹“{0}”不是 Git 存储库。请先初始化存储库。",
+			"worktrees.notWorktree": "“{0}”不是此工作区中可识别的工作树。",
+			"worktrees.openWorktree": "打开工作树",
+			"worktrees.outOfWorkspace": "它已从工作区中移除。",
+			"worktrees.pathExists": "“{0}”处已存在文件或文件夹。",
+			"worktrees.prepare.folderEmpty": "此文件夹不是 Git 存储库。继续操作将初始化该文件夹(“git init”)，并创建一个空的初始提交。",
+			"worktrees.prepare.folderMany": "此文件夹不是 Git 存储库。继续操作将初始化该文件夹(“git init”)，并创建包含 {0} 个文件的初始提交。",
+			"worktrees.prepare.folderOne": "此文件夹不是 Git 存储库。继续操作将初始化该文件夹(“git init”)，并创建包含 1 个文件的初始提交。",
+			"worktrees.prepare.insideEmpty": "此文件夹位于 Git 存储库“{0}”内，但不是其根目录。继续操作将在此处初始化一个单独的存储库(“git init”)，并创建一个空的初始提交。",
+			"worktrees.prepare.insideMany": "此文件夹位于 Git 存储库“{0}”内，但不是其根目录。继续操作将在此处初始化一个单独的存储库(“git init”)，并创建包含 {1} 个文件的初始提交。",
+			"worktrees.prepare.insideOne": "此文件夹位于 Git 存储库“{0}”内，但不是其根目录。继续操作将在此处初始化一个单独的存储库(“git init”)，并创建包含 1 个文件的初始提交。",
+			"worktrees.prepare.unbornEmpty": "此存储库还没有任何提交。继续操作将创建一个空的初始提交。",
+			"worktrees.prepare.unbornMany": "此存储库还没有任何提交。继续操作将创建包含 {0} 个文件的初始提交。",
+			"worktrees.prepare.unbornOne": "此存储库还没有任何提交。继续操作将创建包含 1 个文件的初始提交。",
+			"worktrees.prepareFailed": "未能为“{0}”创建初始提交: {1}",
+			"worktrees.preparing": "正在“{0}”中创建初始提交...",
+			"worktrees.restricted": "工作树需要执行 Git 操作，而这些操作在受限模式下已禁用。",
+			"worktrees.restrictedUnasked": "工作区处于受限模式。请信任此工作区以运行 Git 操作。",
+			"worktrees.retry": "重试",
+			"worktrees.revealInLinux": "打开所在的文件夹",
+			"worktrees.revealInMac": "在 Finder 中显示",
+			"worktrees.revealInWindows": "在文件资源管理器中显示",
+			"worktrees.runSetupAgain": "重新运行初始化",
+			"worktrees.setupTerminal": "工作树初始化",
+			"worktrees.setupUnfinished": "工作树“{0}”的初始化脚本可能因窗口重新加载或关闭而中断。请先检查其终端输出，然后再重试。",
+			"worktrees.shellEnded": "shell 在此命令之后退出，因此其后的命令未运行。",
+			"worktrees.sinceAsked": "自打开此提示以来，又有其他文件被修改，这些文件也将丢失。",
+			"worktrees.startingGit": "正在启动 Git...",
+			"worktrees.startsAt": "从“{0}”的 HEAD 创建。",
+			"worktrees.startsAtFirst": "从初始提交创建。",
+			"worktrees.stepOpen": "打开工作树",
+			"worktrees.stepRecord": "读取 Git 工作树元数据",
+			"worktrees.stillStopping": "未删除工作树“{0}”，因为以下 agent 尚未停止: {1}。请在它们停止后再次删除。",
+			"worktrees.stillStoppingOut": "未删除工作树“{0}”，因为以下 agent 尚未停止: {1}。它已从工作区中移除。请在它们停止后再次删除。",
+			"worktrees.submodulesLost": "其子模块(包括所有未推送的提交)",
+			"worktrees.submodulesMeanwhile": "未删除“{0}”，因为删除期间其中添加了子模块；删除它会丢失这些子模块中所有未推送的提交。",
+			"worktrees.submodulesSince": "子模块及所有未推送的提交也将被删除。",
+			"worktrees.superseded": "在打开完成之前又请求了切换文件夹",
+			"worktrees.terminalsEnded": "与此工作树关联的终端已关闭，活动进程已终止: {0}。",
+			"worktrees.terminalsTerminated": "{0} 其正在运行的终端已终止。",
+			"worktrees.trustFolder": "信任文件夹并继续(&&T)",
+			"worktrees.trustWorkspace": "信任工作区并继续(&&T)",
+			"worktrees.unbornBranch": "存储库“{0}”的当前分支上没有任何提交。请先创建提交或切换分支。",
+			"worktrees.unsafeRepository": "Git 无法打开“{0}”，因为它归其他用户所有。请运行“{1}”将其标记为安全，然后重试。",
+			"worktrees.unsavedFile": "{0} (未保存)",
+			"worktrees.untrusted": "工作树从其父存储库“{0}”继承信任。请先信任父存储库。",
+			"worktrees.untrustedUnasked": "存储库“{0}”不受信任。请先信任该存储库，再创建工作树。",
+			"worktrees.wouldLose": "“{0}”中有删除后会丢失的更改: {1}。未删除任何内容。",
+			"worktrees.wouldLoseSubmodules": "“{0}”包含子模块；删除它会丢失这些子模块中所有未推送的提交。未删除任何内容。"
+		},
+		"vs/workbench/electron-browser/actions/windowActions": {
+			"openDefaultWorkspace": "打开默认工作区"
+		},
+		"vs/workbench/electron-browser/desktop.contribution": {
+			"argv.disableChromiumSandbox": "禁用 Chromium 沙盒。在 Linux 上以提升的权限运行 {0} 以及在 Windows 上的 Applocker 下运行时，这很有用。",
+			"argv.useInMemorySecretStorage": "确保使用内存中存储来存储机密，而不是使用操作系统的凭据存储。此选项通常在运行 {0} 扩展测试或遇到凭据存储问题时使用。",
+			"miOpenDefaultWorkspace": "打开默认工作区(&&D)"
+		},
+		"vs/workbench/electron-browser/window": {
+			"notOpenedWithoutFolder": "无法打开 {0}，因为窗口无法切换到包含它们的文件夹。"
+		},
+		"vs/workbench/services/dialogs/electron-browser/fileDialogService": {
+			"openFileOrFolder.title": "打开文件或文件夹",
+			"openFolder.title": "打开文件夹"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryAccountService": {
+			"marketplace.pickAccount": "选择要用于扩展市场的帐户",
+			"marketplace.signInDifferentAccount": "使用其他帐户登录…"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryManifestService": {
+			"extensionGalleryManifestService.configurationChange": "扩展市场配置已更改。请重启以应用更改。"
+		},
+		"vs/workbench/services/extensions/common/extensionsRegistry": {
+			"vscode.extension.capabilities.agentsWindow": "声明是否应在 Agent 窗口中启用该扩展。需要 `agentsWindowActivation` API 建议和实验性 Agent 窗口功能设置。",
+			"vscode.extension.capabilities.agentsWindow.supported": "声明扩展是否支持在 Agent 窗口中运行。扩展必须启用 `agentsWindowActivation` API 建议和 `extensions.experimental.enableAgentsWindowCapability` 设置，此属性才会生效。"
+		},
+		"vs/workbench/services/extensions/electron-browser/nativeExtensionService": {
+			"relaunch": "重新启动 {0}"
+		},
+		"vs/workbench/services/folderScope/browser/folderScope.contribution": {
+			"allFoldersIcon": "用于在当前文件夹和整个工作区之间切换视图范围的图标。",
+			"facadeCategory": "工作区",
+			"toggleFolderScope": "显示所有文件夹",
+			"toggleFolderScope.toggled": "正在显示所有文件夹"
+		},
+		"vs/workbench/services/folderScope/common/folderScope": {
+			"facadeFolderScope": "视图的范围是当前文件夹还是整个工作区",
+			"folderScope.searchingAll": "正在搜索所有文件夹。单击可仅搜索当前文件夹。",
+			"folderScope.searchingFolder": "正在搜索当前文件夹。单击可搜索所有工作区文件夹。"
+		},
+		"vs/workbench/services/userDataProfile/browser/userDataProfileManagement": {
+			"reload message": "切换配置文件需要重新加载 {0}。"
+		}
+	},
+	"vscode.configuration-editing": {
+		"bundle": {
+			"The name of the folder opened in {0} without any slashes (/)": "在 {0} 中打开的文件夹的名称(不包含任何斜杠“/”)",
+			"The path of the folder opened in {0}": "在 {0} 中打开的文件夹的路径",
+			"e.g. {0}": "例如 {0}"
+		}
+	},
+	"vscode.css-language-features": {
+		"package": {
+			"css.completion.triggerPropertyValueCompletion.desc": "默认情况下，Facade Code 会在选择 CSS 属性后触发属性值补全。使用此设置可禁用此行为。",
+			"css.trace.server.desc": "跟踪 Facade Code 与 CSS 语言服务器之间的通信。",
+			"less.completion.triggerPropertyValueCompletion.desc": "默认情况下，Facade Code 会在选择 CSS 属性后触发属性值补全。使用此设置可禁用此行为。",
+			"scss.completion.triggerPropertyValueCompletion.desc": "默认情况下，Facade Code 会在选择 CSS 属性后触发属性值补全。使用此设置可禁用此行为。"
+		}
+	},
+	"vscode.facade-agents": {
+		"bundle": {
+			"1 message, at {0}": "1 条消息，时间为 {0}",
+			"@{0} #a{1} · last screen": "@{0} #a{1} · 最后一屏",
+			"Agent management for this workspace has been transferred to another Facade window.": "此工作区的 agent 管理已转移到另一个 Facade 窗口。",
+			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "此工作区的 agent 由另一个窗口管理。请在该窗口中删除聊天室。",
+			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "此工作区的 agent 由另一个窗口管理。请在该窗口中打开聊天室。",
+			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "将删除此工作区中你与 agent 之间的所有消息。此操作无法撤消。",
+			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "你从 Agent 菜单或“启动 agent”启动的 agent 会保留其 CLI 自身的提问和更新，审批则按 YOLO 的设置进行。由其他 agent 或你的脚本通过 start_agent 启动的 agent 可能无人照看，因此会使用其启动配置中的无人值守部分运行(其中的组替换启动配置中的同名组；其中的环境和设置应用在启动配置之上)，这样只要其 CLI 允许，就不会有任何操作等待回答。whenYouStartIt 和 throughStartAgent 分别显示这两种情况下获得的配置。",
+			"Another Facade window manages this workspace's agents. Start agents in that window.": "另一个 Facade 窗口正在管理此工作区的 agent。请在该窗口中启动 agent。",
+			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "另一个 Facade 窗口正在管理此工作区的 agent。请使用该窗口，或者关闭该窗口并重新加载此窗口，以便在此处管理它们。",
+			"Are you sure you want to delete all chat rooms in this workspace?": "确定要删除此工作区中的所有聊天室吗？",
+			"Configure Agents": "配置 agent",
+			"Could not delete all chat rooms: {0}": "无法删除所有聊天室: {0}",
+			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "无法重新连接到已在运行的 agent。它们无法使用 Facade 工具，但从现在起启动的 agent 可以正常工作。",
+			"Delete": "删除",
+			"Each chat room holds every message of an agent you started and of the agents it started": "每个聊天室包含你启动的一个 agent 及其所启动的 agent 的全部消息",
+			"Facade Agents": "Facade Agents",
+			"Facade Agents could not start in this window. See the Facade Agents output for details.": "Facade Agents 无法在此窗口中启动。有关详细信息，请查看 Facade Agents 输出。",
+			"Facade Agents could not start: {0}": "Facade Agents 无法启动: {0}",
+			"Facade Agents stopped in this window.": "Facade Agents 已在此窗口中停止。",
+			"Facade cannot read this workspace's agent record while one of its agents may still be running. See the Facade Agents output for details.": "此工作区的某个 agent 可能仍在运行，Facade 暂时无法读取此工作区的 agent 记录。有关详细信息，请查看 Facade Agents 输出。",
+			"Facade cannot read this workspace's agent record: {0}": "Facade 无法读取此工作区的 agent 记录: {0}",
+			"Facade could not confirm that {0} started: {1}.": "Facade 无法确认 {0} 已启动: {1}。",
+			"Facade could not read this workspace's agent record ({0}), so it started a new one. No action is needed: agents start as before, and their numbering continues. Their history is in {1}; the unreadable record is kept as {2}. Delete it once you no longer need it.": "Facade 无法读取此工作区的 agent 记录({0})，因此新建了一份记录。无需执行任何操作: agent 照常启动，编号也会接续。它们的历史记录位于 {1}；无法读取的记录已保留为 {2}。不再需要时请将其删除。",
+			"Facade could not read {0}, which tells running agents how to reach this window. Agents that were already running can no longer use Facade tools; agents started from now on can.": "Facade 无法读取 {0}，正在运行的 agent 要通过该文件才能连接到此窗口。已在运行的 agent 无法再使用 Facade 工具；从现在起启动的 agent 可以使用。",
+			"Facade: {0}": "Facade: {0}",
+			"Message #m{0} is no longer available because the chat rooms were deleted.": "消息 #m{0} 已不可用，因为聊天室已被删除。",
+			"No agent has been started in this workspace yet.": "此工作区中尚未启动任何 agent。",
+			"No agents are available: none of the built-in agent CLIs were found on this machine, and no custom agents are configured.": "没有可用的 agent: 此计算机上未找到任何内置 agent CLI，也未配置任何自定义 agent。",
+			"No agents are available: the built-in agent CLIs found on this machine are disabled in your settings ({0}), and no custom agents are configured.": "没有可用的 agent: 此计算机上找到的内置 agent CLI 已在你的设置中禁用({0})，也未配置任何自定义 agent。",
+			"No chat rooms have messages yet. A chat room is created when an agent is started.": "还没有任何聊天室包含消息。启动 agent 时会创建聊天室。",
+			"Open Chat Room": "打开聊天室",
+			"Open a local folder to start an agent.": "请打开本地文件夹以启动 agent。",
+			"Select an agent to start": "选择要启动的 agent",
+			"Show": "显示",
+			"Start Agent": "启动 agent",
+			"Terminal screen content upon exit:": "退出时的终端屏幕内容:",
+			"The agent could not start: {0}": "该 agent 无法启动: {0}",
+			"The agent framework is off: the warmUp, connect, and messages groups do not apply, and nothing of Facade's is added to a launch.": "Agent 框架已关闭: warmUp、connect 和 messages 组不适用，启动配置中不会添加 Facade 的任何内容。",
+			"The agent framework is on: the warmUp, connect, and messages groups apply, and Facade tools, skills, and files are added to each launch.": "Agent 框架已开启: warmUp、connect 和 messages 组适用，每个启动配置都会添加 Facade 的工具、技能和文件。",
+			"The last full-screen frame rendered before leaving full screen:": "退出全屏之前呈现的最后一个全屏帧:",
+			"This document only shows the launch. To change it, set what you want to change in your settings. An agent with wrongSettings does not start until they are fixed; cannotStart lists anything else that would prevent its start here.": "此文档仅显示启动配置。若要更改，请在你的设置中设置要更改的内容。存在 wrongSettings 的 agent 在这些设置修正之前不会启动；cannotStart 列出了会阻止其在此处启动的其他原因。",
+			"What Facade starts each agent with now, for an agent in {0}: the program a terminal there runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "Facade 当前启动每个 agent 的方式(针对 {0} 中的 agent): 该处终端运行的程序及其启动配置，即在 Facade 默认值之上应用你的 facade.agents 设置。",
+			"What Facade starts each agent with now: the program it runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "Facade 当前启动每个 agent 的方式: 它运行的程序及其启动配置，即在 Facade 默认值之上应用你的 facade.agents 设置。",
+			"YOLO is off: each agent gets its yoloOff arguments, with its sandbox on where it has one and Facade tools exempted from approval where its CLI allows it. facadeTools and approvalsWithYoloOff show, for each agent, what is asked and what is denied.": "YOLO 已关闭: 每个 agent 获得其 yoloOff 参数；有沙盒的启用沙盒，在 CLI 允许时 Facade 工具免于审批。facadeTools 和 approvalsWithYoloOff 显示每个 agent 会询问什么、拒绝什么。",
+			"YOLO is on: each agent gets its yoloOn arguments, with its sandbox off and nothing asked. Turning off facade.agents.yolo applies to agents started afterward.": "YOLO 已开启: 每个 agent 获得其 yoloOn 参数，沙盒关闭，不询问任何内容。关闭 facade.agents.yolo 仅对之后启动的 agent 生效。",
+			"YOLO: {0}. No agent starts until this is fixed.": "YOLO: {0}。在修复此问题之前，不会启动任何 agent。",
+			"anything that would ask is denied without asking": "所有需要询问的操作都会被直接拒绝，不予询问",
+			"as set by your launch's questions group": "由你的启动配置中的 questions 组设置",
+			"as set by your launch's yoloOff group": "由你的启动配置中的 yoloOff 组设置",
+			"as set by your launch's {0} and {1} groups: Facade's defaults exempt its server from approval, and you changed them": "由你的启动配置中的 {0} 和 {1} 组设置: Facade 的默认值让其服务器免于审批，而你更改了这些默认值",
+			"as set by your launch's {0} group: Facade's default exempts its server from approval, and you changed it": "由你的启动配置中的 {0} 组设置: Facade 的默认值让其服务器免于审批，而你更改了该默认值",
+			"asks you, as its CLI does": "按其 CLI 的方式询问你",
+			"cannot be granted: {0}": "无法授予: {0}",
+			"custom": "自定义",
+			"denied: {0}": "已拒绝: {0}",
+			"edits in its folder are allowed without asking; anything else asks you, as its CLI does": "在其文件夹中编辑无需询问；其他操作按其 CLI 的方式询问你",
+			"edits in its folder are allowed without asking; anything else that would ask is denied without asking": "在其文件夹中编辑无需询问；其他需要询问的操作都会被直接拒绝，不予询问",
+			"kept: it can show a question for you to answer, as it does outside Facade": "保留: 它可以像在 Facade 之外一样显示问题供你回答",
+			"kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question": "保留: 任何启动配置都无法移除其提问工具，因此它在启动时获得的说明会要求它通过 Facade 消息提问；如果有人按名称要求它使用该工具，它仍可以显示问题",
+			"kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer": "保留: 你的启动配置清空了其 questions 组，因此它可以显示等待有人选择答案的问题",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; it has no sandbox": "从不询问: 它无法只让 Facade 的服务器免于审批，因此 YOLO 关闭时它什么都不询问；它没有沙盒",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is as your launch's groups set it": "从不询问: 它无法只让 Facade 的服务器免于审批，因此 YOLO 关闭时它什么都不询问；其沙盒按你的启动配置中的组设置",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is off, as your launch sets it": "从不询问: 它无法只让 Facade 的服务器免于审批，因此 YOLO 关闭时它什么都不询问；其沙盒已按你的启动配置关闭",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox stays on": "从不询问: 它无法只让 Facade 的服务器免于审批，因此 YOLO 关闭时它什么都不询问；其沙盒保持开启",
+			"never asked: its launch exempts only Facade's server from approval": "从不询问: 其启动配置只让 Facade 的服务器免于审批",
+			"none: the CLI asks whether you trust the folder": "无: CLI 会询问你是否信任该文件夹",
+			"not found: {0}": "未找到: {0}",
+			"not yet": "尚未",
+			"nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off": "不询问，也不拒绝: 它无法只让 Facade 工具免于审批，因此其审批已关闭",
+			"permanently: Facade never removes it": "永久: Facade 从不移除它",
+			"removed by its launch's questions group: it asks through Facade messages": "已由其启动配置中的 questions 组移除: 它通过 Facade 消息提问",
+			"task: argument - its task notice is passed as an argument; typed - its task notice is typed into its terminal once it connects; none - it takes no task.": "task: argument - 其任务通知作为参数传递；typed - 其连接后，任务通知会键入到其终端中；none - 它不接收任务。",
+			"trust: a file entry is merged in as if you had answered the CLI yourself, and it stays: Facade never removes it. Arguments trust the folder for that launch only.": "trust: 文件条目会被合并进去，如同你亲自回答了 CLI，并且会一直保留: Facade 从不移除它。参数仅在该次启动中信任该文件夹。",
+			"with YOLO off, none turned off: this folder's .mcp.json has no server that you have not approved for its project": "YOLO 关闭时，无关闭项: 此文件夹的 .mcp.json 中没有你尚未为其项目批准的服务器",
+			"with YOLO off, the servers in its folder's .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them": "YOLO 关闭时，其文件夹的 .mcp.json 中你尚未为其项目批准的服务器会在本次运行中关闭，以免它停下来询问这些服务器",
+			"with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: {0}": "YOLO 关闭时，以下服务器会在本次运行中关闭，以免它停下来询问，因为你尚未为此项目批准它们: {0}",
+			"{0} (ended)": "{0} (已结束)",
+			"{0} ended unexpectedly: {1}.": "{0} 意外结束: {1}。",
+			"{0} exited: {1}.": "{0} 已退出: {1}。",
+			"{0} failed to start: {1}.": "{0} 启动失败: {1}。",
+			"{0} is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.": "{0} 已打开，但尚未连接到 Facade，因此还没有 Facade 工具。它可能启动较慢，或正在其终端中等待回答。",
+			"{0} messages, latest at {1}": "{0} 条消息，最新一条时间为 {1}",
+			"{0} of your agents ended. {1}": "你的 {0} 个 agent 已结束。{1}",
+			"{0} sent you a message: {1}": "{0} 给你发送了一条消息: {1}",
+			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "Facade 添加其部分后，{0} 在其窗口关闭期间被更改。其先前的内容保留在 {1}。",
+			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} 在 agent 使用期间被更改，已不再包含 Facade 添加的部分，因此保持原样。其先前的内容保留在 {1}。",
+			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "另一个 agent 在该处启动时，{0} 不存在。其在 Facade 更改之前的内容保留在 {1}。",
+			"{0} was missing when its agents ended. Its content from before Facade's changes is kept at {1}.": "其 agent 结束时，{0} 不存在。其在 Facade 更改之前的内容保留在 {1}。",
+			"{0} was stopped by {1}.": "{0} 已被 {1} 停止。",
+			"{0} was stopped: {1}.": "{0} 已停止: {1}。",
+			"{0}, saved when its terminal closed. How it ended: {1}.": "{0}，在其终端关闭时保存。结束方式: {1}。",
+			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: 未能读取最后一屏文件“{1}”: {2}。结束方式: {3}。",
+			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: 未保存最后一屏。结束方式: {1}。仅当 agent 的终端在窗口打开期间关闭时，才会保存最后一屏。",
+			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO 关闭时，{1} 会拒绝 Facade 工具",
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}"
+		},
+		"package": {
+			"command.category": "Agent",
+			"command.deleteChatRooms": "删除聊天室...",
+			"command.openChatRoom": "打开聊天室...",
+			"command.showLaunch": "显示 agent 启动配置",
+			"command.showLog": "显示 agent 日志",
+			"command.startAgent": "启动 agent...",
+			"config.antigravity.enabled": "控制是否在 Agent 菜单中以及向 agent 提供 Antigravity。",
+			"config.antigravity.launch": "高级: Facade 启动 Antigravity 的方式。只需设置你想更改的部分: 在 settings.json 中，从大括号内的建议中选择一个部分以填入 Facade 的默认值，然后进行编辑；`null` 会移除 Facade 的某一项。**Agent: 显示 agent 启动配置** 会显示每个 agent 当前使用的启动方式。",
+			"config.antigravity.path": "要运行的 Antigravity 程序。留空则使用 PATH 中的 `agy`。",
+			"config.antigravity.title": "Antigravity",
+			"config.claude.enabled": "控制是否在 Agent 菜单中以及向 agent 提供 Claude Code。",
+			"config.claude.launch": "高级: Facade 启动 Claude Code 的方式。只需设置你想更改的部分: 在 settings.json 中，从大括号内的建议中选择一个部分以填入 Facade 的默认值，然后进行编辑；`null` 会移除 Facade 的某一项。**Agent: 显示 agent 启动配置** 会显示每个 agent 当前使用的启动方式。",
+			"config.claude.launch.settings": "每个 agent 的 Claude Code 设置，逐键合并到你自己的设置之上；`null` 会移除 Facade 的某一项。如果有一个值的类型不被 Claude Code 接受，Claude Code 会忽略所有这些设置。",
+			"config.claude.path": "要运行的 Claude Code 程序。留空则使用 PATH 中的 `claude`。",
+			"config.claude.title": "Claude Code",
+			"config.codex.enabled": "控制是否在 Agent 菜单中以及向 agent 提供 Codex。",
+			"config.codex.launch": "高级: Facade 启动 Codex 的方式。只需设置你想更改的部分: 在 settings.json 中，从大括号内的建议中选择一个部分以填入 Facade 的默认值，然后进行编辑；`null` 会移除 Facade 的某一项。**Agent: 显示 agent 启动配置** 会显示每个 agent 当前使用的启动方式。",
+			"config.codex.path": "要运行的 Codex 程序。留空则使用 PATH 中的 `codex`。",
+			"config.codex.title": "Codex",
+			"config.custom": "你自己的 agent，按名称配置: `{ \"<name>\": { \"path\": \"...\", \"launch\": { ... } } }`。每个 agent 都像内置 agent 一样在自己的终端中启动。其启动配置与内置 agent 的各部分相同(按组划分的参数、环境、信任和延迟)，但 Facade 不会填入其中任何部分: 你省略的组不会添加任何内容。在参数中，`${mcpConfig}` 指向一个以 `mcpServers` 格式保存 Facade MCP 服务器的文件，供你的 `connect` 组使用；`${folder}`、`${repository}`、`${home}`、`${messagesDir}`、`${screensDir}`、`${model}`、`${effort}`、`${task}` 和 `${opening}` 的填入方式与内置 agent 相同。",
+			"config.custom.launch": "Facade 启动此 agent 的方式，与内置 agent 的启动配置一样逐部分配置。只使用你填写的组。",
+			"config.custom.name": "自定义 agent 的名称必须由 1 到 40 个小写字母、数字、点、短划线或下划线组成，并以字母或数字开头。它不能是内置 agent 的 ID (claude、codex、agy、muse)或保留名称(human、you、me、facade、all、everyone、init、kernel)。",
+			"config.custom.path": "要运行的程序: 文件路径，或终端所用 PATH 中的命令。",
+			"config.custom.title": "自定义 agent",
+			"config.enabled": "控制是否启用 agent 框架。启用后，agent 可以通过 Facade 工具启动、列出和停止其他 agent。禁用后，agent 仍会照常启动、运行和结束，但没有 Facade 工具。",
+			"config.launch.arguments": "命令行参数，按组排列，顺序如下: `warmUp`、`connect`、`quiet`、`questions`、`messages`、`yoloOn`、`yoloOff`、`model`、`effort`、`extra` (你自己的)和 `task`。你设置的组会替换 Facade 的组；`null` 会省略该组。`yoloOn` 仅在 YOLO 开启时使用，`yoloOff` 仅在 YOLO 关闭时使用；`warmUp`、`connect` 和 `messages` 仅在 agent 框架开启时使用；`model`、`effort` 和 `task` 仅在 agent 指定了它们时使用。Facade 会为每个 agent 填入以下变量: `${folder}`、`${repository}` (其主工作树)、`${home}`、`${messagesDir}` 和 `${screensDir}` (保存长消息和 agent 屏幕的位置)、`${model}`、`${effort}`、`${task}` (agent 的第一行，指明其任务)、`${opening}` (适用于通过 `start_agent` 启动的 agent: 说明它是谁，以及它应通过 Facade 消息提问，与其预热内容所述一致)，等等。",
+			"config.launch.enterDelay": "控制在 agent 的终端中键入一行与按下 Enter 之间的延迟(毫秒)。没有此延迟，CLI 可能会将快速键入视为粘贴。",
+			"config.launch.environment": "Facade 为每个 agent 设置的环境变量。你设置的变量会替换 Facade 的变量；`null` 会移除 Facade 的某个变量。",
+			"config.launch.taskDelay": "控制从 agent 的 CLI 连接到 Facade 到将其第一行(指明其任务)键入其终端之间的延迟(毫秒)。仅适用于以这种方式接收任务的 CLI。",
+			"config.launch.trust": "Facade 如何信任 agent 启动所在的文件夹及其整个存储库，使 CLI 不会停下来询问你是否信任它: `arguments` 仅在该次运行中传递，`merge` 则写入 CLI 自己的 `file` 并一直保留。`null`: Facade 不提供信任，CLI 会在其终端中询问。",
+			"config.launch.unattended": "由其他 agent 或你的脚本通过 `start_agent` 启动的 agent 用来代替启动配置运行的内容，以便在可能无人照看时不会有任何操作等待回答。其 `arguments` 组替换启动配置中的同名组，其 `environment` 和 `settings` 应用在启动配置之上。你从 Agent 菜单启动的 agent 仅使用启动配置运行。",
+			"config.launch.unattended.arguments": "通过 `start_agent` 启动的 agent 的参数组，每组替换启动配置中的同名组。你设置的组会替换 Facade 的组；`null` 会为该 agent 省略该组。",
+			"config.launch.unattended.environment": "通过 `start_agent` 启动的 agent 的环境变量，应用在启动配置之上。你设置的变量会替换 Facade 的变量；`null` 会移除该变量，包括启动配置中的。",
+			"config.launch.unattended.settings": "通过 `start_agent` 启动的 agent 的 Claude Code 设置，逐键合并到启动配置的设置之上。`null` 会移除某个键，包括启动配置中的。",
+			"config.muse.enabled": "控制是否在 Agent 菜单中以及向 agent 提供 Muse Code。",
+			"config.muse.launch": "高级: Facade 启动 Muse Code 的方式。只需设置你想更改的部分: 在 settings.json 中，从大括号内的建议中选择一个部分以填入 Facade 的默认值，然后进行编辑；`null` 会移除 Facade 的某一项。**Agent: 显示 agent 启动配置** 会显示每个 agent 当前使用的启动方式。",
+			"config.muse.path": "要运行的 Muse Code 程序。留空则使用 PATH 中的 `muse`。",
+			"config.muse.title": "Muse Code",
+			"config.timeout": "高级: Facade 等待其无法控制的事项的秒数，包括新 agent 连接、已停止 agent 的进程结束、此窗口响应 agent 的 MCP 服务器、重新加载后还原终端，以及发送到另一个 agent 终端的文本或按键轮到处理。它也是任务或消息在 Facade 通知其发送者之前可以保持未被获取的时长。",
+			"config.title": "Agent",
+			"config.yolo": "控制你启动的 agent 是否以 YOLO 模式运行。启用后，agent 的 CLI 会关闭沙盒运行，并且从不请求审批。禁用后，如果 CLI 有沙盒则启用沙盒，并在运行其自身的命令和编辑之前询问，但调用 Facade 工具之前从不询问。Agent 会保留其启动时的 YOLO 模式，它启动的 agent 也会继承该模式。",
+			"description": "在窗口内的终端中运行编程 agent CLI，包括你自己的 CLI。Agent 通过 MCP 服务器相互启动、列出和停止，彼此之间以及与你互发消息，并读取彼此的终端。",
+			"displayName": "Facade Agents"
+		}
+	},
+	"vscode.git": {
+		"package": {
+			"config.terminalAuthentication": "控制是否启用 Facade Code 作为集成终端中生成的 Git 进程的身份验证处理程序。注意: 需要重启终端才能应用此设置的更改。",
+			"config.terminalGitEditor": "控制是否使 Facade Code 成为集成终端中生成的 Git 进程的 Git 编辑器。注意: 需要重启终端才能应用此设置的更改。",
+			"view.workbench.scm.workspaceFolder": "当前打开的文件夹中没有 Git 存储库。可以初始化一个存储库，以启用由 Git 提供支持的源代码管理功能。\n[初始化仓库](command:git.init)\n若要详细了解如何在 Facade Code 中使用 Git 和源代码管理，[请阅读我们的文档](https://aka.ms/vscode-scm)。"
+		}
+	},
+	"vscode.github": {
+		"package": {
+			"config.gitAuthentication": "控制是否在 Facade Code 中为 git 命令启用自动 GitHub 身份验证。"
+		}
+	},
+	"vscode.html-language-features": {
+		"package": {
+			"html.trace.server.desc": "跟踪 Facade Code 与 HTML 语言服务器之间的通信。"
+		}
+	},
+	"vscode.json-language-features": {
+		"package": {
+			"json.tracing.desc": "跟踪 Facade Code 与 JSON 语言服务器之间的通信。"
+		}
+	},
+	"vscode.markdown-language-features": {
+		"package": {
+			"markdown.trace.server.desc": "跟踪 Facade Code 与 Markdown 语言服务器之间的通信。"
+		}
+	},
+	"vscode.media-preview": {
+		"bundle": {
+			"Open file using {0}'s standard text/binary editor?": "是否使用 {0} 的标准文本/二进制编辑器打开文件？"
+		}
+	},
+	"vscode.mermaid-markdown-features": {
+		"package": {
+			"config.markdown-mermaid.theme.vscode.description": "从当前 Facade Code 颜色主题派生的 Mermaid 主题。"
+		}
+	},
+	"vscode.typescript-language-features": {
+		"bundle": {
+			"Please open a folder in {0} to use a TypeScript or JavaScript project": "请在 {0} 中打开一个文件夹，以使用 TypeScript 或 JavaScript 项目",
+			"TS Server logging is off. Please set 'js/ts.tsserver.log' and restart the TS server to enable logging": "TS 服务器日志记录已关闭。请设置“js/ts.tsserver.log”并重启 TS 服务器以启用日志记录",
+			"Use {0}'s Version": "使用 {0} 的版本",
+			"{0}'s tsserver was deleted by another application such as a misbehaving virus detection tool. Please reinstall {0}.": "{0} 的 tsserver 已被其他应用程序(例如运行异常的病毒检测工具)删除。请重新安装 {0}。"
+		},
+		"package": {
+			"configuration.tsserver.nodePath": "在自定义 Node 安装上运行 TS 服务器。可以是 Node 可执行文件的路径；如果希望 Facade Code 检测 Node 安装，也可以是 `node`。",
+			"configuration.tsserver.useVsCodeWatcher": "使用 Facade Code 的文件观察程序，而不是 TypeScript 的。要求在工作区中使用 TypeScript 5.4+。",
+			"configuration.tsserver.watchOptions.vscode": "使用 Facade Code 的文件观察程序，而不是 TypeScript 的。要求在工作区中使用 TypeScript 5.4+。",
+			"configuration.tsserver.web.projectWideIntellisense.enabled": "在 Web 上启用/禁用项目范围的 IntelliSense。要求 Facade Code 在受信任的上下文中运行。",
+			"typescript.locale": "设置报告 JavaScript 和 TypeScript 错误时使用的区域设置。默认使用 Facade Code 的区域设置。",
+			"typescript.locale.auto": "使用 Facade Code 配置的显示语言。",
+			"typescript.updateImportsOnFileMove.enabled": "启用或禁用在 Facade Code 中重命名或移动文件时自动更新导入路径。",
+			"walkthroughs.nodejsWelcome.debugJsFile.description": "安装 Node.js 后，可以在终端中输入 ``node your-file-name.js`` 来运行 JavaScript 程序\n运行 Node.js 程序的另一种简便方法是使用 Facade Code 的调试器，它可以运行代码、在不同位置暂停，并帮助你逐步了解运行情况。\n[开始调试](command:javascript-walkthrough.commands.debugJsFile)"
+		}
+	}
+}

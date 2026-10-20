@@ -1,0 +1,893 @@
+{
+	"vscode": {
+		"vs/editor/browser/widget/multiDiffEditor/diffEditorItemTemplate": {
+			"binaryFileChanged": "Arquivo binário alterado",
+			"openBinaryDiff": "Abrir Comparação"
+		},
+		"vs/editor/common/config/editorOptions": {
+			"fullwidthCharacterWidth": "Controla a largura usada para renderizar caracteres de largura total.",
+			"fullwidthCharacterWidth.font": "Renderizar caracteres de largura total usando a largura definida pela fonte.",
+			"fullwidthCharacterWidth.twoCells": "Renderizar caracteres de largura total centralizados em exatamente duas células de caractere. Aplica-se apenas a fontes com espaçamento uniforme. Não se aplica a caracteres de largura total com vários pontos de código nem à renderização por GPU. Isso afeta o desempenho da renderização de linhas."
+		},
+		"vs/editor/common/editorContextKeys": {
+			"diffEditorAutomaticRenderSideBySide": "Se o layout automático do editor de comparação renderizaria lado a lado",
+			"diffEditorTemporaryInlineMode": "Se o modo embutido está temporariamente ativo depois de redimensionar manualmente o editor de comparação"
+		},
+		"vs/platform/contextkey/common/contextkeys": {
+			"isChromeOS": "Se o sistema operacional é ChromeOS",
+			"productQualityType": "Tipo de qualidade do {0}"
+		},
+		"vs/platform/extensionManagement/node/extensionManagementService": {
+			"restartCode": "Reinicie o {1} antes de reinstalar {0}."
+		},
+		"vs/platform/externalTerminal/node/externalTerminalService": {
+			"console.title": "Console do {0}"
+		},
+		"vs/platform/product/common/releaseVersion": {
+			"releaseVersion": "{0} (baseado no VS Code {1})"
+		},
+		"vs/platform/terminal/common/terminalPlatformConfiguration": {
+			"terminal.integrated.inheritEnv": "Se os novos shells devem herdar o ambiente do {0}, o que pode carregar um shell de logon para garantir que $PATH e outras variáveis de desenvolvimento sejam inicializadas. Isso não tem efeito no Windows."
+		},
+		"vs/platform/update/common/update.config.contribution": {
+			"default": "Habilitar verificações automáticas de atualização. O Code verificará se há atualizações de forma automática e periódica."
+		},
+		"vs/workbench/api/browser/mainThreadMcp": {
+			"mcp.enterpriseManaged.issuerMissing": "A autenticação MCP gerenciada pela empresa requer que `mcp.enterpriseManagedAuth.idp.issuer` esteja configurado. Defina-o por meio da política corporativa (Política de Grupo do Windows / preferências gerenciadas do macOS / Linux `/etc/facade/policy.json`) ou, para testes locais, editando manualmente o `settings.json`."
+		},
+		"vs/workbench/api/common/configurationExtensionPoint": {
+			"scope.deprecationMessageSeverity": "Controla a gravidade usada para exibir a mensagem de preterição.",
+			"scope.deprecationMessageSeverity.info": "Mostra a mensagem de preterição com um tratamento informativo.",
+			"scope.deprecationMessageSeverity.warning": "Mostra a mensagem de preterição com o tratamento de aviso padrão."
+		},
+		"vs/workbench/browser/actions/layoutActions": {
+			"layoutDensity": "Densidade do Layout",
+			"layoutDensityCompact": "Compacto",
+			"layoutDensityCompactIcon": "Representa a densidade de layout compacta",
+			"layoutDensityDefault": "Padrão",
+			"layoutDensityDefaultIcon": "Representa a densidade de layout padrão"
+		},
+		"vs/workbench/browser/chatPills": {
+			"chatPills.open": "Abrir {0}"
+		},
+		"vs/workbench/browser/parts/activitybar/activitybarPart": {
+			"miToolbarActivityBar": "&&Barra de Ferramentas",
+			"positionActivityBarToolbar": "Mover Barra de Atividades para a Barra de Título",
+			"toolbar": "Barra de Ferramentas"
+		},
+		"vs/workbench/browser/parts/dialogs/facadeDialogColors": {
+			"facadeDialogBorder": "Cor da borda nas caixas de diálogo do Facade: o contorno da caixa de diálogo, o separador acima dos botões e as caixas de aviso.",
+			"facadeDialogControlBackground": "Cor da tela de fundo dos seletores de ícone nas caixas de diálogo do Facade.",
+			"facadeDialogControlBorder": "Cor da borda dos seletores de ícone e dos botões de redefinição de cor nas caixas de diálogo do Facade.",
+			"facadeDialogFooterBackground": "Cor da tela de fundo da área de botões do rodapé nas caixas de diálogo do Facade."
+		},
+		"vs/workbench/browser/parts/editor/editor.contribution": {
+			"diffView": "Modo de Exibição de Comparação",
+			"diffView.automaticInline": "Automático (Atualmente Embutido)",
+			"diffView.automaticSideBySide": "Automático (Atualmente Lado a Lado)",
+			"diffView.inline": "Embutido",
+			"diffView.inlineTemporary": "Embutido (Temporário)",
+			"diffView.sideBySide": "Lado a Lado"
+		},
+		"vs/workbench/browser/parts/titlebar/titlebarAppIcon": {
+			"titleBar.showAppIcon": "Controla se o ícone do aplicativo é mostrado na barra de título personalizada. Quando desabilitado, o canto fica reservado para o botão que alterna a barra de workspaces. Aplica-se apenas a barras de título personalizadas no Windows e no Linux; requer uma nova janela para entrar em vigor."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarActions": {
+			"workspaceBar.category": "Workspace",
+			"workspaceBar.collapse": "Recolher Barra de Workspaces",
+			"workspaceBar.collapseFolder": "Recolher",
+			"workspaceBar.collapsedContext": "Se a barra de workspaces está recolhida em ícones",
+			"workspaceBar.customizeFolder": "Personalizar...",
+			"workspaceBar.expand": "Expandir Barra de Workspaces",
+			"workspaceBar.expandFolder": "Expandir",
+			"workspaceBar.focus": "Focar na Barra de Workspaces",
+			"workspaceBar.focusContext": "Se a lista de pastas do workspace tem o foco do teclado",
+			"workspaceBar.moveFolderDown": "Mover Pasta para Baixo",
+			"workspaceBar.moveFolderUp": "Mover Pasta para Cima",
+			"workspaceBar.moveWorktreeDown": "Mover Árvore de Trabalho para Baixo",
+			"workspaceBar.moveWorktreeUp": "Mover Árvore de Trabalho para Cima",
+			"workspaceBar.openFolder": "Abrir Pasta...",
+			"workspaceBar.openFolderButton": "Adicionar",
+			"workspaceBar.openFolderTitle": "Abrir Pasta",
+			"workspaceBar.removeFolder": "Remover Pasta do Workspace",
+			"workspaceBar.revealInLinux": "Abrir a Pasta Que Contém",
+			"workspaceBar.revealInMac": "Revelar no Finder",
+			"workspaceBar.revealInWindows": "Revelar no Explorador de Arquivos",
+			"workspaceBar.rowExpansionContext": "Se as árvores de trabalho estão expandidas na linha do repositório com foco",
+			"workspaceBar.rowKindContext": "Se a linha com foco é uma pasta, um repositório ou uma árvore de trabalho",
+			"workspaceBar.rowOffersWorktreeContext": "Se a linha com foco oferece uma nova árvore de trabalho",
+			"workspaceBar.toggleCollapsed": "Alternar Barra de Workspaces",
+			"workspaceBar.toggleIcon": "Ícone para recolher e expandir a barra de workspaces.",
+			"workspaceBar.worktrees": "Controla se a barra de workspaces mostra as árvores de trabalho do Git sob cada repositório."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarColors": {
+			"facadeAgentBadgeBackground": "Cor da tela de fundo dos selos de agentes nas linhas do workspace e no botão de agentes da barra de título.",
+			"facadeAgentBadgeForeground": "Cor de primeiro plano do texto de contagem dos selos de agentes.",
+			"facadeBarActiveBorder": "Cor do indicador de item ativo na linha da pasta atual na barra de workspaces.",
+			"facadeBarBackground": "Cor da tela de fundo da barra de workspaces. A barra de workspaces é a coluna de pastas ao longo da borda esquerda da janela.",
+			"facadeBarBorder": "Cor da borda que separa a barra de workspaces dos modos de exibição adjacentes.",
+			"facadeBarFolderBlue": "Cor de destaque azul para pastas na barra de workspaces.",
+			"facadeBarFolderGreen": "Cor de destaque verde para pastas na barra de workspaces.",
+			"facadeBarFolderIndigo": "Cor de destaque anil para pastas na barra de workspaces.",
+			"facadeBarFolderLime": "Cor de destaque verde-limão para pastas na barra de workspaces.",
+			"facadeBarFolderOrange": "Cor de destaque laranja para pastas na barra de workspaces.",
+			"facadeBarFolderPink": "Cor de destaque rosa para pastas na barra de workspaces.",
+			"facadeBarFolderPurple": "Cor de destaque roxa para pastas na barra de workspaces.",
+			"facadeBarFolderRed": "Cor de destaque vermelha para pastas na barra de workspaces.",
+			"facadeBarFolderTeal": "Cor de destaque verde-azulada para pastas na barra de workspaces.",
+			"facadeBarFolderYellow": "Cor de destaque amarela para pastas na barra de workspaces.",
+			"facadeBarForeground": "Cor de primeiro plano da barra de workspaces.",
+			"facadeBarInactiveForeground": "Cor de primeiro plano das linhas inativas na barra de workspaces.",
+			"facadeBarTitleForeground": "Cor de primeiro plano do cabeçalho da barra de workspaces."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomization": {
+			"workspaceBar.worktreeIcon": "Ícone de uma árvore de trabalho na barra de workspaces."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomize": {
+			"workspaceBar.branch": "Branch",
+			"workspaceBar.branchAria": "Branch da nova árvore de trabalho",
+			"workspaceBar.branchPlaceholder": "Nome do branch",
+			"workspaceBar.cancel": "Cancelar",
+			"workspaceBar.color": "Cor",
+			"workspaceBar.colorAria": "Cor da pasta",
+			"workspaceBar.colorBlue": "Azul",
+			"workspaceBar.colorGreen": "Verde",
+			"workspaceBar.colorIndigo": "Anil",
+			"workspaceBar.colorLime": "Verde-limão",
+			"workspaceBar.colorNone": "Sem Cor",
+			"workspaceBar.colorOrange": "Laranja",
+			"workspaceBar.colorPink": "Rosa",
+			"workspaceBar.colorPurple": "Roxo",
+			"workspaceBar.colorRed": "Vermelho",
+			"workspaceBar.colorTeal": "Verde-azulado",
+			"workspaceBar.colorYellow": "Amarelo",
+			"workspaceBar.create": "Criar",
+			"workspaceBar.customizeAbout": "Configure o nome de exibição, a cor e o ícone de '{0}'. A pasta no disco não é renomeada.",
+			"workspaceBar.customizeTitle": "Personalizar Pasta",
+			"workspaceBar.customizeWorktreeAbout": "Configure o nome de exibição e a cor de '{0}'. O branch e a pasta no disco não são renomeados.",
+			"workspaceBar.customizeWorktreeTitle": "Personalizar Árvore de Trabalho",
+			"workspaceBar.displayName": "Nome de Exibição",
+			"workspaceBar.displayNameAria": "Nome de exibição desta pasta",
+			"workspaceBar.displayNameDefault": "Deixe em branco para usar o nome padrão '{0}'.",
+			"workspaceBar.displayNameHintBranch": "Deixe em branco para usar o nome do branch.",
+			"workspaceBar.icon": "Ícone",
+			"workspaceBar.iconAria": "Ícone da pasta",
+			"workspaceBar.iconBeaker": "Béquer",
+			"workspaceBar.iconBook": "Livro",
+			"workspaceBar.iconDatabase": "Banco de Dados",
+			"workspaceBar.iconDevice": "Dispositivo",
+			"workspaceBar.iconFolder": "Pasta",
+			"workspaceBar.iconGlobe": "Globo",
+			"workspaceBar.iconPackage": "Pacote",
+			"workspaceBar.iconRocket": "Foguete",
+			"workspaceBar.iconServer": "Servidor",
+			"workspaceBar.iconTools": "Ferramentas",
+			"workspaceBar.newWorktreeAbout": "Crie uma nova árvore de trabalho do Git e um novo branch para '{0}'.",
+			"workspaceBar.newWorktreeTitle": "Nova Árvore de Trabalho em '{0}'",
+			"workspaceBar.save": "Salvar",
+			"workspaceBar.worktreeColorAria": "Cor da árvore de trabalho",
+			"workspaceBar.worktreeDisplayNameAria": "Nome de exibição desta árvore de trabalho"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarEditors": {
+			"workspaceBar.editorsNotClosed": "Não foi possível fechar os editores abertos."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarPart": {
+			"workspaceBar.couldNotAdd": "Falha ao adicionar a pasta '{0}' ao workspace: {1}",
+			"workspaceBar.gone": "A pasta '{0}' não existe mais no disco.",
+			"workspaceBar.goneReason": "não existe mais no disco",
+			"workspaceBar.moreActions": "Mais Ações...",
+			"workspaceBar.notTaken": "a pasta não foi adicionada ao workspace",
+			"workspaceBar.title": "Workspace"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarQuestions": {
+			"workspaceBar.agentLine": "Agente {0}",
+			"workspaceBar.agentLineAt": "Agente {0} · {1}",
+			"workspaceBar.agentTerminated": "O seguinte agente será encerrado:",
+			"workspaceBar.agentsAndTerminalsTerminated": "Os seguintes agentes e terminais serão encerrados:",
+			"workspaceBar.agentsTerminated": "Os seguintes agentes serão encerrados:",
+			"workspaceBar.fileDiscarded": "O seguinte arquivo tem alterações não salvas que serão descartadas:",
+			"workspaceBar.fileLineAt": "{0} · {1}",
+			"workspaceBar.filesDiscarded": "Os seguintes arquivos têm alterações não salvas que serão descartadas:",
+			"workspaceBar.moreFiles": "...mais {0} arquivos não mostrados",
+			"workspaceBar.moreSessions": "...mais {0} sessões não mostradas",
+			"workspaceBar.oneMoreFile": "...mais 1 arquivo não mostrado",
+			"workspaceBar.oneMoreSession": "...mais 1 sessão não mostrada",
+			"workspaceBar.terminalLine": "Terminal ({0})",
+			"workspaceBar.terminalLineAt": "Terminal ({0}) · {1}",
+			"workspaceBar.terminalTerminated": "O seguinte terminal será encerrado:",
+			"workspaceBar.terminalsTerminated": "Os seguintes terminais serão encerrados:",
+			"workspaceBar.worktreePlace": "{0} (árvore de trabalho: {1})"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarRemoval": {
+			"workspaceBar.notRemoved": "Falha ao atualizar o workspace: {0}",
+			"workspaceBar.notRemovedReason": "falha ao gravar o arquivo de configuração do workspace",
+			"workspaceBar.removeAndDiscard": "&&Remover e Descartar Alterações",
+			"workspaceBar.removeFolderAndWorktree": "Tem certeza de que deseja remover '{0}' e a respectiva árvore de trabalho do workspace?",
+			"workspaceBar.removeFolderAndWorktrees": "Tem certeza de que deseja remover '{0}' e as respectivas {1} árvores de trabalho do workspace?",
+			"workspaceBar.removeFolderButton": "&&Remover",
+			"workspaceBar.removeFolderQuestion": "Tem certeza de que deseja remover '{0}' do workspace?",
+			"workspaceBar.removeFoldersQuestion": "Tem certeza de que deseja remover as {0} pastas a seguir do workspace?",
+			"workspaceBar.removeKeepsDisk": "Os arquivos no disco não serão excluídos.",
+			"workspaceBar.worktreeDeleted": "A árvore de trabalho '{0}' foi excluída e removida do workspace."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitchFolder": {
+			"workspaceBar.switchFolder": "Alternar Pasta...",
+			"workspaceBar.switchFolderNext": "Selecionar a Próxima Pasta em Alternar Pasta",
+			"workspaceBar.switchFolderPlaceholder": "Selecione uma pasta para a qual alternar"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitcher": {
+			"workspaceBar.addedNotShown": "A pasta '{0}' foi adicionada ao workspace, mas não foi possível alternar para ela.",
+			"workspaceBar.addedNotShownOf": "Pastas adicionadas ao workspace: {0}. Falha ao alternar para '{1}'.",
+			"workspaceBar.couldNotLeave": "Falha ao alternar a pasta: não foi possível salvar o estado dos editores da pasta ativa. {0}",
+			"workspaceBar.couldNotRestore": "Não foi possível restaurar alguns editores desta pasta. {0}",
+			"workspaceBar.gone": "A pasta '{0}' não existe mais no disco.",
+			"workspaceBar.goneReason": "não existe mais no disco",
+			"workspaceBar.unreadable": "Falha ao ler a pasta '{0}': {1}"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
+			"workspaceBar.openInNewWindow": "Abrir em Nova Janela",
+			"workspaceBar.trustAndAdd": "&&Confiar e Adicionar",
+			"workspaceBar.trustParent": "Confiar nos autores de todos os arquivos na pasta pai '{0}'",
+			"workspaceBar.untrustedConsequence": "Este workspace é confiável. Adicionar uma pasta não confiável mudará todo o workspace e os agentes ativos para o Modo Restrito.",
+			"workspaceBar.untrustedConsequenceMany": "Este workspace é confiável. Adicionar pastas não confiáveis mudará todo o workspace e os agentes ativos para o Modo Restrito.",
+			"workspaceBar.untrustedLinks": "Consulte [nossa documentação](https://aka.ms/vscode-workspace-trust) para saber mais ou [abra em uma nova janela]({0}) no Modo Restrito.",
+			"workspaceBar.untrustedLinksMany": "Consulte [nossa documentação](https://aka.ms/vscode-workspace-trust) para saber mais ou [abra todas as {0} pastas em uma nova janela]({1}) no Modo Restrito.",
+			"workspaceBar.untrustedMessage": "Você confia nos autores dos arquivos nesta pasta?",
+			"workspaceBar.untrustedMessageMany": "Você confia nos autores dos arquivos nestas {0} pastas?",
+			"workspaceBar.untrustedMore": "e mais {0}",
+			"workspaceBar.untrustedTakenOut": "A pasta '{0}' foi removida porque não é confiável e mudaria o workspace para o Modo Restrito."
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
+			"workspaceBar.agentsAria": "{0} agentes",
+			"workspaceBar.ariaLabel": "Pastas do Workspace",
+			"workspaceBar.collapse": "Recolher",
+			"workspaceBar.empty": "Arraste uma pasta para cá ou clique em +.",
+			"workspaceBar.expand": "Expandir",
+			"workspaceBar.moreAgents": "mais {0} agentes",
+			"workspaceBar.oneAgentAria": "1 agente",
+			"workspaceBar.oneMoreAgent": "mais 1 agente",
+			"workspaceBar.oneWorktreeAria": "1 árvore de trabalho",
+			"workspaceBar.unavailableAria": "{0}, a pasta não existe no disco",
+			"workspaceBar.unreadableAria": "{0}, não é possível ler a pasta",
+			"workspaceBar.worktreeAria": "{0}, árvore de trabalho",
+			"workspaceBar.worktreesAria": "{0} árvores de trabalho"
+		},
+		"vs/workbench/browser/workbench.contribution": {
+			"appName": "`${appName}`: por exemplo, {0}.",
+			"workbench.activityBar.location.toolbar": "Mostrar a Barra de Atividades na barra de título, ao lado dos controles de layout."
+		},
+		"vs/workbench/common/contextkeys": {
+			"inAutomation": "Se o {0} está sendo executado em automação/teste de fumaça"
+		},
+		"vs/workbench/common/theme": {
+			"modernPanelBorder": "Cor da borda da superfície do painel quando a interface do usuário moderna está habilitada.",
+			"modernSashGripForeground": "Cor das alças que marcam os limites redimensionáveis entre as partes do workbench quando a interface do usuário moderna está habilitada.",
+			"modernUIInactiveShellBackground": "Cor da tela de fundo do shell visível ao redor das superfícies flutuantes do workbench quando a janela está inativa e a interface do usuário moderna está habilitada.",
+			"modernUIShellBackground": "Cor da tela de fundo do shell visível ao redor das superfícies flutuantes do workbench quando a interface do usuário moderna está habilitada.",
+			"statusBarInactiveBackground": "Cor da tela de fundo da barra de status quando um workspace ou uma pasta está aberto e a janela está inativa. A depuração e outras substituições da tela de fundo têm precedência. Se não for definida, a tela de fundo atual da barra de status será usada."
+		},
+		"vs/workbench/contrib/accessibility/browser/accessibilityConfiguration": {
+			"verbosity.customizationMigrations.description": "Fornecer informações sobre como acessar a ajuda de acessibilidade da lista de verificação de migração de personalizações."
+		},
+		"vs/workbench/contrib/browserView/common/browserView": {
+			"browserView.openShareableCopy.cancel": "Cancelar",
+			"browserView.openShareableCopy.confirm": "&&Abrir e Compartilhar",
+			"browserView.openShareableCopy.detail": "Esta guia não impõe as restrições de política configuradas que são exigidas para o compartilhamento com agentes.\n\nAbra a página em uma nova guia para compartilhá-la com agentes.",
+			"browserView.openShareableCopy.message": "Abrir uma nova guia para compartilhamento?"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/browserViewWorkbenchService": {
+			"browser.networkFilteringEnabled": "O acesso dos agentes às guias do navegador foi revogado porque a filtragem de rede foi habilitada."
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserDataStorageFeatures": {
+			"browser.clearAgentStorageAction": "Limpar Armazenamento (Agente)",
+			"browser.dataStorage.agent": "As exibições do navegador compartilham uma única sessão em memória, que é limpa quando o aplicativo é fechado. Essa sessão é compartilhada com as páginas do navegador abertas por agentes, portanto, **todos os dados, incluindo o armazenamento local e os cookies, poderão ser acessados pelos agentes.** Quando a filtragem de rede dos agentes está habilitada, as solicitações desta sessão são restringidas pela política de domínio de rede configurada."
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorChatFeatures": {
+			"browser.shareWithAgent.blockedByNetworkPolicy": "Não é possível compartilhar com agentes devido à política de domínio de rede.",
+			"browser.shareWithAgent.failed": "Não foi possível compartilhar a guia do navegador",
+			"browser.shareWithAgent.isolated": "Compartilhar com o agente (abre uma guia isolada)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorEmulationFeatures": {
+			"browser.userAgent.prompt": "Cadeia de caracteres do agente de usuário (deixe em branco para usar o padrão do {0})"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorErrorFeatures": {
+			"browser.networkPolicyErrorExtraWarning": "Provavelmente, a solicitação foi bloqueada pela política de domínio de rede.\nVerifique os domínios de rede permitidos e negados que estão configurados."
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserTabManagementFeatures": {
+			"browser.openInIntegratedBrowser": "Links do terminal, do chat e de outras origens que são abertos no Navegador Integrado em vez do navegador do sistema, independentemente do valor de `#workbench.browser.openLocalhostLinks#`. Cada entrada é um padrão de URL: `example.com` corresponde às páginas desse domínio, `*.example.com` ao domínio e aos subdomínios dele, `https://example.com/docs` às páginas sob esse caminho com esse esquema e `example.com:*` a qualquer porta."
+		},
+		"vs/workbench/contrib/chat/browser/chat.shared.contribution": {
+			"autoApprove3.description": "A aprovação automática global, também conhecida como \"modo YOLO\", desabilita completamente a aprovação manual para todas as ferramentas em todos os workspaces, permitindo que o agente aja de forma totalmente autônoma. Isso é extremamente perigoso e *nunca* é recomendado; mesmo ambientes conteinerizados, como Codespaces e Contêineres de Desenvolvimento, têm chaves de usuário encaminhadas para o contêiner que podem ser comprometidas.\n\nEsse recurso desabilita proteções de segurança críticas e torna muito mais fácil para um invasor comprometer o computador.\n\nObservação: essa configuração controla apenas a aprovação de ferramentas e não impede que o agente faça perguntas. Para responder automaticamente às perguntas do agente, use a configuração `#chat.autoReply#`.",
+			"mcp.enterpriseManagedAuth.idp": "(Versão Prévia) A configuração de IdP de OAuth/OIDC usada para servidores do Protocolo de Contexto do Modelo (MCP) gerenciados pela empresa. Normalmente, ela é fornecida por política corporativa (Política de Grupo do Windows / preferências gerenciadas do macOS / Linux `/etc/facade/policy.json`); os desenvolvedores podem editar manualmente o `settings.json` para testes locais. Propriedades: `issuer` (URL HTTPS), `clientId`, `clientSecret`."
+		},
+		"vs/workbench/contrib/codeEditor/browser/diffEditorAccessibilityHelp": {
+			"msg6": "Use o Modo de Exibição de Comparação no menu Mais Ações da área de título do editor para selecionar o layout embutido, lado a lado ou automático."
+		},
+		"vs/workbench/contrib/debug/browser/debugAdapterManager": {
+			"debugServer": "Somente para desenvolvimento de extensão de depuração: se uma porta for especificada, o {0} tentará se conectar a um adaptador de depuração em execução no modo de servidor"
+		},
+		"vs/workbench/contrib/extensions/browser/extensions.contribution": {
+			"extensions.gallery.authProvider": "Configurar o provedor de autenticação do Marketplace de Extensões",
+			"extensions.gallery.authProvider.github": "Autenticar no Marketplace de Extensões usando o GitHub.",
+			"extensions.gallery.authProvider.microsoft": "Autenticar no Marketplace de Extensões usando uma conta Microsoft (Entra ID).",
+			"notInstalled": "A extensão '{0}' não está instalada. Certifique-se de usar a ID de extensão completa, incluindo o editor, por exemplo: ms-dotnettools.csharp.",
+			"workbench.extensions.installExtension.option.donotSync": "Quando habilitado, o {0} não sincroniza esta extensão quando a Sincronização de Configurações está ativada.",
+			"workbench.extensions.installExtension.option.installOnlyNewlyAddedFromExtensionPackVSIX": "Quando habilitado, o {0} instala somente as extensões recém-adicionadas do VSIX do pacote de extensões. Essa opção é considerada somente durante a instalação de um VSIX.",
+			"workbench.extensions.installExtension.option.installPreReleaseVersion": "Quando habilitado, o {0} instala a versão de pré-lançamento da extensão, se disponível."
+		},
+		"vs/workbench/contrib/extensions/browser/extensionsActions": {
+			"deprecated with alternate settings message": "Esta extensão foi preterida, pois essa funcionalidade agora está integrada ao {0}.",
+			"deprecated with alternate settings tooltip": "Esta extensão foi preterida, pois essa funcionalidade agora está integrada ao {1}. Configure estas {0} para usar essa funcionalidade.",
+			"disableForWorkspaceActionToolTip": "Desabilitar esta extensão somente neste workspace. Isso se aplica a todas as pastas desta janela.",
+			"enableForWorkspaceActionToolTip": "Habilitar esta extensão somente neste workspace. Isso se aplica a todas as pastas desta janela."
+		},
+		"vs/workbench/contrib/extensions/common/extensionsFileTemplate": {
+			"app.extensions.json.unwantedRecommendations": "Lista de extensões recomendadas pelo {0} que não devem ser recomendadas para usuários deste workspace. O identificador de uma extensão é sempre '${publisher}.${name}'. Por exemplo: 'vscode.csharp'."
+		},
+		"vs/workbench/contrib/externalUriOpener/common/configuration": {
+			"externalUriOpeners.defaultId": "Abrir usando o abridor padrão do {0}."
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
+			"facadeNotificationSource": "Agentes do Facade"
+		},
+		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
+			"changeAndRestart": "Alterar e Reiniciar",
+			"dontShowAgain": "Não Mostrar Novamente",
+			"suggestDisplayLanguage": "O {0} também está disponível em {1}. Deseja alterar o idioma de exibição e reiniciar?",
+			"suggestDisplayLanguageSetting": "Controla se, enquanto nenhum idioma de exibição tiver sido escolhido, a janela oferece a mudança para o idioma do sistema operacional quando houver um pacote de idiomas interno para ele."
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminalActions": {
+			"facade.terminal.openTab": "Terminal"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals": {
+			"folderTerminals.keptRunning": "A pasta '{0}' foi removida do workspace. Os terminais ativos continuam em execução no painel: {1}.",
+			"folderTerminals.stop": "Parar"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals.contribution": {
+			"terminal.followFolder": "Controla se os terminais na área do editor acompanham a pasta atual. Quando habilitado, alternar de pasta oculta os terminais das outras pastas e os restaura quando você volta. Quando desabilitado, os terminais permanecem visíveis ao alternar de pasta."
+		},
+		"vs/workbench/contrib/github/browser/githubLinkPresentation.contribution": {
+			"github.authenticationRequired": "Entre no GitHub para carregar o status das solicitações de pull e outros detalhes dos links do GitHub.",
+			"github.authenticationRequired.signIn": "Entrar"
+		},
+		"vs/workbench/contrib/issue/browser/baseIssueReporterService": {
+			"handlesIssuesElsewhere": "Esta extensão lida com problemas fora do {0}"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterOverlay": {
+			"screenshotsSubtitle": "Você pode adicionar até {0} capturas de tela ou vídeos. Navegue pelo {1} e escolha quando capturar."
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterPage": {
+			"acknowledgements": "Reconheço que minha versão do {0} não está atualizada e que este problema pode ser encerrado."
+		},
+		"vs/workbench/contrib/localization/common/localizationsActions": {
+			"configureLocaleDescription": "Altera a localidade do {0} com base nos pacotes de idiomas instalados. Os idiomas comuns incluem francês, chinês, espanhol, japonês, alemão, coreano e muito mais."
+		},
+		"vs/workbench/contrib/multiDiffEditor/browser/actions": {
+			"diffView": "Modo de Exibição de Comparação"
+		},
+		"vs/workbench/contrib/preferences/browser/preferencesWidgets": {
+			"workspaceSettingsAllFolders": "Workspace: aplica-se a todas as pastas desta janela."
+		},
+		"vs/workbench/contrib/preferences/browser/settingsTree": {
+			"setting.deprecationMessageSeverity.info": "Informações",
+			"setting.deprecationMessageSeverity.warning": "Aviso"
+		},
+		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
+			"progress.turnOn.final.noLink": "O Acesso ao Túnel Remoto está habilitado para {0}. Você pode [configurar](command:{1}) ou [desativar](command:{2}) esse acesso pelo menu Contas do {3}.",
+			"remoteTunnel.actions.rename": "Renomear Túnel",
+			"renameTunnel.invalidName": "O nome deve conter apenas letras, números, sublinhados e hifens. Ele não pode começar com um hífen.",
+			"renameTunnel.maxLength": "O nome não pode ter mais de {0} caracteres.",
+			"renameTunnel.placeholder": "Deixe em branco para usar o nome de host deste computador.",
+			"renameTunnel.prompt": "Insira um nome para este túnel.",
+			"renameTunnel.title": "Renomear Túnel"
+		},
+		"vs/workbench/contrib/scm/browser/scm.contribution": {
+			"no repository in folder": "Não há nenhum repositório de controle do código-fonte nesta pasta."
+		},
+		"vs/workbench/contrib/search/browser/search.common.contribution": {
+			"exclude": "Configure [padrões glob](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options) para excluir arquivos e pastas nas pesquisas de texto completo e na pesquisa de arquivos da abertura rápida. Para excluir arquivos da lista de abertos recentemente da abertura rápida, os padrões devem ser absolutos (por exemplo, `**/node_modules/**`). Herda todos os padrões glob da configuração `#files.exclude#`.",
+			"exclude.boolean": "O padrão glob ao qual os caminhos de arquivo serão comparados. Defina como true ou false para habilitar ou desabilitar o padrão.",
+			"exclude.when": "Verificação adicional nos irmãos de um arquivo correspondente. Use \\$(basename) como variável para o nome do arquivo correspondente.",
+			"search.followSymlinks": "Controla se os links simbólicos devem ser seguidos durante a pesquisa.",
+			"search.maxResults": "Controla o número máximo de resultados da pesquisa. Pode ser definido como `null` (vazio) para retornar resultados ilimitados.",
+			"search.ripgrep.maxThreads": "Número de threads a serem usados na pesquisa. Quando definido como 0, o mecanismo determina esse valor automaticamente.",
+			"search.smartCase": "Pesquisar sem diferenciar maiúsculas de minúsculas se o padrão estiver todo em minúsculas; caso contrário, pesquisar diferenciando maiúsculas de minúsculas.",
+			"search.sortOrder": "Controla a ordem de classificação dos resultados da pesquisa.",
+			"searchSortOrder.countAscending": "Os resultados são classificados pela contagem por arquivo, em ordem crescente.",
+			"searchSortOrder.countDescending": "Os resultados são classificados pela contagem por arquivo, em ordem decrescente.",
+			"searchSortOrder.default": "Os resultados são classificados pelos nomes de pastas e arquivos, em ordem alfabética.",
+			"searchSortOrder.filesOnly": "Os resultados são classificados pelos nomes de arquivo, ignorando a ordem das pastas, em ordem alfabética.",
+			"searchSortOrder.modified": "Os resultados são classificados pela data da última modificação do arquivo, em ordem decrescente.",
+			"searchSortOrder.type": "Os resultados são classificados pelas extensões de arquivo, em ordem alfabética.",
+			"useGlobalIgnoreFiles": "Controla se o arquivo gitignore global (por exemplo, de `$HOME/.config/git/ignore`) deve ser usado ao pesquisar arquivos. Requer que {0} esteja habilitado.",
+			"useIgnoreFiles": "Controla se os arquivos `.gitignore` e `.ignore` devem ser usados ao pesquisar arquivos.",
+			"useParentIgnoreFiles": "Controla se os arquivos `.gitignore` e `.ignore` dos diretórios pai devem ser usados ao pesquisar arquivos. Requer que {0} esteja habilitado."
+		},
+		"vs/workbench/contrib/tasks/browser/abstractTaskService": {
+			"TerminateAction.noProcess": "O processo iniciado não existe mais. Se a tarefa gerou tarefas em segundo plano, sair do {0} poderá resultar em processos órfãos."
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchemaCommon": {
+			"JsonSchema.promptOnClose": "Se o usuário é avisado quando o {0} é fechado com uma tarefa em segundo plano em execução.",
+			"JsonSchema.tasks.promptOnClose": "Se o usuário é avisado quando o {0} é fechado com uma tarefa em execução."
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchema_v2": {
+			"JsonSchema.tasks.promptOnClose": "Se o usuário é avisado quando o {0} é fechado com uma tarefa em execução."
+		},
+		"vs/workbench/contrib/tasks/common/taskDefinitionRegistry": {
+			"TaskDefinition.required": "Os nomes das propriedades do objeto `properties` que precisam ser fornecidas para que uma tarefa desse tipo seja considerada uma correspondência. Usado pelo {0} para associar uma entrada do `tasks.json` a um provedor de tarefas registrado."
+		},
+		"vs/workbench/contrib/tasks/electron-browser/taskService": {
+			"TaskSystem.noProcess": "A tarefa iniciada não existe mais. Se a tarefa gerou processos em segundo plano, sair do {0} poderá resultar em processos órfãos. Para evitar isso, inicie o último processo em segundo plano com um sinalizador de espera."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalActions": {
+			"facade.terminal.newInFolder": "Criar Novo Terminal em Outra Pasta..."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalProcessManager": {
+			"facade.agentElsewhere": "Este agente está em execução em outra janela. Alterne para a guia dele lá.",
+			"facade.agentProcessGone": "O processo deste agente terminou enquanto a janela estava fechada ou sendo recarregada."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalView": {
+			"terminal.monospaceOnly": "O terminal só dá suporte a fontes com espaçamento uniforme. Não se esqueça de reiniciar o {0} se esta for uma fonte recém-instalada."
+		},
+		"vs/workbench/contrib/terminal/common/terminalConfiguration": {
+			"terminal.integrated.allowChords": "Se as combinações de teclas de acordes devem ser permitidas no terminal. Observe que, quando isso for true e o pressionamento de tecla resultar em um acorde, ele ignorará {0}. Definir isso como false é particularmente útil quando você deseja que ctrl+k vá para o seu shell (e não para o {1}).",
+			"terminal.integrated.commandsToSkipShell": "Um conjunto de IDs de comando cujas combinações de teclas não serão enviadas ao shell, mas sempre tratadas pelo {2}. Isso permite que as combinações de teclas que normalmente seriam consumidas pelo shell funcionem da mesma forma que quando o terminal não está focado, por exemplo, `Ctrl+P` para iniciar a Abertura Rápida.\n\n&nbsp;\n\nMuitos comandos são ignorados por padrão. Para substituir um padrão e passar a combinação de teclas desse comando para o shell, adicione o comando prefixado com o caractere `-`. Por exemplo, adicione `-workbench.action.quickOpen` para permitir que `Ctrl+P` chegue ao shell.\n\n&nbsp;\n\nA lista a seguir de comandos ignorados por padrão é truncada quando exibida no Editor de Configurações. Para ver a lista completa, {1} e pesquise o primeiro comando da lista abaixo.\n\n&nbsp;\n\nComandos Ignorados por Padrão:\n\n{0}",
+			"terminal.integrated.detectLocale": "Controla se a variável de ambiente `$LANG` deve ser detectada e definida como uma opção compatível com UTF-8, pois o terminal do {0} só dá suporte a dados codificados em UTF-8 provenientes do shell.",
+			"terminal.integrated.env.linux": "Objeto com variáveis de ambiente que serão adicionadas ao processo do {0} para serem usadas pelo terminal no Linux. Defina como `null` para excluir a variável de ambiente.",
+			"terminal.integrated.env.osx": "Objeto com variáveis de ambiente que serão adicionadas ao processo do {0} para serem usadas pelo terminal no macOS. Defina como `null` para excluir a variável de ambiente.",
+			"terminal.integrated.env.windows": "Objeto com variáveis de ambiente que serão adicionadas ao processo do {0} para serem usadas pelo terminal no Windows. Defina como `null` para excluir a variável de ambiente.",
+			"terminal.integrated.gpuAcceleration.auto": "Permitir que o {0} detecte qual renderizador fornecerá a melhor experiência.",
+			"terminal.integrated.shellIntegration.enabled": "Determina se a integração do shell é injetada automaticamente para dar suporte a recursos como o rastreamento aprimorado de comandos e a detecção do diretório de trabalho atual. \n\nA integração do shell funciona injetando no shell um script de inicialização. O script dá ao {2} uma visão do que está acontecendo no terminal.\n\nShells com suporte:\n\n- Linux/macOS: bash, fish, pwsh, zsh\n - Windows: pwsh, git bash\n\nEsta configuração se aplica somente quando os terminais são criados, portanto, você precisará reiniciar seus terminais para que ela entre em vigor.\n\n Observe que a injeção de script poderá não funcionar se você tiver argumentos personalizados definidos no perfil do terminal, tiver habilitado {1}, tiver um [`PROMPT_COMMAND` complexo do bash](https://code.visualstudio.com/docs/editor/integrated-terminal#_complex-bash-promptcommand) ou outra configuração sem suporte. Para desabilitar as decorações, confira {0}",
+			"terminal.integrated.windowsUseConptyDll": "Se deve ser usado o conpty.dll (v1.25.260303002) fornecido com o {0}, em vez daquele incluído no Windows."
+		},
+		"vs/workbench/contrib/terminal/common/terminalContextKey": {
+			"facadeAgentTerminalContextKey": "Se o editor de terminal ativo foi iniciado pelo menu de agentes",
+			"facadeRunTerminalContextKey": "Se o terminal ativo executa um agente iniciado pelo Facade."
+		},
+		"vs/workbench/contrib/terminalContrib/autoReplies/common/terminalAutoRepliesConfiguration": {
+			"terminal.integrated.autoReplies": "Um conjunto de mensagens que, quando encontradas no terminal, serão respondidas automaticamente. Desde que a mensagem seja específica o suficiente, isso pode ajudar a automatizar respostas comuns.\n\nObservações:\n\n- Use {0} para responder automaticamente ao prompt de encerramento do trabalho em lote no Windows.\n- A mensagem inclui sequências de escape, portanto, a resposta pode não acontecer com texto estilizado.\n- Cada resposta só pode acontecer uma vez por segundo.\n- Use {1} na resposta para representar a tecla Enter.\n- Para cancelar a definição de uma chave padrão, defina o valor como null.\n- Reinicie o {2} se as novas não se aplicarem."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherActions": {
+			"facade.agent.configure": "Configurar Agentes...",
+			"facade.agent.menu": "Agente",
+			"facade.agent.oneActive": "{0} - 1 agente ativo",
+			"facade.agent.showActive": "Mostrar Agentes Ativos...",
+			"facade.agent.showMenu": "Mostrar Menu de Agentes",
+			"facade.agent.someActive": "{0} - {1} agentes ativos",
+			"facade.agent.startRestricted": "Iniciar Agente...",
+			"facade.agents.category": "Agentes"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
+			"facade.agent.noneFound": "Nenhum Agente Encontrado: Configurar Agentes..."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
+			"agentPicker.agentAndTitle": "{0} · {1}",
+			"agentPicker.close": "Fechar Agente",
+			"agentPicker.creatingWorktree": "criando a árvore de trabalho",
+			"agentPicker.empty": "Nenhum agente ativo",
+			"agentPicker.panel": "Painel",
+			"agentPicker.placeholder": "Selecione um agente",
+			"agentPicker.preparing": "{0} · {1}",
+			"agentPicker.runningSetup": "configurando a árvore de trabalho",
+			"agentPicker.untitled": "Agente"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherService": {
+			"facade.agent.trustToStart": "Um agente trabalha nas pastas deste workspace. Confie no workspace para iniciar {0}.",
+			"facade.agent.trustToStartAny": "Um agente trabalha nas pastas deste workspace. Confie no workspace para iniciar um."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherShutdown": {
+			"runningWork.agent": "Deseja encerrar 1 agente?",
+			"runningWork.agentAndTerminal": "Deseja encerrar 1 agente e 1 terminal?",
+			"runningWork.agentAndTerminals": "Deseja encerrar 1 agente e {0} terminais?",
+			"runningWork.agents": "Deseja encerrar {0} agentes?",
+			"runningWork.agentsAndTerminal": "Deseja encerrar {0} agentes e 1 terminal?",
+			"runningWork.agentsAndTerminals": "Deseja encerrar {0} agentes e {1} terminais?"
+		},
+		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
+			"agentIcon.antigravity": "Ícone de um terminal que executa o Antigravity.",
+			"agentIcon.claude": "Ícone de um terminal que executa o Claude Code.",
+			"agentIcon.codex": "Ícone de um terminal que executa o Codex.",
+			"agentIcon.grok": "Ícone de um terminal que executa o Grok Build.",
+			"agentIcon.muse": "Ícone de um terminal que executa o Muse Code."
+		},
+		"vs/workbench/contrib/webview/browser/webviewFindAccessibilityHelp": {
+			"webview.importantDesc": "Alguns modos de exibição da web interceptam a entrada do teclado antes que a Localização do {0} possa usá-la. Se Enter ou Shift+Enter não navegarem pelas correspondências, o modo de exibição da web poderá estar tratando essas teclas. Tente primeiro clicar no conteúdo do modo de exibição da web ou acessá-lo com Tab para garantir que ele tenha o foco; depois, reabra a Localização e tente navegar novamente."
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution": {
+			"minWelcomeDescription": "Abre um passo a passo para ajudar você a começar a usar o {0}.",
+			"workbench.startupEditor.welcomePage": "Abrir a página de boas-vindas, com conteúdo para ajudar na introdução ao {0} e às extensões."
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedExtensionPoint": {
+			"walkthroughs.steps.completionEvents.onCommand": "Marcar a etapa como concluída quando um determinado comando for executado em qualquer lugar do {0}."
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent": {
+			"gettingStarted.commandPalette.description.interpolated": "Execute comandos sem precisar do mouse para realizar qualquer tarefa no {1}.\n{0}",
+			"gettingStarted.commandPaletteAccessibility.description.interpolated": "Execute comandos sem precisar do mouse para realizar qualquer tarefa no {1}.\n{0}",
+			"gettingStarted.extensions.description.interpolated": "As extensões são os power-ups do {1}. Elas vão de truques úteis de produtividade e da expansão dos recursos prontos para uso até a adição de funcionalidades totalmente novas.\n{0}",
+			"gettingStarted.settingsAndSync.description.interpolated": "Personalize todos os aspectos do {1} e [sincronize](command:workbench.userDataSync.actions.turnOn) as personalizações entre dispositivos.\n{0}",
+			"gettingStarted.setup.title": "Introdução ao {0}",
+			"gettingStarted.setup.walkthroughPageTitle": "Configurar o {0}",
+			"gettingStarted.setupAccessibility.description": "Conheça as ferramentas e os atalhos que tornam o {0} acessível. Observe que algumas ações não estão disponíveis no contexto do passo a passo.",
+			"gettingStarted.setupAccessibility.walkthroughPageTitle": "Configurar a Acessibilidade do {0}",
+			"gettingStarted.videoTutorial.description.interpolated": "Assista ao primeiro de uma série de tutoriais em vídeo curtos e práticos sobre os principais recursos do {1}.\n{0}"
+		},
+		"vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA": {
+			"onboarding.personalize.tip.suffix": " para acessar todos os comandos do {0}.",
+			"onboarding.signIn.heroTitle": "Bem-vindo ao {0}"
+		},
+		"vs/workbench/contrib/workspace/browser/workspace.contribution": {
+			"workspace.trust.description": "Controla se a Confiança do Workspace está habilitada no {0}.",
+			"workspace.trust.emptyWindow.description": "Controla se a janela vazia é confiável por padrão no {1}. Quando usada com `#{0}#`, você pode habilitar a funcionalidade completa do {1} sem solicitação em uma janela vazia."
+		},
+		"vs/workbench/contrib/worktrees/browser/worktrees": {
+			"worktrees.agentElsewhere": "'{0}' não foi excluída porque um agente de outra janela está trabalhando nela ({1}). Primeiro, pare esse agente na janela dele.",
+			"worktrees.agentInside": "'{0}' não foi excluída porque um agente que esta exclusão não interrompe está trabalhando nela ({1}). Primeiro, pare esse agente.",
+			"worktrees.alreadyOut": "{0} Ela foi removida do workspace, e os terminais em execução nela foram encerrados.",
+			"worktrees.anotherToolsWorktree": "'{0}' é uma árvore de trabalho criada fora do Facade. Crie a árvore de trabalho a partir do check-out principal do repositório dela.",
+			"worktrees.badName": "'{0}' não é um nome de pasta válido no Windows.",
+			"worktrees.badSetup": "Falha ao analisar .facade/worktrees.json: as chaves de configuração inicial devem conter uma matriz de cadeias de caracteres de comando. Nenhum comando foi executado.",
+			"worktrees.beingDeleted": "A árvore de trabalho está sendo excluída.",
+			"worktrees.branchCheckedOut": "O branch '{0}' já está com check-out em '{1}'.",
+			"worktrees.branchExists": "Já existe um branch chamado '{0}'. Escolha outro nome.",
+			"worktrees.branchKeptQuoted": "O branch '{0}' será preservado.",
+			"worktrees.changedMeanwhile": "'{0}' não foi excluída porque surgiram nela, durante a exclusão, novas alterações que seriam perdidas: {1}.",
+			"worktrees.changedSinceCheck": "Arquivos da árvore de trabalho foram modificados após a verificação. Revise as alterações e tente novamente.",
+			"worktrees.checkFailed": "Falha ao verificar o estado da árvore de trabalho antes da exclusão: {0}",
+			"worktrees.copyFailed": "Falha ao copiar para a árvore de trabalho {0} arquivos especificados em .worktreeinclude: {1}",
+			"worktrees.couldNotLeave": "Não foi possível alternar para '{0}'; a árvore de trabalho '{1}' não foi excluída.",
+			"worktrees.createFailed": "Falha ao criar a árvore de trabalho: {0}",
+			"worktrees.createdForAgent": "A árvore de trabalho foi criada em '{0}', mas houve uma falha ao {1}: {2}",
+			"worktrees.createdNotOpened": "A árvore de trabalho foi criada em '{0}', mas houve uma falha ao {1}: {2}",
+			"worktrees.creating": "Criando a árvore de trabalho '{0}'...",
+			"worktrees.deleteButton": "&&Excluir",
+			"worktrees.deleteDiscardButton": "&&Excluir e Descartar Alterações",
+			"worktrees.deleteFailed": "Falha ao excluir a árvore de trabalho: {0}",
+			"worktrees.deleteQuestion": "Tem certeza de que deseja excluir a árvore de trabalho '{0}'?",
+			"worktrees.deleteUnknown": "Não foi possível confirmar a exclusão da árvore de trabalho '{0}'. A barra de workspaces reflete o status atual do Git.",
+			"worktrees.deleteWorktree": "Excluir Árvore de Trabalho...",
+			"worktrees.deleting": "Excluindo a árvore de trabalho '{0}'...",
+			"worktrees.folder": "Caminho: {0}",
+			"worktrees.folderAndSubmodulesDeleted": "A pasta da árvore de trabalho, incluindo os submódulos e os commits não enviados por push, será excluída. Esta ação não pode ser desfeita.",
+			"worktrees.folderDeleted": "A pasta da árvore de trabalho será excluída do disco. Esta ação não pode ser desfeita.",
+			"worktrees.goThere": "Alternar para a Árvore de Trabalho",
+			"worktrees.hookFailed": "A árvore de trabalho foi criada, mas um hook do Git falhou: {0}",
+			"worktrees.ignored": "Os seguintes arquivos ignorados pelo Git serão excluídos:",
+			"worktrees.ignoredFile": "{0} (ignorado pelo Git)",
+			"worktrees.inheritedEnvironment": "Esta janela foi iniciada com GIT_DIR, GIT_WORK_TREE ou GIT_INDEX_FILE definido, o que redireciona o Git para outro repositório. Abra a pasta em uma nova janela.",
+			"worktrees.initialBranch": "O commit inicial está no branch '{0}'. Escolha outro nome de branch para a nova árvore de trabalho.",
+			"worktrees.initializeAndCreate": "Inicializar e Criar",
+			"worktrees.inspectFailed": "O Git falhou ao ler o repositório '{0}': {1}",
+			"worktrees.inspecting": "Lendo o repositório '{0}'...",
+			"worktrees.invalidBranchName": "'{0}' não é um nome de branch válido.",
+			"worktrees.kept": "A árvore de trabalho '{0}' não foi excluída do disco. Ela foi removida do workspace. Clique na linha dela para adicioná-la novamente.",
+			"worktrees.keptOutside": "A árvore de trabalho '{0}' não foi excluída do disco.",
+			"worktrees.leftover": "A árvore de trabalho foi removida do Git, mas não foi possível excluir a pasta dela: {0}. {1}",
+			"worktrees.leftoverRefused": "Falha ao excluir a pasta: {0}",
+			"worktrees.leftoverUnknown": "'{0}' não foi reconhecida como uma pasta de árvore de trabalho deixada por uma exclusão nesta janela, portanto, não foi excluída. Exclua-a manualmente, se necessário.",
+			"worktrees.locked": "A árvore de trabalho '{0}' está bloqueada. Execute 'git worktree unlock' para permitir a exclusão.",
+			"worktrees.lockedBecause": "A árvore de trabalho '{0}' está bloqueada: {1}. Execute 'git worktree unlock' para permitir a exclusão.",
+			"worktrees.loses": "As seguintes alterações sem commit serão perdidas:",
+			"worktrees.mainNotDeleted": "{0} é o check-out principal do repositório, que nunca é excluído.",
+			"worktrees.namedMore": "{0} e mais {1}",
+			"worktrees.newWorktree": "Nova Árvore de Trabalho...",
+			"worktrees.nextSentence": "{0} {1}",
+			"worktrees.noAnswer": "O processo do Git não respondeu.",
+			"worktrees.noBaseUnasked": "O repositório '{0}' não contém commits. Crie um commit inicial primeiro.",
+			"worktrees.noBranch": "É necessário um nome de branch para criar uma árvore de trabalho.",
+			"worktrees.noGit": "Falha ao executar o comando do Git para criar a árvore de trabalho: {0}",
+			"worktrees.noGitDelete": "Falha ao executar o comando do Git para excluir a árvore de trabalho: {0}",
+			"worktrees.noGitExtension": "As operações de árvore de trabalho exigem a extensão interna do Git, que não está ativa nesta janela.",
+			"worktrees.noIdentity": "A identidade de autor do Git não está configurada. Defina '{0}' e '{1}' com '{2}' e tente novamente.",
+			"worktrees.notARepository": "'{0}' contém uma pasta .git que não pode ser lida como um repositório Git válido.",
+			"worktrees.notDeletedNotFacades": "{0} é uma árvore de trabalho criada fora do Facade, que o Facade nunca exclui.",
+			"worktrees.notOnDisk": "'{0}' não é uma pasta válida no disco.",
+			"worktrees.notOut": "Não foi possível remover a árvore de trabalho '{0}' do workspace, portanto, ela não foi excluída.",
+			"worktrees.notRepositoryUnasked": "A pasta '{0}' não é um repositório Git. Inicialize o repositório primeiro.",
+			"worktrees.notWorktree": "'{0}' não é uma árvore de trabalho reconhecida neste workspace.",
+			"worktrees.openWorktree": "Abrir Árvore de Trabalho",
+			"worktrees.outOfWorkspace": "Ela foi removida do workspace.",
+			"worktrees.pathExists": "Já existe um arquivo ou uma pasta em '{0}'.",
+			"worktrees.prepare.folderEmpty": "Esta pasta não é um repositório Git. Ao continuar, ela será inicializada ('git init') e um commit inicial vazio será criado.",
+			"worktrees.prepare.folderMany": "Esta pasta não é um repositório Git. Ao continuar, ela será inicializada ('git init') e um commit inicial com {0} arquivos será criado.",
+			"worktrees.prepare.folderOne": "Esta pasta não é um repositório Git. Ao continuar, ela será inicializada ('git init') e um commit inicial com 1 arquivo será criado.",
+			"worktrees.prepare.insideEmpty": "Esta pasta está dentro do repositório Git '{0}', mas não é a raiz dele. Ao continuar, um repositório separado será inicializado aqui ('git init') e um commit inicial vazio será criado.",
+			"worktrees.prepare.insideMany": "Esta pasta está dentro do repositório Git '{0}', mas não é a raiz dele. Ao continuar, um repositório separado será inicializado aqui ('git init') e um commit inicial com {1} arquivos será criado.",
+			"worktrees.prepare.insideOne": "Esta pasta está dentro do repositório Git '{0}', mas não é a raiz dele. Ao continuar, um repositório separado será inicializado aqui ('git init') e um commit inicial com 1 arquivo será criado.",
+			"worktrees.prepare.unbornEmpty": "Este repositório ainda não tem commits. Ao continuar, um commit inicial vazio será criado.",
+			"worktrees.prepare.unbornMany": "Este repositório ainda não tem commits. Ao continuar, um commit inicial com {0} arquivos será criado.",
+			"worktrees.prepare.unbornOne": "Este repositório ainda não tem commits. Ao continuar, um commit inicial com 1 arquivo será criado.",
+			"worktrees.prepareFailed": "Falha ao criar o commit inicial de '{0}': {1}",
+			"worktrees.preparing": "Criando o commit inicial em '{0}'...",
+			"worktrees.restricted": "As árvores de trabalho exigem operações do Git, que estão desabilitadas no Modo Restrito.",
+			"worktrees.restrictedUnasked": "O workspace está no Modo Restrito. Confie no workspace para executar operações do Git.",
+			"worktrees.retry": "Tentar Novamente",
+			"worktrees.revealInLinux": "Abrir a Pasta Que Contém",
+			"worktrees.revealInMac": "Revelar no Finder",
+			"worktrees.revealInWindows": "Revelar no Explorador de Arquivos",
+			"worktrees.runSetupAgain": "Executar a Configuração Inicial Novamente",
+			"worktrees.setupTerminal": "Configuração Inicial da Árvore de Trabalho",
+			"worktrees.setupUnfinished": "O script de configuração inicial da árvore de trabalho '{0}' pode ter sido interrompido por um recarregamento ou fechamento da janela. Verifique a saída do terminal dele antes de tentar novamente.",
+			"worktrees.shellEnded": "O shell foi encerrado após este comando, portanto, os comandos seguintes não foram executados.",
+			"worktrees.sinceAsked": "Outros arquivos foram modificados desde que esta solicitação foi aberta e também serão perdidos.",
+			"worktrees.startingGit": "Iniciando o Git...",
+			"worktrees.startsAt": "Criada a partir do HEAD de '{0}'.",
+			"worktrees.startsAtFirst": "Criada a partir do commit inicial.",
+			"worktrees.stepOpen": "abrir a árvore de trabalho",
+			"worktrees.stepRecord": "ler os metadados da árvore de trabalho do Git",
+			"worktrees.stillStopping": "A árvore de trabalho '{0}' não foi excluída porque estes agentes ainda não pararam: {1}. Exclua-a novamente quando eles tiverem parado.",
+			"worktrees.stillStoppingOut": "A árvore de trabalho '{0}' não foi excluída porque estes agentes ainda não pararam: {1}. Ela foi removida do workspace. Exclua-a novamente quando eles tiverem parado.",
+			"worktrees.submodulesLost": "os submódulos dela (incluindo os commits não enviados por push)",
+			"worktrees.submodulesMeanwhile": "'{0}' não foi excluída porque submódulos foram adicionados a ela durante a exclusão; excluí-la perderia os commits deles não enviados por push.",
+			"worktrees.submodulesSince": "Os submódulos e os commits não enviados por push também serão excluídos.",
+			"worktrees.superseded": "uma troca de pasta foi solicitada antes que a abertura fosse concluída",
+			"worktrees.terminalsEnded": "Os terminais associados a esta árvore de trabalho foram fechados e os processos ativos foram encerrados: {0}.",
+			"worktrees.terminalsTerminated": "{0} Os terminais em execução nela foram encerrados.",
+			"worktrees.trustFolder": "&&Confiar na pasta e continuar",
+			"worktrees.trustWorkspace": "&&Confiar no workspace e continuar",
+			"worktrees.unbornBranch": "O repositório '{0}' não tem commits no branch atual. Crie um commit ou mude de branch primeiro.",
+			"worktrees.unsafeRepository": "O Git não pode abrir '{0}' porque ele pertence a outro usuário. Execute '{1}' para marcá-lo como seguro e tente novamente.",
+			"worktrees.unsavedFile": "{0} (não salvo)",
+			"worktrees.untrusted": "Uma árvore de trabalho herda a confiança do repositório pai '{0}'. Confie no repositório pai primeiro.",
+			"worktrees.untrustedUnasked": "O repositório '{0}' não é confiável. Confie no repositório antes de criar uma árvore de trabalho.",
+			"worktrees.wouldLose": "'{0}' tem alterações que seriam perdidas se ela fosse excluída: {1}. Nada foi excluído.",
+			"worktrees.wouldLoseSubmodules": "'{0}' tem submódulos; excluí-la perderia os commits deles não enviados por push. Nada foi excluído."
+		},
+		"vs/workbench/electron-browser/actions/windowActions": {
+			"openDefaultWorkspace": "Abrir Workspace Padrão"
+		},
+		"vs/workbench/electron-browser/desktop.contribution": {
+			"argv.disableChromiumSandbox": "Desabilita a área restrita do Chromium. Isso é útil ao executar o {0} com privilégios elevados no Linux e ao executá-lo sob o Applocker no Windows.",
+			"argv.useInMemorySecretStorage": "Garante que um repositório em memória será usado para o armazenamento de segredos em vez do repositório de credenciais do sistema operacional. Isso geralmente é usado ao executar testes de extensão do {0} ou quando você está tendo dificuldades com o repositório de credenciais.",
+			"miOpenDefaultWorkspace": "Abrir Workspace &&Padrão"
+		},
+		"vs/workbench/electron-browser/window": {
+			"notOpenedWithoutFolder": "Não foi possível abrir {0} porque a janela não conseguiu alternar para a pasta que os contém."
+		},
+		"vs/workbench/services/dialogs/electron-browser/fileDialogService": {
+			"openFileOrFolder.title": "Abrir Arquivo ou Pasta",
+			"openFolder.title": "Abrir Pasta"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryAccountService": {
+			"marketplace.pickAccount": "Selecione a conta a ser usada no Marketplace de Extensões",
+			"marketplace.signInDifferentAccount": "Entrar com uma Conta Diferente…"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryManifestService": {
+			"extensionGalleryManifestService.configurationChange": "A configuração do Marketplace de Extensões foi alterada. Reinicie para aplicar as alterações."
+		},
+		"vs/workbench/services/extensions/common/extensionsRegistry": {
+			"vscode.extension.capabilities.agentsWindow": "Declara se a extensão deve ser habilitada na janela Agentes. Requer a proposta de API `agentsWindowActivation` e a configuração experimental de capacidade da janela Agentes.",
+			"vscode.extension.capabilities.agentsWindow.supported": "Declara se a extensão dá suporte à execução na janela Agentes. A extensão deve habilitar a proposta de API `agentsWindowActivation` e a configuração `extensions.experimental.enableAgentsWindowCapability` para que esta propriedade tenha efeito."
+		},
+		"vs/workbench/services/extensions/electron-browser/nativeExtensionService": {
+			"relaunch": "Reiniciar o {0}"
+		},
+		"vs/workbench/services/folderScope/browser/folderScope.contribution": {
+			"allFoldersIcon": "Ícone para alternar o escopo dos modos de exibição entre a pasta atual e todo o workspace.",
+			"facadeCategory": "Workspace",
+			"toggleFolderScope": "Mostrar Todas as Pastas",
+			"toggleFolderScope.toggled": "Mostrando Todas as Pastas"
+		},
+		"vs/workbench/services/folderScope/common/folderScope": {
+			"facadeFolderScope": "Se os modos de exibição estão limitados à pasta atual ou a todo o workspace",
+			"folderScope.searchingAll": "Pesquisando em todas as pastas. Clique para pesquisar somente na pasta atual.",
+			"folderScope.searchingFolder": "Pesquisando na pasta atual. Clique para pesquisar em todas as pastas do workspace."
+		},
+		"vs/workbench/services/userDataProfile/browser/userDataProfileManagement": {
+			"reload message": "Alternar um perfil requer recarregar o {0}."
+		}
+	},
+	"vscode.configuration-editing": {
+		"bundle": {
+			"The name of the folder opened in {0} without any slashes (/)": "O nome da pasta aberta no {0}, sem barras (/)",
+			"The path of the folder opened in {0}": "O caminho da pasta aberta no {0}",
+			"e.g. {0}": "por exemplo, {0}"
+		}
+	},
+	"vscode.css-language-features": {
+		"package": {
+			"css.completion.triggerPropertyValueCompletion.desc": "Por padrão, o Facade Code dispara a conclusão do valor da propriedade após a seleção de uma propriedade CSS. Use esta configuração para desabilitar esse comportamento.",
+			"css.trace.server.desc": "Rastreia a comunicação entre o Facade Code e o servidor de linguagem CSS.",
+			"less.completion.triggerPropertyValueCompletion.desc": "Por padrão, o Facade Code dispara a conclusão do valor da propriedade após a seleção de uma propriedade CSS. Use esta configuração para desabilitar esse comportamento.",
+			"scss.completion.triggerPropertyValueCompletion.desc": "Por padrão, o Facade Code dispara a conclusão do valor da propriedade após a seleção de uma propriedade CSS. Use esta configuração para desabilitar esse comportamento."
+		}
+	},
+	"vscode.facade-agents": {
+		"bundle": {
+			"1 message, at {0}": "1 mensagem, às {0}",
+			"@{0} #a{1} · last screen": "@{0} #a{1} · última tela",
+			"Agent management for this workspace has been transferred to another Facade window.": "O gerenciamento de agentes deste workspace foi transferido para outra janela do Facade.",
+			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Os agentes deste workspace são gerenciados em outra janela. Exclua as salas de chat nessa janela.",
+			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Os agentes deste workspace são gerenciados em outra janela. Abra as salas de chat nessa janela.",
+			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Todas as mensagens entre você e seus agentes neste workspace serão excluídas. Esta ação não pode ser desfeita.",
+			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Um agente que você inicia pelo menu de agentes ou por Iniciar Agente mantém as perguntas e atualizações da própria CLI, e as aprovações conforme o YOLO as define. Um agente que outro agente ou um script seu inicia por meio de start_agent, quando talvez ninguém esteja acompanhando, usa a parte não assistida da configuração de inicialização (os grupos dela substituem os da configuração de inicialização; o ambiente e as configurações dela são aplicados sobre os da configuração de inicialização) para que, onde a CLI permitir, nada fique aguardando uma resposta. whenYouStartIt e throughStartAgent mostram o que cada um recebe.",
+			"Another Facade window manages this workspace's agents. Start agents in that window.": "Outra janela do Facade gerencia os agentes deste workspace. Inicie agentes nessa janela.",
+			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Outra janela do Facade gerencia os agentes deste workspace. Use essa janela ou feche-a e recarregue esta janela para gerenciá-los aqui.",
+			"Are you sure you want to delete all chat rooms in this workspace?": "Tem certeza de que deseja excluir todas as salas de chat deste workspace?",
+			"Configure Agents": "Configurar Agentes",
+			"Could not delete all chat rooms: {0}": "Não foi possível excluir todas as salas de chat: {0}",
+			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Não foi possível reconectar aos agentes que já estavam em execução. Eles não podem usar as ferramentas do Facade, mas os agentes iniciados a partir de agora funcionam normalmente.",
+			"Delete": "Excluir",
+			"Each chat room holds every message of an agent you started and of the agents it started": "Cada sala de chat guarda todas as mensagens de um agente que você iniciou e dos agentes que ele iniciou",
+			"Facade Agents": "Agentes do Facade",
+			"Facade Agents could not start in this window. See the Facade Agents output for details.": "Não foi possível iniciar os Agentes do Facade nesta janela. Consulte a saída de Agentes do Facade para obter detalhes.",
+			"Facade Agents could not start: {0}": "Não foi possível iniciar os Agentes do Facade: {0}",
+			"Facade Agents stopped in this window.": "Os Agentes do Facade pararam nesta janela.",
+			"Facade cannot read this workspace's agent record while one of its agents may still be running. See the Facade Agents output for details.": "O Facade não pode ler o registro de agentes deste workspace enquanto um dos agentes dele ainda pode estar em execução. Consulte a saída de Agentes do Facade para obter detalhes.",
+			"Facade cannot read this workspace's agent record: {0}": "O Facade não pode ler o registro de agentes deste workspace: {0}",
+			"Facade could not confirm that {0} started: {1}.": "O Facade não conseguiu confirmar que {0} foi iniciado: {1}.",
+			"Facade could not read this workspace's agent record ({0}), so it started a new one. No action is needed: agents start as before, and their numbering continues. Their history is in {1}; the unreadable record is kept as {2}. Delete it once you no longer need it.": "O Facade não conseguiu ler o registro de agentes deste workspace ({0}) e, por isso, iniciou um novo. Nenhuma ação é necessária: os agentes são iniciados como antes, e a numeração deles continua. O histórico deles está em {1}; o registro ilegível foi mantido como {2}. Exclua-o quando não precisar mais dele.",
+			"Facade could not read {0}, which tells running agents how to reach this window. Agents that were already running can no longer use Facade tools; agents started from now on can.": "O Facade não conseguiu ler {0}, que informa aos agentes em execução como acessar esta janela. Os agentes que já estavam em execução não podem mais usar as ferramentas do Facade; os agentes iniciados a partir de agora podem.",
+			"Facade: {0}": "Facade: {0}",
+			"Message #m{0} is no longer available because the chat rooms were deleted.": "A mensagem #m{0} não está mais disponível porque as salas de chat foram excluídas.",
+			"No agent has been started in this workspace yet.": "Nenhum agente foi iniciado neste workspace ainda.",
+			"No agents are available: none of the built-in agent CLIs were found on this machine, and no custom agents are configured.": "Nenhum agente está disponível: nenhuma das CLIs de agentes internas foi encontrada neste computador, e nenhum agente personalizado está configurado.",
+			"No agents are available: the built-in agent CLIs found on this machine are disabled in your settings ({0}), and no custom agents are configured.": "Nenhum agente está disponível: as CLIs de agentes internas encontradas neste computador estão desabilitadas nas suas configurações ({0}), e nenhum agente personalizado está configurado.",
+			"No chat rooms have messages yet. A chat room is created when an agent is started.": "Nenhuma sala de chat tem mensagens ainda. Uma sala de chat é criada quando um agente é iniciado.",
+			"Open Chat Room": "Abrir Sala de Chat",
+			"Open a local folder to start an agent.": "Abra uma pasta local para iniciar um agente.",
+			"Select an agent to start": "Selecione um agente para iniciar",
+			"Show": "Mostrar",
+			"Start Agent": "Iniciar Agente",
+			"Terminal screen content upon exit:": "Conteúdo da tela do terminal ao sair:",
+			"The agent could not start: {0}": "Não foi possível iniciar o agente: {0}",
+			"The agent framework is off: the warmUp, connect, and messages groups do not apply, and nothing of Facade's is added to a launch.": "O framework de agentes está desativado: os grupos warmUp, connect e messages não se aplicam, e nada do Facade é adicionado a uma configuração de inicialização.",
+			"The agent framework is on: the warmUp, connect, and messages groups apply, and Facade tools, skills, and files are added to each launch.": "O framework de agentes está ativado: os grupos warmUp, connect e messages se aplicam, e as ferramentas, habilidades e arquivos do Facade são adicionados a cada configuração de inicialização.",
+			"The last full-screen frame rendered before leaving full screen:": "O último conteúdo em tela cheia exibido no terminal antes de sair do modo de tela cheia:",
+			"This document only shows the launch. To change it, set what you want to change in your settings. An agent with wrongSettings does not start until they are fixed; cannotStart lists anything else that would prevent its start here.": "Este documento apenas mostra a configuração de inicialização. Para alterá-la, defina nas suas configurações o que você deseja alterar. Um agente com wrongSettings não é iniciado até que elas sejam corrigidas; cannotStart lista qualquer outra coisa que impediria que ele fosse iniciado aqui.",
+			"What Facade starts each agent with now, for an agent in {0}: the program a terminal there runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "Como o Facade inicia cada agente agora, para um agente em {0}: o programa que um terminal ali executa e a configuração de inicialização dele, que é o padrão do Facade com as suas configurações facade.agents aplicadas sobre ele.",
+			"What Facade starts each agent with now: the program it runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "Como o Facade inicia cada agente agora: o programa que ele executa e a configuração de inicialização dele, que é o padrão do Facade com as suas configurações facade.agents aplicadas sobre ele.",
+			"YOLO is off: each agent gets its yoloOff arguments, with its sandbox on where it has one and Facade tools exempted from approval where its CLI allows it. facadeTools and approvalsWithYoloOff show, for each agent, what is asked and what is denied.": "O YOLO está desativado: cada agente recebe os argumentos yoloOff, com a área restrita ativada onde houver uma e as ferramentas do Facade isentas de aprovação onde a CLI permitir. facadeTools e approvalsWithYoloOff mostram, para cada agente, o que é perguntado e o que é negado.",
+			"YOLO is on: each agent gets its yoloOn arguments, with its sandbox off and nothing asked. Turning off facade.agents.yolo applies to agents started afterward.": "O YOLO está ativado: cada agente recebe os argumentos yoloOn, com a área restrita desativada e sem nenhuma pergunta. Desativar facade.agents.yolo se aplica aos agentes iniciados depois.",
+			"YOLO: {0}. No agent starts until this is fixed.": "YOLO: {0}. Nenhum agente é iniciado até que isso seja corrigido.",
+			"anything that would ask is denied without asking": "tudo o que pediria aprovação é negado sem perguntar",
+			"as set by your launch's questions group": "conforme definido pelo grupo questions da sua configuração de inicialização",
+			"as set by your launch's yoloOff group": "conforme definido pelo grupo yoloOff da sua configuração de inicialização",
+			"as set by your launch's {0} and {1} groups: Facade's defaults exempt its server from approval, and you changed them": "conforme definido pelos grupos {0} e {1} da sua configuração de inicialização: os padrões do Facade isentam o servidor dele de aprovação, e você os alterou",
+			"as set by your launch's {0} group: Facade's default exempts its server from approval, and you changed it": "conforme definido pelo grupo {0} da sua configuração de inicialização: o padrão do Facade isenta o servidor dele de aprovação, e você o alterou",
+			"asks you, as its CLI does": "pergunta a você, como a CLI dele faz",
+			"cannot be granted: {0}": "não pode ser concedida: {0}",
+			"custom": "personalizado",
+			"denied: {0}": "negado: {0}",
+			"edits in its folder are allowed without asking; anything else asks you, as its CLI does": "as edições na pasta dele são permitidas sem perguntar; todo o resto pergunta a você, como a CLI dele faz",
+			"edits in its folder are allowed without asking; anything else that would ask is denied without asking": "as edições na pasta dele são permitidas sem perguntar; todo o resto que pediria aprovação é negado sem perguntar",
+			"kept: it can show a question for you to answer, as it does outside Facade": "mantida: ele pode mostrar uma pergunta para você responder, como faz fora do Facade",
+			"kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question": "mantida: nenhuma configuração de inicialização pode remover a ferramenta de pergunta dele, por isso as instruções que ele recebe ao iniciar dizem para perguntar por mensagens do Facade; se essa ferramenta for pedida pelo nome, ele ainda poderá mostrar uma pergunta",
+			"kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer": "mantida: sua configuração de inicialização esvazia o grupo questions dele, por isso ele pode mostrar uma pergunta que aguarda alguém escolher uma resposta",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; it has no sandbox": "nunca pede aprovação: ele não consegue isentar apenas o servidor do Facade, por isso, com o YOLO desativado, não pede aprovação para nada; ele não tem área restrita",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is as your launch's groups set it": "nunca pede aprovação: ele não consegue isentar apenas o servidor do Facade, por isso, com o YOLO desativado, não pede aprovação para nada; a área restrita dele fica como os grupos da sua configuração de inicialização a definem",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is off, as your launch sets it": "nunca pede aprovação: ele não consegue isentar apenas o servidor do Facade, por isso, com o YOLO desativado, não pede aprovação para nada; a área restrita dele fica desativada, como a sua configuração de inicialização define",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox stays on": "nunca pede aprovação: ele não consegue isentar apenas o servidor do Facade, por isso, com o YOLO desativado, não pede aprovação para nada; a área restrita dele continua ativada",
+			"never asked: its launch exempts only Facade's server from approval": "nunca pede aprovação: a configuração de inicialização dele isenta de aprovação apenas o servidor do Facade",
+			"none: the CLI asks whether you trust the folder": "nenhuma: a CLI pergunta se você confia na pasta",
+			"not found: {0}": "não encontrado: {0}",
+			"not yet": "ainda não",
+			"nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off": "nada é perguntado, nada é negado: ele não consegue isentar apenas as ferramentas do Facade, por isso as aprovações dele estão desativadas",
+			"permanently: Facade never removes it": "permanentemente: o Facade nunca a remove",
+			"removed by its launch's questions group: it asks through Facade messages": "removida pelo grupo questions da configuração de inicialização dele: ele pergunta por mensagens do Facade",
+			"task: argument - its task notice is passed as an argument; typed - its task notice is typed into its terminal once it connects; none - it takes no task.": "task: argument - o aviso de tarefa dele é passado como argumento; typed - o aviso de tarefa dele é digitado no terminal dele assim que ele se conecta; none - ele não recebe tarefa.",
+			"trust: a file entry is merged in as if you had answered the CLI yourself, and it stays: Facade never removes it. Arguments trust the folder for that launch only.": "trust: uma entrada de arquivo é mesclada como se você mesmo tivesse respondido à CLI, e ela permanece: o Facade nunca a remove. Os argumentos confiam na pasta somente para essa execução.",
+			"with YOLO off, none turned off: this folder's .mcp.json has no server that you have not approved for its project": "com o YOLO desativado, nenhum é desativado: o .mcp.json desta pasta não tem nenhum servidor que você não tenha aprovado para o projeto dela",
+			"with YOLO off, the servers in its folder's .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them": "com o YOLO desativado, os servidores do .mcp.json da pasta dele que você não aprovou para o projeto dela são desativados durante a execução, para que ele não pare para perguntar sobre eles",
+			"with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: {0}": "com o YOLO desativado, desativados durante a execução para que ele não pare para perguntar sobre eles, já que você não os aprovou para este projeto: {0}",
+			"{0} (ended)": "{0} (encerrado)",
+			"{0} ended unexpectedly: {1}.": "{0} foi encerrado inesperadamente: {1}.",
+			"{0} exited: {1}.": "{0} saiu: {1}.",
+			"{0} failed to start: {1}.": "Falha ao iniciar {0}: {1}.",
+			"{0} is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.": "{0} está aberto, mas não se conectou ao Facade, por isso ainda não tem as ferramentas do Facade. Ele pode estar demorando para iniciar ou aguardando uma resposta no terminal.",
+			"{0} messages, latest at {1}": "{0} mensagens, a mais recente às {1}",
+			"{0} of your agents ended. {1}": "{0} dos seus agentes foram encerrados. {1}",
+			"{0} sent you a message: {1}": "{0} enviou uma mensagem para você: {1}",
+			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "{0} foi alterado depois que o Facade adicionou a própria parte, enquanto a janela estava sendo fechada. O conteúdo anterior foi mantido em {1}.",
+			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} foi alterado enquanto os agentes o usavam e não contém mais a parte do Facade, por isso foi deixado como está. O conteúdo anterior foi mantido em {1}.",
+			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "{0} não existia quando outro agente foi iniciado ali. O conteúdo dele de antes das alterações do Facade foi mantido em {1}.",
+			"{0} was missing when its agents ended. Its content from before Facade's changes is kept at {1}.": "{0} não existia quando os agentes dele foram encerrados. O conteúdo dele de antes das alterações do Facade foi mantido em {1}.",
+			"{0} was stopped by {1}.": "{0} foi parado por {1}.",
+			"{0} was stopped: {1}.": "{0} foi parado: {1}.",
+			"{0}, saved when its terminal closed. How it ended: {1}.": "{0}, salva quando o terminal foi fechado. Como terminou: {1}.",
+			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: falha ao ler o arquivo da última tela '{1}': {2}. Como terminou: {3}.",
+			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: nenhuma última tela foi salva. Como terminou: {1}. A última tela só é salva quando o terminal de um agente é fechado enquanto a janela está aberta.",
+			"{0}: with YOLO off, {1} denies Facade tools": "{0}: com o YOLO desativado, {1} nega as ferramentas do Facade",
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+		},
+		"package": {
+			"command.category": "Agentes",
+			"command.deleteChatRooms": "Excluir Salas de Chat...",
+			"command.openChatRoom": "Abrir Sala de Chat...",
+			"command.showLaunch": "Mostrar Configuração de Inicialização do Agente",
+			"command.showLog": "Mostrar Log dos Agentes",
+			"command.startAgent": "Iniciar Agente...",
+			"config.antigravity.enabled": "Controla se o Antigravity é oferecido no menu de agentes e aos agentes.",
+			"config.antigravity.launch": "Avançado: como o Facade inicia o Antigravity. Defina apenas o que você deseja alterar: no settings.json, escolha uma parte nas sugestões dentro das chaves para preencher o padrão do Facade e, em seguida, edite-a; `null` remove uma das do Facade. **Agentes: Mostrar Configuração de Inicialização do Agente** mostra a configuração com que cada agente é iniciado agora.",
+			"config.antigravity.path": "O programa do Antigravity a ser executado. Deixe em branco para usar o `agy` do seu PATH.",
+			"config.antigravity.title": "Antigravity",
+			"config.claude.enabled": "Controla se o Claude Code é oferecido no menu de agentes e aos agentes.",
+			"config.claude.launch": "Avançado: como o Facade inicia o Claude Code. Defina apenas o que você deseja alterar: no settings.json, escolha uma parte nas sugestões dentro das chaves para preencher o padrão do Facade e, em seguida, edite-a; `null` remove uma das do Facade. **Agentes: Mostrar Configuração de Inicialização do Agente** mostra a configuração com que cada agente é iniciado agora.",
+			"config.claude.launch.settings": "Configurações do Claude Code para cada agente, mescladas sobre as suas chave por chave; `null` remove uma das do Facade. Se um valor tiver um tipo que o Claude Code não aceita, o Claude Code ignorará todos eles.",
+			"config.claude.path": "O programa do Claude Code a ser executado. Deixe em branco para usar o `claude` do seu PATH.",
+			"config.claude.title": "Claude Code",
+			"config.codex.enabled": "Controla se o Codex é oferecido no menu de agentes e aos agentes.",
+			"config.codex.launch": "Avançado: como o Facade inicia o Codex. Defina apenas o que você deseja alterar: no settings.json, escolha uma parte nas sugestões dentro das chaves para preencher o padrão do Facade e, em seguida, edite-a; `null` remove uma das do Facade. **Agentes: Mostrar Configuração de Inicialização do Agente** mostra a configuração com que cada agente é iniciado agora.",
+			"config.codex.path": "O programa do Codex a ser executado. Deixe em branco para usar o `codex` do seu PATH.",
+			"config.codex.title": "Codex",
+			"config.custom": "Seus próprios agentes, por nome: `{ \"<name>\": { \"path\": \"...\", \"launch\": { ... } } }`. Cada um é iniciado como um agente interno, em um terminal próprio. A configuração de inicialização dele tem as mesmas partes que a de um agente interno (argumentos por grupo, ambiente, confiança e atrasos), mas o Facade não preenche nenhuma delas: um grupo que você omitir não adiciona nada. Nos argumentos, `${mcpConfig}` nomeia um arquivo que contém o servidor MCP do Facade no formato `mcpServers`, para o seu grupo `connect`; `${folder}`, `${repository}`, `${home}`, `${messagesDir}`, `${screensDir}`, `${model}`, `${effort}`, `${task}` e `${opening}` são preenchidos como para um agente interno.",
+			"config.custom.launch": "Como o Facade inicia este agente, parte por parte, como a configuração de inicialização de um agente interno. Somente os grupos que você preencher são usados.",
+			"config.custom.name": "O nome de um agente personalizado deve ter de 1 a 40 letras minúsculas, dígitos, pontos, hifens ou sublinhados, começando com uma letra ou um dígito. Ele não pode ser a ID de um agente interno (claude, codex, agy, muse) nem um nome reservado (human, you, me, facade, all, everyone, init, kernel).",
+			"config.custom.path": "O programa a ser executado: um caminho de arquivo ou um comando no PATH que os terminais recebem.",
+			"config.custom.title": "Agentes Personalizados",
+			"config.enabled": "Controla se o framework de agentes está habilitado. Quando habilitado, os agentes podem iniciar, listar e parar outros agentes por meio das ferramentas do Facade. Quando desabilitado, os agentes ainda são iniciados, executados e encerrados normalmente, mas sem as ferramentas do Facade.",
+			"config.launch.arguments": "Argumentos de linha de comando, por grupo, nesta ordem: `warmUp`, `connect`, `quiet`, `questions`, `messages`, `yoloOn`, `yoloOff`, `model`, `effort`, `extra` (os seus) e `task`. Um grupo que você define substitui o do Facade; `null` o omite. `yoloOn` é usado somente enquanto o YOLO está ativado e `yoloOff` somente enquanto está desativado; `warmUp`, `connect` e `messages` somente enquanto o framework de agentes está ativado; `model`, `effort` e `task` somente quando um agente os especifica. O Facade preenche estas variáveis para cada agente: `${folder}`, `${repository}` (o check-out principal dele), `${home}`, `${messagesDir}` e `${screensDir}` (onde as mensagens longas e as telas dos agentes são salvas), `${model}`, `${effort}`, `${task}` (a primeira linha do agente, que nomeia a tarefa dele), `${opening}` (para um agente iniciado por meio de `start_agent`: quem ele é e que ele deve perguntar por mensagens do Facade, como o aquecimento dele indica) e outras.",
+			"config.launch.enterDelay": "Controla o atraso, em milissegundos, entre digitar uma linha no terminal do agente e pressionar Enter. Sem ele, a CLI pode tratar a digitação rápida como uma colagem.",
+			"config.launch.environment": "Variáveis de ambiente que o Facade define para cada agente. Uma variável que você define substitui a do Facade; `null` remove uma das do Facade.",
+			"config.launch.taskDelay": "Controla o atraso, em milissegundos, depois que a CLI do agente se conecta ao Facade e antes que a primeira linha dele, que nomeia a tarefa, seja digitada no terminal. Aplica-se somente a CLIs que recebem a tarefa dessa forma.",
+			"config.launch.trust": "Como o Facade confia na pasta onde um agente é iniciado, e em todo o repositório dela, para que a CLI não pare para perguntar se você confia nela: `arguments` são passados somente para essa execução, ou `merge` é gravado no próprio `file` da CLI, onde permanece. `null`: o Facade não concede confiança, e a CLI pergunta no terminal dela.",
+			"config.launch.unattended": "Configuração usada por um agente iniciado via `start_agent`, por outro agente ou pelo seu script, no lugar da configuração de inicialização, para que nada fique aguardando uma resposta quando talvez ninguém esteja acompanhando. Os grupos de `arguments` dela substituem os grupos de mesmo nome da configuração de inicialização, e os valores de `environment` e `settings` dela são aplicados sobre os da configuração de inicialização. Um agente que você inicia pelo menu de agentes usa somente a configuração de inicialização.",
+			"config.launch.unattended.arguments": "Grupos de argumentos para um agente iniciado por meio de `start_agent`, cada um substituindo o grupo de mesmo nome da configuração de inicialização. Um grupo que você define substitui o do Facade; `null` omite o grupo para esse agente.",
+			"config.launch.unattended.environment": "Variáveis de ambiente para um agente iniciado por meio de `start_agent`, aplicadas sobre as da configuração de inicialização. Uma variável que você define substitui a do Facade; `null` a remove, inclusive a da configuração de inicialização.",
+			"config.launch.unattended.settings": "Configurações do Claude Code para um agente iniciado por meio de `start_agent`, mescladas chave por chave sobre as da configuração de inicialização. `null` remove uma chave, inclusive a da configuração de inicialização.",
+			"config.muse.enabled": "Controla se o Muse Code é oferecido no menu de agentes e aos agentes.",
+			"config.muse.launch": "Avançado: como o Facade inicia o Muse Code. Defina apenas o que você deseja alterar: no settings.json, escolha uma parte nas sugestões dentro das chaves para preencher o padrão do Facade e, em seguida, edite-a; `null` remove uma das do Facade. **Agentes: Mostrar Configuração de Inicialização do Agente** mostra a configuração com que cada agente é iniciado agora.",
+			"config.muse.path": "O programa do Muse Code a ser executado. Deixe em branco para usar o `muse` do seu PATH.",
+			"config.muse.title": "Muse Code",
+			"config.timeout": "Avançado: o número de segundos que o Facade aguarda por eventos fora do controle dele: a conexão de um novo agente, o encerramento do processo de um agente parado, a resposta desta janela ao servidor MCP de um agente, a restauração dos terminais após um recarregamento e a vez, na fila, do texto ou das teclas enviados ao terminal de outro agente, que aguardam para ser digitados nele. É também o prazo durante o qual uma tarefa ou mensagem pode ficar sem ser buscada antes que o Facade notifique o remetente.",
+			"config.title": "Agentes",
+			"config.yolo": "Controla se os agentes que você inicia são executados no modo YOLO. Quando habilitado, a CLI de um agente é executada com a área restrita desativada e nunca pede aprovação. Quando desabilitado, a área restrita fica ativada onde a CLI tiver uma, e ela pergunta antes de executar os próprios comandos e edições, mas nunca antes de chamar as ferramentas do Facade. Um agente mantém o modo YOLO com que foi iniciado, e os agentes que ele inicia o herdam.",
+			"description": "Executa CLIs de agentes de programação, incluindo as suas, em terminais dentro da janela. Por meio de um servidor MCP, os agentes iniciam, listam e param uns aos outros, trocam mensagens entre si e com você, e leem os terminais uns dos outros.",
+			"displayName": "Agentes do Facade"
+		}
+	},
+	"vscode.git": {
+		"package": {
+			"config.terminalAuthentication": "Controla se o Facade Code deve ser habilitado para ser o manipulador de autenticação dos processos Git gerados no Terminal Integrado. Observação: os terminais precisam ser reiniciados para detectar uma alteração nesta configuração.",
+			"config.terminalGitEditor": "Controla se o Facade Code deve ser habilitado como o editor do Git para os processos Git gerados no terminal integrado. Observação: os terminais precisam ser reiniciados para detectar uma alteração nesta configuração.",
+			"view.workbench.scm.workspaceFolder": "A pasta aberta no momento não tem um repositório Git. Você pode inicializar um repositório, o que habilitará os recursos de controle do código-fonte fornecidos pelo Git.\n[Inicializar Repositório](command:git.init)\nPara saber mais sobre como usar o Git e o controle do código-fonte no Facade Code, [leia nossos documentos](https://aka.ms/vscode-scm)."
+		}
+	},
+	"vscode.github": {
+		"package": {
+			"config.gitAuthentication": "Controla se a autenticação automática do GitHub deve ser habilitada para comandos git no Facade Code."
+		}
+	},
+	"vscode.html-language-features": {
+		"package": {
+			"html.trace.server.desc": "Rastreia a comunicação entre o Facade Code e o servidor de linguagem HTML."
+		}
+	},
+	"vscode.json-language-features": {
+		"package": {
+			"json.tracing.desc": "Rastreia a comunicação entre o Facade Code e o servidor de linguagem JSON."
+		}
+	},
+	"vscode.markdown-language-features": {
+		"package": {
+			"markdown.trace.server.desc": "Rastreia a comunicação entre o Facade Code e o servidor de linguagem Markdown."
+		}
+	},
+	"vscode.media-preview": {
+		"bundle": {
+			"Open file using {0}'s standard text/binary editor?": "Abrir o arquivo usando o editor de texto/binário padrão do {0}?"
+		}
+	},
+	"vscode.mermaid-markdown-features": {
+		"package": {
+			"config.markdown-mermaid.theme.vscode.description": "Tema do Mermaid derivado do tema de cores atual do Facade Code."
+		}
+	},
+	"vscode.typescript-language-features": {
+		"bundle": {
+			"Please open a folder in {0} to use a TypeScript or JavaScript project": "Abra uma pasta no {0} para usar um projeto TypeScript ou JavaScript",
+			"TS Server logging is off. Please set 'js/ts.tsserver.log' and restart the TS server to enable logging": "O registro em log do Servidor TS está desativado. Defina 'js/ts.tsserver.log' e reinicie o servidor TS para habilitar o registro em log",
+			"Use {0}'s Version": "Usar a Versão do {0}",
+			"{0}'s tsserver was deleted by another application such as a misbehaving virus detection tool. Please reinstall {0}.": "O tsserver do {0} foi excluído por outro aplicativo, como uma ferramenta de detecção de vírus com mau funcionamento. Reinstale o {0}."
+		},
+		"package": {
+			"configuration.tsserver.nodePath": "Executar o Servidor TS em uma instalação personalizada do Node. Pode ser um caminho para um executável do Node ou `node`, se você quiser que o Facade Code detecte uma instalação do Node.",
+			"configuration.tsserver.useVsCodeWatcher": "Usar os observadores de arquivos do Facade Code em vez dos do TypeScript. Requer o uso do TypeScript 5.4+ no workspace.",
+			"configuration.tsserver.watchOptions.vscode": "Usar os observadores de arquivos do Facade Code em vez dos do TypeScript. Requer o uso do TypeScript 5.4+ no workspace.",
+			"configuration.tsserver.web.projectWideIntellisense.enabled": "Habilitar/desabilitar o IntelliSense em todo o projeto na Web. Requer que o Facade Code esteja sendo executado em um contexto confiável.",
+			"typescript.locale": "Define a localidade usada para relatar erros de JavaScript e TypeScript. O padrão é usar a localidade do Facade Code.",
+			"typescript.locale.auto": "Usar o idioma de exibição configurado do Facade Code.",
+			"typescript.updateImportsOnFileMove.enabled": "Habilitar/desabilitar a atualização automática dos caminhos de importação ao renomear ou mover um arquivo no Facade Code.",
+			"walkthroughs.nodejsWelcome.debugJsFile.description": "Depois de instalar o Node.js, você pode executar programas JavaScript em um terminal digitando ``node your-file-name.js``\nOutra maneira fácil de executar programas Node.js é usar o depurador do Facade Code, que permite executar seu código, pausar em diferentes pontos e ajudar você a entender o que está acontecendo passo a passo.\n[Iniciar Depuração](command:javascript-walkthrough.commands.debugJsFile)"
+		}
+	}
+}

@@ -693,8 +693,9 @@ async function resolveNlsConfiguration(): Promise<INLSConfiguration> {
 
 	// Try to use the app locale which is only valid
 	// after the app ready event has been fired.
+	// Facade Code: none chosen is English (`facadeDisplayLanguageWhenChosen`, LOCALIZATION.md LC4).
 
-	let userLocale = app.getLocale();
+	let userLocale = product.facadeDisplayLanguageWhenChosen ? 'en' : app.getLocale();
 	if (!userLocale) {
 		return {
 			userLocale: 'en',

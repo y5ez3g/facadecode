@@ -1,0 +1,893 @@
+{
+	"vscode": {
+		"vs/editor/browser/widget/multiDiffEditor/diffEditorItemTemplate": {
+			"binaryFileChanged": "二進位檔案已變更",
+			"openBinaryDiff": "開啟差異"
+		},
+		"vs/editor/common/config/editorOptions": {
+			"fullwidthCharacterWidth": "控制轉譯全形字元時使用的寬度。",
+			"fullwidthCharacterWidth.font": "使用字型定義的寬度轉譯全形字元。",
+			"fullwidthCharacterWidth.twoCells": "將全形字元置中轉譯在剛好兩個字元格中。僅適用於等寬字型。不適用於由多個字碼指標組成的全形字元，也不適用於 GPU 轉譯。這會影響行轉譯的效能。"
+		},
+		"vs/editor/common/editorContextKeys": {
+			"diffEditorAutomaticRenderSideBySide": "自動差異編輯器版面配置是否會以並排方式轉譯",
+			"diffEditorTemporaryInlineMode": "手動調整差異編輯器大小後，是否暫時使用內嵌模式"
+		},
+		"vs/platform/contextkey/common/contextkeys": {
+			"isChromeOS": "作業系統是否為 ChromeOS",
+			"productQualityType": "{0} 的品質類型"
+		},
+		"vs/platform/extensionManagement/node/extensionManagementService": {
+			"restartCode": "請在重新安裝 {0} 前重新啟動 {1}。"
+		},
+		"vs/platform/externalTerminal/node/externalTerminalService": {
+			"console.title": "{0} 主控台"
+		},
+		"vs/platform/product/common/releaseVersion": {
+			"releaseVersion": "{0} (以 VS Code {1} 為基礎)"
+		},
+		"vs/platform/terminal/common/terminalPlatformConfiguration": {
+			"terminal.integrated.inheritEnv": "新殼層是否應從 {0} 繼承其環境，這可能會載入登入殼層，以確保 $PATH 和其他開發變數已初始化。這對 Windows 沒有影響。"
+		},
+		"vs/platform/update/common/update.config.contribution": {
+			"default": "啟用自動更新檢查。Code 會自動定期檢查更新。"
+		},
+		"vs/workbench/api/browser/mainThreadMcp": {
+			"mcp.enterpriseManaged.issuerMissing": "企業管理的 MCP 驗證需要設定 `mcp.enterpriseManagedAuth.idp.issuer`。請透過企業原則 (Windows 群組原則/macOS 受控喜好設定/Linux `/etc/facade/policy.json`) 設定，或為了本機測試手動編輯 `settings.json`。"
+		},
+		"vs/workbench/api/common/configurationExtensionPoint": {
+			"scope.deprecationMessageSeverity": "控制顯示淘汰訊息時使用的嚴重性。",
+			"scope.deprecationMessageSeverity.info": "以資訊樣式顯示淘汰訊息。",
+			"scope.deprecationMessageSeverity.warning": "以標準警告樣式顯示淘汰訊息。"
+		},
+		"vs/workbench/browser/actions/layoutActions": {
+			"layoutDensity": "版面配置密度",
+			"layoutDensityCompact": "精簡",
+			"layoutDensityCompactIcon": "代表精簡的版面配置密度",
+			"layoutDensityDefault": "預設",
+			"layoutDensityDefaultIcon": "代表預設的版面配置密度"
+		},
+		"vs/workbench/browser/chatPills": {
+			"chatPills.open": "開啟 {0}"
+		},
+		"vs/workbench/browser/parts/activitybar/activitybarPart": {
+			"miToolbarActivityBar": "工具列(&&T)",
+			"positionActivityBarToolbar": "將活動列移至標題列",
+			"toolbar": "工具列"
+		},
+		"vs/workbench/browser/parts/dialogs/facadeDialogColors": {
+			"facadeDialogBorder": "Facade 對話方塊中的框線色彩: 對話方塊外框、按鈕上方的分隔線，以及提示方塊。",
+			"facadeDialogControlBackground": "Facade 對話方塊中圖示選取器的背景色彩。",
+			"facadeDialogControlBorder": "Facade 對話方塊中圖示選取器和色彩重設按鈕的框線色彩。",
+			"facadeDialogFooterBackground": "Facade 對話方塊中頁尾按鈕區域的背景色彩。"
+		},
+		"vs/workbench/browser/parts/editor/editor.contribution": {
+			"diffView": "差異檢視",
+			"diffView.automaticInline": "自動 (目前為內嵌)",
+			"diffView.automaticSideBySide": "自動 (目前為並排)",
+			"diffView.inline": "內嵌",
+			"diffView.inlineTemporary": "內嵌 (暫時)",
+			"diffView.sideBySide": "並排"
+		},
+		"vs/workbench/browser/parts/titlebar/titlebarAppIcon": {
+			"titleBar.showAppIcon": "控制是否在自訂標題列中顯示應用程式圖示。停用時，該角落會保留給工作區列的切換按鈕。僅適用於 Windows 和 Linux 上的自訂標題列；需要開啟新視窗才會生效。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarActions": {
+			"workspaceBar.category": "工作區",
+			"workspaceBar.collapse": "摺疊工作區列",
+			"workspaceBar.collapseFolder": "摺疊",
+			"workspaceBar.collapsedContext": "工作區列是否已摺疊為圖示",
+			"workspaceBar.customizeFolder": "自訂...",
+			"workspaceBar.expand": "展開工作區列",
+			"workspaceBar.expandFolder": "展開",
+			"workspaceBar.focus": "聚焦於工作區列",
+			"workspaceBar.focusContext": "工作區資料夾清單是否具有鍵盤焦點",
+			"workspaceBar.moveFolderDown": "向下移動資料夾",
+			"workspaceBar.moveFolderUp": "向上移動資料夾",
+			"workspaceBar.moveWorktreeDown": "向下移動工作樹",
+			"workspaceBar.moveWorktreeUp": "向上移動工作樹",
+			"workspaceBar.openFolder": "開啟資料夾...",
+			"workspaceBar.openFolderButton": "新增",
+			"workspaceBar.openFolderTitle": "開啟資料夾",
+			"workspaceBar.removeFolder": "將資料夾從工作區移除",
+			"workspaceBar.revealInLinux": "開啟內含資料夾",
+			"workspaceBar.revealInMac": "在 Finder 中顯示",
+			"workspaceBar.revealInWindows": "在檔案總管中顯示",
+			"workspaceBar.rowExpansionContext": "聚焦的存放庫列是否已展開其工作樹",
+			"workspaceBar.rowKindContext": "聚焦的列是資料夾、存放庫還是工作樹",
+			"workspaceBar.rowOffersWorktreeContext": "聚焦的列是否提供新增工作樹",
+			"workspaceBar.toggleCollapsed": "切換工作區列",
+			"workspaceBar.toggleIcon": "用於摺疊和展開工作區列的圖示。",
+			"workspaceBar.worktrees": "控制工作區列是否在每個存放庫底下顯示 Git 工作樹。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarColors": {
+			"facadeAgentBadgeBackground": "工作區列各列和標題列 agent 按鈕上 agent 徽章指示器的背景色彩。",
+			"facadeAgentBadgeForeground": "Agent 徽章計數文字的前景色彩。",
+			"facadeBarActiveBorder": "工作區列中目前資料夾列上作用中指示器的色彩。",
+			"facadeBarBackground": "工作區列的背景色彩。工作區列是沿著視窗左側排列的資料夾欄。",
+			"facadeBarBorder": "分隔工作區列與相鄰檢視的框線色彩。",
+			"facadeBarFolderBlue": "工作區列中資料夾的藍色強調色彩。",
+			"facadeBarFolderGreen": "工作區列中資料夾的綠色強調色彩。",
+			"facadeBarFolderIndigo": "工作區列中資料夾的靛色強調色彩。",
+			"facadeBarFolderLime": "工作區列中資料夾的萊姆綠強調色彩。",
+			"facadeBarFolderOrange": "工作區列中資料夾的橘色強調色彩。",
+			"facadeBarFolderPink": "工作區列中資料夾的粉紅色強調色彩。",
+			"facadeBarFolderPurple": "工作區列中資料夾的紫色強調色彩。",
+			"facadeBarFolderRed": "工作區列中資料夾的紅色強調色彩。",
+			"facadeBarFolderTeal": "工作區列中資料夾的藍綠色強調色彩。",
+			"facadeBarFolderYellow": "工作區列中資料夾的黃色強調色彩。",
+			"facadeBarForeground": "工作區列的前景色彩。",
+			"facadeBarInactiveForeground": "工作區列中非作用中列的前景色彩。",
+			"facadeBarTitleForeground": "工作區列標頭的前景色彩。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomization": {
+			"workspaceBar.worktreeIcon": "工作區列中工作樹的圖示。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarCustomize": {
+			"workspaceBar.branch": "分支",
+			"workspaceBar.branchAria": "新工作樹的分支",
+			"workspaceBar.branchPlaceholder": "分支名稱",
+			"workspaceBar.cancel": "取消",
+			"workspaceBar.color": "色彩",
+			"workspaceBar.colorAria": "資料夾色彩",
+			"workspaceBar.colorBlue": "藍色",
+			"workspaceBar.colorGreen": "綠色",
+			"workspaceBar.colorIndigo": "靛色",
+			"workspaceBar.colorLime": "萊姆綠",
+			"workspaceBar.colorNone": "無色彩",
+			"workspaceBar.colorOrange": "橘色",
+			"workspaceBar.colorPink": "粉紅色",
+			"workspaceBar.colorPurple": "紫色",
+			"workspaceBar.colorRed": "紅色",
+			"workspaceBar.colorTeal": "藍綠色",
+			"workspaceBar.colorYellow": "黃色",
+			"workspaceBar.create": "建立",
+			"workspaceBar.customizeAbout": "設定 '{0}' 的顯示名稱、色彩和圖示。磁碟上的資料夾不會重新命名。",
+			"workspaceBar.customizeTitle": "自訂資料夾",
+			"workspaceBar.customizeWorktreeAbout": "設定 '{0}' 的顯示名稱和色彩。磁碟上的分支和資料夾不會重新命名。",
+			"workspaceBar.customizeWorktreeTitle": "自訂工作樹",
+			"workspaceBar.displayName": "顯示名稱",
+			"workspaceBar.displayNameAria": "此資料夾的顯示名稱",
+			"workspaceBar.displayNameDefault": "保留空白以使用預設名稱 '{0}'。",
+			"workspaceBar.displayNameHintBranch": "保留空白以使用分支名稱。",
+			"workspaceBar.icon": "圖示",
+			"workspaceBar.iconAria": "資料夾圖示",
+			"workspaceBar.iconBeaker": "燒杯",
+			"workspaceBar.iconBook": "書本",
+			"workspaceBar.iconDatabase": "資料庫",
+			"workspaceBar.iconDevice": "裝置",
+			"workspaceBar.iconFolder": "資料夾",
+			"workspaceBar.iconGlobe": "地球",
+			"workspaceBar.iconPackage": "套件",
+			"workspaceBar.iconRocket": "火箭",
+			"workspaceBar.iconServer": "伺服器",
+			"workspaceBar.iconTools": "工具",
+			"workspaceBar.newWorktreeAbout": "為 '{0}' 建立新的 Git 工作樹和分支。",
+			"workspaceBar.newWorktreeTitle": "在 '{0}' 中新增工作樹",
+			"workspaceBar.save": "儲存",
+			"workspaceBar.worktreeColorAria": "工作樹色彩",
+			"workspaceBar.worktreeDisplayNameAria": "此工作樹的顯示名稱"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarEditors": {
+			"workspaceBar.editorsNotClosed": "無法關閉開啟的編輯器。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarPart": {
+			"workspaceBar.couldNotAdd": "無法將資料夾 '{0}' 新增至工作區: {1}",
+			"workspaceBar.gone": "資料夾 '{0}' 已不存在於磁碟上。",
+			"workspaceBar.goneReason": "已不存在於磁碟上",
+			"workspaceBar.moreActions": "更多動作...",
+			"workspaceBar.notTaken": "資料夾未新增至工作區",
+			"workspaceBar.title": "工作區"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarQuestions": {
+			"workspaceBar.agentLine": "Agent {0}",
+			"workspaceBar.agentLineAt": "Agent {0} · {1}",
+			"workspaceBar.agentTerminated": "下列 agent 將會終止:",
+			"workspaceBar.agentsAndTerminalsTerminated": "下列 agent 和終端機將會終止:",
+			"workspaceBar.agentsTerminated": "下列 agent 將會終止:",
+			"workspaceBar.fileDiscarded": "下列檔案有未儲存的變更，將會捨棄:",
+			"workspaceBar.fileLineAt": "{0} · {1}",
+			"workspaceBar.filesDiscarded": "下列檔案有未儲存的變更，將會捨棄:",
+			"workspaceBar.moreFiles": "...另有 {0} 個檔案未顯示",
+			"workspaceBar.moreSessions": "...另有 {0} 個工作階段未顯示",
+			"workspaceBar.oneMoreFile": "...另有 1 個檔案未顯示",
+			"workspaceBar.oneMoreSession": "...另有 1 個工作階段未顯示",
+			"workspaceBar.terminalLine": "終端機 ({0})",
+			"workspaceBar.terminalLineAt": "終端機 ({0}) · {1}",
+			"workspaceBar.terminalTerminated": "下列終端機將會終止:",
+			"workspaceBar.terminalsTerminated": "下列終端機將會終止:",
+			"workspaceBar.worktreePlace": "{0} (工作樹: {1})"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarRemoval": {
+			"workspaceBar.notRemoved": "無法更新工作區: {0}",
+			"workspaceBar.notRemovedReason": "無法寫入工作區組態檔",
+			"workspaceBar.removeAndDiscard": "移除並捨棄變更(&&R)",
+			"workspaceBar.removeFolderAndWorktree": "確定要將 '{0}' 及其工作樹從工作區移除嗎?",
+			"workspaceBar.removeFolderAndWorktrees": "確定要將 '{0}' 及其 {1} 個工作樹從工作區移除嗎?",
+			"workspaceBar.removeFolderButton": "移除(&&R)",
+			"workspaceBar.removeFolderQuestion": "確定要將 '{0}' 從工作區移除嗎?",
+			"workspaceBar.removeFoldersQuestion": "確定要將下列 {0} 個資料夾從工作區移除嗎?",
+			"workspaceBar.removeKeepsDisk": "不會刪除磁碟上的檔案。",
+			"workspaceBar.worktreeDeleted": "工作樹 '{0}' 已刪除，並已從工作區移除。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitchFolder": {
+			"workspaceBar.switchFolder": "切換資料夾...",
+			"workspaceBar.switchFolderNext": "在切換資料夾中選取下一個資料夾",
+			"workspaceBar.switchFolderPlaceholder": "選取要切換的資料夾"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarSwitcher": {
+			"workspaceBar.addedNotShown": "資料夾 '{0}' 已新增至工作區，但無法切換過去。",
+			"workspaceBar.addedNotShownOf": "已將資料夾新增至工作區: {0}。無法切換至 '{1}'。",
+			"workspaceBar.couldNotLeave": "無法切換資料夾: 無法儲存使用中資料夾的編輯器狀態。{0}",
+			"workspaceBar.couldNotRestore": "無法還原此資料夾的部分編輯器。{0}",
+			"workspaceBar.gone": "資料夾 '{0}' 已不存在於磁碟上。",
+			"workspaceBar.goneReason": "已不存在於磁碟上",
+			"workspaceBar.unreadable": "無法讀取資料夾 '{0}': {1}"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
+			"workspaceBar.openInNewWindow": "在新視窗中開啟",
+			"workspaceBar.trustAndAdd": "信任並新增(&&T)",
+			"workspaceBar.trustParent": "信任父資料夾 '{0}' 中所有檔案的作者",
+			"workspaceBar.untrustedConsequence": "此工作區已受信任。新增不受信任的資料夾，會讓整個工作區和執行中的 agent 切換為受限模式。",
+			"workspaceBar.untrustedConsequenceMany": "此工作區已受信任。新增不受信任的資料夾，會讓整個工作區和執行中的 agent 切換為受限模式。",
+			"workspaceBar.untrustedLinks": "請參閱[我們的文件](https://aka.ms/vscode-workspace-trust)以深入了解，或以受限模式[在新視窗中開啟]({0})。",
+			"workspaceBar.untrustedLinksMany": "請參閱[我們的文件](https://aka.ms/vscode-workspace-trust)以深入了解，或以受限模式[在新視窗中開啟全部 {0} 個資料夾]({1})。",
+			"workspaceBar.untrustedMessage": "您是否信任此資料夾中檔案的作者?",
+			"workspaceBar.untrustedMessageMany": "您是否信任這 {0} 個資料夾中檔案的作者?",
+			"workspaceBar.untrustedMore": "及其他 {0} 個",
+			"workspaceBar.untrustedTakenOut": "已移除資料夾 '{0}'，因為它不受信任，會讓工作區切換為受限模式。"
+		},
+		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
+			"workspaceBar.agentsAria": "{0} 個 agent",
+			"workspaceBar.ariaLabel": "工作區資料夾",
+			"workspaceBar.collapse": "摺疊",
+			"workspaceBar.empty": "將資料夾拖曳到這裡，或按一下 +。",
+			"workspaceBar.expand": "展開",
+			"workspaceBar.moreAgents": "還有 {0} 個 agent",
+			"workspaceBar.oneAgentAria": "1 個 agent",
+			"workspaceBar.oneMoreAgent": "還有 1 個 agent",
+			"workspaceBar.oneWorktreeAria": "1 個工作樹",
+			"workspaceBar.unavailableAria": "{0}，資料夾不存在於磁碟上",
+			"workspaceBar.unreadableAria": "{0}，無法讀取資料夾",
+			"workspaceBar.worktreeAria": "{0}，工作樹",
+			"workspaceBar.worktreesAria": "{0} 個工作樹"
+		},
+		"vs/workbench/browser/workbench.contribution": {
+			"appName": "`${appName}`: 例如 {0}。",
+			"workbench.activityBar.location.toolbar": "在標題列中的版面配置控制項旁顯示活動列。"
+		},
+		"vs/workbench/common/contextkeys": {
+			"inAutomation": "{0} 是否在自動化/煙霧測試下執行"
+		},
+		"vs/workbench/common/theme": {
+			"modernPanelBorder": "啟用現代化 UI 時，面板表面的框線色彩。",
+			"modernSashGripForeground": "啟用現代化 UI 時，標示工作台各部分之間可調整大小邊界的拖曳控點色彩。",
+			"modernUIInactiveShellBackground": "啟用現代化 UI 且視窗非作用中時，浮動工作台表面周圍可見的外框背景色彩。",
+			"modernUIShellBackground": "啟用現代化 UI 時，浮動工作台表面周圍可見的外框背景色彩。",
+			"statusBarInactiveBackground": "開啟工作區或資料夾且視窗非作用中時的狀態列背景色彩。偵錯和其他背景覆寫的優先順序較高。若未設定，則使用目前的狀態列背景。"
+		},
+		"vs/workbench/contrib/accessibility/browser/accessibilityConfiguration": {
+			"verbosity.customizationMigrations.description": "提供如何存取自訂項目移轉檢查清單之協助工具說明的資訊。"
+		},
+		"vs/workbench/contrib/browserView/common/browserView": {
+			"browserView.openShareableCopy.cancel": "取消",
+			"browserView.openShareableCopy.confirm": "開啟並分享(&&O)",
+			"browserView.openShareableCopy.detail": "此索引標籤未強制執行與 agent 分享所需的已設定原則限制。\n\n請在新的索引標籤中開啟此頁面，以便與 agent 分享。",
+			"browserView.openShareableCopy.message": "要開啟新的索引標籤以進行分享嗎?"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/browserViewWorkbenchService": {
+			"browser.networkFilteringEnabled": "已撤銷 agent 對瀏覽器索引標籤的存取權，因為已啟用網路篩選。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserDataStorageFeatures": {
+			"browser.clearAgentStorageAction": "清除儲存空間 (Agent)",
+			"browser.dataStorage.agent": "瀏覽器檢視共用一個記憶體內工作階段，會在應用程式關閉時清除。此工作階段也與 agent 開啟的瀏覽器頁面共用，因此 **包括本機儲存空間和 Cookie 在內的所有資料都可供 agent 存取。** 啟用 agent 網路篩選時，來自此工作階段的要求會受到已設定之網路網域原則的限制。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorChatFeatures": {
+			"browser.shareWithAgent.blockedByNetworkPolicy": "由於網路網域原則，無法與 agent 分享。",
+			"browser.shareWithAgent.failed": "無法分享瀏覽器索引標籤",
+			"browser.shareWithAgent.isolated": "與 agent 分享 (開啟隔離的索引標籤)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorEmulationFeatures": {
+			"browser.userAgent.prompt": "使用者代理程式字串 (保留空白以使用 {0} 預設值)"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserEditorErrorFeatures": {
+			"browser.networkPolicyErrorExtraWarning": "此要求很可能已被網路網域原則封鎖。\n請檢查已設定的允許和拒絕網路網域。"
+		},
+		"vs/workbench/contrib/browserView/electron-browser/features/browserTabManagementFeatures": {
+			"browser.openInIntegratedBrowser": "來自終端機、聊天和其他來源，且無論 `#workbench.browser.openLocalhostLinks#` 設為何值，都會在整合式瀏覽器而非系統瀏覽器中開啟的連結。每個項目都是一個 URL 模式: `example.com` 符合該網域的頁面，`*.example.com` 符合該網域及其子網域，`https://example.com/docs` 符合該路徑下使用該配置的頁面，`example.com:*` 則符合任何連接埠。"
+		},
+		"vs/workbench/contrib/chat/browser/chat.shared.contribution": {
+			"autoApprove3.description": "全域自動核准 (亦稱「YOLO 模式」) 會完全停用所有工作區中所有工具的手動核准，讓 agent 能完全自主運作。這極度危險，*絕不*建議使用；即使是 Codespaces 和開發容器這類容器化環境，也會將使用者金鑰轉送到容器中，而可能遭到入侵。\n\n此功能會停用重要的安全性保護，讓攻擊者更容易入侵電腦。\n\n注意: 此設定只控制工具核准，不會阻止 agent 提出問題。若要自動回答 agent 的問題，請使用 `#chat.autoReply#` 設定。",
+			"mcp.enterpriseManagedAuth.idp": "(預覽) 用於企業管理之 Model Context Protocol (MCP) 伺服器的 OAuth/OIDC IdP 設定。通常透過企業原則 (Windows 群組原則/macOS 受控喜好設定/Linux `/etc/facade/policy.json`) 傳遞；開發人員可以手動編輯 `settings.json` 以進行本機測試。屬性: `issuer` (HTTPS URL)、`clientId`、`clientSecret`。"
+		},
+		"vs/workbench/contrib/codeEditor/browser/diffEditorAccessibilityHelp": {
+			"msg6": "使用編輯器標題區域 [更多動作] 功能表中的 [差異檢視]，以選取內嵌、並排或自動版面配置。"
+		},
+		"vs/workbench/contrib/debug/browser/debugAdapterManager": {
+			"debugServer": "僅限偵錯延伸模組開發: 如果指定了連接埠，{0} 會嘗試連線至以伺服器模式執行的偵錯配接器"
+		},
+		"vs/workbench/contrib/extensions/browser/extensions.contribution": {
+			"extensions.gallery.authProvider": "設定延伸模組市集的驗證提供者",
+			"extensions.gallery.authProvider.github": "使用 GitHub 向延伸模組市集進行驗證。",
+			"extensions.gallery.authProvider.microsoft": "使用 Microsoft (Entra ID) 帳戶向延伸模組市集進行驗證。",
+			"notInstalled": "未安裝延伸模組 '{0}'。請務必使用包含發行者的完整延伸模組識別碼，例如: ms-dotnettools.csharp。",
+			"workbench.extensions.installExtension.option.donotSync": "啟用時，若設定同步已開啟，{0} 不會同步此延伸模組。",
+			"workbench.extensions.installExtension.option.installOnlyNewlyAddedFromExtensionPackVSIX": "啟用時，{0} 只會從延伸模組套件 VSIX 安裝新增的延伸模組。只有在安裝 VSIX 時才會考慮此選項。",
+			"workbench.extensions.installExtension.option.installPreReleaseVersion": "啟用時，{0} 會安裝延伸模組的發行前版本 (如果有的話)。"
+		},
+		"vs/workbench/contrib/extensions/browser/extensionsActions": {
+			"deprecated with alternate settings message": "此延伸模組已淘汰，因為此功能現已內建於 {0}。",
+			"deprecated with alternate settings tooltip": "此延伸模組已淘汰，因為此功能現已內建於 {1}。請設定這些 {0} 以使用此功能。",
+			"disableForWorkspaceActionToolTip": "僅在此工作區中停用此延伸模組。這會套用至此視窗中的所有資料夾。",
+			"enableForWorkspaceActionToolTip": "僅在此工作區中啟用此延伸模組。這會套用至此視窗中的所有資料夾。"
+		},
+		"vs/workbench/contrib/extensions/common/extensionsFileTemplate": {
+			"app.extensions.json.unwantedRecommendations": "由 {0} 建議、但不應向此工作區使用者建議的延伸模組清單。延伸模組的識別碼一律為 '${publisher}.${name}'。例如: 'vscode.csharp'。"
+		},
+		"vs/workbench/contrib/externalUriOpener/common/configuration": {
+			"externalUriOpeners.defaultId": "使用 {0} 的標準開啟工具開啟。"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
+			"facadeNotificationSource": "Facade Agents"
+		},
+		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
+			"changeAndRestart": "變更並重新啟動",
+			"dontShowAgain": "不再顯示",
+			"suggestDisplayLanguage": "{0} 也提供{1}介面。要變更顯示語言並重新啟動嗎?",
+			"suggestDisplayLanguageSetting": "控制在尚未選擇顯示語言時，若作業系統的語言有內建的語言套件，視窗是否提議切換為該語言。"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminalActions": {
+			"facade.terminal.openTab": "終端機"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals": {
+			"folderTerminals.keptRunning": "資料夾 '{0}' 已從工作區移除。執行中的終端機會在面板中繼續執行: {1}。",
+			"folderTerminals.stop": "停止"
+		},
+		"vs/workbench/contrib/folderTerminals/browser/folderTerminals.contribution": {
+			"terminal.followFolder": "控制編輯器區域中的終端機是否跟隨目前的資料夾。啟用時，切換資料夾會隱藏其他資料夾的終端機，並在您切換回來時還原。停用時，終端機在切換資料夾時仍保持顯示。"
+		},
+		"vs/workbench/contrib/github/browser/githubLinkPresentation.contribution": {
+			"github.authenticationRequired": "登入 GitHub 以載入提取要求狀態和其他 GitHub 連結詳細資料。",
+			"github.authenticationRequired.signIn": "登入"
+		},
+		"vs/workbench/contrib/issue/browser/baseIssueReporterService": {
+			"handlesIssuesElsewhere": "此延伸模組會在 {0} 以外處理問題"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterOverlay": {
+			"screenshotsSubtitle": "您最多可以新增 {0} 個螢幕擷取畫面或影片。瀏覽 {1} 並選擇擷取的時機。"
+		},
+		"vs/workbench/contrib/issue/browser/issueReporterPage": {
+			"acknowledgements": "我了解我的 {0} 版本不是最新版本，此問題可能會被關閉。"
+		},
+		"vs/workbench/contrib/localization/common/localizationsActions": {
+			"configureLocaleDescription": "根據已安裝的語言套件變更 {0} 的地區設定。常見語言包括法文、中文、西班牙文、日文、德文、韓文等等。"
+		},
+		"vs/workbench/contrib/multiDiffEditor/browser/actions": {
+			"diffView": "差異檢視"
+		},
+		"vs/workbench/contrib/preferences/browser/preferencesWidgets": {
+			"workspaceSettingsAllFolders": "工作區: 套用至此視窗中的所有資料夾。"
+		},
+		"vs/workbench/contrib/preferences/browser/settingsTree": {
+			"setting.deprecationMessageSeverity.info": "資訊",
+			"setting.deprecationMessageSeverity.warning": "警告"
+		},
+		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
+			"progress.turnOn.final.noLink": "已為 {0} 啟用遠端通道存取。您可以透過 {3} [帳戶] 功能表[設定](command:{1})或[關閉](command:{2})此存取。",
+			"remoteTunnel.actions.rename": "重新命名通道",
+			"renameTunnel.invalidName": "名稱只能由字母、數字、底線和破折號組成，且開頭不得為破折號。",
+			"renameTunnel.maxLength": "名稱不得超過 {0} 個字元。",
+			"renameTunnel.placeholder": "保留空白以使用此電腦的主機名稱。",
+			"renameTunnel.prompt": "輸入此通道的名稱。",
+			"renameTunnel.title": "重新命名通道"
+		},
+		"vs/workbench/contrib/scm/browser/scm.contribution": {
+			"no repository in folder": "此資料夾中沒有原始檔控制存放庫。"
+		},
+		"vs/workbench/contrib/search/browser/search.common.contribution": {
+			"exclude": "設定 [Glob 模式](https://code.visualstudio.com/docs/editor/codebasics#_advanced-search-options)，以在全文檢索搜尋和 Quick Open 的檔案搜尋中排除檔案和資料夾。若要從 Quick Open 的最近開啟清單中排除檔案，模式必須是絕對路徑 (例如 `**/node_modules/**`)。會繼承 `#files.exclude#` 設定中的所有 Glob 模式。",
+			"exclude.boolean": "要比對檔案路徑的 Glob 模式。設為 true 或 false 可啟用或停用此模式。",
+			"exclude.when": "對相符檔案的同層級項目進行額外檢查。請使用 \\$(basename) 作為相符檔案名稱的變數。",
+			"search.followSymlinks": "控制搜尋時是否追蹤符號連結。",
+			"search.maxResults": "控制搜尋結果的數目上限，可設為 `null` (空白) 以傳回不限數目的結果。",
+			"search.ripgrep.maxThreads": "用於搜尋的執行緒數目。設為 0 時，引擎會自動決定此值。",
+			"search.smartCase": "如果模式全為小寫，搜尋時不區分大小寫；否則區分大小寫。",
+			"search.sortOrder": "控制搜尋結果的排序順序。",
+			"searchSortOrder.countAscending": "結果會依每個檔案的計數升冪排序。",
+			"searchSortOrder.countDescending": "結果會依每個檔案的計數降冪排序。",
+			"searchSortOrder.default": "結果會依資料夾和檔案名稱，按字母順序排序。",
+			"searchSortOrder.filesOnly": "結果會忽略資料夾順序，依檔案名稱按字母順序排序。",
+			"searchSortOrder.modified": "結果會依檔案的上次修改日期降冪排序。",
+			"searchSortOrder.type": "結果會依副檔名，按字母順序排序。",
+			"useGlobalIgnoreFiles": "控制搜尋檔案時是否使用全域 gitignore 檔案 (例如來自 `$HOME/.config/git/ignore`)。需要啟用 {0}。",
+			"useIgnoreFiles": "控制搜尋檔案時是否使用 `.gitignore` 和 `.ignore` 檔案。",
+			"useParentIgnoreFiles": "控制搜尋檔案時是否使用上層目錄中的 `.gitignore` 和 `.ignore` 檔案。需要啟用 {0}。"
+		},
+		"vs/workbench/contrib/tasks/browser/abstractTaskService": {
+			"TerminateAction.noProcess": "啟動的處理序已不存在。如果工作繁衍了背景工作，結束 {0} 可能會留下孤立的處理序。"
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchemaCommon": {
+			"JsonSchema.promptOnClose": "當 {0} 在有背景工作執行時關閉，是否提示使用者。",
+			"JsonSchema.tasks.promptOnClose": "當 {0} 在有工作執行時關閉，是否提示使用者。"
+		},
+		"vs/workbench/contrib/tasks/common/jsonSchema_v2": {
+			"JsonSchema.tasks.promptOnClose": "當 {0} 在有工作執行時關閉，是否提示使用者。"
+		},
+		"vs/workbench/contrib/tasks/common/taskDefinitionRegistry": {
+			"TaskDefinition.required": "此類型的工作必須提供 `properties` 物件中的哪些屬性名稱，才會被視為相符。{0} 會用它將 `tasks.json` 項目與已登錄的工作提供者產生關聯。"
+		},
+		"vs/workbench/contrib/tasks/electron-browser/taskService": {
+			"TaskSystem.noProcess": "啟動的工作已不存在。如果工作繁衍了背景處理序，結束 {0} 可能會留下孤立的處理序。若要避免此情況，請以等候旗標啟動最後一個背景處理序。"
+		},
+		"vs/workbench/contrib/terminal/browser/terminalActions": {
+			"facade.terminal.newInFolder": "在其他資料夾中建立新的終端機..."
+		},
+		"vs/workbench/contrib/terminal/browser/terminalProcessManager": {
+			"facade.agentElsewhere": "此 agent 正在另一個視窗中執行。請切換到該視窗中它的索引標籤。",
+			"facade.agentProcessGone": "此 agent 的處理序已在視窗關閉或重新載入期間結束。"
+		},
+		"vs/workbench/contrib/terminal/browser/terminalView": {
+			"terminal.monospaceOnly": "終端機只支援等寬字型。如果這是新安裝的字型，請務必重新啟動 {0}。"
+		},
+		"vs/workbench/contrib/terminal/common/terminalConfiguration": {
+			"terminal.integrated.allowChords": "是否允許在終端機中使用組合按鍵繫結關係。請注意，當此設定為 true 且按鍵輸入形成組合按鍵時，將會略過 {0}；如果您希望 ctrl+k 傳送至殼層 (而不是 {1})，將此設定為 false 特別有用。",
+			"terminal.integrated.commandsToSkipShell": "一組命令識別碼，其按鍵繫結關係不會傳送到殼層，而是一律由 {2} 處理。如此一來，通常會被殼層取用的按鍵繫結關係，就能像終端機沒有焦點時一樣運作，例如按 `Ctrl+P` 啟動 Quick Open。\n\n&nbsp;\n\n預設會略過許多命令。若要覆寫預設值，改為將該命令的按鍵繫結關係傳遞給殼層，請新增前面加上 `-` 字元的命令。例如，新增 `-workbench.action.quickOpen` 可讓 `Ctrl+P` 傳送到殼層。\n\n&nbsp;\n\n在設定編輯器中檢視時，下列預設略過的命令清單會被截斷。若要查看完整清單，{1}，然後搜尋下列清單中的第一個命令。\n\n&nbsp;\n\n預設略過的命令:\n\n{0}",
+			"terminal.integrated.detectLocale": "控制是否偵測 `$LANG` 環境變數並將其設為符合 UTF-8 的選項，因為 {0} 的終端機只支援來自殼層的 UTF-8 編碼資料。",
+			"terminal.integrated.env.linux": "具有環境變數的物件，這些環境變數會新增至 Linux 上終端機所使用的 {0} 處理序。設為 `null` 可刪除環境變數。",
+			"terminal.integrated.env.osx": "具有環境變數的物件，這些環境變數會新增至 macOS 上終端機所使用的 {0} 處理序。設為 `null` 可刪除環境變數。",
+			"terminal.integrated.env.windows": "具有環境變數的物件，這些環境變數會新增至 Windows 上終端機所使用的 {0} 處理序。設為 `null` 可刪除環境變數。",
+			"terminal.integrated.gpuAcceleration.auto": "讓 {0} 偵測哪種轉譯器能提供最佳體驗。",
+			"terminal.integrated.shellIntegration.enabled": "決定是否自動插入殼層整合，以支援增強的命令追蹤和目前工作目錄偵測等功能。 \n\n殼層整合的運作方式是在殼層中插入啟動指令碼。此指令碼讓 {2} 能了解終端機內發生的狀況。\n\n支援的殼層:\n\n- Linux/macOS: bash、fish、pwsh、zsh\n - Windows: pwsh、git bash\n\n此設定只會在建立終端機時套用，因此您需要重新啟動終端機才會生效。\n\n 請注意，如果您在終端機設定檔中定義了自訂引數、已啟用 {1}、使用[複雜的 bash `PROMPT_COMMAND`](https://code.visualstudio.com/docs/editor/integrated-terminal#_complex-bash-promptcommand)，或有其他不受支援的設定，指令碼插入可能無法運作。若要停用裝飾，請參閱 {0}",
+			"terminal.integrated.windowsUseConptyDll": "是否使用 {0} 隨附的 conpty.dll (v1.25.260303002)，而不是 Windows 內建的版本。"
+		},
+		"vs/workbench/contrib/terminal/common/terminalContextKey": {
+			"facadeAgentTerminalContextKey": "使用中的終端機編輯器是否從 agent 功能表啟動",
+			"facadeRunTerminalContextKey": "使用中的終端機是否在執行由 Facade 啟動的 agent。"
+		},
+		"vs/workbench/contrib/terminalContrib/autoReplies/common/terminalAutoRepliesConfiguration": {
+			"terminal.integrated.autoReplies": "一組訊息，在終端機中遇到時會自動回應。只要訊息夠明確，就能協助自動處理常見的回應。\n\n備註:\n\n- 使用 {0} 自動回應 Windows 上的終止批次工作提示。\n- 訊息包含逸出序列，因此有樣式的文字可能不會觸發回覆。\n- 每個回覆每秒最多只能發生一次。\n- 在回覆中使用 {1} 代表 Enter 鍵。\n- 若要取消設定預設的索引鍵，請將值設為 null。\n- 如果新的回覆沒有套用，請重新啟動 {2}。"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherActions": {
+			"facade.agent.configure": "設定 agent...",
+			"facade.agent.menu": "Agent",
+			"facade.agent.oneActive": "{0} - 1 個執行中的 agent",
+			"facade.agent.showActive": "顯示執行中的 agent...",
+			"facade.agent.showMenu": "顯示 agent 功能表",
+			"facade.agent.someActive": "{0} - {1} 個執行中的 agent",
+			"facade.agent.startRestricted": "啟動 agent...",
+			"facade.agents.category": "Agent"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
+			"facade.agent.noneFound": "找不到 agent: 設定 agent..."
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
+			"agentPicker.agentAndTitle": "{0} · {1}",
+			"agentPicker.close": "關閉 agent",
+			"agentPicker.creatingWorktree": "正在建立其工作樹",
+			"agentPicker.empty": "沒有執行中的 agent",
+			"agentPicker.panel": "面板",
+			"agentPicker.placeholder": "選取 agent",
+			"agentPicker.preparing": "{0} · {1}",
+			"agentPicker.runningSetup": "正在執行其工作樹的初始設定",
+			"agentPicker.untitled": "Agent"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherService": {
+			"facade.agent.trustToStart": "Agent 會在此工作區的資料夾中工作。請信任此工作區以啟動 {0}。",
+			"facade.agent.trustToStartAny": "Agent 會在此工作區的資料夾中工作。請信任此工作區以啟動 agent。"
+		},
+		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherShutdown": {
+			"runningWork.agent": "要終止 1 個 agent 嗎?",
+			"runningWork.agentAndTerminal": "要終止 1 個 agent 和 1 個終端機嗎?",
+			"runningWork.agentAndTerminals": "要終止 1 個 agent 和 {0} 個終端機嗎?",
+			"runningWork.agents": "要終止 {0} 個 agent 嗎?",
+			"runningWork.agentsAndTerminal": "要終止 {0} 個 agent 和 1 個終端機嗎?",
+			"runningWork.agentsAndTerminals": "要終止 {0} 個 agent 和 {1} 個終端機嗎?"
+		},
+		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
+			"agentIcon.antigravity": "執行 Antigravity 的終端機圖示。",
+			"agentIcon.claude": "執行 Claude Code 的終端機圖示。",
+			"agentIcon.codex": "執行 Codex 的終端機圖示。",
+			"agentIcon.grok": "執行 Grok Build 的終端機圖示。",
+			"agentIcon.muse": "執行 Muse Code 的終端機圖示。"
+		},
+		"vs/workbench/contrib/webview/browser/webviewFindAccessibilityHelp": {
+			"webview.importantDesc": "有些 Web 檢視會在 {0} 的 [尋找] 取得鍵盤輸入之前將其攔截。如果 Enter 或 Shift+Enter 無法在相符項目之間瀏覽，可能是 Web 檢視正在處理這些按鍵。請先按一下或用 Tab 鍵進入 Web 檢視內容，確保 Web 檢視具有焦點，然後重新開啟 [尋找] 並再次嘗試瀏覽。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution": {
+			"minWelcomeDescription": "開啟逐步解說，協助您開始使用 {0}。",
+			"workbench.startupEditor.welcomePage": "開啟歡迎頁面，其中包含協助您開始使用 {0} 和延伸模組的內容。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedExtensionPoint": {
+			"walkthroughs.steps.completionEvents.onCommand": "在 {0} 中的任何位置執行指定的命令時，勾選完成步驟。"
+		},
+		"vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent": {
+			"gettingStarted.commandPalette.description.interpolated": "不必動用滑鼠即可執行命令，完成 {1} 中的任何工作。\n{0}",
+			"gettingStarted.commandPaletteAccessibility.description.interpolated": "不必動用滑鼠即可執行命令，完成 {1} 中的任何工作。\n{0}",
+			"gettingStarted.extensions.description.interpolated": "延伸模組能為 {1} 增添威力。從便利的生產力小技巧、擴充內建功能，到加入全新能力，應有盡有。\n{0}",
+			"gettingStarted.settingsAndSync.description.interpolated": "自訂 {1} 的每個細節，並在不同裝置間[同步](command:workbench.userDataSync.actions.turnOn)自訂項目。\n{0}",
+			"gettingStarted.setup.title": "開始使用 {0}",
+			"gettingStarted.setup.walkthroughPageTitle": "設定 {0}",
+			"gettingStarted.setupAccessibility.description": "了解讓 {0} 可存取的工具和快速鍵。請注意，有些動作無法在逐步解說中執行。",
+			"gettingStarted.setupAccessibility.walkthroughPageTitle": "設定 {0} 協助工具",
+			"gettingStarted.videoTutorial.description.interpolated": "觀看一系列簡短實用的影片教學中的第一集，了解 {1} 的主要功能。\n{0}"
+		},
+		"vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA": {
+			"onboarding.personalize.tip.suffix": " 以存取所有 {0} 命令。",
+			"onboarding.signIn.heroTitle": "歡迎使用 {0}"
+		},
+		"vs/workbench/contrib/workspace/browser/workspace.contribution": {
+			"workspace.trust.description": "控制是否在 {0} 中啟用工作區信任。",
+			"workspace.trust.emptyWindow.description": "控制在 {1} 中是否預設信任空白視窗。與 `#{0}#` 搭配使用時，您可以在空白視窗中啟用 {1} 的完整功能，而不會出現提示。"
+		},
+		"vs/workbench/contrib/worktrees/browser/worktrees": {
+			"worktrees.agentElsewhere": "未刪除 '{0}'，因為另一個視窗中的 agent 正在其中工作 ({1})。請先在該視窗中停止該 agent。",
+			"worktrees.agentInside": "未刪除 '{0}'，因為有一個不會因這次刪除而停止的 agent 正在其中工作 ({1})。請先停止該 agent。",
+			"worktrees.alreadyOut": "{0} 它已從工作區移除，其執行中的終端機也已終止。",
+			"worktrees.anotherToolsWorktree": "'{0}' 是在 Facade 外部建立的工作樹。請改從其存放庫的主要工作樹建立工作樹。",
+			"worktrees.badName": "'{0}' 不是有效的 Windows 資料夾名稱。",
+			"worktrees.badSetup": "無法剖析 .facade/worktrees.json: setup 索引鍵必須包含命令字串陣列。未執行任何命令。",
+			"worktrees.beingDeleted": "正在刪除工作樹。",
+			"worktrees.branchCheckedOut": "分支 '{0}' 已在 '{1}' 中簽出。",
+			"worktrees.branchExists": "名為 '{0}' 的分支已存在。請選擇其他名稱。",
+			"worktrees.branchKeptQuoted": "將保留分支 '{0}'。",
+			"worktrees.changedMeanwhile": "未刪除 '{0}'，因為刪除期間其中出現了新的變更，刪除會使其遺失: {1}。",
+			"worktrees.changedSinceCheck": "工作樹中的檔案在驗證後已被修改。請檢閱變更後再試一次。",
+			"worktrees.checkFailed": "刪除前無法驗證工作樹狀態: {0}",
+			"worktrees.copyFailed": "無法將 .worktreeinclude 中指定的 {0} 個檔案複製到工作樹: {1}",
+			"worktrees.couldNotLeave": "無法切換至 '{0}'；未刪除工作樹 '{1}'。",
+			"worktrees.createFailed": "無法建立工作樹: {0}",
+			"worktrees.createdForAgent": "已在 '{0}' 建立工作樹，但{1}失敗: {2}",
+			"worktrees.createdNotOpened": "已在 '{0}' 建立工作樹，但{1}失敗: {2}",
+			"worktrees.creating": "正在建立工作樹 '{0}'...",
+			"worktrees.deleteButton": "刪除(&&D)",
+			"worktrees.deleteDiscardButton": "刪除並捨棄變更(&&D)",
+			"worktrees.deleteFailed": "無法刪除工作樹: {0}",
+			"worktrees.deleteQuestion": "確定要刪除工作樹 '{0}' 嗎?",
+			"worktrees.deleteUnknown": "無法確認工作樹 '{0}' 是否已刪除。工作區列會反映目前的 Git 狀態。",
+			"worktrees.deleteWorktree": "刪除工作樹...",
+			"worktrees.deleting": "正在刪除工作樹 '{0}'...",
+			"worktrees.folder": "路徑: {0}",
+			"worktrees.folderAndSubmodulesDeleted": "將刪除工作樹資料夾，包括其子模組和未推送的提交。此動作無法復原。",
+			"worktrees.folderDeleted": "將從磁碟刪除工作樹資料夾。此動作無法復原。",
+			"worktrees.goThere": "切換至工作樹",
+			"worktrees.hookFailed": "已建立工作樹，但 Git 勾點失敗: {0}",
+			"worktrees.ignored": "將刪除下列被 Git 忽略的檔案:",
+			"worktrees.ignoredFile": "{0} (被 Git 忽略)",
+			"worktrees.inheritedEnvironment": "此視窗啟動時設定了 GIT_DIR、GIT_WORK_TREE 或 GIT_INDEX_FILE，會將 Git 導向另一個存放庫。請在新視窗中開啟此資料夾。",
+			"worktrees.initialBranch": "初始提交位於分支 '{0}'。請為新工作樹選擇其他分支名稱。",
+			"worktrees.initializeAndCreate": "初始化並建立",
+			"worktrees.inspectFailed": "Git 無法讀取存放庫 '{0}': {1}",
+			"worktrees.inspecting": "正在讀取存放庫 '{0}'...",
+			"worktrees.invalidBranchName": "'{0}' 不是有效的分支名稱。",
+			"worktrees.kept": "未從磁碟刪除工作樹 '{0}'。它已從工作區移除。按一下它的列即可將它加回。",
+			"worktrees.keptOutside": "未從磁碟刪除工作樹 '{0}'。",
+			"worktrees.leftover": "已從 Git 移除工作樹，但無法刪除其資料夾: {0}。{1}",
+			"worktrees.leftoverRefused": "無法刪除資料夾: {0}",
+			"worktrees.leftoverUnknown": "無法將 '{0}' 識別為此視窗中的刪除作業所留下的工作樹資料夾，因此未將其刪除。如有需要，請手動刪除。",
+			"worktrees.locked": "工作樹 '{0}' 已鎖定。請執行 'git worktree unlock' 以允許刪除。",
+			"worktrees.lockedBecause": "工作樹 '{0}' 已鎖定: {1}。請執行 'git worktree unlock' 以允許刪除。",
+			"worktrees.loses": "將會遺失下列未提交的變更:",
+			"worktrees.mainNotDeleted": "{0} 是其存放庫的主要工作樹，永遠不會被刪除。",
+			"worktrees.namedMore": "{0} 及其他 {1} 個",
+			"worktrees.newWorktree": "新增工作樹...",
+			"worktrees.nextSentence": "{0}{1}",
+			"worktrees.noAnswer": "Git 處理序沒有回應。",
+			"worktrees.noBaseUnasked": "存放庫 '{0}' 沒有任何提交。請先建立初始提交。",
+			"worktrees.noBranch": "需要分支名稱才能建立工作樹。",
+			"worktrees.noGit": "無法執行建立工作樹的 Git 命令: {0}",
+			"worktrees.noGitDelete": "無法執行刪除工作樹的 Git 命令: {0}",
+			"worktrees.noGitExtension": "工作樹作業需要內建的 Git 延伸模組，但它在此視窗中未啟用。",
+			"worktrees.noIdentity": "未設定 Git 作者身分識別。請透過 '{2}' 設定 '{0}' 和 '{1}'，然後再試一次。",
+			"worktrees.notARepository": "'{0}' 包含無法讀取為有效 Git 存放庫的 .git 資料夾。",
+			"worktrees.notDeletedNotFacades": "{0} 是在 Facade 外部建立的工作樹，Facade 永遠不會刪除它。",
+			"worktrees.notOnDisk": "'{0}' 不是磁碟上的有效資料夾。",
+			"worktrees.notOut": "無法將工作樹 '{0}' 從工作區移除，因此未將其刪除。",
+			"worktrees.notRepositoryUnasked": "資料夾 '{0}' 不是 Git 存放庫。請先初始化存放庫。",
+			"worktrees.notWorktree": "'{0}' 不是此工作區中可識別的工作樹。",
+			"worktrees.openWorktree": "開啟工作樹",
+			"worktrees.outOfWorkspace": "它已從工作區移除。",
+			"worktrees.pathExists": "'{0}' 已存在檔案或資料夾。",
+			"worktrees.prepare.folderEmpty": "此資料夾不是 Git 存放庫。繼續將會初始化它 ('git init') 並建立空白的初始提交。",
+			"worktrees.prepare.folderMany": "此資料夾不是 Git 存放庫。繼續將會初始化它 ('git init') 並建立包含 {0} 個檔案的初始提交。",
+			"worktrees.prepare.folderOne": "此資料夾不是 Git 存放庫。繼續將會初始化它 ('git init') 並建立包含 1 個檔案的初始提交。",
+			"worktrees.prepare.insideEmpty": "此資料夾位於 '{0}' Git 存放庫內，但不是其根目錄。繼續將會在這裡初始化另一個存放庫 ('git init') 並建立空白的初始提交。",
+			"worktrees.prepare.insideMany": "此資料夾位於 '{0}' Git 存放庫內，但不是其根目錄。繼續將會在這裡初始化另一個存放庫 ('git init') 並建立包含 {1} 個檔案的初始提交。",
+			"worktrees.prepare.insideOne": "此資料夾位於 '{0}' Git 存放庫內，但不是其根目錄。繼續將會在這裡初始化另一個存放庫 ('git init') 並建立包含 1 個檔案的初始提交。",
+			"worktrees.prepare.unbornEmpty": "此存放庫尚無任何提交。繼續將會建立空白的初始提交。",
+			"worktrees.prepare.unbornMany": "此存放庫尚無任何提交。繼續將會建立包含 {0} 個檔案的初始提交。",
+			"worktrees.prepare.unbornOne": "此存放庫尚無任何提交。繼續將會建立包含 1 個檔案的初始提交。",
+			"worktrees.prepareFailed": "無法為 '{0}' 建立初始提交: {1}",
+			"worktrees.preparing": "正在 '{0}' 中建立初始提交...",
+			"worktrees.restricted": "工作樹需要 Git 作業，但 Git 作業在受限模式中已停用。",
+			"worktrees.restrictedUnasked": "工作區處於受限模式。請信任此工作區以執行 Git 作業。",
+			"worktrees.retry": "重試",
+			"worktrees.revealInLinux": "開啟內含資料夾",
+			"worktrees.revealInMac": "在 Finder 中顯示",
+			"worktrees.revealInWindows": "在檔案總管中顯示",
+			"worktrees.runSetupAgain": "重新執行初始設定",
+			"worktrees.setupTerminal": "工作樹初始設定",
+			"worktrees.setupUnfinished": "工作樹 '{0}' 的初始設定指令碼可能因視窗重新載入或關閉而中斷。重試之前，請先檢查其終端機輸出。",
+			"worktrees.shellEnded": "殼層在此命令之後結束，因此其後的命令未執行。",
+			"worktrees.sinceAsked": "自此提示開啟後，又有其他檔案被修改，也將會遺失。",
+			"worktrees.startingGit": "正在啟動 Git...",
+			"worktrees.startsAt": "從 '{0}' 的 HEAD 建立。",
+			"worktrees.startsAtFirst": "從初始提交建立。",
+			"worktrees.stepOpen": "開啟工作樹",
+			"worktrees.stepRecord": "讀取 Git 工作樹中繼資料",
+			"worktrees.stillStopping": "未刪除工作樹 '{0}'，因為這些 agent 尚未停止: {1}。請在它們停止後再刪除一次。",
+			"worktrees.stillStoppingOut": "未刪除工作樹 '{0}'，因為這些 agent 尚未停止: {1}。它已從工作區移除。請在它們停止後再刪除一次。",
+			"worktrees.submodulesLost": "其子模組 (包括任何未推送的提交)",
+			"worktrees.submodulesMeanwhile": "未刪除 '{0}'，因為刪除期間其中新增了子模組；刪除它會遺失子模組中任何未推送的提交。",
+			"worktrees.submodulesSince": "子模組和任何未推送的提交也將被刪除。",
+			"worktrees.superseded": "開啟完成前已要求切換資料夾",
+			"worktrees.terminalsEnded": "已關閉與此工作樹相關聯的終端機，並終止執行中的處理序: {0}。",
+			"worktrees.terminalsTerminated": "{0} 其執行中的終端機已終止。",
+			"worktrees.trustFolder": "信任資料夾並繼續(&&T)",
+			"worktrees.trustWorkspace": "信任工作區並繼續(&&T)",
+			"worktrees.unbornBranch": "存放庫 '{0}' 的目前分支上沒有任何提交。請先建立提交或切換分支。",
+			"worktrees.unsafeRepository": "Git 無法開啟 '{0}'，因為它的擁有者是另一個使用者。請執行 '{1}' 將其標記為安全，然後再試一次。",
+			"worktrees.unsavedFile": "{0} (未儲存)",
+			"worktrees.untrusted": "工作樹會繼承其父存放庫 '{0}' 的信任。請先信任父存放庫。",
+			"worktrees.untrustedUnasked": "存放庫 '{0}' 不受信任。請先信任此存放庫，再建立工作樹。",
+			"worktrees.wouldLose": "'{0}' 有刪除後會遺失的變更: {1}。未刪除任何內容。",
+			"worktrees.wouldLoseSubmodules": "'{0}' 有子模組；刪除它會遺失子模組中任何未推送的提交。未刪除任何內容。"
+		},
+		"vs/workbench/electron-browser/actions/windowActions": {
+			"openDefaultWorkspace": "開啟預設工作區"
+		},
+		"vs/workbench/electron-browser/desktop.contribution": {
+			"argv.disableChromiumSandbox": "停用 Chromium 沙箱。在 Linux 上以提升的權限執行 {0}，以及在 Windows 上於 Applocker 下執行時，這很有用。",
+			"argv.useInMemorySecretStorage": "確保使用記憶體內存放區來儲存祕密，而不是使用作業系統的認證存放區。這通常用於執行 {0} 延伸模組測試，或在認證存放區發生問題時使用。",
+			"miOpenDefaultWorkspace": "開啟預設工作區(&&D)"
+		},
+		"vs/workbench/electron-browser/window": {
+			"notOpenedWithoutFolder": "無法開啟 {0}，因為視窗無法切換至包含它們的資料夾。"
+		},
+		"vs/workbench/services/dialogs/electron-browser/fileDialogService": {
+			"openFileOrFolder.title": "開啟檔案或資料夾",
+			"openFolder.title": "開啟資料夾"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryAccountService": {
+			"marketplace.pickAccount": "選取要用於延伸模組市集的帳戶",
+			"marketplace.signInDifferentAccount": "使用其他帳戶登入…"
+		},
+		"vs/workbench/services/extensionManagement/electron-browser/extensionGalleryManifestService": {
+			"extensionGalleryManifestService.configurationChange": "延伸模組市集的設定已變更。請重新啟動以套用變更。"
+		},
+		"vs/workbench/services/extensions/common/extensionsRegistry": {
+			"vscode.extension.capabilities.agentsWindow": "宣告是否應在 Agent 視窗中啟用此延伸模組。需要 `agentsWindowActivation` API 提案和實驗性的 Agent 視窗功能設定。",
+			"vscode.extension.capabilities.agentsWindow.supported": "宣告此延伸模組是否支援在 Agent 視窗中執行。延伸模組必須啟用 `agentsWindowActivation` API 提案和 `extensions.experimental.enableAgentsWindowCapability` 設定，此屬性才會生效。"
+		},
+		"vs/workbench/services/extensions/electron-browser/nativeExtensionService": {
+			"relaunch": "重新啟動 {0}"
+		},
+		"vs/workbench/services/folderScope/browser/folderScope.contribution": {
+			"allFoldersIcon": "用於在目前資料夾和整個工作區之間切換檢視範圍的圖示。",
+			"facadeCategory": "工作區",
+			"toggleFolderScope": "顯示所有資料夾",
+			"toggleFolderScope.toggled": "正在顯示所有資料夾"
+		},
+		"vs/workbench/services/folderScope/common/folderScope": {
+			"facadeFolderScope": "檢視的範圍是目前資料夾還是整個工作區",
+			"folderScope.searchingAll": "正在搜尋所有資料夾。按一下以僅搜尋目前資料夾。",
+			"folderScope.searchingFolder": "正在搜尋目前資料夾。按一下以搜尋所有工作區資料夾。"
+		},
+		"vs/workbench/services/userDataProfile/browser/userDataProfileManagement": {
+			"reload message": "切換設定檔需要重新載入 {0}。"
+		}
+	},
+	"vscode.configuration-editing": {
+		"bundle": {
+			"The name of the folder opened in {0} without any slashes (/)": "在 {0} 中開啟的資料夾名稱，不含任何斜線 (/)",
+			"The path of the folder opened in {0}": "在 {0} 中開啟的資料夾路徑",
+			"e.g. {0}": "例如 {0}"
+		}
+	},
+	"vscode.css-language-features": {
+		"package": {
+			"css.completion.triggerPropertyValueCompletion.desc": "根據預設，Facade Code 會在選取 CSS 屬性後觸發屬性值完成。使用此設定可停用此行為。",
+			"css.trace.server.desc": "追蹤 Facade Code 與 CSS 語言伺服器之間的通訊。",
+			"less.completion.triggerPropertyValueCompletion.desc": "根據預設，Facade Code 會在選取 CSS 屬性後觸發屬性值完成。使用此設定可停用此行為。",
+			"scss.completion.triggerPropertyValueCompletion.desc": "根據預設，Facade Code 會在選取 CSS 屬性後觸發屬性值完成。使用此設定可停用此行為。"
+		}
+	},
+	"vscode.facade-agents": {
+		"bundle": {
+			"1 message, at {0}": "1 則訊息，於 {0}",
+			"@{0} #a{1} · last screen": "@{0} #a{1} · 最後畫面",
+			"Agent management for this workspace has been transferred to another Facade window.": "此工作區的 agent 管理已轉移至另一個 Facade 視窗。",
+			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "此工作區的 agent 由另一個視窗管理。請在該視窗中刪除聊天室。",
+			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "此工作區的 agent 由另一個視窗管理。請在該視窗中開啟聊天室。",
+			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "將會刪除您與此工作區中 agent 之間的所有訊息。此動作無法復原。",
+			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "您從 agent 功能表或 [啟動 agent] 啟動的 agent，會保留其 CLI 本身的提問和更新，核准則依 YOLO 的設定。由其他 agent 或您的指令碼透過 start_agent 啟動的 agent，可能無人在旁看著，因此會以其啟動方式中的 unattended 部分執行 (其群組會取代啟動方式中的群組；其環境和設定會套用在啟動方式之上)，讓它在 CLI 允許的範圍內不必等待任何回答。whenYouStartIt 和 throughStartAgent 會顯示兩者各自得到的內容。",
+			"Another Facade window manages this workspace's agents. Start agents in that window.": "另一個 Facade 視窗正在管理此工作區的 agent。請在該視窗中啟動 agent。",
+			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "另一個 Facade 視窗正在管理此工作區的 agent。請使用該視窗，或將其關閉並重新載入此視窗，以便在這裡管理。",
+			"Are you sure you want to delete all chat rooms in this workspace?": "確定要刪除此工作區中的所有聊天室嗎?",
+			"Configure Agents": "設定 agent",
+			"Could not delete all chat rooms: {0}": "無法刪除所有聊天室: {0}",
+			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "無法重新連線至已在執行的 agent。它們無法使用 Facade 工具，但從現在起啟動的 agent 會正常運作。",
+			"Delete": "刪除",
+			"Each chat room holds every message of an agent you started and of the agents it started": "每個聊天室都保存您啟動的 agent 及其所啟動 agent 的所有訊息",
+			"Facade Agents": "Facade Agents",
+			"Facade Agents could not start in this window. See the Facade Agents output for details.": "Facade Agents 無法在此視窗中啟動。如需詳細資料，請參閱 Facade Agents 輸出。",
+			"Facade Agents could not start: {0}": "Facade Agents 無法啟動: {0}",
+			"Facade Agents stopped in this window.": "Facade Agents 已在此視窗中停止。",
+			"Facade cannot read this workspace's agent record while one of its agents may still be running. See the Facade Agents output for details.": "Facade 無法讀取此工作區的 agent 紀錄，而其中某個 agent 可能仍在執行。如需詳細資料，請參閱 Facade Agents 輸出。",
+			"Facade cannot read this workspace's agent record: {0}": "Facade 無法讀取此工作區的 agent 紀錄: {0}",
+			"Facade could not confirm that {0} started: {1}.": "Facade 無法確認 {0} 已啟動: {1}。",
+			"Facade could not read this workspace's agent record ({0}), so it started a new one. No action is needed: agents start as before, and their numbering continues. Their history is in {1}; the unreadable record is kept as {2}. Delete it once you no longer need it.": "Facade 無法讀取此工作區的 agent 紀錄 ({0})，因此已建立新的紀錄。您不需要採取任何動作: agent 會照常啟動，編號也會延續。它們的歷程記錄位於 {1}；無法讀取的紀錄已保留為 {2}。不再需要時請將其刪除。",
+			"Facade could not read {0}, which tells running agents how to reach this window. Agents that were already running can no longer use Facade tools; agents started from now on can.": "Facade 無法讀取 {0}，執行中的 agent 要靠它才能連上此視窗。已在執行的 agent 無法再使用 Facade 工具；從現在起啟動的 agent 則可以。",
+			"Facade: {0}": "Facade: {0}",
+			"Message #m{0} is no longer available because the chat rooms were deleted.": "訊息 #m{0} 已無法使用，因為聊天室已被刪除。",
+			"No agent has been started in this workspace yet.": "此工作區尚未啟動任何 agent。",
+			"No agents are available: none of the built-in agent CLIs were found on this machine, and no custom agents are configured.": "沒有可用的 agent: 在此電腦上找不到任何內建的 agent CLI，也未設定任何自訂 agent。",
+			"No agents are available: the built-in agent CLIs found on this machine are disabled in your settings ({0}), and no custom agents are configured.": "沒有可用的 agent: 在此電腦上找到的內建 agent CLI 已在您的設定中停用 ({0})，也未設定任何自訂 agent。",
+			"No chat rooms have messages yet. A chat room is created when an agent is started.": "聊天室中還沒有任何訊息。啟動 agent 時會建立聊天室。",
+			"Open Chat Room": "開啟聊天室",
+			"Open a local folder to start an agent.": "請開啟本機資料夾以啟動 agent。",
+			"Select an agent to start": "選取要啟動的 agent",
+			"Show": "顯示",
+			"Start Agent": "啟動 agent",
+			"Terminal screen content upon exit:": "結束時的終端機畫面內容:",
+			"The agent could not start: {0}": "Agent 無法啟動: {0}",
+			"The agent framework is off: the warmUp, connect, and messages groups do not apply, and nothing of Facade's is added to a launch.": "Agent 架構已關閉: warmUp、connect 和 messages 群組不適用，啟動方式中也不會加入任何 Facade 的內容。",
+			"The agent framework is on: the warmUp, connect, and messages groups apply, and Facade tools, skills, and files are added to each launch.": "Agent 架構已開啟: warmUp、connect 和 messages 群組會套用，且每次啟動都會加入 Facade 的工具、技能和檔案。",
+			"The last full-screen frame rendered before leaving full screen:": "離開全螢幕前轉譯的最後一個全螢幕畫面:",
+			"This document only shows the launch. To change it, set what you want to change in your settings. An agent with wrongSettings does not start until they are fixed; cannotStart lists anything else that would prevent its start here.": "此文件只會顯示啟動方式。若要變更，請在設定中設定您要變更的部分。具有 wrongSettings 的 agent 在設定修正之前不會啟動；cannotStart 會列出在此處會阻止其啟動的其他任何原因。",
+			"What Facade starts each agent with now, for an agent in {0}: the program a terminal there runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "對於位在 {0} 中的 agent，Facade 目前用來啟動每個 agent 的內容: 該處終端機所執行的程式及其啟動方式，也就是在 Facade 的預設值之上套用您的 facade.agents 設定。",
+			"What Facade starts each agent with now: the program it runs and its launch, which is Facade's default with your facade.agents settings applied over it.": "Facade 目前用來啟動每個 agent 的內容: 它執行的程式及其啟動方式，也就是在 Facade 的預設值之上套用您的 facade.agents 設定。",
+			"YOLO is off: each agent gets its yoloOff arguments, with its sandbox on where it has one and Facade tools exempted from approval where its CLI allows it. facadeTools and approvalsWithYoloOff show, for each agent, what is asked and what is denied.": "YOLO 已關閉: 每個 agent 都會取得其 yoloOff 引數，有沙箱的會開啟沙箱，並在 CLI 允許時讓 Facade 工具免於核准。facadeTools 和 approvalsWithYoloOff 會顯示每個 agent 哪些需要詢問、哪些會被拒絕。",
+			"YOLO is on: each agent gets its yoloOn arguments, with its sandbox off and nothing asked. Turning off facade.agents.yolo applies to agents started afterward.": "YOLO 已開啟: 每個 agent 都會取得其 yoloOn 引數，沙箱關閉，且不會詢問任何事。關閉 facade.agents.yolo 只會套用至之後啟動的 agent。",
+			"YOLO: {0}. No agent starts until this is fixed.": "YOLO: {0}。在修正此問題之前，任何 agent 都不會啟動。",
+			"anything that would ask is denied without asking": "任何需要詢問的動作都會直接拒絕，不會詢問",
+			"as set by your launch's questions group": "依您啟動方式中的 questions 群組設定",
+			"as set by your launch's yoloOff group": "依您啟動方式中的 yoloOff 群組設定",
+			"as set by your launch's {0} and {1} groups: Facade's defaults exempt its server from approval, and you changed them": "依您啟動方式中的 {0} 和 {1} 群組設定: Facade 的預設值讓其伺服器免於核准，而您已變更這些預設值",
+			"as set by your launch's {0} group: Facade's default exempts its server from approval, and you changed it": "依您啟動方式中的 {0} 群組設定: Facade 的預設值讓其伺服器免於核准，而您已變更此預設值",
+			"asks you, as its CLI does": "依其 CLI 的方式詢問您",
+			"cannot be granted: {0}": "無法授與: {0}",
+			"custom": "自訂",
+			"denied: {0}": "已拒絕: {0}",
+			"edits in its folder are allowed without asking; anything else asks you, as its CLI does": "允許在其資料夾中編輯而不詢問；其他任何動作都依其 CLI 的方式詢問您",
+			"edits in its folder are allowed without asking; anything else that would ask is denied without asking": "允許在其資料夾中編輯而不詢問；其他任何需要詢問的動作都會直接拒絕，不會詢問",
+			"kept: it can show a question for you to answer, as it does outside Facade": "保留: 它可以顯示問題讓您回答，就像在 Facade 外部一樣",
+			"kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question": "保留: 任何啟動方式都無法移除其提問工具，因此它在啟動時收到的指示會要求它透過 Facade 訊息提問；如果被指名要求使用該工具，它仍可顯示問題",
+			"kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer": "保留: 您的啟動方式清空了其 questions 群組，因此它可以顯示需等待有人選擇答案的問題",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; it has no sandbox": "永不詢問: 它無法只讓 Facade 的伺服器免於核准，因此在 YOLO 關閉時不會詢問任何事；它沒有沙箱",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is as your launch's groups set it": "永不詢問: 它無法只讓 Facade 的伺服器免於核准，因此在 YOLO 關閉時不會詢問任何事；其沙箱依您啟動方式中的群組設定",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox is off, as your launch sets it": "永不詢問: 它無法只讓 Facade 的伺服器免於核准，因此在 YOLO 關閉時不會詢問任何事；其沙箱已依您的啟動方式設定為關閉",
+			"never asked: it cannot exempt only Facade's server, so with YOLO off it asks for nothing; its sandbox stays on": "永不詢問: 它無法只讓 Facade 的伺服器免於核准，因此在 YOLO 關閉時不會詢問任何事；其沙箱保持開啟",
+			"never asked: its launch exempts only Facade's server from approval": "永不詢問: 其啟動方式只讓 Facade 的伺服器免於核准",
+			"none: the CLI asks whether you trust the folder": "無: CLI 會詢問您是否信任此資料夾",
+			"not found: {0}": "找不到: {0}",
+			"not yet": "尚未",
+			"nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off": "不詢問也不拒絕: 它無法只讓 Facade 工具免於核准，因此其核准已關閉",
+			"permanently: Facade never removes it": "永久: Facade 永遠不會移除它",
+			"removed by its launch's questions group: it asks through Facade messages": "已由其啟動方式中的 questions 群組移除: 它會透過 Facade 訊息提問",
+			"task: argument - its task notice is passed as an argument; typed - its task notice is typed into its terminal once it connects; none - it takes no task.": "task: argument - 其任務通知會以引數傳遞；typed - 其任務通知會在它連線後輸入其終端機；none - 它不接受任務。",
+			"trust: a file entry is merged in as if you had answered the CLI yourself, and it stays: Facade never removes it. Arguments trust the folder for that launch only.": "trust: 檔案項目會像您親自回答 CLI 一樣合併進去，並且會保留: Facade 永遠不會移除它。引數則只在該次啟動時信任資料夾。",
+			"with YOLO off, none turned off: this folder's .mcp.json has no server that you have not approved for its project": "YOLO 關閉時，不會關閉任何伺服器: 此資料夾的 .mcp.json 中沒有您尚未為其專案核准的伺服器",
+			"with YOLO off, the servers in its folder's .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them": "YOLO 關閉時，其資料夾 .mcp.json 中您尚未為其專案核准的伺服器會在這次執行中關閉，以免它停下來詢問這些伺服器",
+			"with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: {0}": "YOLO 關閉時，由於您尚未為此專案核准這些伺服器，它們會在這次執行中關閉，以免它停下來詢問: {0}",
+			"{0} (ended)": "{0} (已結束)",
+			"{0} ended unexpectedly: {1}.": "{0} 意外結束: {1}。",
+			"{0} exited: {1}.": "{0} 已結束: {1}。",
+			"{0} failed to start: {1}.": "{0} 無法啟動: {1}。",
+			"{0} is open but has not connected to Facade, so it has no Facade tools yet. It may be starting slowly, or waiting for an answer in its terminal.": "{0} 已開啟，但尚未連線至 Facade，因此還沒有 Facade 工具。它可能啟動得較慢，或正在其終端機中等待回答。",
+			"{0} messages, latest at {1}": "{0} 則訊息，最新一則於 {1}",
+			"{0} of your agents ended. {1}": "您的 {0} 個 agent 已結束。{1}",
+			"{0} sent you a message: {1}": "{0} 傳送了一則訊息給您: {1}",
+			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "在 Facade 加入自己的部分之後、視窗關閉期間，{0} 已被變更。其先前的內容保留在 {1}。",
+			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} 在 agent 使用期間已被變更，且不再包含 Facade 的部分，因此維持原狀。其先前的內容保留在 {1}。",
+			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "另一個 agent 在該處啟動時，{0} 不存在。其在 Facade 變更之前的內容保留在 {1}。",
+			"{0} was missing when its agents ended. Its content from before Facade's changes is kept at {1}.": "其 agent 結束時，{0} 不存在。其在 Facade 變更之前的內容保留在 {1}。",
+			"{0} was stopped by {1}.": "{0} 已由 {1} 停止。",
+			"{0} was stopped: {1}.": "{0} 已停止: {1}。",
+			"{0}, saved when its terminal closed. How it ended: {1}.": "{0}，於其終端機關閉時儲存。結束方式: {1}。",
+			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: 無法讀取最後畫面檔案 '{1}': {2}。結束方式: {3}。",
+			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: 未儲存最後畫面。結束方式: {1}。只有在視窗開啟期間 agent 的終端機關閉時，才會儲存最後畫面。",
+			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO 關閉時，{1} 會拒絕 Facade 工具",
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}"
+		},
+		"package": {
+			"command.category": "Agent",
+			"command.deleteChatRooms": "刪除聊天室...",
+			"command.openChatRoom": "開啟聊天室...",
+			"command.showLaunch": "顯示 agent 啟動方式",
+			"command.showLog": "顯示 agent 記錄",
+			"command.startAgent": "啟動 agent...",
+			"config.antigravity.enabled": "控制是否在 agent 功能表中提供 Antigravity，並提供給 agent 使用。",
+			"config.antigravity.launch": "進階: Facade 如何啟動 Antigravity。只設定您要變更的部分: 在 settings.json 中，從大括號內的建議中挑選一個部分以填入 Facade 的預設值，然後加以編輯；`null` 會移除 Facade 的某個部分。**Agent: 顯示 agent 啟動方式** 會顯示目前每個 agent 的啟動內容。",
+			"config.antigravity.path": "要執行的 Antigravity 程式。保留空白以使用 PATH 中的 `agy`。",
+			"config.antigravity.title": "Antigravity",
+			"config.claude.enabled": "控制是否在 agent 功能表中提供 Claude Code，並提供給 agent 使用。",
+			"config.claude.launch": "進階: Facade 如何啟動 Claude Code。只設定您要變更的部分: 在 settings.json 中，從大括號內的建議中挑選一個部分以填入 Facade 的預設值，然後加以編輯；`null` 會移除 Facade 的某個部分。**Agent: 顯示 agent 啟動方式** 會顯示目前每個 agent 的啟動內容。",
+			"config.claude.launch.settings": "每個 agent 的 Claude Code 設定，會逐一索引鍵合併至您自己的設定之上；`null` 會移除 Facade 的某個設定。只要有一個值的類型不被 Claude Code 接受，Claude Code 就會忽略所有設定。",
+			"config.claude.path": "要執行的 Claude Code 程式。保留空白以使用 PATH 中的 `claude`。",
+			"config.claude.title": "Claude Code",
+			"config.codex.enabled": "控制是否在 agent 功能表中提供 Codex，並提供給 agent 使用。",
+			"config.codex.launch": "進階: Facade 如何啟動 Codex。只設定您要變更的部分: 在 settings.json 中，從大括號內的建議中挑選一個部分以填入 Facade 的預設值，然後加以編輯；`null` 會移除 Facade 的某個部分。**Agent: 顯示 agent 啟動方式** 會顯示目前每個 agent 的啟動內容。",
+			"config.codex.path": "要執行的 Codex 程式。保留空白以使用 PATH 中的 `codex`。",
+			"config.codex.title": "Codex",
+			"config.custom": "您自己的 agent，依名稱設定: `{ \"<name>\": { \"path\": \"...\", \"launch\": { ... } } }`。每個 agent 都像內建 agent 一樣，在自己的終端機中啟動。其啟動方式的組成部分與內建 agent 相同 (依群組的引數、環境、信任和延遲)，但 Facade 不會填入任何部分: 您省略的群組不會加入任何內容。在引數中，`${mcpConfig}` 代表一個以 `mcpServers` 格式保存 Facade MCP 伺服器的檔案，供您的 `connect` 群組使用；`${folder}`、`${repository}`、`${home}`、`${messagesDir}`、`${screensDir}`、`${model}`、`${effort}`、`${task}` 和 `${opening}` 會如同內建 agent 一樣填入。",
+			"config.custom.launch": "Facade 如何逐一部分啟動此 agent，與內建 agent 的啟動方式相同。只會使用您填入的群組。",
+			"config.custom.name": "自訂 agent 的名稱必須由 1 到 40 個小寫字母、數字、點、破折號或底線組成，並以字母或數字開頭。不能是內建 agent 的識別碼 (claude、codex、agy、muse) 或保留名稱 (human、you、me、facade、all、everyone、init、kernel)。",
+			"config.custom.path": "要執行的程式: 檔案路徑，或終端機所取得之 PATH 上的命令。",
+			"config.custom.title": "自訂 agent",
+			"config.enabled": "控制是否啟用 agent 架構。啟用時，agent 可以透過 Facade 工具啟動、列出和停止其他 agent。停用時，agent 仍會照常啟動、執行和結束，但沒有 Facade 工具。",
+			"config.launch.arguments": "命令列引數，依群組並按此順序排列: `warmUp`、`connect`、`quiet`、`questions`、`messages`、`yoloOn`、`yoloOff`、`model`、`effort`、`extra` (您自己的) 和 `task`。您設定的群組會取代 Facade 的；`null` 會略過該群組。`yoloOn` 只在 YOLO 開啟時使用，`yoloOff` 只在 YOLO 關閉時使用；`warmUp`、`connect` 和 `messages` 只在 agent 架構開啟時使用；`model`、`effort` 和 `task` 只在 agent 有指定時使用。Facade 會為每個 agent 填入下列變數: `${folder}`、`${repository}` (其主要工作樹)、`${home}`、`${messagesDir}` 和 `${screensDir}` (長訊息和 agent 畫面的儲存位置)、`${model}`、`${effort}`、`${task}` (agent 的第一行，說明其任務)、`${opening}` (適用於透過 `start_agent` 啟動的 agent: 說明它是誰，以及它應透過 Facade 訊息提問，如同其暖身所告知的) 等等。",
+			"config.launch.enterDelay": "控制在 agent 的終端機中輸入一行文字到按下 Enter 之間的延遲 (毫秒)。若沒有此延遲，CLI 可能會將快速輸入視為貼上。",
+			"config.launch.environment": "Facade 為每個 agent 設定的環境變數。您設定的變數會取代 Facade 的；`null` 會移除 Facade 的某個變數。",
+			"config.launch.taskDelay": "控制從 agent 的 CLI 連線至 Facade，到將其第一行 (說明其任務) 輸入其終端機之間的延遲 (毫秒)。僅適用於以此方式接收任務的 CLI。",
+			"config.launch.trust": "Facade 如何信任 agent 啟動所在的資料夾及其整個存放庫，讓 CLI 不會停下來詢問您是否信任它: `arguments` 只在該次執行時傳遞，或將 `merge` 寫入 CLI 自己的 `file` 並保留在其中。`null`: Facade 不提供信任，由 CLI 在其終端機中詢問。",
+			"config.launch.unattended": "由其他 agent 或您的指令碼透過 `start_agent` 啟動的 agent，會改用此內容而非啟動方式執行，以便在可能無人看著時不必等待任何回答。其 `arguments` 群組會取代啟動方式中同名的群組，其 `environment` 和 `settings` 則會套用在啟動方式之上。您從 agent 功能表啟動的 agent 只使用啟動方式執行。",
+			"config.launch.unattended.arguments": "透過 `start_agent` 啟動之 agent 的引數群組，每個群組都會取代啟動方式中同名的群組。您設定的群組會取代 Facade 的；`null` 會讓該 agent 略過此群組。",
+			"config.launch.unattended.environment": "透過 `start_agent` 啟動之 agent 的環境變數，會套用在啟動方式之上。您設定的變數會取代 Facade 的；`null` 會將其移除，包括啟動方式中的變數。",
+			"config.launch.unattended.settings": "透過 `start_agent` 啟動之 agent 的 Claude Code 設定，會逐一索引鍵合併至啟動方式的設定之上。`null` 會移除索引鍵，包括啟動方式中的索引鍵。",
+			"config.muse.enabled": "控制是否在 agent 功能表中提供 Muse Code，並提供給 agent 使用。",
+			"config.muse.launch": "進階: Facade 如何啟動 Muse Code。只設定您要變更的部分: 在 settings.json 中，從大括號內的建議中挑選一個部分以填入 Facade 的預設值，然後加以編輯；`null` 會移除 Facade 的某個部分。**Agent: 顯示 agent 啟動方式** 會顯示目前每個 agent 的啟動內容。",
+			"config.muse.path": "要執行的 Muse Code 程式。保留空白以使用 PATH 中的 `muse`。",
+			"config.muse.title": "Muse Code",
+			"config.timeout": "進階: Facade 等待其無法控制之事項的秒數: 新 agent 連線、已停止 agent 的處理序結束、此視窗回應 agent 的 MCP 伺服器、重新載入後還原終端機，以及傳送至其他 agent 終端機的文字或按鍵輪到送出。這也是任務或訊息在 Facade 通知其傳送者之前，可以維持未被擷取的時間長度。",
+			"config.title": "Agent",
+			"config.yolo": "控制您啟動的 agent 是否以 YOLO 模式執行。啟用時，agent 的 CLI 會在關閉沙箱的情況下執行，且永遠不會要求核准。停用時，CLI 若有沙箱就會開啟，並在執行其自己的命令和編輯之前詢問，但在呼叫 Facade 工具之前永遠不會詢問。Agent 會保留其啟動時的 YOLO 模式，其所啟動的 agent 也會繼承此模式。",
+			"description": "在視窗內的終端機中執行各種程式設計 agent CLI (包括您自己的)。透過 MCP 伺服器，agent 可以互相啟動、列出和停止，互傳訊息給彼此和您，以及讀取彼此的終端機。",
+			"displayName": "Facade Agents"
+		}
+	},
+	"vscode.git": {
+		"package": {
+			"config.terminalAuthentication": "控制是否讓 Facade Code 成為在整合式終端機中繁衍之 Git 處理序的驗證處理常式。注意: 必須重新啟動終端機，才會套用此設定的變更。",
+			"config.terminalGitEditor": "控制是否讓 Facade Code 成為在整合式終端機中繁衍之 Git 處理序的 Git 編輯器。注意: 必須重新啟動終端機，才會套用此設定的變更。",
+			"view.workbench.scm.workspaceFolder": "目前開啟的資料夾沒有 Git 存放庫。您可以初始化存放庫，以啟用由 Git 提供的原始檔控制功能。\n[初始化存放庫](command:git.init)\n若要深入了解如何在 Facade Code 中使用 Git 和原始檔控制，[請閱讀我們的文件](https://aka.ms/vscode-scm)。"
+		}
+	},
+	"vscode.github": {
+		"package": {
+			"config.gitAuthentication": "控制是否在 Facade Code 中為 git 命令啟用自動 GitHub 驗證。"
+		}
+	},
+	"vscode.html-language-features": {
+		"package": {
+			"html.trace.server.desc": "追蹤 Facade Code 與 HTML 語言伺服器之間的通訊。"
+		}
+	},
+	"vscode.json-language-features": {
+		"package": {
+			"json.tracing.desc": "追蹤 Facade Code 與 JSON 語言伺服器之間的通訊。"
+		}
+	},
+	"vscode.markdown-language-features": {
+		"package": {
+			"markdown.trace.server.desc": "追蹤 Facade Code 與 Markdown 語言伺服器之間的通訊。"
+		}
+	},
+	"vscode.media-preview": {
+		"bundle": {
+			"Open file using {0}'s standard text/binary editor?": "要使用 {0} 的標準文字/二進位編輯器開啟檔案嗎?"
+		}
+	},
+	"vscode.mermaid-markdown-features": {
+		"package": {
+			"config.markdown-mermaid.theme.vscode.description": "衍生自目前 Facade Code 色彩佈景主題的 Mermaid 佈景主題。"
+		}
+	},
+	"vscode.typescript-language-features": {
+		"bundle": {
+			"Please open a folder in {0} to use a TypeScript or JavaScript project": "請在 {0} 中開啟資料夾，以使用 TypeScript 或 JavaScript 專案",
+			"TS Server logging is off. Please set 'js/ts.tsserver.log' and restart the TS server to enable logging": "TS 伺服器記錄功能已關閉。請設定 'js/ts.tsserver.log' 並重新啟動 TS 伺服器，以啟用記錄功能",
+			"Use {0}'s Version": "使用 {0} 的版本",
+			"{0}'s tsserver was deleted by another application such as a misbehaving virus detection tool. Please reinstall {0}.": "{0} 的 tsserver 已被其他應用程式 (例如行為異常的病毒偵測工具) 刪除。請重新安裝 {0}。"
+		},
+		"package": {
+			"configuration.tsserver.nodePath": "在自訂的 Node 安裝上執行 TS 伺服器。這可以是 Node 可執行檔的路徑，或者，如果您要讓 Facade Code 偵測 Node 安裝，則為 `node`。",
+			"configuration.tsserver.useVsCodeWatcher": "使用 Facade Code 的檔案監看員，而非 TypeScript 的。需要在工作區中使用 TypeScript 5.4 以上版本。",
+			"configuration.tsserver.watchOptions.vscode": "使用 Facade Code 的檔案監看員，而非 TypeScript 的。需要在工作區中使用 TypeScript 5.4 以上版本。",
+			"configuration.tsserver.web.projectWideIntellisense.enabled": "在 Web 上啟用/停用全專案 IntelliSense。需要 Facade Code 在受信任的內容中執行。",
+			"typescript.locale": "設定用於回報 JavaScript 和 TypeScript 錯誤的地區設定。預設使用 Facade Code 的地區設定。",
+			"typescript.locale.auto": "使用 Facade Code 設定的顯示語言。",
+			"typescript.updateImportsOnFileMove.enabled": "在 Facade Code 中重新命名或移動檔案時，啟用/停用自動更新匯入路徑。",
+			"walkthroughs.nodejsWelcome.debugJsFile.description": "安裝 Node.js 之後，您可以在終端機中輸入 ``node your-file-name.js`` 來執行 JavaScript 程式\n另一個執行 Node.js 程式的簡單方式是使用 Facade Code 的偵錯工具，它可讓您執行程式碼、在不同位置暫停，並協助您逐步了解發生的情況。\n[開始偵錯](command:javascript-walkthrough.commands.debugJsFile)"
+		}
+	}
+}
