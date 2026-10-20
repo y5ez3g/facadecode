@@ -12,6 +12,8 @@ Built on VS Code. Runs your native agent CLIs, like Claude Code, Codex, Antigrav
 [Specs](facade-code-spec/) ·
 [Report a Bug](https://github.com/y5ez3g/facadecode/issues)
 
+**English** · [简体中文](locales/zh-CN/README.md) · [繁體中文](locales/zh-TW/README.md) · [Português (Brasil)](locales/pt-BR/README.md) · [Español](locales/es/README.md) · [Русский](locales/ru/README.md) · [Deutsch](locales/de/README.md) · [日本語](locales/ja/README.md) · [Bahasa Indonesia](locales/id/README.md) · [Français](locales/fr/README.md) · [한국어](locales/ko/README.md) · [Türkçe](locales/tr/README.md) · [Tiếng Việt](locales/vi/README.md) · [Polski](locales/pl/README.md)
+
 </div>
 
 https://github.com/user-attachments/assets/35e2c317-8040-49c6-bb56-ab81196e8ebc
