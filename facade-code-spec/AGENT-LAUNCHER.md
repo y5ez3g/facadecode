@@ -27,7 +27,7 @@ a record of tests already passed.
 ## L1. Scope and principles
 
 The first release supports local desktop windows on Windows, macOS and Linux,
-with Claude Code, Codex, Muse Code, Antigravity and configured custom agents.
+with Claude Code, Codex, Muse Code, Antigravity, Qwen Code and configured custom agents.
 Remote SSH, containers and WSL windows are outside this release's scope.
 
 The complete agent framework exposes exactly eight tools:
@@ -76,7 +76,7 @@ sequence and prefix, such as `#m42`.
 Names contain 1–40 lowercase ASCII letters, digits, dots, underscores or hyphens,
 starting with a letter or digit. Reserved names are `human`, `you`, `me`,
 `facade`, `all`, `everyone`, `init` and `kernel`. Built-ins started from the UI
-default to `claude`, `codex`, `muse` or `agy`; custom agents use their configured
+default to `claude`, `codex`, `muse`, `agy` or `qwen`; custom agents use their configured
 name. Runs started through `start_agent`, including the person's scripts as
 `@human`, use the supplied `name`. Names may repeat. Reference resolution is
 specified in O2.
@@ -89,7 +89,7 @@ Folder paths identify checkouts; branch names are useful labels, not identities.
 ## L3. Starting and finding agents
 
 The title bar's agent button opens a menu containing installed, enabled built-ins
-in this order: Claude Code, Codex, Antigravity, Muse Code; then custom agents in
+in this order: Claude Code, Codex, Antigravity, Muse Code, Qwen Code; then custom agents in
 configuration order. Below a separator are **Show Active Agents...** and
 **Configure Agents...**. An item's action does not change with the framework switch.
 
@@ -300,7 +300,7 @@ installed CLI never creates a setting.
 | `facade.agents.<cli>.launch` | `{}` | Overrides of the built-in launch |
 | `facade.agents.custom` | `{}` | Named custom launch definitions |
 
-The built-in setting keys are `claude`, `codex`, `antigravity` and `muse`;
+The built-in setting keys are `claude`, `codex`, `antigravity`, `muse` and `qwen`;
 Antigravity's tool-facing CLI id is `agy`. This mapping is fixed.
 
 Group the settings under Agents, then each built-in, then Custom Agents.
@@ -367,7 +367,7 @@ override remains empty when defaults change in a future release.
 | `arguments` | Ordered groups: warmUp, connect, quiet, questions, messages, yoloOn, yoloOff, model, effort, extra, task |
 | `environment` | Per-variable overrides; null removes Facade's override, not the inherited variable |
 | `trust` | Launch arguments, or a file and structured merge describing CLI trust; null disables it |
-| `settings` | Per-launch settings, recursively merged; primarily for Claude Code |
+| `settings` | Per-launch settings, recursively merged: Claude Code's settings file, and Qwen Code's settings in its highest scope, which go over the administrator's as Qwen Code merges one scope over another. A Qwen Code value that is exactly `${model}` or `${effort}` takes the given value and is omitted when none is given; such a value is how that CLI accepts a model or an effort |
 | `taskDelay` | Delay before the first typed task notification after connection, integer 0–60000 ms |
 | `enterDelay` | Delay between a paste and Enter, integer 0–60000 ms |
 | `unattended` | What an agent started through `start_agent` runs with in place of parts of the launch (L4): its own `arguments` groups, each replacing the launch's group of the same name (an empty or null one leaves that group out), and `environment` and `settings` merged over the launch's (null removes the launch's key too). UI-started agents run with the launch alone |
@@ -409,7 +409,7 @@ not a message adapter.
 
 ## L10. Built-in launches and executable handling
 
-Maintain small data-oriented launch definitions for the four CLIs. The following
+Maintain small data-oriented launch definitions for the five CLIs. The following
 are the launch mechanisms to verify, not a claim of acceptance on every version.
 
 | CLI | Connection and startup mechanism |
@@ -418,6 +418,16 @@ are the launch mechanisms to verify, not a claim of acceptance on every version.
 | Codex | Per-launch configuration overrides for the MCP server; Facade skill; initial task notice as an argument |
 | Muse Code | Project MCP configuration where required; Facade skill; initial task notice as an argument |
 | Antigravity | Project plugin configuration where required; a harmless warm-up prompt to establish MCP; task notice typed afterwards |
+| Qwen Code | Per-run MCP configuration, its servers connected before the first prompt; Facade skill; per-run settings over the administrator's in its highest scope; initial task notice as an argument |
+
+Qwen Code has a precise control for Facade's tools but no setting that denies
+other approvals without asking. With YOLO off, an agent started through
+`start_agent` keeps the CLI's approval prompts; its launch record says so. It runs
+without the project MCP servers the person has not approved for its folder, which
+Qwen Code would stop to ask about: they are rejected for that run in a per-run copy
+of Qwen Code's MCP server approvals, the person's own left unchanged. With YOLO on,
+its launch turns off the sandbox the person's own Qwen Code settings may turn on;
+with YOLO off it leaves that sandbox as configured and reports it.
 
 With the framework disabled, remove those connection additions and Antigravity's
 warm-up. A human launch otherwise leaves the CLI at its normal input prompt.
@@ -433,7 +443,9 @@ Trust/config paths use that environment as well.
 
 Prefer direct executable plus argument-array process launch. On Windows, a standard
 npm .cmd shim that only invokes a Node entry point can run through that Node
-executable directly. Other .cmd launchers use the existing platform quoting path.
+executable directly, and so can a vendor installer's own launcher that Facade
+knows - Qwen Code's - with the variables that launcher sets. Other .cmd launchers
+use the existing platform quoting path.
 Generated notices must be quoted as data; arbitrary message/task content never
 enters cmd.exe. Reject arguments the fallback cannot preserve instead of rewriting
 their meaning. Test paths with spaces, quotes and non-ASCII characters.
