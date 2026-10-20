@@ -25,12 +25,14 @@
  *     codex.svg         chatgpt.com/codex, its `icon` - the bare mark, no tile behind it
  *     antigravity.png   antigravity.google, its `antigravity-logo.png`
  *     muse.png          dev.meta.ai/docs/muse-code, its `favicon.ico`, the 64px image as a PNG
+ *     qwen.png          qwenlm.github.io/qwen-code-docs, its `favicon.png`, scaled to 64px
  *     grok.svg          grok.com, its `/images/favicon.svg` - the mark's two paths, without the tile
  */
 .monaco-workbench .codicon-agent-claude::before,
 .monaco-workbench .codicon-agent-codex::before,
 .monaco-workbench .codicon-agent-antigravity::before,
 .monaco-workbench .codicon-agent-muse::before,
+.monaco-workbench .codicon-agent-qwen::before,
 .monaco-workbench .codicon-agent-grok::before {
 	-webkit-text-fill-color: transparent;
 	background-position: center;
@@ -62,6 +64,11 @@
 .monaco-workbench .codicon-agent-muse::before,
 .monaco-workbench .monaco-icon-label.terminal-tab.codicon-agent-muse::before {
 	background-image: url('./agents/muse.png') !important;
+}
+
+.monaco-workbench .codicon-agent-qwen::before,
+.monaco-workbench .monaco-icon-label.terminal-tab.codicon-agent-qwen::before {
+	background-image: url('./agents/qwen.png') !important;
 }
 
 /* The one-colour logos: the text's colour, through the logo's shape. */

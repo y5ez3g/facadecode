@@ -71,7 +71,8 @@ suite('Terminal launchers - what to look for', () => {
 			['claude', 'Claude Code', 'claude', ['command', 'id', 'label', 'setting']],
 			['codex', 'Codex', 'codex', ['command', 'id', 'label', 'setting']],
 			['agy', 'Antigravity', 'agy', ['command', 'id', 'label', 'setting']],
-			['muse', 'Muse Code', 'muse', ['command', 'id', 'label', 'setting']]
+			['muse', 'Muse Code', 'muse', ['command', 'id', 'label', 'setting']],
+			['qwen', 'Qwen Code', 'qwen', ['command', 'id', 'label', 'setting']]
 		]);
 	});
 
@@ -96,6 +97,7 @@ suite('Terminal launchers - what to look for', () => {
 			agentIcon('codex --yolo').id,
 			agentIcon('agy').id,
 			agentIcon('muse').id,
+			agentIcon('qwen').id,
 			agentIcon('grok').id,
 			agentIcon('"C:\\Program Files\\Claude\\Claude.EXE" --resume').id,	// a path, an extension, any case
 			agentIcon('/usr/local/bin/codex').id,
@@ -108,6 +110,7 @@ suite('Terminal launchers - what to look for', () => {
 			'agent-codex',
 			'agent-antigravity',
 			'agent-muse',
+			'agent-qwen',
 			'agent-grok',
 			'agent-claude',
 			'agent-codex',
