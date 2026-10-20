@@ -6,7 +6,7 @@
 
 **あなたと AI チームのための、ひとつの IDE。**
 
-VS Code がベース。Claude Code、Codex、Antigravity、Muse Code など、各社のネイティブなエージェント CLI をそのまま動かします。
+VS Code がベース。Claude Code、Codex、Antigravity、Muse Code、Qwen Code など、各社のネイティブなエージェント CLI をそのまま動かします。
 
 [ダウンロード](https://github.com/y5ez3g/facadecode/releases) ·
 [仕様](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code は VS Code のフォークです。あらゆるベンダーのネ�
 
 [Releases](https://github.com/y5ez3g/facadecode/releases) から最新版をダウンロードしてください。macOS（Apple シリコン）用の `.dmg`、Windows（x64）用のインストーラー、Ubuntu（x64）用の `.deb` があります。
 
-**前提条件**: 使いたいエージェント CLI（Claude Code、Codex、Antigravity、Muse Code の任意の組み合わせ）をインストールし、ログインしておいてください。Facade Code はそれらを直接実行し、それぞれのネイティブな認証とサブスクリプションを使います。
+**前提条件**: 使いたいエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、Qwen Code の任意の組み合わせ）をインストールし、ログインしておいてください。Facade Code はそれらを直接実行し、それぞれのネイティブな認証とサブスクリプションを使います。
 
 Facade Code は VS Code と並べてインストールでき、何も共有しません。設定、拡張機能、`facade` コマンドライン ツールはすべて別々です。
 
@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
 
 ### あらゆるベンダーから集めたチーム
 
-- **自分のプランで動くネイティブ CLI**: Claude Code、Codex、Muse Code、Antigravity が、それぞれ自分の統合ターミナルで、既存のサブスクリプションを使って動きます。
+- **自分のプランで動くネイティブ CLI**: Claude Code、Codex、Muse Code、Antigravity、Qwen Code が、それぞれ自分の統合ターミナルで、既存のサブスクリプションを使って動きます。
 - **エージェントがエージェントを起動する**: エージェントは、現在の機能か新しい worktree で、ほかのエージェント（どのベンダーの CLI やモデルでも）を起動し、タスクを割り当てられます。[`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) と [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md) を参照してください。
 - **メッセージ**: エージェント同士がメッセージを送り合い、結果を依頼元に報告し、人の承認が必要な判断があればあなたに知らせます。[`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md) を参照してください。
 - **互いに助け合う**: エージェントはほかのエージェントのターミナルを読み、プロンプトに答え、キー入力を送って、行き詰まった作業者をあなたの手を煩わせずに助けられます。[`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md) を参照してください。

@@ -6,7 +6,7 @@
 
 **Un seul IDE pour vous et votre équipe d'IA.**
 
-Basé sur VS Code. Exécute les CLI natives de vos agents, comme Claude Code, Codex, Antigravity et Muse Code.
+Basé sur VS Code. Exécute les CLI natives de vos agents, comme Claude Code, Codex, Antigravity, Muse Code et Qwen Code.
 
 [Télécharger](https://github.com/y5ez3g/facadecode/releases) ·
 [Spécifications](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code est un fork de VS Code dans lequel des agents natifs de tous les fou
 
 Téléchargez la dernière version depuis [Releases](https://github.com/y5ez3g/facadecode/releases) : un `.dmg` pour macOS (Apple silicon), un programme d'installation pour Windows (x64) ou un `.deb` pour Ubuntu (x64).
 
-**Prérequis** : installez les CLI d'agents que vous voulez utiliser et connectez-vous-y (n'importe quelle combinaison de Claude Code, Codex, Antigravity ou Muse Code). Facade Code les exécute directement, avec leur propre authentification et leurs propres abonnements.
+**Prérequis** : installez les CLI d'agents que vous voulez utiliser et connectez-vous-y (n'importe quelle combinaison de Claude Code, Codex, Antigravity, Muse Code ou Qwen Code). Facade Code les exécute directement, avec leur propre authentification et leurs propres abonnements.
 
 Facade Code s'installe à côté de VS Code et ne partage rien avec lui : les paramètres, les extensions et l'outil en ligne de commande `facade` sont entièrement séparés.
 
@@ -77,7 +77,7 @@ Une fonctionnalité a souvent besoin de plus d'un agent. Celui qui écrit le cod
 
 ### Une équipe issue de tous les fournisseurs
 
-- **Des CLI natives sur vos propres abonnements** : Claude Code, Codex, Muse Code et Antigravity tournent dans leurs propres terminaux intégrés, avec les abonnements que vous avez déjà.
+- **Des CLI natives sur vos propres abonnements** : Claude Code, Codex, Muse Code, Antigravity et Qwen Code tournent dans leurs propres terminaux intégrés, avec les abonnements que vous avez déjà.
 - **Des agents qui lancent des agents** : un agent peut lancer d'autres agents (avec la CLI ou le modèle de n'importe quel fournisseur) dans la fonctionnalité en cours ou dans un nouveau worktree, et leur confier des tâches. Voir [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) et [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md).
 - **Messagerie** : les agents s'envoient des messages, rendent compte de leurs résultats à celui qui les a sollicités et vous préviennent quand une décision demande une validation humaine. Voir [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md).
 - **Ils se débloquent entre eux** : un agent peut lire le terminal d'un autre agent, répondre à ses invites et lui envoyer des frappes clavier pour aider un collègue bloqué, sans vous interrompre. Voir [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md).

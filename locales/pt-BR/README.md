@@ -6,7 +6,7 @@
 
 **Uma IDE para você e seu time de IA.**
 
-Baseada no VS Code. Roda as CLIs nativas dos seus agentes, como Claude Code, Codex, Antigravity e Muse Code.
+Baseada no VS Code. Roda as CLIs nativas dos seus agentes, como Claude Code, Codex, Antigravity, Muse Code e Qwen Code.
 
 [Download](https://github.com/y5ez3g/facadecode/releases) ·
 [Especificações](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ O Facade Code é um fork do VS Code em que agentes nativos de todos os fornecedo
 
 Baixe a versão mais recente em [Releases](https://github.com/y5ez3g/facadecode/releases): um `.dmg` para macOS (Apple silicon), um instalador para Windows (x64) ou um `.deb` para Ubuntu (x64).
 
-**Pré-requisitos**: instale e faça login nas CLIs de agentes que você quer usar (qualquer combinação de Claude Code, Codex, Antigravity ou Muse Code). O Facade Code as executa diretamente, com a autenticação e as assinaturas nativas delas.
+**Pré-requisitos**: instale e faça login nas CLIs de agentes que você quer usar (qualquer combinação de Claude Code, Codex, Antigravity, Muse Code ou Qwen Code). O Facade Code as executa diretamente, com a autenticação e as assinaturas nativas delas.
 
 O Facade Code é instalado ao lado do VS Code e não compartilha nada com ele: configurações, extensões e a ferramenta de linha de comando `facade` são totalmente separadas.
 
@@ -76,7 +76,7 @@ Uma funcionalidade costuma precisar de mais de um agente. O que escreve o códig
 
 ### Um time de todos os fornecedores
 
-- **CLIs nativas nas suas próprias assinaturas**: Claude Code, Codex, Muse Code e Antigravity rodam nos seus próprios terminais integrados, usando as assinaturas que você já tem.
+- **CLIs nativas nas suas próprias assinaturas**: Claude Code, Codex, Muse Code, Antigravity e Qwen Code rodam nos seus próprios terminais integrados, usando as assinaturas que você já tem.
 - **Agentes iniciam agentes**: um agente pode iniciar outros agentes (com qualquer CLI ou modelo de qualquer fornecedor) na funcionalidade atual ou em uma nova worktree, e atribuir tarefas a eles. Veja [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) e [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md).
 - **Mensagens**: os agentes trocam mensagens entre si, reportam resultados a quem os chamou e avisam você quando uma decisão precisa de aprovação humana. Veja [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md).
 - **Um destrava o outro**: um agente pode ler o terminal de outro agente, responder prompts e enviar teclas para ajudar um engenheiro travado, sem interromper você. Veja [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md).

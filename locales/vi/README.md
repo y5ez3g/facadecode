@@ -6,7 +6,7 @@
 
 **Một IDE cho bạn và đội AI của bạn.**
 
-Xây dựng trên VS Code. Chạy trực tiếp các CLI agent chính hãng của bạn, như Claude Code, Codex, Antigravity và Muse Code.
+Xây dựng trên VS Code. Chạy trực tiếp các CLI agent chính hãng của bạn, như Claude Code, Codex, Antigravity, Muse Code và Qwen Code.
 
 [Tải về](https://github.com/y5ez3g/facadecode/releases) ·
 [Đặc tả](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code là một bản fork của VS Code, nơi các agent chính hãng c�
 
 Tải bản phát hành mới nhất từ [Releases](https://github.com/y5ez3g/facadecode/releases): tệp `.dmg` cho macOS (Apple silicon), trình cài đặt cho Windows (x64), hoặc tệp `.deb` cho Ubuntu (x64).
 
-**Trước khi bắt đầu**: Cài đặt và đăng nhập vào các CLI agent bạn muốn dùng (kết hợp tùy ý Claude Code, Codex, Antigravity hoặc Muse Code). Facade Code chạy trực tiếp chúng, dùng cơ chế xác thực và gói đăng ký riêng của từng CLI.
+**Trước khi bắt đầu**: Cài đặt và đăng nhập vào các CLI agent bạn muốn dùng (kết hợp tùy ý Claude Code, Codex, Antigravity, Muse Code hoặc Qwen Code). Facade Code chạy trực tiếp chúng, dùng cơ chế xác thực và gói đăng ký riêng của từng CLI.
 
 Facade Code được cài song song với VS Code và không dùng chung bất cứ thứ gì: cài đặt, tiện ích mở rộng và công cụ dòng lệnh `facade` đều hoàn toàn tách biệt.
 
@@ -76,7 +76,7 @@ Một tính năng thường cần nhiều hơn một agent. Agent viết code c�
 
 ### Một đội đến từ mọi nhà cung cấp
 
-- **CLI chính hãng trên gói đăng ký của bạn**: Claude Code, Codex, Muse Code và Antigravity chạy trong terminal tích hợp riêng của chúng, dùng các gói đăng ký bạn đang có.
+- **CLI chính hãng trên gói đăng ký của bạn**: Claude Code, Codex, Muse Code, Antigravity và Qwen Code chạy trong terminal tích hợp riêng của chúng, dùng các gói đăng ký bạn đang có.
 - **Agent khởi chạy agent**: Một agent có thể khởi chạy các agent khác (dùng CLI hoặc mô hình của bất kỳ nhà cung cấp nào) trong tính năng hiện tại hoặc trong một worktree mới, và giao việc cho chúng. Xem [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) và [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md).
 - **Nhắn tin**: Các agent nhắn tin cho nhau, báo cáo kết quả cho bên đã gọi chúng và thông báo cho bạn khi có quyết định cần con người phê duyệt. Xem [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md).
 - **Gỡ rối cho nhau**: Một agent có thể đọc terminal của agent khác, trả lời các câu hỏi của nó và gửi thao tác phím để giúp một agent đang bị kẹt mà không làm phiền bạn. Xem [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md).

@@ -6,7 +6,7 @@
 
 **Одна IDE для вас и вашей ИИ-команды.**
 
-Построена на VS Code. Запускает нативные CLI ваших агентов, например Claude Code, Codex, Antigravity и Muse Code.
+Построена на VS Code. Запускает нативные CLI ваших агентов, например Claude Code, Codex, Antigravity, Muse Code и Qwen Code.
 
 [Скачать](https://github.com/y5ez3g/facadecode/releases) ·
 [Спецификации](../../facade-code-spec/) ·
@@ -28,7 +28,7 @@ Facade Code — это форк VS Code, в котором нативные аг
 
 Скачайте последнюю версию в разделе [Releases](https://github.com/y5ez3g/facadecode/releases): `.dmg` для macOS (Apple silicon), установщик для Windows (x64) или `.deb` для Ubuntu (x64).
 
-**Требования**: установите CLI агентов, которыми хотите пользоваться, и войдите в них (любое сочетание Claude Code, Codex, Antigravity и Muse Code). Facade Code запускает их напрямую, с их собственной авторизацией и подписками.
+**Требования**: установите CLI агентов, которыми хотите пользоваться, и войдите в них (любое сочетание Claude Code, Codex, Antigravity, Muse Code и Qwen Code). Facade Code запускает их напрямую, с их собственной авторизацией и подписками.
 
 Facade Code устанавливается рядом с VS Code и ничего с ним не делит: настройки, расширения и консольная утилита `facade` полностью раздельны.
 
@@ -76,7 +76,7 @@ https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
 
 ### Команда от всех вендоров
 
-- **Нативные CLI на ваших подписках**: Claude Code, Codex, Muse Code и Antigravity работают в своих встроенных терминалах и используют подписки, которые у вас уже есть.
+- **Нативные CLI на ваших подписках**: Claude Code, Codex, Muse Code, Antigravity и Qwen Code работают в своих встроенных терминалах и используют подписки, которые у вас уже есть.
 - **Агенты запускают агентов**: агент может запускать других агентов (с CLI или моделью любого вендора) в текущей фиче или в новом worktree и раздавать им задачи. См. [`AGENT-LAUNCHER.md`](../../facade-code-spec/AGENT-LAUNCHER.md) и [`AGENT-ORCHESTRATION.md`](../../facade-code-spec/AGENT-ORCHESTRATION.md).
 - **Сообщения**: агенты пишут друг другу, отчитываются о результатах перед тем, кто их запустил, и сообщают вам, когда решение требует одобрения человека. См. [`AGENT-MESSAGES.md`](../../facade-code-spec/AGENT-MESSAGES.md).
 - **Помогают друг другу**: агент может читать терминал другого агента, отвечать на его запросы и отправлять нажатия клавиш, чтобы выручить застрявшего инженера, не отвлекая вас. См. [`AGENT-DEBUGGING.md`](../../facade-code-spec/AGENT-DEBUGGING.md).
