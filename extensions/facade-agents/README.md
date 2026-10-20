@@ -2,7 +2,7 @@
 
 **Notice:** This extension is bundled with Facade Code. It can be disabled but not uninstalled.
 
-Coding agents' CLIs - Claude Code, Codex, Antigravity, Muse Code, and the person's own custom agents - each in its own terminal UI, in the folders and worktrees of a Facade window. Each agent has a name and a number, as `@claude #a1`, the person or agent that started it, and a tree: the agent the person started that it comes from. Through Facade's MCP server an agent starts, lists and stops other agents, sends them and the person numbered messages, and looks into their terminals. The design is `facade-code-spec/AGENT-LAUNCHER.md` (L1-L16), `facade-code-spec/AGENT-ORCHESTRATION.md` (O1-O13), `facade-code-spec/AGENT-MESSAGES.md` (M1-M13) and `facade-code-spec/AGENT-DEBUGGING.md` (D1-D11).
+Coding agents' CLIs - Claude Code, Codex, Antigravity, Muse Code, Qwen Code, and the person's own custom agents - each in its own terminal UI, in the folders and worktrees of a Facade window. Each agent has a name and a number, as `@claude #a1`, the person or agent that started it, and a tree: the agent the person started that it comes from. Through Facade's MCP server an agent starts, lists and stops other agents, sends them and the person numbered messages, and looks into their terminals. The design is `facade-code-spec/AGENT-LAUNCHER.md` (L1-L16), `facade-code-spec/AGENT-ORCHESTRATION.md` (O1-O13), `facade-code-spec/AGENT-MESSAGES.md` (M1-M13) and `facade-code-spec/AGENT-DEBUGGING.md` (D1-D11).
 
 ## What it does
 
@@ -20,12 +20,13 @@ Coding agents' CLIs - Claude Code, Codex, Antigravity, Muse Code, and the person
 
 ## Settings
 
-Three groups, each setting always shown - an advanced one's description begins "Advanced:". **Agents**: `facade.agents.yolo`, `facade.orchestration.enabled` and, advanced, `facade.agents.timeout` (seconds, 1-3600). **Each built-in** (`claude`, `codex`, `antigravity`, `muse`): `facade.agents.<cli>.enabled`, `.path`, and, advanced, `.launch` - its arguments group by group (`warmUp`, `connect`, `quiet`, `questions`, `messages`, `yoloOn`, `yoloOff`, `model`, `effort`, `extra`, `task`), environment, trust, Claude Code's settings and two delays. A launch holds only what you change; `null` takes one of Facade's parts out. **Custom Agents**: `facade.agents.custom`, `{ "<name>": { "path": "...", "launch": { ... } } }`, whose launch has the same parts and none of Facade's: `${mcpConfig}` names a file with Facade's server for its `connect` group.
+Three groups, each setting always shown - an advanced one's description begins "Advanced:". **Agents**: `facade.agents.yolo`, `facade.orchestration.enabled` and, advanced, `facade.agents.timeout` (seconds, 1-3600). **Each built-in** (`claude`, `codex`, `antigravity`, `muse`, `qwen`): `facade.agents.<cli>.enabled`, `.path`, and, advanced, `.launch` - its arguments group by group (`warmUp`, `connect`, `quiet`, `questions`, `messages`, `yoloOn`, `yoloOff`, `model`, `effort`, `extra`, `task`), environment, trust, Claude Code's and Qwen Code's settings and two delays. A launch holds only what you change; `null` takes one of Facade's parts out. **Custom Agents**: `facade.agents.custom`, `{ "<name>": { "path": "...", "launch": { ... } } }`, whose launch has the same parts and none of Facade's: `${mcpConfig}` names a file with Facade's server for its `connect` group.
 
 ## Known limits
 
 - Whether Muse Code and Antigravity can let Facade's server alone through with YOLO off, and how the CLIs' sandboxes behave with it off, are still to be measured: until then those two ask for nothing with YOLO off.
-- Tested live on macOS with Claude Code and Codex; Windows and Linux have their unit tests.
+- Qwen Code has no setting that denies an approval without asking: with YOLO off, an agent started through `start_agent` can wait at its approval prompt. Its own sandbox, which its settings can turn on, is left as configured with YOLO off; whether Facade's tools connect from inside it is not verified.
+- Tested live on macOS with Claude Code and Codex; Windows and Linux have their unit tests. Qwen Code (0.25.3) was tested live on Windows only.
 
 ## Layout
 

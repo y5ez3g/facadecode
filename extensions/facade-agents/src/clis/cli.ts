@@ -5,9 +5,27 @@
 
 import * as os from 'os';
 import { isJsonObject, JsonObject, mergedObject, sameJson } from '../base/json';
+import type { LaunchTarget } from './executable';
 
 /** Environment variables, as `process.env` holds them. */
 export type Environment = { readonly [name: string]: string | undefined };
+
+/**
+ * The name `variables` has for the variable `name`: on Windows, which takes a variable's name in any case, theirs whatever
+ * its case; `name` where they have none, and elsewhere.
+ */
+export function variableName(variables: { readonly [name: string]: unknown }, name: string): string {
+	return process.platform === 'win32' ? Object.keys(variables).find(key => key.toUpperCase() === name.toUpperCase()) ?? name : name;
+}
+
+/** `env` with the variables of `set` over it, each in place of the one of its name - on Windows, whatever the case of either. */
+export function withVariables<T extends string | undefined>(env: { readonly [name: string]: T }, set: { readonly [name: string]: T }): { [name: string]: T } {
+	const result: { [name: string]: T } = { ...env };
+	for (const [name, value] of Object.entries(set)) {
+		result[variableName(result, name)] = value;
+	}
+	return result;
+}
 
 /** How to start Facade's MCP server for one agent. */
 export interface McpLaunch {
@@ -82,7 +100,10 @@ export interface LaunchConfig {
 	readonly environment: { readonly [name: string]: string };
 	/** None: it asks, in its terminal. */
 	readonly trust?: TrustConfig;
-	/** Claude Code's settings for each launch, written to the file its `${settingsFile}` names. */
+	/**
+	 * Its settings for each launch: Claude Code's, written to the file its `${settingsFile}` names; Qwen Code's, in the scope
+	 * over all its others, where a value that is `${model}` or `${effort}` alone is the one the launch is given (L9).
+	 */
 	readonly settings?: JsonObject;
 	/** Milliseconds between typing a line into its terminal and pressing Enter: a CLI can take fast typing for a paste. */
 	readonly enterDelay: number;
@@ -104,7 +125,7 @@ export function launchFor(config: CliConfig, unattended: boolean): CliConfig {
 	const environment: { [name: string]: string } = { ...launch.environment };
 	for (const [name, value] of Object.entries(overlay.environment)) {
 		// On Windows a variable's name is the same in any case
-		const key = process.platform === 'win32' ? Object.keys(environment).find(each => each.toUpperCase() === name.toUpperCase()) ?? name : name;
+		const key = variableName(environment, name);
 		if (value === null) {
 			delete environment[key];
 		} else {
@@ -188,6 +209,16 @@ export function sandboxOf(cli: AgentCli, config: CliConfig, uses: LaunchUses): S
 	return typeof theirs !== 'boolean' ? sandbox : !theirs ? 'off' : cli.sandbox.yoloOff === 'unavailable' ? 'unavailable' : 'on';
 }
 
+/**
+ * The sandbox an agent of `cli` runs with: as `sandboxOf` says its launch leaves it, but on where that launch leaves the CLI's
+ * own sandbox on - as the person configured it, in the environment `env` of an agent in `folder`, or as their launch's settings
+ * and environment set it (AGENT-LAUNCHER.md, L4: the effective sandbox is said).
+ */
+export function effectiveSandbox(cli: AgentCli, config: CliConfig, uses: LaunchUses, env: Environment, folder: string | undefined): Sandbox {
+	const sandbox = sandboxOf(cli, config, uses);
+	return sandbox === 'off' && cli.ownSandbox?.(config, uses.yolo, env, folder) !== undefined ? 'on' : sandbox;
+}
+
 /** Whether `group` applies to a launch `uses` describes: an empty group adds nothing either way. */
 export function appliesTo(group: ArgGroup, uses: LaunchUses): boolean {
 	switch (group) {
@@ -257,6 +288,11 @@ export interface LaunchInput {
 	readonly repository: string;
 	/** The home folder, as the environment its terminal starts with has it - as its trust has it (X-58); Facade's own where none is given. */
 	readonly home?: string;
+	/**
+	 * The environment its terminal starts with, its launch's variables over it, where the start has it: for a CLI that finds
+	 * files of its own by it - its settings, say - as it will (L10). Facade's own where none is given.
+	 */
+	readonly env?: Environment;
 	/** Where the files of the workspace's messages are: long messages, and fetches too long for a result (M11). */
 	readonly messagesDir: string;
 	/** Where the agents' screens are kept: final screens, and reads too long for a result (AGENT-DEBUGGING.md, D6). */
@@ -337,11 +373,25 @@ export interface AgentCli {
 	 */
 	trustValues?(place: { readonly folder: string; readonly repository: string }, env: Environment): { readonly [name: string]: string };
 	/**
-	 * What of the person's own configuration of it a launch with `args` in `folder` would mix Facade's content
-	 * into - an entry of theirs under the name Facade's takes: a sentence naming the file and the entry, or
+	 * What of the person's own configuration of it a launch with `args` in `folder`, as `config` has it, would mix
+	 * Facade's content into - an entry of theirs under the name Facade's takes - or would keep Facade's server from,
+	 * their launch's own settings and options among it: a sentence naming the file or the setting and the entry, or
 	 * undefined (AGENT-ORCHESTRATION.md: an unrelated conflicting entry produces a named configuration error).
 	 */
-	conflict?(args: readonly string[], folder: string, env: Environment): string | undefined;
+	conflict?(args: readonly string[], folder: string, env: Environment, config: CliConfig): string | undefined;
+	/**
+	 * How Windows starts it from `file`, a launcher of its own installer's that is no npm shim - which `launchTarget`
+	 * would leave to cmd.exe - as that launcher would: the program it runs, with the script and the variables it gives
+	 * it; undefined where `file` is no such launcher (L10).
+	 */
+	launchTarget?(file: string, platform: NodeJS.Platform, env: Environment): LaunchTarget | undefined;
+	/**
+	 * Where its own sandbox is on for an agent of a launch as `config` has it, with YOLO `yolo`, in the environment `env`
+	 * of an agent in `folder`: as the person's configuration of it turns it on, which a launch with YOLO off leaves as it
+	 * is, or as their launch's settings and environment do; where, in words; undefined where nothing turns it on
+	 * (AGENT-LAUNCHER.md, L4: the effective sandbox is said).
+	 */
+	ownSandbox?(config: CliConfig, yolo: boolean, env: Environment, folder: string | undefined): string | undefined;
 	/**
 	 * Where a setting of the person's own refuses Facade's tools with YOLO off - a deny rule of theirs, which
 	 * wins over Facade's allow - for a launch as `config` has it in `folder`, or anywhere where none is given:
@@ -363,6 +413,11 @@ export interface AgentCli {
 	 */
 	readonly modelCarriesEffort?: boolean;
 	/**
+	 * Its launch's settings take a model and an effort: a value there that is `${model}` or `${effort}` alone is set to
+	 * the one given, and left out where none is - how a CLI none of whose options takes one is given it (L9).
+	 */
+	readonly settingsTakeValues?: boolean;
+	/**
 	 * How it gets the notice of its task: `argument`, on its command line; `terminal`, typed into its
 	 * terminal once its MCP server said hello, for a CLI whose first conversation has no MCP tools; `none`
 	 * for a custom agent whose launch has no task group.
@@ -381,6 +436,13 @@ export interface AgentCli {
 	 * `unknown` for a custom agent.
 	 */
 	readonly exemption: 'precise' | 'all' | 'unknown';
+	/**
+	 * With YOLO off, what else than Facade's tools an agent of it started through `start_agent` meets: `refused`
+	 * unasked by its launch's unattended part, where it has none of these; `asked`, as its CLI asks, for a CLI with
+	 * no way to refuse unasked - it can wait at an approval nobody answers, a limitation its launch record says
+	 * (AGENT-LAUNCHER.md, L4).
+	 */
+	readonly unattendedApprovals?: 'refused' | 'asked';
 	/**
 	 * Its tools that would leave its terminal waiting for someone to pick an answer: `removed`, by its launch's
 	 * `questions` group; `kept`, its launch cannot take them away, and its instructions tell it to ask through
@@ -448,5 +510,42 @@ export function capabilitiesOf(cli: AgentCli, config: CliConfig): { readonly int
 	// A CLI that reads Facade's server from its folder has it there; any other only through its connect group,
 	// which the person can take out (L9).
 	const integration = !!cli.sharedServer || has('connect');
-	return { integration, task: integration && cli.task !== 'none' && (cli.task === 'terminal' || has('task')), model: has('model'), effort: has('effort') };
+	// A CLI whose settings take one, where a value there is its `${name}` alone (L9)
+	const takes = (name: 'model' | 'effort') => has(name) || (!!cli.settingsTakeValues && settingTakes(config.launch.settings, name));
+	return { integration, task: integration && cli.task !== 'none' && (cli.task === 'terminal' || has('task')), model: takes('model'), effort: takes('effort') };
+}
+
+/** Whether `settings` has, anywhere in it, a value that is `${name}` alone: one a launch sets to what it is given (L9). */
+function settingTakes(settings: JsonObject | undefined, name: string): boolean {
+	return !!settings && Object.values(settings).some(value => givenName(value) === name || (isJsonObject(value) && settingTakes(value, name)));
+}
+
+/** What a setting's `value` stands for where it is `${model}` or `${effort}` alone - `model` or `effort` - else undefined (L9). */
+function givenName(value: unknown): string | undefined {
+	return typeof value === 'string' ? /^\$\{(?<name>model|effort)\}$/.exec(value)?.groups?.name : undefined;
+}
+
+/**
+ * A launch's `settings` with each value that is `${model}` or `${effort}` alone the one it was given, in `values`, and taken
+ * out where it was given none - as its groups of those apply only where given - and with no empty object, which sets nothing
+ * (L9). Any other text is the settings' own, as the CLI reads it.
+ */
+export function settingsWithValues(settings: JsonObject, values: { readonly [name: string]: string }): JsonObject {
+	const result: { [key: string]: unknown } = {};
+	for (const [key, value] of Object.entries(settings)) {
+		const name = givenName(value);
+		if (name !== undefined) {
+			if (Object.hasOwn(values, name)) {
+				result[key] = values[name];
+			}
+		} else if (isJsonObject(value)) {
+			const inner = settingsWithValues(value, values);
+			if (Object.keys(inner).length) {
+				result[key] = inner;
+			}
+		} else {
+			result[key] = value;
+		}
+	}
+	return result;
 }

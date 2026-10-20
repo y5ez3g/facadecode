@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { isJsonObject, isStringArray, JsonObject, mergedObject } from '../base/json';
-import { AgentCli, ARG_GROUPS, ArgGroup, CliConfig, LaunchConfig, TrustConfig, UnattendedLaunch } from './cli';
+import { AgentCli, ARG_GROUPS, ArgGroup, CliConfig, LaunchConfig, TrustConfig, UnattendedLaunch, variableName } from './cli';
 
 /** The longest a launch waits before typing a CLI its task, or between a line and its Enter: a minute. */
 export const MAX_DELAY_MS = 60_000;
@@ -87,7 +87,7 @@ export function shown(value: unknown): string {
 
 /**
  * `cli`'s launch as the person changed its defaults with `set`, the setting `setting`: a part they set
- * replaces the default's, an object - the environment, Claude Code's settings - key by key, and null takes
+ * replaces the default's, an object - the environment, Claude Code's or Qwen Code's settings - key by key, and null takes
  * one out; its unattended part the same way, part by part (`unattendedOf`). What is wrong goes into `wrong`,
  * the default's part shown in its place.
  */
@@ -145,7 +145,7 @@ function unattendedOf(cli: AgentCli, set: unknown, setting: string, wrong: strin
 	const environment: { [name: string]: string | null } = { ...defaults?.environment };
 	for (const [name, value] of Object.entries(objectOf(own.environment, `${setting}.environment`, wrong))) {
 		if (value === null || typeof value === 'string') {
-			environment[variableKey(environment, name)] = value;
+			environment[variableName(environment, name)] = value;
 		} else {
 			wrong.push(`${setting}.environment.${name} must be a string or null; received ${shown(value)}`);
 		}
@@ -211,19 +211,14 @@ function variablesOf(defaults: { readonly [name: string]: string }, set: unknown
 	const variables: { [name: string]: string } = { ...defaults };
 	for (const [name, value] of Object.entries(isJsonObject(set) ? set : {})) {
 		if (value === null) {
-			delete variables[variableKey(variables, name)];
+			delete variables[variableName(variables, name)];
 		} else if (typeof value === 'string') {
-			variables[variableKey(variables, name)] = value;
+			variables[variableName(variables, name)] = value;
 		} else {
 			wrong.push(`${setting}.${name} must be a string or null; received ${shown(value)}`);
 		}
 	}
 	return variables;
-}
-
-/** The name `variables` has for the variable `name`: on Windows, which takes a name in any case, theirs whatever its case. */
-function variableKey(variables: { readonly [name: string]: unknown }, name: string): string {
-	return process.platform === 'win32' ? Object.keys(variables).find(key => key.toUpperCase() === name.toUpperCase()) ?? name : name;
 }
 
 /**
@@ -273,7 +268,7 @@ function trustOf(defaults: TrustConfig | undefined, set: unknown, setting: strin
 	return wrong.length === before && file !== undefined && merge !== undefined ? { file, merge } : defaults;
 }
 
-/** Claude Code's settings: the defaults with the person's over them, key by key. */
+/** Claude Code's or Qwen Code's settings: the defaults with the person's over them, key by key. */
 function settingsOf(defaults: JsonObject, set: unknown, setting: string, wrong: string[]): JsonObject {
 	if (set !== undefined && !isJsonObject(set)) {
 		wrong.push(`${setting} must be an object; received ${shown(set)}`);

@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { Environment } from './cli';
+import type { AgentCli, Environment } from './cli';
 
 /**
  * The script npm's shim for a package's command runs with Node, and nothing between the two: `"%_prog%"
@@ -74,6 +74,16 @@ export interface LaunchTarget {
 	readonly args: readonly string[];
 	/** Whether its arguments go through cmd.exe, which must be given no text of an agent's or the person's. */
 	readonly throughCmd: boolean;
+	/** What the launcher it stands in for sets in its environment: given it so, as that launcher would. */
+	readonly env?: { readonly [name: string]: string };
+}
+
+/**
+ * How to start `cli` from `file`, as `platform` runs it in the environment `env`: as its own installer's launcher would,
+ * where the CLI knows that launcher; else as `launchTarget` starts any program (L10).
+ */
+export function launchTargetOf(cli: AgentCli, file: string, platform: NodeJS.Platform = process.platform, env: Environment = process.env): LaunchTarget {
+	return cli.launchTarget?.(file, platform, env) ?? launchTarget(file, platform, env);
 }
 
 /**

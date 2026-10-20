@@ -11,7 +11,8 @@ const BUILT_IN_ICONS: ReadonlyMap<string, string> = new Map([
 	['claude', 'agent-claude'],
 	['codex', 'agent-codex'],
 	['agy', 'agent-antigravity'],
-	['muse', 'agent-muse']
+	['muse', 'agent-muse'],
+	['qwen', 'agent-qwen']
 ]);
 
 /** The codicon of every custom agent, whatever program it runs (AGENT-LAUNCHER.md, L3). */

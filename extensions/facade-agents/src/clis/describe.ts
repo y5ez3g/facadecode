@@ -26,6 +26,8 @@ export interface DescribedCli {
 	readonly trust: GivenTrust;
 	/** Where a setting of the person's own outside Facade - a deny rule of theirs - asks for Facade's tools all the same, which one: for an agent the person starts. */
 	readonly overridden?: string;
+	/** Where its own sandbox is on, by YOLO, as the person's configuration of it or their launch turns it on: for an agent the person starts. */
+	readonly ownSandbox?: OwnSandbox;
 	/**
 	 * The same two for an agent started through `start_agent`, which runs in the environment and with the settings its
 	 * launch's unattended part gives it (L9; L10): its trust can go elsewhere, and a deny rule can refuse it Facade's
@@ -43,6 +45,9 @@ type GivenTrust =
 	| { readonly kind: 'none' }
 	| { readonly kind: 'cannot'; readonly why: string };
 
+/** Where a CLI's own sandbox is on, as the person's configuration of it or a launch turns it on: in words, for each YOLO it is on with (L4). */
+type OwnSandbox = { readonly [yolo in 'yoloOn' | 'yoloOff']?: string };
+
 /** What an agent of a CLI gets where the launch of whoever starts it decides it: its trust, and a deny rule of the person's that refuses it Facade's tools. */
 interface StarterFacts {
 	readonly trust: GivenTrust;
@@ -52,23 +57,31 @@ interface StarterFacts {
 	 * approved them for the project (L4, rule 3; LV-02): Claude Code's, through `start_agent`. None where nothing is.
 	 */
 	readonly serversOff?: readonly string[];
+	/** Where the CLI's own sandbox is on, by YOLO, as the person's configuration of it or that launch turns it on (L4). */
+	readonly ownSandbox?: OwnSandbox;
 }
 
 /**
  * What an agent of `cli` in `place` gets by who starts it - the person, from the UI, or, `unattended`, an agent or the
  * person's script through `start_agent` - where that starter's launch decides it (L4; L9): in the environment a terminal
  * there starts with, `terminal`, with that launch's over it (L10), the trust it is given, a setting of the person's that
- * refuses Facade's tools with YOLO off - a deny rule in Claude Code's settings, that launch's, the person's own or the
- * project's (rule 4) - and the servers of the folder's project MCP configuration that launch turns off (rule 3).
+ * refuses Facade's tools with YOLO off - a deny rule in Claude Code's or Qwen Code's settings, that launch's, the person's own or the
+ * project's (rule 4) - the servers of the folder's project MCP configuration that launch turns off (rule 3), and where the
+ * CLI's own sandbox is on with each YOLO, as the person's configuration of it or that launch turns it on.
  */
 export function starterFacts(cli: AgentCli, config: CliConfig, place: { readonly folder: string; readonly repository: string } | undefined, terminal: Environment, unattended: boolean): StarterFacts {
 	const launch = launchFor(config, unattended);
 	const env = { ...terminal, ...launch.launch.environment };
 	const refused = cli.exemptionOverride?.(launch, env, place?.folder);
+	const ownSandbox: OwnSandbox = Object.fromEntries((['yoloOn', 'yoloOff'] as const).flatMap(key => {
+		const where = cli.ownSandbox?.(launch, key === 'yoloOn', env, place?.folder);
+		return where === undefined ? [] : [[key, where]];
+	}));
 	return {
 		trust: givenTrust(cli, launch, place, env),
 		...(refused !== undefined ? { overridden: l10n.t("{0}: with YOLO off, {1} denies Facade tools", refused, cli.displayName) } : {}),
-		...(place && unattended && cli.projectServersOff ? { serversOff: cli.projectServersOff(launch, place, homeOf(env), false, unattended) } : {})
+		...(place && unattended && cli.projectServersOff ? { serversOff: cli.projectServersOff(launch, place, homeOf(env), false, unattended) } : {}),
+		...(Object.keys(ownSandbox).length ? { ownSandbox } : {})
 	};
 }
 
@@ -169,8 +182,9 @@ function questionsShown(cli: AgentCli, config: CliConfig, unattended: boolean): 
 /**
  * What else than Facade's tools an agent of `cli` asks for with YOLO off, started by the person or, `unattended`,
  * through `start_agent` (L4): as the CLI asks, for an agent the person starts; refused unasked for one started
- * through `start_agent`; nothing at all for a CLI that cannot let Facade's tools alone through (rule 1) - and, for
- * a launch the person changed, theirs to say.
+ * through `start_agent` - asked as the CLI asks, a limitation said, for a CLI with no way to refuse unasked; nothing
+ * at all for a CLI that cannot let Facade's tools alone through (rule 1) - and, for a launch the person changed, theirs
+ * to say.
  */
 function approvalsShown(cli: AgentCli, config: CliConfig, unattended: boolean): string {
 	if (cli.custom || exemptionGroupsChanged(cli, config, unattended).includes('yoloOff')) {
@@ -178,6 +192,9 @@ function approvalsShown(cli: AgentCli, config: CliConfig, unattended: boolean): 
 	}
 	if (cli.exemption === 'all') {
 		return l10n.t("nothing asked, nothing denied: it cannot exempt only Facade tools, so its approvals are off");
+	}
+	if (unattended && cli.unattendedApprovals === 'asked') {
+		return l10n.t("asks, as its CLI does: it has no setting that denies without asking, so with no one watching it can wait at an approval prompt");
 	}
 	// Edits in its folder that go unasked - Claude Code's dontAsk with them let through, as through start_agent - are said
 	// so; without, the person's own asks them as its CLI does, in their own permission mode (L4)
@@ -194,21 +211,26 @@ function approvalsShown(cli: AgentCli, config: CliConfig, unattended: boolean): 
  */
 function serversOffShown(serversOff: readonly string[] | undefined): string {
 	return serversOff === undefined
-		? l10n.t("with YOLO off, the servers in its folder's .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them")
+		? l10n.t("with YOLO off, the project MCP servers in its folder that you have not approved for it are turned off for the run, so that it does not stop to ask about them")
 		: serversOff.length
 			? l10n.t("with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: {0}", serversOff.join(', '))
-			: l10n.t("with YOLO off, none turned off: this folder's .mcp.json has no server that you have not approved for its project");
+			: l10n.t("with YOLO off, none turned off: this folder has no project MCP server that you have not approved for it");
 }
 
 /**
- * What an agent of `cli` runs with, started by the person or, `unattended`, through `start_agent`: its sandbox by YOLO,
- * whether Facade's tools and anything else are asked for, its question tool, and - through `start_agent`, of a CLI whose
- * launch turns some off - the project's MCP servers it runs without, `serversOff` (L4).
+ * What an agent of `cli` runs with, started by the person or, `unattended`, through `start_agent`: its sandbox by YOLO -
+ * the CLI's own, where its launch leaves that on as the person's configuration of it or their launch turns it on,
+ * `ownSandbox` - whether Facade's tools and anything else are asked for, its question tool, and - through `start_agent`, of
+ * a CLI whose launch turns some off - the project's MCP servers it runs without, `serversOff` (L4).
  */
-function byStarter(cli: AgentCli, config: CliConfig, overridden: string | undefined, unattended: boolean, serversOff?: readonly string[]): object {
+function byStarter(cli: AgentCli, config: CliConfig, overridden: string | undefined, unattended: boolean, serversOff?: readonly string[], ownSandbox?: OwnSandbox): object {
 	return {
-		// As the launch the person has set up leaves it (X-07)
-		sandbox: Object.fromEntries((['yoloOn', 'yoloOff'] as const).map(key => [key, sandboxOf(cli, launchFor(config, unattended), { framework: true, yolo: key === 'yoloOn', model: false, effort: false, task: false, trust: true })])),
+		// As the launch the person has set up leaves it (X-07), and the CLI's own as they turned it on (L4)
+		sandbox: Object.fromEntries((['yoloOn', 'yoloOff'] as const).map(key => {
+			const sandbox = sandboxOf(cli, launchFor(config, unattended), { framework: true, yolo: key === 'yoloOn', model: false, effort: false, task: false, trust: true });
+			const own = ownSandbox?.[key];
+			return [key, sandbox === 'off' && own !== undefined ? l10n.t("on: {0}; Facade leaves it as it is and has not verified that its tools connect from inside it", own) : sandbox];
+		})),
 		facadeTools: facadeToolsShown(cli, config, overridden, unattended),
 		approvalsWithYoloOff: approvalsShown(cli, config, unattended),
 		questions: questionsShown(cli, config, unattended),
@@ -229,11 +251,11 @@ function byStarter(cli: AgentCli, config: CliConfig, overridden: string | undefi
  * and no inherited variable is shown.
  */
 export function launchDocument({ folder, yolo, framework, clis }: ShownLaunches): string {
-	const shown = Object.fromEntries(clis.map(({ cli, config, yours, program, trust, overridden, throughStartAgent, problems }) => {
+	const shown = Object.fromEntries(clis.map(({ cli, config, yours, program, trust, overridden, ownSandbox, throughStartAgent, problems }) => {
 		const throughCmd = program.target?.throughCmd ?? false;
 		// An agent started through start_agent, in its own environment and with its own settings (L9; L10): its trust
 		// shown for each starter where the two differ
-		const startAgentFacts = throughStartAgent ?? { trust, ...(overridden !== undefined ? { overridden } : {}) };
+		const startAgentFacts = throughStartAgent ?? { trust, ...(overridden !== undefined ? { overridden } : {}), ...(ownSandbox !== undefined ? { ownSandbox } : {}) };
 		const trusts = [trustShown(trust), trustShown(startAgentFacts.trust)] as const;
 		const sameTrust = sameJson(trusts[0], trusts[1]);
 		return [cli.setting.replace(/^facade\.agents\./, ''), {
@@ -246,8 +268,8 @@ export function launchDocument({ folder, yolo, framework, clis }: ShownLaunches)
 				}),
 			...(cli.custom ? {} : { offered: config.enabled }),
 			task: cli.task === 'terminal' ? 'typed' : cli.task === 'none' ? 'none' : 'argument',
-			whenYouStartIt: { ...byStarter(cli, config, overridden, false), ...(sameTrust ? {} : { trust: trusts[0] }) },
-			throughStartAgent: { ...byStarter(cli, config, startAgentFacts.overridden, true, startAgentFacts.serversOff), ...(sameTrust ? {} : { trust: trusts[1] }) },
+			whenYouStartIt: { ...byStarter(cli, config, overridden, false, undefined, ownSandbox), ...(sameTrust ? {} : { trust: trusts[0] }) },
+			throughStartAgent: { ...byStarter(cli, config, startAgentFacts.overridden, true, startAgentFacts.serversOff, startAgentFacts.ownSandbox), ...(sameTrust ? {} : { trust: trusts[1] }) },
 			...(sameTrust ? { trust: trusts[0] } : {}),
 			...(config.wrong ? { wrongSettings: config.wrong } : {}),
 			...(problems?.length ? { cannotStart: problems } : {}),

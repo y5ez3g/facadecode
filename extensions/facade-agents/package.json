@@ -1793,9 +1793,425 @@
 				}
 			},
 			{
+				"id": "facade.agents.qwen",
+				"title": "%config.qwen.title%",
+				"order": 6,
+				"properties": {
+					"facade.agents.qwen.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.qwen.enabled%"
+					},
+					"facade.agents.qwen.path": {
+						"type": "string",
+						"default": "",
+						"scope": "machine",
+						"order": 2,
+						"markdownDescription": "%config.qwen.path%"
+					},
+					"facade.agents.qwen.launch": {
+						"type": "object",
+						"default": {},
+						"properties": {
+							"arguments": {
+								"type": "object",
+								"properties": {
+									"warmUp": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										}
+									},
+									"connect": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										},
+										"default": [
+											"--mcp-config",
+											"${mcpConfig}"
+										]
+									},
+									"quiet": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										}
+									},
+									"questions": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										}
+									},
+									"messages": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										},
+										"default": [
+											"--include-directories",
+											"${messagesDir}",
+											"--include-directories",
+											"${screensDir}"
+										]
+									},
+									"yoloOn": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										},
+										"default": [
+											"--yolo"
+										]
+									},
+									"yoloOff": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										}
+									},
+									"model": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										},
+										"default": [
+											"--model",
+											"${model}"
+										]
+									},
+									"effort": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										}
+									},
+									"extra": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										}
+									},
+									"task": {
+										"type": [
+											"array",
+											"null"
+										],
+										"items": {
+											"type": "string"
+										},
+										"default": [
+											"--prompt-interactive=${task}"
+										]
+									}
+								},
+								"additionalProperties": false,
+								"default": {
+									"connect": [
+										"--mcp-config",
+										"${mcpConfig}"
+									],
+									"messages": [
+										"--include-directories",
+										"${messagesDir}",
+										"--include-directories",
+										"${screensDir}"
+									],
+									"yoloOn": [
+										"--yolo"
+									],
+									"model": [
+										"--model",
+										"${model}"
+									],
+									"task": [
+										"--prompt-interactive=${task}"
+									]
+								},
+								"markdownDescription": "%config.launch.arguments%"
+							},
+							"environment": {
+								"type": "object",
+								"additionalProperties": {
+									"type": [
+										"string",
+										"null"
+									]
+								},
+								"default": {},
+								"markdownDescription": "%config.launch.environment%"
+							},
+							"trust": {
+								"type": [
+									"object",
+									"null"
+								],
+								"properties": {
+									"arguments": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"file": {
+										"type": "string"
+									},
+									"merge": {
+										"type": "object"
+									}
+								},
+								"additionalProperties": false,
+								"default": {
+									"file": "${configFile}",
+									"merge": {
+										"${folder}": "TRUST_FOLDER"
+									}
+								},
+								"markdownDescription": "%config.launch.trust%"
+							},
+							"settings": {
+								"type": "object",
+								"default": {
+									"model": {
+										"reasoningEffort": "${effort}"
+									}
+								},
+								"markdownDescription": "%config.qwen.launch.settings%"
+							},
+							"enterDelay": {
+								"type": "integer",
+								"minimum": 0,
+								"maximum": 60000,
+								"default": 1000,
+								"markdownDescription": "%config.launch.enterDelay%"
+							},
+							"taskDelay": {
+								"type": "integer",
+								"minimum": 0,
+								"maximum": 60000,
+								"default": 2000,
+								"markdownDescription": "%config.launch.taskDelay%"
+							},
+							"unattended": {
+								"type": "object",
+								"properties": {
+									"arguments": {
+										"type": "object",
+										"properties": {
+											"warmUp": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"connect": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"quiet": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"questions": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												},
+												"default": [
+													"--exclude-tools",
+													"ask_user_question"
+												]
+											},
+											"messages": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOn": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"yoloOff": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"model": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"effort": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"extra": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											},
+											"task": {
+												"type": [
+													"array",
+													"null"
+												],
+												"items": {
+													"type": "string"
+												}
+											}
+										},
+										"additionalProperties": false,
+										"default": {
+											"questions": [
+												"--exclude-tools",
+												"ask_user_question"
+											]
+										},
+										"markdownDescription": "%config.launch.unattended.arguments%"
+									},
+									"environment": {
+										"type": "object",
+										"additionalProperties": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
+										"default": {},
+										"markdownDescription": "%config.launch.unattended.environment%"
+									},
+									"settings": {
+										"type": "object",
+										"default": {
+											"ui": {
+												"hideTips": true,
+												"enableFollowupSuggestions": false,
+												"enableUserFeedback": false,
+												"enableWelcomeBack": false
+											},
+											"ide": {
+												"hasSeenNudge": true
+											},
+											"general": {
+												"enableAutoUpdate": false
+											}
+										},
+										"markdownDescription": "%config.launch.unattended.settings%"
+									}
+								},
+								"additionalProperties": false,
+								"default": {
+									"arguments": {
+										"questions": [
+											"--exclude-tools",
+											"ask_user_question"
+										]
+									},
+									"environment": {},
+									"settings": {
+										"ui": {
+											"hideTips": true,
+											"enableFollowupSuggestions": false,
+											"enableUserFeedback": false,
+											"enableWelcomeBack": false
+										},
+										"ide": {
+											"hasSeenNudge": true
+										},
+										"general": {
+											"enableAutoUpdate": false
+										}
+									}
+								},
+								"markdownDescription": "%config.launch.unattended%"
+							}
+						},
+						"additionalProperties": false,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.qwen.launch%"
+					}
+				}
+			},
+			{
 				"id": "facade.agents.custom",
 				"title": "%config.custom.title%",
-				"order": 6,
+				"order": 7,
 				"properties": {
 					"facade.agents.custom": {
 						"type": "object",
@@ -1815,7 +2231,8 @@
 									"claude",
 									"codex",
 									"agy",
-									"muse"
+									"muse",
+									"qwen"
 								]
 							},
 							"errorMessage": "%config.custom.name%"

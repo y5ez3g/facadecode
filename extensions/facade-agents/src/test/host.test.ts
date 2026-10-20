@@ -31,7 +31,7 @@ suite('Host: Facade: Start Agent', () => {
 		// extension's that drifts from its own shows no icon at all - nothing in the extension could catch that
 		const launchers = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'src', 'vs', 'workbench', 'contrib', 'terminalLaunchers', 'common', 'terminalLaunchers.ts'), 'utf8');
 		const registered = new Map([...launchers.matchAll(/\['(?<cli>[\w-]+)', registerIcon\('(?<icon>[\w-]+)'/g)].map(match => [match.groups?.cli, match.groups?.icon]));
-		const logos = ['claude: agent-claude', 'codex: agent-codex', 'agy: agent-antigravity', 'muse: agent-muse'];
+		const logos = ['claude: agent-claude', 'codex: agent-codex', 'agy: agent-antigravity', 'muse: agent-muse', 'qwen: agent-qwen'];
 
 		assert.deepStrictEqual({
 			builtIns: knownClis().map(cli => `${cli.id}: ${agentIconId(cli.id, false)}`),

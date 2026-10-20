@@ -9,16 +9,18 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { messageOf } from '../base/errors';
+import { canonicalFolder } from '../base/files';
 import { FileLock } from '../base/lock';
 import { antigravityCli } from '../clis/antigravity';
 import { claudeCli, claudeConfigFile, claudeDenyOf } from '../clis/claude';
-import { AgentCli, ARG_GROUPS, capabilitiesOf, connectionFor, LaunchInput, launchFor, LaunchSpec, sandboxOf, skillMarkdown } from '../clis/cli';
+import { AgentCli, ARG_GROUPS, capabilitiesOf, connectionFor, effectiveSandbox, LaunchInput, launchFor, LaunchSpec, sandboxOf, skillMarkdown } from '../clis/cli';
 import { codexCli } from '../clis/codex';
 import { MAX_DELAY_MS, MAX_TIME_S, readCliConfig, readSeconds } from '../clis/config';
 import { customAgentOf } from '../clis/custom';
 import { launchDocument, starterFacts } from '../clis/describe';
-import { launchTarget, unsafeForCmd, which } from '../clis/executable';
+import { HOME_VARIABLE, launchTarget, launchTargetOf, unsafeForCmd, which } from '../clis/executable';
 import { museCli } from '../clis/muse';
+import { qwenCli } from '../clis/qwen';
 import { installedClis, knownClis, locateCli, turnedOffClis } from '../clis/registry';
 import { mergeIntoJsonFile, trustProblem, trustTarget, writeTrust } from '../clis/trust';
 import { firstLineFor } from '../contract/prompts';
@@ -212,6 +214,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				{ removed: ['--dangerously-bypass-approvals-and-sandbox'], added: ['--sandbox', 'workspace-write'] },
 				{ removed: [], added: [] },
 				{ removed: ['--disable-sandbox'], added: [] },
+				{ removed: ['--yolo'], added: [] },
 				{ removed: ['--yolo'], added: ['--careful'] }
 			],
 			startAgents: [
@@ -219,6 +222,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				{ removed: ['--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust'], added: ['--sandbox', 'workspace-write', '--ask-for-approval', 'never', 'features.hooks=false'] },
 				{ removed: [], added: [] },
 				{ removed: ['--disable-sandbox'], added: [] },
+				{ removed: ['--yolo'], added: [] },
 				{ removed: ['--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust'], added: ['--sandbox', 'workspace-write', '--ask-for-approval', 'never', 'features.hooks=false'] }
 			]
 		});
@@ -276,7 +280,7 @@ suite('CLIs: each launch, argument by argument', () => {
 				persons: ['facade'],
 				shown: [undefined, 'with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: la13-own'],
 				allApproved: ['facade'],
-				allShown: 'with YOLO off, none turned off: this folder\'s .mcp.json has no server that you have not approved for its project'
+				allShown: 'with YOLO off, none turned off: this folder has no project MCP server that you have not approved for it'
 			});
 		} finally {
 			temp.remove();
@@ -293,7 +297,8 @@ suite('CLIs: each launch, argument by argument', () => {
 			{ args: [], files: ['7.settings.json'], injected: 0 },
 			{ args: [], files: [], injected: 0 },
 			{ args: [], files: [], injected: 0 },
-			{ args: [], files: [], injected: 0 }
+			{ args: [], files: [], injected: 0 },
+			{ args: [], files: ['7.settings.json'], injected: 0 }
 		]);
 	});
 
@@ -391,6 +396,148 @@ suite('CLIs: each launch, argument by argument', () => {
 			},
 			task: 'terminal',
 			persons: { args: ['-i', 'Reply only with ready.', '--add-dir', '/record/messages', '--add-dir', '/record/screens', '--mode', 'accept-edits', '--dangerously-skip-permissions'], env: {} }
+		});
+	});
+
+	test('Qwen Code runs in its own UI with YOLO on - every tool without asking, its sandbox off whatever the person turned on - with Facade\'s server, trusted, from a file of the run, its MCP servers connected before its first prompt, the notice of its task, goes; on the model asked for, at the effort asked for, which goes in its settings for the run, over the administrator\'s, in the scope over all its others - the system defaults left where they were; its skill goes into the folder. Started through start_agent, its question tool is taken away, and its tips, its feedback survey, its update check and its questions about the IDE and the project\'s last session are off in those settings; the person\'s own, from the window, given no effort, starts with no settings of Facade\'s and as it usually does (L4)', () => {
+		const temp = tempDir('facade-qwen-');
+		try {
+			const admin = path.join(temp.dir, 'admin', 'settings.json');
+			fs.mkdirSync(path.dirname(admin));
+			fs.writeFileSync(admin, '{\n\t// The administrator\'s\n\t"model": { "name": "qwen3.8-max" },\n\t"ui": { "hideTips": false },\n}\n');
+			const env = { [HOME_VARIABLE]: temp.dir, QWEN_CODE_SYSTEM_SETTINGS_PATH: admin };
+			const spec = qwenCli.launch(inputFor(qwenCli, { env, model: 'qwen3.8-max', effort: 'xhigh', task: '-[facade] You are @q #a7.', unattended: true }), '/bin/qwen');
+			const persons = qwenCli.launch(inputFor(qwenCli, { env, model: undefined, effort: undefined }), '/bin/qwen');
+			const yoloOff = qwenCli.launch(inputFor(qwenCli, { env, model: undefined, effort: undefined, yolo: false }), '/bin/qwen');
+			const file = (of: LaunchSpec, name: string) => JSON.parse(of.files.find(each => path.basename(each.path) === name)?.content ?? 'null');
+			const mcpConfig = path.join('/runs', '7.mcp.json');
+			const settingsFile = path.join('/runs', '7.settings.json');
+
+			assert.deepStrictEqual({ executable: spec.executable, args: spec.args, env: spec.env, cwd: spec.cwd, files: spec.files.map(each => each.path), config: file(spec, '7.mcp.json'), settings: file(spec, '7.settings.json'), injected: spec.injected, task: qwenCli.task, persons: { args: persons.args, env: persons.env, files: persons.files.map(each => each.path) }, yoloOff: yoloOff.env, admin: fs.readFileSync(admin, 'utf8') }, {
+				executable: '/bin/qwen',
+				args: [
+					'--mcp-config', mcpConfig,
+					'--exclude-tools', 'ask_user_question',
+					'--include-directories', '/record/messages', '--include-directories', '/record/screens',
+					'--yolo',
+					'--model', 'qwen3.8-max',
+					'--prompt-interactive=-[facade] You are @q #a7.'
+				],
+				env: {
+					QWEN_CODE_LEGACY_MCP_BLOCKING: '1',
+					QWEN_SANDBOX: 'false',
+					QWEN_CODE_SYSTEM_SETTINGS_PATH: settingsFile,
+					QWEN_CODE_SYSTEM_DEFAULTS_PATH: path.join(path.dirname(admin), 'system-defaults.json')
+				},
+				cwd: '/lab',
+				files: [settingsFile, mcpConfig],
+				config: { mcpServers: { facade: { command: MCP.command, args: MCP.args, env: MCP.env, timeout: 3_600_000, trust: true, alwaysLoadTools: true } } },
+				settings: { model: { name: 'qwen3.8-max', reasoningEffort: 'xhigh' }, ui: { hideTips: true, enableFollowupSuggestions: false, enableUserFeedback: false, enableWelcomeBack: false }, ide: { hasSeenNudge: true }, general: { enableAutoUpdate: false } },
+				injected: [{ path: '.agents/skills/facade/SKILL.md', content: SKILL_MD }],
+				task: 'argument',
+				persons: { args: ['--mcp-config', mcpConfig, '--include-directories', '/record/messages', '--include-directories', '/record/screens', '--yolo'], env: { QWEN_CODE_LEGACY_MCP_BLOCKING: '1', QWEN_SANDBOX: 'false' }, files: [mcpConfig] },
+				yoloOff: { QWEN_CODE_LEGACY_MCP_BLOCKING: '1' },
+				admin: '{\n\t// The administrator\'s\n\t"model": { "name": "qwen3.8-max" },\n\t"ui": { "hideTips": false },\n}\n'
+			});
+		} finally {
+			temp.remove();
+		}
+	});
+
+	test('Qwen Code\'s settings for the run go over the administrator\'s, which a start that cannot read them refuses, naming the file and leaving it as it is; with no file there, they are Facade\'s alone. A wait of Facade\'s longer than Qwen Code lets a tool call go without word - as its settings say, which go over its variable, or by default - start_agent\'s, is let go that long in those settings; a shorter one is left as it is', () => {
+		const temp = tempDir('facade-qwen-');
+		try {
+			const admin = path.join(temp.dir, 'settings.json');
+			const user = path.join(temp.dir, '.qwen', 'settings.json');
+			fs.writeFileSync(admin, '{ not json');
+			fs.mkdirSync(path.dirname(user));
+			const env = { [HOME_VARIABLE]: temp.dir, QWEN_CODE_SYSTEM_SETTINGS_PATH: path.join(temp.dir, 'none.json') };
+			const refused = outcome(() => qwenCli.launch(inputFor(qwenCli, { env: { ...env, QWEN_CODE_SYSTEM_SETTINGS_PATH: admin } }), '/bin/qwen'));
+			const none = qwenCli.launch(inputFor(qwenCli, { env }), '/bin/qwen');
+			const waitingOf = (waitMs: string, theirs: object = {}, variables: object = {}) => {
+				fs.writeFileSync(user, JSON.stringify(theirs));
+				const spec = qwenCli.launch(inputFor(qwenCli, { effort: undefined, env: { ...env, ...variables }, connection: { ...CONNECTION, values: { ...CONNECTION.values, waitMs } } }), '/bin/qwen');
+				const settings = spec.files.find(each => path.basename(each.path) === '7.settings.json');
+				return settings ? JSON.parse(settings.content).mcp?.toolIdleTimeoutMs : undefined;
+			};
+
+			assert.deepStrictEqual({
+				refused: [refused.startsWith(`${admin} `), refused.includes('left the file unchanged'), refused.includes('facade.agents.qwen.launch')],
+				left: fs.readFileSync(admin, 'utf8'),
+				none: JSON.parse(none.files[0].content),
+				waits: [waitingOf('120000'), waitingOf('240000'), waitingOf('250000'), waitingOf('3600000')],
+				theirs: [waitingOf('120000', { mcp: { toolIdleTimeoutMs: 60_000 } }), waitingOf('250000', { mcp: { toolIdleTimeoutMs: 3_600_000 } }), waitingOf('120000', {}, { QWEN_CODE_MCP_TOOL_IDLE_TIMEOUT_MS: '60000' })]
+			}, {
+				refused: [true, true, true],
+				left: '{ not json',
+				none: { model: { reasoningEffort: 'high' } },
+				waits: [undefined, undefined, 310_000, 3_600_000],
+				theirs: [180_000, undefined, 180_000]
+			});
+		} finally {
+			temp.remove();
+		}
+	});
+
+	test('Qwen Code\'s settings for the run go over the administrator\'s as it merges one scope over another: a list it adds together has both - whole, or each entry once - an object it merges one level deep has the launch\'s keys in place of theirs, any other value is the launch\'s, and objects are merged key by key', () => {
+		const temp = tempDir('facade-qwen-');
+		try {
+			const admin = path.join(temp.dir, 'admin.json');
+			fs.writeFileSync(admin, JSON.stringify({
+				permissions: { deny: ['run_shell_command'] },
+				mcp: { excluded: ['old'] },
+				mcpServers: { a: { command: 'a', args: ['1'] }, b: { command: 'b' } },
+				tools: { sandbox: true },
+				context: { includeDirectories: ['/x'] },
+				hooks: { Stop: [{ hooks: [] }] },
+				ui: { hideTips: false }
+			}));
+			const config = readCliConfig(qwenCli, name => name === 'launch' ? {
+				settings: {
+					permissions: { deny: ['run_shell_command', 'web_fetch'] },
+					mcp: { excluded: ['new'] },
+					mcpServers: { a: { command: 'a2' } },
+					tools: { sandbox: false },
+					context: { includeDirectories: ['/y'] },
+					hooks: { Stop: [{ hooks: [{ type: 'command', command: 'x' }] }] },
+					ui: { theme: 'Default' }
+				}
+			} : undefined);
+			const spec = qwenCli.launch(inputFor(qwenCli, { config, env: { [HOME_VARIABLE]: temp.dir, QWEN_CODE_SYSTEM_SETTINGS_PATH: admin } }), '/bin/qwen');
+
+			assert.deepStrictEqual(JSON.parse(spec.files.find(each => path.basename(each.path) === '7.settings.json')?.content ?? 'null'), {
+				permissions: { deny: ['run_shell_command', 'web_fetch'] },
+				mcp: { excluded: ['old', 'new'] },
+				mcpServers: { a: { command: 'a2' }, b: { command: 'b' } },
+				tools: { sandbox: false },
+				context: { includeDirectories: ['/x', '/y'] },
+				hooks: { Stop: [{ hooks: [] }, { hooks: [{ type: 'command', command: 'x' }] }] },
+				ui: { hideTips: false, theme: 'Default' },
+				model: { reasoningEffort: 'high' }
+			});
+		} finally {
+			temp.remove();
+		}
+	});
+
+	test('Qwen Code takes a model by its option and an effort in its settings for the run, as no option of its takes one: both are offered to agents, and the effort is withheld where the person took that setting out; a value that names neither is the settings\' own; Claude Code\'s settings, which take none, offer none (L9)', () => {
+		const withoutEffort = readCliConfig(qwenCli, name => name === 'launch' ? { settings: { model: { reasoningEffort: null } } } : undefined);
+		const fixed = readCliConfig(qwenCli, name => name === 'launch' ? { settings: { model: { reasoningEffort: 'low' }, general: { note: '${folder}' } } } : undefined);
+		const claudeInSettings = readCliConfig(claudeCli, name => name === 'launch' ? { arguments: { model: null }, settings: { model: '${model}' } } : undefined);
+		const settingsOf = (config = qwenCli.defaults) => JSON.parse(qwenCli.launch(inputFor(qwenCli, { config, env: { QWEN_CODE_SYSTEM_SETTINGS_PATH: path.join(os.tmpdir(), 'facade-qwen-none', 'settings.json') } }), '/bin/qwen').files.find(file => path.basename(file.path) === '7.settings.json')?.content ?? 'null');
+
+		assert.deepStrictEqual({
+			maintained: capabilitiesOf(qwenCli, launchFor(qwenCli.defaults, true)),
+			withoutEffort: capabilitiesOf(qwenCli, launchFor(withoutEffort, true)),
+			others: knownClis().filter(cli => cli !== qwenCli).map(cli => capabilitiesOf(cli, launchFor(cli.defaults, true)).effort),
+			claudeInSettings: capabilitiesOf(claudeCli, launchFor(claudeInSettings, true)).model,
+			settings: [settingsOf(), settingsOf(withoutEffort), settingsOf(fixed)]
+		}, {
+			maintained: { integration: true, task: true, model: true, effort: true },
+			withoutEffort: { integration: true, task: true, model: true, effort: false },
+			others: [true, true, true, true],
+			claudeInSettings: false,
+			settings: [{ model: { reasoningEffort: 'high' } }, null, { model: { reasoningEffort: 'low' }, general: { note: '${folder}' } }]
 		});
 	});
 });
@@ -511,7 +658,8 @@ suite('CLIs: how the person has Facade start each one', () => {
 			claude: [true, false],
 			codex: [true, false],
 			agy: [true, true],
-			muse: [true, true]
+			muse: [true, true],
+			qwen: [true, false]
 		});
 	});
 
@@ -558,7 +706,8 @@ suite('CLIs: how the person has Facade start each one', () => {
 			claude: { server: 'its own', ...each },
 			codex: { server: 'its own', ...each },
 			agy: { server: 'shared', ...each },
-			muse: { server: 'shared', ...each }
+			muse: { server: 'shared', ...each },
+			qwen: { server: 'its own', ...each }
 		});
 	});
 
@@ -587,7 +736,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 				scopes: [declared('enabled')?.scope, declared('path')?.scope, launch?.scope],
 				parts: Object.fromEntries(Object.entries(parts).map(([part, schema]) => [part, schema.default])),
 				groups: Object.fromEntries(Object.entries(parts.arguments?.properties ?? {}).map(([group, schema]) => [group, schema.default])),
-				unattended: Object.fromEntries(Object.entries(parts.unattended?.properties ?? {}).map(([part, schema]) => [part, part === 'arguments' ? Object.fromEntries(Object.entries(schema.properties ?? {}).map(([group, each]) => [group, each.default])) : schema.default])),
+				unattended: Object.fromEntries(Object.entries(parts.unattended?.properties ?? {}).map(([part, schema]) => [part, part === 'arguments' ? { whole: schema.default, groups: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([group, each]) => [group, each.default])) } : schema.default])),
 				trustTakesBoth: parts.trust?.dependencies,
 				delays: [parts.enterDelay?.maximum, parts.taskDelay?.maximum],
 				described: [text(launch?.markdownDescription).includes('**Agents: Show Agent Launch**'), text(launch?.markdownDescription).includes('\n')]
@@ -606,7 +755,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 			category: texts['command.category'],
 			seen
 		}, {
-			sections: ['facade.agents', 'facade.agents.claude', 'facade.agents.codex', 'facade.agents.antigravity', 'facade.agents.muse', 'facade.agents.custom'],
+			sections: ['facade.agents', 'facade.agents.claude', 'facade.agents.codex', 'facade.agents.antigravity', 'facade.agents.muse', 'facade.agents.qwen', 'facade.agents.custom'],
 			own: ['facade.agents.yolo', 'facade.orchestration.enabled', 'facade.agents.timeout'],
 			switches: [true, undefined, true, undefined],
 			timeout: [START_TIMEOUT_MS / 1000, MAX_TIME_S, undefined, true],
@@ -622,8 +771,8 @@ suite('CLIs: how the person has Facade start each one', () => {
 				parts: { arguments: launch.arguments, environment: launch.environment, trust: launch.trust, ...(launch.settings ? { settings: launch.settings } : {}), enterDelay: launch.enterDelay, taskDelay: launch.taskDelay, unattended: launch.unattended },
 				// A CLI told of its task in its terminal takes no task group.
 				groups: Object.fromEntries(ARG_GROUPS.filter(group => group !== 'task' || task === 'argument').map(group => [group, launch.arguments[group]])),
-				// Its unattended part, part by part, each group of it as completion fills it in (L4)
-				unattended: { arguments: Object.fromEntries(ARG_GROUPS.filter(group => group !== 'task' || task === 'argument').map(group => [group, launch.unattended?.arguments[group]])), environment: launch.unattended?.environment, ...(launch.settings ? { settings: launch.unattended?.settings } : {}) },
+				// Its unattended part, part by part - its arguments whole and each group of them - as completion fills it in (L4)
+				unattended: { arguments: { whole: launch.unattended?.arguments, groups: Object.fromEntries(ARG_GROUPS.filter(group => group !== 'task' || task === 'argument').map(group => [group, launch.unattended?.arguments[group]])) }, environment: launch.unattended?.environment, ...(launch.settings ? { settings: launch.unattended?.settings } : {}) },
 				// One given its trust in its arguments has no file of Facade's to complete one of the person's.
 				trustTakesBoth: launch.trust?.file === undefined ? { file: ['merge'], merge: ['file'] } : undefined,
 				delays: [MAX_DELAY_MS, MAX_DELAY_MS],
@@ -637,14 +786,14 @@ suite('CLIs: how the person has Facade start each one', () => {
 		const names = sections.find(each => each.id === 'facade.agents.custom')?.properties['facade.agents.custom']?.propertyNames;
 		const bySchema = (name: string) => new RegExp(names?.pattern ?? '').test(name) && !(names?.not?.enum ?? []).includes(name);
 		const builtIns = new Set(knownClis().map(cli => cli.id));
-		const candidates = ['bot', 'my.bot_2-x', '7up', 'a'.repeat(40), 'a'.repeat(41), 'My Bot', 'Bot', '-bot', '.bot', '', 'claude', 'codex', 'agy', 'muse', 'antigravity', 'human', 'you', 'me', 'facade', 'all', 'everyone', 'init', 'kernel'];
+		const candidates = ['bot', 'my.bot_2-x', '7up', 'a'.repeat(40), 'a'.repeat(41), 'My Bot', 'Bot', '-bot', '.bot', '', 'claude', 'codex', 'agy', 'muse', 'qwen', 'antigravity', 'human', 'you', 'me', 'facade', 'all', 'everyone', 'init', 'kernel'];
 
 		assert.deepStrictEqual({
 			names: candidates.map(name => [name, bySchema(name)]),
 			says: texts[names?.errorMessage?.replace(/^%|%$/g, '') ?? '']
 		}, {
 			names: candidates.map(name => [name, customAgentNameProblem(name, builtIns) === undefined]),
-			says: 'A custom agent\'s name must be 1 to 40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit. It cannot be a built-in agent\'s ID (claude, codex, agy, muse) or a reserved name (human, you, me, facade, all, everyone, init, kernel).'
+			says: 'A custom agent\'s name must be 1 to 40 lowercase letters, digits, dots, dashes, or underscores, starting with a letter or digit. It cannot be a built-in agent\'s ID (claude, codex, agy, muse, qwen) or a reserved name (human, you, me, facade, all, everyone, init, kernel).'
 		});
 	});
 
@@ -689,7 +838,7 @@ suite('CLIs: how the person has Facade start each one', () => {
 				claude: {
 					program: 'C:/tools/claude.cmd', throughCmd: true, offered: true, task: 'argument',
 					whenYouStartIt: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'denied: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'asks you, as its CLI does', questions: yoursToAnswer },
-					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'denied: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'edits in its folder are allowed without asking; anything else that would ask is denied without asking', questions: 'removed by its launch\'s questions group: it asks through Facade messages', projectMcpServers: 'with YOLO off, the servers in its folder\'s .mcp.json that you have not approved for its project are turned off for the run, so that it does not stop to ask about them' },
+					throughStartAgent: { sandbox: { yoloOn: 'off', yoloOff: sandboxOff }, facadeTools: 'denied: /home/.claude/settings.json denies mcp__facade', approvalsWithYoloOff: 'edits in its folder are allowed without asking; anything else that would ask is denied without asking', questions: 'removed by its launch\'s questions group: it asks through Facade messages', projectMcpServers: 'with YOLO off, the project MCP servers in its folder that you have not approved for it are turned off for the run, so that it does not stop to ask about them' },
 					trust: { file: '/home/.claude.json', merge: { projects: { '/lab': { hasTrustDialogAccepted: true } } }, kept: 'permanently: Facade never removes it' }, wrongSettings: ['Unknown field \'extra\' in facade.agents.claude.launch. Claude Code\'s launch accepts: arguments, environment, trust, settings, enterDelay, taskDelay, unattended'], verified: '2.1.296', launch: JSON.parse(JSON.stringify(config.launch)), yourChanges: yours
 				},
 				codex: {
@@ -737,6 +886,29 @@ suite('CLIs: how the person has Facade start each one', () => {
 			emptied: [yours, 'kept: your launch empties its questions group, so it can show a question that waits for someone to choose an answer'],
 			muse: [yours, 'kept: no launch can remove its question tool, so the instructions it gets at start tell it to ask through Facade messages; if asked for that tool by name, it can still show a question'],
 			custom: ['as set by your launch\'s questions group', 'as set by your launch\'s questions group']
+		});
+	});
+
+	test('Show Agent Launch says that Qwen Code started through start_agent with YOLO off asks as its CLI does - it has no setting that denies without asking - while Facade\'s tools go unasked, and the project MCP servers the person has not approved are turned off for the run; and that its own sandbox is on with each YOLO the person\'s configuration of it or their launch turns it on with, for that starter (L4)', () => {
+		const own = 'tools.sandbox in /home/.qwen/settings.json';
+		const theirs = 'QWEN_SANDBOX=docker in its environment';
+		const document = launchDocument({ folder: '/lab', yolo: false, framework: true, clis: [{ cli: qwenCli, config: qwenCli.defaults, yours: undefined, program: { target: { executable: '/bin/qwen', args: [], throughCmd: false } }, trust: { kind: 'none' }, ownSandbox: { yoloOff: own }, throughStartAgent: { trust: { kind: 'none' }, ownSandbox: { yoloOn: theirs }, serversOff: ['fresh'] } }] });
+		const { whenYouStartIt, throughStartAgent } = JSON.parse(document.split('\n').filter(line => !line.startsWith('// ')).join('\n')).qwen;
+
+		assert.deepStrictEqual({ whenYouStartIt, throughStartAgent }, {
+			whenYouStartIt: {
+				sandbox: { yoloOn: 'off', yoloOff: `on: ${own}; Facade leaves it as it is and has not verified that its tools connect from inside it` },
+				facadeTools: 'never asked: its launch exempts only Facade\'s server from approval',
+				approvalsWithYoloOff: 'asks you, as its CLI does',
+				questions: 'kept: it can show a question for you to answer, as it does outside Facade'
+			},
+			throughStartAgent: {
+				sandbox: { yoloOn: `on: ${theirs}; Facade leaves it as it is and has not verified that its tools connect from inside it`, yoloOff: 'off' },
+				facadeTools: 'never asked: its launch exempts only Facade\'s server from approval',
+				approvalsWithYoloOff: 'asks, as its CLI does: it has no setting that denies without asking, so with no one watching it can wait at an approval prompt',
+				questions: 'removed by its launch\'s questions group: it asks through Facade messages',
+				projectMcpServers: 'with YOLO off, turned off for the run so that it does not stop to ask about them, since you have not approved them for this project: fresh'
+			}
 		});
 	});
 
@@ -1132,6 +1304,36 @@ suite('CLIs: the person\'s trust, where a CLI keeps it in a file', () => {
 			'Setting \'facade.agents.antigravity.launch.trust.file\' must be an absolute path; received \'~agy/trusted.json\'. For example, use a path under ${home}.'
 		]);
 	});
+
+	test('Qwen Code\'s trust in a folder is merged into its trusted folders as an entry for that very folder - it trusts the folders inside one, not the worktrees beside it - kept where it reads it: in QWEN_HOME, a ~ in that the home folder and a relative one from the folder the agent starts in, else in .qwen in the home folder; or in the file QWEN_CODE_TRUSTED_FOLDERS_PATH names - each, where its environment has none, as it takes it from the .env of its own folder, of the home folder, or of the folder a QWEN_HOME found so names', () => {
+		const lab = path.join(temp.dir, 'Lab');
+		fs.mkdirSync(lab);
+		const { home, env } = homeIn('home');
+		const targetOf = (more: object) => trustTarget(qwenCli, qwenCli.defaults, { folder: lab, repository: lab }, { ...env, ...more });
+		const entry = { [canonicalFolder(lab)]: 'TRUST_FOLDER' };
+		const dotenv = (file: string, text: string) => {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, text);
+		};
+		const set = [targetOf({}), targetOf({ QWEN_HOME: '~/qh' }), targetOf({ QWEN_HOME: 'rel' }), targetOf({ QWEN_CODE_TRUSTED_FOLDERS_PATH: path.join(temp.dir, 'trust.json') })];
+		dotenv(path.join(home, '.env'), '# the home folder\'s\nexport QWEN_HOME=~/fromenv\n');
+		const fromHomeEnv = targetOf({});
+		const setWins = targetOf({ QWEN_HOME: '~/qh' });
+		dotenv(path.join(home, 'fromenv', '.env'), `QWEN_CODE_TRUSTED_FOLDERS_PATH='${path.join(temp.dir, 'found.json')}'\n`);
+		const fromItsOwn = targetOf({});
+
+		assert.deepStrictEqual({ set, fromHomeEnv, setWins, fromItsOwn }, {
+			set: [
+				{ file: path.join(home, '.qwen', 'trustedFolders.json'), entry },
+				{ file: path.join(home, 'qh', 'trustedFolders.json'), entry },
+				{ file: path.join(lab, 'rel', 'trustedFolders.json'), entry },
+				{ file: path.join(temp.dir, 'trust.json'), entry }
+			],
+			fromHomeEnv: { file: path.join(home, 'fromenv', 'trustedFolders.json'), entry },
+			setWins: { file: path.join(home, 'qh', 'trustedFolders.json'), entry },
+			fromItsOwn: { file: path.join(temp.dir, 'found.json'), entry }
+		});
+	});
 });
 
 suite('CLIs: the person\'s own configuration a launch would mix Facade\'s into', () => {
@@ -1186,7 +1388,7 @@ suite('CLIs: the person\'s own configuration a launch would mix Facade\'s into',
 		const user = path.join(home, 'config.toml');
 		const named = (text: string, args = withServer) => {
 			fs.writeFileSync(user, text);
-			return codexCli.conflict?.(args, folder, env) !== undefined;
+			return codexCli.conflict?.(args, folder, env, codexCli.defaults) !== undefined;
 		};
 
 		const conflicts = {
@@ -1204,11 +1406,219 @@ suite('CLIs: the person\'s own configuration a launch would mix Facade\'s into',
 		fs.writeFileSync(user, 'model = "o4"\n');
 		fs.mkdirSync(path.join(repository, '.codex'));
 		fs.writeFileSync(path.join(repository, '.codex', 'config.toml'), '[mcp_servers]\nfacade.url = "http://localhost:9"\n');
-		const project = codexCli.conflict?.(withServer, folder, env);
+		const project = codexCli.conflict?.(withServer, folder, env, codexCli.defaults);
 
 		assert.deepStrictEqual({ conflicts, project }, {
 			conflicts: { table: true, subtable: true, dotted: true, underServers: true, inline: true, arrayOfTables: true, likeIt: false, inAString: false, noToml: false, frameworkOff: false },
 			project: `${path.join(repository, '.codex', 'config.toml')} already defines an MCP server named facade. Codex would merge Facade's server into that entry. Rename or remove the existing entry.`
+		});
+	});
+
+	/** Qwen Code's settings files in the folder of a test - the administrator's, the person's and the project's - and the environment that has it read them. */
+	function qwenPlace() {
+		const home = path.join(temp.dir, 'home');
+		const folder = path.join(temp.dir, 'lab');
+		const admin = path.join(temp.dir, 'admin', 'settings.json');
+		const user = path.join(home, '.qwen', 'settings.json');
+		const project = path.join(folder, '.qwen', 'settings.json');
+		for (const file of [admin, user, project]) {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+		}
+		const settings = (files: { readonly [file: string]: object }) => {
+			for (const file of [admin, user, project]) {
+				fs.writeFileSync(file, JSON.stringify(files[file] ?? {}));
+			}
+		};
+		return { folder, admin, user, project, settings, env: { [HOME_VARIABLE]: home, QWEN_CODE_SYSTEM_SETTINGS_PATH: admin } };
+	}
+
+	test('Qwen Code: what would keep Facade\'s server from it, as it reads it for the launch, is named where it is - the person\'s own option that turns it off, or that allows servers without it, in place of the settings\' lists; mcp.excluded naming it in any scope, by its name now or an older one; mcp.allowed of all its scopes together without it, an empty one too; its tool sandbox, which its project cannot set, with which it refuses to start - the launch\'s own settings counted over the administrator\'s, a list of theirs added to the administrator\'s; a launch without Facade\'s server names none (O9)', () => {
+		const { folder, admin, user, project, settings, env } = qwenPlace();
+		const withServer = qwenCli.launch(inputFor(qwenCli, { folder, effort: undefined, env }), '/bin/qwen').args;
+		const without = qwenCli.launch(inputFor(qwenCli, { folder, effort: undefined, env, connection: undefined }), '/bin/qwen').args;
+		const launchWith = (own: object) => readCliConfig(qwenCli, name => name === 'launch' ? { settings: own } : undefined);
+		const conflictWith = (files: { readonly [file: string]: object }, args: readonly string[] = withServer, config = qwenCli.defaults) => {
+			settings(files);
+			return qwenCli.conflict?.(args, folder, env, config);
+		};
+		const executionSandbox = { executionSandbox: { filesystem: 'workspace-write', network: 'open' } };
+		const sandboxed = `${user} sets tools.executionSandbox, with which Qwen Code refuses to start with Facade's MCP server, task and folders. Remove that setting to use Qwen Code as a Facade agent.`;
+
+		assert.deepStrictEqual({
+			none: conflictWith({}),
+			excluded: conflictWith({ [user]: { mcp: { excluded: ['fac*'] } } }),
+			excludedOlder: conflictWith({ [project]: { excludeMCPServers: ['facade'] } }) !== undefined,
+			allowedWithout: conflictWith({ [admin]: { mcp: { allowed: ['github'] } } }),
+			allowedTogether: conflictWith({ [admin]: { mcp: { allowed: ['github'] } }, [project]: { mcp: { allowed: ['facade'] } } }),
+			allowedEmpty: conflictWith({ [user]: { mcp: { allowed: [] } } }),
+			sandbox: conflictWith({ [user]: { tools: executionSandbox } }),
+			sandboxNotValid: conflictWith({ [user]: { tools: { executionSandbox: true } } }),
+			projectSandbox: conflictWith({ [project]: { tools: executionSandbox } }),
+			frameworkOff: conflictWith({ [user]: { mcp: { excluded: ['facade'] } } }, without),
+			theirOption: conflictWith({ [user]: { mcp: { excluded: ['facade'] } } }, [...withServer, '--allowed-mcp-server-names', 'github', 'facade']),
+			theirOptionWithout: conflictWith({}, [...withServer, '--allowedMcpServerNames=github,gitlab']),
+			theirOptionAndSandbox: conflictWith({ [user]: { tools: executionSandbox } }, [...withServer, '--allowed-mcp-server-names', 'fac*']),
+			turnedOff: conflictWith({}, [...withServer, '--disable-mcp-server', 'github,facade']),
+			inLaunch: conflictWith({}, withServer, launchWith({ mcp: { excluded: ['facade'] } })),
+			launchListAdded: conflictWith({ [admin]: { mcp: { excluded: ['facade'] } } }, withServer, launchWith({ mcp: { excluded: [] } })),
+			launchBesideAdmin: conflictWith({ [admin]: { mcp: { excluded: ['facade'] } } }, withServer, launchWith({ ui: { hideTips: true } }))
+		}, {
+			none: undefined,
+			excluded: `${user} excludes the MCP server named facade (mcp.excluded contains "fac*"), so Qwen Code would not load Facade tools. Remove that entry.`,
+			excludedOlder: true,
+			allowedWithout: `${admin} limits Qwen Code to the MCP servers in mcp.allowed, which does not include facade, so Qwen Code would not load Facade tools. Add "facade" to mcp.allowed.`,
+			allowedTogether: undefined,
+			allowedEmpty: `${user} limits Qwen Code to the MCP servers in mcp.allowed, which does not include facade, so Qwen Code would not load Facade tools. Add "facade" to mcp.allowed.`,
+			sandbox: sandboxed,
+			sandboxNotValid: sandboxed,
+			projectSandbox: undefined,
+			frameworkOff: undefined,
+			theirOption: undefined,
+			theirOptionWithout: 'facade.agents.qwen.launch.arguments limits Qwen Code to the MCP servers in --allowed-mcp-server-names, which does not include facade, so Qwen Code would not load Facade tools. Add "facade" to --allowed-mcp-server-names.',
+			theirOptionAndSandbox: sandboxed,
+			turnedOff: 'facade.agents.qwen.launch.arguments turns off the MCP server named facade (--disable-mcp-server facade), so Qwen Code would not load Facade tools. Remove that value.',
+			inLaunch: 'facade.agents.qwen.launch.settings excludes the MCP server named facade (mcp.excluded contains "facade"), so Qwen Code would not load Facade tools. Remove that entry.',
+			launchListAdded: `${admin} excludes the MCP server named facade (mcp.excluded contains "facade"), so Qwen Code would not load Facade tools. Remove that entry.`,
+			launchBesideAdmin: `${admin} excludes the MCP server named facade (mcp.excluded contains "facade"), so Qwen Code would not load Facade tools. Remove that entry.`
+		});
+	});
+
+	test('Qwen Code: a rule that denies one of Facade\'s tools - in its launch\'s settings, or in the administrator\'s, the person\'s own or the project\'s settings, by its name now or an older one, or by a pattern that takes them in - is found, where and which; one for other tools, or none, is not; a list of the launch\'s settings is added to the administrator\'s (L4, rule 4)', () => {
+		const { folder, admin, user, project, settings, env } = qwenPlace();
+		const launchWith = (own: object) => readCliConfig(qwenCli, name => name === 'launch' ? { settings: own } : undefined);
+		const deniedBy = (files: { readonly [file: string]: object }, config = qwenCli.defaults) => {
+			settings(files);
+			return qwenCli.exemptionOverride?.(config, env, folder);
+		};
+
+		assert.deepStrictEqual({
+			none: deniedBy({}),
+			others: deniedBy({ [user]: { permissions: { deny: ['run_shell_command', 'mcp__github__*'] } } }),
+			user: deniedBy({ [user]: { permissions: { deny: ['mcp__facade__*'] } } }),
+			older: deniedBy({ [project]: { tools: { exclude: ['mcp__facade__send_message'] } } }),
+			pattern: deniedBy({ [admin]: { permissions: { deny: ['mcp__*'] } } }),
+			launch: deniedBy({}, launchWith({ permissions: { deny: ['mcp__facade'] } })),
+			launchListAdded: deniedBy({ [admin]: { permissions: { deny: ['mcp__*'] } } }, launchWith({ permissions: { deny: [] } }))
+		}, {
+			none: undefined,
+			others: undefined,
+			user: `${user} denies mcp__facade__*`,
+			older: `${project} denies mcp__facade__send_message`,
+			pattern: `${admin} denies mcp__*`,
+			launch: 'facade.agents.qwen.launch.settings denies mcp__facade',
+			launchListAdded: `${admin} denies mcp__*`
+		});
+	});
+
+	test('Qwen Code: its own sandbox is found where a launch leaves it on, as it decides it - by QWEN_SANDBOX in the environment it starts with, Facade\'s false with YOLO on under the launch\'s own, or by tools.sandbox in the highest scope that sets it, never the project\'s, the launch\'s own settings over the administrator\'s - and the agent\'s sandbox is said on; QWEN_SANDBOX set to false, or the sandbox it runs in already, leaves none (L4)', () => {
+		const { folder, admin, user, project, settings, env } = qwenPlace();
+		const launchWith = (launch: object) => readCliConfig(qwenCli, name => name === 'launch' ? launch : undefined);
+		const ownOf = (files: { readonly [file: string]: object }, more: object = {}, config = qwenCli.defaults, yolo = false) => {
+			settings(files);
+			return qwenCli.ownSandbox?.(config, yolo, { ...env, ...more }, folder);
+		};
+		const theirs = launchWith({ environment: { QWEN_SANDBOX: 'docker' } });
+		const uses = (yolo: boolean) => ({ framework: true, yolo, model: false, effort: false, task: false, trust: true });
+		const found = {
+			none: ownOf({}),
+			byEnvironment: ownOf({}, { QWEN_SANDBOX: 'docker' }),
+			offByEnvironment: ownOf({ [user]: { tools: { sandbox: true } } }, { QWEN_SANDBOX: 'false' }),
+			user: ownOf({ [user]: { tools: { sandbox: 'podman' } } }),
+			adminOverUser: ownOf({ [user]: { tools: { sandbox: true } }, [admin]: { tools: { sandbox: false } } }),
+			project: ownOf({ [project]: { tools: { sandbox: true } } }),
+			inOne: ownOf({ [user]: { tools: { sandbox: true } } }, { SANDBOX: 'qwen-code-sandbox' }),
+			yoloOn: ownOf({ [user]: { tools: { sandbox: true } } }, {}, qwenCli.defaults, true),
+			yoloOnTheirs: ownOf({}, {}, theirs, true),
+			inLaunch: ownOf({}, {}, launchWith({ settings: { tools: { sandbox: true } } })),
+			launchOverAdmin: ownOf({ [admin]: { tools: { sandbox: true } } }, {}, launchWith({ settings: { tools: { sandbox: false } } }))
+		};
+		settings({ [user]: { tools: { sandbox: true } } });
+		const effective = [false, true].map(yolo => effectiveSandbox(qwenCli, qwenCli.defaults, uses(yolo), env, folder));
+		settings({});
+		const without = effectiveSandbox(qwenCli, qwenCli.defaults, uses(false), env, folder);
+		const theirsWithYolo = effectiveSandbox(qwenCli, theirs, uses(true), env, folder);
+
+		assert.deepStrictEqual({ found, effective, without, theirsWithYolo }, {
+			found: {
+				none: undefined,
+				byEnvironment: 'QWEN_SANDBOX=docker in its environment',
+				offByEnvironment: undefined,
+				user: `tools.sandbox in ${user}`,
+				adminOverUser: undefined,
+				project: undefined,
+				inOne: undefined,
+				yoloOn: undefined,
+				yoloOnTheirs: 'QWEN_SANDBOX=docker in its environment',
+				inLaunch: 'tools.sandbox in facade.agents.qwen.launch.settings',
+				launchOverAdmin: undefined
+			},
+			effective: ['on', 'off'],
+			without: 'off',
+			theirsWithYolo: 'on'
+		});
+	});
+
+	test('Qwen Code: with YOLO off, one started through start_agent runs without the servers of its folder\'s project MCP configuration that the person has not decided on for the folder - its .mcp.json\'s, written as Claude Code reads one, and its project settings\', their variables expanded - which it would stop to ask about, and a doorbell\'s Enter would approve: they are rejected for the run in a copy of the person\'s approvals, theirs left as they are, each by the hash Qwen Code binds an approval to. Those approved or rejected, Facade\'s own and the administrator\'s it runs as it would; the person\'s own, and one with YOLO on, are not asked (L4, rule 3)', () => {
+		const { folder, admin, project, settings, env } = qwenPlace();
+		const home = path.join(temp.dir, 'home');
+		const approvals = path.join(home, '.qwen', 'mcpApprovals.json');
+		const keyOf = (dir: string) => process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir);
+		// Hashes from Qwen Code's own hashMcpServerConfig (0.25.3)
+		const theirs = JSON.stringify({
+			[path.resolve(folder)]: {
+				approved: { hash: 'eb68c8fa4f95591509ad4b0ed440617b79113cabe813f7f834b3869dd27b85fa', status: 'approved' },
+				stale: { hash: 'of an older configuration', status: 'approved' },
+				rejected: { hash: '3cfe984956dfac02d7b0e1663e7b5861c39daaef98c0d67137bcf9c15eea097f', status: 'rejected' }
+			},
+			[path.resolve('/elsewhere')]: { other: { hash: 'x', status: 'approved' } }
+		});
+		fs.writeFileSync(approvals, theirs);
+		fs.writeFileSync(path.join(folder, '.mcp.json'), JSON.stringify({
+			mcpServers: {
+				approved: { type: 'stdio', command: 'npx', args: ['-y', 'pkg'] },
+				stale: { command: 'node', args: ['server.js', '--port', '9'], env: { TOKEN: 'x', A: '1' }, description: 'not part of the hash' },
+				rejected: { type: 'http', url: 'https://example.invalid/mcp', headers: { Z: '1', A: '2' } },
+				fresh: { type: 'sse', url: 'https://example.invalid/sse' },
+				facade: { command: 'facade' },
+				administered: { command: 'z' }
+			}
+		}));
+		settings({ [admin]: { mcpServers: { administered: { command: 'z' } } }, [project]: { mcpServers: { inSettings: { env: { A: '${TOKEN}' }, command: '$TOOL_BIN/x' } } } });
+		const config = readCliConfig(qwenCli, name => name === 'launch' ? { environment: { QWEN_CODE_SYSTEM_SETTINGS_PATH: admin, TOOL_BIN: '/opt/bin', TOKEN: 't' } } : undefined);
+		const place = { folder, repository: folder };
+		const offFor = (yolo: boolean, unattended: boolean) => qwenCli.projectServersOff?.(launchFor(config, unattended), place, home, yolo, unattended);
+		const launched = (yolo: boolean) => qwenCli.launch(inputFor(qwenCli, { folder, config, env: { ...env, ...config.launch.environment }, yolo, unattended: true }), '/bin/qwen');
+		const run = launched(false);
+		const withYolo = launched(true);
+		const runApprovals = run.files.find(each => path.basename(each.path) === '7.approvals.json');
+
+		assert.deepStrictEqual({
+			off: offFor(false, true),
+			withYolo: offFor(true, true),
+			persons: offFor(false, false),
+			shown: starterFacts(qwenCli, config, place, { [HOME_VARIABLE]: home }, true).serversOff,
+			env: run.env.QWEN_CODE_MCP_APPROVALS_PATH,
+			runApprovals: JSON.parse(runApprovals?.content ?? 'null'),
+			left: fs.readFileSync(approvals, 'utf8'),
+			yoloOn: [withYolo.env.QWEN_CODE_MCP_APPROVALS_PATH, withYolo.files.some(each => path.basename(each.path) === '7.approvals.json')]
+		}, {
+			off: ['stale', 'fresh', 'inSettings'],
+			withYolo: [],
+			persons: [],
+			shown: ['stale', 'fresh', 'inSettings'],
+			env: path.join('/runs', '7.approvals.json'),
+			runApprovals: {
+				[keyOf('/elsewhere')]: { other: { hash: 'x', status: 'approved' } },
+				[keyOf(folder)]: {
+					approved: { hash: 'eb68c8fa4f95591509ad4b0ed440617b79113cabe813f7f834b3869dd27b85fa', status: 'approved' },
+					stale: { hash: '52e27d506f065d14202a170923d57cd557bdc9aa7503e54ddcb78a426f051a64', status: 'rejected' },
+					rejected: { hash: '3cfe984956dfac02d7b0e1663e7b5861c39daaef98c0d67137bcf9c15eea097f', status: 'rejected' },
+					fresh: { hash: '61d5c0dd38bca97eb7f471424f8aa3fc95a765dca8aefb522adb17a0fcbd2ee7', status: 'rejected' },
+					inSettings: { hash: 'f307e0ffb6f9f91e5e4fa242c25b3590eebf2354aa0b82582a159f05ea247e9f', status: 'rejected' }
+				}
+			},
+			left: theirs,
+			yoloOn: [undefined, false]
 		});
 	});
 });
@@ -1321,6 +1731,36 @@ suite('CLIs: starting one without cmd.exe reading its arguments', () => {
 
 		assert.deepStrictEqual({ safe: safe.map(unsafeForCmd), unsafe: unsafe.map(unsafeForCmd) }, { safe: safe.map(() => false), unsafe: unsafe.map(() => true) });
 	});
+
+	test('Qwen Code\'s own Windows installer is run as its launcher would run it - the Node it brings with the package\'s script, told the path of that launcher - from the launcher on PATH, which calls the package\'s, or from the package\'s own; the package\'s beside the launcher on PATH where the path it calls, in a folder whose name is not all ASCII, is not written as UTF-8; a .cmd that is neither, or whose Node is gone, and anywhere but Windows, are left to how any program is started (L10)', () => {
+		const shim = write('qwen-code/qwen-code/bin/qwen.cmd', ['@echo off', 'setlocal', 'set "ROOT=%~dp0.."', 'set "QWEN_CODE_LAUNCHER_PATH=%ROOT%\\bin\\qwen.cmd"', '"%ROOT%\\node\\node.exe" "%ROOT%\\lib\\cli-entry.js" %*', 'exit /b %ERRORLEVEL%', ''].join('\r\n'));
+		const onPath = write('qwen-code/bin/qwen.cmd', `@echo off\r\ncall "${shim}" %*\r\n`);
+		const node = write('qwen-code/qwen-code/node/node.exe');
+		const script = write('qwen-code/qwen-code/lib/cli-entry.js');
+		const other = write('other/qwen.cmd', '@echo off\r\n"%~dp0\\qwen.exe" %*\r\n');
+		// The path it calls written in a code page of Windows, not UTF-8: the e with its accent one byte
+		const notUtf8 = path.join(path.dirname(onPath), 'qwen-cafe.cmd');
+		fs.writeFileSync(notUtf8, Buffer.from(`@echo off\r\ncall "${path.join(temp.dir, `Caf${String.fromCharCode(0xe9)}`, 'qwen-code', 'bin', 'qwen.cmd')}" %*\r\n`, 'latin1'));
+		const env = { PATH: path.join(temp.dir, 'nothing-here'), PATHEXT: '.EXE;.CMD' };
+		const expected = { executable: node, args: [script], throughCmd: false, env: { QWEN_CODE_LAUNCHER_PATH: shim } };
+		const found = {
+			fromOnPath: qwenCli.launchTarget?.(onPath, 'win32', env),
+			fromShim: qwenCli.launchTarget?.(shim, 'win32', env),
+			notUtf8: qwenCli.launchTarget?.(notUtf8, 'win32', env),
+			elsewhere: qwenCli.launchTarget?.(onPath, 'linux', env),
+			neither: launchTargetOf(qwenCli, other, 'win32', env)
+		};
+		fs.rmSync(node);
+
+		assert.deepStrictEqual({ ...found, gone: launchTargetOf(qwenCli, onPath, 'win32', env) }, {
+			fromOnPath: expected,
+			fromShim: expected,
+			notUtf8: expected,
+			elsewhere: undefined,
+			neither: { executable: other, args: [], throughCmd: true },
+			gone: { executable: onPath, args: [], throughCmd: true }
+		});
+	});
 });
 
 suite('CLIs: which of them this machine has', () => {
@@ -1355,7 +1795,7 @@ suite('CLIs: which of them this machine has', () => {
 			installed: installedClis(cli => cli.defaults, env).map(each => [each.cli.id, each.executable]),
 			none: installedClis(cli => cli.defaults, { PATH: '' })
 		}, {
-			known: ['claude', 'codex', 'agy', 'muse'],
+			known: ['claude', 'codex', 'agy', 'muse', 'qwen'],
 			installed: [['claude', first], ['agy', agy]],
 			none: []
 		});
