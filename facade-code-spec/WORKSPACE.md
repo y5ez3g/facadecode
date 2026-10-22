@@ -481,7 +481,9 @@ uses a preservation path: keep its unsaved editors available in the active folde
 or as window editors if no folder remains; move its agents and terminals to the
 panel and keep them running. Notify the person and offer Stop. Their existing run
 identity and working directory are retained; workspace membership alone is not an
-agent-exit event.
+agent-exit event. With no folder left, the window stays their workspace until it
+closes, and a reload keeps it one while any of them still runs
+(AGENT-ORCHESTRATION.md O1).
 
 Changes are thrown away only after the workspace has taken the edit. Cancellation
 leaves membership, running work and unsaved changes in place. Revalidate the affected members after asynchronous preparation, and propagate
@@ -741,7 +743,7 @@ Code's in-window ones do: on Windows the primary button first, on macOS and Linu
 | Event | Required result |
 | --- | --- |
 | Reload Window | Restore the active folder, row layout, editor sets including hidden dirty editors, scope and bar state. Reconnect terminals whose processes survived. Agents reconnect to those same processes; do not ask to stop them |
-| Close window or quit | Ask once before stopping agents or terminals running a process, including hidden ones: VS Code's own question (`terminal.integrated.confirmOnExit`, `hasChildProcesses` by Facade's default), Terminate or Cancel. Facade has it count the terminals kept in the background for folders the window is not on, which stock does not see, and list under it every agent and terminal that would stop, with its place, as W10.7 writes a line; with agents among them it counts them apart: "Do you want to terminate 2 agents and 3 terminals?" (`terminalShutdownQuestion`). Use normal unsaved-file handling, including hidden dirty editors; VS Code's question names each file with the folder it is found in (W6.2), as W10.7 writes a line (`unsavedNamesOf`). Any cancellation cancels shutdown |
+| Close window or quit | Ask once before stopping agents or terminals running a process, including hidden ones: VS Code's own question (`terminal.integrated.confirmOnExit`, `hasChildProcesses` by Facade's default), Terminate or Cancel. Facade has it count the terminals kept in the background for folders the window is not on, which stock does not see, and list under it every agent and terminal that would stop, with its place, as W10.7 writes a line - an agent whose creator runs in another workspace adds that creator and its workspace, since closing ends the child of a tree that lives on there (AGENT-LAUNCHER.md L3); with agents among them it counts them apart: "Do you want to terminate 2 agents and 3 terminals?" (`terminalShutdownQuestion`). Use normal unsaved-file handling, including hidden dirty editors; VS Code's question names each file with the folder it is found in (W6.2), as W10.7 writes a line (`unsavedNamesOf`). Any cancellation cancels shutdown |
 | Start the app again with `window.restoreWindows` | Restore folders, editor state, scope and layout. Terminal scrollback or a revived shell is not proof the old process survived. End agent runs whose processes ended; never label a replacement shell as the previous live agent |
 | Renderer crash with surviving processes | Reconnect using the recorded process/run identities. Preserve unsaved backups; do not relaunch an agent or replay setup merely because its UI was restored |
 | Save Workspace As | Transfer active folder, editor sets, scope and collapsed repositories to the new workspace storage; keep the file in the ordinary format |
@@ -1015,8 +1017,9 @@ plan before declaring L1 complete.
   its keyboard acceptance case has passed before a binding is selected and tested.
 - W10's grid, title-bar drag regions, menu glyph and icon-theme alignment require
   a running-window check, especially after an upstream merge.
-- W10 retains theme-based folder colors and documents the existing text-contrast
-  exceptions. These are visible design limits, not proof of accessibility compliance.
+- W10.6's ten fixed folder colours, which do not follow the theme, and W10.4's
+  documented text-contrast exceptions are visible design limits, not proof of
+  accessibility compliance.
 - Remote workspaces, non-TypeScript symbol providers, notebook kernels and edit
   sessions need their actual integration evidence. Record unsupported combinations
   explicitly rather than inferring support from local unit tests.

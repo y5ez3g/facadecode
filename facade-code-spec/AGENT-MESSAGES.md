@@ -20,8 +20,9 @@ text. Facade does not interpret a message as a workflow command, guess whether i
 author is finished, or automatically make staffing decisions.
 
 A mailbox contains the messages addressed to one agent or to @human. Each message
-has a stable workspace number, displayed as `#m42`, distinct from an agent number
-such as `#a7`.
+has a stable number, unique on the machine (L2), displayed as `#m42`, distinct from
+an agent number such as `#a7`. A mailbox lives in the workspace its agent belongs to;
+mail reaches it from any workspace.
 
 A doorbell is generated text telling an agent that messages wait and asking it to
 call read_messages. It does not contain the messages' bodies.
@@ -65,9 +66,17 @@ whole call. The transport limit is 1 MiB of encoded request JSON, including text
 and arguments. A larger payload must be shared by file path in a shorter message.
 
 An agent can send to itself, its creator, another agent in its reach, or @human.
-YOLO off restricts agent recipients to its tree; YOLO on reaches the whole window.
-Every agent retains the ability to address @human, with the default escalation
-behavior in M8.
+YOLO off restricts agent recipients to its tree, in whichever workspace each runs;
+YOLO on reaches every workspace on the machine. Every agent retains the ability to
+address @human, with the default escalation behavior in M8.
+
+A recipient of another workspace gets the same message as one of the caller's own:
+the recipient's workspace records it in the recipient's mailbox, gives it its
+number and rings the recipient, and the caller's workspace keeps the sender's copy
+(M11). The result reads the same, with the recipient's workspace named. While
+recipients are checked, a recipient whose workspace is silent past O8's wait
+refuses the whole call as UNAVAILABLE, naming the workspace, and nothing is sent.
+A workspace lost after sending began gives a partial outcome (M11).
 
 A starting agent can receive messages if its launch is configured for Facade.
 Delivery waits until its terminal is ready under M5. A disconnected agent that
@@ -137,9 +146,19 @@ ids and all:true are mutually exclusive. Remove duplicate ids and return selecte
 messages in number order. Reject an invalid, missing or out-of-reach id before
 marking any delivery. An agent number is not a message reference.
 
-A caller with YOLO on may read any current-session message by number. With YOLO off,
-it may read messages to or from its own tree, including that tree's conversation
-with @human. Reading somebody else's message does not deliver it for its recipient.
+A caller with YOLO on may read any current-session message by number, in any
+workspace: a number its own workspace does not have, or one at or below the
+machine's shared mark (AGENT-LAUNCHER.md L12), is looked up in the others too. With YOLO
+off, it may read messages to or from its own tree, including that tree's
+conversation with @human, in whichever workspace each is held. Reading somebody
+else's message does not deliver it for its recipient. A message's session and
+delivery state are its recipient's workspace's; read through the sender's copy
+(M11), the state is asked of that workspace, and while it does not answer the
+result gives the last state its sender's workspace learned - returned, or its
+recipient ended with a closed workspace (O8) - or says that it does not answer.
+A sender's copy and its original are one message. An older number that two records hold as different
+messages is refused as ambiguous, listing it for each workspace as `#m7 (workspace lab, 1a2b3c4d)`; an id
+written that way reads that workspace's message (O2).
 
 A message from a previous app session is available in its saved chat room, not in
 the current mailbox. A request for that old number returns the saved history
@@ -159,7 +178,8 @@ delivery state, not a separate read history for each caller.
 When the selected texts total at most 8,000 characters, return them inline.
 Otherwise return one immutable UTF-8 snapshot file containing all selected messages,
 plus a compact index and the path. The result tells the agent to read the whole
-file before acting. The snapshot is created before returning its path. Every
+file before acting. The snapshot is created before returning its path, under the
+caller's own workspace's record, whichever workspace holds the messages (O8). Every
 supported CLI must be able to read message files with its effective sandbox,
 without another approval; L14 verifies that launch capability.
 
@@ -259,6 +279,16 @@ Original message: ...
 ```
 
 If the sender has ended, record that the message could not be returned.
+A sender of another workspace receives the return, and the delivery-delayed notice
+above, from its own workspace: the recipient's workspace writes it into that
+workspace's outbox, keyed by its kind and message number, and rings it (O8). A
+sender's workspace that is reloading or silent takes it when it answers again; one
+with its framework off takes it on re-enable, as M10 keeps its own; a notice
+written twice is recorded once. A sender whose workspace is gone ended with it, and
+the message is recorded as not returned. A message the person's script sent from
+another workspace goes back to the person there, the same way. A workspace closing ends its agents, which
+returns their unread mail like any end (AGENT-LAUNCHER.md L6). The notices of M7
+and M8 to a creator of another workspace travel the same way.
 Messages to @human and Facade-generated notices are never returned. This prevents
 return-message loops. Returned originals remain readable by number while retained.
 
@@ -268,7 +298,10 @@ continue to retry until fetched or until their recipient ends.
 ## M7. Tasks use the same mailbox
 
 A start with a task records a message from its creator immediately after allocating
-the run, before launching the CLI. The start result contains its number.
+the run, before launching the CLI. The start result contains its number. A child
+started in another workspace (O3) gets its task from that workspace, which records
+and numbers it in the child's mailbox; the creator's workspace keeps the sender's
+copy, as for any message between workspaces (M11).
 
 The initial prompt is a short generated notice:
 
@@ -333,8 +366,12 @@ commit or worktree deletion; those depend on the requested workflow.
 Notify a live agent creator when a child process ends, including exit code 0:
 the creator needs to know that the child is no longer available even if it never
 sent a report. Suppress a notice for a stop the creator requested, an immediately
-reported definitive start failure, and a whole-window shutdown. If a start was
-previously reported unconfirmed and then fails, send the notice.
+reported definitive start failure, and a workspace closing that ends the creator
+too. A creator in another workspace is told as its child's workspace closes
+(AGENT-LAUNCHER.md L6), its notice and the unfetched-task notice of M6 recorded by
+its own workspace (O8); when that workspace's app crashes, the creator's own
+workspace tells it (O8). If a start was previously reported unconfirmed
+and then fails, send the notice.
 
 A lifecycle notice contains the end reason, actor, exit code and D6's final-screen
 excerpt when available. It does not claim a successful exit proves a successful task.
@@ -342,7 +379,8 @@ Human-root exit notifications remain L6's less noisy policy.
 
 When the creator itself has ended, preserve the event in history; do not notify the
 person about every descendant exit. A surviving child can use its retained creator
-chain to choose the nearest available ancestor for its next report or question.
+chain - across workspaces, as O11 keeps it - to choose the nearest available
+ancestor for its next report or question.
 
 ## M9. The person's experience and saved history
 
@@ -351,7 +389,11 @@ by the CLI, has no Facade message number and is not copied into Facade chat room
 Facade chat rooms are histories of messages, not complete CLI transcripts.
 
 For a message to @human, the sending agent prints its text in its own terminal
-before sending the notification. Keep the full message in history. The notification
+before sending the notification. The notification appears where the person directs
+that tree: in the workspace of the sender's tree root, or in the sender's own
+workspace when that root's workspace is closed. Show reveals the sender's terminal, bringing its window forward when it is
+another workspace's - the person's explicit action, so no focus is stolen. Keep the
+full message in history. The notification
 shows the sender and a short first-line preview, with Show to reveal the terminal.
 If the terminal has ended, Show opens the message in saved history.
 
@@ -363,8 +405,14 @@ The sender's choice to ask @human does not steal focus.
 
 There is one saved **chat room** per human-created root. It contains messages to
 or from that tree, with sender, recipient, time, number and reply reference.
-Cross-tree messages appear in both histories. They are ordinary readable Markdown
-artifacts; editing an artifact does not send a message.
+Cross-tree messages appear in both histories. Chat rooms belong to the machine, not
+to a workspace: one file per root in the Facade home, named by the root's number and
+workspace, whichever workspaces its tree spans. Each message is written once into
+each room it belongs to, by the workspace that records its original - its
+recipient's, or for a message to @human its sender's - under a short lock on that
+room, with each party's workspace named where it is not the root's. Open Chat Room
+lists every room on the machine, naming the workspaces each spans. They are
+ordinary readable Markdown artifacts; editing an artifact does not send a message.
 
 | Command | Behavior |
 | --- | --- |
@@ -372,15 +420,23 @@ artifacts; editing an artifact does not send a message.
 | Agents: Delete Chat Rooms... | Confirm deletion of saved history files and unused message attachments |
 
 Delete Chat Rooms is history-file cleanup, not a reset of running agents or their
-current-session mailboxes. The confirmation states that current-session messages
-remain available to those agents. Retain payloads still needed by the current
+current-session mailboxes. The rooms are the machine's, so the confirmation says
+what goes: how many rooms, and that they are every workspace's, not this one's
+alone. It also states that current-session messages remain available to those
+agents. With no room, it says so and asks nothing. Retain payloads still needed by the current
 session, and remove them after that session ends if no retained history needs them.
-Record a deletion watermark so old history files are not regenerated on reload.
-Later messages can begin a new saved history after that watermark.
+Deletion removes the machine's rooms. Record a deletion watermark beside them - the
+machine's message counter at that moment (AGENT-LAUNCHER.md L12) - so no workspace
+regenerates old history files on reload. Later messages, numbered above it, can
+begin a new saved history.
 
 The person's scripts call send_message/read_messages as @human. Default unread
 fetching has nothing to consume after human notifications are recorded delivered;
-all or explicit ids reads the retained human mailbox.
+all or explicit ids reads the retained human mailbox of every workspace, each workspace
+answering for its own (O8); a workspace silent past O8's query limit is named in
+the result.
+A script's reply_to may name a message to @human in any workspace; that workspace
+confirms it.
 
 ## M10. Reload, shutdown and framework switch
 
@@ -420,11 +476,12 @@ A message record contains id, sender, recipient, text or payload-file reference,
 length, time, optional reply/task marker and optional Facade notice kind.
 Its delivery record contains unread/delivered/returned and the relevant times.
 
-Use the workspace ledger and monotonically increasing last-message counter.
+Use the workspace ledger, and the machine's message counter (L12) for numbers.
 Relevant events are message.sent, message.delivered,
-message.returned, mailbox.rang and the saved-history deletion watermark.
-Use the existing versioned-record mechanism; the presence of this document does
-not require another incompatible ledger version.
+message.returned, mailbox.rang and the keys of notices taken from the outbox; the
+saved-history deletion watermark lies beside the machine's chat rooms (M9).
+Use the existing versioned-record mechanism; messages between workspaces take the
+next ledger version (AGENT-LAUNCHER.md L12).
 
 Store text up to 8,000 characters inline in the record; larger text and fetch
 snapshots are UTF-8 files under the workspace record's messages directory.
@@ -446,6 +503,31 @@ Only prevalidation is all-or-nothing. A storage failure while recording a multi-
 can have partial effects; return the recorded ids when known, otherwise unknown.
 Do not introduce a distributed transaction to cover that unusual failure.
 No automatic send retry is permitted after an ambiguous response.
+
+A recipient of another workspace (O8) changes only where steps 2 and 3 happen:
+
+1. The caller's workspace resolves and validates every recipient, asking their
+   workspaces for state where needed; a workspace silent past O8's wait refuses
+   the whole call.
+2. For each such recipient, it sends that workspace one delivery: sender identity,
+   text and reply reference. The recipient's workspace numbers it, records it - a long
+   text as a file under its own record - writes it into the machine's chat rooms
+   and schedules the doorbell, then answers with the number.
+3. The caller's workspace records the sender's copy under that number - its full
+   text, a long one as a file under its own record - for reading by number, and
+   returns the ids.
+
+The recipient's workspace is the authority for that message: its delivery state, its
+return and its session. The sender's copy carries no delivery state of its own; a
+return reaches the sender as a notice (M6), which also marks the copy returned, and
+a crash of the recipient's workspace marks it as possibly never fetched (O8).
+
+A recipient that the recipient's workspace finds ended at step 2 is refused for that
+recipient alone, and the result reports each recipient's outcome. A workspace that
+disappears between step 1 and its answer is a partial outcome, as a storage failure
+is: the ids recorded so far, and that recipient's outcome unknown. reply_to names a
+message addressed to the caller: an agent's mailbox is in its own workspace, and
+@human's reply follows M9.
 
 Sequence of a fetch:
 
@@ -469,15 +551,16 @@ The notification bridge uses VS Code notification handles to update/close by key
 
 | Key | Content |
 | --- | --- |
-| message:<agent> | That agent's current message to @human |
+| message:<agent> | That agent's current message to @human, in the workspace M9 names; another workspace's agent's is shown there at its workspace's request (O8) |
 | message:facade:<agent> | A Facade notice about that agent |
 | ended:<batch> | Coalesced human-root end notifications under L6 |
 
 There is no unread:<agent> manual-Ring notification category.
 
 Saved chat rooms append entries with stable message headings and full text.
-Rebuild a missing or interrupted export from the retained record when possible,
-but never re-export messages before the deletion watermark. Keep a small history
+Rebuild a missing or interrupted export from the retained record when possible -
+each workspace adds the entries of its own originals that the room lacks - but never
+re-export messages at or below the deletion watermark. Keep a small history
 index for locating older ids; it is an index of artifacts, not a second source of
 message truth.
 
@@ -522,6 +605,11 @@ well as visible behavior; successful send alone is not an end-to-end pass.
 | MS-26 | Framework off during unread mail and recipient exit, then on | No new ring starts while off; correct retained mail/returns afterwards | I,V |
 | MS-27 | Send reply lost or storage fails during multi-send | No hidden retry; known ids/partial outcome reported | I |
 | MS-28 | Fetch a retained task again by id or all:true | Same message number and content; no new task allocated | U,I |
+| MS-29 | Agent of workspace A sends to an agent of workspace B, which replies; a 20,000-character message; several recipients across both workspaces, one of B's ending meanwhile; A and B sending to each other at once while each also sends locally | Doorbells in B, then A; one number per recipient, unique on the machine; each record takes the other's lower numbers; the tree's one chat room holds each message once; long text readable as a file in both; the ended recipient refused alone | U,I,V |
+| MS-30 | Read by number, across workspaces, in both YOLO modes and as @human: unread, after B's agent fetches it, after it is returned, while B does not answer; an older number A and B both hold, read from A; @human all:true and a reply_to into B's human mailbox | YOLO on and @human read any current-session message with B's delivery state, or a note that B does not answer; YOLO off only its tree's; reading delivers nothing for the recipient; the older shared number is refused as ambiguous, a sender's copy never is; @human reads and replies across workspaces | U,I |
+| MS-31 | Recipient in B ends or B closes with A's mail unread; A reloads or turns its framework off as B's recipient ends; A's sender ends or A closes first; B's notice is written twice; B is silent during a send; B's app crashes with A's mail unread | Return reaches A's live sender once, after A's reload or re-enable; a gone sender's return is recorded as not returned; the silent send is refused after the short wait or reported partial, never resent; after the crash A's sender is told which messages may never have been fetched, and reading the copy says so | U,I,V |
+| MS-32 | An agent of workspace A starts a child in workspace B with a task; the child does not fetch it in time, then reports, then ends; B closes with another child of A running | The task is numbered and rung in B, its copy in A; A's agent is told of the unfetched task and of each end, also as B closes; the tree's one chat room holds the exchange | U,I,V |
+| MS-33 | A tree rooted in workspace A has a child in B that messages @human while the person works in A; A's root workspace closes, and the child messages again; the person shows each; Delete Chat Rooms from B; both workspaces reload | The first notification appears in A and Show brings B forward on the child's terminal; after A closes it appears in B; Open Chat Room in either lists the machine's rooms, the tree's room naming both workspaces; deletion removes them for both and neither reload brings deleted history back | I,H |
 
 Use fake recipients and a controllable clock for mailbox order, warning coalescing,
 timers and reload. A small deterministic failure suite is sufficient; randomized
@@ -536,7 +624,9 @@ On other supported operating systems, cover each CLI in both roles plus
 platform-specific input/file access behavior.
 
 The primary journey is a root delegating to two children, receiving a question,
-answering it, receiving both results and summarizing to the person. Type a human
+answering it, receiving both results and summarizing to the person. A second
+journey runs between two workspaces: a root in one starts a child in a folder of the
+other, asks it for a result, gets a question back, answers and receives the result. Type a human
 correction during a child report, then repeat with a ten-second unfinished draft.
 The person should be able to remain in the root's terminal throughout.
 

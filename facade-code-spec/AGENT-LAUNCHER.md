@@ -2,7 +2,8 @@
 
 Facade Code runs coding agents in their vendors' interactive terminal interfaces.
 Choosing an agent opens its terminal, ready for a conversation. Agents created by
-other agents use the same launch path and appear in the same window.
+other agents use the same launch path and appear in the workspace whose folder they
+work in, which is usually their creator's (AGENT-ORCHESTRATION.md O3).
 
 This document is one of four specifications for a single product:
 
@@ -47,7 +48,8 @@ The product follows these principles:
 - Starting a configured agent is immediate and asks no launch questionnaire.
 - Background agent activity does not move the person's focus, selected tab or
   selected folder, except for cleanup and view fallback when deleting a worktree
-  under O5. A person's explicit navigation does.
+  under O5, in any workspace that showed it. A person's explicit navigation does,
+  Show on a notification included (M9).
 - Routine cooperation proceeds automatically. The person normally stays in the
   terminal of the agent they are directing.
 - Facade provides capabilities and clear results. Project workflow, staffing,
@@ -69,9 +71,14 @@ A **child** is a run created by an agent. A **tree** consists of one human-creat
 root and all its descendants, including ended ancestors.
 
 The person is `@human`. An agent is displayed as `@name #a7`. Its number is unique
-within its workspace record and never reused, including after restarting the app.
-Numbers distinguish agents with the same name. Message numbers use a separate
-sequence and prefix, such as `#m42`.
+on the machine - across every workspace and its record - and never reused,
+including after restarting the app. Numbers distinguish agents with the same name.
+Message numbers use a separate sequence and prefix, such as `#m42`, unique on the
+machine in the same way. A workspace's own numbers may therefore skip. Numbers given
+before machine numbering, or by an older version still running beside this one,
+stay as they were, and two records may share one; L12's shared mark bounds them,
+and O2 treats such a number as ambiguous where two workspaces hold it, unless the
+reference names its workspace.
 
 Names contain 1–40 lowercase ASCII letters, digits, dots, underscores or hyphens,
 starting with a letter or digit. Reserved names are `human`, `you`, `me`,
@@ -81,9 +88,15 @@ name. Runs started through `start_agent`, including the person's scripts as
 `@human`, use the supplied `name`. Names may repeat. Reference resolution is
 specified in O2.
 
-A **window** is a VS Code window with its workspace. A run belongs to the window
-that started it. A **worktree** in these specifications means an additional Git
-worktree; the repository's primary working folder is its **main checkout**.
+A **workspace** is one VS Code window with the folders it has open: one window, one
+workspace, and these specifications name them as one - the window is the workspace's,
+which opens, reloads and closes. A window with no folder is none, except one whose
+last folder left while its runs were live (O1). A run belongs to
+the workspace that started it. The **machine** is every open workspace of this
+Facade version that shares one Facade home (O1): one virtual window, which Facade's
+tools reach across. A **worktree** in
+these specifications means an additional Git worktree; the repository's primary
+working folder is its **main checkout**.
 Folder paths identify checkouts; branch names are useful labels, not identities.
 
 ## L3. Starting and finding agents
@@ -127,6 +140,12 @@ conventions, including a marker on collapsed rows. **Show Active Agents...** is 
 live Quick Pick in workspace bar order, with the folder, terminal title and agent
 number, and a close action. Selecting a row reveals that agent, selecting its
 folder first if necessary. Ended agents remain in the record, not this active list.
+The button, row markers and Show Active Agents show the workspace's own agents.
+That is a deliberate choice for this release: other workspaces' agents are reached
+through Facade's tools and their own windows, and a later change may list them in
+Show Active Agents by workspace. Closing a workspace ends its agents (L6), so
+WORKSPACE.md W11's question names, for each agent whose creator runs in another
+workspace, that creator and its workspace - closing ends that tree's children here.
 
 ## L4. YOLO, approvals and questions
 
@@ -135,11 +154,11 @@ tools; it is not an extra approval dialog.
 
 | Launch mode | CLI sandbox | Reach of Facade tools |
 | --- | --- | --- |
-| YOLO on | Disabled | All agents in the same window |
-| YOLO off | Enabled where the CLI and operating system support it | The caller's tree, ended agents included |
+| YOLO on | Disabled | All agents in every workspace on the machine |
+| YOLO off | Enabled where the CLI and operating system support it | The caller's tree, ended agents included, in whichever workspace each runs |
 
 Every agent can address `@human`. The person's scripts can address every agent in
-the window. Reach is checked against the caller's mode, not the target's mode.
+every workspace. Reach is checked against the caller's mode, not the target's mode.
 A YOLO-on caller can therefore reach an agent in a YOLO-off tree.
 
 A human-created agent snapshots the setting at launch. A child inherits its
@@ -263,6 +282,30 @@ remains running; connection is a separate fact.
   in a new window leaves them running. Folder-window conversion and Save Workspace
   As preserve the runs through storage migration. The next launch of the app does
   not replay their command lines.
+- The workspace's runs end with its window, and their unread mail is returned as for
+  any end. Once W11's checks can no longer cancel the window's shutdown, the
+  workbench tells the extension the reason - closing, quitting, replacing its
+  workspace or reloading - and stops the extension host only after the extension
+  has done its closing work. For a close, quit or replacement it then, in order:
+  1. marks its window.json closing, so other workspaces take it for gone and send
+     it nothing more (O8);
+  2. records, in one write, each run ended with the window's close as the reason;
+  3. writes, into the outbox of each other workspace concerned, the returns of
+     unread mail from its senders there (M6) and the ends of their children (M8),
+     and rings those workspaces, without waiting for their answer: the window closes
+     no later for them, and one the ring does not reach takes its notices as it
+     answers again (O8);
+  4. removes its window.json.
+  Notices are files, so a workspace that is reloading or silent takes them when it
+  answers again, and no other workspace's state - its reloading, its own closing -
+  changes what is written. A reload, an extension host restart and a storage
+  migration are no close and end nothing; the extension is told of a reload, which
+  ends nothing. A CLI recorded ended this way whose process outlives the close is
+  still found and ended at the next start. A close whose reason never reached the
+  extension - its host hung - ends nothing then: the workspace stays silent while
+  its application instance runs, and once that instance ends it is gone, as after
+  an app crash. After an app crash, the next open of the workspace records the ends
+  as before, and the other workspaces have told their agents meanwhile (O8).
 - After a renderer crash, reconnect any surviving terminal process. A run whose
   process is gone without an observed exit is lost.
 - Interactive Remove Folder follows WORKSPACE.md W9.6's confirmed stop; external
@@ -448,7 +491,9 @@ knows - Qwen Code's - with the variables that launcher sets. Other .cmd launcher
 use the existing platform quoting path.
 Generated notices must be quoted as data; arbitrary message/task content never
 enters cmd.exe. Reject arguments the fallback cannot preserve instead of rewriting
-their meaning. Test paths with spaces, quotes and non-ASCII characters.
+their meaning - before anything is made for the agent, its first line checked as it
+will be given, naming its creator as it will. Parentheses it preserves, quoted or not.
+Test paths with spaces, quotes and non-ASCII characters.
 
 Configuration values embedded in TOML or JSON must be encoded with the corresponding
 serializer. Facade neither validates model names against a hardcoded catalog nor
@@ -479,7 +524,7 @@ same policy for human and agent launches.
 
 ## L12. Record and recovery
 
-Retain the workspace record under `~/.facade/workspaces/<id>/` and the append-only
+Retain the workspace record under `workspaces/<id>/` in the Facade home and the append-only
 ledger. The workspace id is kept in VS Code workspace storage. It follows the live
 workspace when folders change or Save Workspace As migrates storage. If another
 workspace subsequently presents the same id but a different identity, allocate a
@@ -493,7 +538,33 @@ new id there; two independent workspaces must not share a live record.
 | message history and message files | M10 |
 | final and large screen snapshots | D6 |
 
-Write the next agent number before using it; skipped numbers are acceptable.
+Agent and message numbers come from the machine's counters, `counters.json` in the
+Facade home (`~/.facade`, or `FACADE_HOME`, O8), taken under its lock; each
+workspace record keeps the last numbers it used as well, as before. A workspace
+takes the next number above both the counter and its own record's last, and writes
+the counter before using it. The lock records its holder's process id and that
+process's start time, and is taken over only from a holder that is gone - its
+process ended, or its id now another process's, by that start time - never from a
+live one for its age: a paused holder stops the machine's numbering while it is
+paused, the accepted cost of never giving a number twice, and a live holder that
+keeps it too long fails the call that waited, which gives no number. Waiting for the
+lock never blocks the extension host's other work.
+
+The counters start above the highest number any existing record has used, found by
+reading the records while holding the lock; a missing or unreadable counters file is
+rebuilt the same way, an unreadable one kept aside. The counters file also keeps the
+machine's **shared mark** of each kind: the highest number that two records may both
+hold. Each record notes when it first took a machine number; a record that has
+none yet - one written before machine numbering, or by an older version running
+beside this one - raises the shared mark to its own last numbers as this version
+first opens it. A number above the shared mark is held by one record only; one at or
+below it may be held by two (O2). Skipped numbers are acceptable.
+
+Agents of other workspaces in a record (O8) need the next ledger version: a creator,
+ancestor, tree root, sender, recipient, actor or child of another workspace recorded
+by number, name and workspace, a number another workspace gave that is lower than
+the record's last, and the keys of notices taken from the outbox.
+
 Record intent before starting/stopping a process and record its observed result.
 Typical lifecycle events are started, launched, connected, running, stopping and
 ended. M10 adds message events. Use a supported versioned reader; do not introduce
@@ -528,7 +599,12 @@ a surviving run after renderer-crash recovery. Numbers never reset.
 `facade.orchestration.enabled` applies immediately.
 
 Off: stop accepting tool work, stop doorbells, mark the endpoint disabled, and
-continue observing every process. Operations already accepted finish or report
+continue observing every process. Two duties to other workspaces remain, since they
+protect the person's work and the record, not the agent tools: answering a
+deletion's question and stopping its authorized work (AGENT-ORCHESTRATION.md O5),
+and keeping notices other workspaces write for it until re-enable (O8). The switch
+is the application instance's, so a workspace with it off beside one with it on
+means two instances. Operations already accepted finish or report
 their partial outcome; do not start a second copy on re-enable. Newly launched
 agents receive no server, skill, project injection or warm-up.
 
@@ -600,6 +676,8 @@ H = human-visible verification. Each row defines an observable outcome.
 | LA-20 | Windows shims; spaces, Unicode and quoting; environment overrides | Correct executable, arguments, cwd and configuration paths | U,V |
 | LA-21 | Trust file contains unrelated settings or is malformed | Preserve unrelated content; malformed file remains intact with a useful failure | U,I |
 | LA-22 | Show Agent Launch and all commands | Effective values and errors readable; no tokens exposed; keyboard and mouse paths agree | I,H |
+| LA-23 | Two workspaces starting agents and sending messages at once; the first start after an upgrade with existing records; an older version beside this one keeps numbering, and its record is then opened by this version; the counters file missing or unreadable, rebuilt while another workspace takes numbers; the lock's holder paused or gone | No agent or message number given twice on the machine; the counters continue above every existing record; the older record raises the shared mark to its last numbers and its numbers are then ambiguous where two workspaces hold them; a paused holder keeps its lock, a gone one loses it, one whose process id another process now has included; waiting for the lock does not stop the workspace answering others | U,I |
+| LA-24 | Workspace B, with agents running - one holding unread mail from an agent of workspace A, one a child of an agent of A: closes alone; quits with A in the same application instance, A cancelling its own close; quits while A reloads; quits with A in another instance; reloads with persistent sessions on and off; reloads after a vetoed close; its extension host restarts while its close question is open; its renderer crashes with terminals surviving; the app crashes | Every close: B's agents end at once, A no longer finds them, its sender receives the return and the child's creator its end - A takes them after its own reload too, and keeps them when it cancelled its close; reload, the vetoed close and the extension host restart end nothing; the renderer crash follows L6's rule; after the app crash A's agents are told by A (O8) and B's reopen records the ends without repeating A's notices | I,V |
 
 Run the unmodified ordinary-terminal scenarios beside LA-14, LA-16 and LA-17.
 Agent integration must not change their lifecycle, movement, titles or approvals.
