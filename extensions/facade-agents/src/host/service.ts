@@ -4,27 +4,34 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { timeout } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
+import { processStartTimeAsync } from '../base/system';
 import { disposeAll } from '../base/lifecycle';
 import { isJsonObject } from '../base/json';
 import { InstalledCli } from '../clis/cli';
 import { installedClis, knownClis, locateCli, turnedOffClis } from '../clis/registry';
 import { facadeSkill, firstLineFor } from '../contract/prompts';
-import { Contract, toolDefinitions } from '../contract/tools';
+import { Contract, toolDefinitions, WindowWorkbench } from '../contract/tools';
 import { FacadeError } from '../core/errors';
-import { Facade } from '../core/facade';
+import { CallerIdentity, callerOfRequest, Machine, SILENT_WAIT_MS, WINDOW_REQUESTS } from '../core/machine';
+import { Facade, workOf } from '../core/facade';
 import { AgentTable, countOnFrom, numberedUpTo } from '../record/agents';
-import { agentRef, Caller, isLive, PERSON } from '../record/events';
+import { MachineCounters } from '../record/counters';
+import { agentRef, Caller, foreignRef, isLive, PERSON } from '../record/events';
 import { earlierRecordOf, identityOf, isSameWorkspace, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { ClosedBy, LedgerLockedError, LedgerUnreadableError, lockStateOf, lockWait } from '../record/ledger';
 import { AGENTS_LOG } from '../record/log';
-import { workspacesRoot } from '../record/paths';
-import { PipeEndpoint } from '../transport/endpoint';
+import { noticesFor } from '../record/outbox';
+import { countersFile, deletionsRoot, outboxRoot, repositoryLocksRoot, roomsRoot, windowKeyFile, workspacesRoot } from '../record/paths';
+import { PipeEndpoint, WindowFacts } from '../transport/endpoint';
 import { PipeHandlers, pipePath } from '../transport/pipe';
+import { labelOf, WindowLink } from '../transport/windows';
 import { HostGit } from './git';
+import { HostMachine } from './machine';
 import { HostPerson } from './person';
 import { confirmDeleteRooms, pickRoom } from './rooms';
 import { ScreenDocuments } from './screenDocuments';
@@ -34,11 +41,22 @@ import { agentProcessesRun, HostTerminals, terminalEnvironment } from './termina
 import { JsonFileState, StateStore } from './windowState';
 
 const PIPE_ID_KEY = 'facade.agents.pipeId';
+/** Another window of the machine, as the pipe knows a caller that holds the machine's key (AGENT-ORCHESTRATION.md, O8). */
+const WINDOW_CALLER = 'window';
+/** Who calls on the pipe: an agent of this window, the person's script, or another window. */
+type PipeCaller = Caller | typeof WINDOW_CALLER;
 const WINDOW_STATE_FILE = 'window-state.json';
 /** The workspace's id, which names its record: kept in its `workspaceState`, which VS Code carries over as the workspace is saved under another name. */
 const WORKSPACE_ID_KEY = 'facade.agents.workspaceId';
 /** Where a build before workspace ids kept the path of the workspace's record, in its `workspaceState`. */
 const EARLIER_RECORD_KEY = 'facade.agents.record';
+/** What the other workspaces of the machine have in a folder a deletion asks of (O5; WT-8): by workspace, those silent, and windows of another version, which are not asked. */
+export interface WorkElsewhere {
+	readonly workspaces: readonly { readonly record: string; readonly label: string; readonly agents: readonly string[]; readonly runs: readonly number[]; readonly terminals: readonly string[]; readonly editors: readonly string[] }[];
+	readonly silent: readonly string[];
+	readonly otherVersions: readonly string[];
+}
+
 /** Who this workspace's window is to its ledger, the same through its reloads: kept in its `workspaceState`. */
 const OWNER_KEY = 'facade.agents.owner';
 /**
@@ -67,7 +85,11 @@ export class AgentsService implements vscode.Disposable {
 	private facade: Facade | undefined;
 	/** Why there is no core once the service started: another window has the workspace's agents, or no folder is on this machine. */
 	private noCore: 'otherWindow' | 'noFolder' | 'unreadable' | undefined;
-	private endpoint: PipeEndpoint<Caller> | undefined;
+	private endpoint: PipeEndpoint<PipeCaller> | undefined;
+	/** The other windows of the machine, as this one reaches them (AGENT-ORCHESTRATION.md, O8). */
+	private machine: HostMachine | undefined;
+	/** Set once the window closed - closing, quitting or replacing its workspace - and its runs ended with it (AGENT-LAUNCHER.md, L6). */
+	private closing = false;
 	/** The workspace's record, open in this window. */
 	private table: AgentTable | undefined;
 	/** That record's id, as the window's commands name it. */
@@ -107,7 +129,7 @@ export class AgentsService implements vscode.Disposable {
 	 */
 	async start(): Promise<void> {
 		const folders = (vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file');
-		if (!folders.length) {
+		if (!folders.length && !await keepsAgentsWithoutFolder(this.workspaceState)) {
 			this.log.info('Facade agents require a local folder in the workspace. Nothing was started.');
 			this.noCore = 'noFolder';
 			return;
@@ -119,6 +141,7 @@ export class AgentsService implements vscode.Disposable {
 		// workspace's storage names, while it names this workspace; any other workspace gets one of its own.
 		const load = await windowLoad();
 		const fromWindow = load.record;
+		// With no folder, the workspace file: a window keeps its agents without one only as a workspace
 		const workspace = (vscode.workspace.workspaceFile ?? folders[0].uri).toString();
 		const storedId = fromWindow?.id ?? this.workspaceState.get(WORKSPACE_ID_KEY);
 		if (isWorkspaceId(storedId)) {
@@ -132,7 +155,7 @@ export class AgentsService implements vscode.Disposable {
 			this.log.info(`Created a new record for workspace ${workspace} at ${dir}.`);
 			// The record a build before workspace ids kept of it: its agents' numbers are never given again
 			// (AGENT-LAUNCHER.md, L2; X-49)
-			const earlier = earlierRecordOf(workspacesRoot(), this.workspaceState.get(EARLIER_RECORD_KEY), folders[0].uri.fsPath);
+			const earlier = folders.length ? earlierRecordOf(workspacesRoot(), this.workspaceState.get(EARLIER_RECORD_KEY), folders[0].uri.fsPath) : undefined;
 			// - nor its messages' (AGENT-MESSAGES.md, M10)
 			const reached = earlier === undefined ? undefined : numberedUpTo(earlier);
 			if (earlier !== undefined && reached && (reached.agents > 0 || reached.messages > 0)) {
@@ -196,7 +219,36 @@ export class AgentsService implements vscode.Disposable {
 
 		// The CLIs this machine has, as a terminal finds them: Facade's own PATH until they are looked for there (X-39)
 		this.installed = installedClis(configFor);
+		// The other windows of the machine, and what this one says of itself to them (AGENT-ORCHESTRATION.md, O1, O8)
+		const product = productOf();
+		// The application instance is the extension host's parent, the main process: by its id and start, it tells a
+		// workspace whose app crashed from one that reloads or hangs (O8)
+		const instanceStart = await processStartTimeAsync(process.ppid);
+		const facts: WindowFacts = {
+			record: id,
+			...(vscode.workspace.name ? { workspace: vscode.workspace.name } : {}),
+			...(folders.length ? { folder: folders[0].uri.fsPath } : {}),
+			...(product.version ? { version: product.version } : {}),
+			...(product.commit ? { commit: product.commit } : {}),
+			load: crypto.randomUUID(),
+			instance: { pid: process.ppid, ...(instanceStart !== undefined ? { start: instanceStart } : {}) }
+		};
+		const link = new WindowLink(windowKeyFile());
+		const machine = new HostMachine(link, workspacesRoot(), outboxRoot(), deletionsRoot(), { record: id, label: labelOf(facts as WindowFacts & { record: string }), ...(facts.load ? { load: facts.load } : {}), ...(facts.version ? { version: facts.version } : {}), ...(facts.commit ? { commit: facts.commit } : {}) }, timeoutMs, message => this.say(message));
+		// What another workspace's deletion asks of this window's workbench: its terminals and unsaved editors in a folder,
+		// and to stop and discard them (O5; WT-8)
+		const texts = (value: unknown) => Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : [];
+		const workbench: WindowWorkbench = {
+			workIn: async folder => {
+				// A window that cannot say what it has there says so: the deletion asking is refused, not told of nothing (O5)
+				const found = await vscode.commands.executeCommand<unknown>('_facade.work.in', vscode.Uri.file(folder)) as { terminals?: unknown; editors?: unknown } | undefined;
+				return { terminals: texts(found?.terminals), editors: texts(found?.editors) };
+			},
+			workRelease: async (folder, discard) => texts(await vscode.commands.executeCommand<unknown>('_facade.work.release', vscode.Uri.file(folder), discard).then(undefined, err => [messageOf(err)]))
+		};
+		this.machine = machine;
 		const facade = new Facade({
+			machine,
 			table,
 			ports: {
 				terminals,
@@ -231,6 +283,9 @@ export class AgentsService implements vscode.Disposable {
 				firstLine: firstLineFor
 			},
 			timing: () => ({ startTimeoutMs: timeoutMs() }),
+			notices: () => noticesFor(outboxRoot(), id),
+			roomsFolder: roomsRoot(),
+			repositoryLocks: repositoryLocksRoot(),
 			settingsProblems,
 			log: message => this.say(message)
 		});
@@ -239,19 +294,25 @@ export class AgentsService implements vscode.Disposable {
 		const contract = new Contract(facade);
 		// The endpoint listens before the record is reconciled - an agent's MCP server says hello as it comes
 		// back - but a tool call waits for it: answered before, `list_agents` would show agents gone with the
-		// window as running, and a stop would race the reconciliation (L12).
+		// window as running, and a stop would race the reconciliation (L12). Another window of the machine calls
+		// it too, with the machine's key (AGENT-ORCHESTRATION.md, O8).
 		let reconciled = () => { };
 		const reconciliation = new Promise<void>(resolve => reconciled = resolve);
 		const endpoint = this.endpoint = await this.listen(windowState, dir, {
-			authenticate: token => table.authenticate(token),
-			hello: (caller, server) => contract.hello(caller, server),
-			call: (caller, tool, args, progress, whenWritten) => this.whileUnderWay(reconciliation.then(() => contract.call(caller, tool, args, progress, whenWritten))),
+			// Never an empty key: a request that sends none is no window of the machine (O8)
+			authenticate: token => token && token === link.windowKey ? WINDOW_CALLER : table.authenticate(token),
+			hello: (caller, server) => caller === WINDOW_CALLER ? contract.windowHello(facts) : contract.hello(caller, server),
+			call: (caller, tool, args, progress, whenWritten) => this.whileUnderWay(reconciliation.then(() => caller === WINDOW_CALLER
+				? contract.windowCall(tool, args, progress, whenWritten, workbench)
+				: contract.call(caller, tool, args, progress, whenWritten))),
+			mayExceed: caller => caller === WINDOW_CALLER,
 			log: message => this.log.error(message)
-		}, [...table.state.agents.values()].some(isLive), windowState.unreadable);
+		}, [...table.state.agents.values()].some(isLive), windowState.unreadable, facts);
 		if (!endpoint) {
 			return;
 		}
-		this.disposables.push(endpoint);
+		// Its record stays through a reload, for the other workspaces to wait for it; it goes as the window closes (O8)
+		this.disposables.push({ dispose: () => endpoint.dispose(this.closing) });
 		// What of the person's settings Facade does not take as set is said as Facade starts, and as they change (X-59)
 		const sayProblems = () => settingsProblems().forEach(problem => this.say(`${problem}.`));
 		sayProblems();
@@ -266,7 +327,9 @@ export class AgentsService implements vscode.Disposable {
 				const preparing = agents
 					.filter(agent => agent.state === 'starting' && (agent.phase === 'creating_worktree' || agent.phase === 'running_setup'))
 					.map(agent => ({ id: agent.id, name: agent.name, phase: agent.phase, ...(agent.phase === 'running_setup' ? { folder: agent.folder } : {}) }));
-				void vscode.commands.executeCommand('_facade.agents.live', id, agents.map(agent => agent.id), preparing).then(undefined, () => undefined);
+				// Those another workspace's agent started, with that creator: closing the window ends them, which it says (L3; W11)
+				const creators = agents.filter(agent => agent.creatorAfar).map(agent => ({ id: agent.id, creator: foreignRef(agent.creatorAfar!) }));
+				void vscode.commands.executeCommand('_facade.agents.live', id, agents.map(agent => agent.id), preparing, creators).then(undefined, () => undefined);
 			}, 100);
 		};
 		const changes = table.onDidChange(pushLive);
@@ -312,7 +375,7 @@ export class AgentsService implements vscode.Disposable {
 			return;
 		}
 		this.facade = facade;
-		this.log.info(`Facade agents are ready for ${folders[0].uri.fsPath}. Record: ${dir}; pipe: ${endpoint.pipe}; available CLIs: ${facade.startable().map(each => each.id).join(', ') || 'none'}; agent framework: ${frameworkOn() ? 'on' : 'off'}.`);
+		this.log.info(`Facade agents are ready for ${folders.length ? folders[0].uri.fsPath : workspace}. Record: ${dir}; pipe: ${endpoint.pipe}; available CLIs: ${facade.startable().map(each => each.id).join(', ') || 'none'}; agent framework: ${frameworkOn() ? 'on' : 'off'}.`);
 	}
 
 	/**
@@ -320,6 +383,122 @@ export class AgentsService implements vscode.Disposable {
 	 * failed - which the workspace's ledger records for the next window to know.
 	 */
 	dispose(by: ClosedBy = 'window'): Promise<void> {
+		return this.release(by);
+	}
+
+	/**
+	 * The window shuts down, past every question that could cancel it, and says why - closing, quitting, replacing its
+	 * workspace, or reloading - before its extension host stops (AGENT-LAUNCHER.md, L6). A reload ends nothing. A close, in
+	 * order: the window's record says it closes, so that the other workspaces take it as gone and send it nothing more; its
+	 * runs end, their unread mail goes back and creators elsewhere hear of their children's ends, as notices in the other
+	 * workspaces' outboxes; those workspaces are rung, with no wait for their answers, so the window closes no later for
+	 * them; and the record goes.
+	 */
+	windowClosing(reason: 'close' | 'quit' | 'load' | 'reload' | undefined): void {
+		const facade = this.facade;
+		const endpoint = this.endpoint;
+		if (reason === undefined || reason === 'reload' || !facade || !endpoint || this.stopped || this.closing) {
+			return;
+		}
+		this.closing = true;
+		try {
+			endpoint.markClosing();
+		} catch (err) {
+			this.warn(`Could not record in window.json that this window is closing: ${messageOf(err)}`);
+		}
+		try {
+			facade.windowClosing();
+		} catch (err) {
+			this.warn(`Could not record the end of this window's agents as it closed: ${messageOf(err)}`);
+		}
+	}
+
+	/**
+	 * The window's deletion of `folder` asks every other window of the machine for its agents and unsaved editors there, and
+	 * has them hold new starts there until it lets go (AGENT-ORCHESTRATION.md, O5; WORKTREE.md WT-8, steps 2 and 6).
+	 */
+	async workIn(folder: string, by?: CallerIdentity): Promise<WorkElsewhere> {
+		if (!this.machineToAsk()) {
+			return { workspaces: [], silent: [], otherVersions: [] };
+		}
+		// Every workspace answers what protects work in it, its framework on or off - for an agent's deletion, which of its
+		// agents that agent reaches (O1, O5, O8)
+		const [{ answers, silent }, otherVersions] = await Promise.all([this.machineToAsk()!.askEvery(WINDOW_REQUESTS.workIn, { folder, ...(by ? { caller: by } : {}) }, SILENT_WAIT_MS), this.machineToAsk()!.otherVersions()]);
+		return {
+			workspaces: answers.map(({ record, label, answer }) => {
+				const work = workOf(answer);
+				return {
+					record, label, agents: work.agents.map(each => each.agent), runs: work.agents.flatMap(each => each.id !== undefined ? [each.id] : []),
+					unreached: work.agents.filter(each => !each.reached).map(each => each.agent), terminals: work.terminals, editors: work.editors
+				};
+			}).filter(each => each.agents.length || each.terminals.length || each.editors.length),
+			// A workspace whose framework is off answers this too: one that does not is silent (O8)
+			silent: silent.filter(each => each.reason === 'not answering').map(each => each.label),
+			otherVersions
+		};
+	}
+
+	/**
+	 * The window's deletion of `folder` was authorized - `place` - or settled: its deletion mark placed, refused where another
+	 * workspace's stands, or removed (WT-8, step 3).
+	 */
+	async workMark(folder: string, place: boolean): Promise<{ readonly placed: boolean; readonly by?: string }> {
+		const machine = this.machineToAsk();
+		if (!machine) {
+			return { placed: true };
+		}
+		if (!place) {
+			await machine.unmark(folder);
+			return { placed: false };
+		}
+		return machine.mark(folder);
+	}
+
+	/**
+	 * The window's deletion of `folder` is at its step 6: every other workspace stops its agents and terminals working there
+	 * and, `discard`, discards its unsaved editors there. Answers what is left, by workspace, and the workspaces that did not answer.
+	 */
+	async workRelease(folder: string, discard: boolean, by?: CallerIdentity): Promise<{ readonly left: readonly string[]; readonly silent: readonly string[]; readonly unknown: readonly string[] }> {
+		const machine = this.machineToAsk();
+		if (!machine) {
+			return { left: [], silent: [], unknown: [] };
+		}
+		// Each workspace stops its work there once - never sent again once taken - for the caller the window carried through
+		// the deletion, if an agent deletes it: an agent there that the caller does not reach stays, and is left (O1, O5, O8)
+		const { answers, silent, unknown, refused } = await machine.callEvery(WINDOW_REQUESTS.workRelease, { folder, discard, ...(by ? { caller: by } : {}) });
+		// Refused before it ran there, said with why - and those whose outcome is unknown with it: no workspace that refuses is
+		// taken for one that may answer shortly
+		if (refused?.length) {
+			const unsure = unknown?.length ? `; whether ${unknown.map(each => `workspace ${each.label}`).join(', ')} stopped its work there is unknown` : '';
+			throw new Error(`${refused.map(each => `workspace ${each.label}: ${each.why}`).join('; ')}${unsure}`);
+		}
+		const left: string[] = [];
+		for (const { label, answer } of answers) {
+			const { stopping, left: there } = (answer ?? {}) as { stopping?: unknown; left?: unknown };
+			const texts = (value: unknown) => Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : [];
+			left.push(...[...texts(stopping), ...texts(there)].map(each => `${each} (workspace ${label})`));
+		}
+		return { left, silent: silent.filter(each => each.reason === 'not answering').map(each => each.label), unknown: (unknown ?? []).map(each => each.label) };
+	}
+
+	/**
+	 * The machine to ask what protects work in a folder of this window: none where there is nothing to ask for - no
+	 * local folder. Throws where it should be there and is not - Facade did not start here, or another window has this
+	 * workspace's record - so that the deletion asking is refused rather than told of nothing (O5).
+	 */
+	private machineToAsk(): Machine | undefined {
+		if (this.machine) {
+			return this.machine;
+		}
+		if (this.noCore === undefined || this.noCore === 'noFolder') {
+			return undefined;
+		}
+		throw new Error(this.noCore === 'otherWindow'
+			? vscode.l10n.t("Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.")
+			: vscode.l10n.t("Facade cannot read this workspace's agent record: {0}", this.recordDir ?? ''));
+	}
+
+	private release(by: ClosedBy): Promise<void> {
 		this.stopped = true;
 		this.stoppedBy ??= by;
 		this.facade = undefined;
@@ -467,7 +646,7 @@ export class AgentsService implements vscode.Disposable {
 			this.tellNoCore(vscode.l10n.t("Agents for this workspace are managed in another window. Delete chat rooms in that window."));
 			return;
 		}
-		if (!await confirmDeleteRooms()) {
+		if (!await confirmDeleteRooms(this.facade.mail.rooms.list())) {
 			return;
 		}
 		try {
@@ -516,7 +695,10 @@ export class AgentsService implements vscode.Disposable {
 	private async openTable(dir: string, owner: string, session: string | undefined, mayMoveAside: () => boolean, onMovedAside?: (why: string, keptAs: string) => void): Promise<AgentTable | undefined> {
 		const locked = lockWait(HANDOVER_MS);
 		let told = false;
-		return this.retried(() => AgentTable.open({ dir, owner, session, mayMoveAside, onMovedAside, onTaken: () => setImmediate(() => this.taken()) }), err => {
+		const counters = new MachineCounters(countersFile(), workspacesRoot());
+		// The record joins the counters as it opens, under their lock: waited for first without holding up the extension host (L12)
+		await counters.ready();
+		return this.retried(() => AgentTable.open({ dir, owner, session, mayMoveAside, onMovedAside, onTaken: () => setImmediate(() => this.taken()), counters }), err => {
 			if (err instanceof LedgerLockedError && !told) {
 				told = true;
 				this.log.info(`${err.message} Waiting for the previous window to release the ledger lock or for an untouched lock to expire.`);
@@ -553,7 +735,7 @@ export class AgentsService implements vscode.Disposable {
 	}
 
 	/** The endpoint the agents' MCP servers call, once it listens. */
-	private listening(): PipeEndpoint<Caller> {
+	private listening(): PipeEndpoint<PipeCaller> {
 		if (!this.endpoint) {
 			throw new Error('The Facade agent service is not listening in this window.');
 		}
@@ -588,7 +770,7 @@ export class AgentsService implements vscode.Disposable {
 	 * taken, the person told that the agents still running lost Facade's tools. The tools it serves go into
 	 * the record with it: an agent's MCP server lists them while the window does not answer (L1; O8).
 	 */
-	private async listen(windowState: StateStore, dir: string, handlers: PipeHandlers<Caller>, agentsRun: boolean, unreadable?: string): Promise<PipeEndpoint<Caller> | undefined> {
+	private async listen(windowState: StateStore, dir: string, handlers: PipeHandlers<PipeCaller>, agentsRun: boolean, unreadable: string | undefined, facts: WindowFacts): Promise<PipeEndpoint<PipeCaller> | undefined> {
 		const kept = windowState.get(PIPE_ID_KEY);
 		// The file that names the pipe could not be read: the agents running call a pipe this window cannot know -
 		// said once, loud, not lost quietly (C-REC-19)
@@ -602,7 +784,7 @@ export class AgentsService implements vscode.Disposable {
 			// No shorter than the extension host before takes to let go of it, however short the person set it.
 			const deadline = Date.now() + (agentsRun ? Math.max(timeoutMs(), HANDOVER_MS) : HANDOVER_MS);
 			try {
-				return await this.retried(() => PipeEndpoint.start(pipePath(kept), dir, handlers, frameworkOn(), toolDefinitions()), err => codeOf(err) === 'EADDRINUSE' && Date.now() < deadline);
+				return await this.retried(() => PipeEndpoint.start(pipePath(kept), dir, handlers, frameworkOn(), toolDefinitions(), facts), err => codeOf(err) === 'EADDRINUSE' && Date.now() < deadline);
 			} catch (err) {
 				if (codeOf(err) !== 'EADDRINUSE') {
 					throw err;
@@ -615,7 +797,7 @@ export class AgentsService implements vscode.Disposable {
 		}
 		const pipeId = crypto.randomBytes(8).toString('hex');
 		await windowState.update(PIPE_ID_KEY, pipeId);
-		return this.stopped ? undefined : PipeEndpoint.start(pipePath(pipeId), dir, handlers, frameworkOn(), toolDefinitions());
+		return this.stopped ? undefined : PipeEndpoint.start(pipePath(pipeId), dir, handlers, frameworkOn(), toolDefinitions(), facts);
 	}
 
 	/** What `attempt` makes, tried again while `again` says so of what it failed with; undefined once the service stopped meanwhile. */
@@ -632,6 +814,44 @@ export class AgentsService implements vscode.Disposable {
 		}
 		return undefined;
 	}
+}
+
+/** Facade's version and commit, as the product it runs in says: what the windows of one machine must share to call each other (O1). */
+function productOf(): { readonly version?: string; readonly commit?: string } {
+	try {
+		const product: unknown = JSON.parse(fs.readFileSync(path.join(vscode.env.appRoot, 'product.json'), 'utf8'));
+		if (!isJsonObject(product)) {
+			return {};
+		}
+		const version = typeof product.facadeVersion === 'string' ? product.facadeVersion : typeof product.version === 'string' ? product.version : undefined;
+		const commit = typeof product.commit === 'string' ? product.commit : undefined;
+		return { ...(version ? { version } : {}), ...(commit ? { commit } : {}) };
+	} catch {
+		return {};
+	}
+}
+
+/** Who deletes a folder, as the window carries it through the deletion: a caller of a workspace, each field checked (O5). */
+export function identityIn(value: unknown): CallerIdentity | undefined {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	// One that names nobody it can tell is no deletion's to carry out as the person's: refused (O5)
+	const caller = callerOfRequest(value);
+	if (!caller?.from) {
+		throw new Error(vscode.l10n.t("The deletion names a caller that Facade could not read."));
+	}
+	return { ...(caller.id !== undefined ? { id: caller.id } : {}), name: caller.name, from: caller.from };
+}
+
+/**
+ * Whether the window, with no folder on this machine, still runs agents of its record in its terminals: a workspace
+ * whose last folder left while they ran, reloaded, which stays their workspace (AGENT-ORCHESTRATION.md, O1; WORKSPACE.md W9.6).
+ */
+export async function keepsAgentsWithoutFolder(workspaceState: vscode.Memento): Promise<boolean> {
+	const id = workspaceState.get(WORKSPACE_ID_KEY);
+	// A workspace file, saved or untitled: a folder window with no folder is no window at all
+	return vscode.workspace.workspaceFile !== undefined && isWorkspaceId(id) && await agentProcessesRun(id);
 }
 
 /**

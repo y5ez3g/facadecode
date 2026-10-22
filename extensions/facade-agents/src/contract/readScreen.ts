@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ANSWER_DELAY_MS, ANSWER_LINES, DEFAULT_LINES, InputResult, MOST_INLINE_CHARS, MOST_LINES, ScreenRead } from '../core/screens';
-import { agentRef, describe, PERSON } from '../record/events';
+import { agentRef, describe, foreignRef, isForeign, PERSON } from '../record/events';
 import { Args } from './args';
 import type { ContractTool } from './tools';
 import { timeOfDay } from './words';
@@ -43,7 +43,7 @@ export function screenText(read: ScreenRead, cliName: string): string {
 		`Source: ${read.source}; requested=${lines(read.requested)}; selected=${lines(read.selected)}; older=${read.older}.`
 	];
 	if (read.end) {
-		const by = read.end.by === undefined ? '' : ` by ${read.end.by === 'human' ? describe(PERSON) : agentRef(read.end.by)}`;
+		const by = read.end.by === undefined ? '' : ` by ${read.end.by === 'human' ? describe(PERSON) : isForeign(read.end.by) ? foreignRef(read.end.by) : agentRef(read.end.by)}`;
 		said.push(`Ended at ${timeOfDay(read.end.time)}: ${read.end.kind}${by}: ${read.end.reason}${read.end.exitCode !== undefined ? `; exit code=${read.end.exitCode}` : ''}.`);
 	} else if (read.exited) {
 		said.push('The process has exited; its terminal is still open.');

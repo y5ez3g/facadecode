@@ -12,10 +12,13 @@ import { readCliConfig } from '../clis/config';
 import { customAgentOf } from '../clis/custom';
 import { Facade, StartRequest, Started } from '../core/facade';
 import { customAgentNameProblem } from '../core/launch';
+import { Machine } from '../core/machine';
 import { Fetched, FetchRequest } from '../core/mail';
 import { Disposable, EndedAgent, EndTold, Git, InputEffect, KeysOptions, ListedWorktree, MadeWorktreeFolder, Notification, Person, PersonInput, Repository, SetupOutcome, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TerminalsInside, TypeOptions, WorktreeChanges, WorktreeDeletion } from '../core/ports';
 import { AgentTable } from '../record/agents';
-import { Agent, Caller } from '../record/events';
+import { NumberCounters } from '../record/counters';
+import { WaitingNotice } from '../record/outbox';
+import { Agent, Caller, describe } from '../record/events';
 import { ClosedBy, Ledger } from '../record/ledger';
 import { FACADE, MailboxEntry, Message, MessageRecord, NewMessage } from '../record/messages';
 import { settled, until } from './clock';
@@ -623,8 +626,8 @@ interface Recording {
 /** A world's record of messages: Facade's own, but that recording one fails where `recording` says, as a disk that refuses the write would. */
 class FallibleMessageRecord extends MessageRecord {
 
-	constructor(dir: string, ledger: Ledger, private readonly recording: Recording) {
-		super(dir, ledger);
+	constructor(dir: string, ledger: Ledger, private readonly recording: Recording, counters?: NumberCounters) {
+		super(dir, ledger, counters);
 	}
 
 	override send(message: NewMessage): Message {
@@ -810,6 +813,14 @@ export interface WorldOptions {
 	readonly toldModelCarriesEffort?: boolean;
 	/** Arg Code keeps its question tool, as Muse Code does: no launch takes it away (N-71). */
 	readonly argKeepsQuestions?: boolean;
+	/** The other windows of the machine, as a test links worlds: none unless set. */
+	readonly machine?: Machine;
+	/** The machine's counters, which windows that share them number from: the record's own numbers alone unless set. */
+	readonly counters?: NumberCounters;
+	/** The notices other workspaces left for this one: none unless set. */
+	readonly notices?: () => readonly WaitingNotice[];
+	/** Where the machine's chat rooms are: the record's own folder unless set. */
+	readonly roomsFolder?: string;
 }
 
 /** How many worlds were made: each one a new load of the window. */
@@ -825,7 +836,7 @@ let loads = 0;
  */
 export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const recording: Recording = {};
-	const table = AgentTable.open({ dir, isRunning: options.isRunning, owner: options.owner ?? 'lab', session: options.session ?? `load-${++loads}`, messageRecord: (recordDir, ledger) => new FallibleMessageRecord(recordDir, ledger, recording) });
+	const table = AgentTable.open({ dir, isRunning: options.isRunning, owner: options.owner ?? 'lab', session: options.session ?? `load-${++loads}`, ...(options.counters ? { counters: options.counters } : {}), messageRecord: (recordDir, ledger, counters) => new FallibleMessageRecord(recordDir, ledger, recording, counters) });
 	const terminals = new FakeTerminals();
 	const git = new FakeGit(options.repositories ?? {}, options.gitDir ?? path.join(dir, 'git'), options.unborn);
 	const person = new FakePerson();
@@ -851,6 +862,9 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const ignoringTermination = new Set<number>();
 	const facade = new Facade({
 		...(options.platform ? { platform: options.platform } : {}),
+		...(options.machine ? { machine: options.machine } : {}),
+		...(options.notices ? { notices: options.notices } : {}),
+		...(options.roomsFolder ? { roomsFolder: options.roomsFolder } : {}),
 		table,
 		ports: { terminals, git, workspace: { folders: () => [...options.firstFolders ?? [], ...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder, worktreesManaged: () => switches.worktrees }, person },
 		clis: {
@@ -883,7 +897,8 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 			agentEnv: tokenFile => ({ FACADE_AGENTS_PIPE: 'pipe', FACADE_AGENTS_TOKEN: tokenFile }),
 			skills: () => [{ name: 'facade', description: 'How to work in Facade Code.', body: options.skill ?? '# Working in Facade Code' }],
 			firstLine: (agent, creator, task, note) => [
-				`[facade] You are @${agent.name} #a${agent.id}, created by @${creator.name}${creator.id !== undefined ? ` #a${creator.id}` : ''}.`,
+				// Its creator as the real one names it: of another workspace, with that workspace
+				`[facade] You are @${agent.name} #a${agent.id}, created by ${describe(creator)}.`,
 				...note ? [note] : [],
 				...task !== undefined ? [`Your task is #m${task}.`] : []
 			].join(' ')
@@ -961,13 +976,16 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		 * start_agent answered, or its error. On a test's clock.
 		 */
 		async startUp(caller: Caller, request: StartRequest): Promise<Started> {
-			const id = table.state.lastId + 1;
+			// Its number the next of the record's - or, numbered by the machine's counters, the one its terminal is launched with
+			const before = terminals.launched.length;
+			const numbered = () => options.counters ? terminals.launched.slice(before).map(launch => /^@\S+ #a(\d+)$/.exec(launch.name)?.[1]).find(Boolean) : String(table.state.lastId + 1);
+			const next = table.state.lastId + 1;
 			let over = false;
 			const starting = facade.startAgent(caller, request);
 			starting.then(() => over = true, () => over = true);
-			await until(() => over || terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.endsWith(` #a${id}`)));
+			await until(() => over || (options.counters ? numbered() !== undefined : terminals.launched.some(launch => launch.name.startsWith(`@`) && launch.name.endsWith(` #a${next}`))));
 			if (!over) {
-				facade.connected(callerOf(this.agent(id)));
+				facade.connected(callerOf(this.agent(Number(options.counters ? numbered() : next))));
 			}
 			return settled(starting);
 		},

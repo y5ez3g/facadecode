@@ -19,9 +19,10 @@ const NPM_SHIM_PROGRAM = /SET\s+"_prog=(?<program>[^"]*)"/gi;
 const NODE_EXECUTABLE = /\.(?:exe|com)$/i;
 /**
  * What cmd.exe reads as its own in an argument, or which ends one: text with any of these that goes
- * through it can run commands or lose what follows.
+ * through it can run commands or lose what follows. Parentheses reach a launcher's `%*` whole, quoted
+ * or not, and are not among them: another workspace's agent is written with its workspace in them.
  */
-const CMD_SPECIAL = /["%^&|<>!()\r\n]/;
+const CMD_SPECIAL = /["%^&|<>!\r\n]/;
 
 /** The variable of the environment the operating system says the person's home folder in. */
 export const HOME_VARIABLE = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';

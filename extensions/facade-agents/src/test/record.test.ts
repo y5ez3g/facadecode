@@ -11,7 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
 import { agentName, AgentTable, countOnFrom, nameOfWorktree, NewAgent, numberedUpTo } from '../record/agents';
-import { agentRef, describe, LedgerEventBody, parseAgentReference, PERSON } from '../record/events';
+import { agentRef, describe, LedgerEventBody, parseAgentReference, PERSON, splitWorkspace, workspaceNameOf, workspaceWordOf } from '../record/events';
 import { isLedgerHeld, Ledger, LedgerLockedError, lockStateOf, lockWait } from '../record/ledger';
 import { earlierRecordOf, identityOf, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { AGENTS_LOG } from '../record/log';
@@ -320,10 +320,12 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		});
 	});
 
-	test('an agent\'s number is written #a7, and a tool\'s reference reads #a7, #7, a7 and 7 as its number - a7 and 7 bare, as a name could be them too - @name and name as a name, @name #a7 as both, and #m7 as another kind\'s number', () => {
+	test('an agent\'s number is written #a7, and a tool\'s reference reads #a7, #7, a7 and 7 as its number - a7 and 7 bare, as a name could be them too - @name and name as a name, @name #a7 as both, and #m7 as another kind\'s number; any of them may end in its workspace, a label\'s parentheses in it (O2)', () => {
 		assert.deepStrictEqual({
 			written: [agentRef(7), describe({ id: 7, name: 'lint' }), describe(PERSON)],
-			read: ['#a7', '#7', ' a7 ', '7', '#A7', '@Lint', 'lint', '@lint #a7', '@lint #7', '#m7', '@lint #m7'].map(parseAgentReference)
+			read: ['#a7', '#7', ' a7 ', '7', '#A7', '@Lint', 'lint', '@lint #a7', '@lint #7', '#m7', '@lint #m7'].map(parseAgentReference),
+			placed: ['@lint #a7 (workspace lab)', '7 (workspace 0161ba44)', '@lint (Workspace Untitled (Workspace) (C:\\lab, 0161ba44))', '@lint #a7 (workspace )'].map(parseAgentReference),
+			split: splitWorkspace(' #m7 (workspace lab) ')
 		}, {
 			written: ['#a7', '@lint #a7', '@human'],
 			read: [
@@ -338,11 +340,41 @@ suite('Record: agents, their numbers, names and tokens', () => {
 				{ kind: 'number', id: 7, name: 'lint', bare: false },
 				{ kind: 'other', text: '#m7' },
 				{ kind: 'other', text: '@lint #m7' }
-			]
+			],
+			placed: [
+				{ kind: 'number', id: 7, name: 'lint', bare: false, workspace: 'lab' },
+				{ kind: 'number', id: 7, bare: true, workspace: '0161ba44' },
+				{ kind: 'name', name: 'lint', workspace: 'Untitled (Workspace) (C:\\lab, 0161ba44)' },
+				{ kind: 'name', name: 'lint #a7 (workspace )' }
+			],
+			split: { text: '#m7', workspace: 'lab' }
 		});
 	});
 
-	test('a ledger of version 5 - a task kept in a file of its own, its notice typed - reads as it was, the task\'s number given no more; what is appended to it is of version 6 (M7, M11)', () => {
+	test('a workspace is written after a reference by its name and the start of its record id, whatever parentheses its name and folder hold, and reads back as written (O2)', () => {
+		const labels = ['lab (C:\\src\\lab, 1a2b3c4d)', 'Untitled (Workspace) (C:\\src\\lab (old), 0161ba44)', 'app (/home/me/app (2), 9f8e7d6c)', 'scratch (5e6f7a8b)', 'app (old (/srv/a, 2b3c4d5e)', 'app) (/srv/b, 3c4d5e6f)', 'a) b (c (/srv/c, 4d5e6f7a)'];
+		const words = labels.map(label => workspaceWordOf(label));
+
+		assert.deepStrictEqual({
+			names: labels.map(workspaceNameOf),
+			words,
+			byRecord: workspaceWordOf(undefined, '0161ba44-0000-4000-8000-000000000000'),
+			read: words.map(word => parseAgentReference(`@lint #a7 (workspace ${word})`))
+		}, {
+			names: ['lab', 'Untitled (Workspace)', 'app', 'scratch', 'app (old', 'app)', 'a) b (c'],
+			words: ['lab, 1a2b3c4d', 'Untitled (Workspace), 0161ba44', 'app, 9f8e7d6c', 'scratch, 5e6f7a8b', '2b3c4d5e', '3c4d5e6f', '4d5e6f7a'],
+			byRecord: '0161ba44',
+			read: words.map(workspace => ({ kind: 'number', id: 7, name: 'lint', bare: false, workspace }))
+		});
+	});
+
+	test('a workspace whose name cmd.exe would read as its own is written by the start of its record id alone - what Facade writes of it goes on a command line in a first line (O2, L10)', () => {
+		const labels = ['R&D (C:\\src\\rd, 1a2b3c4d)', '100% (C:\\src\\full, 2b3c4d5e)', 'Hi! (C:\\src\\hi, 3c4d5e6f)', 'a^b (C:\\src\\ab, 4d5e6f7a)', 'x|y (C:\\src\\xy, 5e6f7a8b)', 'my lab (old) (C:\\src\\lab, 6f7a8b9c)'];
+
+		assert.deepStrictEqual(labels.map(label => workspaceWordOf(label)), ['1a2b3c4d', '2b3c4d5e', '3c4d5e6f', '4d5e6f7a', '5e6f7a8b', 'my lab (old), 6f7a8b9c']);
+	});
+
+	test('a ledger of version 5 - a task kept in a file of its own, its notice typed - reads as it was, the task\'s number given no more; what is appended to it is of version 7 (M7, M11; L12)', () => {
 		table.dispose();
 		const file = path.join(temp.dir, LEDGER);
 		fs.writeFileSync(file, [
@@ -361,7 +393,7 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		assert.deepStrictEqual({ read, next, versions }, {
 			read: { state: 'running', runningTime: 5, lastMessage: 7 },
 			next: 8,
-			versions: [5, 5, 5, 5, 5, 6]
+			versions: [5, 5, 5, 5, 5, 7]
 		});
 	});
 

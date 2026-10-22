@@ -5,7 +5,8 @@
 
 import { isEqualPath } from '../base/files';
 import { JsonObject } from '../base/json';
-import { applyMessages, clearMailboxes, createMessagesState, FACADE, fitsMessages, HUMAN, messageBodyOf, MessageEventBody, MessagesState } from './messages';
+import { applyMessages, clearMailboxes, createMessagesState, FACADE, fitsMessages, ForeignAgent, HUMAN, isForeign, workspaceWordOf, messageBodyOf, MessageEventBody, MessagesState } from './messages';
+export { ForeignAgent, foreignRef, isForeign, workspaceNameOf, workspaceWordOf } from './messages';
 /** The first number an agent gets; numbers then count up and are never given twice within a workspace. */
 const FIRST_ID = 1;
 /** Names an agent cannot take: the person's, Facade's, and words a model reads as someone else. */
@@ -47,8 +48,8 @@ export type EndKind = 'exited' | 'stopped' | 'failed' | 'lost';
  */
 export type StartPhase = 'creating_worktree' | 'running_setup' | 'launching_cli' | 'connecting';
 
-/** Who stopped an agent: another agent, by its number, or the person. */
-export type StoppedBy = number | 'human';
+/** Who stopped an agent: another agent - of this record, by its number, or of another window (AGENT-ORCHESTRATION.md, O8) - or the person. */
+export type StoppedBy = number | 'human' | ForeignAgent;
 
 /** An agent's sandbox, as its launch left it: on, off, unavailable where its CLI has none, unknown for a custom agent. */
 export type SandboxState = 'on' | 'off' | 'unavailable' | 'unknown';
@@ -83,6 +84,17 @@ export interface Agent {
 	readonly creator?: number;
 	/** The number of its tree's root: the agent the person started that it comes from, itself for that one. */
 	readonly root: number;
+	/**
+	 * Its creator and its tree's root, where they are agents of another workspace (AGENT-ORCHESTRATION.md, O3, O8): `creator`
+	 * and `root` are their numbers, which the machine gives once (AGENT-LAUNCHER.md, L2).
+	 */
+	readonly creatorAfar?: ForeignAgent;
+	readonly rootAfar?: ForeignAgent;
+	/**
+	 * Beyond a creator of another workspace, that creator's own ancestors, nearest first, as its workspace gave them: M8's
+	 * nearest available ancestor is found through them when a workspace between closes (O11).
+	 */
+	readonly ancestorsAfar?: readonly ForeignAgent[];
 	/** The CLI's id, or a custom agent's name. */
 	readonly cli: string;
 	/** Whether it is one of the person's custom agents. */
@@ -174,6 +186,10 @@ export type LedgerEventBody =
 		readonly creator?: number;
 		/** Its tree's root; none for a root, which is its own. */
 		readonly root?: number;
+		/** Its creator and its tree's root, where they are agents of another workspace (O8), and that creator's ancestors. */
+		readonly creatorAfar?: ForeignAgent;
+		readonly rootAfar?: ForeignAgent;
+		readonly ancestorsAfar?: readonly ForeignAgent[];
 		readonly cli: string;
 		readonly custom?: boolean;
 		readonly model?: string;
@@ -211,6 +227,8 @@ export type LedgerEventBody =
 	| { readonly type: 'worktree.removal' } & WorktreeRemoval
 	/** A start of the window that is not a reload: the agents that ended leave the list, and their mailboxes are emptied. */
 	| { readonly type: 'list.cleared' }
+	/** The agent started a child in another workspace, which numbered it there (AGENT-ORCHESTRATION.md, O11). */
+	| { readonly type: 'agent.childAfar'; readonly id: number; readonly child: ForeignAgent }
 	| MessageEventBody;
 
 /** An event as the ledger keeps it: numbered, with the time it happened. */
@@ -221,6 +239,26 @@ export interface Caller {
 	/** None for the person. */
 	readonly id?: number;
 	readonly name: string;
+	/**
+	 * For a call another window of the machine forwarded (AGENT-ORCHESTRATION.md, O8), who the caller is there: its window,
+	 * and - for an agent - its YOLO and tree, which that window knows; none for a caller of this window's own.
+	 */
+	readonly from?: ForeignCaller;
+}
+
+/**
+ * A caller of another workspace, as that workspace says it is: its workspace's record and label, and for an agent its
+ * YOLO, creator and tree - the root's number with the root's workspace, which together name the tree (O8) - and the chain
+ * of its ancestors, nearest first, as its workspace knows them.
+ */
+export interface ForeignCaller {
+	readonly window: string;
+	readonly label: string;
+	readonly yolo?: boolean;
+	readonly creator?: number;
+	readonly root?: number;
+	readonly rootWindow?: string;
+	readonly ancestors?: readonly ForeignAgent[];
 }
 
 /** The person, as a caller. */
@@ -236,38 +274,69 @@ export function messageRef(id: number): string {
 	return `#m${id}`;
 }
 
-/** An agent as Facade's words name it, `@lint #a7`; the person as `@human`. */
+/** An agent as Facade's words name it, `@lint #a7`; the person as `@human`; a caller of another window with its window's label. */
 export function describe(who: Caller): string {
-	return who.id === undefined ? `@${HUMAN}` : `@${who.name} ${agentRef(who.id)}`;
+	const of = who.from ? ` (workspace ${workspaceWordOf(who.from.label, who.from.window)})` : '';
+	return who.id === undefined ? `@${HUMAN}${of}` : `@${who.name} ${agentRef(who.id)}${of}`;
+}
+
+/** What a record writes of a caller of another window, as who stopped an agent or removed a worktree: the agent; none for the person. */
+export function foreignOf(caller: Caller): ForeignAgent | 'human' | undefined {
+	if (!caller.from) {
+		return undefined;
+	}
+	return caller.id === undefined ? HUMAN : { id: caller.id, name: caller.name, window: caller.from.window, label: caller.from.label };
 }
 
 /**
  * What a tool's reference to an agent says: its number - with its name, or bare, so that it may be a
  * name as well - its name, or a number of another kind.
  */
+/** A reference to an agent; `workspace`, where it ends in one, names the workspace it is in, by its name, label or the start of its record id (O2). */
 export type AgentReference =
-	| { readonly kind: 'number'; readonly id: number; readonly name?: string; readonly bare: boolean }
-	| { readonly kind: 'name'; readonly name: string }
+	| { readonly kind: 'number'; readonly id: number; readonly name?: string; readonly bare: boolean; readonly workspace?: string }
+	| { readonly kind: 'name'; readonly name: string; readonly workspace?: string }
 	| { readonly kind: 'other'; readonly text: string };
 
 /**
+ * Splits the workspace off a reference written as Facade writes one of another workspace - `@lint #a7 (workspace lab,
+ * 1a2b3c4d)`, `#m7 (workspace lab)` - into the reference and the workspace: from the last parenthesis back to the one
+ * that opens it, whatever parentheses the workspace's name holds (AGENT-ORCHESTRATION.md, O2).
+ */
+export function splitWorkspace(text: string): { readonly text: string; readonly workspace?: string } {
+	const trimmed = text.trim();
+	let depth = 0;
+	for (let i = trimmed.length - 1; i >= 0 && trimmed.endsWith(')'); i--) {
+		if (trimmed[i] === ')') {
+			depth++;
+		} else if (trimmed[i] === '(' && --depth === 0) {
+			const workspace = /^\(workspace\s+(?<workspace>[\s\S]*)\)$/i.exec(trimmed.slice(i))?.groups?.workspace.trim();
+			return workspace ? { text: trimmed.slice(0, i).trim(), workspace } : { text: trimmed };
+		}
+	}
+	return { text: trimmed };
+}
+
+/**
  * Reads a tool's reference to an agent: `#a7`, `#7`, `a7` or `7` by its number; `@name` or `name` by
- * its name; `@name #a7` by both. A number with another kind's letter, `#m7`, is no agent's.
+ * its name; `@name #a7` by both; any of them followed by its workspace. A number with another kind's
+ * letter, `#m7`, is no agent's.
  */
 export function parseAgentReference(text: string): AgentReference {
-	const trimmed = text.trim();
+	const { text: trimmed, workspace } = splitWorkspace(text);
+	const where = workspace !== undefined ? { workspace } : {};
 	const numbered = NAMED_REFERENCE.exec(trimmed)?.groups ?? NUMBER_REFERENCE.exec(trimmed)?.groups;
 	if (numbered) {
 		if (numbered.letter !== undefined && numbered.letter.toLowerCase() !== AGENT_LETTER) {
 			return { kind: 'other', text: trimmed };
 		}
-		return { kind: 'number', id: Number(numbered.id), ...(numbered.name !== undefined ? { name: numbered.name.toLowerCase() } : {}), bare: false };
+		return { kind: 'number', id: Number(numbered.id), ...(numbered.name !== undefined ? { name: numbered.name.toLowerCase() } : {}), bare: false, ...where };
 	}
 	const bare = BARE_REFERENCE.exec(trimmed)?.groups;
 	if (bare) {
-		return { kind: 'number', id: Number(bare.id), bare: true };
+		return { kind: 'number', id: Number(bare.id), bare: true, ...where };
 	}
-	return { kind: 'name', name: trimmed.replace(/^@/, '').toLowerCase() };
+	return { kind: 'name', name: trimmed.replace(/^@/, '').toLowerCase(), ...where };
 }
 
 /**
@@ -279,6 +348,16 @@ export interface AgentIdentity {
 	readonly name: string;
 	readonly root: number;
 	readonly worktree: string;
+	/** For a tree's root of another workspace, that workspace: as the workspaces name it, and its record (M9). */
+	readonly workspace?: string;
+	readonly window?: string;
+	/** For an agent of this record whose tree's root is of another workspace, that workspace's record: the root is `foreignRoots`'s. */
+	readonly rootWindow?: string;
+}
+
+/** How `foreignRoots` keys a root of another workspace: by its workspace's record and its number, which another record may share. */
+export function foreignRootKey(window: string, id: number): string {
+	return `${window} ${id}`;
 }
 
 /** Whether `text` names the person, as a tool may: `@human`, or `human`. */
@@ -296,6 +375,11 @@ export interface WorkspaceState {
 	readonly agents: Map<number, Agent>;
 	/** Every agent the workspace's ledger started, by number: those that left the list too. */
 	readonly identities: Map<number, AgentIdentity>;
+	/**
+	 * The roots of other workspaces whose trees agents of this record are in, by their workspace's record and number
+	 * (`foreignRootKey`): apart from this record's agents, whose numbers before machine numbering they may share (M9; L12).
+	 */
+	readonly foreignRoots: Map<string, AgentIdentity>;
 	/** The numbers of the agents that have not exited, by the hashes of their tokens. */
 	readonly tokens: Map<string, number>;
 	/** The worktrees Facade made, by folder. */
@@ -304,11 +388,13 @@ export interface WorkspaceState {
 	readonly removals: Map<string, WorktreeRemoval>;
 	/** The messages, and the mailboxes (AGENT-MESSAGES.md). */
 	readonly mail: MessagesState;
+	/** The children each agent of the list started in other workspaces, by the agent's number (O11). */
+	readonly childrenAfar: Map<number, ForeignAgent[]>;
 }
 
 /** The state of a workspace with no ledger yet: no agent and no message, the next numbers the first. */
 export function createState(): WorkspaceState {
-	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), identities: new Map(), tokens: new Map(), worktrees: new Map(), removals: new Map(), mail: createMessagesState() };
+	return { seq: 0, lastId: FIRST_ID - 1, agents: new Map(), identities: new Map(), foreignRoots: new Map(), tokens: new Map(), worktrees: new Map(), removals: new Map(), mail: createMessagesState(), childrenAfar: new Map() };
 }
 
 const END_KINDS: ReadonlySet<string> = new Set<EndKind>(['exited', 'stopped', 'failed', 'lost']);
@@ -328,9 +414,9 @@ function isId(value: unknown): value is number {
 	return typeof value === 'number' && Number.isInteger(value) && value >= FIRST_ID;
 }
 
-/** Whether `value` names who stopped an agent: an agent's number, or the person. */
+/** Whether `value` names who stopped an agent: an agent's number, one of another window, or the person. */
 function isStoppedBy(value: unknown): value is StoppedBy {
-	return value === HUMAN || isId(value);
+	return value === HUMAN || isId(value) || isForeign(value);
 }
 
 /** Whether `value` is a string with something in it. */
@@ -357,7 +443,7 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 			// A line of version 4 has neither YOLO nor sandbox, its agents at full access, and model and effort always.
 			// One of version 5 says how the notice of its task reached it, and the number of its task's message, kept
 			// in a file of its own: the number is given no more, and the rest is nothing now (AGENT-MESSAGES.md, M7).
-			const { id, name, creator, root, cli, custom, model, effort, ignored, unattended, worktree, outsideGit, folder, taskMessage, task, tokenHash, phase } = value;
+			const { id, name, creator, root, cli, custom, model, effort, ignored, unattended, worktree, outsideGit, folder, taskMessage, task, tokenHash, phase, creatorAfar, rootAfar, ancestorsAfar } = value;
 			const yolo = value.yolo ?? (value.v === 4 ? true : undefined);
 			const sandbox = value.sandbox ?? (value.v === 4 ? 'unknown' : undefined);
 			const integration = value.integration ?? (value.v === 4 ? true : undefined);
@@ -366,11 +452,15 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 				|| (ignored !== undefined && !(Array.isArray(ignored) && ignored.every(each => typeof each === 'string' && IGNORABLE.has(each))))
 				|| typeof yolo !== 'boolean' || (unattended !== undefined && unattended !== true) || typeof sandbox !== 'string' || !SANDBOX_STATES.has(sandbox) || typeof integration !== 'boolean'
 				|| typeof worktree !== 'string' || (outsideGit !== undefined && outsideGit !== true) || !isText(folder) || (taskMessage !== undefined && !isId(taskMessage)) || (task !== undefined && (typeof task !== 'string' || !STARTING_TASKS.has(task)))
-				|| typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (phase !== undefined && (typeof phase !== 'string' || !START_PHASES.has(phase)))) {
+				|| typeof tokenHash !== 'string' || !TOKEN_HASH.test(tokenHash) || (phase !== undefined && (typeof phase !== 'string' || !START_PHASES.has(phase)))
+				|| (creatorAfar !== undefined && (!isForeign(creatorAfar) || creatorAfar.id !== creator)) || (rootAfar !== undefined && (!isForeign(rootAfar) || rootAfar.id !== root))
+				|| (ancestorsAfar !== undefined && (creatorAfar === undefined || !Array.isArray(ancestorsAfar) || !ancestorsAfar.every(isForeign)))) {
 				return undefined;
 			}
 			return {
 				type: 'agent.started', id, name, ...(creator !== undefined ? { creator } : {}), ...(root !== undefined ? { root } : {}), cli, ...(custom ? { custom } : {}),
+				...(creatorAfar !== undefined ? { creatorAfar: creatorAfar as ForeignAgent } : {}), ...(rootAfar !== undefined ? { rootAfar: rootAfar as ForeignAgent } : {}),
+				...(Array.isArray(ancestorsAfar) && ancestorsAfar.length ? { ancestorsAfar: ancestorsAfar as ForeignAgent[] } : {}),
 				...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ...(Array.isArray(ignored) && ignored.length ? { ignored: ignored as Ignored[] } : {}),
 				yolo, ...(unattended ? { unattended } : {}), sandbox: sandbox as SandboxState, integration, worktree, ...(outsideGit ? { outsideGit } : {}), folder, tokenHash,
 				...(phase !== undefined ? { phase: phase as StartPhase } : {}),
@@ -400,13 +490,13 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 		case 'agent.stopping': {
 			const { id, by, reason } = value;
 			return isId(id) && (by === undefined || isStoppedBy(by)) && typeof reason === 'string'
-				? { type: 'agent.stopping', id, ...(by !== undefined ? { by } : {}), reason }
+				? { type: 'agent.stopping', id, ...(by !== undefined ? { by: by as StoppedBy } : {}), reason }
 				: undefined;
 		}
 		case 'agent.ended': {
 			const { id, kind, by, reason, exitCode } = value;
 			return isId(id) && isEndKind(kind) && (by === undefined || isStoppedBy(by)) && typeof reason === 'string' && (exitCode === undefined || (typeof exitCode === 'number' && Number.isInteger(exitCode)))
-				? { type: 'agent.ended', id, kind, ...(by !== undefined ? { by } : {}), reason, ...(exitCode !== undefined ? { exitCode } : {}) }
+				? { type: 'agent.ended', id, kind, ...(by !== undefined ? { by: by as StoppedBy } : {}), reason, ...(exitCode !== undefined ? { exitCode } : {}) }
 				: undefined;
 		}
 		case 'worktree.made': {
@@ -423,11 +513,15 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
 			const { folder, by, deleted, reason, main, branch } = value;
 			return isText(folder) && (by === undefined || isStoppedBy(by)) && typeof deleted === 'boolean' && (reason === undefined || typeof reason === 'string')
 				&& (main === undefined || isText(main)) && (branch === undefined || isText(branch))
-				? { type: 'worktree.removal', folder, ...(by !== undefined ? { by } : {}), deleted, ...(reason !== undefined ? { reason } : {}), ...(main !== undefined ? { main } : {}), ...(branch !== undefined ? { branch } : {}) }
+				? { type: 'worktree.removal', folder, ...(by !== undefined ? { by: by as StoppedBy } : {}), deleted, ...(reason !== undefined ? { reason } : {}), ...(main !== undefined ? { main } : {}), ...(branch !== undefined ? { branch } : {}) }
 				: undefined;
 		}
 		case 'list.cleared':
 			return { type: 'list.cleared' };
+		case 'agent.childAfar': {
+			const { id, child } = value;
+			return isId(id) && isForeign(child) ? { type: 'agent.childAfar', id, child } : undefined;
+		}
 	}
 	return messageBodyOf(value);
 }
@@ -440,12 +534,13 @@ function bodyOf(value: JsonObject): LedgerEventBody | undefined {
  */
 export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 	const known = (id: number | undefined) => id === undefined || state.agents.has(id);
-	// Who stopped an agent, or removed a worktree, is the person or a number given before - the list may have dropped that
-	// agent since (X-13)
-	const given = (by: StoppedBy | undefined) => by === undefined || by === HUMAN || by <= state.lastId;
+	// Who stopped an agent, or removed a worktree, is the person, an agent of another window, or a number given before - the
+	// list may have dropped that agent since (X-13)
+	const given = (by: StoppedBy | undefined) => by === undefined || by === HUMAN || isForeign(by) || by <= state.lastId;
 	switch (event.type) {
 		case 'agent.started':
-			return event.id > state.lastId && known(event.creator) && (event.root === undefined || event.root === event.id || event.creator !== undefined);
+			// A child of another workspace's agent: its creator is not this record's (O8)
+			return event.id > state.lastId && (event.creatorAfar !== undefined || known(event.creator)) && (event.root === undefined || event.root === event.id || event.creator !== undefined);
 		case 'agent.launched':
 		case 'agent.connected':
 		case 'task.typing':
@@ -464,6 +559,8 @@ export function fitsState(state: WorkspaceState, event: LedgerEvent): boolean {
 		case 'worktree.gone':
 		case 'list.cleared':
 			return true;
+		case 'agent.childAfar':
+			return state.agents.has(event.id);
 		default:
 			return fitsMessages(state.agents, state.mail, event);
 	}
@@ -490,6 +587,9 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				name: event.name,
 				...(event.creator !== undefined ? { creator: event.creator } : {}),
 				root,
+				...(event.creatorAfar ? { creatorAfar: event.creatorAfar } : {}),
+				...(event.rootAfar ? { rootAfar: event.rootAfar } : {}),
+				...(event.ancestorsAfar ? { ancestorsAfar: event.ancestorsAfar } : {}),
 				cli: event.cli,
 				custom: event.custom ?? false,
 				...(event.model !== undefined ? { model: event.model } : {}),
@@ -508,7 +608,12 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 				startTime: event.time
 			});
 			state.lastId = Math.max(state.lastId, event.id);
-			state.identities.set(event.id, { id: event.id, name: event.name, root, worktree: event.worktree || event.folder });
+			// A root of another workspace is known here by who it is and where, for the chat room of its tree (AGENT-MESSAGES.md, M9)
+			const rootAfar = event.rootAfar ?? (event.creatorAfar && event.creatorAfar.id === root ? event.creatorAfar : undefined);
+			state.identities.set(event.id, { id: event.id, name: event.name, root, worktree: event.worktree || event.folder, ...(rootAfar ? { rootWindow: rootAfar.window } : {}) });
+			if (rootAfar && !state.foreignRoots.has(foreignRootKey(rootAfar.window, rootAfar.id))) {
+				state.foreignRoots.set(foreignRootKey(rootAfar.window, rootAfar.id), { id: rootAfar.id, name: rootAfar.name, root: rootAfar.id, worktree: '', ...(rootAfar.label !== undefined ? { workspace: rootAfar.label } : {}), window: rootAfar.window });
+			}
 			// A task's message of a ledger of version 5: its number is given no more
 			if (event.taskMessage !== undefined) {
 				state.mail.lastMessage = Math.max(state.mail.lastMessage, event.taskMessage);
@@ -628,10 +733,23 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 					state.agents.delete(agent.id);
 				}
 			}
+			for (const id of [...state.childrenAfar.keys()]) {
+				if (!state.agents.has(id)) {
+					state.childrenAfar.delete(id);
+				}
+			}
+			break;
+		}
+		case 'agent.childAfar': {
+			const children = state.childrenAfar.get(event.id) ?? [];
+			if (!children.some(each => each.id === event.child.id && each.window === event.child.window)) {
+				children.push(event.child);
+			}
+			state.childrenAfar.set(event.id, children);
 			break;
 		}
 		default:
-			applyMessages(state.mail, event, event.time);
+			applyMessages(state.mail, event, event.time, event.seq);
 	}
 }
 

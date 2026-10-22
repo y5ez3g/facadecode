@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as l10n from '@vscode/l10n';
@@ -10,7 +11,7 @@ import { DeferredPromise, timeout } from '../base/async';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
 import { canonicalFolder, isEqualPath, isInsideFolder } from '../base/files';
-import { withFileLock } from '../base/lock';
+import { withFileLock, withLongFileLock } from '../base/lock';
 import { isProcessRunning, processStartedAt, workingFoldersOf } from '../base/system';
 import { AgentCli, capabilitiesOf, CliConfig, Environment, exemptionGroupsChanged, InstalledCli, launchFor, Sandbox } from '../clis/cli';
 import { whyNotInstalled } from '../clis/config';
@@ -18,14 +19,17 @@ import { homeOf } from '../clis/executable';
 import { TrustedFolder, trustProblem, writeTrust } from '../clis/trust';
 import { agentName, AgentTable } from '../record/agents';
 import { identityOf } from '../record/identity';
-import { Agent, agentRef, AgentState, Caller, describe, End, EndKind, Ignored, isLive, LiveAgent, parseAgentReference, PERSON, SetupState, StartPhase, StoppedBy, WorktreeRemoval } from '../record/events';
+import { Agent, agentRef, AgentState, Caller, describe, workspaceNameOf, End, EndKind, foreignOf, Ignored, isLive, LiveAgent, parseAgentReference, PERSON, splitWorkspace, workspaceWordOf, SetupState, StartPhase, StoppedBy, WorktreeRemoval } from '../record/events';
 import { closedByItsWindow, isLedgerHeld } from '../record/ledger';
+import { ForeignAgent, foreignRef, isForeign, Message } from '../record/messages';
+import { WaitingNotice } from '../record/outbox';
 import { injectedFile } from '../record/paths';
-import { screensDir } from '../record/screens';
+import { screenCopyName, screensDir } from '../record/screens';
 import { LaunchDelays } from './doorbell';
 import { ErrorOutcome, FacadeError } from './errors';
 import { Injections, InjectionUser, UnchangedFile } from './injections';
 import { delaysOf, inBackground, Launched, Launcher, LaunchProgress, notConnectedNotice, Prepared, timingOf, windowClosed } from './launch';
+import { CallerIdentity, Machine, RemoteAgent, SILENT_WAIT_MS, SilentWindow, silentText, WINDOW_REQUESTS } from './machine';
 import { Mail, Mailbox } from './mail';
 import { AgentSetup, CliCatalog, Disposable, EndedAgent, EndTold, MadeWorktreeFolder, OwnedFile, Ports, Repository, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalsInside, Timing, WORKTREES_SETTING } from './ports';
 import { ScreenRead, Screens } from './screens';
@@ -79,7 +83,18 @@ export interface FacadeOptions {
 	readonly platform?: NodeJS.Platform;
 	/** How long the core waits, as the person sets it; where left out, two minutes. */
 	readonly timing?: () => Timing;
+	/** The other windows of the machine (AGENT-ORCHESTRATION.md, O8); where left out, this window alone. */
+	readonly machine?: Machine;
+	/** The notices other workspaces left for this one's agents, oldest first (O8). */
+	readonly notices?: () => readonly WaitingNotice[];
+	/** Where the machine's chat rooms are (AGENT-MESSAGES.md, M9); where left out, the record's own folder. */
+	readonly roomsFolder?: string;
+	/** Where the machine's locks of repositories are, which serialize making worktrees across workspaces (O4); none where left out. */
+	readonly repositoryLocks?: string;
 }
+
+/** Where the agent a tool names is: in this window, or in another window of the machine, by its number (O8). */
+export type Located = { readonly here: true } | { readonly here: false; readonly window: string; readonly label: string; readonly id: number };
 
 /** What a caller asks `start_agent` for (AGENT-ORCHESTRATION.md, O3). */
 export interface StartRequest {
@@ -98,6 +113,9 @@ export interface StartRequest {
 	 * the person.
 	 */
 	readonly folder?: string;
+	/** For a start another workspace handed this one: its caller's checkout's commit, for a new worktree of that repository, and its caller's wait (O3). */
+	readonly head?: { readonly repository: string; readonly commit: string };
+	readonly waitMs?: number;
 	/** Whether it works in a new worktree of that folder's repository, on a new branch called `name`. */
 	readonly newWorktree?: boolean;
 }
@@ -110,6 +128,9 @@ export interface AgentFacts {
 	readonly creator?: number;
 	/** Its tree's root. */
 	readonly root: number;
+	/** Its creator and its tree's root where they are agents of another workspace (O6, O8). */
+	readonly creatorAfar?: ForeignAgent;
+	readonly rootAfar?: ForeignAgent;
 	readonly cli: string;
 	readonly custom: boolean;
 	/** As asked for; none where the CLI's own applies. */
@@ -256,7 +277,8 @@ export interface Stopped {
 	/** Every agent the call stopped, the named one among them. */
 	readonly stopped: readonly AgentFacts[];
 	/** With `delete_worktree`: the folder, and whether it was deleted - or why not. */
-	readonly worktree?: { readonly folder: string; readonly deleted: boolean; readonly why?: string };
+	/** `note`, what the deletion could not ask: a window of another Facade version open meanwhile (WORKTREE.md WT-8, step 2). */
+	readonly worktree?: { readonly folder: string; readonly deleted: boolean; readonly why?: string; readonly note?: string };
 	/**
 	 * Where the start of the agent the call named was when it was stopped, before its CLI had a terminal: its worktree
 	 * being made - git may finish it - or set up (AGENT-ORCHESTRATION.md, O4; OR-05).
@@ -294,12 +316,12 @@ type Place =
 	| { readonly kind: 'new'; readonly repository: Repository; readonly head: string; readonly branch: string };
 
 /**
- * Who asks for a place to start, and how, on which what to do next after a refusal depends: the caller, whether it asks
- * for a new worktree, and whether worktree management was on as the start was accepted (AGENT-ORCHESTRATION.md, O3;
- * WORKTREE.md WT-9.3).
+ * Who asks for a place to start, and how, on which what to do next after a refusal depends: an agent or the person,
+ * whether it asks for a new worktree, and whether worktree management was on as the start was accepted
+ * (AGENT-ORCHESTRATION.md, O3; WORKTREE.md WT-9.3).
  */
 interface PlaceRequest {
-	readonly caller: Caller;
+	readonly byAgent: boolean;
 	readonly newWorktree: boolean;
 	readonly managed: boolean;
 }
@@ -312,14 +334,13 @@ type PlaceProblem = 'folder' | 'branch' | 'branches' | 'repository';
 
 /**
  * What a start refused for `problem` says to do next, as `request` asks: while worktree management is on, an agent's child
- * goes in a worktree created by Facade, a new worktree is made of a Git repository folder, and the person may start in any
- * folder of the window; with it off, a folder the window knows is the one choice (AGENT-ORCHESTRATION.md, O3; WORKTREE.md
- * WT-9.3). A folder that is no place to start is answered with the window's `folders` - or, where it has none, with who can
- * add one, never with an empty list to choose from.
+ * goes in a main checkout or a worktree created by Facade, a new worktree is made of a Git repository folder, and the
+ * person may start in any folder of the window; with it off, a folder the window knows is the one choice
+ * (AGENT-ORCHESTRATION.md, O3; WORKTREE.md WT-9.3). A folder that is no place to start is answered with the window's
+ * `folders` - or, where it has none, with who can add one, never with an empty list to choose from.
  */
 function placeRecovery(request: PlaceRequest, problem: PlaceProblem, folders: readonly string[] = []): string {
-	const byAgent = request.caller.id !== undefined;
-	const { newWorktree, managed } = request;
+	const { byAgent, newWorktree, managed } = request;
 	const listed = problem === 'folder';
 	if (listed && !folders.length) {
 		return managed && (byAgent || newWorktree)
@@ -331,14 +352,14 @@ function placeRecovery(request: PlaceRequest, problem: PlaceProblem, folders: re
 		next = 'Set folder to the absolute path of an existing window folder or a recorded agent launch folder.';
 	} else if (problem === 'branches') {
 		next = byAgent && !newWorktree
-			? 'Set folder to the absolute path of one created by Facade, or set new_worktree:true and choose a Git repository folder in this window.'
+			? 'Set folder to the absolute path of one of them, or set new_worktree:true and choose a Git repository folder in this window.'
 			: 'Select a worktree by its absolute folder path.';
 	} else if (newWorktree) {
 		next = 'Keep new_worktree:true and set folder to the absolute path of a Git repository folder in this window.';
 	} else if (byAgent) {
 		next = problem === 'branch'
-			? 'Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.'
-			: 'Set folder to the absolute path of a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window.';
+			? 'Set folder to the absolute path of a main checkout or a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.'
+			: 'Set folder to the absolute path of a main checkout or a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window.';
 	} else {
 		next = listed ? 'Set folder to an absolute path from this list.' : 'Set folder to the absolute path of a folder in this window; a detached HEAD must be selected by path.';
 	}
@@ -403,6 +424,10 @@ export class Facade implements Disposable {
 	private readonly stoppedWhileAnswered = new Set<number>();
 	/** When the folders a process had in use are tried again, while some are. */
 	private takingBack: ReturnType<typeof setTimeout> | undefined;
+	/** The look at the other workspaces once a minute (O8). */
+	private watching: ReturnType<typeof setInterval> | undefined;
+	/** Since when each other workspace this one has children or messages in has been silent, by its record, and in which load. */
+	private readonly silentSince = new Map<string, { readonly load?: string; readonly since: number }>();
 	private takeBackTriesLeft = 0;
 	private disposed = false;
 	/** Whether the window that had the record before is this very one, its extension host started again (`recover`). */
@@ -426,6 +451,7 @@ export class Facade implements Disposable {
 		});
 		this.launcher = new Launcher({
 			table: this.table,
+			selfRecord: options.machine?.self.record ?? path.basename(options.table.dir),
 			ports: this.ports,
 			clis: options.clis,
 			setup: options.setup,
@@ -451,7 +477,15 @@ export class Facade implements Disposable {
 			frameworkOn: () => this.frameworkOn(),
 			isConnected: agent => this.isConnected(agent),
 			excerptOf: agent => this.screens.excerptOf(agent, true),
-			log: message => this.log(message)
+			log: message => this.log(message),
+			...(options.machine ? { machine: options.machine } : {}),
+			identityOf: caller => this.identityOf(caller),
+			locate: (caller, text) => this.locate(caller, text),
+			reachesMachine: caller => this.reachesMachine(caller),
+			treeOf: agent => this.treeOf(agent),
+			workspaceNamed: text => this.workspaceNamed(text),
+			...(options.notices ? { notices: options.notices } : {}),
+			...(options.roomsFolder ? { roomsFolder: options.roomsFolder } : {})
 		});
 		this.disposables.push(this.launcher, this.mail, this.ports.terminals.onDidEnd((id, end) => this.terminalEnded(id, end)));
 	}
@@ -464,6 +498,8 @@ export class Facade implements Disposable {
 		disposeAll(this.disposables.splice(0), err => this.log(`Error while shutting down Facade agents: ${messageOf(err)}`));
 		clearTimeout(this.takingBack);
 		this.takingBack = undefined;
+		clearInterval(this.watching);
+		this.watching = undefined;
 		this.personDeletions.splice(0).forEach(each => clearTimeout(each.timer));
 	}
 
@@ -494,9 +530,251 @@ export class Facade implements Disposable {
 		this.ports.person.tellEnded(this.endsTold.batch, [...this.endsTold.ends]);
 	}
 
-	/** The agent a caller is; undefined for the person. */
+	/** The agent a caller is; undefined for the person, and for a caller of another window, whose number this record may give another. */
 	agentOf(caller: Caller): Agent | undefined {
-		return caller.id === undefined ? undefined : this.table.get(caller.id);
+		return caller.id === undefined || caller.from ? undefined : this.table.get(caller.id);
+	}
+
+	/** The other windows of the machine, where this window has them (O8). */
+	get machine(): Machine | undefined {
+		return this.options.machine;
+	}
+
+	/** This workspace's record, as the others name it: its id. */
+	get selfRecord(): string {
+		return this.options.machine?.self.record ?? path.basename(this.table.dir);
+	}
+
+	/** This workspace, as the others name it. */
+	get selfLabel(): string {
+		return this.options.machine?.self.label ?? path.basename(this.table.dir);
+	}
+
+	/** The tree an agent of this record is in: its root's number with the root's workspace, which together name it (O8). */
+	treeOf(agent: Agent): { readonly root: number; readonly window: string } {
+		return { root: agent.root, window: agent.rootAfar?.window ?? this.selfRecord };
+	}
+
+	/**
+	 * The chain of an agent's ancestors, nearest first, as another workspace is told it: its creators here, each with this
+	 * workspace, then a creator of another workspace and the ancestors that workspace gave (O11; M8).
+	 */
+	ancestorsOf(agent: Agent): ForeignAgent[] {
+		const chain: ForeignAgent[] = [];
+		const seen = new Set<number>();
+		let at: Agent | undefined = agent;
+		while (at && !at.creatorAfar && at.creator !== undefined && !seen.has(at.creator)) {
+			seen.add(at.creator);
+			const creator = this.table.get(at.creator);
+			const identity = creator ?? this.table.state.identities.get(at.creator);
+			if (!identity) {
+				break;
+			}
+			chain.push({ id: identity.id, name: identity.name, window: this.selfRecord, label: this.selfLabel });
+			at = creator;
+		}
+		if (at?.creatorAfar) {
+			chain.push(at.creatorAfar, ...at.ancestorsAfar ?? []);
+		}
+		return chain;
+	}
+
+	/**
+	 * Who `caller` is, as this workspace tells another (O8): its number, name, YOLO, its tree and ancestors, and this workspace.
+	 * A caller of another workspace, whose call this one carries out, is told as it came: who it is there.
+	 */
+	identityOf(caller: Caller): CallerIdentity {
+		if (caller.from) {
+			return { ...(caller.id !== undefined ? { id: caller.id } : {}), name: caller.name, from: caller.from };
+		}
+		const self = this.agentOf(caller);
+		const tree = self && this.treeOf(self);
+		const ancestors = self ? this.ancestorsOf(self) : [];
+		return {
+			...(caller.id !== undefined ? { id: caller.id } : {}),
+			name: caller.name,
+			from: {
+				window: this.selfRecord, label: this.selfLabel,
+				...(self && tree ? { yolo: self.yolo, root: tree.root, rootWindow: tree.window, ...(self.creator !== undefined ? { creator: self.creator } : {}), ...(ancestors.length ? { ancestors } : {}) } : {})
+			}
+		};
+	}
+
+	/**
+	 * Whether `caller` reaches the other workspaces of the machine (O1): the person, and every agent of this workspace -
+	 * with YOLO off, its tree's runs there alone, which those workspaces check.
+	 */
+	reachesMachine(caller: Caller): boolean {
+		if (!this.options.machine || caller.from) {
+			return false;
+		}
+		return caller.id === undefined || !!this.agentOf(caller);
+	}
+
+	/**
+	 * Where the agent `target` names is, for `caller` (O2, O8): `#a7` or `#7` above the machine's shared mark is settled
+	 * where it is found - here, or in any workspace that answers - since no other record can hold it. Any other reference -
+	 * a name, a number that may be a name, a number at or below the mark - is found among this workspace's agents and every
+	 * other live workspace's, waiting a moment for a silent workspace that may hold it. Two found are refused, naming each
+	 * with its workspace. One found nowhere here is left to `agentNamed` to refuse.
+	 */
+	async locate(caller: Caller, target: string): Promise<Located> {
+		const machine = this.options.machine;
+		const reference = parseAgentReference(target);
+		if (!machine || !this.reachesMachine(caller) || reference.kind === 'other' || (reference.kind === 'name' && reference.name === PERSON.name)) {
+			return { here: true };
+		}
+		// Ending in its workspace, it is looked for there alone: in this one's list, or in that workspace (O2)
+		const named = reference.workspace !== undefined ? await this.workspaceNamed(reference.workspace) : undefined;
+		if (named?.record === this.selfRecord) {
+			return { here: true };
+		}
+		const settles = reference.kind === 'number' && !reference.bare && reference.id > this.table.sharedMark('agents');
+		const matches = (agent: { readonly id: number; readonly name: string }) => reference.kind === 'number' && agent.id === reference.id && (reference.name === undefined || agent.name === reference.name);
+		if (!named && settles && [...this.table.state.agents.values()].some(agent => matches(agent) && this.reaches(caller, agent))) {
+			return { here: true };
+		}
+		const { agents, silent, held } = await this.survey(caller, SILENT_WAIT_MS, named?.record);
+		const here = named ? [] : [...this.table.state.agents.values()].filter(agent => this.reaches(caller, agent));
+		// As a caller can pass it back: its workspace by name and the start of its record id (O2)
+		const write = (agent: { readonly id: number; readonly name: string; readonly window?: string; readonly label?: string }) => `@${agent.name} ${agentRef(agent.id)} (workspace ${agent.window === undefined ? workspaceWordOf(this.selfLabel, this.selfRecord) : workspaceWordOf(agent.label, agent.window)})`;
+		const candidates: (RemoteAgent | (Agent & { readonly window?: undefined }))[] = [];
+		if (reference.kind === 'number') {
+			candidates.push(...here.filter(matches), ...agents.filter(matches));
+			if (reference.bare) {
+				const name = target.trim().toLowerCase();
+				candidates.push(...here.filter(agent => isLive(agent) && agent.name === name), ...agents.filter(agent => agent.state !== 'ended' && agent.name === name));
+			}
+		} else {
+			const live = [...here.filter(agent => isLive(agent) && agent.name === reference.name), ...agents.filter(agent => agent.state !== 'ended' && agent.name === reference.name)];
+			candidates.push(...live);
+			if (!live.length && !silent.some(each => each.reason === 'not answering')) {
+				const ended = agents.filter(agent => agent.name === reference.name);
+				if (ended.length && !here.some(agent => agent.name === reference.name)) {
+					throw new FacadeError('NOT_FOUND', `All runs named @${reference.name} have ended: ${ended.map(each => write(each)).join(', ')}. Select one by its agent ID.`);
+				}
+			}
+		}
+		const waiting = silent.filter(each => each.reason === 'not answering');
+		// Found by its number above the mark, it is that one, whatever is silent: no other record can hold it
+		if (waiting.length && !(settles && candidates.length === 1)) {
+			throw new FacadeError('UNAVAILABLE', `Cannot resolve '${target.trim()}' yet: ${silentText(waiting)}, and it may hold a match. Nothing was done. Retry shortly${reference.kind === 'name' || reference.bare ? ', or use the agent ID (#a7) of the agent you mean' : ''}${named ? '' : ', or end the reference in the workspace you mean, as #a7 (workspace lab)'}.`);
+		}
+		if (candidates.length > 1) {
+			const written = candidates.map(each => write(each));
+			throw new FacadeError('INVALID', `'${target.trim()}' is ambiguous: it matches ${written.join(', ')}. Pass the one you mean as written here.`);
+		}
+		const found = candidates[0];
+		// Another workspace holds it outside the caller's tree: refused as one of this workspace's would be (O1)
+		if (!found && reference.kind === 'number' && !reference.bare && held.has(reference.id) && !here.some(matches)) {
+			throw new FacadeError('REFUSED', `${agentRef(reference.id)} is outside your tree. With YOLO off, you can reach only your tree: your human-started root and all its descendants.`);
+		}
+		// Found nowhere that answers: a workspace with its framework off may hold it, and keeps its agents out of reach (O8)
+		const off = silent.filter(each => each.reason === 'framework off');
+		if (!found && off.length && !(reference.kind === 'number' && here.some(matches)) && !(reference.kind === 'name' && here.some(agent => agent.name === reference.name))) {
+			throw new FacadeError('UNAVAILABLE', `Cannot reach '${target.trim()}': ${silentText(off)} (framework_disabled), so its agents cannot be reached until it is turned on there; no workspace that answers has it. Nothing was done.`, { reason: 'frameworkOff' });
+		}
+		// The workspace it names has none such: never one of this workspace's instead (O2)
+		if (!found && named) {
+			throw new FacadeError('NOT_FOUND', `Workspace ${workspaceWordOf(named.label, named.record)} has no agent '${splitWorkspace(target).text}' that you can reach. Nothing was done. Call list_agents with all:true to see every reachable run.`);
+		}
+		return found?.window === undefined ? { here: true } : { here: false, window: found.window, label: found.label, id: found.id };
+	}
+
+	/**
+	 * The agents of the other live workspaces `caller` reaches - with YOLO off, its tree's alone, as each workspace decides
+	 * - and the workspaces that did not answer, a silent one asked again for up to `waitMs` (O6, O8).
+	 */
+	async survey(caller: Caller, waitMs = 0, only?: string): Promise<{ readonly agents: readonly RemoteAgent[]; readonly silent: readonly SilentWindow[]; readonly lines: readonly { readonly label: string; readonly lines: readonly string[]; readonly clis: readonly string[] }[]; readonly held: ReadonlySet<number> }> {
+		const machine = this.options.machine;
+		if (!machine || !this.reachesMachine(caller)) {
+			return { agents: [], silent: [], lines: [], held: new Set() };
+		}
+		const { answers, silent } = await machine.ask(WINDOW_REQUESTS.rows, { caller: this.identityOf(caller) }, waitMs, only);
+		const agents: RemoteAgent[] = [];
+		const held = new Set<number>();
+		const lines: { label: string; lines: readonly string[]; clis: readonly string[] }[] = [];
+		for (const { record, label, answer } of answers) {
+			const rows = (answer as { readonly agents?: unknown; readonly lines?: unknown })?.agents;
+			for (const row of Array.isArray(rows) ? rows : []) {
+				const { id, name, state } = row as { [key: string]: unknown };
+				if (typeof id === 'number' && typeof name === 'string' && (state === 'starting' || state === 'running' || state === 'stopping' || state === 'ended')) {
+					agents.push({ id, name, state, window: record, label });
+				}
+			}
+			const { lines: text, clis, numbers } = (answer ?? {}) as { readonly lines?: unknown; readonly clis?: unknown; readonly numbers?: unknown };
+			const texts = (list: unknown) => Array.isArray(list) ? list.filter((each): each is string => typeof each === 'string') : [];
+			lines.push({ label, lines: texts(text), clis: texts(clis) });
+			for (const id of Array.isArray(numbers) ? numbers : []) {
+				if (typeof id === 'number') {
+					held.add(id);
+				}
+			}
+		}
+		return { agents, silent, lines, held };
+	}
+
+	/**
+	 * The live and starting agents working in the folder `folder` - in it or a folder inside it, or gone there - as another
+	 * workspace's deletion of it asks (O5; WORKTREE.md WT-8, step 2): each in words, and whether `caller`, for whom it is
+	 * asked, reaches it - the person, where none is named. Asking holds nothing.
+	 */
+	async workIn(folder: string, caller: Caller = PERSON): Promise<readonly { readonly agent: string; readonly id: number; readonly reached: boolean }[]> {
+		const { inside } = await this.workingIn(folder);
+		return inside.map(agent => ({ agent: describe(agent), id: agent.id, reached: this.reaches(caller, agent) }));
+	}
+
+	/**
+	 * Another workspace's deletion of the folder `folder` reached its step 6 (WT-8): every agent working in it here is
+	 * stopped, by `by` - the person, or the agent whose call deletes it - and waited for. One that `caller`, the agent whose
+	 * call deletes it, does not reach - come since its preflight - is not stopped (O1). Answers those not stopped.
+	 */
+	async releaseWorkIn(folder: string, by: StoppedBy, caller?: Caller): Promise<readonly string[]> {
+		const { inside } = await this.workingIn(folder);
+		const reached = inside.filter(agent => !caller || this.reaches(caller, agent));
+		const results = await Promise.allSettled(reached.map(agent => this.stopOne(agent, by, by === 'human' ? 'as its worktree was being deleted' : 'with stop_agent to delete its worktree')));
+		const failed = reached.filter((agent, i) => {
+			const result = results[i];
+			if (result.status === 'rejected') {
+				this.log(`Could not stop ${describe(agent)} during another workspace's worktree deletion: ${messageOf(result.reason)}`);
+			}
+			return result.status === 'rejected';
+		});
+		const outOfReach = inside.filter(agent => !reached.includes(agent));
+		return [...failed.map(agent => describe(agent)), ...outOfReach.map(agent => `${describe(agent)}, outside the deleting agent's tree`)];
+	}
+
+	/** A caller of this workspace that another workspace named back to it: its agent of that number and name, or the person (O8). */
+	ownCaller(caller: Caller): Caller {
+		if (caller.id === undefined) {
+			return PERSON;
+		}
+		const agent = this.table.get(caller.id);
+		if (!agent || agent.name !== caller.name) {
+			throw new FacadeError('INVALID', `The request names @${caller.name} #a${caller.id} of this workspace, which has no such agent.`);
+		}
+		return { id: agent.id, name: agent.name };
+	}
+
+	/**
+	 * The workspace closes, quits or replaces its workspace - not a reload (AGENT-LAUNCHER.md, L6): each of its runs ends
+	 * with it, recorded now - not as the workspace opens next - their unread mail returned to live senders, and creators in
+	 * other workspaces told of their children's ends, those of other workspaces left in their outboxes at once.
+	 */
+	windowClosing(): void {
+		this.mail.closingNow();
+		this.settling = [];
+		try {
+			for (const agent of this.liveAgents()) {
+				this.ended(agent, agent.state === 'starting' ? 'failed' : 'stopped', 'its window closed', { quiet: true, windowWent: true });
+			}
+		} finally {
+			const settled = this.settling;
+			this.settling = undefined;
+			for (const [agent, notice] of settled) {
+				this.messagesOfEnded(agent, notice);
+			}
+		}
 	}
 
 	/** What an agent must know of its start's preparation: its worktree's setup, sent with no word of how it went (O4). */
@@ -530,6 +808,8 @@ export class Facade implements Disposable {
 	frameworkChanged(): void {
 		if (!this.disposed) {
 			this.mail.frameworkChanged(this.frameworkOn());
+			// What other workspaces left while it was off is taken now (M10)
+			this.mail.takeNotices();
 		}
 	}
 
@@ -613,15 +893,16 @@ export class Facade implements Disposable {
 
 	/**
 	 * The folders of the window an agent can start in: its workspace's, and the worktrees Facade made of their
-	 * repositories - those the workspace bar lists - each once, with the worktree it is. For one an agent starts, Facade's
-	 * worktrees alone: while worktree management is on, an agent's child works in one, never in the person's checkout, a
-	 * folder or another tool's worktree (AGENT-ORCHESTRATION.md, O3; WORKTREE.md WT-1.3). With worktree management off,
-	 * git is not asked for worktrees: the workspace's folders, and those agents of its list were started in (WT-9.3).
+	 * repositories - those the workspace bar lists - each once, with the worktree it is. For one an agent starts, the main
+	 * checkouts and Facade's worktrees alone: while worktree management is on, an agent's child works in one, never in a
+	 * folder outside Git or another tool's worktree (AGENT-ORCHESTRATION.md, O3; WORKTREE.md WT-1.3). With worktree
+	 * management off, git is not asked for worktrees: the workspace's folders, and those agents of its list were started
+	 * in (WT-9.3).
 	 */
 	async windowFolders(forAgent = false): Promise<readonly WindowFolder[]> {
 		const found: WindowFolder[] = [];
-		const add = (folder: string, worktree: string) => {
-			if ((!forAgent || this.ports.git.isFacadeWorktree(folder)) && !found.some(each => isEqualPath(each.folder, folder))) {
+		const add = (folder: string, worktree: string, mainCheckout = false) => {
+			if ((!forAgent || mainCheckout || this.ports.git.isFacadeWorktree(folder)) && !found.some(each => isEqualPath(each.folder, folder))) {
 				found.push({ folder, worktree });
 			}
 		};
@@ -632,7 +913,7 @@ export class Facade implements Disposable {
 				continue;
 			}
 			const repository = await this.ports.git.repositoryOf(folder);
-			add(folder, repository?.worktree ?? path.basename(folder));
+			add(folder, repository?.worktree ?? path.basename(folder), !!repository?.mainCheckout);
 			for (const listed of repository && managed ? await this.ports.git.worktreesOf(repository.main) : []) {
 				if (this.ports.git.isFacadeWorktree(listed.folder)) {
 					add(listed.folder, listed.name);
@@ -816,7 +1097,7 @@ export class Facade implements Disposable {
 		const effort = request.effort?.trim() || undefined;
 		const task = request.task?.trim() ? request.task : undefined;
 		// Everything that can refuse the call is asked before anything is made for it.
-		const place = await this.placeOf(caller, request.folder, request.newWorktree === true, name);
+		const place = await this.placeOf(caller, request.folder, request.newWorktree === true, name, request.head);
 		// A new branch is this start's from here until its worktree is made, or the start ends without one: a second
 		// start on it is refused at once, before anything is allocated for it (AS-21)
 		const reserved = place.kind === 'new' ? this.reserveBranch(place.repository.main, place.branch) : undefined;
@@ -862,13 +1143,17 @@ export class Facade implements Disposable {
 			// The project's MCP servers its launch runs without, where its folder is there to read them; a new worktree's, once made
 			const serversOff = place.kind === 'new' ? [] : serversOffNotes(installed, { folder: place.folder, repository }, homeOf(env), yolo);
 			const run = { ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}), ignored, task, folder: home, repository, home: homeOf(env), env, yolo, unattended: true, integration, notes: [...this.exemptionNotes(installed, exemption), ...serversOff] };
-			const files = this.launcher.check(installed, run, env);
+			// Checked with the first line it will be given, its creator named as there: before a worktree is made for it
+			const files = this.launcher.check(installed, run, env, caller);
 			this.launcher.checkFiles(installed, files, place.kind === 'new' ? undefined : place.folder);
 			this.stillOpen();
 
 			// Wherever it starts, the CLI is given the person's trust in its folder's repository - or in the folder,
 			// outside any - so that it does not stop to ask; what would keep that from being given refuses the start
 			// before anything is made for it, a new worktree included (X-30).
+			// A number taken waits on no other workspace's hold of the counters while the extension host waits (L12)
+			await this.table.numbersReady();
+			this.stillOpen();
 			if (place.kind !== 'new') {
 				// Asked again as it is recorded: a deletion of its folder that began while it was checked keeps it out (O5)
 				this.assertNotDeleting(place.folder);
@@ -877,7 +1162,7 @@ export class Facade implements Disposable {
 				} catch (err) {
 					throw new FacadeError('FAILED', messageOf(err));
 				}
-				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.worktree, outsideGit: place.outsideGit, folder: place.folder }, { wait: true, acceptedAt, ...(progress ? { progress } : {}), onRecorded: whenRecorded });
+				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.worktree, outsideGit: place.outsideGit, folder: place.folder }, { wait: true, acceptedAt, ...(request.waitMs ? { waitMs: request.waitMs } : {}), ...(progress ? { progress } : {}), onRecorded: whenRecorded });
 				return this.startedOf(caller, launched, false);
 			}
 			const planned = this.ports.git.plannedWorktreeFolder(place.repository.main, place.branch);
@@ -897,7 +1182,8 @@ export class Facade implements Disposable {
 				const making = new DeferredPromise<string | undefined>();
 				this.worktreesMaking.set(agent.id, making.p);
 				try {
-					worktree = await this.ports.git.makeWorktree(place.repository.main, place.branch, place.head);
+					// One at a time for a repository on the machine: two workspaces never race for one worktree directory (O4)
+					worktree = await this.inRepositoryLock(place.repository.main, () => this.ports.git.makeWorktree(place.repository.main, place.branch, place.head));
 				} catch (err) {
 					making.complete(undefined);
 					throw new FacadeError('FAILED', `Could not create worktree ${place.branch}: ${messageOf(err)}`, { outcome: 'failed', agent: agent.id });
@@ -907,7 +1193,7 @@ export class Facade implements Disposable {
 				}
 				const folder = made = worktree.folder;
 				// Recorded even where the window closed or the agent was stopped meanwhile: it was made, and stays.
-				this.table.recordWorktree({ name: place.branch, folder, repository: place.repository.main, commit: place.head, ...(caller.id !== undefined ? { madeBy: caller.id } : {}) });
+				this.table.recordWorktree({ name: place.branch, folder, repository: place.repository.main, commit: place.head, ...(caller.id !== undefined && !caller.from ? { madeBy: caller.id } : {}) });
 				making.complete(folder);
 				if (!this.isStarting(agent)) {
 					// Its run is where git made the worktree, not at the folder planned for it - taken, maybe (O4; OR-05)
@@ -953,7 +1239,7 @@ export class Facade implements Disposable {
 				return { folder, notes, ...(startNote ? { startNote } : {}), setup: setup.kind };
 			};
 			try {
-				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.branch, folder: planned }, { wait: true, acceptedAt, prepare, ...(progress ? { progress } : {}), onRecorded: whenRecorded });
+				const launched = await this.launcher.launch(caller, installed, { ...run, name, worktree: place.branch, folder: planned }, { wait: true, acceptedAt, prepare, ...(request.waitMs ? { waitMs: request.waitMs } : {}), ...(progress ? { progress } : {}), onRecorded: whenRecorded });
 				return this.startedOf(caller, launched, true);
 			} catch (err) {
 				// A worktree made for a start that fails stays, its branch with it: the answer says where (O4).
@@ -1010,7 +1296,7 @@ export class Facade implements Disposable {
 		const agents = [...this.table.state.agents.values()]
 			.filter(agent => all
 				? this.reaches(caller, agent)
-				: agent.id === caller.id || (self?.creator !== undefined && agent.id === self.creator) || agent.creator === caller.id)
+				: agent.id === caller.id || (self?.creator !== undefined && !self.creatorAfar && agent.id === self.creator) || (agent.creator === caller.id && !agent.creatorAfar))
 			.sort((a, b) => a.id - b.id)
 			.map(agent => {
 				// Each with its mailbox: what it has not fetched shows without a guess at what it does (M3)
@@ -1018,6 +1304,13 @@ export class Facade implements Disposable {
 				return { ...this.factsOf(agent), ...(mailbox ? { mailbox } : {}) };
 			});
 		return { ...(self ? { yolo: self.yolo } : {}), agents, clis: this.startable() };
+	}
+
+	/** The children the caller started in other workspaces that are not known to have ended, as this record keeps them (O6, O11). */
+	childrenAfar(caller: Caller): readonly ForeignAgent[] {
+		const self = this.agentOf(caller);
+		const { state } = this.table;
+		return self ? (state.childrenAfar.get(self.id) ?? []).filter(child => !state.mail.noticeKeys.has(`ended-a${child.id}`)) : [];
 	}
 
 	/**
@@ -1118,7 +1411,8 @@ export class Facade implements Disposable {
 		}
 		const agent = this.agentNamed(target, caller);
 		this.assertReaches(caller, agent);
-		const by = caller.id ?? 'human';
+		// A caller of another window is recorded as that window's agent: this record may give its number to another (O8)
+		const by = foreignOf(caller) ?? caller.id ?? 'human';
 		// Read now: the record's agent is the one its end is written into.
 		const alreadyEnded = !!agent.end;
 		if (!options.deleteWorktree) {
@@ -1246,11 +1540,18 @@ export class Facade implements Disposable {
 		if (terminals.others) {
 			throw new FacadeError('REFUSED', `Cannot delete ${folder}: ${terminals.others === 1 ? 'an agent' : `${terminals.others} agents`} working there ${terminals.others === 1 ? 'is' : 'are'} missing from this window's agent list. Deleting the worktree would end ${terminals.others === 1 ? 'it' : 'them'} without an explicit stop. Nothing was stopped. Stop the unlisted agents first.`);
 		}
-		// Another window's agents there are its to stop: the window sees their terminals - the pty host holds every
-		// window's - and what Facade put there for them says so too. Refused before anything is stopped (X-10; N-53).
-		const elsewhere = terminals.elsewhere.length ? terminals.elsewhere : this.othersUsing(folder).map(user => `#a${user.id} in that window's agent list`);
-		if (elsewhere.length) {
-			throw new FacadeError('REFUSED', `Cannot delete ${folder}: it is in use by ${elsewhere.length === 1 ? 'an agent' : `${elsewhere.length} agents`} from another window (${elsewhere.join(', ')}). This call cannot stop ${elsewhere.length === 1 ? 'it' : 'them'}. Nothing was stopped. Stop the agents in their own window first.`);
+		// The machine is one window: another workspace's work there is checked as this one's - its agents in the caller's
+		// reach, its unsaved editors a loss to authorize - and stopped by that workspace at the window's step 6 (O5). Without
+		// the machine, an agent another window runs there - the pty host holds every window's terminals - is its to stop,
+		// refused before anything is stopped (X-10; N-53)
+		const machine = this.options.machine;
+		if (machine) {
+			await this.preflightElsewhere(caller, folder, !!options.discardChanges);
+		} else {
+			const elsewhere = terminals.elsewhere.length ? terminals.elsewhere : this.othersUsing(folder).map(user => `#a${user.id} in that window's agent list`);
+			if (elsewhere.length) {
+				throw new FacadeError('REFUSED', `Cannot delete ${folder}: it is in use by ${elsewhere.length === 1 ? 'an agent' : `${elsewhere.length} agents`} from another window (${elsewhere.join(', ')}). This call cannot stop ${elsewhere.length === 1 ? 'it' : 'them'}. Nothing was stopped. Stop the agents in their own window first.`);
+			}
 		}
 		const outOfReach = inside.filter(each => !this.reaches(caller, each));
 		if (outOfReach.length) {
@@ -1277,7 +1578,9 @@ export class Facade implements Disposable {
 				ownFiles: target.leftover === undefined ? await this.ownFilesIn(folder, target) : [],
 				main: target.main,
 				agents,
-				...(target.leftover !== undefined ? { leftover: true } : {})
+				...(target.leftover !== undefined ? { leftover: true } : {}),
+				// Whom the other workspaces ask again and stop their work there for, as the window carries it (O5)
+				by: this.identityOf(caller)
 			});
 		} catch (err) {
 			// Its agents not all ended in time: what happened all the same, said and given as the same facts - the agents it
@@ -1310,7 +1613,40 @@ export class Facade implements Disposable {
 		this.recordRemoval({ folder, by, deleted: true });
 		this.table.forgetWorktree(folder);
 		this.log(`Deleted ${folder} through stop_agent requested by ${this.whoIs(by)}.`);
-		return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped: stoppedNow(), worktree: { folder, deleted: true } };
+		const others = await this.options.machine?.otherVersions().catch(() => []) ?? [];
+		const note = others.length ? `A window of another Facade version is open (${others.join(', ')}); it was not asked whether it had work in this worktree.` : undefined;
+		return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped: stoppedNow(), worktree: { folder, deleted: true, ...(note ? { note } : {}) } };
+	}
+
+	/**
+	 * The preflight of a deletion of `folder` over the other workspaces of the machine (O5; WORKTREE.md WT-8, step 2): each
+	 * is asked what it has there, waiting a moment for a silent one. Refused before anything is stopped, naming each
+	 * workspace: one still silent; an agent there outside `caller`'s reach; unsaved editors there, unless `discard`.
+	 */
+	private async preflightElsewhere(caller: Caller, folder: string, discard: boolean): Promise<void> {
+		const machine = this.options.machine;
+		if (!machine) {
+			return;
+		}
+		// Every workspace answers what protects work in it, its framework on or off (O5, O8)
+		const { answers, silent } = await machine.askEvery(WINDOW_REQUESTS.workIn, { folder, caller: this.identityOf(caller) }, SILENT_WAIT_MS);
+		const waiting = silent.filter(each => each.reason === 'not answering');
+		if (waiting.length) {
+			throw new FacadeError('UNAVAILABLE', `Cannot delete ${folder} yet: ${silentText(waiting)}, and it may have work there. Nothing was stopped. Retry shortly.`);
+		}
+		const outOfReach: string[] = [];
+		const unsaved: string[] = [];
+		for (const { label, answer } of answers) {
+			const work = workOf(answer);
+			outOfReach.push(...work.agents.filter(each => !each.reached).map(each => `${each.agent} (workspace ${label})`));
+			unsaved.push(...work.editors.map(each => `${each} (workspace ${label})`));
+		}
+		if (outOfReach.length) {
+			throw new FacadeError('REFUSED', `Cannot delete ${folder}: agents working there are outside your tree: ${outOfReach.join(', ')}. With YOLO off, you can reach only your own tree. Nothing was stopped.`);
+		}
+		if (unsaved.length && !discard) {
+			throw lossRefusal(folder, `unsaved editors in other workspaces: ${unsaved.join(', ')}`);
+		}
 	}
 
 	/**
@@ -1434,8 +1770,109 @@ export class Facade implements Disposable {
 			// Their screens go with the agents that leave the list (AGENT-DEBUGGING.md, D6)
 			this.screens.discard(new Set(endedBefore.filter(id => !this.table.state.agents.has(id))));
 		}
+		if (fresh) {
+			this.screens.discardCopies();
+		}
 		this.mail.recover(fresh, last?.by === 'facade');
 		this.endLeftBehind();
+		this.watchMachine();
+	}
+
+	/**
+	 * Looks at the other workspaces of the machine as Facade starts and once a minute (O8): takes the notices they left in
+	 * this one's outbox, and tells this workspace's agents what became of their children and messages in a workspace that
+	 * is gone without the notices its close brings - its app crashed - or silent past the timeout.
+	 */
+	private watchMachine(): void {
+		if (!this.options.machine || this.watching || this.disposed) {
+			return;
+		}
+		this.mail.takeNotices();
+		this.watching = setInterval(() => {
+			this.mail.takeNotices();
+			void this.checkAway().catch(err => this.log(`Could not check the other workspaces of this machine: ${messageOf(err)}`));
+		}, MACHINE_WATCH_MS);
+	}
+
+	/**
+	 * Tells this workspace's live agents of their children and messages in a workspace that is gone after a crash, or
+	 * silent past the timeout (O8; M8): each a notice of Facade's, keyed so that it comes once - a child's end under the key
+	 * its workspace's own notice of it has, so that whichever comes first is the one.
+	 */
+	async checkAway(): Promise<void> {
+		const machine = this.options.machine;
+		if (!machine || this.disposed || !this.frameworkOn()) {
+			return;
+		}
+		const { state } = this.table;
+		const interest = new Map<string, { children: [number, ForeignAgent][]; copies: Message[] }>();
+		const of = (window: string) => {
+			const found = interest.get(window) ?? { children: [], copies: [] };
+			interest.set(window, found);
+			return found;
+		};
+		for (const [creator, children] of state.childrenAfar) {
+			if (isLive(this.table.get(creator))) {
+				for (const child of children.filter(each => !state.mail.noticeKeys.has(`ended-a${each.id}`))) {
+					of(child.window).children.push([creator, child]);
+				}
+			}
+		}
+		for (const message of state.mail.messages.values()) {
+			const sender = typeof message.from === 'number' ? this.table.get(message.from) : undefined;
+			// One its recipient answered was fetched: no doubt is left about it (O8)
+			const answered = (copy: Message) => [...state.mail.messages.values()].some(each => each.replyTo === copy.id && isForeign(each.from) && isForeign(copy.to) && each.from.id === copy.to.id && each.from.window === copy.to.window);
+			if (isForeign(message.to) && sender && isLive(sender) && message.time >= sender.startTime && !state.mail.copyOutcomes.has(message.id) && !answered(message)) {
+				of(message.to.window).copies.push(message);
+			}
+		}
+		for (const [window, { children, copies }] of interest) {
+			const presence = await machine.presence(window);
+			if (this.disposed) {
+				return;
+			}
+			if (presence.kind === 'gone') {
+				this.silentSince.delete(window);
+				if (!presence.closed) {
+					this.toldGone(window, presence.label, presence.load, children, copies);
+				}
+			} else if (presence.kind === 'silent') {
+				const since = this.silentSince.get(window);
+				if (!since || since.load !== presence.load) {
+					this.silentSince.set(window, { load: presence.load, since: Date.now() });
+				} else if (Date.now() - since.since >= this.timing().startTimeoutMs) {
+					this.toldSilent(window, presence.label, presence.load, Date.now() - since.since, children, copies.filter(each => each.time >= since.since - this.timing().startTimeoutMs));
+				}
+			} else {
+				this.silentSince.delete(window);
+			}
+		}
+	}
+
+	/** Tells each creator of children in the workspace `window`, gone after a crash, of their ends, and each sender of messages there that they may never have been fetched. */
+	private toldGone(window: string, label: string, load: string | undefined, children: readonly [number, ForeignAgent][], copies: readonly Message[]): void {
+		for (const [creator, child] of children) {
+			this.mail.noticeHere(creator, `${foreignRef(child)} ended with its workspace ${workspaceNameOf(label)}, whose app ended unexpectedly. It can no longer receive messages.`, 'ended', child, `ended-a${child.id}`);
+		}
+		for (const [sender, sent] of groupBy(copies, each => each.from as number)) {
+			const ids = sent.slice(0, 10).map(each => `#m${each.id}`).join(', ') + (sent.length > 10 ? `, and ${sent.length - 10} more` : '');
+			this.mail.noticeHere(sender, `Workspace ${workspaceNameOf(label)} is gone: its app ended unexpectedly, and its agents with it. Your messages to them may never have been fetched: ${ids}.`, 'ended', sent[0].to as ForeignAgent, `gone-${window}-${load ?? ''}-a${sender}`);
+		}
+	}
+
+	/** Tells each creator of children in the workspace `window`, silent for `ms`, and each sender of recent messages there, that it does not answer: a fact, not an end. */
+	private toldSilent(window: string, label: string, load: string | undefined, ms: number, children: readonly [number, ForeignAgent][], copies: readonly Message[]): void {
+		const minutes = Math.max(1, Math.round(ms / 60_000));
+		const told = new Set<number>();
+		for (const [creator, list] of groupBy(children, each => each[0])) {
+			told.add(creator);
+			this.mail.noticeHere(creator, `Workspace ${label} has not answered for about ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}: your ${list.length === 1 ? 'child there' : 'children there'} (${list.map(each => foreignRef(each[1])).join(', ')}) may not be reachable. It may be reloading, busy or hung; Facade keeps trying.`, 'delayed', list[0][1], `silent-${window}-${load ?? ''}-a${creator}`);
+		}
+		for (const [sender, sent] of groupBy(copies, each => each.from as number)) {
+			if (!told.has(sender)) {
+				this.mail.noticeHere(sender, `Workspace ${label} has not answered for about ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}: your messages to its agents (${sent.slice(0, 10).map(each => `#m${each.id}`).join(', ')}) may be waiting. It may be reloading, busy or hung; Facade keeps trying.`, 'delayed', sent[0].to as ForeignAgent, `silent-${window}-${load ?? ''}-a${sender}`);
+			}
+		}
 	}
 
 	/**
@@ -1923,10 +2360,17 @@ export class Facade implements Disposable {
 		};
 	}
 
-	/** Refuses a start in a worktree being deleted: by an agent's `stop_agent`, or by the person in the window. */
+	/**
+	 * Refuses a start in a worktree being deleted: by an agent's `stop_agent`, or by the person - in this workspace, or in
+	 * another, whose deletion mark stands over it (WORKTREE.md WT-8, step 3).
+	 */
 	private assertNotDeleting(folder: string): void {
 		if ([...this.deletions, ...this.personDeletions].some(each => isEqualPath(each.folder, folder))) {
 			throw new FacadeError('REFUSED', `Cannot start an agent in ${folder} while the folder is being deleted.`);
+		}
+		const by = this.options.machine?.markOver(folder);
+		if (by !== undefined && by !== this.selfLabel) {
+			throw new FacadeError('REFUSED', `Cannot start an agent in ${folder} while workspace ${by} is deleting it. Choose another folder, or retry once the deletion is over.`);
 		}
 	}
 
@@ -1934,14 +2378,14 @@ export class Facade implements Disposable {
 	 * Where a child of the caller starts: a folder of the window - by its absolute path, or in the caller's own
 	 * repository by the branch checked out there - the caller's own folder where none is named, or a new
 	 * worktree of that folder's repository on the branch `name`. Refused before anything is made, saying what to
-	 * do next as the caller and its request call for: what names no folder of the window, a branch checked out in
-	 * two worktrees, a worktree being deleted, an agent's child anywhere but in a worktree Facade made while
-	 * worktree management is on, and a new worktree outside any repository, on a branch that is there or that git
-	 * takes for no branch, or with no commit to start at.
+	 * do next as its request calls for: what names no folder of the window, a branch checked out in two
+	 * worktrees, a worktree being deleted, and a new worktree outside any repository, on a branch that is there or
+	 * that git takes for no branch, or with no commit to start at. An agent's child starts in a main checkout or a
+	 * worktree Facade made; with worktree management off, in a folder the window knows (AGENT-ORCHESTRATION.md, O3).
 	 */
-	private async placeOf(caller: Caller, named: string | undefined, newWorktree: boolean, name: string): Promise<Place> {
+	private async placeOf(caller: Caller, named: string | undefined, newWorktree: boolean, name: string, callerHead?: { readonly repository: string; readonly commit: string }): Promise<Place> {
 		// Worktree management as the start is accepted, as new_worktree's refusal read it (WORKTREE.md WT-9.3)
-		const request: PlaceRequest = { caller, newWorktree, managed: this.ports.workspace.worktreesManaged() };
+		const request: PlaceRequest = { byAgent: caller.id !== undefined, newWorktree, managed: this.ports.workspace.worktreesManaged() };
 		const own = this.agentOf(caller)?.folder;
 		// The person's own is the folder on their screen (AGENT-ORCHESTRATION.md, O3).
 		const here = own ?? (caller.id === undefined ? await this.ports.workspace.activeFolder() : undefined);
@@ -1956,18 +2400,20 @@ export class Facade implements Disposable {
 			throw new FacadeError('NOT_FOUND', `Cannot start an agent in ${folder}: it no longer exists on disk. Nothing was started. ${placeRecovery(request, 'folder', folders)}`);
 		}
 		const repository = await this.ports.git.repositoryOf(folder);
-		// O3: while worktree management is on, an agent's child works in one of Facade's worktrees - a new one, or one that
-		// is there, its own among them. A folder outside Git has none to make either: a new one is made of a folder of a Git
-		// repository. With management off, it starts in any folder the window knows, as the person's does (WT-9.3)
-		if (caller.id !== undefined && request.managed && (!repository || (!newWorktree && (repository.mainCheckout || !this.ports.git.isFacadeWorktree(folder))))) {
-			const worktrees = (await this.windowFolders(true)).map(each => each.folder).join(', ');
-			// What to do next: one of the worktrees Facade made in the window - where there are none, it says so - or a new one
-			const reuse = `folder to one of these worktrees created by Facade: ${worktrees}.`;
-			const none = 'No worktrees created by Facade are available in this window.';
+		// O3: while worktree management is on, an agent's child works in a main checkout or one of Facade's worktrees - a
+		// new one, or one that is there, its own among them. A folder outside Git has none to make either: a new one is
+		// made of a folder of a Git repository. With management off, it starts in any folder the window knows, as the
+		// person's does (WT-9.3)
+		if (request.byAgent && request.managed && (!repository || (!newWorktree && !repository.mainCheckout && !this.ports.git.isFacadeWorktree(folder)))) {
+			const places = (await this.windowFolders(true)).map(each => each.folder).join(', ');
+			// What to do next: a main checkout or one of the worktrees Facade made in the window - where there are none, it
+			// says so - or a new worktree
+			const reuse = `folder to one of these main checkouts and worktrees created by Facade: ${places}.`;
+			const none = 'No main checkouts or worktrees created by Facade are available in this window.';
 			const fromRepository = 'Set new_worktree:true and folder to a Git repository folder in this window';
 			throw new FacadeError('REFUSED', !repository
-				? `Cannot ${newWorktree ? 'create a worktree from' : 'start a child in'} ${folder}: it is not in a Git repository. Nothing was started. ${worktrees ? `${fromRepository}, or set new_worktree:false and ${reuse}` : `${none} ${fromRepository}.`}`
-				: `Cannot start a child in ${folder}: it is ${repository.mainCheckout ? 'a main checkout' : 'not a worktree created by Facade'}. Nothing was started. ${worktrees ? `Set new_worktree:true to create a worktree in this repository, or set ${reuse}` : `${none} Set new_worktree:true to create one in this repository.`}`);
+				? `Cannot ${newWorktree ? 'create a worktree from' : 'start a child in'} ${folder}: it is not in a Git repository. Nothing was started. ${places ? `${fromRepository}, or set new_worktree:false and ${reuse}` : `${none} ${fromRepository}.`}`
+				: `Cannot start a child in ${folder}: it is a worktree not created by Facade. Nothing was started. ${places ? `Set new_worktree:true to create a worktree in this repository, or set ${reuse}` : `${none} Set new_worktree:true to create one in this repository.`}`);
 		}
 		if (!newWorktree) {
 			return { kind: 'folder', folder, worktree: repository?.worktree ?? path.basename(folder), main: repository?.main ?? folder, outsideGit: !repository };
@@ -1977,8 +2423,9 @@ export class Facade implements Disposable {
 		}
 		// At the caller's commit in its own repository - the person's checkout being the folder on their screen (O3;
 		// N-06) - and in another at its main checkout's.
-		const ownRepository = here === undefined || !fs.existsSync(here) ? undefined : await this.ports.git.repositoryOf(here);
-		const from = ownRepository && isEqualPath(ownRepository.main, repository.main) ? { folder: here, head: ownRepository.head } : { folder: repository.main, head: (await this.ports.git.repositoryOf(repository.main))?.head };
+		// A caller of another workspace: its checkout's commit, as its workspace resolved it before handing the start over
+		const ownRepository = callerHead ? { main: callerHead.repository, head: callerHead.commit } : here === undefined || !fs.existsSync(here) ? undefined : await this.ports.git.repositoryOf(here);
+		const from = ownRepository && isEqualPath(ownRepository.main, repository.main) ? { folder: here ?? ownRepository.main, head: ownRepository.head } : { folder: repository.main, head: (await this.ports.git.repositoryOf(repository.main))?.head };
 		if (from.head === undefined) {
 			throw new FacadeError('REFUSED', `Cannot create a worktree from ${from.folder}: its branch has no commit yet, or Git cannot read its commit.`);
 		}
@@ -1992,10 +2439,7 @@ export class Facade implements Disposable {
 			throw new FacadeError('REFUSED', `Cannot use '${name}' for the new worktree's branch: ${notABranch}. Choose another agent name.`);
 		}
 		if (await this.ports.git.hasBranch(repository.main, name)) {
-			// An agent's child goes in an existing worktree only without new_worktree, and only in one Facade created (O3)
-			throw new FacadeError('REFUSED', `Branch '${name}' already exists in ${path.basename(repository.main)}. A new worktree needs a new branch named after the child. ${caller.id !== undefined
-				? 'Choose another agent name. To reuse an existing worktree created by Facade, set new_worktree:false and folder to its absolute path or checked-out branch.'
-				: `Choose another agent name, or use folder to start in the existing worktree for '${name}'.`}`);
+			throw new FacadeError('REFUSED', `Branch '${name}' already exists in ${path.basename(repository.main)}. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for '${name}'.`);
 		}
 		if (this.branchesBeingMade.some(each => isEqualPath(each.main, repository.main) && each.branch === name)) {
 			throw new FacadeError('REFUSED', `Branch '${name}' is already being created in ${path.basename(repository.main)} for another start. Choose another agent name.`);
@@ -2021,11 +2465,183 @@ export class Facade implements Disposable {
 				throw new FacadeError('REFUSED', `${folder} is outside this window, and worktree management is turned off by the setting ${WORKTREES_SETTING}. Nothing was started. ${next}`);
 			}
 			if (fs.existsSync(folder)) {
-				throw new FacadeError('REFUSED', `${folder} is ${fs.statSync(folder).isDirectory() ? 'a folder' : 'a file'} outside this window. Nothing was started. ${next}`);
+				// Another workspace's folder is named, yet this one carries out the start: its caller named this one (O3)
+				const owner = await this.windowWith(folder);
+				throw new FacadeError('REFUSED', owner
+					? `${folder} is a folder of workspace ${owner}, not of this workspace. Nothing was started. Pass workspace '${owner.split(' (')[0]}', or omit workspace, to start it there.`
+					: `${folder} is ${fs.statSync(folder).isDirectory() ? 'a folder' : 'a file'} outside every Facade workspace on this machine. Nothing was started. ${next}`);
 			}
 			throw new FacadeError('NOT_FOUND', `${folder} does not identify a folder in this window. Nothing was started. ${next}`);
 		}
 		return found.folder;
+	}
+
+	/**
+	 * Where a start the caller asks for is carried out (O3): here, or in the workspace `record` that has its folder - the one
+	 * `workspace` names, which must have it; else this workspace where it has it, else the one workspace of the machine that
+	 * has it, waiting a moment for a silent one. Refused where several have it and none is named, where the named one does
+	 * not, and where a silent one may. A branch, and a folder no workspace has, are left to this workspace to place or refuse.
+	 */
+	async startWhere(caller: Caller, folder: string | undefined, workspace: string | undefined): Promise<{ readonly here: true } | { readonly here: false; readonly record: string; readonly label: string; readonly folder: string }> {
+		const machine = this.options.machine;
+		const wanted = folder?.trim();
+		if (workspace !== undefined) {
+			const named = await this.workspaceNamed(workspace);
+			if (named.record === this.selfRecord || !machine) {
+				return { here: true };
+			}
+			const target = wanted && path.isAbsolute(wanted) ? wanted : wanted ? undefined : this.agentOf(caller)?.folder;
+			if (target === undefined) {
+				throw new FacadeError('INVALID', `With workspace, folder must be an absolute path${wanted ? ', not a branch' : ''}. Nothing was started.`);
+			}
+			// Its folders, asked again a moment while it is silent: a reload takes seconds (O8)
+			const { answers, silent } = await machine.ask(WINDOW_REQUESTS.folders, {}, SILENT_WAIT_MS, named.record);
+			if (!answers.length) {
+				// Off, it is said as an agent of it is (O8); silent, it may answer again; neither, it closed meanwhile
+				const off = silent.filter(each => each.reason === 'framework off');
+				if (off.length) {
+					throw new FacadeError('UNAVAILABLE', `Cannot start an agent there: ${silentText(off)} (framework_disabled), so no agent can start there until it is turned on there. Nothing was started.`, { reason: 'frameworkOff' });
+				}
+				throw new FacadeError('UNAVAILABLE', silent.length
+					? `Cannot start an agent there yet: ${silentText(silent)}. Nothing was started. Retry shortly.`
+					: `Cannot start an agent there: workspace ${named.label} is closed. Nothing was started.`);
+			}
+			const has = answers[0].answer;
+			if (!(Array.isArray(has) && has.some(each => typeof each === 'string' && isEqualPath(each, target)))) {
+				const { answers } = await machine.ask(WINDOW_REQUESTS.folders, {}).catch(() => ({ answers: [] }));
+				const having = [...(await this.windowFolders()).some(each => isEqualPath(each.folder, target)) ? [this.selfLabel] : [], ...answers.filter(({ answer }) => Array.isArray(answer) && answer.some(each => typeof each === 'string' && isEqualPath(each, target))).map(each => each.label)];
+				throw new FacadeError('REFUSED', `${target} is no folder of workspace ${named.label}. Nothing was started.${having.length ? ` Workspaces that have it: ${having.join(', ')}.` : ''}`);
+			}
+			return { here: false, record: named.record, label: named.label, folder: target };
+		}
+		if (!machine || caller.from || !wanted || !path.isAbsolute(wanted) || (await this.windowFolders()).some(each => isEqualPath(each.folder, wanted))) {
+			return { here: true };
+		}
+		const { answers, silent } = await machine.ask(WINDOW_REQUESTS.folders, {}, SILENT_WAIT_MS);
+		const having = answers.filter(({ answer }) => Array.isArray(answer) && answer.some(each => typeof each === 'string' && isEqualPath(each, wanted)));
+		if (having.length > 1) {
+			throw new FacadeError('REFUSED', `${wanted} is a folder of several workspaces: ${having.map(each => each.label).join(', ')}. Nothing was started. Pass workspace to choose one.`);
+		}
+		if (having.length === 1) {
+			return { here: false, record: having[0].record, label: having[0].label, folder: wanted };
+		}
+		const waiting = silent.filter(each => each.reason === 'not answering');
+		if (waiting.length) {
+			throw new FacadeError('UNAVAILABLE', `Cannot find which workspace has ${wanted} yet: ${silentText(waiting)}. Nothing was started. Retry shortly, or pass workspace.`);
+		}
+		return { here: true };
+	}
+
+	/**
+	 * A copy of `file`, a screen file another workspace's result names, under this workspace's record - its screens folder,
+	 * named afresh - which the caller's launch lets it read (O8; D1). The file itself where it cannot be copied.
+	 */
+	adoptFile(file: string): string {
+		try {
+			const folder = screensDir(this.table.dir);
+			fs.mkdirSync(folder, { recursive: true });
+			const own = path.join(folder, screenCopyName(file));
+			fs.copyFileSync(file, own);
+			return own;
+		} catch (err) {
+			this.log(`Could not copy ${file} from another workspace into this workspace's record: ${messageOf(err)}`);
+			return file;
+		}
+	}
+
+	/**
+	 * Runs `make` holding the machine's lock of the repository `main` (O4): git's making of a worktree and the copying that
+	 * comes with it, one at a time for a repository across the machine's workspaces. As it is, without the machine.
+	 */
+	private inRepositoryLock<T>(main: string, make: () => Promise<T>): Promise<T> {
+		const locks = this.options.repositoryLocks;
+		if (!locks) {
+			return make();
+		}
+		const key = process.platform === 'linux' ? canonicalFolder(main) : canonicalFolder(main).toLowerCase();
+		return withLongFileLock(path.join(locks, crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)), make, this.timing().startTimeoutMs);
+	}
+
+	/** The numbers of the agents this workspace's list holds, whoever asks: what another workspace's caller learns of those out of its reach (O1). */
+	agentNumbers(): number[] {
+		return [...this.table.state.agents.keys()];
+	}
+
+	/** Resolves once a number can be taken without waiting on another workspace's hold of the machine's counters (L12). */
+	numbersReady(): Promise<void> {
+		return this.table.numbersReady();
+	}
+
+	/** How long this workspace's calls wait, as the person sets it now: what a start it hands another workspace waits too (O3). */
+	waitMs(): number {
+		return this.timing().startTimeoutMs;
+	}
+
+	/**
+	 * The commit of the caller's own checkout and its repository, for a start handed to another workspace that may make a
+	 * new worktree of the same repository (O3): resolved here, where the checkout is. None where it has none.
+	 */
+	async callerHead(caller: Caller): Promise<{ readonly repository: string; readonly commit: string } | undefined> {
+		const own = this.agentOf(caller)?.folder ?? (caller.id === undefined ? await this.ports.workspace.activeFolder() : undefined);
+		const repository = own === undefined || !fs.existsSync(own) ? undefined : await this.ports.git.repositoryOf(own).catch(() => undefined);
+		return repository?.head !== undefined ? { repository: repository.main, commit: repository.head } : undefined;
+	}
+
+	/**
+	 * The caller started `child` in another workspace, which numbered it there (O11): recorded as its child, once - and, with
+	 * its `task`, the sender's copy of the task under the number that workspace gave it (M7, M11).
+	 */
+	childStartedAfar(caller: Caller, child: ForeignAgent, task?: { readonly id: number; readonly text: string }): void {
+		const creator = this.agentOf(caller);
+		try {
+			if (creator && !(this.table.state.childrenAfar.get(creator.id) ?? []).some(each => each.id === child.id && each.window === child.window)) {
+				this.table.childAfar(creator.id, child);
+			}
+			if (task && !this.table.state.mail.messages.has(task.id)) {
+				const copy = this.table.messages.copy(task.id, { ...(caller.id !== undefined ? { from: caller.id } : {}), to: child, text: task.text });
+				this.mail.copied(copy.id);
+			}
+		} catch (err) {
+			this.log(`Could not record ${describe(child)}, started in workspace ${child.label ?? child.window}: ${messageOf(err)}`);
+		}
+	}
+
+	/**
+	 * The workspace `text` names - by its name, its label as results write it, or the start of its record id - this one or
+	 * another of the machine (O2). Refused where it names none, or several, listing them.
+	 */
+	async workspaceNamed(text: string): Promise<{ readonly record: string; readonly label: string }> {
+		const wanted = text.trim().toLowerCase();
+		const all = await this.workspaces();
+		const short = (record: string) => record.replace(/-/g, '').toLowerCase();
+		const prefixed = (prefix: string) => prefix.length >= 4 && all.filter(each => short(each.record).startsWith(prefix.replace(/-/g, '')));
+		// As Facade writes it, `lab, 1a2b3c4d`: by the start of its record id, its name telling apart those that share it
+		const both = /^(?<name>[\s\S]+),\s*(?<short>[^\s,]+)$/.exec(wanted)?.groups;
+		const byBoth = both && prefixed(both.short);
+		const matches = byBoth && byBoth.length
+			? byBoth.length > 1 ? byBoth.filter(each => nameOfWorkspace(each).toLowerCase() === both.name) : byBoth
+			: all.filter(each => each.label.toLowerCase() === wanted || nameOfWorkspace(each).toLowerCase() === wanted || (prefixed(wanted) || []).includes(each));
+		if (matches.length === 1) {
+			return matches[0];
+		}
+		throw new FacadeError(matches.length ? 'INVALID' : 'NOT_FOUND', matches.length
+			? `Workspace '${text.trim()}' is ambiguous: ${matches.map(each => each.label).join(', ')}. Name it by the start of its record id. Nothing was done.`
+			: `No workspace on this machine is named '${text.trim()}'. Workspaces: ${all.map(each => each.label).join(', ')}. Name one by its name or the start of its record id. Nothing was done.`);
+	}
+
+	/** This workspace and the others of the machine that are open: each by its record, its label and its name. */
+	private async workspaces(): Promise<readonly { readonly record: string; readonly label: string; readonly workspace?: string }[]> {
+		return [{ record: this.selfRecord, label: this.selfLabel, workspace: workspaceNameOf(this.selfLabel) }, ...await this.options.machine?.known() ?? []];
+	}
+
+	/** The label of another workspace of the machine that has the folder `folder`; none where no workspace that answers has it. */
+	private async windowWith(folder: string): Promise<string | undefined> {
+		const machine = this.options.machine;
+		if (!machine) {
+			return undefined;
+		}
+		const { answers } = await machine.ask(WINDOW_REQUESTS.folders, {}).catch(() => ({ answers: [] }));
+		return answers.find(({ answer }) => Array.isArray(answer) && answer.some(each => typeof each === 'string' && isEqualPath(each, folder)))?.label;
 	}
 
 	/**
@@ -2134,8 +2750,9 @@ export class Facade implements Disposable {
 		const notice: EndNotice = {
 			how: howItEnded(end, this.table.whoIs(end.by)),
 			told: howItEnded(end, this.table.whoIs(end.by), true),
-			// Every end, exit 0 too - but a stop it asked for, one its start answered it with, and the window going
-			tell: agent.creator !== undefined && !details.windowWent && !answered && !(end.kind === 'stopped' && end.by === agent.creator)
+			// Every end, exit 0 too - but a stop it asked for, one its start answered it with, and the workspace closing,
+			// which ends a creator here too: one in another workspace hears of that as well (AGENT-LAUNCHER.md, L6)
+			tell: agent.creator !== undefined && (!details.windowWent || !!agent.creatorAfar) && !answered && !(end.kind === 'stopped' && isCreator(end.by, agent))
 		};
 		if (this.settling) {
 			this.settling.push([agent, notice]);
@@ -2287,6 +2904,10 @@ export class Facade implements Disposable {
 
 	/** The YOLO an agent the caller starts gets: its own for an agent, the setting's for the person; refused where the setting is no switch. */
 	private yolo(caller: Caller): boolean {
+		// A child of another workspace's agent: that agent's, as its workspace says (O1)
+		if (caller.from && caller.id !== undefined) {
+			return caller.from.yolo === true;
+		}
 		const creator = this.agentOf(caller);
 		if (creator) {
 			return creator.yolo;
@@ -2298,13 +2919,25 @@ export class Facade implements Disposable {
 		}
 	}
 
-	/** Whether `caller` reaches `agent` (O1): the person every agent; an agent with YOLO on every agent of the window, with it off its own tree, ended ones too. */
+	/**
+	 * Whether `caller` reaches `agent` (O1): the person every agent; an agent with YOLO on every agent of the machine, with it
+	 * off its own tree, ended ones too, in whichever workspace each runs - a tree named by its root's number and the root's
+	 * workspace together, so that a number two records hold never joins two trees (O8).
+	 */
 	private reaches(caller: Caller, agent: Agent): boolean {
-		const self = this.agentOf(caller);
 		if (caller.id === undefined) {
 			return true;
 		}
-		return !!self && (self.yolo || self.root === agent.root);
+		const tree = this.treeOf(agent);
+		if (caller.from) {
+			return caller.from.yolo === true || (caller.from.root === tree.root && (caller.from.rootWindow ?? caller.from.window) === tree.window);
+		}
+		const self = this.agentOf(caller);
+		if (!self) {
+			return false;
+		}
+		const own = this.treeOf(self);
+		return self.yolo || (own.root === tree.root && own.window === tree.window);
 	}
 
 	private assertReaches(caller: Caller, agent: Agent): void {
@@ -2387,6 +3020,8 @@ export class Facade implements Disposable {
 			name: agent.name,
 			...(agent.creator !== undefined ? { creator: agent.creator } : {}),
 			root: agent.root,
+			...(agent.creatorAfar ? { creatorAfar: agent.creatorAfar } : {}),
+			...(agent.rootAfar ? { rootAfar: agent.rootAfar } : {}),
 			cli: agent.cli,
 			custom: agent.custom,
 			...(agent.model !== undefined ? { model: agent.model } : {}),
@@ -2486,10 +3121,42 @@ export function sandboxText(sandbox: Sandbox): string {
 	return sandbox === 'unavailable' ? 'no sandbox' : sandbox === 'unknown' ? 'sandbox unknown' : `sandbox ${sandbox}`;
 }
 
-/**
- * Whether an agent found as Facade came back had its start cut before its CLI was launched: making its worktree,
- * or setting it up. No terminal was ever its, and none will be (O4).
- */
+/** What a workspace answered of its work in a folder, each part checked (O5): its agents, whether the caller reaches each, its terminals and unsaved editors. */
+export function workOf(answer: unknown): { readonly agents: readonly { readonly agent: string; readonly id?: number; readonly reached: boolean }[]; readonly terminals: readonly string[]; readonly editors: readonly string[] } {
+	const value = (answer ?? {}) as { agents?: unknown; terminals?: unknown; editors?: unknown };
+	const texts = (list: unknown) => Array.isArray(list) ? list.filter((each): each is string => typeof each === 'string') : [];
+	const agents = Array.isArray(value.agents) ? value.agents.flatMap(each => {
+		const { agent, id, reached } = (each ?? {}) as { agent?: unknown; id?: unknown; reached?: unknown };
+		return typeof agent === 'string' ? [{ agent, ...(typeof id === 'number' ? { id } : {}), reached: reached === true }] : [];
+	}) : [];
+	return { agents, terminals: texts(value.terminals), editors: texts(value.editors) };
+}
+
+/** How often a workspace looks at the others it has children or messages in, and takes the notices left for it (O8). */
+const MACHINE_WATCH_MS = 60_000;
+
+/** A workspace's name: as it says it, else as its label begins. */
+function nameOfWorkspace(entry: { readonly label: string; readonly workspace?: string }): string {
+	return entry.workspace ?? workspaceNameOf(entry.label);
+}
+
+/** `items` by what `key` says of each, in the order each key first comes. */
+function groupBy<T, K>(items: readonly T[], key: (item: T) => K): Map<K, T[]> {
+	const groups = new Map<K, T[]>();
+	for (const item of items) {
+		groups.set(key(item), [...groups.get(key(item)) ?? [], item]);
+	}
+	return groups;
+}
+
+/** Whether `by`, who stopped `agent`, is its creator: of this record, or of another workspace. */
+function isCreator(by: StoppedBy | undefined, agent: Agent): boolean {
+	if (agent.creatorAfar) {
+		return typeof by === 'object' && by.id === agent.creatorAfar.id && by.window === agent.creatorAfar.window;
+	}
+	return by === agent.creator;
+}
+
 /**
  * The signal an agent's CLI was ended by, as the window writes one - 128 and its number, as a shell does
  * (`processExitCode`); undefined for an exit code of its own, and on Windows, which has no signals.
@@ -2520,6 +3187,10 @@ function closedBecause(end: TerminalEnd): string {
 	}
 }
 
+/**
+ * Whether an agent found as Facade came back had its start cut before its CLI was launched: making its worktree,
+ * or setting it up. No terminal was ever its, and none will be (O4).
+ */
 function cutBeforeLaunch(agent: LiveAgent): boolean {
 	return agent.state === 'starting' && (agent.phase === 'creating_worktree' || agent.phase === 'running_setup');
 }

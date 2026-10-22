@@ -7,7 +7,7 @@ import { timeout } from '../base/async';
 import { messageOf } from '../base/errors';
 import { AgentTable } from '../record/agents';
 import { Agent, AgentState, Caller, describe, End, isLive, StartPhase } from '../record/events';
-import { discardScreens, FinalScreen, FinalScreenError, finalScreenFile, readFinalScreen, writeFinalScreenText, writeScreenSnapshot } from '../record/screens';
+import { discardScreenCopies, discardScreens, FinalScreen, FinalScreenError, finalScreenFile, readFinalScreen, writeFinalScreenText, writeScreenSnapshot } from '../record/screens';
 import { FacadeError } from './errors';
 import { InputEffect, Ports, TerminalScreen, Timing } from './ports';
 
@@ -195,7 +195,7 @@ export class Screens {
 		const timing = this.context.timing();
 		// Known before the keys go in: a CLI that exits on Ctrl+C at once has its end told before the keys' answer - the
 		// agent that pressed it, where one did
-		const interrupter = keys.includes('Ctrl+C') ? caller.id : undefined;
+		const interrupter = keys.includes('Ctrl+C') && !caller.from ? caller.id : undefined;
 		if (interrupter !== undefined) {
 			this.interrupts.set(agent.id, { by: interrupter, at: Date.now() });
 		}
@@ -255,6 +255,18 @@ export class Screens {
 			}
 		} catch (err) {
 			this.context.log(`Could not delete saved screens for previously ended agents: ${messageOf(err)}`);
+		}
+	}
+
+	/** Deletes the copies of other workspaces' screen files, as Facade starts afresh: whoever they were copied for has ended (D6). */
+	discardCopies(): void {
+		try {
+			const discarded = discardScreenCopies(this.context.dir);
+			if (discarded) {
+				this.context.log(`Deleted ${discarded} copies of other workspaces' screen files from before this fresh Facade session.`);
+			}
+		} catch (err) {
+			this.context.log(`Could not delete copies of other workspaces' screen files: ${messageOf(err)}`);
 		}
 	}
 
