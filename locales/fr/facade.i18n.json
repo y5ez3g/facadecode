@@ -330,6 +330,9 @@
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Facade Agents"
 		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "Arrêt des agents de cette fenêtre"
+		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "Changer et redémarrer",
 			"dontShowAgain": "Ne plus afficher",
@@ -481,7 +484,8 @@
 			"runningWork.agentAndTerminals": "Voulez-vous arrêter 1 agent et {0} terminaux ?",
 			"runningWork.agents": "Voulez-vous arrêter {0} agents ?",
 			"runningWork.agentsAndTerminal": "Voulez-vous arrêter {0} agents et 1 terminal ?",
-			"runningWork.agentsAndTerminals": "Voulez-vous arrêter {0} agents et {1} terminaux ?"
+			"runningWork.agentsAndTerminals": "Voulez-vous arrêter {0} agents et {1} terminaux ?",
+			"runningWork.startedBy": "{0} · démarré par {1}"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Icône d’un terminal qui exécute Antigravity.",
@@ -546,7 +550,9 @@
 			"worktrees.deleteQuestion": "Voulez-vous vraiment supprimer l’arborescence de travail « {0} » ?",
 			"worktrees.deleteUnknown": "Impossible de confirmer la suppression de l’arborescence de travail « {0} ». La barre des espaces de travail reflète l’état Git actuel.",
 			"worktrees.deleteWorktree": "Supprimer l’arborescence de travail...",
+			"worktrees.deletedElsewhere": "« {0} » n’a pas été supprimée, car l’espace de travail {1} est en train de la supprimer.",
 			"worktrees.deleting": "Suppression de l’arborescence de travail « {0} »...",
+			"worktrees.elsewhereFailed": "« {0} » n’a pas été supprimée, car les autres espaces de travail n’ont pas pu être contactés à son sujet : {1}",
 			"worktrees.folder": "Chemin : {0}",
 			"worktrees.folderAndSubmodulesDeleted": "Le dossier de l’arborescence de travail, y compris ses sous-modules et ses validations non envoyées, sera supprimé. Cette action est irréversible.",
 			"worktrees.folderDeleted": "Le dossier de l’arborescence de travail sera supprimé du disque. Cette action est irréversible.",
@@ -554,6 +560,7 @@
 			"worktrees.hookFailed": "L’arborescence de travail a été créée, mais un hook Git a échoué : {0}",
 			"worktrees.ignored": "Les fichiers suivants, ignorés par Git, seront supprimés :",
 			"worktrees.ignoredFile": "{0} (ignoré par Git)",
+			"worktrees.inWorkspace": "espace de travail {0}",
 			"worktrees.inheritedEnvironment": "Cette fenêtre a été démarrée avec GIT_DIR, GIT_WORK_TREE ou GIT_INDEX_FILE défini, ce qui redirige Git vers un autre dépôt. Ouvrez le dossier dans une nouvelle fenêtre.",
 			"worktrees.initialBranch": "La validation initiale se trouve sur la branche « {0} ». Choisissez un autre nom de branche pour la nouvelle arborescence de travail.",
 			"worktrees.initializeAndCreate": "Initialiser et créer",
@@ -562,6 +569,7 @@
 			"worktrees.invalidBranchName": "« {0} » n’est pas un nom de branche valide.",
 			"worktrees.kept": "L’arborescence de travail « {0} » n’a pas été supprimée du disque. Elle a été retirée de l’espace de travail. Cliquez sur sa ligne pour la rajouter.",
 			"worktrees.keptOutside": "L’arborescence de travail « {0} » n’a pas été supprimée du disque.",
+			"worktrees.leftElsewhere": "« {0} » n’a pas été supprimée, car le travail d’un autre espace de travail ne s’est pas arrêté : {1}.",
 			"worktrees.leftover": "L’arborescence de travail a été retirée de Git, mais son dossier n’a pas pu être supprimé : {0}. {1}",
 			"worktrees.leftoverRefused": "Impossible de supprimer le dossier : {0}",
 			"worktrees.leftoverUnknown": "« {0} » n’a pas été reconnu comme un dossier d’arborescence de travail laissé par une suppression dans cette fenêtre ; il n’a donc pas été supprimé. Supprimez-le manuellement si nécessaire.",
@@ -586,6 +594,7 @@
 			"worktrees.notRepositoryUnasked": "Le dossier « {0} » n’est pas un dépôt Git. Initialisez d’abord le dépôt.",
 			"worktrees.notWorktree": "« {0} » n’est pas une arborescence de travail reconnue dans cet espace de travail.",
 			"worktrees.openWorktree": "Ouvrir l’arborescence de travail",
+			"worktrees.otherVersions": "Une fenêtre d’une autre version de Facade est ouverte ({0}) ; il ne lui a pas été demandé si elle a du travail dans cette arborescence de travail.",
 			"worktrees.outOfWorkspace": "Elle a été retirée de l’espace de travail.",
 			"worktrees.pathExists": "Un fichier ou un dossier existe déjà à l’emplacement « {0} ».",
 			"worktrees.prepare.folderEmpty": "Ce dossier n’est pas un dépôt Git. Si vous continuez, il sera initialisé (« git init ») et une validation initiale vide sera créée.",
@@ -599,6 +608,7 @@
 			"worktrees.prepare.unbornOne": "Ce dépôt ne contient encore aucune validation. Si vous continuez, une validation initiale contenant 1 fichier sera créée.",
 			"worktrees.prepareFailed": "Impossible de créer la validation initiale pour « {0} » : {1}",
 			"worktrees.preparing": "Création de la validation initiale dans « {0} »...",
+			"worktrees.releaseUnknown": "« {0} » n’a pas été supprimée, car l’espace de travail {1} a peut-être reçu la demande d’arrêter son travail dans celle-ci, mais n’a renvoyé aucun résultat ; on ne sait pas si ce travail s’est arrêté. Vérifiez cet espace de travail, puis réessayez.",
 			"worktrees.restricted": "Les arborescences de travail nécessitent des opérations Git, qui sont désactivées en mode Restreint.",
 			"worktrees.restrictedUnasked": "L’espace de travail est en mode Restreint. Approuvez l’espace de travail pour exécuter des opérations Git.",
 			"worktrees.retry": "Réessayer",
@@ -630,6 +640,8 @@
 			"worktrees.unsavedFile": "{0} (non enregistré)",
 			"worktrees.untrusted": "Une arborescence de travail hérite de l’approbation de son dépôt parent « {0} ». Approuvez d’abord le dépôt parent.",
 			"worktrees.untrustedUnasked": "Le dépôt « {0} » n’est pas approuvé. Approuvez le dépôt avant de créer une arborescence de travail.",
+			"worktrees.workSinceElsewhere": "« {0} » n’a pas été supprimée, car d’autres espaces de travail y ont du travail que cette suppression ne couvrait pas : {1}.",
+			"worktrees.workspaceSilent": "« {0} » n’a pas été supprimée, car l’espace de travail {1} n’a pas répondu et y a peut-être du travail en cours. Réessayez dans un instant.",
 			"worktrees.wouldLose": "« {0} » contient des modifications qui seraient perdues si elle était supprimée : {1}. Rien n’a été supprimé.",
 			"worktrees.wouldLoseSubmodules": "« {0} » contient des sous-modules ; la supprimer ferait perdre leurs validations non envoyées. Rien n’a été supprimé."
 		},
@@ -699,11 +711,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "La gestion des agents de cet espace de travail a été transférée à une autre fenêtre Facade.",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Les agents de cet espace de travail sont gérés dans une autre fenêtre. Supprimez les salons de discussion dans cette fenêtre-là.",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Les agents de cet espace de travail sont gérés dans une autre fenêtre. Ouvrez les salons de discussion dans cette fenêtre-là.",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Tous les messages échangés entre vous et vos agents dans cet espace de travail seront supprimés. Cette action est irréversible.",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "Les salons de discussion appartiennent à cet ordinateur : ceux de tous les espaces de travail seront donc supprimés, et pas seulement ceux de celui-ci. Les agents en cours d’exécution peuvent toujours lire les messages de leur session. Cette action est irréversible.",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Un agent que vous démarrez depuis le menu Agent ou avec Démarrer un agent conserve les questions et les mises à jour propres à sa CLI, et ses approbations telles que YOLO les définit. Un agent qu’un autre agent ou votre script démarre via start_agent, alors que personne ne surveille peut-être, s’exécute avec la partie sans surveillance de sa configuration de lancement (ses groupes remplacent ceux de la configuration de lancement ; son environnement et ses paramètres s’appliquent par-dessus ceux de celle-ci) afin que, là où sa CLI le permet, rien n’attende de réponse. whenYouStartIt et throughStartAgent indiquent ce que reçoit chacun.",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "Une autre fenêtre Facade gère les agents de cet espace de travail. Démarrez les agents dans cette fenêtre-là.",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Une autre fenêtre Facade gère les agents de cet espace de travail. Utilisez cette fenêtre-là, ou fermez-la et rechargez cette fenêtre-ci pour les gérer ici.",
-			"Are you sure you want to delete all chat rooms in this workspace?": "Voulez-vous vraiment supprimer tous les salons de discussion de cet espace de travail ?",
+			"There are no chat rooms to delete.": "Il n’y a aucun salon de discussion à supprimer.",
+			"Are you sure you want to delete 1 chat room?": "Voulez-vous vraiment supprimer 1 salon de discussion ?",
+			"Are you sure you want to delete {0} chat rooms?": "Voulez-vous vraiment supprimer {0} salons de discussion ?",
 			"Configure Agents": "Configurer les agents",
 			"Could not delete all chat rooms: {0}": "Impossible de supprimer tous les salons de discussion : {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Impossible de se reconnecter aux agents qui s’exécutaient déjà. Ils ne peuvent pas utiliser les outils Facade, mais les agents démarrés à partir de maintenant fonctionnent normalement.",
@@ -780,6 +794,7 @@
 			"{0} messages, latest at {1}": "{0} messages, le dernier à {1}",
 			"{0} of your agents ended. {1}": "{0} de vos agents se sont terminés. {1}",
 			"{0} sent you a message: {1}": "{0} vous a envoyé un message : {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "Impossible d’afficher {0} : son espace de travail n’a pas répondu, ou il s’est arrêté. Le message #m{1} se trouve dans son salon de discussion.",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "{0} a été modifié après l’ajout de la partie de Facade, pendant la fermeture de sa fenêtre. Son contenu précédent est conservé dans {1}.",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} a été modifié pendant que des agents l’utilisaient et ne contient plus la partie de Facade ; il a donc été laissé tel quel. Son contenu précédent est conservé dans {1}.",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "{0} était absent quand un autre agent y a démarré. Son contenu antérieur aux modifications de Facade est conservé dans {1}.",
@@ -790,7 +805,9 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0} : impossible de lire le fichier du dernier écran « {1} » : {2}. Comment il s’est terminé : {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0} : aucun dernier écran n’a été enregistré. Comment il s’est terminé : {1}. Un dernier écran n’est enregistré que lorsque le terminal d’un agent se ferme pendant que la fenêtre est ouverte.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0} : avec YOLO désactivé, {1} refuse les outils Facade",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Facade Agents did not start in this window.": "Facade Agents n’a pas démarré dans cette fenêtre.",
+			"The deletion names a caller that Facade could not read.": "La suppression indique un appelant que Facade n’a pas pu lire."
 		},
 		"package": {
 			"command.category": "Agents",

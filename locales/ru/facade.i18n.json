@@ -330,6 +330,9 @@
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Агенты Facade"
 		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "Завершение агентов этого окна"
+		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "Изменить и перезапустить",
 			"dontShowAgain": "Больше не показывать",
@@ -481,7 +484,8 @@
 			"runningWork.agentAndTerminals": "Завершить работу 1 агента и терминалов ({0})?",
 			"runningWork.agents": "Завершить работу агентов ({0})?",
 			"runningWork.agentsAndTerminal": "Завершить работу агентов ({0}) и 1 терминала?",
-			"runningWork.agentsAndTerminals": "Завершить работу агентов ({0}) и терминалов ({1})?"
+			"runningWork.agentsAndTerminals": "Завершить работу агентов ({0}) и терминалов ({1})?",
+			"runningWork.startedBy": "{0} · запущен: {1}"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Значок для терминала, в котором запущен Antigravity.",
@@ -546,7 +550,9 @@
 			"worktrees.deleteQuestion": "Вы действительно хотите удалить рабочее дерево \"{0}\"?",
 			"worktrees.deleteUnknown": "Не удалось подтвердить удаление рабочего дерева \"{0}\". Панель рабочих пространств отражает текущее состояние Git.",
 			"worktrees.deleteWorktree": "Удалить рабочее дерево...",
+			"worktrees.deletedElsewhere": "Рабочее дерево \"{0}\" не удалено, так как его удаляет рабочая область {1}.",
 			"worktrees.deleting": "Удаление рабочего дерева \"{0}\"...",
+			"worktrees.elsewhereFailed": "Рабочее дерево \"{0}\" не удалено, так как не удалось связаться с другими рабочими областями по этому поводу: {1}",
 			"worktrees.folder": "Путь: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "Папка рабочего дерева будет удалена вместе с подмодулями и неотправленными фиксациями. Это действие необратимо.",
 			"worktrees.folderDeleted": "Папка рабочего дерева будет удалена с диска. Это действие необратимо.",
@@ -554,6 +560,7 @@
 			"worktrees.hookFailed": "Рабочее дерево создано, но произошла ошибка перехватчика Git: {0}",
 			"worktrees.ignored": "Будут удалены следующие файлы, игнорируемые Git:",
 			"worktrees.ignoredFile": "{0} (игнорируется Git)",
+			"worktrees.inWorkspace": "рабочая область {0}",
 			"worktrees.inheritedEnvironment": "Это окно запущено с заданной переменной GIT_DIR, GIT_WORK_TREE или GIT_INDEX_FILE, которая перенаправляет Git в другой репозиторий. Откройте папку в новом окне.",
 			"worktrees.initialBranch": "Начальная фиксация находится в ветви \"{0}\". Выберите другое имя ветви для нового рабочего дерева.",
 			"worktrees.initializeAndCreate": "Инициализировать и создать",
@@ -562,6 +569,7 @@
 			"worktrees.invalidBranchName": "\"{0}\" не является допустимым именем ветви.",
 			"worktrees.kept": "Рабочее дерево \"{0}\" не удалено с диска, но убрано из рабочей области. Щелкните его строку, чтобы снова добавить его.",
 			"worktrees.keptOutside": "Рабочее дерево \"{0}\" не удалено с диска.",
+			"worktrees.leftElsewhere": "Рабочее дерево \"{0}\" не удалено, так как работа в другой рабочей области не остановилась: {1}.",
 			"worktrees.leftover": "Рабочее дерево удалено из Git, но его папку не удалось удалить: {0}. {1}",
 			"worktrees.leftoverRefused": "Не удалось удалить папку: {0}",
 			"worktrees.leftoverUnknown": "\"{0}\" не распознана как папка рабочего дерева, оставшаяся после удаления в этом окне, поэтому она не удалена. При необходимости удалите ее вручную.",
@@ -586,6 +594,7 @@
 			"worktrees.notRepositoryUnasked": "Папка \"{0}\" не является репозиторием Git. Сначала инициализируйте репозиторий.",
 			"worktrees.notWorktree": "\"{0}\" не является распознанным рабочим деревом в этой рабочей области.",
 			"worktrees.openWorktree": "Открыть рабочее дерево",
+			"worktrees.otherVersions": "Открыто окно другой версии Facade ({0}); его не спрашивали, есть ли у него работа в этом рабочем дереве.",
 			"worktrees.outOfWorkspace": "Оно убрано из рабочей области.",
 			"worktrees.pathExists": "По пути \"{0}\" уже существует файл или папка.",
 			"worktrees.prepare.folderEmpty": "Эта папка не является репозиторием Git. Если продолжить, она будет инициализирована (\"git init\") и будет создана пустая начальная фиксация.",
@@ -599,6 +608,7 @@
 			"worktrees.prepare.unbornOne": "В этом репозитории еще нет фиксаций. Если продолжить, будет создана начальная фиксация с 1 файлом.",
 			"worktrees.prepareFailed": "Не удалось создать начальную фиксацию для \"{0}\": {1}",
 			"worktrees.preparing": "Создание начальной фиксации в \"{0}\"...",
+			"worktrees.releaseUnknown": "Рабочее дерево \"{0}\" не удалено, так как рабочая область {1}, возможно, приняла запрос на остановку работы в нем, но не вернула результат; неизвестно, остановилась ли эта работа. Проверьте эту рабочую область и повторите попытку.",
 			"worktrees.restricted": "Для рабочих деревьев требуются операции Git, которые отключены в ограниченном режиме.",
 			"worktrees.restrictedUnasked": "Рабочая область находится в ограниченном режиме. Отметьте рабочую область как доверенную, чтобы выполнять операции Git.",
 			"worktrees.retry": "Повторить попытку",
@@ -630,6 +640,8 @@
 			"worktrees.unsavedFile": "{0} (не сохранен)",
 			"worktrees.untrusted": "Рабочее дерево наследует доверие от родительского репозитория \"{0}\". Сначала отметьте родительский репозиторий как доверенный.",
 			"worktrees.untrustedUnasked": "Репозиторий \"{0}\" не является доверенным. Отметьте репозиторий как доверенный, прежде чем создавать рабочее дерево.",
+			"worktrees.workSinceElsewhere": "Рабочее дерево \"{0}\" не удалено, так как в нем есть работа других рабочих областей, которую это удаление не охватило: {1}.",
+			"worktrees.workspaceSilent": "Рабочее дерево \"{0}\" не удалено, так как рабочая область {1} не ответила и в нем может выполняться работа. Повторите попытку через некоторое время.",
 			"worktrees.wouldLose": "В \"{0}\" есть изменения, которые будут потеряны при удалении: {1}. Ничего не удалено.",
 			"worktrees.wouldLoseSubmodules": "В \"{0}\" есть подмодули; при удалении будут потеряны их неотправленные фиксации. Ничего не удалено."
 		},
@@ -699,11 +711,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "Управление агентами этой рабочей области передано другому окну Facade.",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Агентами этой рабочей области управляет другое окно. Удаляйте чат-комнаты в том окне.",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Агентами этой рабочей области управляет другое окно. Открывайте чат-комнаты в том окне.",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Все сообщения между вами и вашими агентами в этой рабочей области будут удалены. Это действие необратимо.",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "Чат-комнаты принадлежат этому компьютеру, поэтому будут удалены чат-комнаты всех рабочих областей, а не только этой. Работающие агенты по-прежнему смогут читать сообщения своего сеанса. Это действие нельзя отменить.",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Агент, которого вы запускаете из меню агентов или командой \"Запустить агента\", сохраняет собственные вопросы и обновления своего CLI, а его утверждения задаются режимом YOLO. Агент, которого запускает другой агент или ваш скрипт через start_agent, когда за ним, возможно, никто не следит, работает с частью unattended своей конфигурации запуска (ее группы заменяют группы конфигурации запуска, а ее переменные среды и параметры применяются поверх них), чтобы ничто не ожидало ответа, если его CLI это позволяет. whenYouStartIt и throughStartAgent показывают, что получает каждый из них.",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "Агентами этой рабочей области управляет другое окно Facade. Запускайте агентов в том окне.",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Агентами этой рабочей области управляет другое окно Facade. Используйте то окно или закройте его и перезагрузите это окно, чтобы управлять агентами здесь.",
-			"Are you sure you want to delete all chat rooms in this workspace?": "Вы действительно хотите удалить все чат-комнаты в этой рабочей области?",
+			"There are no chat rooms to delete.": "Нет чат-комнат для удаления.",
+			"Are you sure you want to delete 1 chat room?": "Вы действительно хотите удалить 1 чат-комнату?",
+			"Are you sure you want to delete {0} chat rooms?": "Вы действительно хотите удалить чат-комнаты ({0})?",
 			"Configure Agents": "Настроить агентов",
 			"Could not delete all chat rooms: {0}": "Не удалось удалить все чат-комнаты: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Не удалось повторно подключиться к уже запущенным агентам. Они не могут использовать инструменты Facade, но агенты, запущенные с этого момента, работают как обычно.",
@@ -780,6 +794,7 @@
 			"{0} messages, latest at {1}": "Сообщений: {0}, последнее в {1}",
 			"{0} of your agents ended. {1}": "Завершили работу ваши агенты: {0}. {1}",
 			"{0} sent you a message: {1}": "{0} отправил вам сообщение: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "Не удалось показать {0}: его рабочая область не ответила или он завершил работу. Сообщение #m{1} находится в его чат-комнате.",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "Файл {0} был изменен после того, как Facade добавил в него свою часть, пока его окно закрывалось. Его предыдущее содержимое сохранено в {1}.",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "Файл {0} был изменен, пока его использовали агенты, и больше не содержит части Facade, поэтому он оставлен как есть. Его предыдущее содержимое сохранено в {1}.",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "Файл {0} отсутствовал, когда там запустился другой агент. Его содержимое до изменений Facade сохранено в {1}.",
@@ -790,7 +805,9 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: не удалось прочитать файл последнего экрана \"{1}\": {2}. Причина завершения: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: последний экран не сохранен. Причина завершения: {1}. Последний экран сохраняется, только если терминал агента закрывается, пока окно открыто.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: при отключенном YOLO {1} запрещает инструменты Facade",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Facade Agents did not start in this window.": "Facade Agents не запустился в этом окне.",
+			"The deletion names a caller that Facade could not read.": "Удаление указывает вызывающего, которого Facade не удалось прочитать."
 		},
 		"package": {
 			"command.category": "Агенты",

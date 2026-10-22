@@ -330,6 +330,9 @@
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Agentes do Facade"
 		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "Encerrando os agentes desta janela"
+		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "Alterar e Reiniciar",
 			"dontShowAgain": "Não Mostrar Novamente",
@@ -481,7 +484,8 @@
 			"runningWork.agentAndTerminals": "Deseja encerrar 1 agente e {0} terminais?",
 			"runningWork.agents": "Deseja encerrar {0} agentes?",
 			"runningWork.agentsAndTerminal": "Deseja encerrar {0} agentes e 1 terminal?",
-			"runningWork.agentsAndTerminals": "Deseja encerrar {0} agentes e {1} terminais?"
+			"runningWork.agentsAndTerminals": "Deseja encerrar {0} agentes e {1} terminais?",
+			"runningWork.startedBy": "{0} · iniciado por {1}"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Ícone de um terminal que executa o Antigravity.",
@@ -546,7 +550,9 @@
 			"worktrees.deleteQuestion": "Tem certeza de que deseja excluir a árvore de trabalho '{0}'?",
 			"worktrees.deleteUnknown": "Não foi possível confirmar a exclusão da árvore de trabalho '{0}'. A barra de workspaces reflete o status atual do Git.",
 			"worktrees.deleteWorktree": "Excluir Árvore de Trabalho...",
+			"worktrees.deletedElsewhere": "'{0}' não foi excluída porque o workspace {1} a está excluindo.",
 			"worktrees.deleting": "Excluindo a árvore de trabalho '{0}'...",
+			"worktrees.elsewhereFailed": "'{0}' não foi excluída porque não foi possível contatar os outros workspaces sobre ela: {1}",
 			"worktrees.folder": "Caminho: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "A pasta da árvore de trabalho, incluindo os submódulos e os commits não enviados por push, será excluída. Esta ação não pode ser desfeita.",
 			"worktrees.folderDeleted": "A pasta da árvore de trabalho será excluída do disco. Esta ação não pode ser desfeita.",
@@ -554,6 +560,7 @@
 			"worktrees.hookFailed": "A árvore de trabalho foi criada, mas um hook do Git falhou: {0}",
 			"worktrees.ignored": "Os seguintes arquivos ignorados pelo Git serão excluídos:",
 			"worktrees.ignoredFile": "{0} (ignorado pelo Git)",
+			"worktrees.inWorkspace": "workspace {0}",
 			"worktrees.inheritedEnvironment": "Esta janela foi iniciada com GIT_DIR, GIT_WORK_TREE ou GIT_INDEX_FILE definido, o que redireciona o Git para outro repositório. Abra a pasta em uma nova janela.",
 			"worktrees.initialBranch": "O commit inicial está no branch '{0}'. Escolha outro nome de branch para a nova árvore de trabalho.",
 			"worktrees.initializeAndCreate": "Inicializar e Criar",
@@ -562,6 +569,7 @@
 			"worktrees.invalidBranchName": "'{0}' não é um nome de branch válido.",
 			"worktrees.kept": "A árvore de trabalho '{0}' não foi excluída do disco. Ela foi removida do workspace. Clique na linha dela para adicioná-la novamente.",
 			"worktrees.keptOutside": "A árvore de trabalho '{0}' não foi excluída do disco.",
+			"worktrees.leftElsewhere": "'{0}' não foi excluída porque o trabalho em outro workspace não parou: {1}.",
 			"worktrees.leftover": "A árvore de trabalho foi removida do Git, mas não foi possível excluir a pasta dela: {0}. {1}",
 			"worktrees.leftoverRefused": "Falha ao excluir a pasta: {0}",
 			"worktrees.leftoverUnknown": "'{0}' não foi reconhecida como uma pasta de árvore de trabalho deixada por uma exclusão nesta janela, portanto, não foi excluída. Exclua-a manualmente, se necessário.",
@@ -586,6 +594,7 @@
 			"worktrees.notRepositoryUnasked": "A pasta '{0}' não é um repositório Git. Inicialize o repositório primeiro.",
 			"worktrees.notWorktree": "'{0}' não é uma árvore de trabalho reconhecida neste workspace.",
 			"worktrees.openWorktree": "Abrir Árvore de Trabalho",
+			"worktrees.otherVersions": "Uma janela de outra versão do Facade está aberta ({0}); ela não foi consultada sobre ter trabalho nesta árvore de trabalho.",
 			"worktrees.outOfWorkspace": "Ela foi removida do workspace.",
 			"worktrees.pathExists": "Já existe um arquivo ou uma pasta em '{0}'.",
 			"worktrees.prepare.folderEmpty": "Esta pasta não é um repositório Git. Ao continuar, ela será inicializada ('git init') e um commit inicial vazio será criado.",
@@ -599,6 +608,7 @@
 			"worktrees.prepare.unbornOne": "Este repositório ainda não tem commits. Ao continuar, um commit inicial com 1 arquivo será criado.",
 			"worktrees.prepareFailed": "Falha ao criar o commit inicial de '{0}': {1}",
 			"worktrees.preparing": "Criando o commit inicial em '{0}'...",
+			"worktrees.releaseUnknown": "'{0}' não foi excluída porque o workspace {1} pode ter recebido a solicitação para parar o trabalho nela, mas não retornou um resultado; não se sabe se esse trabalho parou. Verifique esse workspace e tente novamente.",
 			"worktrees.restricted": "As árvores de trabalho exigem operações do Git, que estão desabilitadas no Modo Restrito.",
 			"worktrees.restrictedUnasked": "O workspace está no Modo Restrito. Confie no workspace para executar operações do Git.",
 			"worktrees.retry": "Tentar Novamente",
@@ -630,6 +640,8 @@
 			"worktrees.unsavedFile": "{0} (não salvo)",
 			"worktrees.untrusted": "Uma árvore de trabalho herda a confiança do repositório pai '{0}'. Confie no repositório pai primeiro.",
 			"worktrees.untrustedUnasked": "O repositório '{0}' não é confiável. Confie no repositório antes de criar uma árvore de trabalho.",
+			"worktrees.workSinceElsewhere": "'{0}' não foi excluída porque outros workspaces têm trabalho nela que esta exclusão não abrangeu: {1}.",
+			"worktrees.workspaceSilent": "'{0}' não foi excluída porque o workspace {1} não respondeu e pode ter trabalho nela. Tente novamente em instantes.",
 			"worktrees.wouldLose": "'{0}' tem alterações que seriam perdidas se ela fosse excluída: {1}. Nada foi excluído.",
 			"worktrees.wouldLoseSubmodules": "'{0}' tem submódulos; excluí-la perderia os commits deles não enviados por push. Nada foi excluído."
 		},
@@ -699,11 +711,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "O gerenciamento de agentes deste workspace foi transferido para outra janela do Facade.",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Os agentes deste workspace são gerenciados em outra janela. Exclua as salas de chat nessa janela.",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Os agentes deste workspace são gerenciados em outra janela. Abra as salas de chat nessa janela.",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Todas as mensagens entre você e seus agentes neste workspace serão excluídas. Esta ação não pode ser desfeita.",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "As salas de chat pertencem a este computador, portanto isso exclui as de todos os workspaces, não apenas deste. Os agentes em execução ainda podem ler as mensagens da sessão deles. Esta ação não pode ser desfeita.",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Um agente que você inicia pelo menu de agentes ou por Iniciar Agente mantém as perguntas e atualizações da própria CLI, e as aprovações conforme o YOLO as define. Um agente que outro agente ou um script seu inicia por meio de start_agent, quando talvez ninguém esteja acompanhando, usa a parte não assistida da configuração de inicialização (os grupos dela substituem os da configuração de inicialização; o ambiente e as configurações dela são aplicados sobre os da configuração de inicialização) para que, onde a CLI permitir, nada fique aguardando uma resposta. whenYouStartIt e throughStartAgent mostram o que cada um recebe.",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "Outra janela do Facade gerencia os agentes deste workspace. Inicie agentes nessa janela.",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Outra janela do Facade gerencia os agentes deste workspace. Use essa janela ou feche-a e recarregue esta janela para gerenciá-los aqui.",
-			"Are you sure you want to delete all chat rooms in this workspace?": "Tem certeza de que deseja excluir todas as salas de chat deste workspace?",
+			"There are no chat rooms to delete.": "Não há salas de chat para excluir.",
+			"Are you sure you want to delete 1 chat room?": "Tem certeza de que deseja excluir 1 sala de chat?",
+			"Are you sure you want to delete {0} chat rooms?": "Tem certeza de que deseja excluir {0} salas de chat?",
 			"Configure Agents": "Configurar Agentes",
 			"Could not delete all chat rooms: {0}": "Não foi possível excluir todas as salas de chat: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Não foi possível reconectar aos agentes que já estavam em execução. Eles não podem usar as ferramentas do Facade, mas os agentes iniciados a partir de agora funcionam normalmente.",
@@ -780,6 +794,7 @@
 			"{0} messages, latest at {1}": "{0} mensagens, a mais recente às {1}",
 			"{0} of your agents ended. {1}": "{0} dos seus agentes foram encerrados. {1}",
 			"{0} sent you a message: {1}": "{0} enviou uma mensagem para você: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "Não foi possível mostrar {0}: o workspace dele não respondeu ou ele foi encerrado. A mensagem #m{1} está na sala de chat dele.",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "{0} foi alterado depois que o Facade adicionou a própria parte, enquanto a janela estava sendo fechada. O conteúdo anterior foi mantido em {1}.",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} foi alterado enquanto os agentes o usavam e não contém mais a parte do Facade, por isso foi deixado como está. O conteúdo anterior foi mantido em {1}.",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "{0} não existia quando outro agente foi iniciado ali. O conteúdo dele de antes das alterações do Facade foi mantido em {1}.",
@@ -790,7 +805,9 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: falha ao ler o arquivo da última tela '{1}': {2}. Como terminou: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: nenhuma última tela foi salva. Como terminou: {1}. A última tela só é salva quando o terminal de um agente é fechado enquanto a janela está aberta.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: com o YOLO desativado, {1} nega as ferramentas do Facade",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Facade Agents did not start in this window.": "O Facade Agents não foi iniciado nesta janela.",
+			"The deletion names a caller that Facade could not read.": "A exclusão indica um chamador que o Facade não conseguiu ler."
 		},
 		"package": {
 			"command.category": "Agentes",
