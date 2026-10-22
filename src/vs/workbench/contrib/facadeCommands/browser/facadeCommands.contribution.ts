@@ -10,7 +10,7 @@ import { Event } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { IProcessEnvironment, isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { assertType, isBoolean, isNumber, isObject, isString, isUndefined, isUndefinedOrNull } from '../../../../base/common/types.js';
-import { URI } from '../../../../base/common/uri.js';
+import { isUriComponents, URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -265,9 +265,10 @@ function isRemoveWorktreeOptions(candidate: unknown): candidate is IRemoveWorktr
 		return false;
 	}
 
-	const { discardChanges, ownFiles, main, runs, leftover } = candidate as Record<string, unknown>;
+	const { discardChanges, ownFiles, main, runs, leftover, by } = candidate as Record<string, unknown>;
 	return (isUndefined(discardChanges) || isBoolean(discardChanges))
 		&& (isUndefined(leftover) || isBoolean(leftover))
+		&& (isUndefined(by) || isObject(by))
 		&& (isUndefined(ownFiles) || (Array.isArray(ownFiles) && ownFiles.every(isOwnedWorktreeFile)))
 		&& (isUndefined(main) || URI.isUri(main))
 		&& (isUndefined(runs) || (Array.isArray(runs) && runs.every(isFacadeRun)));
@@ -310,6 +311,24 @@ CommandsRegistry.registerCommand('_facade.terminal.elsewhere', async (accessor, 
 	assertType(URI.isUri(folder), 'URI');
 
 	return accessor.get(IWorktreeService).otherWindowsAgentsIn(folder);
+});
+
+// `(folder)`: what this window has working inside `folder` - its terminals running a process, its editors with unsaved
+// changes - for another workspace's deletion to list and stop as its own (O5; `IWorktreeService.workIn`).
+CommandsRegistry.registerCommand('_facade.work.in', async (accessor, ...args): Promise<{ readonly terminals: string[]; readonly editors: string[] }> => {
+	const [folder] = args;
+	assertType(URI.isUri(folder) || isUriComponents(folder), 'URI');
+
+	return accessor.get(IWorktreeService).workIn(URI.revive(folder));
+});
+
+// `(folder, discard)`: another workspace's deletion of `folder` reached its step 6 - this window's terminals working
+// there close and, `discard`, its unsaved editors there are discarded. Answers what is left (`IWorktreeService.releaseWork`).
+CommandsRegistry.registerCommand('_facade.work.release', async (accessor, ...args): Promise<string[]> => {
+	const [folder, discard] = args;
+	assertType(URI.isUri(folder) || isUriComponents(folder), 'URI');
+
+	return accessor.get(IWorktreeService).releaseWork(URI.revive(folder), discard === true);
 });
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window

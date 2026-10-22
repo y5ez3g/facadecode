@@ -12,6 +12,7 @@ import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { toDisposable } from '../../../../../base/common/lifecycle.js';
+import { env } from '../../../../../base/common/process.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
@@ -23,12 +24,13 @@ import { TestConfigurationService } from '../../../../../platform/configuration/
 import { ContextKeyService } from '../../../../../platform/contextkey/browser/contextKeyService.js';
 import { ContextKeyExpr, ContextKeyValue, IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IStorageService } from '../../../../../platform/storage/common/storage.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { NEW_WORKTREE_COMMAND, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IFolderCustomization, IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarRepository, IWorkspaceBarWorktree, WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
-import { moveRow, orderWorktrees, rowsOfFolders } from '../../../../browser/parts/workspacebar/workspaceBar.js';
+import { facadeHomeOverride, moveRow, orderWorktrees, rowsOfFolders, worktreesFolderOf, worktreesRootOf } from '../../../../browser/parts/workspacebar/workspaceBar.js';
 import { WorkspaceBarModel } from '../../../../browser/parts/workspacebar/workspaceBarModel.js';
 import { WorkspaceBarSwitcher } from '../../../../browser/parts/workspacebar/workspaceBarSwitcher.js';
 import { carriesMark, isOnWorktreeOf, WorkspaceBarIdentityProvider, workspaceBarRows, WorkspaceBarRow, WorkspaceBarView } from '../../../../browser/parts/workspacebar/workspaceBarView.js';
@@ -36,6 +38,7 @@ import { TestStorageService, TestWorkingCopy } from '../../../common/workbenchTe
 import { workbenchInstantiationService } from '../../workbenchTestServices.js';
 import { IPutAwayEditorsService } from '../../../../services/putAwayEditors/common/putAwayEditors.js';
 import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
+import { IPathService } from '../../../../services/path/common/pathService.js';
 
 suite('Workspace bar - the rows it draws', () => {
 
@@ -760,5 +763,33 @@ suite('Workspace bar - the view', () => {
 			onWorktree: { kind: 'worktree', focused: '/wt/w2' },
 			afterRebuild: { kind: 'folder', focused: undefined },
 		});
+	});
+});
+
+suite('Workspace bar - the Facade home', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('WT-2.1 worktrees are made under <home>/.facade - or under FACADE_HOME, for an isolated test window', async () => {
+		const pathService = upcastPartial<IPathService>({ userHome: (() => Promise.resolve(URI.file('/home/me'))) as IPathService['userHome'] });
+		const fileService = upcastPartial<IFileService>({ realpath: async (uri: URI) => uri });
+
+		const plain = await worktreesFolderOf(fileService, pathService);
+		env.FACADE_HOME = '/tmp/facade-test';
+		try {
+			const override = facadeHomeOverride();
+			const root = await worktreesRootOf(pathService);
+			const folder = await worktreesFolderOf(fileService, pathService);
+
+			assert.deepStrictEqual({ plain: plain.path, override: override?.path, root: root.path, folder: folder.path }, {
+				plain: '/home/me/.facade/worktrees',
+				override: '/tmp/facade-test',
+				root: '/tmp/facade-test/worktrees',
+				folder: '/tmp/facade-test/worktrees',
+			});
+		} finally {
+			delete env.FACADE_HOME;
+		}
+		assert.strictEqual(facadeHomeOverride(), undefined);
 	});
 });
