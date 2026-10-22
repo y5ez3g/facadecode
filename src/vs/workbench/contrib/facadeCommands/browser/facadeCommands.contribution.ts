@@ -17,6 +17,9 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { ITerminalEnvironment, TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { FocusMode } from '../../../../platform/native/common/native.js';
+import { mainWindow } from '../../../../base/browser/window.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
@@ -36,6 +39,7 @@ import { MOST_SCREEN_LINES } from './facadeAgentScreen.js';
 import { FacadeAgentTerminal, IAgentInputEffect, IAgentInputState, IAgentScreenRead } from './facadeAgentTerminal.js';
 import { FacadeNotifications } from './facadeNotifications.js';
 import { IFacadeRunsService } from './facadeRuns.js';
+import { FacadeWindowClosing } from './facadeWindowClosing.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
 const PROCESS_READY_TIMEOUT_MS = 5_000;
@@ -283,16 +287,18 @@ function isOwnedWorktreeFile(candidate: unknown): candidate is IOwnedWorktreeFil
 	return isString(path) && isString(sha256);
 }
 
-// `(workspace, ids, preparing?)`: the runs of the record `workspace` that are live now - starting, running or stopping -
-// as the agents' extension says each time its record changes: what the agent button counts (X-51); `preparing`, those
-// of them with no terminal yet - their worktrees being made or set up - listed as active agents too (L3).
+// `(workspace, ids, preparing?, creators?)`: the runs of the record `workspace` that are live now - starting, running or
+// stopping - as the agents' extension says each time its record changes: what the agent button counts (X-51); `preparing`,
+// those of them with no terminal yet - their worktrees being made or set up - listed as active agents too (L3); `creators`,
+// those of them an agent of another workspace started, with that creator, which closing the window's question names (W11).
 CommandsRegistry.registerCommand('_facade.agents.live', (accessor, ...args) => {
-	const [workspace, ids, preparing] = args;
+	const [workspace, ids, preparing, creators] = args;
 	assertType(isString(workspace), 'string');
 	assertType(Array.isArray(ids) && ids.every(isNumber), 'number[]');
 	assertType(isUndefinedOrNull(preparing) || (Array.isArray(preparing) && preparing.every(isPreparingRun)), 'IPreparingRun[]');
+	assertType(isUndefinedOrNull(creators) || (Array.isArray(creators) && creators.every(each => isObject(each) && isNumber((each as Record<string, unknown>).id) && isString((each as Record<string, unknown>).creator))), 'ICreatorElsewhere[]');
 
-	accessor.get(IFacadeRunsService).setLive(workspace, ids, preparing ?? []);
+	accessor.get(IFacadeRunsService).setLive(workspace, ids, preparing ?? [], creators ?? []);
 });
 
 // `(folder)`: the agents' runs whose terminals work inside `folder` - where they are now, or where they started
@@ -329,6 +335,12 @@ CommandsRegistry.registerCommand('_facade.work.release', async (accessor, ...arg
 	assertType(URI.isUri(folder) || isUriComponents(folder), 'URI');
 
 	return accessor.get(IWorktreeService).releaseWork(URI.revive(folder), discard === true);
+});
+
+// `()`: brings this window forward - the person chose Show on another workspace's notification of an agent of this
+// one's (AGENT-MESSAGES.md, M9)
+CommandsRegistry.registerCommand('_facade.window.reveal', async (accessor): Promise<void> => {
+	await accessor.get(IHostService).focus(mainWindow, { mode: FocusMode.Force });
 });
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window
@@ -508,6 +520,9 @@ CommandsRegistry.registerCommand('_facade.terminal.input', (accessor, ...args): 
 
 // Before the extension host starts, which asks once whether the window keeps Facade's notifications
 registerWorkbenchContribution2(FacadeNotifications.ID, FacadeNotifications, WorkbenchPhase.BlockStartup);
+
+// Tells the agents' extension why the window shuts down, once nothing can cancel it, before its extension host stops
+registerWorkbenchContribution2(FacadeWindowClosing.ID, FacadeWindowClosing, WorkbenchPhase.BlockRestore);
 
 // `(run)`: puts the terminal the run's own process runs in in front, moving the window onto the folder it
 // is held for when that is another's, as a click on its row would (`IFolderTerminalsService.reveal`).
