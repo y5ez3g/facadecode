@@ -41,7 +41,7 @@ import { IWorkspaceContextService, isSingleFolderWorkspaceIdentifier, toWorkspac
 import { canonicalUri, facadeHomeOverride, unreachable, WORKTREES_FOLDER, worktreesFolderOf, worktreesRootOf } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IRunningWork } from '../../../browser/parts/workspacebar/workspaceBarAgents.js';
-import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { agentsFirst, discardedHeading, fileLine, listedFiles, listedSessions, terminatedHeading, workLine } from '../../../browser/parts/workspacebar/workspaceBarQuestions.js';
@@ -1115,11 +1115,8 @@ export class WorktreeService implements IWorktreeService {
 	/** `createDecided`, in `parent`'s turn. */
 	private async createAtFreePath(main: URI, branch: string, name: string, parent: URI, given: IFolderCustomization, startPoint: string | undefined, quiet: boolean): Promise<CreateOutcome> {
 		const worktree = await freeWorktreeUri(parent, name, candidate => this.fileService.exists(candidate));
-
-		// A colour none of the repository's other worktrees has, unless one was chosen (WT-1.12)
-		const siblings = this.workspaceBarService.repositoryFor(main)?.worktrees ?? [];
-		const color = given.color ?? freeWorktreeColor(siblings.map(sibling => this.customizationService.get(sibling.uri)?.color));
-		const customization: IFolderCustomization = color ? { ...given, color } : given;
+		// What was chosen, and nothing more: one given no colour wears the plain dot (WT-1.12)
+		const customization = given;
 
 		// Before git writes its record, which the bar reads a row from while the files are still being
 		// checked out - in every window. Written even when nothing was chosen: looks are kept by path, and one

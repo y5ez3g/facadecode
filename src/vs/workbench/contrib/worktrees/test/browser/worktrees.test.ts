@@ -591,14 +591,14 @@ suite('Worktrees - making and deleting one', () => {
 		trust.enabled = true;
 		answers.set('_git.prepareWorktreeBaseAt inspect', { kind: 'ready' });
 		answers.set('_git.createWorktreeAt w3', { kind: 'created', copyFailures: [], hookFailure: undefined });
-		answer = { branch: 'w3', customization: { name: 'Three' } };
+		answer = { branch: 'w3', customization: { name: 'Three', color: 'teal' } };
 
 		await instantiationService.createInstance(WorktreeService).createWorktree(main);
 
 		assert.deepStrictEqual(steps, [
 			'_git.prepareWorktreeBaseAt /lab inspect',
 			'ask',
-			'made /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"red"}',
+			'made /home/me/.facade/worktrees/lab/w3 {"name":"Three","color":"teal"}',
 			'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3',
 			'listed /home/me/.facade/worktrees/lab/w3',
 			'open /lab',
@@ -720,7 +720,8 @@ suite('Worktrees - making and deleting one', () => {
 			made: '/home/me/.facade/worktrees/lab/w3',
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
-				'made /home/me/.facade/worktrees/lab/w3 {"color":"red"}',
+				// Given no colour, none is chosen for it (WT-1.12)
+				'made /home/me/.facade/worktrees/lab/w3 {}',
 				`_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w3 w3 ${commit}`,
 				'listed /home/me/.facade/worktrees/lab/w3',
 			],
@@ -1141,7 +1142,7 @@ suite('Worktrees - making and deleting one', () => {
 			steps: [
 				'_git.prepareWorktreeBaseAt /lab inspect',
 				'ask',
-				'made /home/me/.facade/worktrees/lab/w2 {"name":"Two","color":"red"}',
+				'made /home/me/.facade/worktrees/lab/w2 {"name":"Two"}',
 				'_git.createWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 w2',
 				// Nothing was made at that path: the name given for it is taken back.
 				'forget /home/me/.facade/worktrees/lab/w2',
@@ -2069,7 +2070,7 @@ suite('Worktrees - making and deleting one', () => {
 				steps: [
 					'_git.prepareWorktreeBaseAt /lab inspect',
 					'_git.prepareWorktreeBaseAt /lab inspect',
-					'made /tmp/facade-test/worktrees/lab/w3 {"color":"red"}',
+					'made /tmp/facade-test/worktrees/lab/w3 {}',
 					`_git.createWorktreeAt /lab /tmp/facade-test/worktrees/lab/w3 w3 ${commit}`,
 					'listed /tmp/facade-test/worktrees/lab/w3',
 				],
