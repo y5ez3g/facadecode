@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { exemptionChangedText, Facade, ToolsExemption } from '../core/facade';
-import { agentRef, Caller, describe, messageRef, PERSON } from '../record/events';
+import { agentRef, Caller, describe, foreignRef, messageRef, PERSON } from '../record/events';
 
 const TOOLS = 'Tools: start_agent launches a separate CLI; started confirms launch readiness, not task completion. list_agents shows runs, mailboxes, and available CLIs: you, your creator, and your immediate children by default, or every reachable run with all:true. stop_agent ends a run and can delete its worktree. read_screen inspects a CLI; type_text and press_keys send terminal input and normally return the resulting screen.';
 
@@ -70,18 +70,21 @@ function anAgentOf(cliName: string): string {
 export function instructionsFor(facade: Facade, caller: Caller): string {
 	const agent = facade.agentOf(caller);
 	if (!agent) {
-		return ['You act as @human in Facade Code and can reach every agent in this window.', TOOLS, PERSON_MESSAGES, UNANSWERED].join('\n');
+		return [`You act as @human in Facade Code, in workspace ${facade.selfLabel}, and can reach every agent in every Facade workspace on this machine.`, TOOLS, PERSON_MESSAGES, UNANSWERED].join('\n');
 	}
-	const starter = agent.creator === undefined ? undefined : facade.agent(agent.creator);
+	const starter = agent.creator === undefined || agent.creatorAfar ? undefined : facade.agent(agent.creator);
 	const startNote = facade.startNoteOf(agent.id);
+	// A creator or root of another workspace is named with it (O7)
+	const creator = agent.creatorAfar ? foreignRef(agent.creatorAfar) : starter ? describe(starter) : agent.creator !== undefined ? agentRef(agent.creator) : describe(PERSON);
+	const root = agent.rootAfar ? foreignRef(agent.rootAfar) : agentRef(agent.root);
 	return [
-		`You are ${describe(agent)}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code. Creator: ${starter ? describe(starter) : agent.creator !== undefined ? agentRef(agent.creator) : describe(PERSON)}. Tree root: ${agentRef(agent.root)}.`,
+		`You are ${describe(agent)}, ${anAgentOf(facade.cliName(agent.cli))} in Facade Code, in workspace ${facade.selfLabel}. Creator: ${creator}. Tree root: ${root}.`,
 		`Working directory: ${agent.folder}${agent.outsideGit ? ' (not a Git repository)' : ` (worktree ${agent.worktree})`}. You are already in this directory; no cd is needed to start work here.`,
 		// What it must know of its preparation, which a first line - given only with a task - would have told it (O4)
 		...startNote !== undefined ? [startNote] : [],
 		agent.yolo
-			? 'YOLO is on. You can reach every agent in this window. Children inherit YOLO on.'
-			: `YOLO is off. You can reach only your own tree. Children inherit YOLO off. ${approvalsOf(facade.exemptionOf(agent.id))}`,
+			? 'YOLO is on. You can reach every agent in every Facade workspace on this machine; refer to another workspace\'s agent by its ID. list_agents lists your own workspace unless all is set. Children inherit YOLO on and start in the workspace that has their folder, yours first.'
+			: `YOLO is off. You can reach only your own tree, in whichever workspace it runs. Children inherit YOLO off. ${approvalsOf(facade.exemptionOf(agent.id))}`,
 		TOOLS,
 		MESSAGES,
 		askingOf(agent),
@@ -127,9 +130,14 @@ export function facadeSkill(): { readonly name: string; readonly description: st
 			'',
 			'Your creator started you. Your tree consists of a human-started root and all its',
 			'descendants. These relationships remain when a run ends; its children continue.',
-			'YOLO on lets you reach every agent in this window. YOLO off limits reach to your',
-			'tree. Children inherit your YOLO. Facade itself adds no approval requirement;',
-			'your launch instructions describe the CLI\'s approval restrictions.',
+			'YOLO on lets you reach every agent in every Facade workspace (window) on this',
+			'machine; names repeat across workspaces, so refer to another workspace\'s agent by',
+			'its ID. YOLO off limits reach to your tree, in whichever workspace it runs.',
+			'`list_agents` lists your own workspace unless `all` is set. Children inherit your',
+			'YOLO and start in the workspace that has their folder: yours first, or the one',
+			'`workspace` names.',
+			'Facade itself adds no approval requirement; your launch instructions describe the',
+			'CLI\'s approval restrictions.',
 			'',
 			'## Choose a tool',
 			'',
@@ -208,11 +216,12 @@ export function facadeSkill(): { readonly name: string; readonly description: st
 			'{"name":"lint","cli":"codex","task":"Fix the lint errors in src/.","new_worktree":true}',
 			'```',
 			'',
-			'With worktree management on, your child must run in a worktree created by Facade.',
-			'Omit `folder` to share your registered launch folder if it is such a worktree. To',
-			'use another, pass its absolute path in this window, or the branch checked out in it',
-			'in your repository. Agents may share a worktree. Use an absolute path for',
-			'a detached HEAD.',
+			'With worktree management on, your child runs in a main checkout or a worktree created',
+			'by Facade. Omit `folder` to share your registered launch folder if it is one. To use',
+			'another, pass its absolute path, or the branch checked out in it in your repository.',
+			'A folder of another Facade workspace on this machine starts the child there; if',
+			'several workspaces have it, add `workspace` with the one you mean. Agents may share a',
+			'folder. Use an absolute path for a detached HEAD.',
 			'',
 			'With `new_worktree:true`, `folder` selects the source repository and may name its',
 			'main checkout. Omit `folder` to use your launch folder\'s repository. Facade creates',

@@ -1370,7 +1370,7 @@ suite('Core: messages', () => {
 			world = fakeWorld(dir, { repositories: { [lab]: ['work'] } });
 			await world.facade.recover();
 
-			assert.deepStrictEqual({ rooms: fs.existsSync(path.join(dir, 'rooms')), files, text: fetched.messages[0]?.length, deleted: world.table.state.mail.roomsDeletedUpTo, person: HUMAN, fresh: fs.readdirSync(path.join(dir, 'messages')) }, {
+			assert.deepStrictEqual({ rooms: fs.readdirSync(path.join(dir, 'rooms')).some(name => name.endsWith('.md')), files, text: fetched.messages[0]?.length, deleted: world.table.state.mail.roomsDeletedUpTo, person: HUMAN, fresh: fs.readdirSync(path.join(dir, 'messages')) }, {
 				rooms: false,
 				files: ['fetch-a2-1.txt', 'm2.txt', 'm3.txt'],
 				text: TEXT_IN_LINE + 1,

@@ -8,7 +8,7 @@ import * as l10n from '@vscode/l10n';
 import * as vscode from 'vscode';
 import { messageOf, stackOf } from './base/errors';
 import { ScreenDocuments } from './host/screenDocuments';
-import { agentsLogOf, AgentsService } from './host/service';
+import { agentsLogOf, AgentsService, identityIn, keepsAgentsWithoutFolder } from './host/service';
 import { registerShowLaunch } from './host/showLaunch';
 
 /** Stops Facade's agents as the extension stops; settles once the workspace's ledger is closed. */
@@ -42,7 +42,8 @@ export function activate(context: vscode.ExtensionContext): void {
 			none = 'noFolder';
 			return;
 		}
-		if (!hasLocalFolder()) {
+		// A workspace whose last folder left while its agents ran keeps them through a reload (AGENT-ORCHESTRATION.md, O1)
+		if (!hasLocalFolder() && !await keepsAgentsWithoutFolder(context.workspaceState)) {
 			// The workspace can open with no folder on this machine - the default workspace, the first time - and a
 			// folder added to it starts no extension host again (WORKSPACE.md WS-29): the agents start with the first.
 			log.info('Facade agents require a local folder in the workspace. They start once one is added.');
@@ -78,6 +79,18 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Settles once the service has started, or could not: it rejects nothing. Started again as the first local
 	// folder comes, it is that start a command waits for.
 	let ready = start();
+	/**
+	 * The service to ask what protects work in a folder of this window (AGENT-ORCHESTRATION.md, O5): none where Facade has
+	 * nothing here - no folder; throws where it should have started and did not, so that the deletion asking is refused
+	 * rather than told of nothing.
+	 */
+	const protecting = () => {
+		if (none === 'failed') {
+			throw new Error(vscode.l10n.t("Facade Agents did not start in this window."));
+		}
+		return service;
+	};
+
 	// The record this window has, as its service knows it - which follows the window through its folder
 	// becoming a workspace - and else the one this workspace's storage names (X-67)
 	context.subscriptions.push(vscode.commands.registerCommand('facade.agents.showLog', () => showAgentsLog(service?.agentsLog ?? creating?.agentsLog ?? agentsLogOf(context.workspaceState))), registerShowLaunch(async (installed, folder) => {
@@ -100,6 +113,43 @@ export function activate(context: vscode.ExtensionContext): void {
 				return { stopping: [] };
 			}
 			return await service?.worktreeStopping(folder.fsPath) ?? { stopping: [] };
+		}),
+		// `({ reason })`: the window shuts down, past every question that could cancel it - closing, quitting, replacing its
+		// workspace or reloading - and waits for this before its extension host stops: a close ends its runs now, a reload
+		// nothing (AGENT-LAUNCHER.md, L6)
+		vscode.commands.registerCommand('_facade.agents.windowClosing', (word?: unknown) => {
+			const reason = (word as { reason?: unknown } | undefined)?.reason;
+			const known = reason === 'close' || reason === 'quit' || reason === 'load' || reason === 'reload' ? reason : undefined;
+			service?.windowClosing(known);
+			creating?.windowClosing(known);
+		}),
+		// `(folder)`: the window's deletion of that folder asks the other workspaces of the machine for their work there -
+		// agents, terminals, unsaved editors - which it lists and stops as its own (AGENT-ORCHESTRATION.md, O5; WT-8, step 2)
+		vscode.commands.registerCommand('_facade.agents.workIn', async (folder?: unknown, by?: unknown) => {
+			await ready;
+			const none = { workspaces: [], silent: [], otherVersions: [] };
+			if (!(folder instanceof vscode.Uri) || folder.scheme !== 'file') {
+				return none;
+			}
+			return await protecting()?.workIn(folder.fsPath, identityIn(by)) ?? none;
+		}),
+		// `(folder, place)`: that deletion was authorized - its deletion mark placed, or refused where another workspace's
+		// stands - or, `place` false, settled: the mark removed (WT-8, step 3)
+		vscode.commands.registerCommand('_facade.agents.workMark', async (folder?: unknown, place?: unknown) => {
+			await ready;
+			if (!(folder instanceof vscode.Uri) || folder.scheme !== 'file') {
+				return { placed: true };
+			}
+			return await protecting()?.workMark(folder.fsPath, place !== false) ?? { placed: true };
+		}),
+		// `(folder, discard)`: that deletion is at its step 6 - the other workspaces stop their work there, and discard their
+		// unsaved editors there where `discard` says
+		vscode.commands.registerCommand('_facade.agents.workRelease', async (folder?: unknown, discard?: unknown, by?: unknown) => {
+			await ready;
+			if (!(folder instanceof vscode.Uri) || folder.scheme !== 'file') {
+				return { left: [], silent: [], unknown: [] };
+			}
+			return await protecting()?.workRelease(folder.fsPath, discard === true, identityIn(by)) ?? { left: [], silent: [], unknown: [] };
 		}),
 		// `(workspace, id)`: the person stops that agent from the window - one with no terminal yet (L3)
 		vscode.commands.registerCommand('_facade.agents.stopAgent', async (workspace?: unknown, id?: unknown) => {

@@ -4,8 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { AgentFacts, Facade, sandboxText, StartableCli } from '../core/facade';
+import { silentText } from '../core/machine';
 import { clockOf, Mailbox } from '../core/mail';
-import { agentRef, AgentState, describe, End, messageRef } from '../record/events';
+import { agentRef, AgentState, describe, End, foreignRef, messageRef, workspaceWordOf } from '../record/events';
 import { Args } from './args';
 import type { ContractTool } from './tools';
 import { timeOfDay } from './words';
@@ -56,9 +57,12 @@ export function factsText(facade: Facade, facts: AgentFacts): string {
 }
 
 /** One line of `list_agents`, as the model reads it; `self` is the caller's number, none for the person. */
-function line(facade: Facade, row: AgentFacts, self: number | undefined, now: number): string {
+export function line(facade: Facade, row: AgentFacts, self: number | undefined, now: number): string {
 	const state = row.end ? `ended at ${timeOfDay(row.end.time)} (${endText(facade, row.end)}${row.end.exitCode !== undefined ? `, exit code ${row.end.exitCode}` : ''})` : row.state;
-	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  creator ${facade.whoIs(row.creator)}  tree ${agentRef(row.root)}  ${state}  ${row.outsideGit ? `folder ${row.folder} (not a Git repository)` : `worktree ${row.worktree}`}${setupText(row.setup)}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}${row.mailbox ? `  mailbox: ${mailboxText(row.mailbox, now)}` : ''}`;
+	// A creator or tree root of another workspace is named with it (O6)
+	const creator = row.creatorAfar ? foreignRef(row.creatorAfar) : facade.whoIs(row.creator);
+	const tree = row.rootAfar ? `${agentRef(row.root)} (workspace ${workspaceWordOf(row.rootAfar.label, row.rootAfar.window)})` : agentRef(row.root);
+	return `@${row.name} ${agentRef(row.id)}${row.id === self ? ' (you)' : ''}  creator ${creator}  tree ${tree}  ${state}  ${row.outsideGit ? `folder ${row.folder} (not a Git repository)` : `worktree ${row.worktree}`}${setupText(row.setup)}  started ${timeOfDay(row.startTime)}  ${factsText(facade, row)}${row.mailbox ? `  mailbox: ${mailboxText(row.mailbox, now)}` : ''}`;
 }
 
 /** How the setup of an agent's new worktree went, as its row says it, where one ran or should have (O11). */
@@ -72,7 +76,7 @@ function setupText(setup: AgentFacts['setup']): string {
 }
 
 /** The line a list opens with: how many agents, and how many in each state - `3 agents: 1 starting, 2 running`. */
-function summary(rows: readonly AgentFacts[]): string {
+function summary(rows: readonly { readonly state: AgentState }[]): string {
 	const counts = STATES.map(state => [state, rows.filter(row => row.state === state).length] as const).filter(([, count]) => count > 0);
 	return `${rows.length} ${rows.length === 1 ? 'agent' : 'agents'}${counts.length ? `: ${counts.map(([state, count]) => `${count} ${state}`).join(', ')}` : ''}`;
 }
@@ -93,7 +97,7 @@ export const listAgentsTool: ContractTool = {
 	definition: {
 		name: 'list_agents',
 		title: 'List agents',
-		description: 'Inspect runs, delivery, and available CLIs. Defaults to you, your creator, and immediate children, including ended runs. all:true includes every reachable run: this window with YOLO on, your tree with YOLO off. Includes identity/tree, lifecycle/exit, CLI/options, YOLO/sandbox, connection, location/setup, timestamps, and mailbox history. Running does not prove activity or completion; check reports and work evidence.',
+		description: 'Inspect runs, delivery, and available CLIs. Defaults to you, your creator, and immediate children in your own Facade workspace, including ended runs, and counts your children in other workspaces. all:true includes every reachable run in every Facade workspace on this machine: every run with YOLO on, your tree with YOLO off; a run of another workspace names it. Includes identity/tree, lifecycle/exit, CLI/options, YOLO/sandbox, connection, location/setup, timestamps, and mailbox history. Running does not prove activity or completion; check reports and work evidence.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -107,22 +111,37 @@ export const listAgentsTool: ContractTool = {
 		const all = args.boolean('all') ?? false;
 		const listed = facade.listAgents(caller, all);
 		const now = Date.now();
+		// Without all, the caller's own workspace; with all, every workspace of the machine in its reach, each row of another
+		// naming its workspace, one silent said to be after one query's wait (O6)
+		const machine = all ? await facade.survey(caller) : { agents: [], silent: [], lines: [] };
+		const self = facade.selfLabel;
 		const who = caller.id === undefined
-			? 'You are @human and can reach every agent in this window.'
-			: `You are ${describe(caller)}. YOLO ${listed.yolo ? 'on: you can reach every agent in this window' : 'off: you can reach only your own tree'}.`;
+			? `You are @human in workspace ${self}, and can reach every agent in every Facade workspace on this machine.`
+			: `You are ${describe(caller)} in workspace ${self}. YOLO ${listed.yolo ? 'on: you can reach every agent in every Facade workspace on this machine' : 'off: you can reach only your own tree, in whichever workspace it runs'}.`;
+		const counted = [...listed.agents, ...machine.agents];
+		const elsewhere = all ? [] : facade.childrenAfar(caller);
+		const ownClis = listed.clis.map(each => each.id).sort().join(',');
+		const otherClis = machine.lines.filter(window => window.clis.length && [...window.clis].sort().join(',') !== ownClis);
 		return {
 			text: [
 				who,
-				listed.agents.length ? summary(listed.agents) : 'No agents in this selection.',
+				counted.length ? summary(counted) : 'No agents in this selection.',
 				...listed.agents.map(row => line(facade, row, caller.id, now)),
-				`CLIs you can start: ${listed.clis.length ? listed.clis.map(cliLine).join('; ') : 'none on this machine'}.`
+				...machine.lines.flatMap(window => window.lines.map(each => `${each}  workspace ${window.label}`)),
+				...(elsewhere.length ? [`Your children in other workspaces: ${elsewhere.map(each => foreignRef(each)).join(', ')}. list_agents all:true lists them.`] : []),
+				...(machine.silent.length ? [`Not listed: ${silentText(machine.silent)}.`] : []),
+				`CLIs you can start: ${listed.clis.length ? listed.clis.map(cliLine).join('; ') : 'none on this machine'}.`,
+				...otherClis.map(window => `Workspace ${window.label} is another Facade instance; a start there can use: ${window.clis.join(', ')}.`)
 			].join('\n'),
 			// Who asks and what it reaches, and how many in each state: as data, as the text says them (O6)
 			data: {
 				caller: caller.id === undefined ? { name: 'human' } : { id: caller.id, name: caller.name },
-				reach: caller.id === undefined || listed.yolo ? 'window' : 'tree',
-				counts: Object.fromEntries(STATES.map(state => [state, listed.agents.filter(row => row.state === state).length])),
+				reach: caller.id === undefined || listed.yolo ? 'machine' : 'tree',
+				workspace: self,
+				counts: Object.fromEntries(STATES.map(state => [state, counted.filter(row => row.state === state).length])),
 				...listed,
+				...(elsewhere.length ? { childrenElsewhere: elsewhere } : {}),
+				...(all ? { workspaces: machine.lines.map(window => ({ label: window.label, agents: machine.agents.filter(agent => agent.label === window.label), clis: window.clis })), silent: machine.silent } : {}),
 				all
 			}
 		};

@@ -23,6 +23,8 @@ import { TestLifecycleService, workbenchInstantiationService } from '../../../..
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { TerminalService } from '../../../terminal/browser/terminalService.js';
+import { IFacadeRunsService } from '../../../facadeCommands/browser/facadeRuns.js';
+import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
 import { RunningWorkShutdownQuestion } from '../../browser/terminalLauncherShutdown.js';
 import { ITerminalLauncherService } from '../../browser/terminalLauncherService.js';
 import { setTerminalShutdownQuestion, terminalShutdownQuestion } from '../../common/terminalShutdownQuestion.js';
@@ -31,8 +33,8 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	const terminal = (instanceId: number, title: string, state: { exitCode?: number; hasChildProcesses?: boolean; agent?: string; workspaceFolder?: IWorkspaceFolder } = {}) =>
-		upcastPartial<ITerminalInstance>({ instanceId, title, exitCode: state.exitCode, hasChildProcesses: !!state.hasChildProcesses, isDisposed: false, shellLaunchConfig: { name: state.agent }, workspaceFolder: state.workspaceFolder });
+	const terminal = (instanceId: number, title: string, state: { exitCode?: number; hasChildProcesses?: boolean; agent?: string; workspaceFolder?: IWorkspaceFolder; run?: number } = {}) =>
+		upcastPartial<ITerminalInstance>({ instanceId, title, exitCode: state.exitCode, hasChildProcesses: !!state.hasChildProcesses, isDisposed: false, shellLaunchConfig: { name: state.agent }, workspaceFolder: state.workspaceFolder, ...(state.run !== undefined ? { reconnectionProperties: facadeRunProperties({ workspace: 'rec', id: state.run }) } : {}) });
 
 	/** `api`, its row named API Server, and its worktree `fix-login`, as the bar shows them. */
 	const api = upcastPartial<IWorkspaceFolder>({ uri: URI.file('/w/api'), name: 'API Server' });
@@ -41,7 +43,7 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 
 	/** Claude at work in `api` - a folder the window is not on - Codex in its worktree, a dev server in the panel, Muse ended. */
 	const claude = terminal(1, 'Claude Code', { hasChildProcesses: true, agent: '@claude #a1' });
-	const codex = terminal(2, 'Codex', { hasChildProcesses: true, agent: '@codex #a2' });
+	const codex = terminal(2, 'Codex', { hasChildProcesses: true, agent: '@codex #a2', run: 2 });
 	const muse = terminal(3, '@muse #a3', { exitCode: 0, agent: '@muse #a3' });
 	const server = terminal(4, 'npm run dev', { hasChildProcesses: true, workspaceFolder: api });
 	const pwsh = terminal(5, 'pwsh');
@@ -54,7 +56,9 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 			upcastPartial<IWorkspaceContextService>({ getWorkspace: () => upcastPartial<IWorkspace>({ folders: [api, fix] }) }),
 			upcastPartial<IWorkspaceBarService>({ repositoryFor: () => repository }),
 			upcastPartial<IWorkspaceBarCustomizationService>({ nameFor: folder => folder.name, get: () => undefined }),
-			upcastPartial<IUriIdentityService>({ extUri })
+			upcastPartial<IUriIdentityService>({ extUri }),
+			// Codex was started by an agent of another workspace: closing ends a child of its tree (L3)
+			upcastPartial<IFacadeRunsService>({ live: { workspace: 'rec', ids: [2], preparing: [], creators: [{ id: 2, creator: '@lead #a9 (workspace lab)' }] } })
 		);
 		const told = {
 			everything: terminalShutdownQuestion()?.describe([pwsh, server, muse, codex, claude]),
@@ -68,7 +72,7 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 				message: 'Do you want to terminate 2 agents and 3 terminals?',
 				detail: [
 					'Agent @claude #a1 · API Server',
-					'Agent @codex #a2 · API Server (worktree: fix-login)',
+					'Agent @codex #a2 · API Server (worktree: fix-login) · started by @lead #a9 (workspace lab)',
 					'Terminal (@muse #a3) · API Server',
 					'Terminal (npm run dev) · API Server',
 					'Terminal (pwsh)',

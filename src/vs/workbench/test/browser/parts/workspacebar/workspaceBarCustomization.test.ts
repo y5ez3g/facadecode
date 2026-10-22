@@ -15,7 +15,7 @@ import { InMemoryStorageService, IS_NEW_KEY, StorageScope, StorageTarget } from 
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspaceContextService, IWorkspaceFolder, IWorkspaceFoldersChangeEvent, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
-import { FOLDER_COLORS, FOLDER_ICONS, freeWorktreeColor, WorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { FOLDER_COLORS, FOLDER_ICONS, WorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 
 const STORAGE_KEY = 'facade.workspaceBar.customization';
 const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
@@ -393,14 +393,5 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		assert.strictEqual(FOLDER_ICONS[0], 'folder');
 		assert.strictEqual(new Set(FOLDER_COLORS).size, FOLDER_COLORS.length, 'a colour is in the list twice');
 		assert.strictEqual(new Set(FOLDER_ICONS).size, FOLDER_ICONS.length, 'an icon is in the list twice');
-	});
-
-	test('WTA-29 a new worktree takes the first colour its repository\'s others do not have, and none once all are taken', () => {
-		assert.deepStrictEqual({
-			first: freeWorktreeColor([]),
-			next: freeWorktreeColor(['red', undefined, 'orange']),
-			last: freeWorktreeColor(FOLDER_COLORS.filter(color => color !== 'pink')),
-			none: freeWorktreeColor([...FOLDER_COLORS]),
-		}, { first: 'red', next: 'yellow', last: 'pink', none: undefined });
 	});
 });

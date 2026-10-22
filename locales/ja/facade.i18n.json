@@ -330,6 +330,9 @@
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Facade エージェント"
 		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "このウィンドウのエージェントを終了しています"
+		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "変更して再起動",
 			"dontShowAgain": "今後表示しない",
@@ -481,7 +484,8 @@
 			"runningWork.agentAndTerminals": "1 個のエージェントと {0} 個のターミナルを終了しますか?",
 			"runningWork.agents": "{0} 個のエージェントを終了しますか?",
 			"runningWork.agentsAndTerminal": "{0} 個のエージェントと 1 個のターミナルを終了しますか?",
-			"runningWork.agentsAndTerminals": "{0} 個のエージェントと {1} 個のターミナルを終了しますか?"
+			"runningWork.agentsAndTerminals": "{0} 個のエージェントと {1} 個のターミナルを終了しますか?",
+			"runningWork.startedBy": "{0} · {1} が開始"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Antigravity を実行しているターミナルのアイコン。",
@@ -546,7 +550,9 @@
 			"worktrees.deleteQuestion": "作業ツリー '{0}' を削除しますか?",
 			"worktrees.deleteUnknown": "作業ツリー '{0}' が削除されたかどうかを確認できません。ワークスペース バーには現在の Git の状態が反映されています。",
 			"worktrees.deleteWorktree": "作業ツリーを削除...",
+			"worktrees.deletedElsewhere": "ワークスペース {1} が削除中のため、'{0}' は削除されませんでした。",
 			"worktrees.deleting": "作業ツリー '{0}' を削除しています...",
+			"worktrees.elsewhereFailed": "他のワークスペースにこの件で連絡できなかったため、'{0}' は削除されませんでした: {1}",
 			"worktrees.folder": "パス: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "作業ツリーのフォルダーが、サブモジュールとプッシュされていないコミットを含めて削除されます。この操作は元に戻せません。",
 			"worktrees.folderDeleted": "作業ツリーのフォルダーがディスクから削除されます。この操作は元に戻せません。",
@@ -554,6 +560,7 @@
 			"worktrees.hookFailed": "作業ツリーは作成されましたが、Git フックが失敗しました: {0}",
 			"worktrees.ignored": "Git で無視されている次のファイルが削除されます:",
 			"worktrees.ignoredFile": "{0} (Git で無視)",
+			"worktrees.inWorkspace": "ワークスペース {0}",
 			"worktrees.inheritedEnvironment": "このウィンドウは GIT_DIR、GIT_WORK_TREE、または GIT_INDEX_FILE が設定された状態で起動されたため、Git が別のリポジトリにリダイレクトされています。新しいウィンドウでフォルダーを開いてください。",
 			"worktrees.initialBranch": "初期コミットはブランチ '{0}' にあります。新しい作業ツリーには別のブランチ名を選択してください。",
 			"worktrees.initializeAndCreate": "初期化して作成",
@@ -562,6 +569,7 @@
 			"worktrees.invalidBranchName": "'{0}' は有効なブランチ名ではありません。",
 			"worktrees.kept": "作業ツリー '{0}' はディスクから削除されませんでした。ワークスペースからは削除されています。行をクリックすると、もう一度追加できます。",
 			"worktrees.keptOutside": "作業ツリー '{0}' はディスクから削除されませんでした。",
+			"worktrees.leftElsewhere": "別のワークスペースの作業が停止しなかったため、'{0}' は削除されませんでした: {1}。",
 			"worktrees.leftover": "作業ツリーは Git から削除されましたが、フォルダーを削除できませんでした: {0}。{1}",
 			"worktrees.leftoverRefused": "フォルダーを削除できませんでした: {0}",
 			"worktrees.leftoverUnknown": "'{0}' は、このウィンドウでの削除で残された作業ツリーのフォルダーとして認識されなかったため、削除されませんでした。必要に応じて手動で削除してください。",
@@ -586,6 +594,7 @@
 			"worktrees.notRepositoryUnasked": "フォルダー '{0}' は Git リポジトリではありません。先にリポジトリを初期化してください。",
 			"worktrees.notWorktree": "'{0}' は、このワークスペースで認識されている作業ツリーではありません。",
 			"worktrees.openWorktree": "作業ツリーを開く",
+			"worktrees.otherVersions": "別のバージョンの Facade のウィンドウが開いています ({0})。この作業ツリーで作業しているかどうかは確認していません。",
 			"worktrees.outOfWorkspace": "ワークスペースからは削除されました。",
 			"worktrees.pathExists": "'{0}' には既にファイルまたはフォルダーが存在します。",
 			"worktrees.prepare.folderEmpty": "このフォルダーは Git リポジトリではありません。続行すると、リポジトリを初期化し ('git init')、空の初期コミットを作成します。",
@@ -599,6 +608,7 @@
 			"worktrees.prepare.unbornOne": "このリポジトリにはまだコミットがありません。続行すると、1 個のファイルを含む初期コミットを作成します。",
 			"worktrees.prepareFailed": "'{0}' の初期コミットを作成できませんでした: {1}",
 			"worktrees.preparing": "'{0}' に初期コミットを作成しています...",
+			"worktrees.releaseUnknown": "ワークスペース {1} はそこでの作業を停止する要求を受け取った可能性がありますが結果を返さなかったため、'{0}' は削除されませんでした。その作業が停止したかどうかは不明です。そのワークスペースを確認してから、もう一度お試しください。",
 			"worktrees.restricted": "作業ツリーには Git の操作が必要ですが、制限モードでは無効になっています。",
 			"worktrees.restrictedUnasked": "ワークスペースは制限モードです。Git の操作を実行するには、ワークスペースを信頼してください。",
 			"worktrees.retry": "再試行",
@@ -630,6 +640,8 @@
 			"worktrees.unsavedFile": "{0} (未保存)",
 			"worktrees.untrusted": "作業ツリーは親リポジトリ '{0}' の信頼を継承します。先に親リポジトリを信頼してください。",
 			"worktrees.untrustedUnasked": "リポジトリ '{0}' は信頼されていません。作業ツリーを作成する前に、リポジトリを信頼してください。",
+			"worktrees.workSinceElsewhere": "この削除の対象外となる作業が他のワークスペースにあるため、'{0}' は削除されませんでした: {1}。",
+			"worktrees.workspaceSilent": "ワークスペース {1} が応答せず、'{0}' で作業している可能性があるため、削除されませんでした。しばらくしてからもう一度お試しください。",
 			"worktrees.wouldLose": "'{0}' には、削除すると失われる変更があります: {1}。何も削除されていません。",
 			"worktrees.wouldLoseSubmodules": "'{0}' にはサブモジュールがあります。削除すると、サブモジュールのプッシュされていないコミットが失われます。何も削除されていません。"
 		},
@@ -699,11 +711,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "このワークスペースのエージェント管理は、別の Facade ウィンドウに移りました。",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "このワークスペースのエージェントは別のウィンドウで管理されています。チャット ルームはそのウィンドウで削除してください。",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "このワークスペースのエージェントは別のウィンドウで管理されています。チャット ルームはそのウィンドウで開いてください。",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "このワークスペースで、あなたとエージェントの間で交わされたすべてのメッセージが削除されます。この操作は元に戻せません。",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "チャット ルームはこのコンピューターに属するため、このワークスペースだけでなく、すべてのワークスペースのチャット ルームが削除されます。実行中のエージェントは、そのセッションのメッセージを引き続き読み取ることができます。この操作は元に戻せません。",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "エージェント メニューまたは [エージェントを起動] から起動したエージェントでは、CLI 自身の質問と更新はそのまま残り、承認は YOLO の設定に従います。ほかのエージェントやスクリプトが start_agent で起動したエージェントは、誰も見ていない可能性があるため、起動構成の unattended 部分を使って実行されます (そのグループが起動構成のグループを置き換え、環境と設定は起動構成の上に適用されます)。これにより、CLI が許す範囲で、応答を待つものはなくなります。whenYouStartIt と throughStartAgent に、それぞれに適用される内容が表示されます。",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "このワークスペースのエージェントは別の Facade ウィンドウで管理されています。エージェントはそのウィンドウで起動してください。",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "このワークスペースのエージェントは別の Facade ウィンドウで管理されています。そのウィンドウを使用してください。ここで管理するには、そのウィンドウを閉じてから、このウィンドウを再読み込みします。",
-			"Are you sure you want to delete all chat rooms in this workspace?": "このワークスペースのすべてのチャット ルームを削除しますか?",
+			"There are no chat rooms to delete.": "削除するチャット ルームはありません。",
+			"Are you sure you want to delete 1 chat room?": "1 個のチャット ルームを削除しますか?",
+			"Are you sure you want to delete {0} chat rooms?": "{0} 個のチャット ルームを削除しますか?",
 			"Configure Agents": "エージェントの構成",
 			"Could not delete all chat rooms: {0}": "すべてのチャット ルームを削除できませんでした: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "既に実行中だったエージェントに再接続できませんでした。それらのエージェントは Facade ツールを使用できませんが、これから起動するエージェントは正常に動作します。",
@@ -780,6 +794,7 @@
 			"{0} messages, latest at {1}": "メッセージ {0} 件、最新 {1}",
 			"{0} of your agents ended. {1}": "エージェントのうち {0} 個が終了しました。{1}",
 			"{0} sent you a message: {1}": "{0} からメッセージが届きました: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "{0} を表示できませんでした: そのワークスペースが応答しなかったか、終了しています。メッセージ #m{1} はそのチャット ルームにあります。",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "ウィンドウを閉じている間に、Facade が自身の部分を追加した後で {0} が変更されました。以前の内容は {1} に保持されています。",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "エージェントが使用している間に {0} が変更され、Facade の部分が含まれなくなったため、そのままにしました。以前の内容は {1} に保持されています。",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "そこで別のエージェントが起動したとき、{0} が見つかりませんでした。Facade が変更する前の内容は {1} に保持されています。",
@@ -790,7 +805,9 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: 最後の画面のファイル '{1}' を読み取れませんでした: {2}。終了理由: {3}。",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: 最後の画面は保存されていません。終了理由: {1}。最後の画面は、ウィンドウが開いている間にエージェントのターミナルが閉じた場合にのみ保存されます。",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO がオフの場合、{1} が Facade ツールを拒否します",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}",
+			"Facade Agents did not start in this window.": "このウィンドウでは Facade Agents が開始されませんでした。",
+			"The deletion names a caller that Facade could not read.": "この削除で指定された呼び出し元を Facade が読み取れませんでした。"
 		},
 		"package": {
 			"command.category": "エージェント",

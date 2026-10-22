@@ -54,7 +54,7 @@ export const stopAgentTool: ContractTool = {
 			// An agent in no Git repository has a folder, not a worktree (N-57)
 			? (stopped.alreadyEnded ? '' : stopped.startStopped === 'creating_worktree' ? ' Git may still finish creating its worktree; the worktree and branch will be kept.' : stopped.agent.outsideGit ? ' Its folder is unchanged.' : ' Its worktree is unchanged.')
 			: stopped.worktree.deleted
-				? ` ${stopped.worktree.folder} was deleted; its branch was kept.`
+				? ` ${stopped.worktree.folder} was deleted; its branch was kept.${stopped.worktree.note ? ` ${stopped.worktree.note}` : ''}`
 				: ` ${notDeleted(stopped.worktree.folder, stopped.worktree.why ?? '')}`;
 		return { text: `${ended}${ended && others ? ' ' : ''}${others}${worktree}`.trim(), data: stopped };
 	}

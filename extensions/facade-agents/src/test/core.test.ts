@@ -290,7 +290,7 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('an agent\'s child starts in a worktree Facade made: its creator\'s where it names no folder, another by its absolute path or by the branch checked out in it, and a detached one by its folder, having no branch; a main checkout - by its path, or as main, a branch like any other - a folder outside git, another repository\'s main checkout and another tool\'s worktree are refused before anything is made, naming Facade\'s worktrees in the window, as is a child of a creator in a folder outside git, there or in a new worktree of it; no branch names another tool\'s worktree; the person starts in any folder of the window - the workspace\'s, another tool\'s worktree among them as a folder in its place, and Facade\'s worktrees of their repositories - and an agent is offered Facade\'s worktrees alone (O3; WT-1.3)', async () => {
+	test('an agent\'s child starts in a main checkout or a worktree Facade made: its creator\'s where it names no folder, another by its absolute path or by the branch checked out in it - main among them - and a detached one by its folder, having no branch; a folder outside git and another tool\'s worktree are refused before anything is made, naming the main checkouts and Facade\'s worktrees in the window, as is a child of a creator in a folder outside git, there or in a new worktree of it; no branch names another tool\'s worktree; the person starts in any folder of the window (O3; WT-1.3; OR-29)', async () => {
 		const api = path.join(temp.dir, 'api');
 		const notes = path.join(temp.dir, 'notes');
 		const scratch = path.join(temp.dir, 'scratch');
@@ -307,12 +307,12 @@ suite('Core: starting an agent, step by step', () => {
 		await world.startUp(PERSON, { name: 'lead', cli: 'arg', model: 'large', effort: 'high', task: 'Lead.', folder: work });
 		const lead = callerOf(world.agent(1));
 		const places: string[] = [];
-		for (const folder of [undefined, docs, 'docs', spike]) {
+		for (const folder of [undefined, docs, 'docs', spike, lab, 'main', api]) {
 			const started = await world.startUp(lead, { name: 'child', cli: 'arg', model: 'small', effort: 'high', folder });
-			places.push(`${started.worktree} at ${started.folder}, task ${started.taskMessage === undefined ? 'none' : `#m${started.taskMessage}`}`);
+			places.push(`${started.worktree} at ${started.folder}`);
 		}
 		const refused: string[] = [];
-		for (const folder of [lab, 'main', notes, api, scratch, 'scratch', 'spike']) {
+		for (const folder of [notes, scratch, 'scratch', 'spike']) {
 			refused.push(await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg', model: 'small', effort: 'high', folder })));
 		}
 		const byPerson: string[] = [];
@@ -321,63 +321,55 @@ suite('Core: starting an agent, step by step', () => {
 			byPerson.push(`${started.worktree} at ${started.folder}`);
 		}
 		// The person's agent in notes, which no worktree can be made of
-		const inNotes = callerOf(world.agent(7));
+		const inNotes = callerOf(world.agent(10));
 		const fromNotes = [
 			await outcomeOf(world.facade.startAgent(inNotes, { name: 'child', cli: 'arg', model: 'small', effort: 'high' })),
 			await outcomeOf(world.facade.startAgent(inNotes, { name: 'child', cli: 'arg', model: 'small', effort: 'high', newWorktree: true }))
 		];
 		const allocated = [...world.table.state.agents.keys()];
-		const there = `folder to one of these worktrees created by Facade: ${work}, ${docs}, ${spike}.`;
-		const refusal = (folder: string, what: string) => `REFUSED: Cannot start a child in ${folder}: it is ${what}. Nothing was started. Set new_worktree:true to create a worktree in this repository, or set ${there}`;
+		const there = `folder to one of these main checkouts and worktrees created by Facade: ${lab}, ${work}, ${docs}, ${spike}, ${api}.`;
 		const outsideGit = (cannot: string) => `REFUSED: Cannot ${cannot} ${notes}: it is not in a Git repository. Nothing was started. Set new_worktree:true and folder to a Git repository folder in this window, or set new_worktree:false and ${there}`;
-		const noBranch = (branch: string) => `NOT_FOUND: No listed worktree of lab has branch '${branch}' checked out. Known worktrees: main at ${lab}, work at ${work}, docs at ${docs}, spike at ${spike}. Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.`;
+		const noBranch = (branch: string) => `NOT_FOUND: No listed worktree of lab has branch '${branch}' checked out. Known worktrees: main at ${lab}, work at ${work}, docs at ${docs}, spike at ${spike}. Set folder to the absolute path of a main checkout or a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.`;
 
 		assert.deepStrictEqual({ places, refused, byPerson, fromNotes, allocated, folders: await world.facade.windowFolders(), forAgent: await world.facade.windowFolders(true) }, {
-			places: [`work at ${work}, task none`, `docs at ${docs}, task none`, `docs at ${docs}, task none`, `spike at ${spike}, task none`],
+			places: [`work at ${work}`, `docs at ${docs}`, `docs at ${docs}`, `spike at ${spike}`, `main at ${lab}`, `main at ${lab}`, `main at ${api}`],
 			refused: [
-				refusal(lab, 'a main checkout'),
-				refusal(lab, 'a main checkout'),
 				outsideGit('start a child in'),
-				refusal(api, 'a main checkout'),
-				refusal(scratch, 'not a worktree created by Facade'),
+				`REFUSED: Cannot start a child in ${scratch}: it is a worktree not created by Facade. Nothing was started. Set new_worktree:true to create a worktree in this repository, or set ${there}`,
 				noBranch('scratch'),
 				noBranch('spike')
 			],
 			byPerson: [`main at ${lab}`, `notes at ${notes}`, `main at ${api}`, `scratch at ${scratch}`],
 			fromNotes: [outsideGit('start a child in'), outsideGit('create a worktree from')],
-			allocated: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+			allocated: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
 			folders: [{ folder: lab, worktree: 'main' }, { folder: work, worktree: 'work' }, { folder: docs, worktree: 'docs' }, { folder: spike, worktree: 'spike' }, { folder: api, worktree: 'main' }, { folder: notes, worktree: 'notes' }, { folder: scratch, worktree: 'scratch' }],
-			forAgent: [{ folder: work, worktree: 'work' }, { folder: docs, worktree: 'docs' }, { folder: spike, worktree: 'spike' }]
+			forAgent: [{ folder: lab, worktree: 'main' }, { folder: work, worktree: 'work' }, { folder: docs, worktree: 'docs' }, { folder: spike, worktree: 'spike' }, { folder: api, worktree: 'main' }]
 		});
 	});
 
-	test('an agent\'s child refused in a main checkout or a folder outside git, in a window with no worktree Facade made, is told there is none, and to create one with new_worktree:true - never to choose from an empty list (O3)', async () => {
+	test('an agent\'s child refused in a folder outside git, in a window with no Git repository, is told there is none and who can add one - never to choose from an empty list; one in a main checkout starts there (O3; OR-29)', async () => {
 		const notes = path.join(temp.dir, 'notes');
 		fs.mkdirSync(notes);
 		world.dispose();
-		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, folders: [notes] });
-		await world.startUp(PERSON, { name: 'lead', cli: 'arg', task: 'Lead.', folder: lab });
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { folders: [notes] });
 		await world.startUp(PERSON, { name: 'writer', cli: 'arg', task: 'Write.', folder: notes });
-		const lead = callerOf(world.agent(1));
-		const writer = callerOf(world.agent(2));
+		const writer = callerOf(world.agent(1));
 		const refused = [
-			await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg' })),
 			await outcomeOf(world.facade.startAgent(writer, { name: 'child', cli: 'arg' })),
 			await outcomeOf(world.facade.startAgent(writer, { name: 'child', cli: 'arg', newWorktree: true }))
 		];
-		const none = 'Nothing was started. No worktrees created by Facade are available in this window.';
+		const none = 'Nothing was started. No main checkouts or worktrees created by Facade are available in this window.';
 
 		assert.deepStrictEqual({ refused, agents: agents(world) }, {
 			refused: [
-				`REFUSED: Cannot start a child in ${lab}: it is a main checkout. ${none} Set new_worktree:true to create one in this repository.`,
 				`REFUSED: Cannot start a child in ${notes}: it is not in a Git repository. ${none} Set new_worktree:true and folder to a Git repository folder in this window.`,
 				`REFUSED: Cannot create a worktree from ${notes}: it is not in a Git repository. ${none} Set new_worktree:true and folder to a Git repository folder in this window.`
 			],
-			agents: ['#a1 @lead by @human running', '#a2 @writer by @human running']
+			agents: ['#a1 @writer by @human running']
 		});
 	});
 
-	test('with worktree management off, an agent\'s child starts in any folder the window knows, as the person\'s does - its creator\'s main checkout, with no folder or by its path, a folder outside git, from a creator there too, and another tool\'s worktree: it must go in a worktree Facade made only while management is on, and on again, the same start is refused (O3; WT-9.3; OR-28)', async () => {
+	test('with worktree management off, an agent\'s child starts in any folder the window knows, as the person\'s does - its creator\'s main checkout, a folder outside git, from a creator there too, and another tool\'s worktree; on again, a folder outside git is refused while the main checkout is not (O3; WT-9.3; OR-29; OR-36)', async () => {
 		const notes = path.join(temp.dir, 'notes');
 		const scratch = path.join(temp.dir, 'scratch');
 		fs.mkdirSync(notes);
@@ -396,12 +388,14 @@ suite('Core: starting an agent, step by step', () => {
 			places.push(`${started.worktree} at ${started.folder}${started.outsideGit ? ', outside git' : ''}`);
 		}
 		world.switches.worktrees = true;
-		const on = await outcomeOf(world.facade.startAgent(lead, { name: 'child', cli: 'arg' }));
+		const main = (await world.startUp(lead, { name: 'child', cli: 'arg' })).folder;
+		const on = await outcomeOf(world.facade.startAgent(writer, { name: 'child', cli: 'arg' }));
 
-		assert.deepStrictEqual({ places, on, agents: agents(world) }, {
+		assert.deepStrictEqual({ places, main, on, agents: agents(world) }, {
 			places: [`main at ${lab}`, `main at ${lab}`, `notes at ${notes}, outside git`, `scratch at ${scratch}`, `notes at ${notes}, outside git`],
-			on: `REFUSED: Cannot start a child in ${lab}: it is a main checkout. Nothing was started. Set new_worktree:true to create a worktree in this repository, or set folder to one of these worktrees created by Facade: ${worktreeFolder(lab, 'docs')}.`,
-			agents: ['#a1 @lead by @human running', '#a2 @writer by @human running', '#a3 @child by #a1 running', '#a4 @child by #a1 running', '#a5 @child by #a1 running', '#a6 @child by #a1 running', '#a7 @child by #a2 running']
+			main: lab,
+			on: `REFUSED: Cannot start a child in ${notes}: it is not in a Git repository. Nothing was started. Set new_worktree:true and folder to a Git repository folder in this window, or set new_worktree:false and folder to one of these main checkouts and worktrees created by Facade: ${lab}, ${worktreeFolder(lab, 'docs')}.`,
+			agents: ['#a1 @lead by @human running', '#a2 @writer by @human running', '#a3 @child by #a1 running', '#a4 @child by #a1 running', '#a5 @child by #a1 running', '#a6 @child by #a1 running', '#a7 @child by #a2 running', '#a8 @child by #a1 running']
 		});
 	});
 
@@ -496,7 +490,6 @@ suite('Core: starting an agent, step by step', () => {
 		refusals.push(
 			await outcomeOf(world.facade.startAgent(leader, { ...lead, folder: 'nope' })),
 			await outcomeOf(world.facade.startAgent(leader, { ...lead, folder: 'docs' })),
-			await outcomeOf(world.facade.startAgent(leader, { ...lead, folder: undefined })),
 			await outcomeOf(world.facade.startAgent(leader, { ...lead, name: 'spike', newWorktree: true }))
 		);
 		const unborn = fakeWorld(path.join(temp.dir, 'unborn'), { repositories: { [lab]: [] }, unborn: [lab] });
@@ -518,10 +511,9 @@ suite('Core: starting an agent, step by step', () => {
 				`REFUSED: Cannot create a worktree from ${plain}: it is not in a Git repository. Start the child in this folder without new_worktree:true.`,
 				'REFUSED: Branch \'spike\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for \'spike\'.',
 				'REFUSED: Cannot use \'v1..2\' for the new worktree\'s branch: git does not take "v1..2" for a branch\'s name. Choose another agent name.',
-				`NOT_FOUND: No listed worktree of lab has branch 'nope' checked out. Known worktrees: main at ${lab}, docs at ${worktreeFolder(lab, 'docs')}, docs at ${worktreeFolder(lab, 'docs-again')}. Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.`,
-				`INVALID: Branch 'docs' is checked out in 2 worktrees of lab: ${worktreeFolder(lab, 'docs')}, ${worktreeFolder(lab, 'docs-again')}. Set folder to the absolute path of one created by Facade, or set new_worktree:true and choose a Git repository folder in this window.`,
-				`REFUSED: Cannot start a child in ${lab}: it is a main checkout. Nothing was started. Set new_worktree:true to create a worktree in this repository, or set folder to one of these worktrees created by Facade: ${worktreeFolder(lab, 'docs')}, ${worktreeFolder(lab, 'docs-again')}.`,
-				'REFUSED: Branch \'spike\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name. To reuse an existing worktree created by Facade, set new_worktree:false and folder to its absolute path or checked-out branch.',
+				`NOT_FOUND: No listed worktree of lab has branch 'nope' checked out. Known worktrees: main at ${lab}, docs at ${worktreeFolder(lab, 'docs')}, docs at ${worktreeFolder(lab, 'docs-again')}. Set folder to the absolute path of a main checkout or a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.`,
+				`INVALID: Branch 'docs' is checked out in 2 worktrees of lab: ${worktreeFolder(lab, 'docs')}, ${worktreeFolder(lab, 'docs-again')}. Set folder to the absolute path of one of them, or set new_worktree:true and choose a Git repository folder in this window.`,
+				'REFUSED: Branch \'spike\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for \'spike\'.',
 				`REFUSED: Cannot create a worktree from ${lab}: its branch has no commit yet, or Git cannot read its commit.`
 			],
 			agents: ['#a1 @lead by @human running'],
@@ -530,7 +522,7 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
-	test('a folder or a branch that names no place to start is refused, nothing started, saying what to do next as who asks and how: an agent, a worktree Facade made or new_worktree; the person, a folder of the window; new_worktree:true, a Git repository folder; with worktree management off, a folder the window knows - the window\'s folders listed after a folder, and a window that has none saying who can add one, never offering an empty list (O1, O3; WT-9.3)', async () => {
+	test('a folder or a branch that names no place to start is refused, nothing started, saying what to do next as who asks and how: an agent, a main checkout or a worktree Facade made, or new_worktree; the person, a folder of the window; new_worktree:true, a Git repository folder; with worktree management off, a folder the window knows - the window\'s folders listed after a folder, and a window that has none saying who can add one, never offering an empty list (O1, O3; WT-9.3)', async () => {
 		const plain = path.join(temp.dir, 'plain');
 		const elsewhere = path.join(temp.dir, 'elsewhere');
 		const nowhere = path.join(temp.dir, 'nowhere');
@@ -597,7 +589,10 @@ suite('Core: starting an agent, step by step', () => {
 		const missing = (next: string) => `NOT_FOUND: No listed worktree of lab has branch 'nope' checked out. Known worktrees: main at ${lab}, docs at ${docs}, docs at ${again}. ${next}`;
 		const twice = (next: string) => `INVALID: Branch 'docs' is checked out in 2 worktrees of lab: ${docs}, ${again}. ${next}`;
 		const noRepository = (next: string) => `INVALID: 'docs' cannot be resolved as a branch because ${plain} is not in a repository. ${next}`;
-		const agentNext = 'Set folder to the absolute path of a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window.';
+		const listNext = 'Set folder to an absolute path from this list.';
+		const pathNext = 'Set folder to the absolute path of a folder in this window; a detached HEAD must be selected by path.';
+		const agentNext = 'Set folder to the absolute path of a main checkout or a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window.';
+		const agentBranch = 'Set folder to the absolute path of a main checkout or a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.';
 		const keepNew = 'Keep new_worktree:true and set folder to the absolute path of a Git repository folder in this window.';
 		const knownNext = 'Set folder to the absolute path of an existing window folder or a recorded agent launch folder.';
 		const noGit = 'No Git repository folder is available in this window. Ask the person to add a Git repository folder.';
@@ -607,15 +602,15 @@ suite('Core: starting an agent, step by step', () => {
 			outside: [
 				notFound(`${agentNext} Window folders: ${all}.`),
 				notFound(`${keepNew} Window folders: ${all}.`),
-				notFound(`Set folder to an absolute path from this list. Window folders: ${all}.`),
+				notFound(`${listNext} Window folders: ${all}.`),
 				notFound(`${keepNew} Window folders: ${all}.`),
-				`REFUSED: ${elsewhere} is a folder outside this window. Nothing was started. ${agentNext} Window folders: ${all}.`
+				`REFUSED: ${elsewhere} is a folder outside every Facade workspace on this machine. Nothing was started. ${agentNext} Window folders: ${all}.`
 			],
 			branches: [
-				missing('Set folder to the absolute path of a worktree created by Facade; a detached HEAD must be selected by path. To create a worktree, set new_worktree:true and folder to a Git repository folder in this window.'),
+				missing(agentBranch),
 				missing(keepNew),
-				missing('Set folder to the absolute path of a folder in this window; a detached HEAD must be selected by path.'),
-				twice('Set folder to the absolute path of one created by Facade, or set new_worktree:true and choose a Git repository folder in this window.'),
+				missing(pathNext),
+				twice('Set folder to the absolute path of one of them, or set new_worktree:true and choose a Git repository folder in this window.'),
 				twice('Select a worktree by its absolute folder path.'),
 				twice('Select a worktree by its absolute folder path.'),
 				noRepository(agentNext),
@@ -3361,7 +3356,7 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 
 		assert.deepStrictEqual({ there: there.status, named, worktree: deleted.worktree, made: world.table.madeWorktree(there.folder) }, {
 			there: 'started',
-			named: `NOT_FOUND: Cannot start an agent in ${gone}: this window's folder no longer exists on disk. Nothing was started. Set folder to the absolute path of a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window. Window folders: ${lab}, ${there.folder}.`,
+			named: `NOT_FOUND: Cannot start an agent in ${gone}: this window's folder no longer exists on disk. Nothing was started. Set folder to the absolute path of a main checkout or a worktree created by Facade, or set new_worktree:true and folder to a Git repository folder in this window. Window folders: ${lab}, ${there.folder}.`,
 			worktree: { folder: there.folder, deleted: false, why: 'the folder no longer exists, so there is nothing to delete' },
 			made: undefined
 		});
@@ -3444,7 +3439,7 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		assert.deepStrictEqual({ second, allocated, after }, {
 			second: `REFUSED: Branch 'clamp' is already being created in lab for another start. Choose another agent name.`,
 			allocated: [1, 2],
-			after: 'REFUSED: Branch \'clamp\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name. To reuse an existing worktree created by Facade, set new_worktree:false and folder to its absolute path or checked-out branch.'
+			after: 'REFUSED: Branch \'clamp\' already exists in lab. A new worktree needs a new branch named after the child. Choose another agent name, or use folder to start in the existing worktree for \'clamp\'.'
 		});
 	});
 

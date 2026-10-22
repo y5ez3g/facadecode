@@ -6,7 +6,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { discardScreens, FinalScreenError, finalScreenFile, parseFinalScreen, readFinalScreen, screensDir, writeFinalScreenText, writeScreenSnapshot } from '../record/screens';
+import { discardScreenCopies, discardScreens, FinalScreenError, finalScreenFile, parseFinalScreen, readFinalScreen, screenCopyName, screensDir, writeFinalScreenText, writeScreenSnapshot } from '../record/screens';
 import { tempDir } from './util';
 
 /** What is wrong with `text` as a final screen; or that it is one. */
@@ -79,5 +79,15 @@ suite('Record: agents\' screens', () => {
 			left: ['a3.log', 'a4.json', 'a5.txt'],
 			noFolder: 0
 		});
+	});
+
+	test('copies of other workspaces\' screen files are named apart from this record\'s own, and go as the record starts afresh, its own staying (D1, D6)', () => {
+		const dir = screensDir(temp.dir);
+		fs.mkdirSync(dir, { recursive: true });
+		const copy = screenCopyName(path.join(temp.dir, 'elsewhere', 'a7.txt'));
+		fs.writeFileSync(path.join(dir, copy), 'theirs');
+		fs.writeFileSync(path.join(dir, 'a3.txt'), 'ours');
+
+		assert.deepStrictEqual({ named: /^elsewhere-.+-a7\.txt$/.test(copy), discarded: discardScreenCopies(dir), left: fs.readdirSync(dir) }, { named: true, discarded: 1, left: ['a3.txt'] });
 	});
 });

@@ -201,7 +201,7 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		const service = launcherService(terminals, disposables.add(new TestStorageService()), new TestConfigurationService(), [], { trusted: true }, runs);
 		const before = { count: service.activeAgentCount, listed: service.agentTerminals, preparing: service.preparingAgents };
 		const making: IPreparingRun = { id: 3, name: 'lint', phase: 'creating_worktree' };
-		runs.live = { workspace: 'record', ids: [1, 3], preparing: [making] };
+		runs.live = { workspace: 'record', ids: [1, 3], preparing: [making], creators: [] };
 		changed.fire();
 
 		assert.deepStrictEqual({ before, after: { count: service.activeAgentCount, listed: service.agentTerminals, preparing: service.preparingAgents } }, {

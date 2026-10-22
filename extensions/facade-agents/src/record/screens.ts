@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
@@ -141,6 +142,35 @@ export function writeFinalScreenText(dir: string, id: number, lines: readonly st
 		}
 	}
 	return file;
+}
+
+/** How a screen file of another workspace's agent copied into this record for a caller here begins (AGENT-DEBUGGING.md, D1). */
+const COPY_PREFIX = 'elsewhere-';
+
+/** The name, in the screens folder, of a copy of `file`, a screen file of another workspace's agent: one of its own. */
+export function screenCopyName(file: string): string {
+	return `${COPY_PREFIX}${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}-${path.basename(file)}`;
+}
+
+/**
+ * Deletes the copies of other workspaces' screen files in the screens folder `dir`, as the record starts afresh: the
+ * callers they were copied for have ended with the session before (D6). Answers how many it deleted.
+ */
+export function discardScreenCopies(dir: string): number {
+	let names: string[];
+	try {
+		names = fs.readdirSync(dir);
+	} catch (err) {
+		if (codeOf(err) === 'ENOENT') {
+			return 0;
+		}
+		throw err;
+	}
+	const copies = names.filter(name => name.startsWith(COPY_PREFIX));
+	for (const name of copies) {
+		fs.rmSync(path.join(dir, name), { force: true });
+	}
+	return copies.length;
 }
 
 /** Deletes the screen files - final screens and screens read - of the agents `ids` in the screens folder `dir`: answers how many. */

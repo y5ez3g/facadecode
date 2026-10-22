@@ -6,50 +6,62 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from '../base/errors';
-import { replaceFile } from '../base/files';
-import { AgentIdentity, describe, isLive, PERSON, WorkspaceState } from './events';
-import { FACADE, HUMAN, Message, MessageRecord, Recipient } from './messages';
+import { isJsonObject } from '../base/json';
+import { withFileLock } from '../base/lock';
+import { AgentIdentity, describe, foreignRootKey, isLive, PERSON, WorkspaceState } from './events';
+import { FACADE, ForeignAgent, foreignRef, HUMAN, isForeign, Message, MessageRecord, Recipient } from './messages';
 
-/** The record's folder of chat rooms. */
-const ROOMS_DIR = 'rooms';
+/** The file beside the machine's chat rooms that says up to which message number they were last deleted (M9). */
+const DELETED_FILE = 'deleted.json';
 
 /** A chat room, as Open Chat Room lists it. */
 export interface ChatRoom {
 	readonly file: string;
 	/** The agent the person started, whose tree it is. */
 	readonly root: AgentIdentity;
-	/** Whether that agent has not ended. */
-	readonly live: boolean;
+	/** Whether that agent has not ended; undefined for a root of another workspace, which this one cannot tell. */
+	readonly live: boolean | undefined;
 	/** How many messages it has. */
 	readonly messages: number;
 	/** When its last message came. */
 	readonly lastTime: number;
 }
 
+/** A tree's root, as a chat room is named by it: its number, its name and its workspace's record. */
+export interface RoomRoot {
+	readonly id: number;
+	readonly name: string;
+	readonly window: string;
+	readonly label?: string;
+}
+
 /**
- * The chat rooms, the person's record of the messages: one Markdown file per agent the person started,
- * with every message to or from its tree, in order, Facade's too, each whole under a heading; a message
- * between two trees is in both. They are appended to as the messages come, never rewritten: one
- * missing, or shorter than the ledger says, is written again from the ledger as the window loads. They
- * stay, through reloads, quitting and crashes, until the person deletes them.
+ * The chat rooms, the person's record of the messages (AGENT-MESSAGES.md, M9): the machine's, in Facade's home - one
+ * Markdown file per agent the person started, whichever workspaces its tree spans - with every message to or from its
+ * tree, in order, Facade's too, each whole under a heading; a message between two trees is in both. Each message is
+ * written once, by the workspace that records it: its recipient's, or for one to the person its sender's - a sender's copy
+ * of one to another workspace's agent is that workspace's to write - under a short lock on the room. A room missing what
+ * this workspace's record holds gets it again as the workspace loads. They stay, through reloads, quitting and crashes,
+ * until the person deletes them - every workspace's - and none is written again for a message up to that point.
  */
 export class ChatRooms {
 
-	constructor(private readonly dir: string, private readonly state: () => WorkspaceState, private readonly messages: MessageRecord) { }
+	/**
+	 * `shared`, the machine's shared mark of agent numbers: a root numbered at or below it may share its number with
+	 * another workspace's, so its room's name says its workspace too (AGENT-LAUNCHER.md, L12).
+	 */
+	constructor(readonly folder: string, private readonly self: string, private readonly state: () => WorkspaceState, private readonly messages: MessageRecord, private readonly shared: () => number = () => 0) { }
 
-	/** The folder the rooms are in. */
-	get folder(): string {
-		return path.join(this.dir, ROOMS_DIR);
-	}
-
-	/** Appends a message to the rooms it goes into. */
-	append(id: number): void {
+	/** Appends a message this workspace records to the rooms it goes into - and to those of `more`, the trees of a sender of another workspace. */
+	append(id: number, more: readonly RoomRoot[] = []): void {
 		const message = this.state().mail.messages.get(id);
-		if (!message) {
+		if (!message || isForeign(message.to) || id <= this.deletedUpTo()) {
 			return;
 		}
 		const entry = this.entryOf(message);
-		for (const root of rootsOf(this.state(), message)) {
+		const roots = this.rootsOf(message);
+		const others = more.filter(each => !roots.some(root => root.id === each.id && root.window === each.window)).map(each => ({ id: each.id, name: each.name, root: each.id, worktree: '', window: each.window, ...(each.label ? { workspace: each.label } : {}) }));
+		for (const root of [...roots, ...others]) {
 			this.appendTo(root, entry);
 		}
 	}
@@ -58,90 +70,124 @@ export class ChatRooms {
 	noteUnreturned(id: number): void {
 		const message = this.state().mail.messages.get(id);
 		const note = message && this.noteOf(message);
-		if (!message || !note) {
+		if (!message || !note || id <= this.deletedUpTo()) {
 			return;
 		}
-		for (const root of rootsOf(this.state(), message)) {
+		for (const root of this.rootsOf(message)) {
 			this.appendTo(root, note);
 		}
 	}
 
-	/** Writes again, from the ledger, each room that is missing or shorter than the ledger says. */
+	/** Writes again, from the record, what of this workspace's messages a room is missing: a room deleted since holds nothing up to its mark. */
 	restore(): void {
-		for (const [file, text] of this.render()) {
-			let size: number | undefined;
-			try {
-				size = fs.statSync(file).size;
-			} catch (err) {
-				if (codeOf(err) !== 'ENOENT') {
-					throw err;
+		const state = this.state();
+		const deleted = this.deletedUpTo();
+		const texts = new Map<string, string>();
+		const textOf = (file: string) => {
+			if (!texts.has(file)) {
+				try {
+					texts.set(file, fs.readFileSync(file, 'utf8'));
+				} catch (err) {
+					if (codeOf(err) !== 'ENOENT') {
+						throw err;
+					}
+					texts.set(file, '');
 				}
 			}
-			if (size === undefined || size < Buffer.byteLength(text)) {
-				fs.mkdirSync(this.folder, { recursive: true });
-				replaceFile(file, text);
+			return texts.get(file)!;
+		};
+		for (const line of state.mail.roomLines) {
+			const message = state.mail.messages.get(line.message);
+			if (!message || isForeign(message.to) || message.id <= deleted || message.seq <= state.mail.roomsDeletedAt) {
+				continue;
+			}
+			// The whole entry, not its heading alone: one cut short as it was written is written again
+			const text = line.unreturned ? this.noteOf(message) : this.entryOf(message);
+			for (const root of text ? this.rootsOf(message) : []) {
+				const file = this.fileOf(root);
+				if (!textOf(file).includes(text!)) {
+					this.appendTo(root, text!);
+					texts.delete(file);
+				}
 			}
 		}
 	}
 
-	/** The rooms there are, the one with the latest message first. */
+	/** The rooms there are on the machine, the one with the latest message first. */
 	list(): ChatRoom[] {
+		let names: string[] = [];
+		try {
+			names = fs.readdirSync(this.folder).filter(name => name.endsWith('.md'));
+		} catch {
+			return [];
+		}
 		const state = this.state();
-		const rooms = new Map<number, { root: AgentIdentity; messages: number; lastTime: number; last: number }>();
-		for (const line of state.mail.roomLines) {
-			const message = line.unreturned ? undefined : state.mail.messages.get(line.message);
-			for (const root of message ? rootsOf(state, message) : []) {
-				const room = rooms.get(root.id) ?? { root, messages: 0, lastTime: 0, last: 0 };
-				room.messages++;
-				room.lastTime = message?.time ?? 0;
-				room.last = message?.id ?? 0;
-				rooms.set(root.id, room);
+		const rooms: (ChatRoom & { readonly last: number })[] = [];
+		for (const name of names) {
+			const file = path.join(this.folder, name);
+			try {
+				const text = fs.readFileSync(file, 'utf8');
+				const heading = /^# Chat room: @(?<name>\S+) #a(?<id>\d+)(?: \(workspace (?<workspace>[^)]*)\))?/.exec(text)?.groups;
+				if (!heading) {
+					continue;
+				}
+				const id = Number(heading.id);
+				const numbers = [...text.matchAll(/^## #m(\d+) · /gm)].map(match => Number(match[1]));
+				const here = !heading.workspace;
+				const root: AgentIdentity = { id, name: heading.name, root: id, worktree: here ? state.identities.get(id)?.worktree ?? '' : heading.workspace!, ...(heading.workspace ? { workspace: heading.workspace } : {}) };
+				rooms.push({ file, root, live: here ? isLive(state.agents.get(id)) : undefined, messages: numbers.length, lastTime: fs.statSync(file).mtimeMs, last: Math.max(0, ...numbers) });
+			} catch {
+				// Gone meanwhile, or not readable: not listed
 			}
 		}
-		return [...rooms.values()]
-			.sort((a, b) => b.last - a.last)
-			.map(({ root, messages, lastTime }) => ({ file: this.fileOf(root), root, live: isLive(state.agents.get(root.id)), messages, lastTime }));
+		return rooms.sort((a, b) => b.last - a.last).map(({ last: _last, ...room }) => room);
 	}
 
 	/** The room a message is shown in: of its sender's tree, for one to the person; else of its recipient's. */
 	roomOf(message: Message): string | undefined {
 		const state = this.state();
-		const roots = rootsOf(state, message);
+		const roots = this.rootsOf(message);
 		const recipient = typeof message.to === 'number' ? state.identities.get(message.to) : undefined;
 		const root = (recipient && roots.find(each => each.id === recipient.root)) ?? roots[0];
 		return root && this.fileOf(root);
 	}
 
-	/** Deletes every room. */
-	delete(): void {
-		fs.rmSync(this.folder, { recursive: true, force: true });
+	/** Deletes every room of the machine, and marks them deleted up to `upTo`, the machine's last message number. */
+	delete(upTo: number): void {
+		fs.mkdirSync(this.folder, { recursive: true });
+		withFileLock(path.join(this.folder, DELETED_FILE), () => {
+			for (const name of fs.readdirSync(this.folder).filter(each => each.endsWith('.md'))) {
+				fs.rmSync(path.join(this.folder, name), { force: true });
+			}
+			fs.writeFileSync(path.join(this.folder, DELETED_FILE), JSON.stringify({ upTo: Math.max(upTo, this.deletedUpTo()) }));
+		});
 	}
 
-	/** The file of the room of `root`'s tree. */
-	private fileOf(root: AgentIdentity): string {
-		return path.join(this.folder, `${root.name}-a${root.id}.md`);
+	/** Up to which message number the rooms were last deleted, on the machine. */
+	deletedUpTo(): number {
+		try {
+			const value: unknown = JSON.parse(fs.readFileSync(path.join(this.folder, DELETED_FILE), 'utf8'));
+			return isJsonObject(value) && typeof value.upTo === 'number' ? value.upTo : 0;
+		} catch {
+			return 0;
+		}
 	}
 
-	/** Appends `text` to the room of `root`'s tree, which begins with its heading. */
-	private appendTo(root: AgentIdentity, text: string): void {
+	/** The roots of the trees a message is in, each with its workspace (`rootsOf`). */
+	private rootsOf(message: Message): (AgentIdentity & RoomRoot)[] {
+		return rootsOf(this.state(), message).map(root => ({ ...root, window: root.window ?? this.self }));
+	}
+
+	/** The file of the room of `root`'s tree: its name and number - and the start of its workspace's record id, for a number two records may hold. */
+	private fileOf(root: RoomRoot): string {
+		return path.join(this.folder, root.id <= this.shared() ? `${root.name}-a${root.id}-${root.window.replace(/-/g, '').slice(0, 8)}.md` : `${root.name}-a${root.id}.md`);
+	}
+
+	/** Appends `text` to the room of `root`'s tree, which begins with its heading, under the room's lock. */
+	private appendTo(root: AgentIdentity & RoomRoot, text: string): void {
 		const file = this.fileOf(root);
 		fs.mkdirSync(this.folder, { recursive: true });
-		fs.appendFileSync(file, fs.existsSync(file) ? text : `${headingOf(root)}${text}`, { mode: 0o600 });
-	}
-
-	/** What each room holds, as the ledger says, by its file. */
-	private render(): Map<string, string> {
-		const state = this.state();
-		const rooms = new Map<string, string>();
-		for (const line of state.mail.roomLines) {
-			const message = state.mail.messages.get(line.message);
-			const text = message && (line.unreturned ? this.noteOf(message) : this.entryOf(message));
-			for (const root of message && text ? rootsOf(state, message) : []) {
-				const file = this.fileOf(root);
-				rooms.set(file, `${rooms.get(file) ?? headingOf(root)}${text}`);
-			}
-		}
-		return rooms;
+		withFileLock(file, () => fs.appendFileSync(file, fs.existsSync(file) ? text : `${headingOf(root, root.window === this.self ? undefined : root.workspace ?? root.window)}${text}`, { mode: 0o600 }));
 	}
 
 	/** A message as its room has it: a heading - its number, time, sender and recipient - then its whole text. */
@@ -174,30 +220,34 @@ export class ChatRooms {
 /**
  * The roots of the trees a message is to or from - of its sender, its recipient, and the agent one of
  * Facade's is about - each the agent the person started at the top: the chat rooms it is in. Agents that left
- * the list are known by who they were.
+ * the list are known by who they were. A root is told apart by its workspace as well as its number: a tree whose
+ * root is of another workspace is that root's, never this record's agent of the same older number (M9; L12).
  */
 export function rootsOf(state: WorkspaceState, message: Message): AgentIdentity[] {
-	const roots = new Map<number, AgentIdentity>();
+	const roots = new Map<string, AgentIdentity>();
 	for (const id of [message.from, message.to, message.from === FACADE ? message.about : undefined]) {
 		const agent = typeof id === 'number' ? state.identities.get(id) : undefined;
-		const root = agent && state.identities.get(agent.root);
+		const root = agent?.rootWindow !== undefined ? state.foreignRoots.get(foreignRootKey(agent.rootWindow, agent.root)) : agent && state.identities.get(agent.root);
 		if (root) {
-			roots.set(root.id, root);
+			roots.set(`${root.window ?? ''} ${root.id}`, root);
 		}
 	}
 	return [...roots.values()];
 }
 
 /** The heading a room begins with: whose tree it is. */
-function headingOf(root: AgentIdentity): string {
-	const who = describe(root);
+function headingOf(root: AgentIdentity, workspace?: string): string {
+	const who = `${describe(root)}${workspace ? ` (workspace ${workspace})` : ''}`;
 	return `# Chat room: ${who}\n\nMessages to or from ${who} and its descendants, in chronological order.\n\n`;
 }
 
-/** Who sent or got a message, as Facade writes it: `@name #a7`, the person, `@human`, or Facade. */
-export function whoOf(state: WorkspaceState, who: Recipient | typeof FACADE | undefined): string {
+/** Who sent or got a message, as Facade writes it: `@name #a7`, an agent of another window with its window, the person, `@human`, or Facade. */
+export function whoOf(state: WorkspaceState, who: Recipient | typeof FACADE | ForeignAgent | undefined): string {
 	if (who === FACADE) {
 		return 'Facade';
+	}
+	if (isForeign(who)) {
+		return foreignRef(who);
 	}
 	if (who === undefined || who === HUMAN) {
 		return describe(PERSON);
