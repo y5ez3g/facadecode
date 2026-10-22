@@ -64,8 +64,9 @@ what the macOS menu bar shows and what names the folder of settings and window s
 in the operating system's application data, `Facade Code`. "Facade" alone is too common
 a word. VS Code's are `Visual Studio Code` and `Code`.
 
-The description says what it is: a fork of Visual Studio Code that shows one folder of
-a workspace at a time. Naming what it is built on is a fact, and says VS Code (I10).
+The description says what it is: a fork of Visual Studio Code in which native agent
+CLIs work alongside the person, one folder of a workspace at a time. Naming what it is
+built on is a fact, and says VS Code (I10).
 
 Every name a machine reads is one word, `facade`, as every editor of this family has
 one (`code`, `cursor`, `windsurf`, `codium`). It is short to type, and it is the word
