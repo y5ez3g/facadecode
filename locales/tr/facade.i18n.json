@@ -234,7 +234,7 @@
 			"workspaceBar.untrustedLinksMany": "Daha fazla bilgi için [belgelerimize](https://aka.ms/vscode-workspace-trust) bakın veya Kısıtlı Mod'da [{0} klasörün tümünü yeni bir pencerede açın]({1}).",
 			"workspaceBar.untrustedMessage": "Bu klasördeki dosyaları oluşturanlara güveniyor musunuz?",
 			"workspaceBar.untrustedMessageMany": "Bu {0} klasördeki dosyaları oluşturanlara güveniyor musunuz?",
-			"workspaceBar.untrustedMore": "ve {0} tane daha",
+			"workspaceBar.untrustedMore": "ve {0} tane daha"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} ajan",
@@ -328,6 +328,9 @@
 		},
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Facade Ajanları"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "Bu pencerenin ajanları sonlandırılıyor"
 		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "Değiştir ve Yeniden Başlat",
@@ -495,7 +498,8 @@
 			"runningWork.awayAgentsAndTerminals": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki {1} ajan ve {2} terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
 			"runningWork.awayTerminal": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
 			"runningWork.awayTerminals": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki {1} terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
-			"runningWork.closeWindow": "&&Pencereyi Kapat"
+			"runningWork.closeWindow": "&&Pencereyi Kapat",
+			"runningWork.startedBy": "{0} · {1} tarafından başlatıldı"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Antigravity çalıştıran bir terminalin simgesi.",
@@ -560,7 +564,9 @@
 			"worktrees.deleteQuestion": "'{0}' çalışma ağacını silmek istediğinizden emin misiniz?",
 			"worktrees.deleteUnknown": "'{0}' çalışma ağacının silindiği doğrulanamadı. Çalışma alanı çubuğu geçerli Git durumunu yansıtır.",
 			"worktrees.deleteWorktree": "Çalışma Ağacını Sil...",
+			"worktrees.deletedElsewhere": "{1} çalışma alanı onu sildiği için '{0}' silinmedi.",
 			"worktrees.deleting": "'{0}' çalışma ağacı siliniyor...",
+			"worktrees.elsewhereFailed": "Diğer çalışma alanlarına bu konuda ulaşılamadığı için '{0}' silinmedi: {1}",
 			"worktrees.folder": "Yol: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "Alt modülleri ve gönderilmemiş commit'leri dahil olmak üzere çalışma ağacı klasörü silinecek. Bu eylem geri alınamaz.",
 			"worktrees.folderDeleted": "Çalışma ağacı klasörü diskten silinecek. Bu eylem geri alınamaz.",
@@ -568,6 +574,7 @@
 			"worktrees.hookFailed": "Çalışma ağacı oluşturuldu ancak bir Git kancası başarısız oldu: {0}",
 			"worktrees.ignored": "Git tarafından yoksayılan şu dosyalar silinecek:",
 			"worktrees.ignoredFile": "{0} (Git tarafından yoksayıldı)",
+			"worktrees.inWorkspace": "{0} çalışma alanı",
 			"worktrees.inheritedEnvironment": "Bu pencere GIT_DIR, GIT_WORK_TREE veya GIT_INDEX_FILE ayarlıyken başlatıldı ve bu, Git'i başka bir depoya yönlendiriyor. Lütfen klasörü yeni bir pencerede açın.",
 			"worktrees.initialBranch": "İlk commit '{0}' dalında. Lütfen yeni çalışma ağacı için farklı bir dal adı seçin.",
 			"worktrees.initializeAndCreate": "Başlat ve Oluştur",
@@ -576,6 +583,7 @@
 			"worktrees.invalidBranchName": "'{0}' geçerli bir dal adı değil.",
 			"worktrees.kept": "'{0}' çalışma ağacı diskten silinmedi. Çalışma alanından kaldırıldı. Geri eklemek için satırına tıklayın.",
 			"worktrees.keptOutside": "'{0}' çalışma ağacı diskten silinmedi.",
+			"worktrees.leftElsewhere": "Başka bir çalışma alanındaki iş durmadığı için '{0}' silinmedi: {1}.",
 			"worktrees.leftover": "Çalışma ağacı Git'ten kaldırıldı ancak klasörü silinemedi: {0}. {1}",
 			"worktrees.leftoverRefused": "Klasör silinemedi: {0}",
 			"worktrees.leftoverUnknown": "'{0}', bu pencerede yapılan bir silme işleminden kalan bir çalışma ağacı klasörü olarak tanınmadığı için silinmedi. Gerekirse el ile silin.",
@@ -600,6 +608,7 @@
 			"worktrees.notRepositoryUnasked": "'{0}' klasörü bir Git deposu değil. Önce depoyu başlatın.",
 			"worktrees.notWorktree": "'{0}', bu çalışma alanında tanınan bir çalışma ağacı değil.",
 			"worktrees.openWorktree": "Çalışma Ağacını Aç",
+			"worktrees.otherVersions": "Başka bir Facade sürümünün penceresi açık ({0}); bu çalışma ağacında işi olup olmadığı ona sorulmadı.",
 			"worktrees.outOfWorkspace": "Çalışma alanından kaldırıldı.",
 			"worktrees.pathExists": "'{0}' konumunda zaten bir dosya veya klasör var.",
 			"worktrees.prepare.folderEmpty": "Bu klasör bir Git deposu değil. Devam ederseniz klasör başlatılacak ('git init') ve boş bir ilk commit oluşturulacak.",
@@ -613,6 +622,7 @@
 			"worktrees.prepare.unbornOne": "Bu depoda henüz commit yok. Devam ederseniz 1 dosya içeren bir ilk commit oluşturulacak.",
 			"worktrees.prepareFailed": "'{0}' için ilk commit oluşturulamadı: {1}",
 			"worktrees.preparing": "'{0}' içinde ilk commit oluşturuluyor...",
+			"worktrees.releaseUnknown": "{1} çalışma alanı içindeki işini durdurma isteğini almış olabilir ancak bir sonuç döndürmediği için '{0}' silinmedi; bu işin durup durmadığı bilinmiyor. O çalışma alanını kontrol edin, ardından yeniden deneyin.",
 			"worktrees.restricted": "Çalışma ağaçları Git işlemleri gerektirir ve bu işlemler Kısıtlı Mod'da devre dışıdır.",
 			"worktrees.restrictedUnasked": "Çalışma alanı Kısıtlı Mod'da. Git işlemlerini çalıştırmak için lütfen çalışma alanına güvenin.",
 			"worktrees.retry": "Yeniden Dene",
@@ -644,6 +654,8 @@
 			"worktrees.unsavedFile": "{0} (kaydedilmemiş)",
 			"worktrees.untrusted": "Çalışma ağacı, güveni '{0}' üst deposundan devralır. Lütfen önce üst depoya güvenin.",
 			"worktrees.untrustedUnasked": "'{0}' deposuna güvenilmiyor. Lütfen çalışma ağacı oluşturmadan önce depoya güvenin.",
+			"worktrees.workSinceElsewhere": "Diğer çalışma alanlarının içinde bu silme işleminin kapsamadığı işleri olduğu için '{0}' silinmedi: {1}.",
+			"worktrees.workspaceSilent": "{1} çalışma alanı yanıt vermediği ve içinde çalışıyor olabileceği için '{0}' silinmedi. Biraz sonra yeniden deneyin.",
 			"worktrees.wouldLose": "'{0}' içinde, silinirse kaybolacak değişiklikler var: {1}. Hiçbir şey silinmedi.",
 			"worktrees.wouldLoseSubmodules": "'{0}' alt modüller içeriyor; silinmesi, bunların gönderilmemiş commit'lerinin kaybolmasına neden olur. Hiçbir şey silinmedi."
 		},
@@ -713,11 +725,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "Bu çalışma alanının ajan yönetimi başka bir Facade penceresine devredildi.",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Bu çalışma alanının ajanları başka bir pencerede yönetiliyor. Sohbet odalarını o pencerede silin.",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Bu çalışma alanının ajanları başka bir pencerede yönetiliyor. Sohbet odalarını o pencerede açın.",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Bu çalışma alanında sizinle ajanlarınız arasındaki tüm mesajlar silinecek. Bu eylem geri alınamaz.",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "Sohbet odaları bu bilgisayara aittir; bu nedenle yalnızca bu çalışma alanının değil, tüm çalışma alanlarının sohbet odaları silinir. Çalışan ajanlar kendi oturumlarının iletilerini okumaya devam edebilir. Bu eylem geri alınamaz.",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Ajan menüsünden veya Ajan Başlat ile başlattığınız bir ajan, CLI'ının kendi sorularını ve güncellemelerini korur; onayları ise YOLO'nun belirlediği gibidir. Başka bir ajanın veya betiğinizin start_agent ile başlattığı ve kimsenin izlemiyor olabileceği bir ajan, başlatma yapılandırmasının gözetimsiz kısmıyla çalışır (onun grupları başlatma yapılandırmasının gruplarının yerini alır; ortamı ve ayarları başlatma yapılandırmasınınkilerin üzerine uygulanır); böylece CLI'ının izin verdiği ölçüde hiçbir şey yanıt beklemez. whenYouStartIt ve throughStartAgent, her birinin ne aldığını gösterir.",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "Bu çalışma alanının ajanlarını başka bir Facade penceresi yönetiyor. Ajanları o pencerede başlatın.",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Bu çalışma alanının ajanlarını başka bir Facade penceresi yönetiyor. O pencereyi kullanın ya da ajanları burada yönetmek için o pencereyi kapatıp bu pencereyi yeniden yükleyin.",
-			"Are you sure you want to delete all chat rooms in this workspace?": "Bu çalışma alanındaki tüm sohbet odalarını silmek istediğinizden emin misiniz?",
+			"There are no chat rooms to delete.": "Silinecek sohbet odası yok.",
+			"Are you sure you want to delete 1 chat room?": "1 sohbet odasını silmek istediğinizden emin misiniz?",
+			"Are you sure you want to delete {0} chat rooms?": "{0} sohbet odasını silmek istediğinizden emin misiniz?",
 			"Configure Agents": "Ajanları Yapılandır",
 			"Could not delete all chat rooms: {0}": "Sohbet odalarının tümü silinemedi: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Zaten çalışmakta olan ajanlara yeniden bağlanılamadı. Bu ajanlar Facade araçlarını kullanamaz ancak bundan sonra başlatılan ajanlar normal şekilde çalışır.",
@@ -794,6 +808,7 @@
 			"{0} messages, latest at {1}": "{0} mesaj, sonuncusu: {1}",
 			"{0} of your agents ended. {1}": "Ajanlarınızdan {0} tanesi sona erdi. {1}",
 			"{0} sent you a message: {1}": "{0} size bir mesaj gönderdi: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "{0} gösterilemedi: Çalışma alanı yanıt vermedi veya sonlandı. #m{1} iletisi sohbet odasında.",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "{0}, Facade kendi kısmını ekledikten sonra, penceresi kapanırken değiştirildi. Önceki içeriği {1} konumunda saklanıyor.",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0}, ajanlar onu kullanırken değiştirildi ve artık Facade'ın kısmını içermiyor; bu yüzden olduğu gibi bırakıldı. Önceki içeriği {1} konumunda saklanıyor.",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "Orada başka bir ajan başladığında {0} eksikti. Facade'ın değişikliklerinden önceki içeriği {1} konumunda saklanıyor.",
@@ -814,7 +829,9 @@
 			"{0} hours ago": "{0} saat önce",
 			"1 day ago": "1 gün önce",
 			"{0} days ago": "{0} gün önce",
-			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Bu pencerenin önceki uzantı konağı ({0} işlemi) bu çalışma alanının ajanlarını hâlâ yönetiyor ve Facade onu durduramadı. Ajanları burada yönetmek için o işlemi sonlandırın ve bu pencereyi yeniden yükleyin."
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Bu pencerenin önceki uzantı konağı ({0} işlemi) bu çalışma alanının ajanlarını hâlâ yönetiyor ve Facade onu durduramadı. Ajanları burada yönetmek için o işlemi sonlandırın ve bu pencereyi yeniden yükleyin.",
+			"Facade Agents did not start in this window.": "Facade Agents bu pencerede başlatılmadı.",
+			"The deletion names a caller that Facade could not read.": "Silme işlemi, Facade'in okuyamadığı bir çağıranı belirtiyor."
 		},
 		"package": {
 			"command.category": "Ajanlar",

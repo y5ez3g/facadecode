@@ -234,7 +234,7 @@
 			"workspaceBar.untrustedLinksMany": "See [our docs](https://aka.ms/vscode-workspace-trust) to learn more, or [open all {0} folders in a new window]({1}) in Restricted Mode.",
 			"workspaceBar.untrustedMessage": "Do you trust the authors of the files in this folder?",
 			"workspaceBar.untrustedMessageMany": "Do you trust the authors of the files in these {0} folders?",
-			"workspaceBar.untrustedMore": "and {0} more",
+			"workspaceBar.untrustedMore": "and {0} more"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} agents",
@@ -328,6 +328,9 @@
 		},
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Facade Agents"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "Ending this window's agents"
 		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "Change and Restart",
@@ -495,7 +498,8 @@
 			"runningWork.awayAgentsAndTerminals": "Do you want to close the window? {0} cannot be reached. Its {1} agents and {2} terminals keep running there as long as its server runs.",
 			"runningWork.awayTerminal": "Do you want to close the window? {0} cannot be reached. Its terminal keeps running there as long as its server runs.",
 			"runningWork.awayTerminals": "Do you want to close the window? {0} cannot be reached. Its {1} terminals keep running there as long as its server runs.",
-			"runningWork.closeWindow": "&&Close Window"
+			"runningWork.closeWindow": "&&Close Window",
+			"runningWork.startedBy": "{0} · started by {1}"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Icon for a terminal running Antigravity.",
@@ -560,7 +564,9 @@
 			"worktrees.deleteQuestion": "Are you sure you want to delete the worktree '{0}'?",
 			"worktrees.deleteUnknown": "Unable to confirm deletion of worktree '{0}'. The workspace bar reflects the current Git status.",
 			"worktrees.deleteWorktree": "Delete Worktree...",
+			"worktrees.deletedElsewhere": "'{0}' was not deleted because workspace {1} is deleting it.",
 			"worktrees.deleting": "Deleting worktree '{0}'...",
+			"worktrees.elsewhereFailed": "'{0}' was not deleted because the other workspaces could not be reached about it: {1}",
 			"worktrees.folder": "Path: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "The worktree folder, including its submodules and unpushed commits, will be deleted. This action cannot be undone.",
 			"worktrees.folderDeleted": "The worktree folder will be deleted from disk. This action cannot be undone.",
@@ -568,6 +574,7 @@
 			"worktrees.hookFailed": "Worktree was created, but a Git hook failed: {0}",
 			"worktrees.ignored": "The following files ignored by Git will be deleted:",
 			"worktrees.ignoredFile": "{0} (ignored by Git)",
+			"worktrees.inWorkspace": "workspace {0}",
 			"worktrees.inheritedEnvironment": "This window was started with GIT_DIR, GIT_WORK_TREE, or GIT_INDEX_FILE set, redirecting Git to another repository. Please open the folder in a new window.",
 			"worktrees.initialBranch": "The initial commit is on branch '{0}'. Please choose a different branch name for the new worktree.",
 			"worktrees.initializeAndCreate": "Initialize and Create",
@@ -576,6 +583,7 @@
 			"worktrees.invalidBranchName": "'{0}' is not a valid branch name.",
 			"worktrees.kept": "Worktree '{0}' was not deleted from disk. It has been removed from the workspace. Click its row to add it back.",
 			"worktrees.keptOutside": "Worktree '{0}' was not deleted from disk.",
+			"worktrees.leftElsewhere": "'{0}' was not deleted because work in another workspace did not stop: {1}.",
 			"worktrees.leftover": "Worktree was removed from Git, but its folder could not be deleted: {0}. {1}",
 			"worktrees.leftoverRefused": "Failed to delete folder: {0}",
 			"worktrees.leftoverUnknown": "'{0}' was not recognized as a worktree folder left behind by a deletion in this window, so it was not deleted. Delete it manually if needed.",
@@ -600,6 +608,7 @@
 			"worktrees.notRepositoryUnasked": "Folder '{0}' is not a Git repository. Initialize the repository first.",
 			"worktrees.notWorktree": "'{0}' is not a recognized worktree in this workspace.",
 			"worktrees.openWorktree": "Open Worktree",
+			"worktrees.otherVersions": "A window of another Facade version is open ({0}); it was not asked whether it has work in this worktree.",
 			"worktrees.outOfWorkspace": "It was removed from the workspace.",
 			"worktrees.pathExists": "A file or folder already exists at '{0}'.",
 			"worktrees.prepare.folderEmpty": "This folder is not a Git repository. Continuing will initialize it ('git init') and create an empty initial commit.",
@@ -613,6 +622,7 @@
 			"worktrees.prepare.unbornOne": "This repository has no commits yet. Continuing will create an initial commit with 1 file.",
 			"worktrees.prepareFailed": "Failed to create the initial commit for '{0}': {1}",
 			"worktrees.preparing": "Creating initial commit in '{0}'...",
+			"worktrees.releaseUnknown": "'{0}' was not deleted because workspace {1} may have taken the request to stop its work in it but gave no result; whether that work stopped is unknown. Check that workspace, then try again.",
 			"worktrees.restricted": "Worktrees require Git operations, which are disabled in Restricted Mode.",
 			"worktrees.restrictedUnasked": "The workspace is in Restricted Mode. Please trust the workspace to run Git operations.",
 			"worktrees.retry": "Retry",
@@ -644,6 +654,8 @@
 			"worktrees.unsavedFile": "{0} (unsaved)",
 			"worktrees.untrusted": "A worktree inherits trust from its parent repository '{0}'. Please trust the parent repository first.",
 			"worktrees.untrustedUnasked": "Repository '{0}' is untrusted. Please trust the repository before creating a worktree.",
+			"worktrees.workSinceElsewhere": "'{0}' was not deleted because other workspaces have work in it that this deletion did not cover: {1}.",
+			"worktrees.workspaceSilent": "'{0}' was not deleted because workspace {1} did not answer and may have work in it. Try again in a moment.",
 			"worktrees.wouldLose": "'{0}' has changes that would be lost if it were deleted: {1}. Nothing was deleted.",
 			"worktrees.wouldLoseSubmodules": "'{0}' has submodules; deleting it would lose any of their unpushed commits. Nothing was deleted."
 		},
@@ -713,11 +725,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "Agent management for this workspace has been transferred to another Facade window.",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Agents for this workspace are managed in another window. Delete chat rooms in that window.",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Agents for this workspace are managed in another window. Open chat rooms in that window.",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "All messages between you and your agents in this workspace will be deleted. This action cannot be undone.",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "Another Facade window manages this workspace's agents. Start agents in that window.",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.",
-			"Are you sure you want to delete all chat rooms in this workspace?": "Are you sure you want to delete all chat rooms in this workspace?",
+			"There are no chat rooms to delete.": "There are no chat rooms to delete.",
+			"Are you sure you want to delete 1 chat room?": "Are you sure you want to delete 1 chat room?",
+			"Are you sure you want to delete {0} chat rooms?": "Are you sure you want to delete {0} chat rooms?",
 			"Configure Agents": "Configure Agents",
 			"Could not delete all chat rooms: {0}": "Could not delete all chat rooms: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.",
@@ -794,6 +808,7 @@
 			"{0} messages, latest at {1}": "{0} messages, latest at {1}",
 			"{0} of your agents ended. {1}": "{0} of your agents ended. {1}",
 			"{0} sent you a message: {1}": "{0} sent you a message: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.",
@@ -814,7 +829,9 @@
 			"{0} hours ago": "{0} hours ago",
 			"1 day ago": "1 day ago",
 			"{0} days ago": "{0} days ago",
-			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here."
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.",
+			"Facade Agents did not start in this window.": "Facade Agents did not start in this window.",
+			"The deletion names a caller that Facade could not read.": "The deletion names a caller that Facade could not read."
 		},
 		"package": {
 			"command.category": "Agents",

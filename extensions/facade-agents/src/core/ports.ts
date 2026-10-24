@@ -5,6 +5,7 @@
 
 import { AgentCli, CliConfig, Connection, Environment, InstalledCli, McpLaunch, Skill } from '../clis/cli';
 import { Caller } from '../record/events';
+import type { CallerIdentity } from './machine';
 
 /** What is let go of once the window closes. */
 export interface Disposable {
@@ -264,6 +265,11 @@ export interface WorktreeDeletion {
 	readonly agents: readonly number[];
 	/** Whether it is what a deletion left of a worktree: a folder git no longer lists, looked at already. */
 	readonly leftover?: boolean;
+	/**
+	 * Who deletes it, as the other workspaces are told: the window carries it through the deletion, and gives it back as
+	 * it asks them, and has them stop their work there, so that each stops only what that caller reaches (O5).
+	 */
+	readonly by?: CallerIdentity;
 }
 
 /**
@@ -440,6 +446,8 @@ export interface Person {
 	openRoom(file: string, message: number): Promise<void>;
 	/** Shows an agent that ended: its terminal while that is still open, else its last screen, read-only; where none was kept, how it ended (D6). */
 	showEnded(agent: EndedAgent): Promise<void>;
+	/** Brings this workspace's window forward: the person asked to see something of it from another workspace's (M9). */
+	bringForward?(): Promise<void>;
 }
 
 /**

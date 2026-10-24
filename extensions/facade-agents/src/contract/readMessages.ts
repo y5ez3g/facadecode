@@ -24,8 +24,10 @@ const STATES = ['unread', 'delivered', 'returned'] as const;
  */
 function fetchedText(fetched: Fetched): string {
 	const { messages } = fetched;
+	const missing = fetched.silent?.length ? `Not included: the messages of ${fetched.silent.map(label => `workspace ${label}`).join(', ')}, which did not answer. Retry shortly for them.` : undefined;
 	if (!messages.length) {
-		return fetched.way === 'all' ? 'No messages have been sent to you.' : 'No unread messages.';
+		const none = fetched.way === 'all' ? 'No messages have been sent to you.' : 'No unread messages.';
+		return missing ? `${none}\n${missing}` : none;
 	}
 	const states = STATES.map(state => [state, messages.filter(message => message.state === state).length] as const).filter(([, total]) => total > 0);
 	const count = `${messages.length} ${messages.length === 1 ? 'message' : 'messages'}: ${states.map(([state, total]) => `${total} ${state}`).join(', ')}`;
@@ -41,6 +43,9 @@ function fetchedText(fetched: Fetched): string {
 		}
 	}
 	lines.push('', PRINT);
+	if (missing) {
+		lines.push(missing);
+	}
 	return lines.join('\n');
 }
 

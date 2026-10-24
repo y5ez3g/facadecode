@@ -234,7 +234,7 @@
 			"workspaceBar.untrustedLinksMany": "請參閱[我們的文件](https://aka.ms/vscode-workspace-trust)以深入了解，或以受限模式[在新視窗中開啟全部 {0} 個資料夾]({1})。",
 			"workspaceBar.untrustedMessage": "您是否信任此資料夾中檔案的作者?",
 			"workspaceBar.untrustedMessageMany": "您是否信任這 {0} 個資料夾中檔案的作者?",
-			"workspaceBar.untrustedMore": "及其他 {0} 個",
+			"workspaceBar.untrustedMore": "及其他 {0} 個"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} 個 agent",
@@ -328,6 +328,9 @@
 		},
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Facade Agents"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "正在結束此視窗的 agent"
 		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "變更並重新啟動",
@@ -495,7 +498,8 @@
 			"runningWork.awayAgentsAndTerminals": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 {1} 個 agent 和 {2} 個終端機就會繼續執行。",
 			"runningWork.awayTerminal": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的終端機就會繼續執行。",
 			"runningWork.awayTerminals": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 {1} 個終端機就會繼續執行。",
-			"runningWork.closeWindow": "關閉視窗(&&C)"
+			"runningWork.closeWindow": "關閉視窗(&&C)",
+			"runningWork.startedBy": "{0} · 由 {1} 啟動"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "執行 Antigravity 的終端機圖示。",
@@ -560,7 +564,9 @@
 			"worktrees.deleteQuestion": "確定要刪除工作樹 '{0}' 嗎?",
 			"worktrees.deleteUnknown": "無法確認工作樹 '{0}' 是否已刪除。工作區列會反映目前的 Git 狀態。",
 			"worktrees.deleteWorktree": "刪除工作樹...",
+			"worktrees.deletedElsewhere": "未刪除 '{0}'，因為工作區 {1} 正在刪除它。",
 			"worktrees.deleting": "正在刪除工作樹 '{0}'...",
+			"worktrees.elsewhereFailed": "未刪除 '{0}'，因為無法就此聯繫其他工作區: {1}",
 			"worktrees.folder": "路徑: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "將刪除工作樹資料夾，包括其子模組和未推送的提交。此動作無法復原。",
 			"worktrees.folderDeleted": "將從磁碟刪除工作樹資料夾。此動作無法復原。",
@@ -568,6 +574,7 @@
 			"worktrees.hookFailed": "已建立工作樹，但 Git 勾點失敗: {0}",
 			"worktrees.ignored": "將刪除下列被 Git 忽略的檔案:",
 			"worktrees.ignoredFile": "{0} (被 Git 忽略)",
+			"worktrees.inWorkspace": "工作區 {0}",
 			"worktrees.inheritedEnvironment": "此視窗啟動時設定了 GIT_DIR、GIT_WORK_TREE 或 GIT_INDEX_FILE，會將 Git 導向另一個存放庫。請在新視窗中開啟此資料夾。",
 			"worktrees.initialBranch": "初始提交位於分支 '{0}'。請為新工作樹選擇其他分支名稱。",
 			"worktrees.initializeAndCreate": "初始化並建立",
@@ -576,6 +583,7 @@
 			"worktrees.invalidBranchName": "'{0}' 不是有效的分支名稱。",
 			"worktrees.kept": "未從磁碟刪除工作樹 '{0}'。它已從工作區移除。按一下它的列即可將它加回。",
 			"worktrees.keptOutside": "未從磁碟刪除工作樹 '{0}'。",
+			"worktrees.leftElsewhere": "未刪除 '{0}'，因為另一個工作區中的工作沒有停止: {1}。",
 			"worktrees.leftover": "已從 Git 移除工作樹，但無法刪除其資料夾: {0}。{1}",
 			"worktrees.leftoverRefused": "無法刪除資料夾: {0}",
 			"worktrees.leftoverUnknown": "無法將 '{0}' 識別為此視窗中的刪除作業所留下的工作樹資料夾，因此未將其刪除。如有需要，請手動刪除。",
@@ -600,6 +608,7 @@
 			"worktrees.notRepositoryUnasked": "資料夾 '{0}' 不是 Git 存放庫。請先初始化存放庫。",
 			"worktrees.notWorktree": "'{0}' 不是此工作區中可識別的工作樹。",
 			"worktrees.openWorktree": "開啟工作樹",
+			"worktrees.otherVersions": "另一個 Facade 版本的視窗已開啟 ({0})；未詢問它在此工作樹中是否有工作。",
 			"worktrees.outOfWorkspace": "它已從工作區移除。",
 			"worktrees.pathExists": "'{0}' 已存在檔案或資料夾。",
 			"worktrees.prepare.folderEmpty": "此資料夾不是 Git 存放庫。繼續將會初始化它 ('git init') 並建立空白的初始提交。",
@@ -613,6 +622,7 @@
 			"worktrees.prepare.unbornOne": "此存放庫尚無任何提交。繼續將會建立包含 1 個檔案的初始提交。",
 			"worktrees.prepareFailed": "無法為 '{0}' 建立初始提交: {1}",
 			"worktrees.preparing": "正在 '{0}' 中建立初始提交...",
+			"worktrees.releaseUnknown": "未刪除 '{0}'，因為工作區 {1} 可能已收到停止其中工作的要求，但沒有傳回結果；不知道那些工作是否已停止。請檢查該工作區，然後再試一次。",
 			"worktrees.restricted": "工作樹需要 Git 作業，但 Git 作業在受限模式中已停用。",
 			"worktrees.restrictedUnasked": "工作區處於受限模式。請信任此工作區以執行 Git 作業。",
 			"worktrees.retry": "重試",
@@ -644,6 +654,8 @@
 			"worktrees.unsavedFile": "{0} (未儲存)",
 			"worktrees.untrusted": "工作樹會繼承其父存放庫 '{0}' 的信任。請先信任父存放庫。",
 			"worktrees.untrustedUnasked": "存放庫 '{0}' 不受信任。請先信任此存放庫，再建立工作樹。",
+			"worktrees.workSinceElsewhere": "未刪除 '{0}'，因為其他工作區在其中有此次刪除未涵蓋的工作: {1}。",
+			"worktrees.workspaceSilent": "未刪除 '{0}'，因為工作區 {1} 沒有回應，其中可能有進行中的工作。請稍後再試一次。",
 			"worktrees.wouldLose": "'{0}' 有刪除後會遺失的變更: {1}。未刪除任何內容。",
 			"worktrees.wouldLoseSubmodules": "'{0}' 有子模組；刪除它會遺失子模組中任何未推送的提交。未刪除任何內容。"
 		},
@@ -713,11 +725,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "此工作區的 agent 管理已轉移至另一個 Facade 視窗。",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "此工作區的 agent 由另一個視窗管理。請在該視窗中刪除聊天室。",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "此工作區的 agent 由另一個視窗管理。請在該視窗中開啟聊天室。",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "將會刪除您與此工作區中 agent 之間的所有訊息。此動作無法復原。",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "聊天室屬於這台電腦，因此這會刪除所有工作區的聊天室，而不只是此工作區的。執行中的 agent 仍可讀取其工作階段中的訊息。此動作無法復原。",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "您從 agent 功能表或 [啟動 agent] 啟動的 agent，會保留其 CLI 本身的提問和更新，核准則依 YOLO 的設定。由其他 agent 或您的指令碼透過 start_agent 啟動的 agent，可能無人在旁看著，因此會以其啟動方式中的 unattended 部分執行 (其群組會取代啟動方式中的群組；其環境和設定會套用在啟動方式之上)，讓它在 CLI 允許的範圍內不必等待任何回答。whenYouStartIt 和 throughStartAgent 會顯示兩者各自得到的內容。",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "另一個 Facade 視窗正在管理此工作區的 agent。請在該視窗中啟動 agent。",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "另一個 Facade 視窗正在管理此工作區的 agent。請使用該視窗，或將其關閉並重新載入此視窗，以便在這裡管理。",
-			"Are you sure you want to delete all chat rooms in this workspace?": "確定要刪除此工作區中的所有聊天室嗎?",
+			"There are no chat rooms to delete.": "沒有可刪除的聊天室。",
+			"Are you sure you want to delete 1 chat room?": "確定要刪除 1 個聊天室嗎?",
+			"Are you sure you want to delete {0} chat rooms?": "確定要刪除 {0} 個聊天室嗎?",
 			"Configure Agents": "設定 agent",
 			"Could not delete all chat rooms: {0}": "無法刪除所有聊天室: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "無法重新連線至已在執行的 agent。它們無法使用 Facade 工具，但從現在起啟動的 agent 會正常運作。",
@@ -794,6 +808,7 @@
 			"{0} messages, latest at {1}": "{0} 則訊息，最新一則於 {1}",
 			"{0} of your agents ended. {1}": "您的 {0} 個 agent 已結束。{1}",
 			"{0} sent you a message: {1}": "{0} 傳送了一則訊息給您: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "無法顯示 {0}: 其所在的工作區沒有回應，或它已結束。訊息 #m{1} 位於其聊天室中。",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "在 Facade 加入自己的部分之後、視窗關閉期間，{0} 已被變更。其先前的內容保留在 {1}。",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} 在 agent 使用期間已被變更，且不再包含 Facade 的部分，因此維持原狀。其先前的內容保留在 {1}。",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "另一個 agent 在該處啟動時，{0} 不存在。其在 Facade 變更之前的內容保留在 {1}。",
@@ -814,7 +829,9 @@
 			"{0} hours ago": "{0} 小時前",
 			"1 day ago": "1 天前",
 			"{0} days ago": "{0} 天前",
-			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "此視窗先前的延伸主機 (處理序 {0}) 仍在管理此工作區的 agent，且 Facade 無法將其停止。請結束該處理序並重新載入此視窗，以便在這裡管理。"
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "此視窗先前的延伸主機 (處理序 {0}) 仍在管理此工作區的 agent，且 Facade 無法將其停止。請結束該處理序並重新載入此視窗，以便在這裡管理。",
+			"Facade Agents did not start in this window.": "Facade Agents 未在此視窗中啟動。",
+			"The deletion names a caller that Facade could not read.": "此刪除指定的呼叫者 Facade 無法讀取。"
 		},
 		"package": {
 			"command.category": "Agent",

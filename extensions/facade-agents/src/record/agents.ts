@@ -9,8 +9,9 @@ import * as path from 'path';
 import { codeOf } from '../base/errors';
 import { isEqualPath, readLastNumber, replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
-import { Agent, agentRef, Caller, describe, End, EndKind, Ignored, isAgentName, isLive, LedgerEventBody, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, SetupState, StartPhase, StoppedBy, WorkspaceState, WorktreeRemoval } from './events';
+import { Agent, agentRef, Caller, describe, End, EndKind, ForeignAgent, foreignRef, Ignored, isAgentName, isForeign, isLive, LedgerEventBody, LiveAgent, MadeWorktree, MAX_NAME_LENGTH, PERSON, RESERVED_NAMES, SandboxState, SetupState, StartPhase, StoppedBy, WorkspaceState, WorktreeRemoval } from './events';
 import { ClosedBy, LastClose, Ledger, LEDGER_FILE, LedgerOptions } from './ledger';
+import type { NumberCounters } from './counters';
 import { AgentLog, LoggedLaunch } from './log';
 import { LAST_MESSAGE_FILES, MessageRecord } from './messages';
 
@@ -51,7 +52,9 @@ export interface AgentTableOptions extends LedgerOptions {
 	/** The workspace's folder under `~/.facade/workspaces`. */
 	readonly dir: string;
 	/** Makes the record of the workspace's messages, over its ledger: Facade's own where left out. */
-	readonly messageRecord?: (dir: string, ledger: Ledger) => MessageRecord;
+	readonly messageRecord?: (dir: string, ledger: Ledger, counters?: NumberCounters) => MessageRecord;
+	/** The machine's counters, which every number comes from (AGENT-LAUNCHER.md, L12); the record's own last numbers alone where left out. */
+	readonly counters?: NumberCounters;
 }
 
 /** An agent to start: who it is, who starts it, how, where it works, and its task. */
@@ -59,6 +62,15 @@ export interface NewAgent {
 	readonly name: string;
 	/** The agent that starts it; none for the person. */
 	readonly creator?: number;
+	/**
+	 * Its creator, where that is an agent of another workspace (AGENT-ORCHESTRATION.md, O3, O8) - `creator` its number - and
+	 * the root of its tree: of another workspace too, or - `rootHere` - an agent of this record, its tree having come back.
+	 */
+	readonly creatorAfar?: ForeignAgent;
+	readonly rootAfar?: ForeignAgent;
+	readonly rootHere?: number;
+	/** That creator's ancestors, nearest first, as its workspace gave them. */
+	readonly ancestorsAfar?: readonly ForeignAgent[];
 	readonly cli: string;
 	readonly custom: boolean;
 	/** As its creator asked for them; none where it asked for none. */
@@ -109,7 +121,7 @@ export class AgentTable {
 
 	private constructor(private readonly options: AgentTableOptions, private readonly ledger: Ledger) {
 		this.log = AgentLog.of(options.dir);
-		this.messages = options.messageRecord?.(options.dir, ledger) ?? new MessageRecord(options.dir, ledger);
+		this.messages = options.messageRecord?.(options.dir, ledger, options.counters) ?? new MessageRecord(options.dir, ledger, options.counters);
 	}
 
 	/** Opens a workspace's ledger, making it the first time. */
@@ -120,6 +132,8 @@ export class AgentTable {
 			table = new AgentTable(options, ledger);
 			table.personToken = readOrCreateToken(path.join(options.dir, YOU_TOKEN_FILE));
 			table.lastId = readLastNumber(path.join(options.dir, LAST_ID_FILE)) || readLastNumber(path.join(options.dir, LAST_PID_FILE));
+			// Numbers an older version gave here meanwhile may be held elsewhere too (L12)
+			options.counters?.join(options.dir);
 		} catch (err) {
 			ledger.close('facade');
 			throw err;
@@ -152,6 +166,24 @@ export class AgentTable {
 		return path.join(this.options.dir, RUNS_DIR);
 	}
 
+	/**
+	 * The machine's shared mark: a number above it is held by one record only; one at or below it may be held by two
+	 * (AGENT-LAUNCHER.md, L2, L12). Without the machine's counters, every number may be.
+	 */
+	sharedMark(kind: 'agents' | 'messages'): number {
+		return this.options.counters?.shared(kind) ?? Number.MAX_SAFE_INTEGER;
+	}
+
+	/** The last number of a kind the machine gave, or this record where there are no machine counters: Delete Chat Rooms' mark (M9). */
+	machineLast(kind: 'agents' | 'messages'): number {
+		return Math.max(this.options.counters?.last(kind) ?? 0, kind === 'messages' ? this.state.mail.lastMessage : this.state.lastId);
+	}
+
+	/** Resolves once a number can be taken without waiting on another workspace (L12). */
+	numbersReady(): Promise<void> {
+		return this.options.counters?.ready() ?? Promise.resolve();
+	}
+
 	/** The person's history of the workspace's agents. */
 	get logFile(): string {
 		return this.log.file;
@@ -161,6 +193,9 @@ export class AgentTable {
 	whoIs(who: StoppedBy | undefined): string {
 		if (who === undefined || who === 'human') {
 			return describe(PERSON);
+		}
+		if (isForeign(who)) {
+			return foreignRef(who);
 		}
 		const agent = this.state.agents.get(who);
 		return agent ? describe(agent) : agentRef(who);
@@ -210,14 +245,15 @@ export class AgentTable {
 	}
 
 	/**
-	 * Records a new agent under the next number, and writes its token. Nothing is written once the ledger is
-	 * closed or another window's: the number may be one that window gave. Its task is a message, sent once it
-	 * is recorded (AGENT-MESSAGES.md, M7).
+	 * Records a new agent under the next number - the machine's, above the record's last - and writes its token. Nothing
+	 * is written once the ledger is closed or another window's: the number may be one that window gave. Its task is a
+	 * message, sent once it is recorded (AGENT-MESSAGES.md, M7).
 	 */
 	start(agent: NewAgent): StartedAgent {
 		const name = agentName(agent.name);
 		this.ledger.assertOpen();
-		const id = Math.max(this.state.lastId, this.lastId) + 1;
+		const last = Math.max(this.state.lastId, this.lastId);
+		const id = this.options.counters?.next('agents', last, this.options.dir) ?? last + 1;
 		// Given before it is recorded: a number the ledger missed is never given again either
 		replaceFile(path.join(this.options.dir, LAST_ID_FILE), String(id));
 		this.lastId = id;
@@ -225,12 +261,23 @@ export class AgentTable {
 		const tokenFile = path.join(this.runsDir, `${id}.token`);
 		fs.mkdirSync(this.runsDir, { recursive: true });
 		fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-		const creator = agent.creator === undefined ? undefined : this.state.agents.get(agent.creator);
+		const creator = agent.creator === undefined || agent.creatorAfar ? undefined : this.state.agents.get(agent.creator);
+		// A child of an agent of another workspace is in its tree, whose root may be there too (O3, O8)
+		const afar = agent.creatorAfar
+			? {
+				creator: agent.creatorAfar.id,
+				root: agent.rootHere ?? agent.rootAfar?.id ?? agent.creatorAfar.id,
+				creatorAfar: agent.creatorAfar,
+				...(agent.rootHere === undefined ? { rootAfar: agent.rootAfar ?? agent.creatorAfar } : {}),
+				...(agent.ancestorsAfar?.length ? { ancestorsAfar: agent.ancestorsAfar } : {})
+			}
+			: undefined;
 		const event: LedgerEventBody = {
 			type: 'agent.started',
 			id,
 			name,
-			...(agent.creator !== undefined ? { creator: agent.creator, root: creator?.root ?? agent.creator } : {}),
+			// A child of a local agent whose tree is of another workspace is in that tree too (AGENT-ORCHESTRATION.md, O8, O11)
+			...(afar ?? (agent.creator !== undefined ? { creator: agent.creator, root: creator?.root ?? agent.creator, ...(creator?.rootAfar ? { rootAfar: creator.rootAfar } : {}) } : {})),
 			cli: agent.cli,
 			...(agent.custom ? { custom: true } : {}),
 			...(agent.model !== undefined ? { model: agent.model } : {}),
@@ -258,8 +305,14 @@ export class AgentTable {
 		if (!started) {
 			throw new Error(`Failed to record agent ${agentRef(id)} in the ledger.`);
 		}
-		this.log.started(started, this.whoIs(started.creator));
+		this.log.started(started, started.creatorAfar ? foreignRef(started.creatorAfar) : this.whoIs(started.creator));
 		return { agent: started, token, tokenFile };
+	}
+
+	/** Records that the agent `id` started `child` in another workspace, which numbered it there (O11). */
+	childAfar(id: number, child: ForeignAgent): void {
+		this.ledger.assertOpen();
+		this.ledger.append({ type: 'agent.childAfar', id, child });
 	}
 
 	/** Writes into the person's history what goes into an agent's terminal, and what went in (AGENT-DEBUGGING.md, D9). */

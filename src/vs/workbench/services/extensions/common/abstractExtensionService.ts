@@ -233,9 +233,12 @@ export abstract class AbstractExtensionService extends Disposable implements IEx
 					order: WillShutdownJoinerOrder.Last // after others have joined that might depend on a remote connection
 				});
 			} else {
-				event.join(this._doStopExtensionHosts(), {
+				// Last, so that a joiner that asks an extension for its shutdown work - Facade's agents ending with their window
+				// (AGENT-LAUNCHER.md, L6) - still has its extension host
+				event.join(() => this._doStopExtensionHosts(), {
 					id: 'join.stopExtensionHosts',
 					label: nls.localize('stopExtensionHosts', "Stopping Extension Hosts"),
+					order: WillShutdownJoinerOrder.Last
 				});
 			}
 		}));

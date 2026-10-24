@@ -33,7 +33,7 @@ AGENT-ORCHESTRATION.md's beyond how they are made (WT-5.11).
 | creating | `git worktree add -b <branch> -- <path> <start point>`, HEAD unless given |
 | Git LFS | the smudge skipped while creating, then `git lfs checkout`: local objects only |
 | trust | a worktree's is its repository's, however it reaches a window (WT-3.9) |
-| small ignored files | `.worktreeinclude` at the repository root, in gitignore syntax |
+| small ignored files | `.worktreeinclude` at the repository root, in gitignore syntax, and VS Code's `git.worktreeIncludeFiles` |
 | dependencies | not installed for you; a repository's setup commands do it |
 | setup | `.facade/worktrees.json`, with per-OS keys, run in a visible terminal |
 | removal | `git worktree remove`, after a confirmation that lists what would be lost |
@@ -138,10 +138,8 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
   icon theme can replace it, and the one glyph the agent picker draws a worktree with
   too. Customize... gives a worktree a display name (unnamed, it is called by its
   branch) and a colour, which paints the dot. No icon to choose: the dot is what says
-  worktree. A new worktree gets a colour none of its repository's other worktrees has,
-  the first of WORKSPACE.md W10.6's ten in their order while one is left, so the dots
-  of one repository can be told apart at a glance, collapsed too. What it is made with -
-  that colour, or the name and colour New Worktree was given - is the worktree's, kept
+  worktree. One made without a colour wears the plain dot; none is chosen for it. What it
+  is made with - the name and colour New Worktree was given - is the worktree's, kept
   for every workspace on the machine: the same worktree is told apart by the same dot
   in each window. Changed with Customize, it changes in that workspace alone (WORKSPACE.md
   W2). One made again at a path an earlier worktree had wears what it is made with, not
@@ -191,7 +189,9 @@ v  FacadeCode               +   New Worktree..., and v in the icon's slot to clo
 ## WT-2. Worktree location
 
 - **WT-2.1** `<home>/.facade/worktrees/<repo>/<name>`, on every OS. `<home>` is
-  `IPathService.userHome()`.
+  `IPathService.userHome()`. `FACADE_HOME`, set for an isolated test window
+  (AGENT-ORCHESTRATION.md O8), replaces `<home>/.facade`; the workbench and the agents
+  extension read the same variable.
 - **WT-2.2** `<repo>` is the main checkout's folder name. `<name>` is the branch name
   with `/` and every character Windows forbids in a file name (`< > : " | ? * \`)
   replaced by `-`, on every OS, so the same branch makes the same directory
@@ -332,7 +332,7 @@ _git.createWorktreeAt(root, path, branch, startPoint?)
                                                   InvalidArgument
     git lfs checkout                              in the worktree, best effort: the LFS objects
                                                   already on this machine, nothing downloaded
-    then copies .worktreeinclude (WT-6)
+    then copies .worktreeinclude and git.worktreeIncludeFiles (WT-6)
     returns { kind: 'created', copyFailures, hookFailure }, or { kind: 'error', code, message }
 
 _git.deleteWorktreeAt(root, path, mode, recovery?)
@@ -378,7 +378,8 @@ other failure is an error.
   the commands. The additional Git-extension UI change is WT-9.2's menu conditions.
 - **WT-4.2** They do not call upstream's `Repository.createWorktree`, which also starts
   its own `git.worktreeIncludeFiles` copy and `runOn: worktreeCreated` tasks, without
-  waiting for either.
+  waiting for either. `_git.createWorktreeAt` copies what that setting selects itself,
+  after `.worktreeinclude`, and waits for both (WT-6.6).
 - **WT-4.3** They run git through the extension's own `Git.exec`, with an argument
   array. No `Repository` is opened.
 - **WT-4.4** They return failures as results and never throw: a thrown error becomes
@@ -496,6 +497,10 @@ when an agent creates a worktree from a different commit.
 A compressed Git directory listing is an optimization, not permission to copy its
 entire subtree without applying the selection rules.
 
+- **WT-6.6** VS Code's `git.worktreeIncludeFiles`, read for the main checkout, selects
+  more in its own glob syntax, as the Git extension's Create Worktree uses it: ignored
+  paths it matches are copied after `.worktreeinclude`'s, under WT-6.3 and WT-6.4.
+
 ## WT-7. Setup: `.facade/worktrees.json`
 
 What a new worktree needs installed - `npm ci`, `uv sync`, `dotnet restore` - differs
@@ -555,11 +560,30 @@ Prepare and perform a deletion in this order:
    window (REMOTE.md R3).
 2. In the workbench, collect dirty editors whose resources are inside the directory,
    including editors visible in another folder context and hidden editors. Also
-   identify affected folder-owned editors and all related terminals/agents.
+   identify affected folder-owned editors and all related terminals/agents. Ask
+   every other workspace of the machine (AGENT-ORCHESTRATION.md O1, O5, O8) for the
+   same inside the directory and its subfolders - agents, terminals, setup terminals
+   and unsaved editors - whatever either workspace's framework switch, and treat
+   what they hold as this workspace's own, named by workspace. A workspace silent
+   past O8's short wait refuses the deletion, naming it, before anything is done, as
+   does asking, marking (step 3) or stopping (step 6) that fails: what cannot be
+   asked is never taken for nothing there. An agent another window of the
+   application runs there, which its terminal host holds, that no workspace answered
+   for is that window's to stop, and refuses it.
+   Asking holds nothing. A window of another Facade version is not asked; when one is
+   running, the confirmation and the result say so.
 3. Show the single confirmation in WT-8.1/WT-8.2. Cancellation changes nothing.
-   Once authorized, block new Facade agent starts into this target until the
-   operation settles. Revalidate scope and authorization for work added during
-   confirmation before continuing.
+   Once authorized, place the directory's deletion mark: a file in the Facade home,
+   created exclusively and naming the deleting workspace and its window's current
+   load. While it stands, every workspace refuses a new Facade agent start into the
+   directory and a second deletion of it, naming the deleting workspace. The mark is
+   removed when the operation settles - done, failed or cancelled - and a mark whose
+   window load has ended, by a reload or a close, is stale and is ignored and
+   removed. A mark already standing refuses this deletion. Then ask every workspace
+   again and revalidate scope and authorization for work added during confirmation
+   before continuing. An agent's deletion is asked with that agent, which the window
+   carries through the whole deletion: an agent there it does not reach refuses the
+   deletion here, before anything is moved, closed or stopped.
 4. If this worktree is active, await a successful switch to its main checkout. If
    that fails, abort deletion while retaining the worktree and its work.
 5. Remove workspace membership through the prepared removal flow, without another
@@ -570,8 +594,14 @@ Prepare and perform a deletion in this order:
    Folder-owned editors whose files are outside the deleted directory stay
    available in the window.
 6. Stop the confirmed terminals and agents, including terminals working inside the
-   directory, and cancel pending starts and their setup terminals. Wait for their
-   ends, then release unchanged Facade-owned configuration under
+   directory, and cancel pending starts and their setup terminals; each other
+   workspace stops its own and discards its authorized editors - asked once, never
+   again once it took the request, and waited for no longer than the timeout and as
+   much again; one that may have taken it and gave no result refuses the deletion as
+   unknown, saying what was done, and one that refused it says why. For an agent's
+   deletion each stops only the agents that agent reaches, and one it does not, come
+   since step 3, is left and refuses the deletion. Wait for their ends, then release
+   unchanged Facade-owned configuration under
    AGENT-ORCHESTRATION.md O10. Recheck disk and dirty editor losses before removal.
    A new loss not covered by the authorization requires an updated confirmation;
    it is not silently authorized by the earlier snapshot. Close/discard only the
@@ -587,7 +617,8 @@ Prepare and perform a deletion in this order:
   No preference disables this confirmation.
 - **WT-8.2** Show up to ten changed/untracked file names, then the remaining count.
   Separately show dirty editor names and ignored paths, ten of each likewise, and the
-  agents and terminals that will stop, as WORKSPACE.md W10.7 lists them; summarize whole
+  agents and terminals that will stop, as WORKSPACE.md W10.7 lists them, each of another
+  workspace with that workspace's name; summarize whole
   ignored directories instead of listing every dependency file. Warn that submodules and
   their local data are removed. Use Delete and Discard Changes when unsaved or
   changed content is involved, otherwise Delete. Do not offer Save and Delete as a
@@ -596,8 +627,8 @@ Prepare and perform a deletion in this order:
 - **WT-8.3** When deleting the active worktree, switch to the repository's main
   checkout before removing membership. That switch uses the ordinary preservation
   rules and must succeed; do not fall through to an unrelated neighboring folder.
-- **WT-8.4** Serialize deletion of a target and show progress for the committed
-  operation. Release Facade-owned directory handles before asking Git to remove it.
+- **WT-8.4** Serialize deletion of a target across the machine through step 3's
+  deletion mark, and show progress for the committed operation. Release Facade-owned directory handles before asking Git to remove it.
   External processes can still block removal; ending Facade terminals is not a
   guarantee that the directory can be deleted.
 - **WT-8.5** A leftover directory is handled only under WT-4.5. Never use recursive
@@ -740,7 +771,7 @@ injection and integrated gate.
 | WTA-26 | I | A worktree on a remote, with a terminal working inside it | The terminal is found by its path there, said to be running, and closed first |
 | WTA-27 | U, I | Turn `facade.workspaceBar.worktrees` off and on with repositories, an active worktree, running agents and worktree commands bound to keys; repeat during accepted creation/deletion | WT-9: flat `folders[]`; no automatic worktree reads/watchers or new management operations; accepted operations settle truthfully without replay; agents remain reachable; on again, grouped from a fresh read; the toggle alone never changes the active folder |
 | WTA-28 | U, I | Create a worktree and inspect source files; exercise Windows path limits under recorded Git/OS configuration | No added ignore/settings entries; Git metadata changes are expected. Show any actual path-length failure without asserting every path over 259 characters must fail |
-| WTA-29 | U, I | Make three worktrees of one repository without choosing colours; collapse the bar | Each gets a colour its siblings do not have; the three dots are told apart collapsed |
+| WTA-29 | U, I | Make three worktrees of one repository without choosing colours, and one with a colour in a second window; collapse the bar | The three wear the plain dot and the fourth its colour, the same in both windows, collapsed too |
 | WTA-30 | I | With worktrees on, look for Create Worktree and Delete Worktree in Source Control's menus and the palette; turn worktrees off and look again | On: only the bar's New Worktree and Delete Worktree. Off: git's own are back |
 | WTA-31 | U, I | Include one file inside a wholly ignored directory; exclude a descendant; place source/destination ancestor links | Correct per-file selection; excluded files and paths through links are never copied; tracked files are never overwritten |
 | WTA-32 | U, I | Delete an ignored-only .env worktree, and one with dirty editors visible in another folder context; cancel first | Confirmation covers disk and editor losses despite an empty Git status; cancellation preserves them; no misleading Save and Delete path |

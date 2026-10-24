@@ -19,13 +19,14 @@ export const LEDGER_FILE = 'ledger.jsonl';
 const LOCK_FILE = 'ledger.lock';
 /**
  * The version of the ledger's events: 5 since an agent has its YOLO, its tree's root, its sandbox and its
- * task's message; 6 since agents send messages, a task among them (AGENT-MESSAGES.md, M11). Lines of
- * versions 4 and 5, from before, are read too: those of 4 had their agents at full access, and a task of 5
- * was in a file of its own, its number given no more.
+ * task's message; 6 since agents send messages, a task among them (AGENT-MESSAGES.md, M11); 7 since an agent of
+ * another window is a party to a record's messages and stops, and a number that window gave may be lower than the
+ * record's last (AGENT-LAUNCHER.md, L12). Lines of versions 4 to 6, from before, are read too: those of 4 had their
+ * agents at full access, and a task of 5 was in a file of its own, its number given no more.
  */
-const VERSION = 6;
+const VERSION = 7;
 /** The versions a ledger's lines may have, the one written last. */
-const READ_VERSIONS: ReadonlySet<unknown> = new Set([4, 5, VERSION]);
+const READ_VERSIONS: ReadonlySet<unknown> = new Set([4, 5, 6, VERSION]);
 /** How often the window that has the ledger open touches its lock. */
 const HEARTBEAT_MS = 30_000;
 /** A lock untouched for this long belongs to no window, even if the process it names runs: its id may be reused. */

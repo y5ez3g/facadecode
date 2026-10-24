@@ -24,10 +24,20 @@ The caller still needs a working Facade connection or the person's token.
 
 The same reach and approval rules apply as in L4/O1:
 
-- YOLO on reaches every agent in the window.
-- YOLO off reaches the caller's tree, including ancestors and ended runs.
-- The person's scripts, acting as `@human`, reach every agent in the window.
+- YOLO on reaches every agent in every workspace on the machine.
+- YOLO off reaches the caller's tree, including ancestors and ended runs, in
+  whichever workspace each runs.
+- The person's scripts, acting as `@human`, reach every agent in every workspace.
 - No debug tool opens an approval dialog.
+
+For an agent of another workspace, that workspace reads its screen or writes its
+input, through its own queue and human-input guard (D3), and returns the result
+(O8). Neither workspace moves its focus, terminal or view. A file the result hands
+over - a large snapshot, a final screen - is copied under the caller's own
+workspace's record before the result returns, so the caller reads it with the
+access its launch gave, whatever its YOLO; the copies go as that record starts
+afresh, with the callers they were made for (D6). The target's workspace logs the call
+(D9), naming the caller by number, name and workspace.
 
 These tools do not open, read or operate ordinary terminals, setup terminals,
 editors or IDE commands. There is no additional debugger API in this scope.
@@ -239,12 +249,12 @@ selection rule. It is an observation, not a conclusion about whether the task
 succeeded. Include a snapshot path/read_screen hint when more information exists.
 
 A run lost without an observed terminal, a failure before terminal creation or an
-ordinary whole-window shutdown need not have a final screen. Say why it is
+ordinary workspace close need not have a final screen. Say why it is
 missing. Do not synthesize one from unrelated logs or imply that no screen means
 no failure.
 
 Store final screens and large live-screen snapshots under the workspace record's
-`screens/` directory. Generated paths are local UTF-8 files readable by the
+`screens/` directory; a caller of another workspace gets its own copy (D1). Generated paths are local UTF-8 files readable by the
 supported CLIs within their effective launch sandbox without another approval.
 Snapshots are immutable once returned. Keep them through reloads and while the
 run remains in the current list; delete them when that ended run is dropped at
@@ -412,8 +422,9 @@ effects. A mocked write alone does not prove the CLI accepted the interaction.
 | DB-20 | I, V | Read a large live/final snapshot with YOLO off in every supported CLI | File path resolves and is readable without a new approval; full selected text is present |
 | DB-21 | U, I | Inspect logs for completed, partial, refused and timed-out inputs and ordinary reads | Intent/effect are distinct; caller/target are correct; no ordinary read spam or false completed entry |
 | DB-22 | I, H | Disable/re-enable the framework; reload; start the app again after ended runs | Tools follow O7; final capture/Show survive disable/reload; expired screen files are cleaned with their ended entries |
-| DB-23 | I, H | Repeat representative reads, keys and lifecycle operations on ordinary terminals and across windows | Ordinary terminals are outside the API; their existing VS Code behavior is unchanged; no cross-window target is accepted |
+| DB-23 | I, H | Repeat representative reads, keys and lifecycle operations on ordinary terminals, in this workspace and another | Ordinary terminals are outside the API in every workspace; their existing VS Code behavior is unchanged |
 | DB-24 | V, H | Give a parent an unconfirmed child or a deliberately blocked prompt and let it inspect, act and verify | Parent can recover through the three tools and resume the original task without sending the person to child buttons |
+| DB-25 | I, V, H | From workspace A, read_screen, type_text and press_keys on an agent of workspace B, idle and while the person types in it; B reloads midway | B's screen and effects returned as for a local agent; B's guard defers the input; neither workspace's focus or view moves; B's log names A's caller; with YOLO off, a large snapshot and a final screen of B's agent are read from A's record without a new approval; a call not yet accepted waits through the reload, an accepted one whose reply is lost is unknown, never a repeated write |
 
 Timing tests use a controllable clock for the ten-second guard, 50 ms key spacing
 and two-second observation delay, plus live checks that real CLIs accept the

@@ -12,19 +12,38 @@ import { processStartTime } from '../base/system';
 import { PipeHandlers, PipeServer } from './pipe';
 import { McpTool, TOOLS_FILE } from './protocol';
 
-const WINDOW_FILE = 'window.json';
+/** The file in a workspace's record that says which window serves its agents, and where. */
+export const WINDOW_FILE = 'window.json';
+
+/** An application instance: its main process, by id and start time, which together tell it from a later one (O8). */
+export interface AppInstance {
+	readonly pid: number;
+	readonly start?: number;
+}
 
 /**
- * What the window that serves a workspace's agents writes of itself: its pipe, its process, whether the
- * agent framework is on, and the secret another extension host of this window says to ask with `/release`
- * that this one lets go - one a window before that secret does not name (REMOTE.md R4).
+ * What the window that serves a workspace's agents writes of itself: its pipe, its process, and whether the agent framework
+ * is on - and, for the other windows of the machine to find it (AGENT-ORCHESTRATION.md, O8), Facade's version and commit, the
+ * workspace's name and first folder, the record's id, this load of the window, its application instance, and - as it
+ * closes - that it is closing. The release secret lets a newer extension host take over this window's pipe (REMOTE.md R4).
  */
 export interface WindowRecord {
 	readonly pipe: string;
 	readonly pid: number;
 	readonly enabled: boolean;
 	readonly release?: string;
+	readonly version?: string;
+	readonly commit?: string;
+	readonly workspace?: string;
+	readonly folder?: string;
+	readonly record?: string;
+	readonly load?: string;
+	readonly instance?: AppInstance;
+	readonly closing?: true;
 }
+
+/** What a window says of itself in its record beyond its pipe, its process and its switch (O8). */
+export type WindowFacts = Pick<WindowRecord, 'version' | 'commit' | 'workspace' | 'folder' | 'record' | 'load' | 'instance'>;
 
 /** How to start an MCP server that calls this endpoint. */
 export interface McpServerLaunch {
@@ -48,28 +67,28 @@ export class PipeEndpoint<C> {
 	private readonly runtime = process.execPath;
 	private readonly shim = path.join(__dirname, 'shim.js');
 
-	private constructor(private readonly dir: string, private readonly server: PipeServer<C>, private enabled: boolean, private readonly releaseSecret: string) { }
+	private constructor(private readonly dir: string, private readonly server: PipeServer<C>, private enabled: boolean, private readonly releaseSecret: string, private readonly facts: WindowFacts) { }
 
 	/**
 	 * Listens on `pipe` and records it in `dir`, the workspace's folder under ~/.facade/workspaces, with
 	 * whether the agent framework is on and the secret another extension host of this window asks `/release`
 	 * with - and, where given, `tools`, the tools it serves, which an agent's MCP server lists while the
-	 * window does not answer (`TOOLS_FILE`). One that cannot record where it listens does not listen: its
-	 * pipe is left for the next try.
+	 * window does not answer (`TOOLS_FILE`). `facts` let other windows find it (O8). One that cannot
+	 * record where it listens does not listen: its pipe is left for the next try.
 	 */
-	static async start<C>(pipe: string, dir: string, handlers: PipeHandlers<C>, enabled = true, tools?: readonly McpTool[]): Promise<PipeEndpoint<C>> {
+	static async start<C>(pipe: string, dir: string, handlers: PipeHandlers<C>, enabled = true, tools?: readonly McpTool[], facts: WindowFacts = {}): Promise<PipeEndpoint<C>> {
 		const release = crypto.randomBytes(16).toString('hex');
 		const server = await PipeServer.listen(pipe, handlers, { release: { secret: release, startedAt: processStartTime() } });
 		try {
 			if (tools) {
 				replaceFile(path.join(dir, TOOLS_FILE), JSON.stringify(tools));
 			}
-			writeWindowRecord(dir, { pipe: server.path, pid: process.pid, enabled, release });
+			writeWindowRecord(dir, { pipe: server.path, pid: process.pid, enabled, release, ...facts });
 		} catch (err) {
 			server.dispose();
 			throw err;
 		}
-		return new PipeEndpoint(dir, server, enabled, release);
+		return new PipeEndpoint(dir, server, enabled, release, facts);
 	}
 
 	/**
@@ -79,8 +98,16 @@ export class PipeEndpoint<C> {
 	setEnabled(enabled: boolean): void {
 		if (enabled !== this.enabled) {
 			this.enabled = enabled;
-			writeWindowRecord(this.dir, { pipe: this.server.path, pid: process.pid, enabled, release: this.releaseSecret });
+			writeWindowRecord(this.dir, { pipe: this.server.path, pid: process.pid, enabled, release: this.releaseSecret, ...this.facts });
 		}
+	}
+
+	/**
+	 * Says in its record that the window closes: the other windows of the machine take it as gone from now, and send it
+	 * nothing more (AGENT-LAUNCHER.md, L6; O8).
+	 */
+	markClosing(): void {
+		writeWindowRecord(this.dir, { pipe: this.server.path, pid: process.pid, enabled: this.enabled, release: this.releaseSecret, ...this.facts, closing: true });
 	}
 
 	/** The pipe it listens on. */
@@ -130,11 +157,15 @@ export class PipeEndpoint<C> {
 		return { FACADE_AGENTS_RECORD: this.dir, FACADE_AGENTS_PIPE: this.pipe, FACADE_AGENTS_TOKEN: tokenFile, FACADE_AGENTS_WAIT_MS: String(waitMs) };
 	}
 
-	/** Stops listening, and removes the window record if it is still this window's. */
-	dispose(): void {
+	/**
+	 * Stops listening. As the window closes - `closing` - its record goes too, if it is still this window's; through a reload
+	 * or an extension host's restart it stays, for the other windows of the machine to tell a window reloading from one gone
+	 * (AGENT-ORCHESTRATION.md, O8).
+	 */
+	dispose(closing = true): void {
 		this.server.dispose();
 		const record = readWindowRecord(this.dir);
-		if (record?.pid === process.pid) {
+		if (closing && record?.pid === process.pid) {
 			fs.rmSync(path.join(this.dir, WINDOW_FILE), { force: true });
 		}
 	}
@@ -147,10 +178,13 @@ export function readWindowRecord(dir: string): WindowRecord | undefined {
 		if (!isJsonObject(read)) {
 			return undefined;
 		}
-		const { pipe, pid, enabled, release } = read;
-		return typeof pipe === 'string' && typeof pid === 'number'
-			? { pipe, pid, enabled: enabled !== false, ...(typeof release === 'string' && release ? { release } : {}) }
+		const { pipe, pid, enabled, release, version, commit, workspace, folder, record, load, instance, closing } = read;
+		const text = (value: unknown) => typeof value === 'string' && value ? value : undefined;
+		const facts: WindowFacts = Object.fromEntries(Object.entries({ version: text(version), commit: text(commit), workspace: text(workspace), folder: text(folder), record: text(record), load: text(load) }).filter(([, value]) => value !== undefined));
+		const app = isJsonObject(instance) && typeof instance.pid === 'number' && Number.isInteger(instance.pid) && instance.pid > 0
+			? { pid: instance.pid, ...(typeof instance.start === 'number' ? { start: instance.start } : {}) }
 			: undefined;
+		return typeof pipe === 'string' && typeof pid === 'number' ? { pipe, pid, enabled: enabled !== false, ...(typeof release === 'string' && release ? { release } : {}), ...facts, ...(app ? { instance: app } : {}), ...(closing === true ? { closing } : {}) } : undefined;
 	} catch {
 		return undefined;
 	}

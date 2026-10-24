@@ -234,7 +234,7 @@
 			"workspaceBar.untrustedLinksMany": "Weitere Informationen finden Sie in unserer [Dokumentation](https://aka.ms/vscode-workspace-trust). Sie können auch [alle {0} Ordner im eingeschränkten Modus in einem neuen Fenster öffnen]({1}).",
 			"workspaceBar.untrustedMessage": "Vertrauen Sie den Autoren der Dateien in diesem Ordner?",
 			"workspaceBar.untrustedMessageMany": "Vertrauen Sie den Autoren der Dateien in diesen {0} Ordnern?",
-			"workspaceBar.untrustedMore": "und {0} weitere",
+			"workspaceBar.untrustedMore": "und {0} weitere"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} Agenten",
@@ -328,6 +328,9 @@
 		},
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Facade-Agenten"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "Agenten dieses Fensters werden beendet"
 		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "Sprache ändern und neu starten",
@@ -495,7 +498,8 @@
 			"runningWork.awayAgentsAndTerminals": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Seine {1} Agenten und {2} Terminals laufen dort weiter, solange sein Server läuft.",
 			"runningWork.awayTerminal": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Sein Terminal läuft dort weiter, solange sein Server läuft.",
 			"runningWork.awayTerminals": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Seine {1} Terminals laufen dort weiter, solange sein Server läuft.",
-			"runningWork.closeWindow": "&&Fenster schließen"
+			"runningWork.closeWindow": "&&Fenster schließen",
+			"runningWork.startedBy": "{0} · gestartet von {1}"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Symbol für ein Terminal, in dem Antigravity ausgeführt wird.",
@@ -560,7 +564,9 @@
 			"worktrees.deleteQuestion": "Möchten Sie den Worktree „{0}“ wirklich löschen?",
 			"worktrees.deleteUnknown": "Das Löschen des Worktrees „{0}“ kann nicht bestätigt werden. Die Workspace-Leiste zeigt den aktuellen Git-Status.",
 			"worktrees.deleteWorktree": "Worktree löschen...",
+			"worktrees.deletedElsewhere": "„{0}“ wurde nicht gelöscht, weil der Arbeitsbereich {1} ihn gerade löscht.",
 			"worktrees.deleting": "Worktree „{0}“ wird gelöscht...",
+			"worktrees.elsewhereFailed": "„{0}“ wurde nicht gelöscht, weil die anderen Arbeitsbereiche dazu nicht erreicht werden konnten: {1}",
 			"worktrees.folder": "Pfad: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "Der Worktree-Ordner wird einschließlich seiner Submodule und nicht gepushten Commits gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
 			"worktrees.folderDeleted": "Der Worktree-Ordner wird vom Datenträger gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
@@ -568,6 +574,7 @@
 			"worktrees.hookFailed": "Der Worktree wurde erstellt, aber ein Git-Hook ist fehlgeschlagen: {0}",
 			"worktrees.ignored": "Die folgenden von Git ignorierten Dateien werden gelöscht:",
 			"worktrees.ignoredFile": "{0} (von Git ignoriert)",
+			"worktrees.inWorkspace": "Arbeitsbereich {0}",
 			"worktrees.inheritedEnvironment": "Dieses Fenster wurde mit festgelegtem GIT_DIR, GIT_WORK_TREE oder GIT_INDEX_FILE gestartet, wodurch Git auf ein anderes Repository umgeleitet wird. Öffnen Sie den Ordner in einem neuen Fenster.",
 			"worktrees.initialBranch": "Der erste Commit befindet sich auf dem Branch „{0}“. Wählen Sie für den neuen Worktree einen anderen Branchnamen.",
 			"worktrees.initializeAndCreate": "Initialisieren und erstellen",
@@ -576,6 +583,7 @@
 			"worktrees.invalidBranchName": "„{0}“ ist kein gültiger Branchname.",
 			"worktrees.kept": "Der Worktree „{0}“ wurde nicht vom Datenträger gelöscht. Er wurde aus dem Arbeitsbereich entfernt. Klicken Sie auf seine Zeile, um ihn wieder hinzuzufügen.",
 			"worktrees.keptOutside": "Der Worktree „{0}“ wurde nicht vom Datenträger gelöscht.",
+			"worktrees.leftElsewhere": "„{0}“ wurde nicht gelöscht, weil die Arbeit in einem anderen Arbeitsbereich nicht beendet wurde: {1}.",
 			"worktrees.leftover": "Der Worktree wurde aus Git entfernt, aber sein Ordner konnte nicht gelöscht werden: {0}. {1}",
 			"worktrees.leftoverRefused": "Fehler beim Löschen des Ordners: {0}",
 			"worktrees.leftoverUnknown": "„{0}“ wurde nicht als Worktree-Ordner erkannt, den ein Löschvorgang in diesem Fenster zurückgelassen hat, und wurde daher nicht gelöscht. Löschen Sie ihn bei Bedarf manuell.",
@@ -600,6 +608,7 @@
 			"worktrees.notRepositoryUnasked": "Der Ordner „{0}“ ist kein Git-Repository. Initialisieren Sie zuerst das Repository.",
 			"worktrees.notWorktree": "„{0}“ ist kein erkannter Worktree in diesem Arbeitsbereich.",
 			"worktrees.openWorktree": "Worktree öffnen",
+			"worktrees.otherVersions": "Ein Fenster einer anderen Facade-Version ist geöffnet ({0}); es wurde nicht gefragt, ob es in diesem Worktree arbeitet.",
 			"worktrees.outOfWorkspace": "Er wurde aus dem Arbeitsbereich entfernt.",
 			"worktrees.pathExists": "Unter „{0}“ ist bereits eine Datei oder ein Ordner vorhanden.",
 			"worktrees.prepare.folderEmpty": "Dieser Ordner ist kein Git-Repository. Wenn Sie fortfahren, wird er initialisiert („git init“) und ein leerer erster Commit erstellt.",
@@ -613,6 +622,7 @@
 			"worktrees.prepare.unbornOne": "Dieses Repository enthält noch keine Commits. Wenn Sie fortfahren, wird ein erster Commit mit 1 Datei erstellt.",
 			"worktrees.prepareFailed": "Der erste Commit für „{0}“ konnte nicht erstellt werden: {1}",
 			"worktrees.preparing": "Erster Commit in „{0}“ wird erstellt...",
+			"worktrees.releaseUnknown": "„{0}“ wurde nicht gelöscht, weil der Arbeitsbereich {1} die Anforderung, seine Arbeit darin zu beenden, möglicherweise angenommen, aber kein Ergebnis zurückgegeben hat; ob diese Arbeit beendet wurde, ist unbekannt. Überprüfen Sie diesen Arbeitsbereich, und versuchen Sie es dann erneut.",
 			"worktrees.restricted": "Worktrees erfordern Git-Vorgänge, die im eingeschränkten Modus deaktiviert sind.",
 			"worktrees.restrictedUnasked": "Der Arbeitsbereich befindet sich im eingeschränkten Modus. Vertrauen Sie dem Arbeitsbereich, um Git-Vorgänge auszuführen.",
 			"worktrees.retry": "Wiederholen",
@@ -644,6 +654,8 @@
 			"worktrees.unsavedFile": "{0} (nicht gespeichert)",
 			"worktrees.untrusted": "Ein Worktree übernimmt das Vertrauen seines übergeordneten Repositorys „{0}“. Vertrauen Sie zuerst dem übergeordneten Repository.",
 			"worktrees.untrustedUnasked": "Das Repository „{0}“ ist nicht vertrauenswürdig. Vertrauen Sie dem Repository, bevor Sie einen Worktree erstellen.",
+			"worktrees.workSinceElsewhere": "„{0}“ wurde nicht gelöscht, weil andere Arbeitsbereiche darin arbeiten, was dieser Löschvorgang nicht abgedeckt hat: {1}.",
+			"worktrees.workspaceSilent": "„{0}“ wurde nicht gelöscht, weil der Arbeitsbereich {1} nicht geantwortet hat und darin möglicherweise gearbeitet wird. Versuchen Sie es gleich noch einmal.",
 			"worktrees.wouldLose": "„{0}“ enthält Änderungen, die beim Löschen verloren gehen würden: {1}. Es wurde nichts gelöscht.",
 			"worktrees.wouldLoseSubmodules": "„{0}“ enthält Submodule; beim Löschen gingen deren nicht gepushte Commits verloren. Es wurde nichts gelöscht."
 		},
@@ -713,11 +725,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "Die Agentenverwaltung für diesen Arbeitsbereich wurde an ein anderes Facade-Fenster übertragen.",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Die Agenten dieses Arbeitsbereichs werden in einem anderen Fenster verwaltet. Löschen Sie Chaträume dort.",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Die Agenten dieses Arbeitsbereichs werden in einem anderen Fenster verwaltet. Öffnen Sie Chaträume dort.",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Alle Nachrichten zwischen Ihnen und Ihren Agenten in diesem Arbeitsbereich werden gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "Chaträume gehören zu diesem Computer. Daher werden die Chaträume aller Arbeitsbereiche gelöscht, nicht nur die dieses Arbeitsbereichs. Laufende Agenten können die Nachrichten ihrer Sitzung weiterhin lesen. Diese Aktion kann nicht rückgängig gemacht werden.",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Ein Agent, den Sie über das Agent-Menü oder „Agent starten“ starten, behält die eigenen Fragen und Updates seiner CLI und seine Genehmigungen so, wie YOLO sie festlegt. Ein Agent, den ein anderer Agent oder Ihr Skript über start_agent startet und bei dem möglicherweise niemand zusieht, wird mit dem unbeaufsichtigten Teil seiner Startkonfiguration ausgeführt (dessen Gruppen ersetzen die der Startkonfiguration; Umgebung und Einstellungen überlagern die der Startkonfiguration), damit nichts auf eine Antwort wartet, soweit seine CLI das zulässt. whenYouStartIt und throughStartAgent zeigen, was jeder erhält.",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "Ein anderes Facade-Fenster verwaltet die Agenten dieses Arbeitsbereichs. Starten Sie Agenten dort.",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Ein anderes Facade-Fenster verwaltet die Agenten dieses Arbeitsbereichs. Verwenden Sie jenes Fenster, oder schließen Sie es und laden Sie dieses Fenster neu, um die Agenten hier zu verwalten.",
-			"Are you sure you want to delete all chat rooms in this workspace?": "Möchten Sie wirklich alle Chaträume in diesem Arbeitsbereich löschen?",
+			"There are no chat rooms to delete.": "Es gibt keine Chaträume zum Löschen.",
+			"Are you sure you want to delete 1 chat room?": "Möchten Sie wirklich 1 Chatraum löschen?",
+			"Are you sure you want to delete {0} chat rooms?": "Möchten Sie wirklich {0} Chaträume löschen?",
 			"Configure Agents": "Agenten konfigurieren",
 			"Could not delete all chat rooms: {0}": "Es konnten nicht alle Chaträume gelöscht werden: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Die Verbindung zu den bereits laufenden Agenten konnte nicht wiederhergestellt werden. Sie können keine Facade-Tools verwenden, aber ab jetzt gestartete Agenten funktionieren normal.",
@@ -794,6 +808,7 @@
 			"{0} messages, latest at {1}": "{0} Nachrichten, letzte um {1}",
 			"{0} of your agents ended. {1}": "{0} Ihrer Agenten wurden beendet. {1}",
 			"{0} sent you a message: {1}": "{0} hat Ihnen eine Nachricht gesendet: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "{0} konnte nicht angezeigt werden: Sein Arbeitsbereich hat nicht geantwortet, oder er wurde beendet. Die Nachricht #m{1} befindet sich in seinem Chatraum.",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "{0} wurde geändert, nachdem Facade seinen Teil hinzugefügt hatte, während das zugehörige Fenster geschlossen wurde. Der vorherige Inhalt wird unter {1} aufbewahrt.",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "{0} wurde geändert, während Agenten die Datei verwendeten, und enthält den Teil von Facade nicht mehr; daher wurde die Datei unverändert gelassen. Der vorherige Inhalt wird unter {1} aufbewahrt.",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "{0} fehlte, als dort ein anderer Agent gestartet wurde. Der Inhalt von vor den Änderungen durch Facade wird unter {1} aufbewahrt.",
@@ -814,7 +829,9 @@
 			"{0} hours ago": "vor {0} Stunden",
 			"1 day ago": "vor 1 Tag",
 			"{0} days ago": "vor {0} Tagen",
-			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Der frühere Erweiterungshost dieses Fensters (Prozess {0}) verwaltet weiterhin die Agenten dieses Arbeitsbereichs, und Facade konnte ihn nicht beenden. Beenden Sie diesen Prozess, und laden Sie dieses Fenster neu, um die Agenten hier zu verwalten."
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Der frühere Erweiterungshost dieses Fensters (Prozess {0}) verwaltet weiterhin die Agenten dieses Arbeitsbereichs, und Facade konnte ihn nicht beenden. Beenden Sie diesen Prozess, und laden Sie dieses Fenster neu, um die Agenten hier zu verwalten.",
+			"Facade Agents did not start in this window.": "Facade Agents wurde in diesem Fenster nicht gestartet.",
+			"The deletion names a caller that Facade could not read.": "Der Löschvorgang nennt einen Aufrufer, den Facade nicht lesen konnte."
 		},
 		"package": {
 			"command.category": "Agenten",

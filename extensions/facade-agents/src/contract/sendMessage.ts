@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { SentMessage } from '../core/mail';
+import { Sent } from '../core/mail';
 import { describe, PERSON } from '../record/events';
 import { Args } from './args';
 import { listAgentsTool } from './listAgents';
@@ -12,9 +12,10 @@ import type { ContractTool } from './tools';
 /**
  * A send as the model reads it: a line for each message, what went to whom and, to an agent, that it is not
  * fetched yet - with where something holds it up, a recipient still starting or one that cannot reply, or
- * that the person has it - then, where an agent got one, that a reply rings the caller's doorbell.
+ * that the person has it - then, where an agent got one, that a reply rings the caller's doorbell; and each recipient of
+ * another window that its window refused as it got the message (AGENT-MESSAGES.md, M11).
  */
-function sentText(sent: readonly SentMessage[]): string {
+function sentText({ sent, notSent }: Sent): string {
 	const lines: string[] = [];
 	for (const message of sent) {
 		if (message.toPerson) {
@@ -32,6 +33,9 @@ function sentText(sent: readonly SentMessage[]): string {
 			lines.push(`${message.to} has YOLO off and you are outside its tree. It cannot reply to you; it can contact ${describe(PERSON)}.`);
 		}
 	}
+	for (const each of notSent) {
+		lines.push(`Not sent to ${each.to}: ${each.why}.`);
+	}
 	if (sent.some(message => !message.toPerson)) {
 		lines.push('Agent replies trigger your mailbox doorbell. Continue independent work, or end this turn if you need a reply to proceed. Do not poll or sleep for it.');
 	}
@@ -39,7 +43,7 @@ function sentText(sent: readonly SentMessage[]): string {
 }
 
 /**
- * `send_message`: a message to agents of the window, or to the person, each its own under its own number.
+ * `send_message`: a message to agents of any window of the machine, or to the person, each its own under its own number.
  * It answers as soon as the messages are recorded: a reply rings the caller's doorbell.
  */
 export const sendMessageTool: ContractTool = {
@@ -60,10 +64,13 @@ export const sendMessageTool: ContractTool = {
 	},
 	async call(facade, caller, input) {
 		const args = new Args('send_message', ['to', 'text', 'reply_to?'], input);
-		const sent = facade.mail.send(caller, args.strings('to'), args.string('text'), args.optionalText('reply_to'));
+		const sent = await facade.mail.sendAcross(caller, args.strings('to'), args.string('text'), args.optionalText('reply_to'));
 		return {
 			text: sentText(sent),
-			data: { messages: sent.map(({ id, to, starting, reconnecting, cannotReply }) => ({ id, to, ...(starting ? { starting } : {}), ...(reconnecting ? { reconnecting } : {}), ...(cannotReply ? { cannotReply } : {}) })) }
+			data: {
+				messages: sent.sent.map(({ id, to, starting, reconnecting, cannotReply, window }) => ({ id, to, ...(window ? { workspace: window } : {}), ...(starting ? { starting } : {}), ...(reconnecting ? { reconnecting } : {}), ...(cannotReply ? { cannotReply } : {}) })),
+				...(sent.notSent.length ? { notSent: sent.notSent } : {})
+			}
 		};
 	}
 };

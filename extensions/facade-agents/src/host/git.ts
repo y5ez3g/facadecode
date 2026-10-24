@@ -4,12 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { canonicalFolder, isInsideFolder } from '../base/files';
 import { Git, ListedWorktree, MadeWorktreeFolder, OwnedFile, Repository, SetupOutcome, SetupProgress, WorktreeChanges, WorktreeDeleted, WorktreeDeletion } from '../core/ports';
 import { runUntimedTicketedCall, TicketRegistry } from '../core/tickets';
+import { worktreesRoot } from '../record/paths';
 import { changedFilesIn, excludeIn, fileAtIn, hasBranchIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreeRootIn, worktreesIn } from './gitCli';
 
 /** The options the window's `_facade.worktree.delete` and `_facade.worktree.removalLoss` take: its `IRemoveWorktreeOptions`. */
@@ -19,6 +19,7 @@ interface WindowDeletion {
 	readonly main: vscode.Uri;
 	readonly runs: readonly { readonly workspace: string; readonly id: number }[];
 	readonly leftover?: true;
+	readonly by?: object;
 }
 
 /**
@@ -28,8 +29,8 @@ interface WindowDeletion {
  */
 export class HostGit implements Git {
 
-	/** Where the window makes every worktree Facade makes: `~/.facade/worktrees` (WORKTREE.md WT-2.1). */
-	private readonly worktreesFolder = path.join(os.homedir(), '.facade', 'worktrees');
+	/** Where the window makes every worktree Facade makes: `~/.facade/worktrees`, or under `FACADE_HOME` (WORKTREE.md WT-2.1). */
+	private readonly worktreesFolder = worktreesRoot();
 	/** Its real path, worked out once it is there: it is under this machine's home, which does not change. */
 	private realWorktreesFolder: string | undefined;
 
@@ -146,7 +147,8 @@ export class HostGit implements Git {
 			ownFiles: options.ownFiles,
 			main: vscode.Uri.file(options.main),
 			runs: options.agents.map(id => ({ workspace: this.workspace, id })),
-			...(options.leftover ? { leftover: true } : {})
+			...(options.leftover ? { leftover: true } : {}),
+			...(options.by ? { by: options.by } : {})
 		};
 	}
 

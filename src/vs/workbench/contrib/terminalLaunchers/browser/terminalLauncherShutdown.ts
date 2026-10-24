@@ -18,6 +18,8 @@ import { IWorkbenchEnvironmentService } from '../../../services/environment/comm
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance } from '../../terminal/browser/terminal.js';
+import { IFacadeRunsService } from '../../facadeCommands/browser/facadeRuns.js';
+import { facadeRunOf } from '../../facadeCommands/common/facadeRun.js';
 import { setTerminalShutdownQuestion } from '../common/terminalShutdownQuestion.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 import { workOf } from './terminalLauncherWorkspaceBar.js';
@@ -40,6 +42,7 @@ export class RunningWorkShutdownQuestion extends Disposable implements IWorkbenc
 		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
 		@IRemoteAgentService remoteAgentService: IRemoteAgentService,
 		@ILabelService private readonly labelService: ILabelService,
+		@IFacadeRunsService private readonly runsService: IFacadeRunsService,
 	) {
 		super();
 
@@ -67,7 +70,14 @@ export class RunningWorkShutdownQuestion extends Disposable implements IWorkbenc
 			.map(instance => ({ instance, ...workOf(instance, agentTerminals) })));
 		const agents = sessions.filter(session => session.kind === 'agent').length;
 
-		const lines = sessions.map(session => workLine(session, this.placeOf(session.instance)));
+		// An agent another workspace's agent started says so: closing the window ends a child of a tree that lives on there (L3)
+		const creators = this.runsService.live?.creators ?? [];
+		const lines = sessions.map(session => {
+			const line = workLine(session, this.placeOf(session.instance));
+			const run = session.kind === 'agent' ? facadeRunOf(session.instance) : undefined;
+			const creator = run && run.workspace === this.runsService.live?.workspace ? creators.find(each => each.id === run.id)?.creator : undefined;
+			return creator ? localize('runningWork.startedBy', "{0} · started by {1}", line, creator) : line;
+		});
 		return {
 			message: this.message(agents, sessions.length - agents),
 			detail: listedSessions(lines).join('\n'),

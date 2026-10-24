@@ -101,8 +101,17 @@ export interface IFacadeRunsService {
 	readonly live: IFacadeLiveRuns | undefined;
 	readonly onDidChangeLive: Event<void>;
 
-	/** What the agents' extension says is live now in its record `workspace`; `preparing`, those of them with no terminal yet. */
-	setLive(workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[]): void;
+	/**
+	 * What the agents' extension says is live now in its record `workspace`; `preparing`, those of them with no terminal
+	 * yet; `creators`, those of them an agent of another workspace started, each with that creator as words name it.
+	 */
+	setLive(workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[], creators?: readonly ICreatorElsewhere[]): void;
+}
+
+/** A live run another workspace's agent started: its number, and that creator - `@lead #a1 (workspace lab)` (AGENT-LAUNCHER.md, L3). */
+export interface ICreatorElsewhere {
+	readonly id: number;
+	readonly creator: string;
 }
 
 /** The live runs of the record `workspace`, as the agents' extension says them (`IFacadeRunsService.live`). */
@@ -112,6 +121,8 @@ export interface IFacadeLiveRuns {
 	readonly ids: readonly number[];
 	/** Those of them with no terminal yet: their worktrees being made or set up (L3). */
 	readonly preparing: readonly IPreparingRun[];
+	/** Those of them an agent of another workspace started, with that creator: what closing the window ends of its tree (L3; WORKSPACE.md W11). */
+	readonly creators: readonly ICreatorElsewhere[];
 }
 
 /**
@@ -311,9 +322,9 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 		return this._live;
 	}
 
-	setLive(workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[]): void {
+	setLive(workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[], creators: readonly ICreatorElsewhere[] = []): void {
 		const known = this._live?.workspace === workspace;
-		this._live = { workspace, ids: [...ids], preparing: [...preparing] };
+		this._live = { workspace, ids: [...ids], preparing: [...preparing], creators: [...creators] };
 		this._liveKnown.complete();
 		this._attachRecord.value = setAgentRecordForAttach(workspace);
 		// Remembered for the next start: layout restore decides with it before the extension says the record (RM-20)

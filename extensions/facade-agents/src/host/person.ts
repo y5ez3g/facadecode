@@ -80,6 +80,10 @@ export class HostPerson implements Person {
 		return openRoom(file, message);
 	}
 
+	async bringForward(): Promise<void> {
+		await vscode.commands.executeCommand('_facade.window.reveal').then(undefined, () => undefined);
+	}
+
 	async showEnded(agent: EndedAgent): Promise<void> {
 		if (!await this.terminals.reveal(agent.id)) {
 			await this.screens.open(agent);

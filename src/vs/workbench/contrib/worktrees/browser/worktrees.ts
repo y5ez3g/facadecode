@@ -38,13 +38,13 @@ import { TerminalExitReason, TerminalSettingId } from '../../../../platform/term
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, WorkspaceTrustRequestButton } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IWorkspaceContextService, isSingleFolderWorkspaceIdentifier, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
-import { canonicalUri, unreachable, WORKTREES_FOLDER, worktreesFolderOf } from '../../../browser/parts/workspacebar/workspaceBar.js';
+import { canonicalUri, facadeHomeOverride, unreachable, WORKTREES_FOLDER, worktreesFolderOf, worktreesRootOf } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IRunningWork } from '../../../browser/parts/workspacebar/workspaceBarAgents.js';
-import { freeWorktreeColor, IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IWorkspaceBarDialogService } from '../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { findWorktree, IWorkspaceBarRepository } from '../../../browser/parts/workspacebar/workspaceBarGit.js';
-import { agentsFirst, discardedHeading, listedFiles, listedSessions, terminatedHeading, workLine } from '../../../browser/parts/workspacebar/workspaceBarQuestions.js';
+import { agentsFirst, discardedHeading, fileLine, listedFiles, listedSessions, terminatedHeading, workLine } from '../../../browser/parts/workspacebar/workspaceBarQuestions.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { EditorResourceAccessor, EditorsOrder } from '../../../common/editor.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -383,6 +383,19 @@ export interface IWorktreeService {
 	 */
 	otherWindowsAgentsIn(worktree: URI): Promise<string[]>;
 
+	/**
+	 * What this window has working inside `worktree` that another workspace's deletion of it lists and stops as its own
+	 * (AGENT-ORCHESTRATION.md, O5): its terminals running a process there - not its agents', which the agents' extension
+	 * answers for - and its editors with unsaved changes there, each as its path in the worktree.
+	 */
+	workIn(worktree: URI): Promise<{ readonly terminals: string[]; readonly editors: string[] }>;
+
+	/**
+	 * Another workspace's deletion of `worktree` reached its step 6 (WT-8): this window's terminals working inside it are
+	 * closed and, `discard`, its unsaved editors there discarded. Answers what is left there.
+	 */
+	releaseWork(worktree: URI, discard: boolean): Promise<string[]>;
+
 	/** Says which worktrees' setup a window that closed was still sending, without sending it again (WT-7.7). */
 	reportUnfinishedSetup(): Promise<void>;
 }
@@ -409,6 +422,12 @@ export interface IRemoveWorktreeOptions {
 	 * terminals it closes. Another agent working inside it refuses it - it would be ended unasked.
 	 */
 	readonly runs?: readonly IFacadeRun[];
+	/**
+	 * Who deletes it, as the agents' extension names the caller to the other workspaces of the machine: carried through
+	 * the deletion and given back as it asks them and has them stop their work there, so that each stops only what that
+	 * caller reaches (AGENT-ORCHESTRATION.md, O5).
+	 */
+	readonly by?: object;
 	/**
 	 * Whether `target` is what a deletion in this window left of a worktree of `main`: a folder git no longer lists,
 	 * whose files could not all be deleted then, which the caller has looked at (AGENT-ORCHESTRATION.md, O5: a retry
@@ -442,6 +461,8 @@ interface IDecidedDeletion {
 	readonly runs: readonly IFacadeRun[];
 	/** Whether its unsaved changes go with it, as the caller said. */
 	readonly discardChanges: boolean;
+	/** Who deletes it, given back to the other workspaces as they are asked and stopped (O5). */
+	readonly by?: object;
 	/**
 	 * Looks once more - before anything is moved, closed or removed, and again, with git's `check` then, right before
 	 * git deletes it, once its terminals have closed: why it is not to be, where something came that nobody decided on.
@@ -454,6 +475,8 @@ interface IPersonDeletion {
 	readonly kind: 'person';
 	/** The unsaved working copies its confirmation named, which are discarded. */
 	readonly unsaved: readonly IWorkingCopy[];
+	/** What other workspaces had inside it as its confirmation named it, which they stop and discard; none without the agents' extension. */
+	readonly elsewhere: IWorkElsewhere | undefined;
 	/** Whether it still goes, given git's `check` right before git deletes it: what came since the confirmation is asked about. */
 	confirmAgain(check: WorktreeCheck): Promise<boolean>;
 }
@@ -486,6 +509,21 @@ interface IDeletion {
 interface IAgentsStopping {
 	readonly stopping: readonly string[];
 	readonly why?: string;
+}
+
+/**
+ * What `_facade.agents.workIn` answers for a worktree (AGENT-ORCHESTRATION.md, O5): every other workspace of the machine
+ * with work inside it - its agents, its terminals running a process, its unsaved editors - each by its label; the labels
+ * of the workspaces that did not answer; and those of the windows of another Facade version, which are not asked.
+ */
+interface IWorkElsewhere {
+	/**
+	 * Each workspace with work there: its record, label, agents in words and by number - and those the deleting caller
+	 * does not reach - terminals and unsaved editors.
+	 */
+	readonly workspaces: readonly { readonly record?: string; readonly label: string; readonly agents: readonly string[]; readonly runs?: readonly number[]; readonly unreached?: readonly string[]; readonly terminals: readonly string[]; readonly editors: readonly string[] }[];
+	readonly silent: readonly string[];
+	readonly otherVersions: readonly string[];
 }
 
 /** That the window could not go from the worktree `name` to its repository `main`, so it was not deleted (WT-8, step 4). */
@@ -904,11 +942,14 @@ export class WorktreeService implements IWorktreeService {
 			blocked: base.identity === false ? noIdentityMessage() : undefined
 		};
 
-		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES_FOLDER, basename(main));
+		const parent = joinPath(await worktreesRootOf(this.pathService), basename(main));
 
-		// From the home folder, so the part the branch makes fits on the dialog's line.
+		// From the home folder, so the part the branch makes fits on the dialog's line; the whole path for an
+		// isolated test window, whose worktrees are no folder under the home (WT-2.1).
 		const separator = this.labelService.getSeparator(parent.scheme, parent.authority);
-		const parentLabel = ['~', ...WORKTREES_FOLDER, basename(main)].join(separator) + separator;
+		const parentLabel = facadeHomeOverride()
+			? this.labelService.getUriLabel(parent) + separator
+			: ['~', ...WORKTREES_FOLDER, basename(main)].join(separator) + separator;
 
 		// The names already taken, so the Path line shows the `-1` the worktree will get.
 		const caseSensitive = this.fileService.hasCapability(parent, FileSystemProviderCapabilities.PathCaseSensitive);
@@ -1036,7 +1077,7 @@ export class WorktreeService implements IWorktreeService {
 			throw new Error(localize('worktrees.noBaseUnasked', "Repository '{0}' contains no commits. Create an initial commit first.", basename(main)));
 		}
 
-		const parent = joinPath(await this.pathService.userHome(), ...WORKTREES_FOLDER, basename(main));
+		const parent = joinPath(await worktreesRootOf(this.pathService), basename(main));
 		// The agent's caller says what could not be copied and how a hook failed: the person is not told of it
 		const created = await this.createDecided(main, branch, name, parent, {}, options.startPoint, true);
 		if (created.kind === 'failed') {
@@ -1074,11 +1115,8 @@ export class WorktreeService implements IWorktreeService {
 	/** `createDecided`, in `parent`'s turn. */
 	private async createAtFreePath(main: URI, branch: string, name: string, parent: URI, given: IFolderCustomization, startPoint: string | undefined, quiet: boolean): Promise<CreateOutcome> {
 		const worktree = await freeWorktreeUri(parent, name, candidate => this.fileService.exists(candidate));
-
-		// A colour none of the repository's other worktrees has, unless one was chosen (WT-1.12)
-		const siblings = this.workspaceBarService.repositoryFor(main)?.worktrees ?? [];
-		const color = given.color ?? freeWorktreeColor(siblings.map(sibling => this.customizationService.get(sibling.uri)?.color));
-		const customization: IFolderCustomization = color ? { ...given, color } : given;
+		// What was chosen, and nothing more: one given no colour wears the plain dot (WT-1.12)
+		const customization = given;
 
 		// Before git writes its record, which the bar reads a row from while the files are still being
 		// checked out - in every window. Written even when nothing was chosen: looks are kept by path, and one
@@ -1384,24 +1422,37 @@ export class WorktreeService implements IWorktreeService {
 		}
 		// And another window's agent working in it, which refuses it as a lock does: asking first would ask about a
 		// deletion that cannot happen (REMOTE.md RM-41). Looked for again once it is decided, for one started meanwhile
-		const elsewhere = await this.agentElsewhere(worktree);
-		if (elsewhere) {
-			this.notificationService.error(elsewhere);
+		const otherAgent = await this.agentElsewhere(worktree);
+		if (otherAgent) {
+			this.notificationService.error(otherAgent);
 			return;
 		}
 
 		// 2  confirm, naming all that would be lost, unsaved editors and running terminals too (WT-8.1, WT-8.2): a terminal
-		//    that goes with it, working inside it or one of its editor area whatever it started in
+		//    that goes with it, working inside it or one of its editor area whatever it started in - and what every other
+		//    workspace of the machine has inside it, as this window's own, each line naming its workspace (O5)
+		const asked = await this.askElsewhere(worktree);
+		if (asked.kind === 'failed') {
+			this.notificationService.error(asked.why);
+			return;
+		}
+		const elsewhere = asked.kind === 'asked' ? asked.work : undefined;
+		if (elsewhere?.silent.length) {
+			this.notificationService.error(this.silentRefusal(worktree, elsewhere.silent));
+			return;
+		}
 		const unsaved = await this.unsavedIn(worktree);
-		const loss: IDeletionLoss = { ...check, unsaved: unsaved.map(each => each.path) };
-		const running = this.runningAmong(await this.terminalsGoingWith(worktree));
-		if (!(await this.confirmDelete(name, branch, loss, running, false))) {
+		const remote = this.elsewhereLines(elsewhere);
+		const loss: IDeletionLoss = { ...check, unsaved: [...unsaved.map(each => each.path), ...remote.unsaved] };
+		const running = [...this.runningAmong(await this.terminalsGoingWith(worktree)), ...remote.running];
+		if (!(await this.confirmDelete(name, branch, loss, running, false, this.otherVersionsNote(elsewhere)))) {
 			return;
 		}
 
 		const deletion = await this.deleteChecked(main, worktree, name, {
 			kind: 'person',
 			unsaved: unsaved.map(each => each.workingCopy),
+			elsewhere,
 			confirmAgain: async now => {
 				const more = newLoss(loss, now);
 				return !more || await this.confirmDelete(name, branch, more, [], true);
@@ -1440,6 +1491,7 @@ export class WorktreeService implements IWorktreeService {
 			kind: 'decided',
 			runs: options.runs ?? [],
 			discardChanges: !!options.discardChanges,
+			...(options.by ? { by: options.by } : {}),
 			// Looked at once more before the cleanup, and right before git deletes it, once its terminals have closed: what
 			// came meanwhile - a file, an unsaved edit, the person's edit to a file the caller put there - is nobody's
 			// decision (X-73; XS-07). What a deletion left has no git to ask again.
@@ -1597,6 +1649,26 @@ export class WorktreeService implements IWorktreeService {
 		return found;
 	}
 
+	async workIn(worktree: URI): Promise<{ readonly terminals: string[]; readonly editors: string[] }> {
+		const running = this.runningAmong(await this.terminalsInside(worktree)).filter(work => work.kind === 'terminal');
+		return { terminals: running.map(work => work.name), editors: (await this.unsavedIn(worktree)).map(each => each.path) };
+	}
+
+	async releaseWork(worktree: URI, discard: boolean): Promise<string[]> {
+		const agents = new Set(this.launcherService.agentTerminals);
+		for (const instance of await this.terminalsInside(worktree)) {
+			if (!agents.has(instance)) {
+				instance.dispose(TerminalExitReason.User);
+			}
+		}
+		const unsaved = await this.unsavedIn(worktree);
+		if (discard) {
+			await this.discardInside(worktree, unsaved.map(each => each.workingCopy));
+		}
+		const still = await this.workIn(worktree);
+		return [...still.terminals, ...still.editors];
+	}
+
 	/**
 	 * Discards the unsaved changes of `unsaved` and closes the editors of `worktree`'s files: those inside it, and those
 	 * of `unsaved`, opened through a link to it too (X-71; SP-25).
@@ -1638,6 +1710,11 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	async otherWindowsAgentsIn(worktree: URI): Promise<string[]> {
+		return (await this.otherWindowsRunsIn(worktree)).map(each => each.title);
+	}
+
+	/** The agents' runs another window of this application runs inside `worktree`, as the pty host holds them: each its title and run. */
+	private async otherWindowsRunsIn(worktree: URI): Promise<readonly (IFacadeRun & { readonly title: string })[]> {
 		const remoteAuthority = worktree.scheme === Schemas.vscodeRemote ? worktree.authority : undefined;
 		if (worktree.scheme !== Schemas.file && !remoteAuthority) {
 			return [];
@@ -1650,13 +1727,12 @@ export class WorktreeService implements IWorktreeService {
 			const backend = await this.terminalInstanceService.getBackend(remoteAuthority);
 			// Every window's, the attached ones too: another window's agent is attached to that window, no orphan (run 4: SP-18)
 			const processes = await backend?.listProcesses({ attached: true }) ?? [];
-			return processes
-				.filter(each => {
-					const run = facadeRunOf(each);
-					return run !== undefined && run.workspace !== own && each.pid > 0 && !!each.cwd && this.uriIdentityService.extUri.isEqualOrParent(runFolderUri(each.cwd, remoteAuthority), worktree);
-				})
-				// By the name its terminal was opened with: its title is whatever its CLI set since - Codex's, the folder's name
-				.map(each => facadeRunTerminalOf(each)?.name || each.title);
+			return processes.flatMap(each => {
+				const run = facadeRunOf(each);
+				return run && run.workspace !== own && each.pid > 0 && !!each.cwd && this.uriIdentityService.extUri.isEqualOrParent(runFolderUri(each.cwd, remoteAuthority), worktree)
+					? [{ ...run, title: facadeRunTerminalOf(each)?.name || each.title }]
+					: [];
+			});
 		} catch {
 			// The pty host does not answer: nothing more to tell than the window knows
 			return [];
@@ -1672,6 +1748,123 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	/**
+	 * What the other workspaces of the machine have inside `worktree`, asked of the agents' extension
+	 * (`_facade.agents.workIn`), which asks every workspace and waits a moment for a silent one: `none` where there is
+	 * nobody to ask - no agents' extension, or a folder not on this machine - and why it could not be asked where asking
+	 * failed, which refuses the deletion as a workspace that did not answer does (AGENT-ORCHESTRATION.md, O5).
+	 */
+	private async askElsewhere(worktree: URI, by?: object): Promise<{ readonly kind: 'none' } | { readonly kind: 'asked'; readonly work: IWorkElsewhere } | { readonly kind: 'failed'; readonly why: string }> {
+		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.workIn')) {
+			return { kind: 'none' };
+		}
+		try {
+			const work = await this.commandService.executeCommand<IWorkElsewhere>('_facade.agents.workIn', worktree, ...(by ? [by] : []));
+			return work ? { kind: 'asked', work } : { kind: 'none' };
+		} catch (error) {
+			this.logService.warn(`[worktrees] Could not ask the other workspaces what they have in '${worktree.toString(true)}': ${toErrorMessage(error)}`);
+			return { kind: 'failed', why: this.elsewhereFailure(worktree, error) };
+		}
+	}
+
+	/** Why `worktree` is not deleted when the other workspaces could not be asked, marked or stopped for it: each may have work inside it. */
+	private elsewhereFailure(worktree: URI, error: unknown): string {
+		return localize('worktrees.elsewhereFailed', "'{0}' was not deleted because the other workspaces could not be reached about it: {1}", this.labelService.getUriLabel(worktree), toErrorMessage(error));
+	}
+
+	/** Why `worktree` is not deleted while the workspaces `silent` do not answer: each may have work inside it. */
+	private silentRefusal(worktree: URI, silent: readonly string[]): string {
+		return localize('worktrees.workspaceSilent', "'{0}' was not deleted because workspace {1} did not answer and may have work in it. Try again in a moment.", this.labelService.getUriLabel(worktree), silent.join(', '));
+	}
+
+	/** What the other workspaces have inside a worktree, as the confirmation lists it: their agents and terminals, and their unsaved editors, each line naming its workspace. */
+	private elsewhereLines(elsewhere: IWorkElsewhere | undefined): { readonly running: (IRunningWork & { readonly place: string })[]; readonly unsaved: string[] } {
+		const running: (IRunningWork & { readonly place: string })[] = [];
+		const unsaved: string[] = [];
+		for (const other of elsewhere?.workspaces ?? []) {
+			const place = localize('worktrees.inWorkspace', "workspace {0}", other.label);
+			running.push(...other.agents.map(agent => ({ id: -1, kind: 'agent' as const, name: agent, place })), ...other.terminals.map(terminal => ({ id: -1, kind: 'terminal' as const, name: terminal, place })));
+			unsaved.push(...other.editors.map(editor => fileLine(editor, place)));
+		}
+		return { running, unsaved };
+	}
+
+	/** That windows of another Facade version run, which were not asked what they have inside the worktree (WT-8, step 2); none where there are none. */
+	private otherVersionsNote(elsewhere: IWorkElsewhere | undefined): string | undefined {
+		return elsewhere?.otherVersions.length
+			? localize('worktrees.otherVersions', "A window of another Facade version is open ({0}); it was not asked whether it has work in this worktree.", elsewhere.otherVersions.join(', '))
+			: undefined;
+	}
+
+	/**
+	 * What other workspaces have inside `worktree` now that `authorized` - the confirmation's - did not name, each line
+	 * naming its workspace; with no `authorized`, a deletion a caller decided: the agents its caller does not reach, and
+	 * unsaved editors it did not say go.
+	 */
+	private newElsewhere(now: IWorkElsewhere, authorized: IWorkElsewhere | undefined, decided: IDecidedDeletion | undefined): string[] {
+		const lines: string[] = [];
+		for (const other of now.workspaces) {
+			const before = authorized?.workspaces.find(each => each.label === other.label);
+			const place = localize('worktrees.inWorkspace', "workspace {0}", other.label);
+			if (decided) {
+				// An agent there the deleting caller does not reach - come since its preflight - is none of its to stop (O1)
+				lines.push(...(other.unreached ?? []).map(agent => workLine({ kind: 'agent', name: agent }, place)));
+				lines.push(...decided.discardChanges ? [] : other.editors.map(editor => fileLine(editor, place)));
+				continue;
+			}
+			lines.push(
+				...other.agents.filter(agent => !before?.agents.includes(agent)).map(agent => workLine({ kind: 'agent', name: agent }, place)),
+				...other.terminals.filter(terminal => !before?.terminals.includes(terminal)).map(terminal => workLine({ kind: 'terminal', name: terminal }, place)),
+				...other.editors.filter(editor => !before?.editors.includes(editor)).map(editor => fileLine(editor, place))
+			);
+		}
+		return lines;
+	}
+
+	/** Places `worktree`'s deletion mark for this workspace, or removes it: why not placed - another workspace deletes it - or undefined (WT-8, step 3). */
+	private async markElsewhere(worktree: URI, place: boolean): Promise<string | undefined> {
+		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.workMark')) {
+			return undefined;
+		}
+		try {
+			const marked = await this.commandService.executeCommand<{ readonly placed: boolean; readonly by?: string }>('_facade.agents.workMark', worktree, place);
+			return place && marked && !marked.placed
+				? localize('worktrees.deletedElsewhere', "'{0}' was not deleted because workspace {1} is deleting it.", this.labelService.getUriLabel(worktree), marked.by ?? '')
+				: undefined;
+		} catch (error) {
+			this.logService.warn(`[worktrees] Could not ${place ? 'place' : 'remove'} the deletion mark of '${worktree.toString(true)}': ${toErrorMessage(error)}`);
+			// A mark not placed holds no start there: the deletion does not go on without it
+			return place ? this.elsewhereFailure(worktree, error) : undefined;
+		}
+	}
+
+	/**
+	 * Has every other workspace stop its work inside `worktree` and, `discard`, discard its unsaved editors there (WT-8,
+	 * step 6): why it is not to be deleted - what is left, or a workspace that did not answer - or undefined.
+	 */
+	private async releaseElsewhere(worktree: URI, discard: boolean, by?: object): Promise<string | undefined> {
+		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.workRelease')) {
+			return undefined;
+		}
+		let released: { readonly left: readonly string[]; readonly silent: readonly string[]; readonly unknown?: readonly string[] } | undefined;
+		try {
+			released = await this.commandService.executeCommand<{ readonly left: readonly string[]; readonly silent: readonly string[]; readonly unknown?: readonly string[] }>('_facade.agents.workRelease', worktree, discard, ...(by ? [by] : []));
+		} catch (error) {
+			this.logService.warn(`[worktrees] Could not have the other workspaces stop their work in '${worktree.toString(true)}': ${toErrorMessage(error)}`);
+			return this.elsewhereFailure(worktree, error);
+		}
+		// Taken and never answered: it may have stopped its work there, or not - said as unknown, never as nothing done (O8)
+		if (released?.unknown?.length) {
+			return localize('worktrees.releaseUnknown', "'{0}' was not deleted because workspace {1} may have taken the request to stop its work in it but gave no result; whether that work stopped is unknown. Check that workspace, then try again.", this.labelService.getUriLabel(worktree), released.unknown.join(', '));
+		}
+		if (released?.silent.length) {
+			return this.silentRefusal(worktree, released.silent);
+		}
+		return released?.left.length
+			? localize('worktrees.leftElsewhere', "'{0}' was not deleted because work in another workspace did not stop: {1}.", this.labelService.getUriLabel(worktree), released.left.join(', '))
+			: undefined;
+	}
+
+	/**
 	 * WT-8 from step 3, once what would be lost is known and its deletion decided - by the person's confirmation, or by a
 	 * caller (WT-8.10): the window off it and the workspace without it before anything of it is stopped or discarded, and
 	 * everything that could hold the directory open gone before git is asked to delete it, by force where git's last look
@@ -1682,18 +1875,40 @@ export class WorktreeService implements IWorktreeService {
 		const decided = deletion.kind === 'decided' ? deletion : undefined;
 		const wasFolder = this.contextService.getWorkspace().folders.some(folder => this.uriIdentityService.extUri.isEqual(folder.uri, worktree));
 		const done: { toldAgents: boolean; leftFolders: boolean; ended: readonly string[] } = { toldAgents: false, leftFolders: false, ended: [] };
+		// Whether this workspace's deletion mark stands, which holds every workspace's new starts there until it is removed below
+		let marked = false;
 
 		// 3 to 7 under one progress: a large tree takes a while to delete. A caller's in the status bar: nobody asked
 		// for it where they would look for it
 		const outcome = await this.progressService.withProgress(
 			{ location: decided ? ProgressLocation.Window : ProgressLocation.Notification, title: localize('worktrees.deleting', "Deleting worktree '{0}'...", name) },
 			async (): Promise<DeletionOutcome> => {
-				// An agent of another window working inside it - the pty host has every window's terminals - would
-				// lose its folder under it, and that window book its end as the person's: refused, before anything
-				// is closed or moved (SP-18; N-37)
-				const elsewhere = await this.agentElsewhere(worktree);
-				if (elsewhere) {
-					return { kind: 'refused', why: elsewhere };
+				// 3  decided: its deletion mark holds new starts there, and another deletion of it, in every workspace of the
+				//    machine - refused where another workspace's stands - and what the other workspaces have there is asked
+				//    again: what came since the confirmation, or a caller's preflight, refuses it before anything is closed or
+				//    moved (O5; WT-8, step 3)
+				const markRefusal = await this.markElsewhere(worktree, true);
+				if (markRefusal) {
+					return { kind: 'refused', why: markRefusal };
+				}
+				marked = worktree.scheme === Schemas.file && !!CommandsRegistry.getCommand('_facade.agents.workMark');
+				const asked = await this.askElsewhere(worktree, decided?.by);
+				if (asked.kind === 'failed') {
+					return { kind: 'refused', why: asked.why };
+				}
+				const elsewhere = asked.kind === 'asked' ? asked.work : undefined;
+				if (elsewhere?.silent.length) {
+					return { kind: 'refused', why: this.silentRefusal(worktree, elsewhere.silent) };
+				}
+				const since = elsewhere ? this.newElsewhere(elsewhere, deletion.kind === 'person' ? deletion.elsewhere : undefined, decided) : [];
+				if (since.length) {
+					return { kind: 'refused', why: localize('worktrees.workSinceElsewhere', "'{0}' was not deleted because other workspaces have work in it that this deletion did not cover: {1}.", this.labelService.getUriLabel(worktree), since.join(', ')) };
+				}
+				// An agent another window runs there, which the pty host sees, that no workspace answered for - of a window
+				// with no agents' extension, or of another version - is its to stop (SP-18; N-37)
+				const unanswered = (await this.otherWindowsRunsIn(worktree)).filter(run => !elsewhere?.workspaces.some(each => each.record === run.workspace && each.runs?.includes(run.id)));
+				if (unanswered.length) {
+					return { kind: 'refused', why: localize('worktrees.agentElsewhere', "'{0}' was not deleted because an agent from another window is working in it ({1}). Stop that agent in its window first.", this.labelService.getUriLabel(worktree), unanswered.map(each => each.title).join(', ')) };
 				}
 
 				// Decided by a caller, whether it goes is settled before anything is moved, closed or removed: a deletion
@@ -1761,6 +1976,14 @@ export class WorktreeService implements IWorktreeService {
 						instance.dispose(TerminalExitReason.User);
 					}
 
+					// The other workspaces stop their own work there, and discard their unsaved editors there as the deletion
+					// authorized them: the person's Delete and Discard Changes, or a caller's discard_changes (O5; WT-8, step 6)
+					const discardElsewhere = deletion.kind === 'person' ? !!deletion.elsewhere?.workspaces.some(each => each.editors.length) : deletion.discardChanges;
+					const left = await this.releaseElsewhere(worktree, discardElsewhere, decided?.by);
+					if (left) {
+						return { kind: 'refused', why: left };
+					}
+
 					// What a deletion left: git has nothing more to say of it (WT-4.5)
 					if (leftover !== undefined) {
 						await this.discardDecided(worktree, deletion);
@@ -1795,7 +2018,7 @@ export class WorktreeService implements IWorktreeService {
 					held.dispose();
 					hidden?.dispose();
 				}
-			});
+			}).finally(() => marked ? this.markElsewhere(worktree, false) : undefined);
 
 		// The agents' record forgets a worktree Facade made, now that git is done: told so here, where the extension
 		// host that asked for the deletion may have started again meanwhile (O5). Told of the person's that it is over
@@ -1893,7 +2116,8 @@ export class WorktreeService implements IWorktreeService {
 
 		this.logService.warn(`[worktrees] Deleting '${worktree.toString(true)}' concluded as ${outcome?.kind ?? 'unknown'}${outcome?.kind === 'error' ? `: ${outcome.message}` : ''}`);
 		if (outcome?.kind === 'refused') {
-			this.notificationService.error(outcome.why);
+			// Refused late, at step 6, what was done before it is said as done (WT-8, step 6)
+			this.notificationService.error([/[.!?]$/.test(outcome.why) ? outcome.why : `${outcome.why}.`, ...this.doneOf(deletion)].join(' '));
 		} else if (outcome?.kind === 'stayed') {
 			this.notificationService.error(couldNotLeave(main, name));
 		} else if (outcome?.kind === 'kept') {
@@ -1950,11 +2174,15 @@ export class WorktreeService implements IWorktreeService {
 			why = deleteFailure(error, main);
 		}
 
-		const done = [
+		return [why, ...this.doneOf(deletion)].join('\n');
+	}
+
+	/** What a deletion that did not delete did all the same, each a sentence: the worktree out of the workspace, its terminals ended (WT-8.6). */
+	private doneOf(deletion: IDeletion): string[] {
+		return [
 			deletion.leftFolders ? localize('worktrees.outOfWorkspace', "It was removed from the workspace.") : undefined,
 			deletion.ended.length ? localize('worktrees.terminalsEnded', "Terminals associated with this worktree were closed and active processes terminated: {0}.", deletion.ended.join(', ')) : undefined
 		].filter(isString);
-		return [why, ...done].join('\n');
 	}
 
 	/**
@@ -2110,7 +2338,7 @@ export class WorktreeService implements IWorktreeService {
 	 * Asks once, naming everything deleting the worktree loses (WT-8.1, WT-8.2): the agents and terminals `running`, and
 	 * what is lost with its folder. With `again`, asks only about what appeared since the first time.
 	 */
-	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: readonly IRunningWork[], again: boolean): Promise<boolean> {
+	private async confirmDelete(name: string, branch: string | undefined, loss: IDeletionLoss, running: readonly (IRunningWork & { readonly place?: string })[], again: boolean, note?: string): Promise<boolean> {
 		const { files, ignoredPaths, submodules, unsaved } = loss;
 
 		// Laid out as VS Code's own delete confirmation: lists first, each under what becomes of it, one to a line, then
@@ -2123,7 +2351,7 @@ export class WorktreeService implements IWorktreeService {
 		};
 
 		const work = agentsFirst(running);
-		list(terminatedHeading(work), listedSessions(work.map(item => workLine(item, undefined))));
+		list(terminatedHeading(work), listedSessions(work.map(item => workLine(item, item.place))));
 		list(localize('worktrees.loses', "The following uncommitted changes will be lost:"), listedFiles(files));
 		list(discardedHeading(unsaved.length), listedFiles(unsaved));
 		list(localize('worktrees.ignored', "The following files ignored by Git will be deleted:"), listedFiles(ignoredPaths));
@@ -2145,6 +2373,9 @@ export class WorktreeService implements IWorktreeService {
 			if (branch) {
 				sentences.push(localize('worktrees.branchKeptQuoted', "The branch '{0}' will be preserved.", branch));
 			}
+		}
+		if (note) {
+			sentences.push(note);
 		}
 		if (sentences.length) {
 			// A space between sentences is the language's to give: Chinese and Japanese have none

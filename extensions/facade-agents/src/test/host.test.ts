@@ -13,7 +13,10 @@ import { agentIconId } from '../host/agentIcons';
 import { changedFilesIn, excludeIn, fileAtIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreeRootIn, worktreesIn } from '../host/gitCli';
 import { releaseEarlierHost, TakeoverPorts } from '../host/takeover';
 import { WAS_AWAY_ASK_MS, WAS_AWAY_COMMAND, windowWasAway } from '../host/windowAway';
+import { HostMachine } from '../host/machine';
 import { JsonFileState } from '../host/windowState';
+import { PipeClientError } from '../transport/pipe';
+import { WindowEntry, WindowLink, windowKey } from '../transport/windows';
 import { outcomeOf, tempDir } from './util';
 
 suite('Host: Facade: Start Agent', () => {
@@ -40,6 +43,137 @@ suite('Host: Facade: Start Agent', () => {
 			registered: knownClis().map(cli => `${cli.id}: ${registered.get(cli.id)}`),
 			custom: [agentIconId('my-agent', true), agentIconId('claude', true)]
 		}, { builtIns: logos, registered: logos, custom: ['robot', 'robot'] });
+	});
+});
+
+suite('Host: what the workspaces of the machine share on disk', () => {
+
+	let temp: { dir: string; remove(): void };
+
+	setup(() => {
+		temp = tempDir('facade-machine-disk-');
+	});
+
+	teardown(() => {
+		temp.remove();
+	});
+
+	/** The machine as the workspace `record` sees it, its window load `load` recorded as live. */
+	function machineOf(record: string, load: string): HostMachine {
+		const root = path.join(temp.dir, 'workspaces');
+		fs.mkdirSync(path.join(root, record), { recursive: true });
+		fs.writeFileSync(path.join(root, record, 'window.json'), JSON.stringify({ pipe: `pipe-${record}`, pid: process.pid, enabled: true, record, load }));
+		return new HostMachine(new WindowLink(path.join(temp.dir, 'window.key')), root, path.join(temp.dir, 'outbox'), path.join(temp.dir, 'deleting'), { record, label: record, load }, () => 0, () => undefined);
+	}
+
+	test('two workspaces deleting one folder at once: one places its mark, the other is refused naming it; one left half written, or by a load that ended, is placed over; the one that placed it alone removes it (WT-8.4)', async () => {
+		const alpha = machineOf('alpha', 'load-a');
+		const beta = machineOf('beta', 'load-b');
+		const folder = path.join(temp.dir, 'work');
+		const both = await Promise.all([alpha.mark(folder), beta.mark(folder)]);
+		await beta.unmark(folder);
+		const held = alpha.markOver(folder);
+		await alpha.unmark(folder);
+		const file = path.join(temp.dir, 'deleting', fs.readdirSync(path.join(temp.dir, 'deleting')).find(name => name.endsWith('.json')) ?? 'none.json');
+		fs.writeFileSync(file, '');
+		const overHalf = await beta.mark(folder);
+		fs.writeFileSync(path.join(temp.dir, 'workspaces', 'beta', 'window.json'), JSON.stringify({ pipe: 'pipe-beta', pid: process.pid, enabled: true, record: 'beta', load: 'load-b2' }));
+		const overEnded = await alpha.mark(folder);
+
+		assert.deepStrictEqual({ placed: both.filter(each => each.placed).length, refused: both.flatMap(each => each.placed ? [] : [each.by]), held, overHalf, overEnded, after: alpha.markOver(folder) }, {
+			placed: 1,
+			refused: [both[0].placed ? 'alpha' : 'beta'],
+			held: both[0].placed ? 'alpha' : undefined,
+			overHalf: { placed: true },
+			overEnded: { placed: true },
+			after: 'alpha'
+		});
+	});
+
+	test('what protects work is asked of a workspace whose framework is off too; a whole call each takes once - sent again only where it was not taken, to its pipe as it is then - and one taken with no result is unknown (O5, O8)', async () => {
+		const root = path.join(temp.dir, 'workspaces');
+		const write = (record: string, pipe: string) => {
+			fs.mkdirSync(path.join(root, record), { recursive: true });
+			fs.writeFileSync(path.join(root, record, 'window.json'), JSON.stringify({ pipe, pid: process.pid, enabled: true, record, load: `${record}-load` }));
+		};
+		write('on', 'pipe-on');
+		write('off', 'pipe-off');
+		write('moved', 'pipe-old');
+		write('offmoved', 'pipe-off-old');
+		write('slow', 'pipe-slow');
+		write('keyless', 'pipe-keyless');
+		const asked: string[] = [];
+		const called: string[] = [];
+		const link = {
+			hello: async (entry: WindowEntry) => ({ window: true, record: entry.record, enabled: entry.record !== 'off' && entry.record !== 'offmoved' }),
+			query: async (entry: WindowEntry) => {
+				asked.push(entry.record);
+				return {};
+			},
+			call: async (entry: WindowEntry) => {
+				called.push(entry.pipe);
+				if (entry.pipe === 'pipe-old' || entry.pipe === 'pipe-off-old') {
+					// Not taken as it reloads: by the next try it listens on another pipe, its framework on or off
+					write(entry.record, entry.pipe === 'pipe-old' ? 'pipe-new' : 'pipe-off-new');
+					throw new PipeClientError('not taken', 'UNREACHABLE');
+				}
+				if (entry.record === 'off') {
+					throw new PipeClientError('taken, then the connection broke', 'NOT_CONNECTED');
+				}
+				if (entry.record === 'keyless') {
+					// Refused before it ran: not the machine's key
+					throw new PipeClientError('Facade IPC request \'call\' was rejected (status 401).', 'UNAUTHORIZED');
+				}
+				if (entry.record === 'slow') {
+					// Taken, and its result not come by the time it is waited for
+					throw new PipeClientError('Cancelled', 'CANCELLED');
+				}
+				return { left: [] };
+			}
+		};
+		const machine = new HostMachine(link as unknown as WindowLink, root, path.join(temp.dir, 'outbox'), path.join(temp.dir, 'deleting'), { record: 'self', label: 'self' }, () => 10_000, () => undefined);
+		const every = await machine.askEvery('window.workIn', {});
+		const plain = await machine.ask('window.workIn', {});
+		const released = await machine.callEvery('window.workRelease', {});
+
+		assert.deepStrictEqual({
+			every: every.answers.map(each => each.record).sort(),
+			plain: { answered: plain.answers.map(each => each.record).sort(), off: plain.silent.map(each => `${each.record} ${each.reason}`) },
+			asked: asked.sort(),
+			released: { answered: released.answers.map(each => each.record).sort(), unknown: released.unknown?.map(each => each.record).sort(), refused: released.refused?.map(each => `${each.record}: ${each.why}`), silent: released.silent },
+			called: called.sort()
+		}, {
+			every: ['keyless', 'moved', 'off', 'offmoved', 'on', 'slow'],
+			plain: { answered: ['keyless', 'moved', 'on', 'slow'], off: ['off framework off', 'offmoved framework off'] },
+			asked: ['keyless', 'keyless', 'moved', 'moved', 'off', 'offmoved', 'on', 'on', 'slow', 'slow'],
+			released: { answered: ['moved', 'offmoved', 'on'], unknown: ['off', 'slow'], refused: ['keyless: Facade IPC request \'call\' was rejected (status 401).'], silent: [] },
+			called: ['pipe-keyless', 'pipe-new', 'pipe-off', 'pipe-off-new', 'pipe-off-old', 'pipe-old', 'pipe-on', 'pipe-slow']
+		});
+	});
+
+	test('a whole call handed every workspace is waited for no longer than its limit: one that never answers is given up, its outcome unknown (O8)', async () => {
+		const root = path.join(temp.dir, 'workspaces');
+		fs.mkdirSync(path.join(root, 'hung'), { recursive: true });
+		fs.writeFileSync(path.join(root, 'hung', 'window.json'), JSON.stringify({ pipe: 'pipe-hung', pid: process.pid, enabled: true, record: 'hung', load: 'hung-load' }));
+		const link = {
+			hello: async (entry: WindowEntry) => ({ window: true, record: entry.record, enabled: true }),
+			// Takes the call and never answers: only the limit ends the wait
+			call: (_entry: WindowEntry, _tool: string, _args: object, _progress: unknown, signal?: AbortSignal) => new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new PipeClientError('Cancelled', 'CANCELLED'))))
+		};
+		const machine = new HostMachine(link as unknown as WindowLink, root, path.join(temp.dir, 'outbox'), path.join(temp.dir, 'deleting'), { record: 'self', label: 'self' }, () => 200, () => undefined);
+		const released = await machine.callEvery('window.workRelease', {});
+
+		assert.deepStrictEqual({ answered: released.answers.length, unknown: released.unknown?.map(each => each.record) }, { answered: 0, unknown: ['hung'] });
+	});
+
+	test('the machine\'s window key is made whole once, whoever makes it first; an empty one left behind is made again, never used (O8)', () => {
+		const file = path.join(temp.dir, 'window.key');
+		const first = windowKey(file);
+		const again = windowKey(file);
+		fs.writeFileSync(file, '');
+		const remade = windowKey(file);
+
+		assert.deepStrictEqual({ same: first === again, long: first.length >= 40, remade: remade.length >= 40 && remade !== first, onDisk: fs.readFileSync(file, 'utf8') === remade }, { same: true, long: true, remade: true, onDisk: true });
 	});
 });
 

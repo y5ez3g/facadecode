@@ -256,7 +256,8 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				upcastPartial<ITerminalInstance>({ reconnectionProperties: facadeRunProperties({ workspace: 'c3d4', id: 5 }), exitCode: undefined }),
 				upcastPartial<ITerminalInstance>({ exitCode: undefined }),
 			] : [],
-			otherWindowsAgentsIn: async worktree => worktree.path === '/home/me/.facade/worktrees/lab/clamp' ? ['@there #a7'] : []
+			otherWindowsAgentsIn: async worktree => worktree.path === '/home/me/.facade/worktrees/lab/clamp' ? ['@there #a7'] : [],
+			workIn: async worktree => worktree.path === '/home/me/.facade/worktrees/lab/clamp' ? { terminals: ['npm run dev'], editors: ['src/a.ts'] } : { terminals: [], editors: [] }
 		});
 		instantiationService.stub(IFolderTerminalsService, {
 			reveal: async instance => {
@@ -397,6 +398,20 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		assert.deepStrictEqual({ elsewhere, none, notAUri }, {
 			elsewhere: ['@there #a7'],
 			none: [],
+			notAUri: 'Unexpected type, expected \'URI\'',
+		});
+	});
+
+	test(`another workspace's deletion is answered this window's work inside the folder - its terminals and unsaved editors; a folder that is no URI is refused (O5)`, async () => {
+		const dirty = await run('_facade.work.in', URI.file('/home/me/.facade/worktrees/lab/clamp'));
+		const none = await run('_facade.work.in', URI.file('/elsewhere'));
+		const components = await run('_facade.work.in', { scheme: 'file', path: '/home/me/.facade/worktrees/lab/clamp' });
+		const notAUri = await failureOf('_facade.work.in', '/elsewhere');
+
+		assert.deepStrictEqual({ dirty, none, components, notAUri }, {
+			dirty: { terminals: ['npm run dev'], editors: ['src/a.ts'] },
+			none: { terminals: [], editors: [] },
+			components: { terminals: ['npm run dev'], editors: ['src/a.ts'] },
 			notAUri: 'Unexpected type, expected \'URI\'',
 		});
 	});

@@ -12,7 +12,7 @@
 	"packageMaintainer": "Yuanzhe Zhang <y5ez3g@gmail.com>",
 	"publisher": "Yuanzhe Zhang",
 	"productSummary": "Code editor that focuses a multi-root workspace on one folder at a time",
-	"productDescription": "Facade Code is a fork of Visual Studio Code that displays workspace folders in a dedicated column. The window focuses on one folder at a time, scoping the file explorer, editors, terminals, and source control directly to that folder.",
+	"productDescription": "Facade Code is a fork of Visual Studio Code in which native agent CLIs work alongside you. It displays workspace folders in a dedicated column, and the window focuses on one folder at a time, scoping the file explorer, editors, terminals, and source control directly to that folder.",
 	"licenseUrl": "https://github.com/y5ez3g/facadecode/blob/main/LICENSE.txt",
 	"serverLicenseUrl": "https://github.com/y5ez3g/facadecode/blob/main/LICENSE.txt",
 	"serverGreeting": [],

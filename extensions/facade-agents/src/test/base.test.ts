@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { getEventListeners } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -13,8 +13,11 @@ import { codeOf, messageOf, stackOf } from '../base/errors';
 import { canonicalFolder, FileChangedError, formatJson, isEqualPath, JsonFile, jsonLayoutOf, parseJson, readJsonFile, replaceFile, updateJsonFile, writeJsonFile } from '../base/files';
 import { isJsonObject, isStringArray } from '../base/json';
 import { disposeAll } from '../base/lifecycle';
-import { removeLockIfUnchanged, withFileLock } from '../base/lock';
-import { identifyProcess, isProcessRunning } from '../base/system';
+import { removeLockIfUnchanged, withFileLock, withLongFileLock } from '../base/lock';
+import { identifyProcess, isProcessRunning, processStartTime } from '../base/system';
+
+/** The id of a process that ran and ended: no process has it now, unless one was given it since. */
+const ENDED_PID = spawnSync(process.execPath, ['-e', '']).pid ?? 0;
 import { cutNextWriteShort, outcomeOf, replaceFsFunction, tempDir } from './util';
 
 const BOM = String.fromCharCode(0xfeff);
@@ -419,6 +422,54 @@ suite('Base: a lock windows take turns at', () => {
 		assert.deepStrictEqual({ kept, left: fs.readdirSync(temp.dir) }, { kept: '4242 taken anew', left: [] });
 	});
 
+	test('a lock of this process\'s own that it does not hold - one it could not let go of - is taken over, keepLive too; one it holds is waited for, however long it has held it (L12)', async () => {
+		const file = path.join(temp.dir, 'counters.json');
+		const lock = `${file}.lock`;
+		const longAgo = new Date(Date.now() - 60_000);
+		fs.writeFileSync(lock, `${process.pid} ${processStartTime(process.pid)} 0123456789ab`);
+		fs.utimesSync(lock, longAgo, longAgo);
+		const leftOver = withFileLock(file, () => 'taken', { keepLive: true, waitMs: 200 });
+		const held = await withLongFileLock(file, async () => {
+			fs.utimesSync(lock, longAgo, longAgo);
+			return withLongFileLock(file, async () => 'taken from its holder', 300).catch((err: Error) => err.message);
+		}, 1_000);
+
+		assert.deepStrictEqual({ leftOver, held, left: fs.readdirSync(temp.dir) }, {
+			leftOver: 'taken',
+			held: `Timed out after 0.3 seconds waiting for another window to release the lock on '${file}'.`,
+			left: []
+		});
+	});
+
+	test('a lock left behind is broken by one process at a time: while another that runs breaks it, it stays - one known by its start however long ago it began; a hold on breaking goes once its breaker ended, or - left empty, or its breaker\'s start unknown - once it is older than any breaker keeps one, and the lock with the next try', () => {
+		const lock = path.join(temp.dir, 'shared.json.lock');
+		const breaking = `${lock}.break`;
+		const longAgo = new Date(Date.now() - 60_000);
+		const outcome = (hold: string, old: boolean) => {
+			fs.writeFileSync(lock, '4242 left behind');
+			fs.writeFileSync(breaking, hold);
+			if (old) {
+				fs.utimesSync(breaking, longAgo, longAgo);
+			}
+			removeLockIfUnchanged(lock, '4242 left behind');
+			const after = fs.readdirSync(temp.dir).sort();
+			fs.rmSync(breaking, { force: true });
+			removeLockIfUnchanged(lock, '4242 left behind');
+			return { after, then: fs.readdirSync(temp.dir) };
+		};
+
+		assert.deepStrictEqual({ running: outcome(String(process.pid), false), knownLongAgo: outcome(`${process.pid} ${processStartTime(process.pid)}`, true), ownLeft: outcome(`${process.pid} ${processStartTime(process.pid)} 0123456789ab`, false), ended: outcome(String(ENDED_PID), false), runningLongAgo: outcome(String(process.pid), true), empty: outcome('', true), emptyNow: outcome('', false) }, {
+			running: { after: ['shared.json.lock', 'shared.json.lock.break'], then: [] },
+			knownLongAgo: { after: ['shared.json.lock', 'shared.json.lock.break'], then: [] },
+			// This process's own, which it could not remove as it let go: it breaks one at a time, so it takes it away itself
+			ownLeft: { after: ['shared.json.lock'], then: [] },
+			ended: { after: ['shared.json.lock'], then: [] },
+			runningLongAgo: { after: ['shared.json.lock'], then: [] },
+			empty: { after: ['shared.json.lock'], then: [] },
+			emptyNow: { after: ['shared.json.lock', 'shared.json.lock.break'], then: [] }
+		});
+	});
+
 	test('a lock left behind by a process that ended goes once it is older than any holder keeps one; a holder\'s error lets it go', () => {
 		const file = path.join(temp.dir, 'shared.json');
 		const lock = `${file}.lock`;
@@ -443,20 +494,28 @@ suite('Base: a lock windows take turns at', () => {
 		this.timeout(15_000);
 		const file = path.join(temp.dir, 'shared.json');
 		const lock = `${file}.lock`;
-		// This test's own process holds it, as a window does, its mark the holder's process id first.
-		const held = `${process.pid} a1b2c3d4e5f6`;
-		fs.writeFileSync(lock, held);
-		const secondsAgo = (seconds: number) => new Date(Date.now() - seconds * 1000);
-		fs.utimesSync(lock, secondsAgo(5), secondsAgo(5));
+		// Another process that runs holds it, as another window does, its mark the holder's process id first: not this
+		// one's own, which it would take back as one it left
+		const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+		const held = `${other.pid} a1b2c3d4e5f6`;
 		let slow = '';
+		let left = '';
+		let abandoned = '';
 		try {
-			slow = withFileLock(file, () => 'took');
-		} catch (err) {
-			slow = messageOf(err);
+			fs.writeFileSync(lock, held);
+			const secondsAgo = (seconds: number) => new Date(Date.now() - seconds * 1000);
+			fs.utimesSync(lock, secondsAgo(5), secondsAgo(5));
+			try {
+				slow = withFileLock(file, () => 'took');
+			} catch (err) {
+				slow = messageOf(err);
+			}
+			left = fs.readFileSync(lock, 'utf8');
+			fs.utimesSync(lock, secondsAgo(40), secondsAgo(40));
+			abandoned = withFileLock(file, () => 'took');
+		} finally {
+			other.kill();
 		}
-		const left = fs.readFileSync(lock, 'utf8');
-		fs.utimesSync(lock, secondsAgo(40), secondsAgo(40));
-		const abandoned = withFileLock(file, () => 'took');
 
 		assert.deepStrictEqual({ slow, left, abandoned }, { slow: `Timed out after 5 seconds waiting for another window to release the lock on '${file}'.`, left: held, abandoned: 'took' });
 	});

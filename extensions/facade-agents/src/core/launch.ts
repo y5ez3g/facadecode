@@ -13,8 +13,8 @@ import { AgentCli, capabilitiesOf, Connection, connectionFor, effectiveSandbox, 
 import { launchTargetOf, unsafeForCmd } from '../clis/executable';
 import { trustTarget } from '../clis/trust';
 import { AgentTable, agentName, StartedAgent } from '../record/agents';
-import { Agent, Caller, describe, Ignored, isLive, PERSON, SetupState, StartPhase } from '../record/events';
-import { Message } from '../record/messages';
+import { Agent, Caller, describe, ForeignCaller, Ignored, isLive, PERSON, SetupState, StartPhase } from '../record/events';
+import { ForeignAgent, Message } from '../record/messages';
 import { screensDir } from '../record/screens';
 import { LaunchDelays } from './doorbell';
 import { FacadeError } from './errors';
@@ -157,6 +157,8 @@ export interface LaunchOptions {
 	readonly onRecorded?: (agent: number) => void;
 	/** When its start was accepted: its time counts from then (AGENT-ORCHESTRATION.md, O9); now, where not given. */
 	readonly acceptedAt?: number;
+	/** How long its caller waits - one of another workspace, as its own timeout says (O3) - where not this workspace's timeout. */
+	readonly waitMs?: number;
 	/** Prepares its folder - its worktree made and set up - recording each phase, once it is recorded. */
 	readonly prepare?: (agent: Agent) => Promise<Prepared>;
 }
@@ -164,6 +166,8 @@ export interface LaunchOptions {
 /** What a launch needs of the core around it. */
 export interface LaunchContext {
 	readonly table: AgentTable;
+	/** This workspace's record, as the others name it (O8). */
+	readonly selfRecord: string;
 	readonly ports: Ports;
 	readonly clis: CliCatalog;
 	readonly setup: AgentSetup;
@@ -258,10 +262,12 @@ export class Launcher implements Disposable {
 	 * for it; answers with the files its launch puts into its folder, which are the same for every agent of
 	 * the CLI. The launch is computed, not run; the model and the effort are the CLI's to take or refuse.
 	 */
-	check(installed: InstalledCli, run: Omit<Run, 'name' | 'worktree'>, env: Environment): readonly Injected[] {
+	check(installed: InstalledCli, run: Omit<Run, 'name' | 'worktree'>, env: Environment, caller: Caller = PERSON): readonly Injected[] {
 		const { setup, table } = this.context;
-		// Its first line as a stand-in's: Facade's own words, and names cmd.exe takes as they are.
-		const firstLine = setup.firstLine({ id: 1, name: 'check' }, PERSON, run.task !== undefined ? 1 : undefined);
+		// Its first line as a stand-in's, from the creator it will name - of another workspace, with that workspace: Facade's
+		// own words, and names cmd.exe takes as they are
+		const creator = this.creatorOf(caller);
+		const firstLine = setup.firstLine({ id: 1, name: 'check' }, creator, run.task !== undefined ? 1 : undefined);
 		let conflict: string | undefined;
 		let injected: readonly Injected[];
 		try {
@@ -274,7 +280,7 @@ export class Launcher implements Disposable {
 				yolo: run.yolo,
 				unattended: run.unattended,
 				...(run.task !== undefined || opensAlone(installed.cli, run.unattended) ? { task: firstLine } : {}),
-				...(run.unattended ? { opening: setup.firstLine({ id: 1, name: 'check' }, PERSON, undefined) } : {}),
+				...(run.unattended ? { opening: setup.firstLine({ id: 1, name: 'check' }, creator, undefined) } : {}),
 				...applied(run, installed),
 				// What goes into the folder as the launch will put it: a server the same for every agent, and the skills.
 				...(run.integration ? { connection: connectionFor(installed.cli, setup.sharedMcpServer(), setup.connection(path.join(table.runsDir, 'check.token'))) } : {}),
@@ -342,9 +348,17 @@ export class Launcher implements Disposable {
 		const { cli } = installed;
 		this.stillOpen();
 		const given = applied(run, installed);
+		// A child of another workspace's agent: its creator, tree and ancestors as that workspace gave them (O3, O8)
+		const afar = caller.from && caller.id !== undefined ? caller.from : undefined;
 		const started = table.start({
 			name: run.name,
 			creator: caller.id,
+			...(afar ? {
+				creatorAfar: { id: caller.id!, name: caller.name, window: afar.window, label: afar.label },
+				...(afar.root !== undefined && (afar.rootWindow ?? afar.window) === this.context.selfRecord ? { rootHere: afar.root } : {}),
+				...(afar.root !== undefined && (afar.rootWindow ?? afar.window) !== this.context.selfRecord ? { rootAfar: rootOf(caller.id!, caller.name, afar) } : {}),
+				...(afar.ancestors?.length ? { ancestorsAfar: afar.ancestors } : {})
+			} : {}),
 			cli: cli.id,
 			custom: !!cli.custom,
 			...(run.model !== undefined ? { model: run.model } : {}),
@@ -380,7 +394,7 @@ export class Launcher implements Disposable {
 		}
 		options.onRecorded?.(agent.id);
 		options.progress?.(`Recorded ${describe(agent)}; starting the run.`, agent.id);
-		const startup = this.watch(agent, run.integration, options.acceptedAt);
+		const startup = this.watch(agent, run.integration, options.acceptedAt, options.waitMs);
 		// Prepared and opened on its own: the caller hears whichever comes first - its time over, unconfirmed in
 		// whatever phase it is, its start failing, or its terminal open.
 		const opening = this.prepareAndOpen(caller, installed, run, started, task, options);
@@ -573,8 +587,12 @@ export class Launcher implements Disposable {
 	 * completion is not known - and its task's number; without a task, its opening alone (L9).
 	 */
 	private firstLineOf(agent: Agent, caller: Caller, task: number | undefined): string {
-		const creator = caller.id === undefined ? PERSON : this.context.table.get(caller.id) ?? caller;
-		return this.context.setup.firstLine({ id: agent.id, name: agent.name }, creator, task, this.startNotes.get(agent.id));
+		return this.context.setup.firstLine({ id: agent.id, name: agent.name }, this.creatorOf(caller), task, this.startNotes.get(agent.id));
+	}
+
+	/** Whom an agent `caller` starts names as its creator: the person, a caller of another workspace as it came, or the agent. */
+	private creatorOf(caller: Caller): Caller {
+		return caller.id === undefined ? PERSON : caller.from ? caller : this.context.table.get(caller.id) ?? caller;
 	}
 
 	/** What an agent is told of its preparation with its first line: that its setup's completion is not known; none where it is told nothing. */
@@ -672,8 +690,8 @@ export class Launcher implements Disposable {
 	 * Where nobody waits for that answer - the person's own start, from the agent menu - the person is told,
 	 * once, with a way to its terminal; a script's start that waits answers the script instead.
 	 */
-	private watch(agent: Agent, integration: boolean, since = Date.now()): Startup {
-		const ms = this.timing().startTimeoutMs;
+	private watch(agent: Agent, integration: boolean, since = Date.now(), waitMs?: number): Startup {
+		const ms = waitMs ?? this.timing().startTimeoutMs;
 		const startup: Startup = {
 			up: new DeferredPromise<Up>(),
 			timer: setTimeout(() => {
@@ -852,4 +870,13 @@ export function delaysOf(file: string): LaunchDelays {
 
 function didNotStart(cli: AgentCli, agent: Agent, reason: string): FacadeError {
 	return new FacadeError('FAILED', `${cli.displayName} did not start as ${describe(agent)}: ${reason}`, { outcome: 'failed', agent: agent.id });
+}
+
+/** The root of the tree of a caller of another workspace, as that workspace named it: among its ancestors, or the caller itself (O8). */
+function rootOf(id: number, name: string, from: ForeignCaller): ForeignAgent {
+	const window = from.rootWindow ?? from.window;
+	if (from.root === id && window === from.window) {
+		return { id, name, window, label: from.label };
+	}
+	return from.ancestors?.find(each => each.id === from.root && each.window === window) ?? { id: from.root!, name: `a${from.root}`, window };
 }

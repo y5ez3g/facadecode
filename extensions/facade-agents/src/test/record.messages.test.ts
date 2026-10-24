@@ -8,8 +8,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { messageOf } from '../base/errors';
 import { AgentTable, NewAgent } from '../record/agents';
-import { FACADE, HUMAN, TEXT_IN_LINE } from '../record/messages';
-import { ChatRooms } from '../record/rooms';
+import { createState, foreignRootKey } from '../record/events';
+import { FACADE, HUMAN, Message, TEXT_IN_LINE } from '../record/messages';
+import { ChatRooms, rootsOf } from '../record/rooms';
 import { tempDir } from './util';
 
 const LEDGER = 'ledger.jsonl';
@@ -150,7 +151,7 @@ suite('Record: messages', () => {
 			written: lines(temp.dir).filter(line => line.includes(' message.'))
 		}, {
 			read: before,
-			written: [`v6 message.sent ${one.id}`, `v6 message.given ${lint.id} ${one.id}`, `v6 message.delivered ${lint.id} ${one.id}`]
+			written: [`v7 message.sent ${one.id}`, `v6 message.given ${lint.id} ${one.id}`, `v7 message.delivered ${lint.id} ${one.id}`]
 		});
 	});
 
@@ -233,7 +234,7 @@ suite('Record: messages', () => {
 			mailboxes: [lead.id],
 			stillKnown: 3,
 			next: 4,
-			types: ['v6 list.cleared', 'v6 message.sent 4']
+			types: ['v7 list.cleared', 'v7 message.sent 4']
 		});
 	});
 
@@ -277,6 +278,23 @@ suite('Record: messages', () => {
 	});
 });
 
+suite('Record: the roots of a message\'s trees', () => {
+
+	test('an agent that left the list is in its tree as it was: a root of another workspace by its workspace and number, never this record\'s agent of the same older number (M9; L12)', () => {
+		const state = createState();
+		state.identities.set(1, { id: 1, name: 'mine', root: 1, worktree: 'main' });
+		state.identities.set(2, { id: 2, name: 'child', root: 1, worktree: 'w2', rootWindow: 'alpha-record' });
+		state.foreignRoots.set(foreignRootKey('alpha-record', 1), { id: 1, name: 'lead', root: 1, worktree: '', window: 'alpha-record' });
+		const roots = (from: number, to: number) => rootsOf(state, { from, to } as Message).map(root => `${root.name} #a${root.id} ${root.window ?? 'here'}`);
+
+		assert.deepStrictEqual({ child: roots(2, 2), across: roots(2, 1), mine: roots(1, 1) }, {
+			child: ['lead #a1 alpha-record'],
+			across: ['lead #a1 alpha-record', 'mine #a1 here'],
+			mine: ['mine #a1 here']
+		});
+	});
+});
+
 suite('Record: chat rooms', () => {
 
 	let temp: { dir: string; remove(): void };
@@ -286,7 +304,7 @@ suite('Record: chat rooms', () => {
 	setup(() => {
 		temp = tempDir('facade-rooms-');
 		table = AgentTable.open({ dir: temp.dir });
-		rooms = new ChatRooms(temp.dir, () => table.state, table.messages);
+		rooms = new ChatRooms(path.join(temp.dir, 'rooms'), 'r', () => table.state, table.messages);
 	});
 
 	teardown(() => {
@@ -355,7 +373,7 @@ suite('Record: chat rooms', () => {
 		]);
 	});
 
-	test('a room missing, or shorter than the ledger says, is written again from it as the window loads; one longer - the person wrote in it - is left as it is', () => {
+	test('a room missing is written again from the ledger as the workspace loads, and one whose entry was cut short gets that entry whole after it; one longer - the person wrote in it - is left as it is (M11)', () => {
 		const lead = table.start(newAgent('lead')).agent;
 		const docs = table.start(newAgent('docs')).agent;
 		send({ to: lead.id, text: 'Lead.' });
@@ -370,16 +388,17 @@ suite('Record: chat rooms', () => {
 		const longer = room('docs-a2.md');
 		rooms.restore();
 
-		assert.deepStrictEqual({ lead: room('lead-a1.md') === whole, tests: room('tests-a3.md') === wholeTests, docs: room('docs-a2.md') === longer }, { lead: true, tests: true, docs: true });
+		const entry = wholeTests.slice(wholeTests.indexOf('## #m'));
+		assert.deepStrictEqual({ lead: room('lead-a1.md') === whole, tests: room('tests-a3.md') === `${wholeTests.slice(0, -5)}${entry}`, docs: room('docs-a2.md') === longer }, { lead: true, tests: true, docs: true });
 	});
 
 	test('rooms deleted are gone for good: none is written again from the ledger for a message up to then; later messages begin them anew', () => {
 		const lead = table.start(newAgent('lead')).agent;
 		send({ to: lead.id, text: 'Before.' });
 		table.messages.roomsDeleted();
-		rooms.delete();
+		rooms.delete(table.machineLast('messages'));
 		rooms.restore();
-		const afterDelete = fs.existsSync(rooms.folder);
+		const afterDelete = fs.readdirSync(rooms.folder).some(name => name.endsWith('.md'));
 		const later = send({ to: lead.id, text: 'After.' });
 		table.dispose();
 		table = AgentTable.open({ dir: temp.dir });
@@ -400,7 +419,7 @@ suite('Record: chat rooms', () => {
 		send({ to: lead.id, text: 'Two.' });
 		const across = send({ from: lead.id, to: docs.id, text: 'Three.' });
 		const toPerson = send({ from: lead.id, to: HUMAN, text: 'Four.' });
-		const shown = (id: number) => path.basename(rooms.roomOf(table.state.mail.messages.get(id) ?? { id, to: HUMAN, length: 1, time: 0 }) ?? '');
+		const shown = (id: number) => path.basename(rooms.roomOf(table.state.mail.messages.get(id) ?? { id, to: HUMAN, length: 1, time: 0, seq: 0 }) ?? '');
 
 		assert.deepStrictEqual({ list: rooms.list().map(each => `${path.basename(each.file)} ${each.messages}`), shown: [shown(across), shown(toPerson)] }, {
 			list: ['lead-a1.md 4', 'docs-a2.md 1'],

@@ -1731,12 +1731,13 @@ suite('CLIs: starting one without cmd.exe reading its arguments', () => {
 		assert.deepStrictEqual(shims.map(shim => launchTarget(shim, 'win32', env)), shims.map(shim => ({ executable: shim, args: [], throughCmd: true })));
 	});
 
-	test('what cmd.exe reads as its own, or which ends an argument there, cannot go through it', () => {
+	test('what cmd.exe reads as its own, or which ends an argument there, cannot go through it; parentheses, quoted or not, can - another workspace\'s agent is written in them', () => {
 		const chinese = String.fromCharCode(0x5f20, 0x4e09);
 		const safe = ['sonnet', '--model', 'C:\\Users\\Zhang San\\.facade\\runs\\7.json', `C:\\Users\\${chinese}\\x.json`];
-		const unsafe = ['Say "hi"', '100%', 'build & test', 'a|b', 'x>y', 'one\ntwo', 'one\rtwo', '^', 'Hi!', '(x)'];
+		const unsafe = ['Say "hi"', '100%', 'build & test', 'a|b', 'x>y', 'one\ntwo', 'one\rtwo', '^', 'Hi!'];
 
-		assert.deepStrictEqual({ safe: safe.map(unsafeForCmd), unsafe: unsafe.map(unsafeForCmd) }, { safe: safe.map(() => false), unsafe: unsafe.map(() => true) });
+		const parenthesized = ['(x)', 'a)b(c', 'created by @codex #a15 (workspace beta, 97487ec8).'];
+		assert.deepStrictEqual({ safe: [...safe, ...parenthesized].map(unsafeForCmd), unsafe: unsafe.map(unsafeForCmd) }, { safe: [...safe, ...parenthesized].map(() => false), unsafe: unsafe.map(() => true) });
 	});
 
 	test('Qwen Code\'s own Windows installer is run as its launcher would run it - the Node it brings with the package\'s script, told the path of that launcher - from the launcher on PATH, which calls the package\'s, or from the package\'s own; the package\'s beside the launcher on PATH where the path it calls, in a folder whose name is not all ASCII, is not written as UTF-8; a .cmd that is neither, or whose Node is gone, and anywhere but Windows, are left to how any program is started (L10)', () => {

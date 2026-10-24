@@ -15,6 +15,7 @@ import { callerOf, fakeWorld, worktreeFolder } from './fakes';
 import { tempDir } from './util';
 
 const TOOLS = 'Tools: start_agent launches a separate CLI; started confirms launch readiness, not task completion. list_agents shows runs, mailboxes, and available CLIs: you, your creator, and your immediate children by default, or every reachable run with all:true. stop_agent ends a run and can delete its worktree. read_screen inspects a CLI; type_text and press_keys send terminal input and normally return the resulting screen.';
+const YOLO_ON = 'YOLO is on. You can reach every agent in every Facade workspace on this machine; refer to another workspace\'s agent by its ID. list_agents lists your own workspace unless all is set. Children inherit YOLO on and start in the workspace that has their folder, yours first.';
 const MESSAGES = 'Use send_message for tasks, questions, answers, and reports. It records each message and returns its ID without waiting for a reply. On a [facade] unread-message notice, call read_messages and show new messages in your terminal before acting. Repeated reads keep the same IDs; track which work you have handled. Before messaging @human, print the full text here. Continue independent work after sending. If you need a reply to proceed, end this turn and leave your CLI running. Agent replies trigger a doorbell; do not poll or sleep for them.';
 /** Whom each agent asks (M8): a child its creator; one the person started from the UI the person; one their script started @human. */
 const ASK_CREATOR = 'Use send_message to send questions to your creator and report when you finish or become blocked.';
@@ -101,9 +102,9 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			model: { type: 'string', description: 'Value for the CLI\'s --model option. Omit to use its default.' },
 			effort: { type: 'string', description: 'CLI reasoning effort, such as low, medium, or high. Omit to use its default. Does not require model.' },
 			instructions: [
-				'You are @planner #a2, a Told Code agent in Facade Code. Creator: @lead #a1. Tree root: #a1.',
+				'You are @planner #a2, a Told Code agent in Facade Code, in workspace workspace. Creator: @lead #a1. Tree root: #a1.',
 				`Working directory: ${work} (worktree work). You are already in this directory; no cd is needed to start work here.`,
-				'YOLO is on. You can reach every agent in this window. Children inherit YOLO on.',
+				YOLO_ON,
 				TOOLS,
 				MESSAGES,
 				ASK_CREATOR,
@@ -111,9 +112,9 @@ suite('Contract: what the model sees, and what it gets back', () => {
 				NO_PICKS
 			],
 			own: [
-				'You are @arg #a3, an Arg Code agent in Facade Code. Creator: @human. Tree root: #a3.',
+				'You are @arg #a3, an Arg Code agent in Facade Code, in workspace workspace. Creator: @human. Tree root: #a3.',
 				`Working directory: ${lab} (worktree main). You are already in this directory; no cd is needed to start work here.`,
-				'YOLO is on. You can reach every agent in this window. Children inherit YOLO on.',
+				YOLO_ON,
 				TOOLS,
 				MESSAGES,
 				ASK_IN_TERMINAL,
@@ -121,7 +122,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			],
 			// Started by the person's script through start_agent: nobody may be watching it (M8)
 			script: [MESSAGES, ASK_HUMAN, UNANSWERED, NO_PICKS],
-			person: { name: 'human', instructions: ['You act as @human in Facade Code and can reach every agent in this window.', TOOLS, PERSON_MESSAGES, UNANSWERED] }
+			person: { name: 'human', instructions: ['You act as @human in Facade Code, in workspace workspace, and can reach every agent in every Facade workspace on this machine.', TOOLS, PERSON_MESSAGES, UNANSWERED] }
 		});
 	});
 
@@ -151,7 +152,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		await world.facade.startForPerson('review', lab);
 		world.settings.arg = { launch: { arguments: { yoloOff: ['--sandbox'] } } };
 		await world.startUp(PERSON, { cli: 'arg', task: 'Changed.', name: 'changed', folder: lab });
-		const said = (id: number) => contract.hello(callerOf(world.agent(id))).instructions.split('\n')[2].replace(/^YOLO is off\. You can reach only your own tree\. Children inherit YOLO off\. /, '');
+		const said = (id: number) => contract.hello(callerOf(world.agent(id))).instructions.split('\n')[2].replace(/^YOLO is off\. You can reach only your own tree, in whichever workspace it runs\. Children inherit YOLO off\. /, '');
 		const launched = [1, 2, 3, 4].map(said);
 		world.dispose();
 		world = fakeWorld(dir, { repositories: { [lab]: ['work'] }, folders: [plain] });
@@ -167,7 +168,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 				'Your CLI may require approval to use Facade tools: the launch\'s yoloOff group differs from Facade\'s defaults for allowing tools without approval.'
 			],
 			afterReload: 'Facade itself does not require approval for its tools.',
-			skill: ['tree. Children inherit your YOLO. Facade itself adds no approval requirement;']
+			skill: ['Facade itself adds no approval requirement; your launch instructions describe the']
 		});
 	});
 
@@ -183,7 +184,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 		assert.deepStrictEqual({ required: schema.required, optional: Object.keys(schema.properties).filter(name => !schema.required.includes(name)), enums: [schema.properties.model.enum, schema.properties.effort.enum] }, {
 			required: ['name', 'cli'],
-			optional: ['model', 'effort', 'task', 'folder', 'new_worktree'],
+			optional: ['model', 'effort', 'task', 'folder', 'new_worktree', 'workspace'],
 			enums: [undefined, undefined]
 		});
 	});
@@ -303,7 +304,7 @@ suite('Contract: what the model sees, and what it gets back', () => {
 			stopped: 'Stopped @tests #a2: its terminal closed. Its worktree is unchanged.',
 			again: '@tests #a2 had already ended (stopped by @lead #a1: with stop_agent).',
 			listed: [
-				'You are @lead #a1. YOLO on: you can reach every agent in this window.',
+				'You are @lead #a1 in workspace workspace. YOLO on: you can reach every agent in every Facade workspace on this machine.',
 				'3 agents: 2 running, 1 ended',
 				// Each with its mailbox (M3): @tests' task went back to @lead as it ended unfetched, in #m4 (M6)
 				`@lead #a1 (you)  creator @human  tree #a1  running  worktree work  started ${timeOfDay(world.agent(1).startTime)}  ${arg('large', work, 1)}  mailbox: 2 unread: #m1 (from @human, 0 min ago), #m4 (from Facade, 0 min ago); 0 fetched; task #m1 not yet fetched`,
@@ -339,8 +340,8 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		};
 
 		assert.deepStrictEqual({ lead: await of(lead), person: await of(PERSON) }, {
-			lead: { who: { id: 1, name: 'lead' }, reach: 'window', counts: { starting: 0, running: 1, stopping: 0, ended: 1 } },
-			person: { who: { name: 'human' }, reach: 'window', counts: { starting: 0, running: 1, stopping: 0, ended: 1 } }
+			lead: { who: { id: 1, name: 'lead' }, reach: 'machine', counts: { starting: 0, running: 1, stopping: 0, ended: 1 } },
+			person: { who: { name: 'human' }, reach: 'machine', counts: { starting: 0, running: 1, stopping: 0, ended: 1 } }
 		});
 	});
 
@@ -486,8 +487,8 @@ suite('Contract: what the model sees, and what it gets back', () => {
 
 		assert.deepStrictEqual(results, [
 			error('INVALID', 'Unknown tool \'send\'. Available tools: start_agent, list_agents, stop_agent, send_message, read_messages, read_screen, type_text, press_keys.'),
-			error('INVALID', 'Unknown arguments for start_agent: color. Accepted arguments (? = optional): name, cli, model?, effort?, task?, folder?, new_worktree?.'),
-			error('INVALID', 'Provide a JSON arguments object for start_agent. Accepted arguments (? = optional): name, cli, model?, effort?, task?, folder?, new_worktree?.'),
+			error('INVALID', 'Unknown arguments for start_agent: color. Accepted arguments (? = optional): name, cli, model?, effort?, task?, folder?, new_worktree?, workspace?.'),
+			error('INVALID', 'Provide a JSON arguments object for start_agent. Accepted arguments (? = optional): name, cli, model?, effort?, task?, folder?, new_worktree?, workspace?.'),
 			error('INVALID', 'Argument \'name\' is required.'),
 			error('INVALID', 'Argument \'task\' must not be empty.'),
 			error('INVALID', 'Argument \'task\' must not be empty.'),

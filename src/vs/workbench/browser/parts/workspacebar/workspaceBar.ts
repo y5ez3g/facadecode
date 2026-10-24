@@ -5,6 +5,8 @@
 
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { Event } from '../../../../base/common/event.js';
+import { isAbsolute } from '../../../../base/common/path.js';
+import { env } from '../../../../base/common/process.js';
 import { basename, dirname, isEqual, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
@@ -63,8 +65,29 @@ export function rekeyFolders<T>(map: Map<string, T>, scheme: string, folderKey: 
 	return changed;
 }
 
-/** Where the product makes worktrees, under the home folder: `<home>/.facade/worktrees/<repository>/<name>` (WORKTREE.md WT-2.1). */
+/** Where the product makes worktrees: `<home>/.facade/worktrees/<repository>/<name>` - or under `FACADE_HOME`, for an isolated test window (WORKTREE.md WT-2.1). */
 export const WORKTREES_FOLDER: readonly string[] = ['.facade', 'worktrees'];
+
+/**
+ * `FACADE_HOME`, when the window runs with it: the Facade home of an isolated test window, in place of
+ * `<home>/.facade` - its worktrees here, and, for the agents' extension, its records, counters and window key
+ * (AGENT-ORCHESTRATION.md O8). Undefined for an ordinary window. Read from the window process's environment,
+ * which the sandbox preload applies to the renderer's own.
+ */
+export function facadeHomeOverride(): URI | undefined {
+	// An absolute path alone, as the agents' extension takes it: a window and its extension agree on one home
+	const value = env.FACADE_HOME;
+	return value && isAbsolute(value) ? URI.file(value) : undefined;
+}
+
+/**
+ * `WORKTREES_FOLDER` under the Facade home - `FACADE_HOME` where the window runs with it, `<home>/.facade`
+ * otherwise - links not followed. `worktreesFolderOf` is this, canonical.
+ */
+export async function worktreesRootOf(pathService: IPathService): Promise<URI> {
+	const override = facadeHomeOverride();
+	return override ? joinPath(override, 'worktrees') : joinPath(await pathService.userHome(), ...WORKTREES_FOLDER);
+}
 
 /**
  * A repository's worktrees in the order the bar draws them (WORKTREE.md WT-1.7): the ones somebody has
@@ -194,10 +217,11 @@ export async function canonicalUri(fileService: IFileService, uri: URI): Promise
 }
 
 /**
- * `WORKTREES_FOLDER` under the home folder, canonical. A worktree inside it is one Facade made; any other is another
+ * `WORKTREES_FOLDER` under the Facade home, canonical - `FACADE_HOME` for an isolated test window, `<home>/.facade`
+ * otherwise (`worktreesRootOf`). A worktree inside it is one Facade made; any other is another
  * tool's, which Facade takes for a folder and never acts on as a worktree (WORKTREE.md WT-1.3).
  */
 export async function worktreesFolderOf(fileService: IFileService, pathService: IPathService): Promise<URI> {
-	return canonicalUri(fileService, joinPath(await pathService.userHome(), ...WORKTREES_FOLDER));
+	return canonicalUri(fileService, await worktreesRootOf(pathService));
 }
 

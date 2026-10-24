@@ -14,6 +14,11 @@ import { CallLine, callLineOf, Progress, splitLines } from './protocol';
 
 /** The most a request's body may hold: a call's arguments are at most 1 MB. */
 const MAX_BODY_BYTES = 1024 * 1024;
+/**
+ * What a window's request to another adds to the call it carries: who calls, as its window knows them (AGENT-ORCHESTRATION.md,
+ * O8). The window takes a body that much longer, from another window alone.
+ */
+export const WINDOW_REQUEST_EXTRA_BYTES = 64 * 1024;
 /** How long a request may take to send its headers; its call may take as long as it needs. */
 const HEADERS_TIMEOUT_MS = 60_000;
 
@@ -162,6 +167,8 @@ export interface PipeHandlers<C> {
 	 * fails is logged, and the takeover ends that process instead. No `/release` where none is given.
 	 */
 	release?(): void;
+	/** Whether a request of `caller` may be longer than a call, by `WINDOW_REQUEST_EXTRA_BYTES`: another window's (O8). */
+	mayExceed?(caller: C): boolean;
 }
 
 /** What `PipeServer.listen` serves else, and how it watches its socket. */
@@ -384,16 +391,16 @@ export class PipeServer<C> {
 				return;
 			}
 			res.writeHead(404).end();
-		});
+		}, this.handlers.mayExceed?.(caller) ? MAX_BODY_BYTES + WINDOW_REQUEST_EXTRA_BYTES : MAX_BODY_BYTES);
 	}
 
 	/** Reads one bounded JSON object, answering with `invalidStatus` when it is malformed. */
-	private readBody(req: http.IncomingMessage, res: http.ServerResponse, invalidStatus: number, onBody: (body: JsonObject) => void): void {
+	private readBody(req: http.IncomingMessage, res: http.ServerResponse, invalidStatus: number, onBody: (body: JsonObject) => void, maxBytes = MAX_BODY_BYTES): void {
 		const chunks: Buffer[] = [];
 		let size = 0;
 		req.on('data', (chunk: Buffer) => {
 			size += chunk.length;
-			if (size > MAX_BODY_BYTES) {
+			if (size > maxBytes) {
 				// What is past the limit is read and dropped, so that the caller reads why before the connection closes
 				if (!res.writableEnded) {
 					chunks.length = 0;
@@ -585,7 +592,8 @@ function windowFailureOf(body: string): string | undefined {
  */
 export class PipeClient {
 
-	constructor(private readonly pipe: string, private readonly token: string) { }
+	/** `extra` is what a request may hold beyond a call: `WINDOW_REQUEST_EXTRA_BYTES` for a window's, which the window takes from another window alone. */
+	constructor(private readonly pipe: string, private readonly token: string, private readonly extra = 0) { }
 
 	/** The window's hello, as it sent it; the caller checks it. Aborting `signal` stops waiting for it, as for a window that does not answer. */
 	hello(signal?: AbortSignal): Promise<unknown> {
@@ -629,8 +637,8 @@ export class PipeClient {
 			}
 			// One the window would refuse is not sent: past the limit, a refusal could not be told from a connection that broke
 			const body = JSON.stringify({ tool, args });
-			if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
-				reject(new PipeClientError(`Request payload exceeds the IPC limit of ${MAX_BODY_BYTES} bytes.`, 'TOO_LARGE'));
+			if (Buffer.byteLength(body) > MAX_BODY_BYTES + this.extra) {
+				reject(new PipeClientError(`Request payload exceeds the IPC limit of ${MAX_BODY_BYTES + this.extra} bytes.`, 'TOO_LARGE'));
 				return;
 			}
 			let settled = false;

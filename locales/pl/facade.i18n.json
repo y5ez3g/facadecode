@@ -234,7 +234,7 @@
 			"workspaceBar.untrustedLinksMany": "Zobacz [naszą dokumentację](https://aka.ms/vscode-workspace-trust), aby dowiedzieć się więcej, lub [otwórz wszystkie foldery ({0}) w nowym oknie]({1}) w trybie ograniczonym.",
 			"workspaceBar.untrustedMessage": "Czy ufasz autorom plików w tym folderze?",
 			"workspaceBar.untrustedMessageMany": "Czy ufasz autorom plików w tych {0} folderach?",
-			"workspaceBar.untrustedMore": "i jeszcze {0}",
+			"workspaceBar.untrustedMore": "i jeszcze {0}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "Agenci: {0}",
@@ -328,6 +328,9 @@
 		},
 		"vs/workbench/contrib/facadeCommands/browser/facadeNotifications": {
 			"facadeNotificationSource": "Agenci Facade"
+		},
+		"vs/workbench/contrib/facadeCommands/browser/facadeWindowClosing": {
+			"facadeWindowClosing": "Kończenie działania agentów tego okna"
 		},
 		"vs/workbench/contrib/facadeLocalization/electron-browser/facadeLocalization.contribution": {
 			"changeAndRestart": "Zmień i uruchom ponownie",
@@ -495,7 +498,8 @@
 			"runningWork.awayAgentsAndTerminals": "Czy chcesz zamknąć okno? Nie można połączyć się z {0}. Jego agenci ({1}) i terminale ({2}) działają tam dalej, dopóki działa serwer.",
 			"runningWork.awayTerminal": "Czy chcesz zamknąć okno? Nie można połączyć się z {0}. Jego terminal działa tam dalej, dopóki działa serwer.",
 			"runningWork.awayTerminals": "Czy chcesz zamknąć okno? Nie można połączyć się z {0}. Jego terminale ({1}) działają tam dalej, dopóki działa serwer.",
-			"runningWork.closeWindow": "&&Zamknij okno"
+			"runningWork.closeWindow": "&&Zamknij okno",
+			"runningWork.startedBy": "{0} · uruchomiony przez {1}"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Ikona terminala, w którym działa Antigravity.",
@@ -560,7 +564,9 @@
 			"worktrees.deleteQuestion": "Czy na pewno chcesz usunąć drzewo robocze „{0}”?",
 			"worktrees.deleteUnknown": "Nie można potwierdzić usunięcia drzewa roboczego „{0}”. Pasek obszarów roboczych odzwierciedla bieżący stan Git.",
 			"worktrees.deleteWorktree": "Usuń drzewo robocze...",
+			"worktrees.deletedElsewhere": "Drzewo robocze „{0}” nie zostało usunięte, ponieważ obszar roboczy {1} je usuwa.",
 			"worktrees.deleting": "Trwa usuwanie drzewa roboczego „{0}”...",
+			"worktrees.elsewhereFailed": "Drzewo robocze „{0}” nie zostało usunięte, ponieważ nie można było skontaktować się w tej sprawie z innymi obszarami roboczymi: {1}",
 			"worktrees.folder": "Ścieżka: {0}",
 			"worktrees.folderAndSubmodulesDeleted": "Folder drzewa roboczego, w tym jego podmoduły i niewypchnięte zatwierdzenia, zostanie usunięty. Tej akcji nie można cofnąć.",
 			"worktrees.folderDeleted": "Folder drzewa roboczego zostanie usunięty z dysku. Tej akcji nie można cofnąć.",
@@ -568,6 +574,7 @@
 			"worktrees.hookFailed": "Drzewo robocze zostało utworzone, ale hak Git nie powiódł się: {0}",
 			"worktrees.ignored": "Następujące pliki ignorowane przez Git zostaną usunięte:",
 			"worktrees.ignoredFile": "{0} (ignorowany przez Git)",
+			"worktrees.inWorkspace": "obszar roboczy {0}",
 			"worktrees.inheritedEnvironment": "To okno zostało uruchomione z ustawioną zmienną GIT_DIR, GIT_WORK_TREE lub GIT_INDEX_FILE, która przekierowuje Git do innego repozytorium. Otwórz folder w nowym oknie.",
 			"worktrees.initialBranch": "Wstępne zatwierdzenie znajduje się w gałęzi „{0}”. Wybierz inną nazwę gałęzi dla nowego drzewa roboczego.",
 			"worktrees.initializeAndCreate": "Zainicjuj i utwórz",
@@ -576,6 +583,7 @@
 			"worktrees.invalidBranchName": "„{0}” nie jest prawidłową nazwą gałęzi.",
 			"worktrees.kept": "Drzewo robocze „{0}” nie zostało usunięte z dysku. Usunięto je z obszaru roboczego. Kliknij jego wiersz, aby dodać je z powrotem.",
 			"worktrees.keptOutside": "Drzewo robocze „{0}” nie zostało usunięte z dysku.",
+			"worktrees.leftElsewhere": "Drzewo robocze „{0}” nie zostało usunięte, ponieważ praca w innym obszarze roboczym nie została zatrzymana: {1}.",
 			"worktrees.leftover": "Drzewo robocze zostało usunięte z Git, ale nie można usunąć jego folderu: {0}. {1}",
 			"worktrees.leftoverRefused": "Nie można usunąć folderu: {0}",
 			"worktrees.leftoverUnknown": "Folder „{0}” nie został rozpoznany jako folder drzewa roboczego pozostawiony przez usuwanie w tym oknie, dlatego nie został usunięty. W razie potrzeby usuń go ręcznie.",
@@ -600,6 +608,7 @@
 			"worktrees.notRepositoryUnasked": "Folder „{0}” nie jest repozytorium Git. Najpierw zainicjuj repozytorium.",
 			"worktrees.notWorktree": "„{0}” nie jest rozpoznanym drzewem roboczym w tym obszarze roboczym.",
 			"worktrees.openWorktree": "Otwórz drzewo robocze",
+			"worktrees.otherVersions": "Otwarte jest okno innej wersji programu Facade ({0}); nie zapytano go, czy pracuje w tym drzewie roboczym.",
 			"worktrees.outOfWorkspace": "Zostało usunięte z obszaru roboczego.",
 			"worktrees.pathExists": "W lokalizacji „{0}” już istnieje plik lub folder.",
 			"worktrees.prepare.folderEmpty": "Ten folder nie jest repozytorium Git. Kontynuowanie spowoduje jego zainicjowanie („git init”) i utworzenie pustego wstępnego zatwierdzenia.",
@@ -613,6 +622,7 @@
 			"worktrees.prepare.unbornOne": "To repozytorium nie ma jeszcze zatwierdzeń. Kontynuowanie spowoduje utworzenie wstępnego zatwierdzenia z 1 plikiem.",
 			"worktrees.prepareFailed": "Nie można utworzyć wstępnego zatwierdzenia dla „{0}”: {1}",
 			"worktrees.preparing": "Trwa tworzenie wstępnego zatwierdzenia w „{0}”...",
+			"worktrees.releaseUnknown": "Drzewo robocze „{0}” nie zostało usunięte, ponieważ obszar roboczy {1} mógł przyjąć żądanie zatrzymania w nim pracy, ale nie zwrócił wyniku; nie wiadomo, czy ta praca została zatrzymana. Sprawdź ten obszar roboczy, a następnie spróbuj ponownie.",
 			"worktrees.restricted": "Drzewa robocze wymagają operacji Git, które są wyłączone w trybie ograniczonym.",
 			"worktrees.restrictedUnasked": "Obszar roboczy jest w trybie ograniczonym. Zaufaj obszarowi roboczemu, aby uruchamiać operacje Git.",
 			"worktrees.retry": "Ponów próbę",
@@ -644,6 +654,8 @@
 			"worktrees.unsavedFile": "{0} (niezapisany)",
 			"worktrees.untrusted": "Drzewo robocze dziedziczy zaufanie od repozytorium nadrzędnego „{0}”. Najpierw zaufaj repozytorium nadrzędnemu.",
 			"worktrees.untrustedUnasked": "Repozytorium „{0}” jest niezaufane. Zaufaj repozytorium przed utworzeniem drzewa roboczego.",
+			"worktrees.workSinceElsewhere": "Drzewo robocze „{0}” nie zostało usunięte, ponieważ inne obszary robocze mają w nim pracę, której to usunięcie nie objęło: {1}.",
+			"worktrees.workspaceSilent": "Drzewo robocze „{0}” nie zostało usunięte, ponieważ obszar roboczy {1} nie odpowiedział i może w nim pracować. Spróbuj ponownie za chwilę.",
 			"worktrees.wouldLose": "Drzewo robocze „{0}” ma zmiany, które zostałyby utracone po jego usunięciu: {1}. Nic nie zostało usunięte.",
 			"worktrees.wouldLoseSubmodules": "Drzewo robocze „{0}” ma podmoduły; jego usunięcie spowodowałoby utratę ich niewypchniętych zatwierdzeń. Nic nie zostało usunięte."
 		},
@@ -713,11 +725,13 @@
 			"Agent management for this workspace has been transferred to another Facade window.": "Zarządzanie agentami tego obszaru roboczego zostało przeniesione do innego okna Facade.",
 			"Agents for this workspace are managed in another window. Delete chat rooms in that window.": "Agentami tego obszaru roboczego zarządza się w innym oknie. Usuń pokoje czatu w tamtym oknie.",
 			"Agents for this workspace are managed in another window. Open chat rooms in that window.": "Agentami tego obszaru roboczego zarządza się w innym oknie. Otwórz pokoje czatu w tamtym oknie.",
-			"All messages between you and your agents in this workspace will be deleted. This action cannot be undone.": "Wszystkie wiadomości między tobą a twoimi agentami w tym obszarze roboczym zostaną usunięte. Tej akcji nie można cofnąć.",
+			"Chat rooms belong to this machine, so this deletes those of every workspace, not only this one. Running agents can still read the messages of their session. This action cannot be undone.": "Pokoje czatu należą do tego komputera, więc zostaną usunięte pokoje wszystkich obszarów roboczych, a nie tylko tego. Działający agenci nadal mogą czytać wiadomości ze swojej sesji. Tej akcji nie można cofnąć.",
 			"An agent you start from the agent menu or Start Agent keeps its CLI's own questions and updates, and its approvals as YOLO sets them. An agent that another agent or your script starts through start_agent, where no one may be watching, runs with its launch's unattended part (its groups replace the launch's; its environment and settings are applied over the launch's) so that, where its CLI allows it, nothing waits for an answer. whenYouStartIt and throughStartAgent show what each gets.": "Agent uruchomiony przez ciebie z menu Agent lub poleceniem Uruchom agenta zachowuje pytania i aktualizacje własnego CLI, a zatwierdzanie działa u niego tak, jak ustawia je YOLO. Agent, którego inny agent lub twój skrypt uruchamia przez start_agent, gdy być może nikt tego nie obserwuje, działa z częścią unattended swojej konfiguracji uruchamiania (jej grupy zastępują grupy konfiguracji uruchamiania, a jej środowisko i ustawienia są nakładane na środowisko i ustawienia konfiguracji uruchamiania), tak aby tam, gdzie pozwala na to jego CLI, nic nie czekało na odpowiedź. whenYouStartIt i throughStartAgent pokazują, co dostaje każdy z nich.",
 			"Another Facade window manages this workspace's agents. Start agents in that window.": "Agentami tego obszaru roboczego zarządza inne okno Facade. Uruchamiaj agentów w tamtym oknie.",
 			"Another Facade window manages this workspace's agents. Use that window, or close it and reload this window to manage them here.": "Agentami tego obszaru roboczego zarządza inne okno Facade. Użyj tamtego okna albo zamknij je i ponownie załaduj to okno, aby zarządzać agentami tutaj.",
-			"Are you sure you want to delete all chat rooms in this workspace?": "Czy na pewno chcesz usunąć wszystkie pokoje czatu w tym obszarze roboczym?",
+			"There are no chat rooms to delete.": "Brak pokoi czatu do usunięcia.",
+			"Are you sure you want to delete 1 chat room?": "Czy na pewno chcesz usunąć 1 pokój czatu?",
+			"Are you sure you want to delete {0} chat rooms?": "Czy na pewno chcesz usunąć pokoje czatu (liczba: {0})?",
 			"Configure Agents": "Konfiguruj agentów",
 			"Could not delete all chat rooms: {0}": "Nie można usunąć wszystkich pokoi czatu: {0}",
 			"Could not reconnect to the agents that were already running. They cannot use Facade tools, but agents started from now on work normally.": "Nie można ponownie połączyć się z agentami, którzy już działali. Nie mogą oni korzystać z narzędzi Facade, ale agenci uruchamiani od teraz działają normalnie.",
@@ -794,6 +808,7 @@
 			"{0} messages, latest at {1}": "{0} wiadomości, ostatnia o {1}",
 			"{0} of your agents ended. {1}": "Zakończyło działanie {0} twoich agentów. {1}",
 			"{0} sent you a message: {1}": "{0} wysłał ci wiadomość: {1}",
+			"{0} could not be shown: its workspace did not answer, or it has ended. Message #m{1} is in its chat room.": "Nie można wyświetlić {0}: jego obszar roboczy nie odpowiedział lub agent zakończył działanie. Wiadomość #m{1} znajduje się w jego pokoju czatu.",
 			"{0} was changed after Facade added its part, while its window was closing. Its previous content is kept at {1}.": "Plik {0} został zmieniony po tym, jak Facade dodał do niego swoją część, gdy zamykało się jego okno. Jego poprzednia zawartość jest zachowana w {1}.",
 			"{0} was changed while agents used it and no longer contains Facade's part, so it was left as it is. Its previous content is kept at {1}.": "Plik {0} został zmieniony, gdy korzystali z niego agenci, i nie zawiera już części Facade, dlatego pozostawiono go bez zmian. Jego poprzednia zawartość jest zachowana w {1}.",
 			"{0} was missing when another agent started there. Its content from before Facade's changes is kept at {1}.": "Brakowało pliku {0}, gdy uruchamiał się tam inny agent. Jego zawartość sprzed zmian Facade jest zachowana w {1}.",
@@ -814,7 +829,9 @@
 			"{0} hours ago": "{0} godz. temu",
 			"1 day ago": "1 dzień temu",
 			"{0} days ago": "{0} dn. temu",
-			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Poprzedni host rozszerzeń tego okna (proces {0}) nadal zarządza agentami tego obszaru roboczego, a Facade nie mógł go zatrzymać. Zakończ ten proces i ponownie załaduj to okno, aby zarządzać agentami tutaj."
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Poprzedni host rozszerzeń tego okna (proces {0}) nadal zarządza agentami tego obszaru roboczego, a Facade nie mógł go zatrzymać. Zakończ ten proces i ponownie załaduj to okno, aby zarządzać agentami tutaj.",
+			"Facade Agents did not start in this window.": "Facade Agents nie został uruchomiony w tym oknie.",
+			"The deletion names a caller that Facade could not read.": "Usuwanie wskazuje wywołującego, którego Facade nie mógł odczytać."
 		},
 		"package": {
 			"command.category": "Agenci",

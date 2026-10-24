@@ -11,7 +11,7 @@ import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.j
 import { Schemas } from '../../../../base/common/network.js';
 import { IProcessEnvironment, OS, OperatingSystem } from '../../../../base/common/platform.js';
 import { assertType, isBoolean, isNumber, isObject, isString, isUndefined, isUndefinedOrNull } from '../../../../base/common/types.js';
-import { URI } from '../../../../base/common/uri.js';
+import { isUriComponents, URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -19,6 +19,9 @@ import { IProductService } from '../../../../platform/product/common/productServ
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ITerminalEnvironment, TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { FocusMode } from '../../../../platform/native/common/native.js';
+import { mainWindow } from '../../../../base/browser/window.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
@@ -42,6 +45,7 @@ import { FacadeAgentTerminal, IAgentInputEffect, IAgentInputState, IAgentScreenR
 import { FacadeNotifications } from './facadeNotifications.js';
 import { IFacadeRunsService } from './facadeRuns.js';
 import { consumeWindowAway, forgetWindowAway, WindowAwayRecord } from './facadeWindowAway.js';
+import { FacadeWindowClosing } from './facadeWindowClosing.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
 const PROCESS_READY_TIMEOUT_MS = 5_000;
@@ -362,9 +366,10 @@ function isRemoveWorktreeOptions(candidate: unknown): candidate is IRemoveWorktr
 		return false;
 	}
 
-	const { discardChanges, ownFiles, main, runs, leftover } = candidate as Record<string, unknown>;
+	const { discardChanges, ownFiles, main, runs, leftover, by } = candidate as Record<string, unknown>;
 	return (isUndefined(discardChanges) || isBoolean(discardChanges))
 		&& (isUndefined(leftover) || isBoolean(leftover))
+		&& (isUndefined(by) || isObject(by))
 		&& (isUndefined(ownFiles) || (Array.isArray(ownFiles) && ownFiles.every(isOwnedWorktreeFile)))
 		&& (isUndefined(main) || URI.isUri(main))
 		&& (isUndefined(runs) || (Array.isArray(runs) && runs.every(isFacadeRun)));
@@ -379,16 +384,18 @@ function isOwnedWorktreeFile(candidate: unknown): candidate is IOwnedWorktreeFil
 	return isString(path) && isString(sha256);
 }
 
-// `(workspace, ids, preparing?)`: the runs of the record `workspace` that are live now - starting, running or stopping -
-// as the agents' extension says each time its record changes: what the agent button counts (X-51); `preparing`, those
-// of them with no terminal yet - their worktrees being made or set up - listed as active agents too (L3).
+// `(workspace, ids, preparing?, creators?)`: the runs of the record `workspace` that are live now - starting, running or
+// stopping - as the agents' extension says each time its record changes: what the agent button counts (X-51); `preparing`,
+// those of them with no terminal yet - their worktrees being made or set up - listed as active agents too (L3); `creators`,
+// those of them an agent of another workspace started, with that creator, which closing the window's question names (W11).
 CommandsRegistry.registerCommand('_facade.agents.live', (accessor, ...args) => {
-	const [workspace, ids, preparing] = args;
+	const [workspace, ids, preparing, creators] = args;
 	assertType(isString(workspace), 'string');
 	assertType(Array.isArray(ids) && ids.every(isNumber), 'number[]');
 	assertType(isUndefinedOrNull(preparing) || (Array.isArray(preparing) && preparing.every(isPreparingRun)), 'IPreparingRun[]');
+	assertType(isUndefinedOrNull(creators) || (Array.isArray(creators) && creators.every(each => isObject(each) && isNumber((each as Record<string, unknown>).id) && isString((each as Record<string, unknown>).creator))), 'ICreatorElsewhere[]');
 
-	accessor.get(IFacadeRunsService).setLive(workspace, ids, preparing ?? []);
+	accessor.get(IFacadeRunsService).setLive(workspace, ids, preparing ?? [], creators ?? []);
 });
 
 // `(folder)`: the agents' runs whose terminals work inside `folder` - where they are now, or where they started
@@ -407,6 +414,30 @@ CommandsRegistry.registerCommand('_facade.terminal.elsewhere', async (accessor, 
 	assertType(URI.isUri(folder), 'URI');
 
 	return accessor.get(IWorktreeService).otherWindowsAgentsIn(folder);
+});
+
+// `(folder)`: what this window has working inside `folder` - its terminals running a process, its editors with unsaved
+// changes - for another workspace's deletion to list and stop as its own (O5; `IWorktreeService.workIn`).
+CommandsRegistry.registerCommand('_facade.work.in', async (accessor, ...args): Promise<{ readonly terminals: string[]; readonly editors: string[] }> => {
+	const [folder] = args;
+	assertType(URI.isUri(folder) || isUriComponents(folder), 'URI');
+
+	return accessor.get(IWorktreeService).workIn(URI.revive(folder));
+});
+
+// `(folder, discard)`: another workspace's deletion of `folder` reached its step 6 - this window's terminals working
+// there close and, `discard`, its unsaved editors there are discarded. Answers what is left (`IWorktreeService.releaseWork`).
+CommandsRegistry.registerCommand('_facade.work.release', async (accessor, ...args): Promise<string[]> => {
+	const [folder, discard] = args;
+	assertType(URI.isUri(folder) || isUriComponents(folder), 'URI');
+
+	return accessor.get(IWorktreeService).releaseWork(URI.revive(folder), discard === true);
+});
+
+// `()`: brings this window forward - the person chose Show on another workspace's notification of an agent of this
+// one's (AGENT-MESSAGES.md, M9)
+CommandsRegistry.registerCommand('_facade.window.reveal', async (accessor): Promise<void> => {
+	await accessor.get(IHostService).focus(mainWindow, { mode: FocusMode.Force });
 });
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window
@@ -613,6 +644,9 @@ CommandsRegistry.registerCommand('_facade.terminal.input', (accessor, ...args): 
 registerWorkbenchContribution2(FacadeNotifications.ID, FacadeNotifications, WorkbenchPhase.BlockStartup);
 registerWorkbenchContribution2(WindowAwayRecord.ID, WindowAwayRecord, WorkbenchPhase.BlockStartup);
 registerWorkbenchContribution2(WindowRecordCarrier.ID, WindowRecordCarrier, WorkbenchPhase.BlockStartup);
+
+// Tells the agents' extension why the window shuts down, once nothing can cancel it, before its extension host stops
+registerWorkbenchContribution2(FacadeWindowClosing.ID, FacadeWindowClosing, WorkbenchPhase.BlockRestore);
 
 // `(run)`: puts the terminal the run's own process runs in in front, moving the window onto the folder it
 // is held for when that is another's, as a click on its row would (`IFolderTerminalsService.reveal`).
