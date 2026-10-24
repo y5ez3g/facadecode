@@ -24,6 +24,8 @@ const page = browser.contexts().flatMap(context => context.pages()).find(page =>
 if (!page) { throw new Error('Actual workbench page not found.'); }
 page.setDefaultTimeout(10000);
 await page.bringToFront();
+// Allow Electron's native window activation to finish before opening transient menus.
+await page.waitForTimeout(200);
 const observations = [];
 const target = step => {
 	const scope = step.within ? page.locator(step.within) : page;
@@ -40,13 +42,23 @@ try {
 		const startedAt = new Date().toISOString();
 		let result;
 		switch (step.action) {
-			case 'click': await target(step).click({ button: step.button || 'left' }); break;
+			case 'click':
+				// Upstream menus deliberately enable mouse-up activation after 100 ms.
+				if (step.role === 'menuitem') { await page.waitForTimeout(120); }
+				await target(step).click({ button: step.button || 'left' });
+				break;
 			case 'dblclick': await target(step).dblclick(); break;
 			case 'hover': await target(step).hover(); break;
 			case 'drag': await target(step).dragTo(target(step.to)); break;
 			case 'focus': await target(step).focus(); break;
 			case 'fill': await target(step).fill(step.text); break;
 			case 'key': await page.keyboard.press(step.key); break;
+			case 'press': await target(step).press(step.key); break;
+			case 'view':
+				if (await target(step).getAttribute('aria-selected') !== 'true' || !await page.locator('.part.sidebar').isVisible()) {
+					await target(step).click();
+				}
+				break;
 			case 'type': await page.keyboard.insertText(step.text); break;
 			case 'wait': await target(step).waitFor({ state: step.state || 'visible', timeout: step.timeout || 30000 }); break;
 			case 'assert-text': {
@@ -57,16 +69,27 @@ try {
 			case 'command': {
 				await page.keyboard.press('Meta+Shift+p');
 				await page.locator('.quick-input-widget:visible input').fill('>' + step.query);
-				await page.getByRole('option').filter({ hasText: step.option || step.query }).first().click();
+				await page.locator('.quick-input-widget:visible').getByRole('option').filter({ hasText: step.option || step.query }).first().click();
+				break;
+			}
+			case 'reload': {
+				const loaded = page.waitForEvent('domcontentloaded', { timeout: step.timeout || 90000 });
+				loaded.catch(() => {});
+				await page.keyboard.press('Meta+Shift+p');
+				await page.locator('.quick-input-widget:visible input').fill('>Developer: Reload Window');
+				await page.locator('.quick-input-widget:visible').getByRole('option').filter({ hasText: 'Developer: Reload Window' }).first().click();
+				await loaded;
+				await page.getByRole('tree', { name: 'Workspace Folders', exact: true }).waitFor({ timeout: step.timeout || 90000 });
 				break;
 			}
 			case 'read': result = {
 				title: await page.title(), lines: await page.locator('.view-line').allTextContents(),
+				editorLines: await page.locator('.part.editor .view-line').allTextContents(),
 				focus: await page.evaluate(() => ({ tag: document.activeElement?.tagName, classes: document.activeElement?.className,
 					insideEditor: !!document.activeElement?.closest('.monaco-editor') })),
 				textboxes: await page.getByRole('textbox').evaluateAll(elements => elements.map(element => ({ name: element.getAttribute('aria-label'), value: element.value }))),
 				rows: await page.getByRole('tree', { name: 'Workspace Folders', exact: true }).getByRole('treeitem').allTextContents(),
-				dialogs: await page.getByRole('dialog').allTextContents()
+				dialogs: await page.getByRole('dialog').evaluateAll(elements => elements.map(element => element.innerText))
 			}; break;
 			case 'snapshot': {
 				const filename = join(evidence, values.label + '-' + index + '.yml');

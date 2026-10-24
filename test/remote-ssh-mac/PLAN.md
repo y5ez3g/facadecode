@@ -1,6 +1,6 @@
 # 24-hour Remote SSH validation: Mac to Windows and Linux
 
-Status: campaign preparation started; application cases have not run. Preflight findings are recorded separately from feature results. The campaign is timeboxed, with measured coverage and explicit blockers, not a promise that untested combinations work.
+Status: the real campaign is running. Baseline and rebuilt candidate results, including failures, are recorded under `.build/logs/remote-ssh-mac/campaign-20261023/`. This file defines the ordered targets; only completed observations in `results.json` and the associated artifacts establish coverage. The campaign is timeboxed, with measured coverage and explicit blockers.
 
 ## Objective and scope
 
@@ -256,3 +256,11 @@ Before reporting that Remote SSH works on Mac:
 6. Rerun failures after fixes, rerun the continuous journey on the final commit, and verify that cleanup leaves no test-owned processes or worktrees.
 
 This macOS-client report is not the full cross-platform release gate in REMOTE.md, W19 or L14.
+
+## Continuous observation helpers
+
+`health.mjs` collects actual forwarded HTTP identities, real Facade MCP agent state, independent host process/heartbeat observations and read-only workbench state every minute. This is continuous monitoring, not completion of the full alternating UI/model soak cycle above. `reload-stress.mjs` separately drives real A/B folder switches, exact hidden dirty text, one tab per agent and Reload Window, checking original native process identity and actual HTTP recovery before and after every round. Its bounded30-second HTTP recovery window records transient attempts rather than mistaking the first request during reconnection for permanent failure. Failures in a driver require diagnosis; a nonzero driver exit is not automatically a product defect. Both scripts retain real evidence without replacing any product service or vendor CLI.
+
+`network-batch.mjs` repeats real ten-second and one-minute socket cuts. Each round checks actual MCP, original native process/start identity and heartbeats before, during and after the interruption, actual forwarded HTTP recovery, and visible workspace rows. It does not replace model-task or full dirty-editor journeys. Requested repetitions become completed results only after their assertions finish. Create `network-batch.pause` and wait for `PAUSED-BETWEEN-CASES` before further GUI cases requiring stable SSH; remove the file when those cases finish.
+
+The continuous helpers read actual target metadata from the campaign's private `soak-targets.json`. Optional self-checkpoint delivery uses private `notification.json` (`enabled`, installed `shim`, own `record`, and `argsFile` naming the actual MCP request). Tokens stay in the product's token files. Do not put credentials in either file or use a checkpoint to contact unrelated agents. Preserve the exact running worker source when editing a helper during an observation interval.
