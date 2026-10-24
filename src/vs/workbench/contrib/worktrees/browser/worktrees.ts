@@ -1988,6 +1988,15 @@ export class WorktreeService implements IWorktreeService {
 						}
 					}
 					done.ended = running.filter(name => !terminalsLeft.includes(name));
+					if (!terminalsLeft.length) {
+						const authority = worktree.scheme === Schemas.vscodeRemote ? worktree.authority : undefined;
+						const backend = await this.terminalInstanceService.getBackend(authority);
+						if (backend?.waitForPendingShutdowns) {
+							// The process host remembers pending native descendants after a window reload loses their tabs.
+							const pending = await raceTimeout(backend.waitForPendingShutdowns(worktree.path), 20000);
+							terminalsLeft.push(...(pending ?? [this.labelService.getUriLabel(worktree)]));
+						}
+					}
 					if (terminalsLeft.length) {
 						return { kind: 'refused', why: localize('worktrees.terminalsStillStopping', "Worktree '{0}' was not deleted because these terminals have not finished stopping: {1}. Check the terminals and try deleting it again once they have stopped.", name, terminalsLeft.join(', ')) };
 					}
@@ -2261,7 +2270,7 @@ export class WorktreeService implements IWorktreeService {
 		}
 		stopping.add(instance);
 		try {
-			if (!await raceTimeout(instance.shutdownAndWait?.() ?? Promise.resolve(false), 20000)) {
+			if (!await raceTimeout(instance.shutdownAndWait?.(worktree.path) ?? Promise.resolve(false), 20000)) {
 				return false;
 			}
 			stopping.delete(instance);

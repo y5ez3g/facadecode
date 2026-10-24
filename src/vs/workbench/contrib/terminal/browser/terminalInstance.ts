@@ -1385,8 +1385,8 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 	}
 
 	/** Facade Code: synthetic exit/disposal is not a native process-tree exit acknowledgement. */
-	shutdownAndWait(): Promise<boolean> {
-		return this._processManager.shutdownAndWait();
+	shutdownAndWait(scope?: string): Promise<boolean> {
+		return this._processManager.shutdownAndWait(scope);
 	}
 
 	async detachProcessAndDispose(reason: TerminalExitReason): Promise<void> {

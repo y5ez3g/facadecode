@@ -237,8 +237,11 @@ export class RemoteTerminalChannelClient implements IPtyHostController {
 		return this._channel.call(RemoteTerminalChannelRequest.SetNextCommandId, [id, commandLine, commandId]);
 	}
 	/** Facade Code: the remote pty host confirms its own native processes ended. */
-	shutdownAndWait(id: number): Promise<boolean> {
-		return this._channel.call(RemoteTerminalChannelRequest.ShutdownAndWait, [id]);
+	shutdownAndWait(id: number, scope?: string): Promise<boolean> {
+		return this._channel.call(RemoteTerminalChannelRequest.ShutdownAndWait, [id, scope]);
+	}
+	waitForPendingShutdowns(scope: string): Promise<readonly string[]> {
+		return this._channel.call(RemoteTerminalChannelRequest.WaitForPendingShutdowns, [scope]);
 	}
 	shutdown(id: number, immediate: boolean): Promise<void> {
 		return this._channel.call(RemoteTerminalChannelRequest.Shutdown, [id, immediate]);

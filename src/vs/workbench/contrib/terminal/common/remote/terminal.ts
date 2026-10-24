@@ -74,6 +74,7 @@ export const enum RemoteTerminalChannelRequest {
 	Shutdown = '$shutdown',
 	/** Facade Code: await native process-tree exit before deleting its worktree. */
 	ShutdownAndWait = '$shutdownAndWait',
+	WaitForPendingShutdowns = '$waitForPendingShutdowns',
 	Resize = '$resize',
 	ClearBuffer = '$clearBuffer',
 	GetInitialCwd = '$getInitialCwd',

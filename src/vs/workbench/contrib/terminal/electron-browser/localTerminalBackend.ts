@@ -248,6 +248,11 @@ class LocalTerminalBackend extends BaseTerminalBackend implements ITerminalBacke
 		return this._proxy.listProcesses(options);
 	}
 
+	async waitForPendingShutdowns(scope: string): Promise<readonly string[]> {
+		await this._connectToDirectProxy();
+		return this._proxy.waitForPendingShutdowns?.(scope) ?? [scope];
+	}
+
 	async getLatency(): Promise<IPtyHostLatencyMeasurement[]> {
 		const measurements: IPtyHostLatencyMeasurement[] = [];
 		const sw = new StopWatch();

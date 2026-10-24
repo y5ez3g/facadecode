@@ -226,12 +226,12 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 	}
 
 	/** Facade Code: only an actual process host can confirm native descendants released their files. */
-	async shutdownAndWait(): Promise<boolean> {
+	async shutdownAndWait(scope?: string): Promise<boolean> {
 		this._stoppingProcess ??= this._process ?? undefined;
 		if (!this._stoppingProcess) {
 			return this._isDisposed || this.processState === ProcessState.KilledByProcess;
 		}
-		return this._stoppingProcess.shutdownAndWait?.() ?? false;
+		return this._stoppingProcess.shutdownAndWait?.(scope) ?? false;
 	}
 
 	override dispose(immediate: boolean = false): void {

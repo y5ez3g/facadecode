@@ -1204,7 +1204,7 @@ export interface ITerminalInstance extends IBaseTerminalInstance {
 	 */
 	dispose(reason?: TerminalExitReason): void;
 	/** Facade Code: wait for the terminal's native process tree before its worktree may be deleted. */
-	shutdownAndWait?(): Promise<boolean>;
+	shutdownAndWait?(scope?: string): Promise<boolean>;
 
 	/**
 	 * Informs the process that the terminal is now detached and

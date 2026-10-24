@@ -1716,6 +1716,37 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
+	test('a fresh window waits for a previous window\'s pending native shutdown before deleting its worktree', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', checked());
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		let recordedScope: string | undefined;
+		let ended = false;
+		const server = terminal('real server', w2.path, { running: true });
+		server.shutdownAndWait = async scope => {
+			recordedScope = scope;
+			return false;
+		};
+		instantiationService.stub(ITerminalInstanceService, {
+			getBackend: async () => upcastPartial<ITerminalBackend>({
+				listProcesses: async () => [],
+				waitForPendingShutdowns: async scope => !ended && scope === recordedScope ? ['real server'] : []
+			})
+		});
+		terminals = [server];
+		const attempt = (service: WorktreeService) => service.removeWorktree(w2).then(() => 'deleted', (error: Error) => error.message);
+		assert.match(await attempt(instantiationService.createInstance(WorktreeService)), /terminals have not finished stopping/);
+		assert.strictEqual(recordedScope, w2.path);
+		// Reload loses both the terminal tab and the old worktree service's in-memory instances.
+		terminals = [];
+		const reloaded = instantiationService.createInstance(WorktreeService);
+		assert.match(await attempt(reloaded), /terminals have not finished stopping/);
+		assert.strictEqual(steps.some(step => step.endsWith(' remove')), false);
+		ended = true;
+		assert.strictEqual(await attempt(reloaded), 'deleted');
+		assert.strictEqual(steps.some(step => step.endsWith(' remove')), true);
+	});
+
 	test('native terminal shutdown is awaited before Git removal; a timed-out terminal remains on explicit retry after its UI disappears', async () => {
 		gitIsRunning();
 		answers.set('_git.deleteWorktreeAt check', checked());

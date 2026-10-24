@@ -284,7 +284,7 @@ export const isTerminalProcessManager = (t: ITerminalProcessInfo | ITerminalProc
 
 export interface ITerminalProcessManager extends IDisposable, ITerminalProcessInfo {
 	/** Facade Code: a native process-tree exit acknowledgement for worktree deletion. */
-	shutdownAndWait(): Promise<boolean>;
+	shutdownAndWait(scope?: string): Promise<boolean>;
 	readonly processTraits: IProcessReadyEvent | undefined;
 	readonly processReadyTimestamp: number;
 

@@ -19,7 +19,7 @@ import { InMemoryStorageService, IS_NEW_KEY, StorageScope, StorageTarget } from 
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspaceContextService, IWorkspaceFolder, IWorkspaceFoldersChangeEvent, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
-import { FOLDER_COLORS, FOLDER_ICONS, WorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
+import { FOLDER_COLORS, FOLDER_ICONS, WorkspaceBarCustomizationService, worktreeNameFor } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 
 const STORAGE_KEY = 'facade.workspaceBar.customization';
 const WORKTREE_ORDER_STORAGE_KEY = 'facade.workspaceBar.worktreeOrder';
@@ -356,6 +356,27 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		assert.deepStrictEqual({ renamed: setupResult.renamed, kept: service.get(folder.uri) }, {
 			renamed: [['/w/api', 'Login']],
 			kept: { name: undefined, color: 'teal', icon: undefined }
+		});
+	});
+
+	test('a worktree made with a name keeps that name outside folders after its name joins the workspace file (WT-8.6)', async () => {
+		const { service, folder, join, renamed, reopen } = setup();
+		service.setMade(folder.uri, { name: 'Payments', color: 'teal' });
+
+		join(folder);
+		await timeout(0);
+
+		const row = { uri: folder.uri, label: 'feature/payments', folder: undefined };
+		assert.deepStrictEqual({
+			renamed,
+			outside: worktreeNameFor(service, row),
+			reopened: worktreeNameFor(reopen(), row),
+			color: service.get(folder.uri)?.color,
+		}, {
+			renamed: [['/w/api', 'Payments']],
+			outside: 'Payments',
+			reopened: 'Payments',
+			color: 'teal',
 		});
 	});
 

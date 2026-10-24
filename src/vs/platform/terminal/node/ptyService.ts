@@ -487,20 +487,38 @@ export class PtyService extends Disposable implements IPtyService {
 	}
 
 	/** Facade Code: keep a stopping pty after its synthetic exit, so a refused deletion can retry the native wait. */
-	private readonly _stoppingPtys = new Map<number, PersistentTerminalProcess>();
+	private readonly _stoppingPtys = new Map<number, { readonly pty: PersistentTerminalProcess; readonly scope: string | undefined }>();
+
+	private shutdownScope(scope: string): string {
+		return isWindows ? scope.toLowerCase() : scope;
+	}
 
 	@traceRpc
-	async shutdownAndWait(id: number): Promise<boolean> {
-		const pty = this._stoppingPtys.get(id) ?? this._ptys.get(id);
+	async shutdownAndWait(id: number, scope?: string): Promise<boolean> {
+		const stopping = this._stoppingPtys.get(id);
+		const pty = stopping?.pty ?? this._ptys.get(id);
 		if (!pty) {
 			return true;
 		}
-		this._stoppingPtys.set(id, pty);
+		const key = scope === undefined ? undefined : this.shutdownScope(scope);
+		if (stopping?.scope !== undefined && key !== undefined && stopping.scope !== key) {
+			return false;
+		}
+		this._stoppingPtys.set(id, { pty, scope: stopping?.scope ?? key });
 		const ended = await pty.shutdownAndWait();
 		if (ended) {
 			this._stoppingPtys.delete(id);
 		}
 		return ended;
+	}
+
+	/** Facade Code: the host retains stopped ptys and native identities even after a renderer reload drops their tabs. */
+	@traceRpc
+	async waitForPendingShutdowns(scope: string): Promise<readonly string[]> {
+		const key = this.shutdownScope(scope);
+		const pending = [...this._stoppingPtys].filter(([, stopping]) => stopping.scope === key);
+		const remaining = await Promise.all(pending.map(async ([id, stopping]) => await this.shutdownAndWait(id, scope) ? [] : [stopping.pty.title]));
+		return remaining.flat();
 	}
 
 	@traceRpc

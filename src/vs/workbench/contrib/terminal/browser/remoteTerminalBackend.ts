@@ -246,6 +246,10 @@ class RemoteTerminalBackend extends BaseTerminalBackend implements ITerminalBack
 		return this._remoteTerminalChannel.listProcesses(options);
 	}
 
+	waitForPendingShutdowns(scope: string): Promise<readonly string[]> {
+		return this._remoteTerminalChannel.waitForPendingShutdowns(scope);
+	}
+
 	async getLatency(): Promise<IPtyHostLatencyMeasurement[]> {
 		const sw = new StopWatch();
 		const results = await this._remoteTerminalChannel.getLatency();

@@ -296,8 +296,16 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 				continue;
 			}
 
+			const key = this.key(folder.uri);
+			const made = this.madeWith.get(key);
+			const fromMade = made && this.byFolder.get(key)?.made !== made.made;
 			this.workspaceEditingService.renameFolder(folder.uri, customization.name, true).then(
-				() => this.set(folder.uri, { color: customization.color, icon: customization.icon }),
+				() => {
+					// The creation name still names the worktree when it leaves the workspace (WT-8.6).
+					if (!fromMade) {
+						this.set(folder.uri, { color: customization.color, icon: customization.icon });
+					}
+				},
 				onUnexpectedError);
 		}
 	}

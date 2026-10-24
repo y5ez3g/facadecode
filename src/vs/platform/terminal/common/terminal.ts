@@ -397,7 +397,9 @@ export interface IPtyService {
 	start(id: number): Promise<ITerminalLaunchError | ITerminalLaunchResult | undefined>;
 	shutdown(id: number, immediate: boolean): Promise<void>;
 	/** Facade Code: shutdown confirmed by native process-tree exit, not the pty notification. */
-	shutdownAndWait?(id: number): Promise<boolean>;
+	shutdownAndWait?(id: number, scope?: string): Promise<boolean>;
+	/** Facade Code: pending native stops for a directory survive the window that requested them. */
+	waitForPendingShutdowns?(scope: string): Promise<readonly string[]>;
 	input(id: number, data: string): Promise<void>;
 	sendSignal(id: number, signal: string): Promise<void>;
 	resize(id: number, cols: number, rows: number, pixelWidth?: number, pixelHeight?: number): Promise<void>;
@@ -883,7 +885,7 @@ export interface ITerminalChildProcess {
 	 */
 	shutdown(immediate: boolean): void;
 	/** Facade Code: a bounded native process-tree wait, repeated on explicit retry after a timeout. */
-	shutdownAndWait?(): Promise<boolean>;
+	shutdownAndWait?(scope?: string): Promise<boolean>;
 	input(data: string): void;
 	/**
 	 * Facade Code: `input`, settling once the pty host has the data - for a remote terminal, once it
@@ -1228,6 +1230,8 @@ export interface ITerminalBackend extends ITerminalBackendPtyServiceContribution
 	attachToProcess(id: number, record?: string): Promise<ITerminalChildProcess | undefined>;
 	attachToRevivedProcess(id: number): Promise<ITerminalChildProcess | undefined>;
 	listProcesses(options?: IListProcessesOptions): Promise<IProcessDetails[]>;
+	/** Facade Code: names of native terminal trees still stopping in this directory, including before a reload. */
+	waitForPendingShutdowns?(scope: string): Promise<readonly string[]>;
 	getLatency(): Promise<IPtyHostLatencyMeasurement[]>;
 	getDefaultSystemShell(osOverride?: OperatingSystem): Promise<string>;
 	getProfiles(profiles: unknown, defaultProfile: unknown, includeDetectedProfiles?: boolean): Promise<ITerminalProfile[]>;

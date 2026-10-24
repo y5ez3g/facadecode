@@ -242,8 +242,11 @@ export class PtyHostService extends Disposable implements IPtyHostService {
 		return this._proxy.start(id);
 	}
 	/** Facade Code: keep this wait on the process host, including a remote host. */
-	async shutdownAndWait(id: number): Promise<boolean> {
-		return this._proxy.shutdownAndWait?.(id) ?? false;
+	async shutdownAndWait(id: number, scope?: string): Promise<boolean> {
+		return this._proxy.shutdownAndWait?.(id, scope) ?? false;
+	}
+	async waitForPendingShutdowns(scope: string): Promise<readonly string[]> {
+		return this._proxy.waitForPendingShutdowns?.(scope) ?? [scope];
 	}
 	shutdown(id: number, immediate: boolean): Promise<void> {
 		return this._proxy.shutdown(id, immediate);

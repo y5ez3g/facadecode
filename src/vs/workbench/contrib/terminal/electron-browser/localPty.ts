@@ -28,8 +28,8 @@ export class LocalPty extends BasePty implements ITerminalChildProcess {
 	}
 
 	/** Facade Code: native process-tree exit, confirmed by the local pty host. */
-	async shutdownAndWait(): Promise<boolean> {
-		return this._proxy.shutdownAndWait?.(this.id) ?? false;
+	async shutdownAndWait(scope?: string): Promise<boolean> {
+		return this._proxy.shutdownAndWait?.(this.id, scope) ?? false;
 	}
 
 	shutdown(immediate: boolean): void {
