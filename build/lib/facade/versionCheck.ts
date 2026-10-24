@@ -49,6 +49,23 @@ export function appVersionFields(appRoot: string, release: string, engine: strin
 	];
 }
 
+/**
+ * The server package's own record of the build (REMOTE.md R6): the release version the download
+ * address names, the engine version the handshake checks, and the commit, which must be the
+ * desktop package's - a remote refuses a server of another commit.
+ */
+export function serverVersionFields(serverDir: string, release: string, engine: string, commit: string): IVersionField[] {
+	const product = JSON.parse(fs.readFileSync(path.join(serverDir, 'product.json'), 'utf8'));
+	const packageJson = JSON.parse(fs.readFileSync(path.join(serverDir, 'package.json'), 'utf8'));
+	return [
+		{ artifact: 'product.json', field: 'release', found: product.release, expected: release },
+		{ artifact: 'product.json', field: 'facadeVersion', found: product.facadeVersion, expected: release },
+		{ artifact: 'product.json', field: 'version', found: product.version, expected: engine },
+		{ artifact: 'product.json', field: 'commit', found: product.commit, expected: commit },
+		{ artifact: 'package.json', field: 'version', found: packageJson.version, expected: engine },
+	];
+}
+
 /** A Windows executable's version fields, which Explorer's Details tab and Apps & features read. */
 export function executableVersionFields(file: string, release: string): IVersionField[] {
 	const version = readExecutableVersion(fs.readFileSync(file));

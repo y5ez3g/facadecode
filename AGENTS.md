@@ -9,7 +9,8 @@ For detailed project overview, architecture, coding guidelines, and validation s
 This repository is a fork. Before changing anything, read `facade-code-spec/ENGINEERING.md` for the
 branch rules and the build, then the specifications. The window: `facade-code-spec/IDENTITY.md`,
 `facade-code-spec/ACTIVITY-BAR.md`, `facade-code-spec/WORKSPACE.md` and
-`facade-code-spec/WORKTREE.md`, whose shared validation plan is `WORKSPACE.md` W19. The
+`facade-code-spec/WORKTREE.md`, whose shared validation plan is `WORKSPACE.md` W19. Remote
+windows over SSH: `facade-code-spec/REMOTE.md`. The
 Integrated Browser: `facade-code-spec/BROWSER.md`. The window's languages:
 `facade-code-spec/LOCALIZATION.md`. Its agents:
 `facade-code-spec/AGENT-LAUNCHER.md`, `facade-code-spec/AGENT-ORCHESTRATION.md`,

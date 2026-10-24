@@ -91,8 +91,74 @@
 				},
 				"publisherDisplayName": "Microsoft"
 			}
+		},
+		{
+			"name": "jeanp413.open-remote-ssh",
+			"version": "0.5.0",
+			"sha256": "99e72aec520a75e8a6ddb4feccf7353c1ff8e700ca885afe811ba96b6c3b48ca",
+			"repo": "https://github.com/jeanp413/open-remote-ssh",
+			"clientOnly": true,
+			"metadata": {
+				"id": "9fc16cea-08e2-4ae5-bf75-224004d722ff",
+				"publisherId": {
+					"publisherId": "82e59b79-acc5-4a5b-81cb-9303cbdc05cb",
+					"publisherName": "jeanp413",
+					"displayName": "jeanp413",
+					"flags": "verified"
+				},
+				"publisherDisplayName": "jeanp413"
+			}
+		},
+		{
+			"name": "jeanp413.open-remote-wsl",
+			"version": "0.0.5",
+			"sha256": "f1025d8a2cf7a2e9b2876bf11d7c97180e597f90a722722c22a94c0d5975a355",
+			"repo": "https://github.com/jeanp413/open-remote-wsl",
+			"clientOnly": true,
+			"metadata": {
+				"id": "85cc8d73-323e-4b6c-8b8b-cdf0f6800249",
+				"publisherId": {
+					"publisherId": "82e59b79-acc5-4a5b-81cb-9303cbdc05cb",
+					"publisherName": "jeanp413",
+					"displayName": "jeanp413",
+					"flags": "verified"
+				},
+				"publisherDisplayName": "jeanp413"
+			}
 		}
 	],
+	"extensionEnabledApiProposals": {
+		"jeanp413.open-remote-ssh": ["resolvers", "contribViewsRemote"],
+		"jeanp413.open-remote-wsl": ["resolvers", "contribViewsRemote"]
+	},
+	"extensionUntrustedWorkspaceSupport": {
+		"jeanp413.open-remote-ssh": { "default": true },
+		"jeanp413.open-remote-wsl": { "default": true }
+	},
+	"remoteExtensionTips": {
+		"jeanp413.open-remote-ssh": {
+			"extensionId": "jeanp413.open-remote-ssh",
+			"friendlyName": "SSH",
+			"startEntry": {
+				"helpLink": "https://github.com/jeanp413/open-remote-ssh",
+				"startConnectLabel": "Connect to Host...",
+				"startCommand": "openremotessh.openEmptyWindow",
+				"priority": 20
+			}
+		},
+		"jeanp413.open-remote-wsl": {
+			"extensionId": "jeanp413.open-remote-wsl",
+			"friendlyName": "WSL",
+			"supportedPlatforms": ["Windows"],
+			"startEntry": {
+				"helpLink": "https://github.com/jeanp413/open-remote-wsl",
+				"startConnectLabel": "Connect to WSL",
+				"startCommand": "openremotewsl.connect",
+				"priority": 10
+			}
+		}
+	},
+	"serverDownloadUrlTemplate": "https://github.com/y5ez3g/facadecode/releases/download/facade/${release}/facade-server-${release}-${os}-${arch}.tar.gz",
 	"defaultChatAgent": {
 		"extensionId": "GitHub.copilot",
 		"chatExtensionId": "GitHub.copilot-chat",

@@ -127,6 +127,14 @@ export function isSigned(signer: Signer, file: string): boolean {
 }
 
 /**
+ * Whether `file` carries a valid Authenticode signature, checked with `signtool` alone: no Azure sign-in, for
+ * checking what was signed before.
+ */
+export function hasValidSignature(file: string): boolean {
+	return spawnSync(findSigntool(), ['verify', '/pa', '/q', file]).status === 0;
+}
+
+/**
  * Signs the files, replacing any signature they had, and timestamps each signature.
  *
  * ⚠️ The certificate lives three days - Azure makes a new one every day. The timestamp is what

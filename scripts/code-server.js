@@ -42,8 +42,20 @@ function startServer(programArgs) {
 		const env = { ...process.env };
 		const entryPoint = path.join(__dirname, '..', 'out', 'server-main.js');
 
+		// With the test resolver's opt-in, broken pipes - the window that started
+		// this launcher went away - end the forwarding, not the server: dying here
+		// would kill it through the exit below, as a window that reloads would lose
+		// every process it started. Without it, upstream behavior: the launcher
+		// dies with its pipes and takes the server.
+		if (process.env['TESTRESOLVER_KEEP_SERVER'] === '1') {
+			process.stdout.on('error', () => { });
+		}
 		console.log(`Starting server: ${entryPoint} ${programArgs.join(' ')}`);
 		const proc = cp.spawn(process.execPath, [entryPoint, ...programArgs], { env, stdio: [process.stdin, null, process.stderr] });
+		// Its own id, for whoever started this launcher to tell the server by: this
+		// launcher and its shell end with the pipes that started them, the server
+		// outlives them.
+		console.log(`Server process id: ${proc.pid}`);
 		proc.stdout.on('data', e => {
 			const data = e.toString();
 			process.stdout.write(data);

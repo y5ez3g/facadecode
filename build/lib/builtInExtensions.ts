@@ -12,6 +12,7 @@ import { rename } from './gulp/facade.ts';
 import vfs from 'vinyl-fs';
 import * as ext from './extensions.ts';
 import { getCurrentExtensionTarget, getPlatformSpecificAssetName } from './extensionTarget.ts';
+import { isSyncedCopyCurrent, markSyncedCopy, patchExtension, SYNCED_MARK } from './facade/extensionPatches.ts';
 import fancyLog from 'fancy-log';
 import ansiColors from 'ansi-colors';
 import { Stream } from 'stream';
@@ -22,6 +23,11 @@ export interface IExtensionDefinition {
 	sha256: string;
 	repo: string;
 	platforms?: string[];
+	/**
+	 * Built into the desktop only, and left out of the server packages: a UI-side extension such as the
+	 * SSH resolver, which runs on the person's computer (REMOTE.md R5).
+	 */
+	clientOnly?: boolean;
 	vsix?: string;
 	/**
 	 * Per-target checksums for a platform-specific extension published to a GitHub release.
@@ -58,21 +64,14 @@ function getExtensionPath(extension: IExtensionDefinition): string {
 	return path.join(root, '.build', 'builtInExtensions', extension.name);
 }
 
+/** Facade Code: what a copy written whole is marked with - a new checksum for the same version syncs it again. */
+function syncedStamp(extension: IExtensionDefinition): string {
+	return `${extension.version} ${extension.sha256 ?? ''}`;
+}
+
 function isUpToDate(extension: IExtensionDefinition): boolean {
-	const packagePath = path.join(getExtensionPath(extension), 'package.json');
-
-	if (!fs.existsSync(packagePath)) {
-		return false;
-	}
-
-	const packageContents = fs.readFileSync(packagePath, { encoding: 'utf8' });
-
-	try {
-		const diskVersion = JSON.parse(packageContents).version;
-		return (diskVersion === extension.version);
-	} catch (err) {
-		return false;
-	}
+	// Facade Code: of its version, written whole and patched, or synced again (REMOTE.md R5)
+	return isSyncedCopyCurrent(getExtensionPath(extension), extension.name, extension.version, syncedStamp(extension));
 }
 
 function isInsiders(): boolean {
@@ -99,7 +98,8 @@ function getExtensionDownloadStream(extension: IExtensionDefinition) {
 		input = ext.fromGithub(extension, { latest: isInsiders() });
 	}
 
-	return input.pipe(rename(p => p.dirname = `${extension.name}/${p.dirname}`));
+	return input.pipe(rename(p => p.dirname = `${extension.name}/${p.dirname}`))
+		.pipe(patchExtension(extension.name, extension.version));
 }
 
 function resolvePlatformSpecificAsset(extension: IExtensionDefinition): { assetName: string; sha256: string } | undefined {
@@ -125,8 +125,10 @@ export function getExtensionStream(extension: IExtensionDefinition) {
 	// if the extension exists on disk, use those files instead of downloading anew
 	if (isUpToDate(extension)) {
 		log('[extensions]', `${extension.name}@${extension.version} up to date`, ansiColors.green('✔︎'));
-		return vfs.src(['**'], { cwd: getExtensionPath(extension), dot: true })
-			.pipe(rename(p => p.dirname = `${extension.name}/${p.dirname}`));
+		// Facade Code: patched here as well, as a copy synced before a patch was added is not; its mark left out (REMOTE.md R5)
+		return vfs.src(['**', `!${SYNCED_MARK}`], { cwd: getExtensionPath(extension), dot: true })
+			.pipe(rename(p => p.dirname = `${extension.name}/${p.dirname}`))
+			.pipe(patchExtension(extension.name, extension.version));
 	}
 
 	return getExtensionDownloadStream(extension);
@@ -142,9 +144,13 @@ function syncMarketplaceExtension(extension: IExtensionDefinition): Stream {
 
 	rimraf.sync(getExtensionPath(extension));
 
+	// Facade Code: marked once every file is written, so that a sync cut short is done again (REMOTE.md R5)
 	return getExtensionDownloadStream(extension)
 		.pipe(vfs.dest('.build/builtInExtensions'))
-		.on('end', () => log(source, extension.name, ansiColors.green('✔︎')));
+		.on('end', () => {
+			markSyncedCopy(getExtensionPath(extension), syncedStamp(extension));
+			log(source, extension.name, ansiColors.green('✔︎'));
+		});
 }
 
 function syncExtension(extension: IExtensionDefinition, controlState: 'disabled' | 'marketplace'): Stream {

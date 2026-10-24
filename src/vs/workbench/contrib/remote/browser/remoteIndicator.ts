@@ -55,6 +55,7 @@ import Severity from '../../../../base/common/severity.js';
 import { isCancellationError } from '../../../../base/common/errors.js';
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
+import { facadeRemoteStartLabel } from './facadeRemoteStartLabels.js';
 
 type ActionGroup = [string, Array<MenuItemAction | SubmenuItemAction>];
 
@@ -116,7 +117,8 @@ export class RemoteStatusIndicator extends Disposable implements IWorkbenchContr
 					isPlatformCompatible: false,
 					dependencies: [],
 					helpLink: value.startEntry?.helpLink ?? '',
-					startConnectLabel: value.startEntry?.startConnectLabel ?? '',
+					// Facade Code: its own remote extensions' entries in the window's language (`facadeRemoteStartLabel`)
+					startConnectLabel: facadeRemoteStartLabel(value.extensionId) ?? value.startEntry?.startConnectLabel ?? '',
 					startCommand: value.startEntry?.startCommand ?? '',
 					priority: value.startEntry?.priority ?? 10,
 					supportedPlatforms: value.supportedPlatforms

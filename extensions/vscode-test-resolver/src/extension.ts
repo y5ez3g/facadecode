@@ -29,6 +29,44 @@ function isExpectedSocketCloseError(error: NodeJS.ErrnoException): boolean {
 	return error.code === 'ECONNRESET' || error.code === 'EPIPE' || error.code === 'ECONNABORTED';
 }
 
+/** Where the running test server of a data folder is recorded, with TESTRESOLVER_KEEP_SERVER=1: a window that reloads reconnects to it instead of starting a new one, as to a real remote. */
+function serverFile(remoteDataDir: string): string {
+	return path.join(remoteDataDir, 'test-resolver-server.json');
+}
+
+/** The recorded server of `remoteDataDir`, where one still answers there: its authority, else undefined and a new one starts. */
+async function reuseServer(remoteDataDir: string): Promise<vscode.ResolvedAuthority | undefined> {
+	let recorded: { port?: unknown; connectionToken?: unknown; pid?: unknown };
+	try {
+		recorded = JSON.parse(fs.readFileSync(serverFile(remoteDataDir), 'utf8'));
+	} catch {
+		return undefined;
+	}
+	if (typeof recorded.port !== 'number' || typeof recorded.connectionToken !== 'string' || typeof recorded.pid !== 'number') {
+		return undefined;
+	}
+	// The port says whether the server lives: its shell may be gone while it
+	// answers - a reload takes the pipes, not the server.
+	const answers = await new Promise<boolean>(resolve => {
+		const probe = net.createConnection({ host: '127.0.0.1', port: recorded.port as number });
+		probe.on('connect', () => { probe.end(); resolve(true); });
+		probe.on('error', () => resolve(false));
+		probe.setTimeout(2000, () => { probe.destroy(); resolve(false); });
+	});
+	if (!answers) {
+		return undefined;
+	}
+	let pid = 'gone';
+	try {
+		process.kill(recorded.pid, 0);
+		pid = String(recorded.pid);
+	} catch {
+		// Its shell is gone; the server lives on.
+	}
+	outputChannel.appendLine(`Reusing test server on port ${recorded.port} (recorded pid ${recorded.pid}, ${pid === 'gone' ? 'shell gone' : 'alive'}).`);
+	return new vscode.ResolvedAuthority('127.0.0.1', recorded.port, recorded.connectionToken);
+}
+
 export function activate(context: vscode.ExtensionContext) {
 
 	let connectionPaused = false;
@@ -112,15 +150,33 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			let lastProgressLine = '';
+			// The server's own process, as the dev launcher names it: the shell and the
+			// launcher end with the pipes that started them, the server outlives them.
+			// The packaged launcher names none - there the shell itself is the server's.
+			let serverPid: number | undefined;
 			function processOutput(output: string) {
 				outputChannel.append(output);
 				for (let i = 0; i < output.length; i++) {
 					const chr = output.charCodeAt(i);
 					if (chr === CharCode.LineFeed) {
+						const pidMatch = lastProgressLine.match(/Server process id: (\d+)/);
+						if (pidMatch) {
+							serverPid = parseInt(pidMatch[1], 10);
+						}
 						const match = lastProgressLine.match(/Extension host agent listening on (\d+)/);
 						if (match) {
 							isResolved = true;
-							res(new vscode.ResolvedAuthority('127.0.0.1', parseInt(match[1], 10), connectionToken)); // success!
+							const port = parseInt(match[1], 10);
+							if (keepServer) {
+								try {
+									// Its connection token is in it: the person's alone to read, one an earlier run left included
+									fs.writeFileSync(serverFile(remoteDataDir), JSON.stringify({ port, connectionToken, pid: serverPid ?? extHostProcess?.pid }), { mode: 0o600 });
+									fs.chmodSync(serverFile(remoteDataDir), 0o600);
+								} catch (err) {
+									outputChannel.appendLine(`Could not record the test server for reuse: ${err instanceof Error ? err.message : err}`);
+								}
+							}
+							res(new vscode.ResolvedAuthority('127.0.0.1', port, connectionToken)); // success!
 						}
 						lastProgressLine = '';
 					} else if (chr === CharCode.Backspace) {
@@ -150,6 +206,16 @@ export function activate(context: vscode.ExtensionContext) {
 			const commandArgs = ['--host=127.0.0.1', '--port=0', '--disable-telemetry', '--disable-experiments', '--use-host-proxy', '--accept-server-license-terms', '--force-disable-user-env'];
 			const env = getNewEnv();
 			const remoteDataDir = process.env['TESTRESOLVER_DATA_FOLDER'] || path.join(os.homedir(), `${serverDataFolderName || dataFolderName}-testresolver`);
+			// Opt-in only: a reused server keeps its build and environment across
+			// resolves, which other suites do not expect. Without it the resolver
+			// behaves exactly as upstream: no record, no reuse, killed on dispose.
+			const keepServer = process.env['TESTRESOLVER_KEEP_SERVER'] === '1';
+			const reused = keepServer ? await reuseServer(remoteDataDir) : undefined;
+			if (reused) {
+				isResolved = true;
+				res(reused);
+				return;
+			}
 			const logsDir = process.env['TESTRESOLVER_LOGS_FOLDER'];
 			if (logsDir) {
 				commandArgs.push('--logsPath', logsDir);
@@ -225,6 +291,9 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			extHostProcess.stdout!.on('data', (data: Buffer) => processOutput(data.toString()));
 			extHostProcess.stderr!.on('data', (data: Buffer) => processOutput(data.toString()));
+			// With the opt-in, its record is left where it is: a resolve finds a dead
+			// server stale by its port, and starts a new one. Deleting it here would race
+			// a reload, whose disconnect the shell observes as its own end.
 			extHostProcess.on('error', (error: Error) => {
 				processError(`server failed with error:\n${error.message}`);
 				extHostProcess = undefined;
@@ -239,9 +308,14 @@ export function activate(context: vscode.ExtensionContext) {
 				processError(`server closed unexpectedly.\nError code: ${code}, signal: ${signal}`);
 				extHostProcess = undefined;
 			});
+			// Without the opt-in the server is killed with this extension host, as
+			// upstream. With it the server is left running, so a window that reloads
+			// reconnects to it, as to a real remote. A kept server never exits by
+			// itself - the resolver passes no auto-shutdown - so the suite that keeps
+			// it stops it when done; `killServerAndTriggerHandledError` kills on demand.
 			context.subscriptions.push({
 				dispose: () => {
-					if (extHostProcess) {
+					if (!keepServer && extHostProcess) {
 						terminateProcess(extHostProcess, context.extensionPath);
 					}
 				}
@@ -273,7 +347,7 @@ export function activate(context: vscode.ExtensionContext) {
 						send: d => remoteSocket.write(d),
 						end: () => remoteSocket.end(),
 					};
-				}, connectionToken));
+				}, serverAddr.connectionToken));
 			}
 
 			return new Promise<vscode.ResolvedAuthority>((res, _rej) => {
@@ -362,7 +436,9 @@ export function activate(context: vscode.ExtensionContext) {
 				proxyServer.listen(0, '127.0.0.1', () => {
 					const port = (<net.AddressInfo>proxyServer.address()).port;
 					outputChannel.appendLine(`Going through proxy at port ${port}`);
-					res(new vscode.ResolvedAuthority('127.0.0.1', port, connectionToken));
+					// The server's token, not this resolve's fresh one: a reused server
+					// answers only to the token it started with.
+					res(new vscode.ResolvedAuthority('127.0.0.1', port, serverAddr.connectionToken));
 				});
 				context.subscriptions.push({
 					dispose: () => {

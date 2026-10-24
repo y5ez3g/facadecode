@@ -338,6 +338,8 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				json.date = readISODate(out);
 				json.checksums = checksums;
 				json.version = version;
+				// The release's version, which the SSH extension's server download URL names (REMOTE.md R6)
+				json.release = releaseVersion(product);
 				json.copilotVersions = {
 					runtime: getLockedPackageVersion('@github/copilot'),
 					sdk: getLockedPackageVersion('@github/copilot-sdk'),

@@ -13,7 +13,10 @@ import * as optimize from './lib/optimize.ts';
 import { inlineMeta } from './lib/inlineMeta.ts';
 import product from '../product.json' with { type: 'json' };
 import { getProductionDependencies } from './lib/dependencies.ts';
-import { readISODate } from './lib/date.ts';
+import { readISODate, writeISODate } from './lib/date.ts';
+import { copyCodiconsTask } from './lib/compilation.ts';
+import { runEsbuildBundle } from './lib/esbuild.ts';
+import { useEsbuildTranspile } from './buildConfig.ts';
 import vfs from 'vinyl-fs';
 import packageJson from '../package.json' with { type: 'json' };
 import { untar } from './lib/util.ts';
@@ -33,6 +36,10 @@ import { fetchUrls } from './lib/fetch.ts';
 import { downloadFeedPackage } from './lib/azureFeed.ts';
 import { ensureCopilotPlatformPackage, getCopilotExcludeFilter, getCopilotRuntimePrebuildFiles, getCopilotTgrepExcludeFilter, getMxcExcludeFilter, getRipgrepExcludeFilter, prepareBuiltInCopilotRipgrepShim } from './lib/copilot.ts';
 import { readAgentSdkResults } from './agent-sdk/common.ts';
+import { releaseVersion } from './lib/facade/releaseVersion.ts';
+import { checkVersionFields, serverVersionFields } from './lib/facade/versionCheck.ts';
+import { checkServerPackage, createServerTarball, glibcCheckedFiles, glibcCheckEnv, glibcProblems, serverLayoutProblems, serverPackageName, serverSignedFiles, serverTopFolderName, sysrootObjdump } from './lib/facade/serverPackage.ts';
+import { createSigner, hasValidSignature, isSigned, sign } from './win32/sign.ts';
 
 
 const rcedit = promisify(rceditCallback);
@@ -41,6 +48,9 @@ const REPO_ROOT = path.dirname(import.meta.dirname);
 const commit = getVersion(REPO_ROOT);
 const BUILD_ROOT = path.dirname(REPO_ROOT);
 const REMOTE_FOLDER = path.join(REPO_ROOT, 'remote');
+const isCI = !!process.env['CI'] || !!process.env['BUILD_ARTIFACTSTAGINGDIRECTORY'] || !!process.env['GITHUB_WORKSPACE'];
+const sourceMappingURLBase = `https://main.vscode-cdn.net/sourcemaps/${commit}`;
+const useCdnSourceMapsForPackagingTasks = isCI;
 
 // Targets
 
@@ -414,6 +424,8 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 				json.commit = commit;
 				json.date = readISODate(sourceFolderName);
 				json.version = version;
+				// The release's version, which the SSH extension's server download URL names (REMOTE.md R6)
+				json.release = releaseVersion(product);
 				// Stamp agentSdks from the per-platform results file produced
 				// by `build/agent-sdk/produce.ts`. REH-only: REH-web is
 				// browser-served and the agent host is node-only, so the
@@ -487,6 +499,12 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 					.pipe(replace('@@COMMIT@@', commit || ''))
 					.pipe(replace('@@APPNAME@@', product.applicationName))
 					.pipe(rename(`bin/remote-cli/${product.applicationName}.cmd`)),
+				// Facade: the same CLI for Git Bash on the host, which cannot run the .cmd by the bare name
+				gulp.src('resources/server/bin/remote-cli/code-win32.sh', { base: '.' })
+					.pipe(replace('@@VERSION@@', version))
+					.pipe(replace('@@COMMIT@@', commit || ''))
+					.pipe(replace('@@APPNAME@@', product.applicationName))
+					.pipe(rename(`bin/remote-cli/${product.applicationName}`)),
 				gulp.src('resources/server/bin/helpers/browser.cmd', { base: '.' })
 					.pipe(replace('@@VERSION@@', version))
 					.pipe(replace('@@COMMIT@@', commit || ''))
@@ -531,6 +549,86 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 
 		return result.pipe(vfs.dest(destination));
 	};
+}
+
+/**
+ * Packs a built server into the tarball the SSH extension downloads,
+ * `facade-server-<release>-<os>-<arch>.tar.gz` beside it (REMOTE.md R6). First the release's
+ * checks: the layout the extension expects, I7's version fields, the glibc 2.28 baseline on
+ * Linux, and every Windows executable and native module's signature - an unchecked server is
+ * never packaged.
+ */
+function serverTarballTask(platform: string, arch: string, serverDirName: string) {
+	const serverDir = path.join(BUILD_ROOT, serverDirName);
+
+	return async () => {
+		if (!fs.existsSync(serverDir)) {
+			throw new Error(`No server build at ${serverDir}. Build it first: npm run gulp vscode-reh-${platform}-${arch}-min`);
+		}
+		const release = releaseVersion(product);
+		checkServerPackage(serverDir, platform, {
+			layout: () => serverLayoutProblems(serverDir, product.serverApplicationName, platform),
+			versions: () => checkVersionFields(serverVersionFields(serverDir, release, packageJson.version, commit!)),
+			glibc: () => serverGlibcProblems(serverDir, arch),
+			unsigned: () => serverSignedFiles(serverDir).filter(file => !hasValidSignature(file)),
+		});
+		const tarball = path.join(BUILD_ROOT, serverPackageName(release, platform, arch));
+		createServerTarball(serverDir, tarball, serverTopFolderName(release, platform, arch));
+		log(`Server package: ${tarball}`);
+	};
+}
+
+/**
+ * Signs the Windows server's executables, native modules and PowerShell scripts with the installer's certificate
+ * (IDENTITY.md I6), then verifies each signature, as the installer release does (REMOTE.md R6).
+ */
+function serverSignTask(serverDirName: string) {
+	const serverDir = path.join(BUILD_ROOT, serverDirName);
+
+	return async () => {
+		if (!fs.existsSync(serverDir)) {
+			throw new Error(`No server build at ${serverDir}.`);
+		}
+		const signer = createSigner();
+		const files = serverSignedFiles(serverDir);
+		// What Electron and Microsoft signed already is left alone; the account has 5,000 signatures a month
+		const unsigned = files.filter(file => !isSigned(signer, file));
+		log(`${files.length} files to be signed, ${unsigned.length} not signed yet`);
+		sign(signer, unsigned);
+		const stillUnsigned = serverSignedFiles(serverDir).filter(file => !isSigned(signer, file));
+		if (stillUnsigned.length) {
+			throw new Error(`Still not signed:\n  ${stillUnsigned.join('\n  ')}`);
+		}
+	};
+}
+
+/**
+ * What upstream's glibc check finds in the Linux server above the 2.28 baseline (REMOTE.md R6): each line it
+ * prints an error on, whatever its exit, and a check that cannot run - no sysroot objdump to read the binaries
+ * with, which it would pass reading nothing.
+ */
+function serverGlibcProblems(serverDir: string, arch: string): string[] {
+	const objdump = sysrootObjdump(REPO_ROOT, arch);
+	if (!fs.existsSync(objdump)) {
+		return [`${objdump} is missing: install the glibc 2.28 sysroot first (RELEASE.md, Linux x64)`];
+	}
+	// One that is there but cannot run fails inside the script's process substitution, unseen: it is tried first,
+	// and then on each file the script reads, a file it cannot read being one that went unchecked
+	if (cp.spawnSync(objdump, ['--version'], { stdio: 'ignore' }).status !== 0) {
+		return [`${objdump} cannot run: install the glibc 2.28 sysroot again (RELEASE.md, Linux x64)`];
+	}
+	const unreadable = glibcCheckedFiles(serverDir)
+		.filter(file => cp.spawnSync(objdump, ['-T', file], { stdio: 'ignore' }).status !== 0)
+		.map(file => `${file} cannot be read by objdump, so it was not checked`);
+	if (unreadable.length) {
+		return unreadable;
+	}
+	const script = path.join(REPO_ROOT, 'build', 'azure-pipelines', 'linux', 'verify-glibc-requirements.sh');
+	const checked = cp.spawnSync('bash', [script], { env: { ...process.env, ...glibcCheckEnv(REPO_ROOT, serverDir, arch) }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+	const output = `${checked.stdout ?? ''}${checked.stderr ?? ''}`;
+	log(output.trim());
+	const problems = glibcProblems(output);
+	return checked.status === 0 ? problems : [...problems, `the check exited with ${checked.status ?? checked.signal}`];
 }
 
 function hasAuthenticodeSignature(filePath: string): Promise<boolean> {
@@ -673,16 +771,54 @@ function tweakProductForServerWeb(product: typeof import('../product.json')) {
 			const serverTaskCI = task.define(`vscode-${type}${dashed(platform)}${dashed(arch)}${dashed(minified)}-ci`, task.series(...packageTasks));
 			task.task(serverTaskCI);
 
-			const serverTask = task.define(`vscode-${type}${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
-				compileBuildWithManglingTask,
-				cleanExtensionsBuildTask,
-				compileNonNativeExtensionsBuildTask,
-				compileCopilotExtensionBuildTask,
-				compileExtensionMediaBuildTask,
-				minified ? minifyTask : bundleTask,
-				serverTaskCI
-			));
+			let serverTask: task.Task;
+			// Facade Code: a server built here follows the desktop's esbuild path (`gulpfile.vscode.ts`), as
+			// upstream's CI builds its server through `core-ci` and `esbuild-vscode-reh-min`. Upstream's own local
+			// path, kept below for `useEsbuildTranspile` off, mangles first, and the mangler fails on upstream's
+			// own sources today (REMOTE.md R6).
+			if (useEsbuildTranspile) {
+				const esbuildBundleTask = task.define(
+					`esbuild-bundle-vscode-${type}${dashed(platform)}${dashed(arch)}${dashed(minified)}`,
+					() => runEsbuildBundle(
+						sourceFolderName,
+						!!minified,
+						true,
+						type === 'reh-web' ? 'server-web' : 'server',
+						minified && useCdnSourceMapsForPackagingTasks ? `${sourceMappingURLBase}/core` : undefined
+					)
+				);
+				serverTask = task.define(`vscode-${type}${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
+					copyCodiconsTask,
+					cleanExtensionsBuildTask,
+					compileNonNativeExtensionsBuildTask,
+					compileCopilotExtensionBuildTask,
+					compileExtensionMediaBuildTask,
+					writeISODate('out-build'),
+					esbuildBundleTask,
+					serverTaskCI
+				));
+			} else {
+				serverTask = task.define(`vscode-${type}${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
+					compileBuildWithManglingTask,
+					cleanExtensionsBuildTask,
+					compileNonNativeExtensionsBuildTask,
+					compileCopilotExtensionBuildTask,
+					compileExtensionMediaBuildTask,
+					minified ? minifyTask : bundleTask,
+					serverTaskCI
+				));
+			}
 			task.task(serverTask);
 		});
 	});
+
+	if (type === 'reh') {
+		BUILD_TARGETS.forEach(({ platform, arch }) => {
+			const serverDirName = `vscode-reh-${platform}-${arch}`;
+			task.task(task.define(`vscode-reh-${platform}-${arch}-server-tarball`, serverTarballTask(platform, arch, serverDirName)));
+			if (platform === 'win32') {
+				task.task(task.define(`vscode-reh-${platform}-${arch}-server-sign`, serverSignTask(serverDirName)));
+			}
+		});
+	}
 });

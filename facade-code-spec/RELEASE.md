@@ -364,3 +364,187 @@ change that leaves the missing tunnel out; pull.
 
 **`The dependencies list has changed.`** `FACADE_DEB_DEPENDENCIES=warn` is not set in this
 terminal.
+
+# Remote servers
+
+A remote window needs a server of exactly the window's build on the remote: the
+connection is refused when the commits differ. Each release carries three server
+packages, one per desktop platform, which the remote downloads itself from the
+release (REMOTE.md R6):
+
+```
+facade-server-<release>-linux-x64.tar.gz
+facade-server-<release>-darwin-arm64.tar.gz
+facade-server-<release>-win32-x64.tar.gz
+```
+
+Each is built on its own OS, from the same tagged commit as the desktop packages,
+beside the desktop package. A server package is not part of a desktop package and
+is not installed with it.
+
+## The tag, the version, the commit
+
+- The release version is `product.json`'s `facadeVersion`, e.g. `0.1.2`.
+- The tag is `facade/<release>`: `facade/0.1.2`. Tag the merged commit on `main`; every
+  machine below builds from that tag, so all six packages share one commit.
+- The download address is `product.json`'s `serverDownloadUrlTemplate`, the release
+  filled in by the build and `${os}` and `${arch}` by the extension, e.g.
+  `https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-server-0.1.2-linux-x64.tar.gz`.
+
+## Linux x64
+
+The server's native modules are built against upstream's glibc 2.28 sysroot, as
+upstream's server is, so it runs where upstream's runs - Debian 10 and RHEL 8
+included - not only on the release the build machine has.
+
+```sh
+git checkout facade/0.1.2
+SYSROOT_ARCH=amd64 VSCODE_SYSROOT_DIR=$PWD/.build/sysroots/glibc-2.28-gcc-8.5.0 \
+  VSCODE_SYSROOT_PREFIX=-glibc-2.28-gcc-8.5.0 \
+  node -e 'import { getVSCodeSysroot } from "./build/linux/debian/install-sysroot.ts"; (async () => { await getVSCodeSysroot(process.env["SYSROOT_ARCH"]); })()'
+npm_config_arch=x64 VSCODE_ARCH=x64 source ./build/azure-pipelines/linux/setup-env.sh
+rm -rf remote/node_modules
+npm install
+npm run gulp vscode-reh-linux-x64-min
+npm run gulp vscode-reh-linux-x64-server-tarball
+```
+
+The package lands one directory above the repository:
+`../facade-server-0.1.2-linux-x64.tar.gz`.
+
+`setup-env.sh` is upstream's toolchain script; it also fetches the desktop build's
+compiler, which a server-only machine does not need but does no harm. What the
+server build takes from it are `VSCODE_REMOTE_CC`, `VSCODE_REMOTE_CXX`,
+`VSCODE_REMOTE_CXXFLAGS` and `VSCODE_REMOTE_LDFLAGS`, under which `npm install`
+builds `remote/`'s native modules - `build/npm/postinstall.ts` maps them onto
+`CC`, `CXX`, `CXXFLAGS` and `LDFLAGS` for that directory. `remote/node_modules`
+is removed first so nothing built against the machine's own glibc survives.
+
+The tarball task checks before it packs: the layout the extension expects, I7's
+version fields (the release, the engine, the commit), and the glibc baseline -
+upstream's `verify-glibc-requirements.sh` over the server with
+`EXPECTED_GLIBC_VERSION=2.28` and `EXPECTED_GLIBCXX_VERSION=3.4.25` - then tars.
+An unchecked server is never packaged.
+
+## macOS arm64
+
+```sh
+git checkout facade/0.1.2
+npm install
+npm run gulp vscode-reh-darwin-arm64-min
+npm run gulp vscode-reh-darwin-arm64-server-tarball
+```
+
+The package lands one directory above the repository:
+`../facade-server-0.1.2-darwin-arm64.tar.gz`.
+
+The macOS server is not signed: a remote downloads its server with curl, which
+marks nothing for Gatekeeper. The tarball task runs the layout and version checks,
+then tars.
+
+## Windows x64
+
+```powershell
+git checkout facade/0.1.2
+npm install
+npm run gulp vscode-reh-win32-x64-min
+npm run gulp vscode-reh-win32-x64-server-sign
+npm run gulp vscode-reh-win32-x64-server-tarball
+```
+
+The package lands one directory above the repository:
+`../facade-server-0.1.2-win32-x64.tar.gz`.
+
+The sign task signs every `.exe`, `.dll` and `.node` in the server, and every
+PowerShell script - `.ps1`, `.psm1`, `.psd1`, `.ps1xml` - as upstream signs its
+own, with the installer's certificate, through `build/win32/sign.ts`, and verifies
+each signature - the same `az login` as the installer release, whose one-time
+setup above covers it. Smart App Control on a Windows host refuses an unsigned
+module at run time, and application control runs an unsigned script restricted.
+The tarball task verifies every signature again before it packs, with `signtool`
+alone - no `az login` - so an unsigned server cannot be published by skipping the
+sign task.
+
+## The tar's layout
+
+One top-level folder, named for the package, with the server inside:
+
+```
+facade-server-0.1.2-linux-x64/
+facade-server-0.1.2-linux-x64/bin/
+facade-server-0.1.2-linux-x64/bin/facade-server
+...
+```
+
+The extension unpacks with `--strip-components 1` and starts
+`bin/facade-server` - `bin/facade-server.cmd` on Windows. The server carries the
+built-in extensions that run on a remote, `facade-agents` among them; the SSH
+extension itself runs on the person's computer and is left out.
+
+## Publishing
+
+One GitHub Release per release, tag `facade/<release>`, with all six assets: the disk
+image, the installer, the `.deb`, and the three server packages. A release is
+published only with its three server packages attached, as one gate with the
+desktop packages: a desktop whose server is missing strands every SSH user on a
+download that 404s. Older releases keep their server packages, for the people
+still on them.
+
+Keep the GitHub Release a draft until all six assets are attached, then publish
+it: that is the gate. The official tags are protected, so a published release is
+not moved or deleted; a bad one is superseded by the next release.
+
+## Without GitHub
+
+A remote that cannot reach GitHub gets its server one of two ways. Facade adds no
+copy-over-SSH.
+
+**A mirror.** Set the extension's `remote.SSH.serverDownloadUrlTemplate` to a copy
+somewhere the remote can reach, as the same template with the same variables:
+
+```
+https://mirror.example.com/facadecode/facade/${release}/facade-server-${release}-${os}-${arch}.tar.gz
+```
+
+**By hand.** Unpack the release's package on the remote under
+`~/.facade-server/bin/<commit>/`, stripped of its top folder:
+
+```sh
+mkdir -p ~/.facade-server/bin/<commit>
+tar -xzf facade-server-0.1.2-linux-x64.tar.gz -C ~/.facade-server/bin/<commit> --strip-components 1
+```
+
+The extension finds `bin/facade-server` already there and starts it without
+downloading. The commit is the second line of `facade --version` on the person's
+computer, and it must be the build's: a server of another commit is refused.
+
+A build not made from a release tag has no release with its server, and connects
+the same two ways.
+
+## A public pre-release for tests
+
+The live SSH runs (REMOTE.md RM-03) connect a packaged build to a host whose
+server comes from a public pre-release. Every build - an rc included - names its
+final release, `facade/<release>`, which 404s until that release is published, so
+attach the three server packages under test to the pre-release as built, and point
+the test windows at them with `remote.SSH.serverDownloadUrlTemplate`:
+
+```
+https://github.com/y5ez3g/facadecode/releases/download/<pre-release tag>/facade-server-${release}-${os}-${arch}.tar.gz
+```
+
+## When it goes wrong
+
+**The tarball task fails on the glibc baseline.** `remote/node_modules` was built
+against the machine's own glibc. Remove it, source the toolchain again, and
+reinstall from the root so `remote/` rebuilds against the sysroot.
+
+**The Windows tarball task lists unsigned files.** Run the sign task first;
+`az login` covers its signing, as for the installer.
+
+**The layout check names `bin/facade-server` or `extensions/facade-agents`.**
+The server build is older than the release's, or another target's; rebuild it
+from the tag.
+
+**The version check names a field.** The server was built from another commit
+than the tag, or `facadeVersion` moved since; rebuild it from the tag.
