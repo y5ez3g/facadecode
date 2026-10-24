@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "하위 모듈과 푸시되지 않은 커밋도 삭제됩니다.",
 			"worktrees.superseded": "열기가 완료되기 전에 폴더 전환이 요청됨",
 			"worktrees.terminalsEnded": "이 작업 트리와 연결된 터미널을 닫고 활성 프로세스를 종료했습니다: {0}.",
+			"worktrees.terminalsStillStopping": "다음 터미널이 아직 완전히 중지되지 않아 작업 트리 '{0}'을(를) 삭제하지 않았습니다: {1}. 터미널을 확인하고 중지된 후 다시 삭제하세요.",
 			"worktrees.terminalsTerminated": "{0} 실행 중이던 터미널은 종료되었습니다.",
 			"worktrees.trustFolder": "폴더 신뢰 및 계속(&&T)",
 			"worktrees.trustWorkspace": "작업 영역 신뢰 및 계속(&&T)",

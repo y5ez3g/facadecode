@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "También se eliminarán los submódulos y sus confirmaciones no enviadas.",
 			"worktrees.superseded": "se solicitó un cambio de carpeta antes de que terminara de abrirse",
 			"worktrees.terminalsEnded": "Se cerraron los terminales asociados a este árbol de trabajo y se terminaron los procesos activos: {0}.",
+			"worktrees.terminalsStillStopping": "El árbol de trabajo \"{0}\" no se eliminó porque estos terminales aún no han terminado de detenerse: {1}. Compruebe los terminales e intente eliminarlo de nuevo cuando se hayan detenido.",
 			"worktrees.terminalsTerminated": "{0} Se terminaron sus terminales en ejecución.",
 			"worktrees.trustFolder": "&&Confiar en la carpeta y continuar",
 			"worktrees.trustWorkspace": "&&Confiar en el área de trabajo y continuar",

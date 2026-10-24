@@ -1989,7 +1989,7 @@ export class WorktreeService implements IWorktreeService {
 					}
 					done.ended = running.filter(name => !terminalsLeft.includes(name));
 					if (terminalsLeft.length) {
-						return { kind: 'refused', why: localize('worktrees.terminalsStillStopping', "Worktree '{0}' was not deleted because these terminals' native processes have not been confirmed stopped: {1}. Check the terminals and try deleting it again once they have stopped.", name, terminalsLeft.join(', ')) };
+						return { kind: 'refused', why: localize('worktrees.terminalsStillStopping', "Worktree '{0}' was not deleted because these terminals have not finished stopping: {1}. Check the terminals and try deleting it again once they have stopped.", name, terminalsLeft.join(', ')) };
 					}
 
 					// The other workspaces stop their own work there, and discard their unsaved editors there as the deletion

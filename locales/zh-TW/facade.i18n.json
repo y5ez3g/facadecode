@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "子模組和任何未推送的提交也將被刪除。",
 			"worktrees.superseded": "開啟完成前已要求切換資料夾",
 			"worktrees.terminalsEnded": "已關閉與此工作樹相關聯的終端機，並終止執行中的處理序: {0}。",
+			"worktrees.terminalsStillStopping": "未刪除工作樹「{0}」，因為以下終端機尚未完全停止：{1}。請檢查這些終端機，待其停止後再次刪除。",
 			"worktrees.terminalsTerminated": "{0} 其執行中的終端機已終止。",
 			"worktrees.trustFolder": "信任資料夾並繼續(&&T)",
 			"worktrees.trustWorkspace": "信任工作區並繼續(&&T)",

@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "Podmoduły i wszelkie niewypchnięte zatwierdzenia również zostaną usunięte.",
 			"worktrees.superseded": "zażądano przełączenia folderu przed zakończeniem otwierania",
 			"worktrees.terminalsEnded": "Terminale powiązane z tym drzewem roboczym zostały zamknięte, a działanie aktywnych procesów zostało zakończone: {0}.",
+			"worktrees.terminalsStillStopping": "Drzewo robocze „{0}” nie zostało usunięte, ponieważ te terminale jeszcze nie zakończyły pracy: {1}. Sprawdź terminale i spróbuj usunąć je ponownie, gdy się zatrzymają.",
 			"worktrees.terminalsTerminated": "{0} Działanie jego uruchomionych terminali zostało zakończone.",
 			"worktrees.trustFolder": "&&Zaufaj folderowi i kontynuuj",
 			"worktrees.trustWorkspace": "&&Zaufaj obszarowi roboczemu i kontynuuj",

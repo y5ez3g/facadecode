@@ -1730,7 +1730,7 @@ suite('Worktrees - making and deleting one', () => {
 		await timeout(0);
 		assert.strictEqual(steps.some(step => step.endsWith(' remove')), false);
 		await nativeExit.complete(false);
-		assert.match(await deleting, /native processes have not been confirmed stopped/);
+		assert.match(await deleting, /terminals have not finished stopping/);
 		assert.strictEqual(steps.some(step => step.endsWith(' remove')), false);
 		assert.strictEqual(server.isDisposed, false);
 		// A synthetic pty exit removes its UI; it is still part of the service's pending native stop.

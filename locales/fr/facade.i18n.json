@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "Les sous-modules et leurs validations non envoyées seront également supprimés.",
 			"worktrees.superseded": "un changement de dossier a été demandé avant la fin de l’ouverture",
 			"worktrees.terminalsEnded": "Les terminaux associés à cette arborescence de travail ont été fermés et les processus actifs arrêtés : {0}.",
+			"worktrees.terminalsStillStopping": "L’arborescence de travail « {0} » n’a pas été supprimée, car ces terminaux n’ont pas fini de s’arrêter : {1}. Vérifiez les terminaux et réessayez de la supprimer une fois qu’ils sont arrêtés.",
 			"worktrees.terminalsTerminated": "{0} Ses terminaux en cours d’exécution ont été arrêtés.",
 			"worktrees.trustFolder": "&&Approuver le dossier et continuer",
 			"worktrees.trustWorkspace": "&&Approuver l’espace de travail et continuer",

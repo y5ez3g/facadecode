@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "Os submódulos e os commits não enviados por push também serão excluídos.",
 			"worktrees.superseded": "uma troca de pasta foi solicitada antes que a abertura fosse concluída",
 			"worktrees.terminalsEnded": "Os terminais associados a esta árvore de trabalho foram fechados e os processos ativos foram encerrados: {0}.",
+			"worktrees.terminalsStillStopping": "A árvore de trabalho '{0}' não foi excluída porque estes terminais ainda não terminaram de encerrar: {1}. Verifique os terminais e tente excluí-la novamente quando eles tiverem encerrado.",
 			"worktrees.terminalsTerminated": "{0} Os terminais em execução nela foram encerrados.",
 			"worktrees.trustFolder": "&&Confiar na pasta e continuar",
 			"worktrees.trustWorkspace": "&&Confiar no workspace e continuar",

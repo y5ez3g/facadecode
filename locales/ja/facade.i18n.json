@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "サブモジュールとプッシュされていないコミットも削除されます。",
 			"worktrees.superseded": "開く処理が完了する前にフォルダーの切り替えが要求されました",
 			"worktrees.terminalsEnded": "この作業ツリーに関連付けられたターミナルを閉じ、アクティブなプロセスを終了しました: {0}。",
+			"worktrees.terminalsStillStopping": "次のターミナルがまだ完全に停止していないため、作業ツリー '{0}' は削除されませんでした: {1}。ターミナルを確認し、停止後にもう一度削除してください。",
 			"worktrees.terminalsTerminated": "{0} 実行中のターミナルは終了しました。",
 			"worktrees.trustFolder": "フォルダーを信頼して続行(&&T)",
 			"worktrees.trustWorkspace": "ワークスペースを信頼して続行(&&T)",

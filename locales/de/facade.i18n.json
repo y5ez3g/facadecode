@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "Submodule und alle nicht gepushten Commits werden ebenfalls gelöscht.",
 			"worktrees.superseded": "vor Abschluss des Öffnens wurde ein Ordnerwechsel angefordert",
 			"worktrees.terminalsEnded": "Die diesem Worktree zugeordneten Terminals wurden geschlossen und aktive Prozesse beendet: {0}.",
+			"worktrees.terminalsStillStopping": "Worktree '{0}' wurde nicht gelöscht, weil diese Terminals noch nicht vollständig beendet wurden: {1}. Prüfen Sie die Terminals und versuchen Sie erneut, ihn zu löschen, sobald sie beendet sind.",
 			"worktrees.terminalsTerminated": "{0} Seine laufenden Terminals wurden beendet.",
 			"worktrees.trustFolder": "&&Ordner vertrauen und fortfahren",
 			"worktrees.trustWorkspace": "&&Arbeitsbereich vertrauen und fortfahren",

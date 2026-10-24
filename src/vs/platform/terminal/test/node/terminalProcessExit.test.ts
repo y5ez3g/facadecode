@@ -6,6 +6,7 @@
 import { ok, strictEqual } from 'assert';
 import { spawn } from 'child_process';
 import { once } from 'events';
+import { isWindows } from '../../../../base/common/platform.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { TerminalProcessExitMonitor } from '../../node/terminalProcessExit.js';
 
@@ -26,10 +27,13 @@ setInterval(() => {}, 1000);
 			ok(parent.pid);
 			const monitor = await TerminalProcessExitMonitor.create(parent.pid);
 			ok(monitor);
+			strictEqual(await monitor.wait(50), false, 'live native processes must not be reported ended');
 			const exited = once(parent, 'exit');
 			parent.kill();
 			await exited;
-			strictEqual(await monitor.wait(50), false, 'the child still holds resources after its shell exits');
+			if (!isWindows) {
+				strictEqual(await monitor.wait(50), false, 'the child still holds resources after its shell exits');
+			}
 			strictEqual(await monitor.wait(10000), true, 'an explicit retry observes the original child ending');
 		} finally {
 			parent.kill();

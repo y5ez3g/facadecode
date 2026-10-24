@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "Alt modüller ve gönderilmemiş commit'ler de silinecek.",
 			"worktrees.superseded": "açma tamamlanmadan önce klasör değiştirme istendi",
 			"worktrees.terminalsEnded": "Bu çalışma ağacıyla ilişkili terminaller kapatıldı ve etkin işlemler sonlandırıldı: {0}.",
+			"worktrees.terminalsStillStopping": "Şu terminaller henüz tamamen durmadığı için '{0}' çalışma ağacı silinmedi: {1}. Terminalleri kontrol edin ve durduklarında yeniden silmeyi deneyin.",
 			"worktrees.terminalsTerminated": "{0} Çalışan terminalleri sonlandırıldı.",
 			"worktrees.trustFolder": "Klasöre &&Güven ve Devam Et",
 			"worktrees.trustWorkspace": "Çalışma Alanına &&Güven ve Devam Et",

@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "子模块及所有未推送的提交也将被删除。",
 			"worktrees.superseded": "在打开完成之前又请求了切换文件夹",
 			"worktrees.terminalsEnded": "与此工作树关联的终端已关闭，活动进程已终止: {0}。",
+			"worktrees.terminalsStillStopping": "未删除工作树“{0}”，因为以下终端尚未完全停止：{1}。请检查这些终端，待其停止后再次删除。",
 			"worktrees.terminalsTerminated": "{0} 其正在运行的终端已终止。",
 			"worktrees.trustFolder": "信任文件夹并继续(&&T)",
 			"worktrees.trustWorkspace": "信任工作区并继续(&&T)",

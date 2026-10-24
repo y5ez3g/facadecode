@@ -646,6 +646,7 @@
 			"worktrees.submodulesSince": "Submodules and any unpushed commits will also be deleted.",
 			"worktrees.superseded": "a folder switch was requested before opening completed",
 			"worktrees.terminalsEnded": "Terminals associated with this worktree were closed and active processes terminated: {0}.",
+			"worktrees.terminalsStillStopping": "Worktree '{0}' was not deleted because these terminals have not finished stopping: {1}. Check the terminals and try deleting it again once they have stopped.",
 			"worktrees.terminalsTerminated": "{0} Its running terminals were terminated.",
 			"worktrees.trustFolder": "&&Trust Folder & Continue",
 			"worktrees.trustWorkspace": "&&Trust Workspace & Continue",
