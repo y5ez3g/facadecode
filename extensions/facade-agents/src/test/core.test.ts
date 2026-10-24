@@ -922,11 +922,15 @@ suite('Core: starting an agent, step by step', () => {
 	test('the person\'s history says what each agent\'s terminal runs, as it is launched: its command line, the variables its launch sets in its environment, and the files its arguments name - its settings - with their keys, never their values, which may be a key of the person\'s; its token\'s file by its path, never the token (N-76; UI-14; O11; OR-16)', async () => {
 		await world.startUp(PERSON, { name: 'main', cli: 'arg', model: 'large', effort: 'high', task: 'Plan.', folder: lab });
 		const token = fs.readFileSync(path.join(world.table.runsDir, '1.token'), 'utf8').trim();
+		const program = path.join(world.table.dir, 'bin', 'arg.exe');
+		const config = path.join(world.table.dir, 'runs', '1.config.json');
+		const commandProgram = process.platform === 'win32' ? JSON.stringify(program) : program;
+		const commandConfig = process.platform === 'win32' ? JSON.stringify(config) : config;
 
-		assert.deepStrictEqual({ history: history(world).map(line => line.split(world.table.dir).join('…')), token: fs.readFileSync(world.table.logFile, 'utf8').includes(token) }, {
+		assert.deepStrictEqual({ history: history(world), token: fs.readFileSync(world.table.logFile, 'utf8').includes(token) }, {
 			history: [
 				`recorded @main #a1  arg large high  YOLO on  creator @human  folder ${lab}`,
-				'launched @main #a1  …/bin/arg.exe --config …/runs/1.config.json --no-ask --yolo --model large --effort high -- "[facade] You are @main #a1, created by @human. Your task is #m1."  environment: ARG_QUIET  …/runs/1.config.json keys: command, args, env.ELECTRON_RUN_AS_NODE',
+				`launched @main #a1  ${commandProgram} --config ${commandConfig} --no-ask --yolo --model large --effort high -- "[facade] You are @main #a1, created by @human. Your task is #m1."  environment: ARG_QUIET  ${config} keys: command, args, env.ELECTRON_RUN_AS_NODE`,
 				'connected @main #a1',
 				'running  @main #a1'
 			],

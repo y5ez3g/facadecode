@@ -9,6 +9,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { codeOf, messageOf } from '../base/errors';
 import { agentName, AgentTable, countOnFrom, nameOfWorktree, NewAgent, numberedUpTo } from '../record/agents';
 import { agentRef, describe, LedgerEventBody, parseAgentReference, PERSON, splitWorkspace, workspaceNameOf, workspaceWordOf } from '../record/events';
@@ -125,7 +126,8 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		const folder = path.join(temp.dir, 'Lab Folder');
 		fs.mkdirSync(folder);
 		const real = fs.realpathSync.native(folder);
-		const key = process.platform === 'darwin' || process.platform === 'win32' ? real.toLowerCase() : real;
+		const normalized = real.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+		const key = process.platform === 'darwin' || process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 		const byFolder = path.join(root, `Lab_Folder-${crypto.createHash('sha256').update(key).digest('hex').slice(0, 12)}`);
 		const kept = path.join(root, 'moved-0123456789ab');
 		const ours = recordDirOf(root, '0b6a9f5e-1c1d-4e8b-9a77-2f1f0f6a7e10');
@@ -1395,13 +1397,15 @@ suite('Record: where a workspace\'s record is', () => {
 
 	test('a workspace file opened by another case of its path, where the file system ignores case, has its record still; a record whose identity cannot be read is no other workspace\'s to replace: that is an error naming the file, and no record is made (C-REC-17; C-REC-18; REC-13)', () => {
 		const root = path.join(temp.dir, 'workspaces');
-		const w2 = recordFor(root, undefined, 'file:///Users/me/W2.code-workspace', () => false);
-		const lowered = recordFor(root, w2.id, 'file:///Users/me/w2.code-workspace', () => false);
+		const workspace = pathToFileURL(path.join(temp.dir, 'W2.code-workspace')).href;
+		const loweredWorkspace = pathToFileURL(path.join(temp.dir, 'w2.code-workspace')).href;
+		const w2 = recordFor(root, undefined, workspace, () => false);
+		const lowered = recordFor(root, w2.id, loweredWorkspace, () => false);
 		fs.writeFileSync(path.join(w2.dir, 'identity.json'), '{"workspace": ');
 		const before = fs.readdirSync(root).length;
 		let unreadable: string;
 		try {
-			recordFor(root, w2.id, 'file:///Users/me/W2.code-workspace', () => false);
+			recordFor(root, w2.id, workspace, () => false);
 			unreadable = 'a record';
 		} catch (err) {
 			unreadable = messageOf(err);

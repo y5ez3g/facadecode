@@ -261,7 +261,9 @@ suite('CLIs: each launch, argument by argument', () => {
 			fs.mkdirSync(config);
 			fs.writeFileSync(path.join(lab, '.mcp.json'), JSON.stringify({ mcpServers: { facade: { command: 'facade' }, 'la13-own': { command: 'own' }, 'in-launch': { command: 'a' }, 'in-local': { command: 'b' }, 'in-config': { command: 'c' } } }));
 			fs.writeFileSync(path.join(lab, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['in-local'] }));
-			const project = (approval: object) => fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ projects: { [fs.realpathSync(lab)]: { hasTrustDialogAccepted: true, ...approval } } }));
+			const projectKey = claudeCli.trustValues?.({ folder: lab, repository: lab }, { CLAUDE_CONFIG_DIR: config })?.repository;
+			assert.ok(projectKey);
+			const project = (approval: object) => fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ projects: { [projectKey]: { hasTrustDialogAccepted: true, ...approval } } }));
 			project({ enabledMcpjsonServers: ['in-config'] });
 			const launch = readCliConfig(claudeCli, name => name === 'launch' ? { environment: { CLAUDE_CONFIG_DIR: config }, settings: { enabledMcpjsonServers: ['in-launch'] } } : undefined);
 			const offIn = (yolo: boolean, unattended: boolean) => JSON.parse(claudeCli.launch(inputFor(claudeCli, { folder: lab, repository: lab, yolo, unattended, config: launch }), '/bin/claude').files[0].content).disabledMcpjsonServers;

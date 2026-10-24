@@ -7,16 +7,18 @@ import { execFile, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from './errors';
+import { isEqualPath } from './files';
 import { isJsonObject } from './json';
 
 /**
  * Whether the running process `pid` runs the same program as this one - another Facade window's extension
  * host, say - rather than whatever program got its id after the one that had it ended; undefined where
- * the system cannot tell (Windows).
+ * the system cannot tell. Windows uses the process inventory's executable path.
  */
 export function isSameProgram(pid: number): boolean | undefined {
 	if (process.platform === 'win32') {
-		return undefined;
+		const executable = identifyWindowsProcess(pid)?.executable;
+		return executable === undefined ? undefined : isEqualPath(executable, process.execPath);
 	}
 	const found = spawnSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 2_000 });
 	const program = found.status === 0 ? found.stdout.trim() : '';
