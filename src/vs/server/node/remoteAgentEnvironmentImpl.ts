@@ -15,7 +15,7 @@ import { transformOutgoingURIs } from '../../base/common/uriIpc.js';
 import { listProcesses } from '../../base/node/ps.js';
 import { getMachineInfo, collectWorkspaceStats } from '../../platform/diagnostics/node/diagnosticsService.js';
 import { IDiagnosticInfoOptions, IDiagnosticInfo } from '../../platform/diagnostics/common/diagnostics.js';
-import { basename } from '../../base/common/path.js';
+import { basename, isAbsolute } from '../../base/common/path.js';
 import { ProcessItem } from '../../base/common/processes.js';
 import { ServerConnectionToken, ServerConnectionTokenType } from './serverConnectionToken.js';
 import { IExtensionHostStatusService } from './extensionHostStatusService.js';
@@ -122,6 +122,7 @@ export class RemoteAgentEnvironmentChannel implements IServerChannel {
 			workspaceStorageHome: this._environmentService.workspaceStorageHome,
 			localHistoryHome: this._environmentService.localHistoryHome,
 			userHome: this._environmentService.userHome,
+			...(process.env.FACADE_HOME && isAbsolute(process.env.FACADE_HOME) ? { facadeHome: URI.file(process.env.FACADE_HOME) } : {}),
 			os: platform.OS,
 			arch: process.arch,
 			marks: performance.getMarks(),

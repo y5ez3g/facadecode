@@ -5,6 +5,7 @@
 
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { Event } from '../../../../base/common/event.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { isAbsolute } from '../../../../base/common/path.js';
 import { env } from '../../../../base/common/process.js';
 import { basename, dirname, isEqual, joinPath } from '../../../../base/common/resources.js';
@@ -12,6 +13,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
+import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 
 /**
  * Whether two paths name one folder. ⚠️ Not `uri.toString()`: a file system that ignores case gives
@@ -81,12 +83,21 @@ export function facadeHomeOverride(): URI | undefined {
 }
 
 /**
- * `WORKTREES_FOLDER` under the Facade home - `FACADE_HOME` where the window runs with it, `<home>/.facade`
- * otherwise - links not followed. `worktreesFolderOf` is this, canonical.
+ * `WORKTREES_FOLDER` under the Facade home on the target machine. A remote server reports its own `FACADE_HOME`;
+ * the renderer's environment belongs to the client and cannot select a remote path. Links are not followed.
  */
-export async function worktreesRootOf(pathService: IPathService): Promise<URI> {
-	const override = facadeHomeOverride();
-	return override ? joinPath(override, 'worktrees') : joinPath(await pathService.userHome(), ...WORKTREES_FOLDER);
+export async function worktreesRootOf(pathService: IPathService, remoteAgentService: IRemoteAgentService): Promise<URI> {
+	const home = await pathService.userHome();
+	let override: URI | undefined;
+	if (home.scheme === Schemas.file) {
+		override = facadeHomeOverride();
+	} else if (home.scheme === Schemas.vscodeRemote) {
+		const remoteHome = (await remoteAgentService.getEnvironment())?.facadeHome;
+		if (remoteHome?.scheme === home.scheme && remoteHome.authority === home.authority) {
+			override = remoteHome;
+		}
+	}
+	return override ? joinPath(override, 'worktrees') : joinPath(home, ...WORKTREES_FOLDER);
 }
 
 /**
@@ -221,7 +232,7 @@ export async function canonicalUri(fileService: IFileService, uri: URI): Promise
  * otherwise (`worktreesRootOf`). A worktree inside it is one Facade made; any other is another
  * tool's, which Facade takes for a folder and never acts on as a worktree (WORKTREE.md WT-1.3).
  */
-export async function worktreesFolderOf(fileService: IFileService, pathService: IPathService): Promise<URI> {
-	return canonicalUri(fileService, await worktreesRootOf(pathService));
+export async function worktreesFolderOf(fileService: IFileService, pathService: IPathService, remoteAgentService: IRemoteAgentService): Promise<URI> {
+	return canonicalUri(fileService, await worktreesRootOf(pathService, remoteAgentService));
 }
 

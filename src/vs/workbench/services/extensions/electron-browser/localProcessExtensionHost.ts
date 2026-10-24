@@ -10,6 +10,7 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import * as objects from '../../../../base/common/objects.js';
 import * as platform from '../../../../base/common/platform.js';
+import { env as windowEnv } from '../../../../base/common/process.js';
 import { removeDangerousEnvVariables } from '../../../../base/common/processes.js';
 import { StopWatch } from '../../../../base/common/stopwatch.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -234,6 +235,16 @@ export class NativeLocalProcessExtensionHost extends Disposable implements IExte
 
 		if (this._environmentService.debugExtensionHost.env) {
 			objects.mixin(env, this._environmentService.debugExtensionHost.env);
+		}
+		// The workbench and its extension host must use the window's Facade home, even when the shell
+		// or a debug launch supplied a different one (AGENT-ORCHESTRATION.md O8).
+		for (const key of Object.keys(env)) {
+			if (platform.isWindows ? key.toUpperCase() === 'FACADE_HOME' : key === 'FACADE_HOME') {
+				delete env[key];
+			}
+		}
+		if (windowEnv.FACADE_HOME !== undefined) {
+			env.FACADE_HOME = windowEnv.FACADE_HOME;
 		}
 
 		removeDangerousEnvVariables(env);

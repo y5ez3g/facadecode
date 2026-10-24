@@ -39,6 +39,7 @@ export interface IRemoteAgentEnvironmentDTO {
 	workspaceStorageHome: UriComponents;
 	localHistoryHome: UriComponents;
 	userHome: UriComponents;
+	facadeHome?: UriComponents;
 	os: platform.OperatingSystem;
 	arch: string;
 	marks: performance.PerformanceMark[];
@@ -78,6 +79,7 @@ export class RemoteExtensionEnvironmentChannelClient {
 			workspaceStorageHome: URI.revive(data.workspaceStorageHome),
 			localHistoryHome: URI.revive(data.localHistoryHome),
 			userHome: URI.revive(data.userHome),
+			...(data.facadeHome ? { facadeHome: URI.revive(data.facadeHome) } : {}),
 			os: data.os,
 			arch: data.arch,
 			marks: data.marks,

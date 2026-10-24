@@ -56,6 +56,7 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { IWorkingCopy } from '../../../../services/workingCopy/common/workingCopy.js';
 import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
+import { IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
 import { IFilesConfigurationService } from '../../../../services/filesConfiguration/common/filesConfigurationService.js';
 import { IFacadeRunsService } from '../../../facadeCommands/browser/facadeRuns.js';
 import { facadeRunOf, facadeRunProperties, IFacadeRun } from '../../../facadeCommands/common/facadeRun.js';
@@ -501,6 +502,7 @@ suite('Worktrees - making and deleting one', () => {
 			path: Promise.resolve(posix),
 			fileURI: async path => URI.file(path)
 		});
+		instantiationService.stub(IRemoteAgentService, { getEnvironment: async () => null });
 		instantiationService.stub(IWorkspaceTrustEnablementService, { isWorkspaceTrustEnabled: () => trust.enabled });
 		instantiationService.stub(IWorkspaceTrustManagementService, {
 			isWorkspaceTrusted: () => trust.trusted,
@@ -2274,6 +2276,56 @@ suite('Worktrees - making and deleting one', () => {
 			answered: 'deleted',
 			unanswered: '\'/home/me/.facade/worktrees/lab/w2\' was not deleted because an agent from another window is working in it (@there #a208). Stop that agent in its window first.'
 		});
+	});
+
+	test(`the person's deletion asks an answering local workspace to stop its agent before removing the worktree (O5)`, async () => {
+		answers.set('_git.deleteWorktreeAt check', checked());
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		gitIsRunning();
+		for (const command of ['_facade.agents.workIn', '_facade.agents.workMark', '_facade.agents.workRelease']) {
+			store.add(CommandsRegistry.registerCommand(command, () => { }));
+		}
+		ptyProcesses = [upcastPartial<IProcessDetails>({ title: '@there #a208', pid: 4242, cwd: `${w2.path}/src`, workspaceId: 'another window', isOrphan: false, reconnectionProperties: facadeRunProperties({ workspace: 'other', id: 208 }) })];
+		answers.set('_facade.agents.workIn undefined', { workspaces: [{ record: 'other', label: 'lab', agents: ['@there #a208'], runs: [208], terminals: [], editors: [] }], silent: [], otherVersions: [] });
+		answers.set('_facade.agents.workMark undefined', { placed: true });
+		answers.set('_facade.agents.workRelease undefined', { left: [], silent: [] });
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(w2);
+
+		assert.deepStrictEqual({
+			confirmed: confirmations.length,
+			named: (confirmations[0]?.detail as string)?.includes('@there #a208'),
+			asked: steps.filter(step => step.startsWith('_facade.agents.workIn ')).length,
+			marked: steps.some(step => step.startsWith('_facade.agents.workMark ') && step.endsWith(' true')),
+			released: steps.some(step => step.startsWith('_facade.agents.workRelease ')),
+			removed: steps.some(step => step.startsWith('_git.deleteWorktreeAt ') && step.endsWith(' remove')),
+			errors: steps.filter(step => step.startsWith('error:'))
+		}, { confirmed: 1, named: true, asked: 2, marked: true, released: true, removed: true, errors: [] });
+	});
+
+	test(`a remote worktree's deletion asks, marks and releases other workspaces on the remote before removing it (O5; REMOTE.md R3)`, async () => {
+		const remote = (path: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+box', path });
+		const worktree = remote(w2.path);
+		repository = { kind: 'repository', main: remote('/lab'), folder: undefined, branch: 'main', members: [], worktrees: [{ uri: worktree, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
+		answers.set('_git.deleteWorktreeAt check', checked());
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		for (const command of ['_facade.agents.workIn', '_facade.agents.workMark', '_facade.agents.workRelease']) {
+			store.add(CommandsRegistry.registerCommand(command, () => { }));
+		}
+		answers.set('_facade.agents.workIn undefined', { workspaces: [{ record: 'other', label: 'lab', agents: [], runs: [], terminals: [], editors: ['draft.md'] }], silent: [], otherVersions: [] });
+		answers.set('_facade.agents.workMark undefined', { placed: true });
+		answers.set('_facade.agents.workRelease undefined', { left: [], silent: [] });
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(worktree);
+
+		assert.deepStrictEqual({
+			listed: (confirmations[0]?.detail as string)?.includes('draft.md'),
+			asked: steps.filter(step => step.startsWith('_facade.agents.workIn ')).length,
+			marked: steps.some(step => step.startsWith('_facade.agents.workMark ') && step.endsWith(' true')),
+			released: steps.some(step => step.startsWith('_facade.agents.workRelease ')),
+			removed: steps.some(step => step.startsWith('_git.deleteWorktreeAt ') && step.endsWith(' remove')),
+			errors: steps.filter(step => step.startsWith('error:'))
+		}, { listed: true, asked: 2, marked: true, released: true, removed: true, errors: [] });
 	});
 
 	test(`an agent's deletion carries who deletes it: asked again with it, an agent there it does not reach refuses it before anything is moved, and the release is asked with it (O1, O5; WT-8, steps 3 and 6)`, async () => {

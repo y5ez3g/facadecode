@@ -38,7 +38,7 @@ import { TerminalExitReason, TerminalSettingId } from '../../../../platform/term
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, WorkspaceTrustRequestButton } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IWorkspaceContextService, isSingleFolderWorkspaceIdentifier, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
-import { canonicalUri, facadeHomeOverride, unreachable, WORKTREES_FOLDER, worktreesFolderOf, worktreesRootOf } from '../../../browser/parts/workspacebar/workspaceBar.js';
+import { canonicalUri, unreachable, WORKTREES_FOLDER, worktreesFolderOf, worktreesRootOf } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { DELETE_WORKTREE_COMMAND, NEW_WORKTREE_COMMAND, WORKSPACE_BAR_CATEGORY, WORKTREES_SHOWN, WorkspaceBarContextMenu, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowToolbar } from '../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IRunningWork } from '../../../browser/parts/workspacebar/workspaceBarAgents.js';
 import { IFolderCustomization, IWorkspaceBarCustomizationService, worktreeNameFor } from '../../../browser/parts/workspacebar/workspaceBarCustomization.js';
@@ -51,6 +51,7 @@ import { IActiveFolderService } from '../../../services/activeFolder/common/acti
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IFilesConfigurationService } from '../../../services/filesConfiguration/common/filesConfigurationService.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
+import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { IWorkingCopy } from '../../../services/workingCopy/common/workingCopy.js';
 import { worktreeRepositoryOf } from '../../../services/workspaces/common/gitFiles.js';
 import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
@@ -646,6 +647,7 @@ export class WorktreeService implements IWorktreeService {
 		@IProgressService private readonly progressService: IProgressService,
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
+		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService,
 		@IWorkspaceTrustManagementService private readonly workspaceTrustManagementService: IWorkspaceTrustManagementService,
 		@IWorkspaceTrustEnablementService private readonly workspaceTrustEnablementService: IWorkspaceTrustEnablementService,
 		@IWorkspaceTrustRequestService private readonly workspaceTrustRequestService: IWorkspaceTrustRequestService,
@@ -942,14 +944,15 @@ export class WorktreeService implements IWorktreeService {
 			blocked: base.identity === false ? noIdentityMessage() : undefined
 		};
 
-		const parent = joinPath(await worktreesRootOf(this.pathService), basename(main));
+		const parent = joinPath(await worktreesRootOf(this.pathService, this.remoteAgentService), basename(main));
 
 		// From the home folder, so the part the branch makes fits on the dialog's line; the whole path for an
 		// isolated test window, whose worktrees are no folder under the home (WT-2.1).
 		const separator = this.labelService.getSeparator(parent.scheme, parent.authority);
-		const parentLabel = facadeHomeOverride()
-			? this.labelService.getUriLabel(parent) + separator
-			: ['~', ...WORKTREES_FOLDER, basename(main)].join(separator) + separator;
+		const ordinary = joinPath(await this.pathService.userHome(), ...WORKTREES_FOLDER, basename(main));
+		const parentLabel = this.uriIdentityService.extUri.isEqual(parent, ordinary)
+			? ['~', ...WORKTREES_FOLDER, basename(main)].join(separator) + separator
+			: this.labelService.getUriLabel(parent) + separator;
 
 		// The names already taken, so the Path line shows the `-1` the worktree will get.
 		const caseSensitive = this.fileService.hasCapability(parent, FileSystemProviderCapabilities.PathCaseSensitive);
@@ -1077,7 +1080,7 @@ export class WorktreeService implements IWorktreeService {
 			throw new Error(localize('worktrees.noBaseUnasked', "Repository '{0}' contains no commits. Create an initial commit first.", basename(main)));
 		}
 
-		const parent = joinPath(await worktreesRootOf(this.pathService), basename(main));
+		const parent = joinPath(await worktreesRootOf(this.pathService, this.remoteAgentService), basename(main));
 		// The agent's caller says what could not be copied and how a hook failed: the person is not told of it
 		const created = await this.createDecided(main, branch, name, parent, {}, options.startPoint, true);
 		if (created.kind === 'failed') {
@@ -1420,9 +1423,10 @@ export class WorktreeService implements IWorktreeService {
 			this.notificationService.error(check);
 			return;
 		}
-		// And another window's agent working in it, which refuses it as a lock does: asking first would ask about a
-		// deletion that cannot happen (REMOTE.md RM-41). Looked for again once it is decided, for one started meanwhile
-		const otherAgent = await this.agentElsewhere(worktree);
+		// A remote window cannot take another window's agent with it (REMOTE.md RM-41). Without the agents' extension,
+		// the pty host is also the only way to find another window's agent before asking the person.
+		const otherAgent = worktree.scheme === Schemas.vscodeRemote || !CommandsRegistry.getCommand('_facade.agents.workIn')
+			? await this.agentElsewhere(worktree) : undefined;
 		if (otherAgent) {
 			this.notificationService.error(otherAgent);
 			return;
@@ -1754,7 +1758,7 @@ export class WorktreeService implements IWorktreeService {
 	 * failed, which refuses the deletion as a workspace that did not answer does (AGENT-ORCHESTRATION.md, O5).
 	 */
 	private async askElsewhere(worktree: URI, by?: object): Promise<{ readonly kind: 'none' } | { readonly kind: 'asked'; readonly work: IWorkElsewhere } | { readonly kind: 'failed'; readonly why: string }> {
-		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.workIn')) {
+		if (!agentsSee(worktree) || !CommandsRegistry.getCommand('_facade.agents.workIn')) {
 			return { kind: 'none' };
 		}
 		try {
@@ -1822,7 +1826,7 @@ export class WorktreeService implements IWorktreeService {
 
 	/** Places `worktree`'s deletion mark for this workspace, or removes it: why not placed - another workspace deletes it - or undefined (WT-8, step 3). */
 	private async markElsewhere(worktree: URI, place: boolean): Promise<string | undefined> {
-		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.workMark')) {
+		if (!agentsSee(worktree) || !CommandsRegistry.getCommand('_facade.agents.workMark')) {
 			return undefined;
 		}
 		try {
@@ -1842,7 +1846,7 @@ export class WorktreeService implements IWorktreeService {
 	 * step 6): why it is not to be deleted - what is left, or a workspace that did not answer - or undefined.
 	 */
 	private async releaseElsewhere(worktree: URI, discard: boolean, by?: object): Promise<string | undefined> {
-		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.workRelease')) {
+		if (!agentsSee(worktree) || !CommandsRegistry.getCommand('_facade.agents.workRelease')) {
 			return undefined;
 		}
 		let released: { readonly left: readonly string[]; readonly silent: readonly string[]; readonly unknown?: readonly string[] } | undefined;
@@ -1891,7 +1895,7 @@ export class WorktreeService implements IWorktreeService {
 				if (markRefusal) {
 					return { kind: 'refused', why: markRefusal };
 				}
-				marked = worktree.scheme === Schemas.file && !!CommandsRegistry.getCommand('_facade.agents.workMark');
+				marked = agentsSee(worktree) && !!CommandsRegistry.getCommand('_facade.agents.workMark');
 				const asked = await this.askElsewhere(worktree, decided?.by);
 				if (asked.kind === 'failed') {
 					return { kind: 'refused', why: asked.why };
@@ -2296,7 +2300,7 @@ export class WorktreeService implements IWorktreeService {
 
 	/** Whether `folder` is in `WORKTREES_FOLDER`, where Facade makes worktrees (WT-2.1), its links followed. */
 	private async inWorktreesFolder(folder: URI): Promise<boolean> {
-		const [canonical, own] = await Promise.all([canonicalUri(this.fileService, folder), worktreesFolderOf(this.fileService, this.pathService)]);
+		const [canonical, own] = await Promise.all([canonicalUri(this.fileService, folder), worktreesFolderOf(this.fileService, this.pathService, this.remoteAgentService)]);
 		return this.uriIdentityService.extUri.isEqualOrParent(canonical, own);
 	}
 

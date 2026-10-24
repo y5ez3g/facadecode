@@ -22,6 +22,8 @@ export interface IRemoteAgentEnvironment {
 	workspaceStorageHome: URI;
 	localHistoryHome: URI;
 	userHome: URI;
+	/** Facade's isolated home on the remote, when set there. */
+	facadeHome?: URI;
 	os: OperatingSystem;
 	arch: string;
 	marks: performance.PerformanceMark[];

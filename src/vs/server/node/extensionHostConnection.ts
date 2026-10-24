@@ -45,6 +45,16 @@ export async function buildUserEnvironment(startParamsEnv: { [key: string]: stri
 		VSCODE_HANDLES_UNCAUGHT_ERRORS: 'true',
 		VSCODE_NLS_CONFIG: JSON.stringify(nlsConfig)
 	};
+	// Facade's home belongs to the server process, which also reports it to the workbench. A login shell
+	// or resolver must not make the extension host use another home (AGENT-ORCHESTRATION.md O8).
+	for (const key of Object.keys(env)) {
+		if (isWindows ? key.toUpperCase() === 'FACADE_HOME' : key === 'FACADE_HOME') {
+			delete env[key];
+		}
+	}
+	if (processEnv.FACADE_HOME !== undefined) {
+		env.FACADE_HOME = processEnv.FACADE_HOME;
+	}
 
 	const binFolder = environmentService.isBuilt ? join(environmentService.appRoot, 'bin') : join(environmentService.appRoot, 'resources', 'server', 'bin-dev');
 	const remoteCliBinFolder = join(binFolder, 'remote-cli'); // contains the `code` command that can talk to the remote server

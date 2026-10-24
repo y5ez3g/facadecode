@@ -22,6 +22,7 @@ import { UriIdentityService } from '../../../../../platform/uriIdentity/common/u
 import { WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { GROUPS_STORAGE_KEY, IDeletedWorktree, WorkspaceBarGit, WorkspaceBarGroup } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
+import { IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
 import { TestStorageService } from '../../../common/workbenchTestServices.js';
 import { TestPathService } from '../../workbenchTestServices.js';
 
@@ -73,6 +74,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 	/** Where the product makes `/lab`'s worktrees: `<home>/.facade/worktrees/<repository>` (WT-2.1). */
 	const OWN = '/home/.facade/worktrees/lab';
 	const pathService = new TestPathService(URI.file('/home'));
+	const remoteAgentService = upcastPartial<IRemoteAgentService>({ getEnvironment: async () => null });
 
 	let fileService: FileService;
 	/** The disk under `fileService`. */
@@ -89,7 +91,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 	/** The reader over `source`, on `files` - the in-memory disk, unless a test brings its own. */
 	function reader(source: ConstructorParameters<typeof WorkspaceBarGit>[0], files: FileService = fileService): WorkspaceBarGit {
-		return disposables.add(new WorkspaceBarGit(source, files, storage, pathService, disposables.add(new UriIdentityService(files))));
+		return disposables.add(new WorkspaceBarGit(source, files, storage, pathService, remoteAgentService, disposables.add(new UriIdentityService(files))));
 	}
 
 	async function write(path: string, content: string): Promise<void> {
@@ -828,7 +830,7 @@ suite('Workspace bar - worktrees as git records them', () => {
 
 		const home = new DeferredPromise<URI>();
 		const slow = upcastPartial<IPathService>({ userHome: (() => home.p) as IPathService['userHome'] });
-		const git = disposables.add(new WorkspaceBarGit({ folders: workspaceFolders('/lab'), onDidChange: Event.None, key: uri => uri.toString() }, fileService, storage, slow, disposables.add(new UriIdentityService(fileService))));
+		const git = disposables.add(new WorkspaceBarGit({ folders: workspaceFolders('/lab'), onDidChange: Event.None, key: uri => uri.toString() }, fileService, storage, slow, remoteAgentService, disposables.add(new UriIdentityService(fileService))));
 		let fired = 0;
 		disposables.add(git.onDidChange(() => fired++));
 		const before = { waiting: git.waiting, hasRead: git.hasRead };

@@ -25,6 +25,7 @@ import { ContextKeyService } from '../../../../../platform/contextkey/browser/co
 import { ContextKeyExpr, ContextKeyValue, IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IStorageService } from '../../../../../platform/storage/common/storage.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IRemoteAgentEnvironment } from '../../../../../platform/remote/common/remoteAgentEnvironment.js';
 import { IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { NEW_WORKTREE_COMMAND, WorkspaceBarRowKindContext, WorkspaceBarRowToolbar } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarAgentsService } from '../../../../browser/parts/workspacebar/workspaceBarAgents.js';
@@ -39,6 +40,7 @@ import { workbenchInstantiationService } from '../../workbenchTestServices.js';
 import { IPutAwayEditorsService } from '../../../../services/putAwayEditors/common/putAwayEditors.js';
 import { IWorkingCopyService } from '../../../../services/workingCopy/common/workingCopyService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
+import { IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
 
 suite('Workspace bar - the rows it draws', () => {
 
@@ -772,14 +774,15 @@ suite('Workspace bar - the Facade home', () => {
 
 	test('WT-2.1 worktrees are made under <home>/.facade - or under FACADE_HOME, for an isolated test window', async () => {
 		const pathService = upcastPartial<IPathService>({ userHome: (() => Promise.resolve(URI.file('/home/me'))) as IPathService['userHome'] });
+		const remoteAgentService = upcastPartial<IRemoteAgentService>({ getEnvironment: async () => null });
 		const fileService = upcastPartial<IFileService>({ realpath: async (uri: URI) => uri });
 
-		const plain = await worktreesFolderOf(fileService, pathService);
+		const plain = await worktreesFolderOf(fileService, pathService, remoteAgentService);
 		env.FACADE_HOME = '/tmp/facade-test';
 		try {
 			const override = facadeHomeOverride();
-			const root = await worktreesRootOf(pathService);
-			const folder = await worktreesFolderOf(fileService, pathService);
+			const root = await worktreesRootOf(pathService, remoteAgentService);
+			const folder = await worktreesFolderOf(fileService, pathService, remoteAgentService);
 
 			assert.deepStrictEqual({ plain: plain.path, override: override?.path, root: root.path, folder: folder.path }, {
 				plain: '/home/me/.facade/worktrees',
@@ -791,5 +794,27 @@ suite('Workspace bar - the Facade home', () => {
 			delete env.FACADE_HOME;
 		}
 		assert.strictEqual(facadeHomeOverride(), undefined);
+	});
+
+	test('WT-2.1 a remote worktree uses the remote Facade home, never the client override', async () => {
+		const remote = (path: string) => URI.from({ scheme: 'vscode-remote', authority: 'ssh-remote+box', path });
+		const pathService = upcastPartial<IPathService>({ userHome: (() => Promise.resolve(remote('/home/remote'))) as IPathService['userHome'] });
+		const fileService = upcastPartial<IFileService>({ realpath: async (uri: URI) => uri });
+		const remoteAgentService = upcastPartial<IRemoteAgentService>({ getEnvironment: async () => upcastPartial<IRemoteAgentEnvironment>({ facadeHome: remote('/srv/isolated') }) });
+		const ordinaryRemoteAgent = upcastPartial<IRemoteAgentService>({ getEnvironment: async () => null });
+		env.FACADE_HOME = '/tmp/client-only';
+		try {
+			const root = await worktreesRootOf(pathService, remoteAgentService);
+			const folder = await worktreesFolderOf(fileService, pathService, remoteAgentService);
+			const ordinary = await worktreesRootOf(pathService, ordinaryRemoteAgent);
+
+			assert.deepStrictEqual({ root: root.toString(), folder: folder.toString(), ordinary: ordinary.toString() }, {
+				root: remote('/srv/isolated/worktrees').toString(),
+				folder: remote('/srv/isolated/worktrees').toString(),
+				ordinary: remote('/home/remote/.facade/worktrees').toString()
+			});
+		} finally {
+			delete env.FACADE_HOME;
+		}
 	});
 });

@@ -17,6 +17,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
+import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { gitPathToUri, IGitLocation, locateGitDirectories, readGitFile, repositoryFolderOf } from '../../../services/workspaces/common/gitFiles.js';
 import { canonicalUri, FolderKey, worktreesFolderOf } from './workspaceBar.js';
 
@@ -277,6 +278,7 @@ export class WorkspaceBarGit extends Disposable {
 		@IFileService private readonly fileService: IFileService,
 		@IStorageService private readonly storageService: IStorageService,
 		@IPathService private readonly pathService: IPathService,
+		@IRemoteAgentService private readonly remoteAgentService: IRemoteAgentService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 	) {
 		super();
@@ -357,7 +359,7 @@ export class WorkspaceBarGit extends Disposable {
 			}
 		}
 
-		this.own ??= worktreesFolderOf(this.fileService, this.pathService);
+		this.own ??= worktreesFolderOf(this.fileService, this.pathService, this.remoteAgentService);
 		const context: IReadContext = {
 			fileService: this.fileService,
 			key: this.source.key,
