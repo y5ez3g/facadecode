@@ -12,13 +12,14 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { IShellLaunchConfig, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { EditorCloseContext, IEditorPane } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
-import { IDeserializedTerminalEditorInput, ITerminalEditorService, ITerminalInstance, ITerminalInstanceService, TerminalEditorLocation } from './terminal.js';
+import { IDeserializedTerminalEditorInput, ITerminalEditorService, ITerminalInstance, ITerminalInstanceService, ITerminalService, TerminalEditorLocation } from './terminal.js';
 import { TerminalEditorInput } from './terminalEditorInput.js';
 import { getInstanceFromResource } from './terminalUri.js';
 import { TerminalContextKeys } from '../common/terminalContextKey.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService, ACTIVE_GROUP, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
 import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
+import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 export class TerminalEditorService extends Disposable implements ITerminalEditorService {
 	declare _serviceBrand: undefined;
@@ -245,7 +246,14 @@ export class TerminalEditorService extends Disposable implements ITerminalEditor
 		return instance;
 	}
 
-	reviveInput(deserializedInput: IDeserializedTerminalEditorInput): EditorInput {
+	reviveInput(deserializedInput: IDeserializedTerminalEditorInput): EditorInput | undefined {
+		if (isFacadeRunTerminal(deserializedInput)) {
+			// Looked up while restoring, after these services were constructed: they depend on each other.
+			const reused = this._instantiationService.invokeFunction(accessor => accessor.get(ITerminalService).reuseAgentEditorInput(deserializedInput));
+			if (reused) {
+				return reused.input;
+			}
+		}
 		const newDeserializedInput = { ...deserializedInput, findRevivedId: true };
 		const instance = this._terminalInstanceService.createInstance({ attachPersistentProcess: newDeserializedInput }, TerminalLocation.Editor);
 		const input = this._instantiationService.createInstance(TerminalEditorInput, instance.resource, instance);

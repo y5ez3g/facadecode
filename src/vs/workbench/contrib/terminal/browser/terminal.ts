@@ -606,6 +606,8 @@ export interface ITerminalService extends ITerminalInstanceHost {
 	moveToBackground(instance: ITerminalInstance): void;
 	revealActiveTerminal(preserveFocus?: boolean): Promise<void>;
 	moveToEditor(source: ITerminalInstance, group?: GroupIdentifier | SIDE_GROUP_TYPE | ACTIVE_GROUP_TYPE | AUX_WINDOW_GROUP_TYPE): void;
+	/** Reuses an agent terminal already restored in this window; an existing panel terminal needs no editor input. */
+	reuseAgentEditorInput(input: IDeserializedTerminalEditorInput): { readonly input?: EditorInput } | undefined;
 	moveIntoNewEditor(source: ITerminalInstance): void;
 	moveToTerminalView(source: ITerminalInstance | URI): Promise<void>;
 	getPrimaryBackend(): ITerminalBackend | undefined;
@@ -710,7 +712,7 @@ export interface ITerminalEditorService extends ITerminalInstanceHost {
 	splitInstance(instanceToSplit: ITerminalInstance, shellLaunchConfig?: IShellLaunchConfig): Promise<ITerminalInstance>;
 	revealActiveEditor(preserveFocus?: boolean): Promise<void>;
 	resolveResource(instance: ITerminalInstance): URI;
-	reviveInput(deserializedInput: IDeserializedTerminalEditorInput): EditorInput;
+	reviveInput(deserializedInput: IDeserializedTerminalEditorInput): EditorInput | undefined;
 	getInputFromResource(resource: URI): TerminalEditorInput;
 }
 

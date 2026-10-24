@@ -29,9 +29,10 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { VirtualWorkspaceContext } from '../../../common/contextkeys.js';
-import { ICreateTerminalOptions, IDetachedTerminalInstance, IDetachedXTermOptions, IRequestAddInstanceToGroupEvent, ITerminalConfigurationService, ITerminalEditorService, ITerminalGroup, ITerminalGroupService, ITerminalInstance, ITerminalInstanceHost, ITerminalInstanceService, ITerminalLocationOptions, ITerminalService, ITerminalServiceNativeDelegate, TerminalConnectionState, TerminalEditorLocation } from './terminal.js';
+import { ICreateTerminalOptions, IDeserializedTerminalEditorInput, IDetachedTerminalInstance, IDetachedXTermOptions, IRequestAddInstanceToGroupEvent, ITerminalConfigurationService, ITerminalEditorService, ITerminalGroup, ITerminalGroupService, ITerminalInstance, ITerminalInstanceHost, ITerminalInstanceService, ITerminalLocationOptions, ITerminalService, ITerminalServiceNativeDelegate, TerminalConnectionState, TerminalEditorLocation } from './terminal.js';
 import { getCwdForSplit } from './terminalActions.js';
 import { TerminalEditorInput } from './terminalEditorInput.js';
+import { EditorInput } from '../../../common/editor/editorInput.js';
 import { getColorStyleContent, getUriClasses } from './terminalIcon.js';
 import { TerminalProfileQuickpick } from './terminalProfileQuickpick.js';
 import { getInstanceFromResource, getTerminalUri, parseTerminalUri } from './terminalUri.js';
@@ -47,7 +48,7 @@ import { IExtensionService } from '../../../services/extensions/common/extension
 import { ILifecycleService, ShutdownReason, StartupKind, WillShutdownEvent } from '../../../services/lifecycle/common/lifecycle.js';
 import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
-import { AGENT_RECORD_STORAGE_KEY, agentRestoreDeferred, isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+import { AGENT_RECORD_STORAGE_KEY, agentRestoreDeferred, facadeRunOf, isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { terminalShutdownQuestion } from '../../terminalLaunchers/common/terminalShutdownQuestion.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { XtermTerminal } from './xterm/xtermTerminal.js';
@@ -613,6 +614,9 @@ export class TerminalService extends Disposable implements ITerminalService {
 			if (agentRestoreDeferred(attachPersistentProcess, this._storageService.get(AGENT_RECORD_STORAGE_KEY, StorageScope.WORKSPACE), this._environmentService.remoteAuthority)) {
 				continue;
 			}
+			if (this._restoredAgent(attachPersistentProcess)) {
+				continue;
+			}
 			const instance = await this.createTerminal({ config: { attachPersistentProcess, hideFromUser: true, forcePersist: true }, location: TerminalLocation.Panel });
 			instances.push(instance);
 		}
@@ -633,6 +637,9 @@ export class TerminalService extends Disposable implements ITerminalService {
 			// Facade Code: on a remote, an agent's of a record not this window's - or none told yet - is left out, for
 			// the take-back: no tab, attached or saying it is elsewhere, for another window's agent (REMOTE.md R7; RM-20)
 			if (agentRestoreDeferred(attachPersistentProcess, this._storageService.get(AGENT_RECORD_STORAGE_KEY, StorageScope.WORKSPACE), this._environmentService.remoteAuthority)) {
+				continue;
+			}
+			if (this._restoredAgent(attachPersistentProcess)) {
 				continue;
 			}
 			mark(`code/terminal/willRecreateTerminal/${attachPersistentProcess.id}-${attachPersistentProcess.pid}`);
@@ -948,6 +955,39 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	isAttachedToTerminal(remoteTerm: IRemoteTerminalAttachTarget): boolean {
 		return this.instances.some(term => term.processId === remoteTerm.pid);
+	}
+
+	reuseAgentEditorInput(input: IDeserializedTerminalEditorInput): { readonly input?: EditorInput } | undefined {
+		const instance = this._restoredAgent(input);
+		if (!instance) {
+			return undefined;
+		}
+
+		// A remote reload can restore a parked process before a folder's saved editor names it.
+		// Transfer that very instance to the editor part, which places the returned input itself.
+		// Attaching a second time fails the agent ownership check and loses a still-running agent.
+		const background = this._backgroundedTerminalInstances.findIndex(each => each.instance === instance);
+		if (background !== -1) {
+			this._backgroundedTerminalInstances.splice(background, 1);
+			this._backgroundedTerminalDisposables.deleteAndDispose(instance.instanceId);
+			instance.shellLaunchConfig.hideFromUser = false;
+		} else if (instance.target !== TerminalLocation.Editor) {
+			// Already restored to the panel: an old editor working set must not move or duplicate it.
+			return {};
+		}
+		const resource = this._terminalEditorService.resolveResource(instance);
+		this._onDidChangeInstances.fire();
+		return { input: this._terminalEditorService.getInputFromResource(resource) };
+	}
+
+	private _restoredAgent(input: Pick<IDeserializedTerminalEditorInput, 'id' | 'reconnectionProperties'>): ITerminalInstance | undefined {
+		const run = facadeRunOf(input);
+		return run && this.instances.find(each => {
+			const other = facadeRunOf(each);
+			return !each.isDisposed && each.remoteAuthority === this._environmentService.remoteAuthority &&
+				(each.persistentProcessId ?? each.shellLaunchConfig.attachPersistentProcess?.id) === input.id &&
+				other?.workspace === run.workspace && other.id === run.id;
+		});
 	}
 
 	moveToEditor(source: ITerminalInstance, group?: GroupIdentifier | SIDE_GROUP_TYPE | ACTIVE_GROUP_TYPE | AUX_WINDOW_GROUP_TYPE): void {
