@@ -104,6 +104,8 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 
 	private _isDisposed: boolean = false;
 	private _process: ITerminalChildProcess | null = null;
+	/** Facade Code: retained across the synthetic exit for a deletion's explicit retry. */
+	private _stoppingProcess: ITerminalChildProcess | undefined;
 	private _processType: ProcessType = ProcessType.Process;
 	private _preLaunchInputQueue: string[] = [];
 	private _initialCwd: string | undefined;
@@ -221,6 +223,15 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 		} catch (e) {
 			this._notificationService.notify({ message: localize('killportfailure', 'Could not kill process listening on port {0}, command exited with error {1}', port, e), severity: Severity.Warning });
 		}
+	}
+
+	/** Facade Code: only an actual process host can confirm native descendants released their files. */
+	async shutdownAndWait(): Promise<boolean> {
+		this._stoppingProcess ??= this._process ?? undefined;
+		if (!this._stoppingProcess) {
+			return this._isDisposed || this.processState === ProcessState.KilledByProcess;
+		}
+		return this._stoppingProcess.shutdownAndWait?.() ?? false;
 	}
 
 	override dispose(immediate: boolean = false): void {

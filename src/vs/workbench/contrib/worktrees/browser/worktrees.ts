@@ -635,6 +635,8 @@ export class WorktreeService implements IWorktreeService {
 	 * with what `cleanup` deletes it by: a retry finishes it, and only while the window keeps that (WT-4.5).
 	 */
 	private readonly leftovers: ResourceMap<string>;
+	/** Native shutdowns that timed out remain part of the worktree until an explicit retry confirms their ends. */
+	private readonly stoppingTerminals: ResourceMap<Set<ITerminalInstance>>;
 
 	constructor(
 		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
@@ -672,6 +674,7 @@ export class WorktreeService implements IWorktreeService {
 		this.makingIn = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 		this.setupStarted = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 		this.leftovers = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
+		this.stoppingTerminals = new ResourceMap(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 	}
 
 	async createWorktree(target: URI | undefined): Promise<void> {
@@ -1660,10 +1663,14 @@ export class WorktreeService implements IWorktreeService {
 
 	async releaseWork(worktree: URI, discard: boolean): Promise<string[]> {
 		const agents = new Set(this.launcherService.agentTerminals);
-		for (const instance of await this.terminalsInside(worktree)) {
-			if (!agents.has(instance)) {
-				instance.dispose(TerminalExitReason.User);
+		const left: string[] = [];
+		for (const instance of distinct([...await this.terminalsInside(worktree), ...(this.stoppingTerminals.get(worktree) ?? [])])) {
+			if (!agents.has(instance) && !await this.stopTerminal(worktree, instance)) {
+				left.push(instance.title);
 			}
+		}
+		if (left.length) {
+			return left;
 		}
 		const unsaved = await this.unsavedIn(worktree);
 		if (discard) {
@@ -1965,19 +1972,24 @@ export class WorktreeService implements IWorktreeService {
 					// 6  stop what goes with it: Facade's agents working in it, by whoever decided on the deletion, their starts
 					//    cancelled, waited for - those still stopping keep it - then the terminals still going with it, working
 					//    inside it or parked for it, closed for the person's deletion, which an agent's end says, not that a tab
-					//    was closed (N-04). What closing them ended is said whatever comes after; git's delete waits for their
-					//    shells to let go.
+					//    was closed (N-04). Native descendants must end before Git sees the directory; UI disposal is not proof.
 					const running = this.runningAmong(await this.terminalsGoingWith(worktree)).map(work => work.name);
 					const stopping = await this.stopAgentsIn(worktree);
 					if (stopping) {
 						return { kind: 'stopping', ...stopping };
 					}
-					done.ended = running;
+					const terminalsLeft: string[] = [];
 					for (const instance of await this.terminalsGoingWith(worktree)) {
 						if (deletion.kind === 'person') {
 							this.facadeRunsService.closingBecause(instance, 'worktreeDeleted');
 						}
-						instance.dispose(TerminalExitReason.User);
+						if (!await this.stopTerminal(worktree, instance)) {
+							terminalsLeft.push(instance.title);
+						}
+					}
+					done.ended = running.filter(name => !terminalsLeft.includes(name));
+					if (terminalsLeft.length) {
+						return { kind: 'refused', why: localize('worktrees.terminalsStillStopping', "Worktree '{0}' was not deleted because these terminals' native processes have not been confirmed stopped: {1}. Check the terminals and try deleting it again once they have stopped.", name, terminalsLeft.join(', ')) };
 					}
 
 					// The other workspaces stop their own work there, and discard their unsaved editors there as the deletion
@@ -2237,7 +2249,31 @@ export class WorktreeService implements IWorktreeService {
 
 	/** The terminals that go with `worktree` as it is deleted, each once: those working inside it, and those of its editor area, whatever they started in. */
 	private async terminalsGoingWith(worktree: URI): Promise<ITerminalInstance[]> {
-		return distinct([...await this.terminalsInside(worktree), ...this.folderTerminalsService.terminalsOf(worktree)]);
+		return distinct([...await this.terminalsInside(worktree), ...this.folderTerminalsService.terminalsOf(worktree), ...(this.stoppingTerminals.get(worktree) ?? [])]);
+	}
+
+	/** Stop on the terminal's own host and retain a timed-out native wait even if the pty already closed its UI. */
+	private async stopTerminal(worktree: URI, instance: ITerminalInstance): Promise<boolean> {
+		let stopping = this.stoppingTerminals.get(worktree);
+		if (!stopping) {
+			stopping = new Set();
+			this.stoppingTerminals.set(worktree, stopping);
+		}
+		stopping.add(instance);
+		try {
+			if (!await raceTimeout(instance.shutdownAndWait?.() ?? Promise.resolve(false), 20000)) {
+				return false;
+			}
+			stopping.delete(instance);
+			if (!stopping.size) {
+				this.stoppingTerminals.delete(worktree);
+			}
+			instance.dispose(TerminalExitReason.User);
+			return true;
+		} catch (error) {
+			this.logService.warn(`[worktrees] Could not confirm native terminal exit: ${toErrorMessage(error)}`);
+			return false;
+		}
 	}
 
 	/** What runs among `terminals`, which closing them ends: agents, and the processes of the others (W9.6). */

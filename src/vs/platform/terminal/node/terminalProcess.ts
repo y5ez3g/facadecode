@@ -17,6 +17,7 @@ import { ILogService, LogLevel } from '../../log/common/log.js';
 import { IProductService } from '../../product/common/productService.js';
 import { FlowControlConstants, IShellLaunchConfig, ITerminalChildProcess, processExitCode, ITerminalLaunchError, IProcessProperty, IProcessPropertyMap, ProcessPropertyType, TerminalShellType, IProcessReadyEvent, ITerminalProcessOptions, PosixShellType, IProcessReadyWindowsPty, GeneralShellType, ITerminalLaunchResult } from '../common/terminal.js';
 import { ChildProcessMonitor } from './childProcessMonitor.js';
+import { TerminalProcessExitMonitor } from './terminalProcessExit.js';
 import { getShellIntegrationInjection, IShellIntegrationConfigInjection, sanitizeEnvForLogging } from './terminalEnvironment.js';
 import { WindowsShellHelper } from './windowsShellHelper.js';
 import { IPty, IPtyForkOptions, IWindowsPtyForkOptions, spawn } from 'node-pty';
@@ -458,6 +459,22 @@ export class TerminalProcess extends Disposable implements ITerminalChildProcess
 			const shellTypeValue = posixShellTypeMap.get(sanitizedTitle) || generalShellTypeMap.get(sanitizedTitle);
 			this._onDidChangeProperty.fire({ type: ProcessPropertyType.ShellType, value: shellTypeValue });
 		}
+	}
+
+	private _shutdownMonitor: Promise<TerminalProcessExitMonitor | undefined> | undefined;
+
+	/** Facade Code: capture descendants before the shell is killed, then wait for their native identities to end. */
+	async shutdownAndWait(): Promise<boolean> {
+		if (!this._shutdownMonitor) {
+			const pid = this._ptyProcess?.pid;
+			if (!pid || pid < 1) {
+				return false;
+			}
+			this._shutdownMonitor = TerminalProcessExitMonitor.create(pid);
+		}
+		const monitor = await this._shutdownMonitor;
+		this.shutdown(false);
+		return monitor ? monitor.wait(10000) : false;
 	}
 
 	shutdown(immediate: boolean): void {

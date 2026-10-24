@@ -1384,6 +1384,11 @@ export class TerminalInstance extends Disposable implements ITerminalInstance {
 		super.dispose();
 	}
 
+	/** Facade Code: synthetic exit/disposal is not a native process-tree exit acknowledgement. */
+	shutdownAndWait(): Promise<boolean> {
+		return this._processManager.shutdownAndWait();
+	}
+
 	async detachProcessAndDispose(reason: TerminalExitReason): Promise<void> {
 		// Detach the process and dispose the instance, without the instance dispose the terminal
 		// won't go away. Force persist if the detach was requested by the user (not shutdown).

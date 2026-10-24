@@ -396,6 +396,8 @@ export interface IPtyService {
 
 	start(id: number): Promise<ITerminalLaunchError | ITerminalLaunchResult | undefined>;
 	shutdown(id: number, immediate: boolean): Promise<void>;
+	/** Facade Code: shutdown confirmed by native process-tree exit, not the pty notification. */
+	shutdownAndWait?(id: number): Promise<boolean>;
 	input(id: number, data: string): Promise<void>;
 	sendSignal(id: number, signal: string): Promise<void>;
 	resize(id: number, cols: number, rows: number, pixelWidth?: number, pixelHeight?: number): Promise<void>;
@@ -880,6 +882,8 @@ export interface ITerminalChildProcess {
 	 * be given some time to make sure no additional data comes through.
 	 */
 	shutdown(immediate: boolean): void;
+	/** Facade Code: a bounded native process-tree wait, repeated on explicit retry after a timeout. */
+	shutdownAndWait?(): Promise<boolean>;
 	input(data: string): void;
 	/**
 	 * Facade Code: `input`, settling once the pty host has the data - for a remote terminal, once it

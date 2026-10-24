@@ -26,9 +26,18 @@ Qualification requires repeated stable and rapid folder-switch/reload journeys o
 
 Packaged `576ddeea` completed twenty full A/B switch-and-reload rounds on each actual host. Every round checked exact hidden dirty text, one editor tab per agent, both real MCP connections, original native agent and HTTP process identity (including start ticks/time), and real forwarded HTTP recovery within thirty seconds. Four actual model replies after the first reload also verified each folder and file's bytes. Evidence is `reload-20-576-f1/results.json` in the campaign directory. The driver checks real host state before reloading; this is steady operation evidence. Faster overlapping focus changes and second-window ownership remain separate qualification work.
 
-## Worktree deletion ordering still under observation
+## Worktree directory removed before its real terminal child exits
 
-On Ubuntu, a real agent, a real HTTP server and a dirty editor were named in one Delete Worktree confirmation. Cancel retained them; confirming stopped the agent, deleted the directory and preserved its branch. One 20 ms process observation sampled the HTTP child as alive at the directory-removal boundary; a later independent check found it exited. That sample read process status before directory status and does not establish an atomic ordering. Repeat with directory status read first and observation continuing after deletion before claiming that terminal shutdown finishes before removal.
+The earlier 20 ms process-first boundary observation was inconclusive. A repeat on packaged `576ddeea` proves the failure with an independent directory-first monitor and the actual program's own log.
+
+1. Create a real Ubuntu worktree from the workspace bar. Run Codex and verify its actual file task and reply. Start an actual Node HTTP server as a child of an ordinary GUI terminal. Give that real server a 1,200 ms graceful shutdown handler and a 20 ms heartbeat reporting whether its original working directory exists; write these logs outside the worktree.
+2. Leave an exact dirty editor, one untracked `.env` fixture, the agent's file, and a deliberately ignored fixture. Inspect the real deletion confirmation. Cancel: independently verify all original process identities, directory and file bytes, dirty editor contents, and absence of shutdown signals.
+3. Reopen confirmation. Before confirming, start an independent monitor that reads directory existence first, then original native PID/start-time identities, every 2 ms. Continue observing after the directory disappears.
+4. Confirm Delete and Discard through the actual GUI.
+
+At `2026-10-24T12:13:22.832338Z`, the directory was absent and original Node PID1449192 remained active. It exited about 1.38 seconds later. Its own heartbeat independently observed the missing directory before its first SIGHUP at `12:13:23.002Z`; this is not solely the deliberately delayed graceful exit. Agent20 and its MCP shim exited before removal. The final directory and Git worktree registration were gone, its branch remained, and the parent workspace's exact dirty editor survived.
+
+Evidence: `linux576-order1-directory-first-monitor.jsonl`, `linux576-order1-http-full-events.jsonl`, `linux576-order1-after-cancel-native.json`, `linux576-order1-after-delete-native.json`, and `linux576-order1-post-delete-branch-and-events.json`. The source calls ordinary terminal `dispose()` without awaiting native process exit; even the terminal's synthetic exit event is not proof its process tree ended. This is **FAIL on576**, with a fix and packaged real-host qualification pending.
 
 ## Windows worktree deletion blocked by existing workspace records
 

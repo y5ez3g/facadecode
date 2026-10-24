@@ -215,6 +215,7 @@ suite('Worktrees - making and deleting one', () => {
 			reconnectionProperties: options?.run && facadeRunProperties(options.run),
 			exitCode: options?.exitCode,
 			get isDisposed() { return closed; },
+			shutdownAndWait: async () => true,
 			dispose: () => {
 				closed = true;
 				steps.push(`close ${name}`);
@@ -1713,6 +1714,31 @@ suite('Worktrees - making and deleting one', () => {
 			agentInside: '\'/home/me/.facade/worktrees/lab/w2\' was not deleted because an agent that this deletion does not stop is working in it (@x #a3). Stop that agent first.',
 			agentInsideSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
 		});
+	});
+
+	test('native terminal shutdown is awaited before Git removal; a timed-out terminal remains on explicit retry after its UI disappears', async () => {
+		gitIsRunning();
+		answers.set('_git.deleteWorktreeAt check', checked());
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+		const nativeExit = new DeferredPromise<boolean>();
+		const server = terminal('real server', w2.path, { running: true });
+		let ended = false;
+		server.shutdownAndWait = async () => ended || await nativeExit.p;
+		terminals = [server];
+		const service = instantiationService.createInstance(WorktreeService);
+		const deleting = service.removeWorktree(w2).then(() => 'deleted', (error: Error) => error.message);
+		await timeout(0);
+		assert.strictEqual(steps.some(step => step.endsWith(' remove')), false);
+		await nativeExit.complete(false);
+		assert.match(await deleting, /native processes have not been confirmed stopped/);
+		assert.strictEqual(steps.some(step => step.endsWith(' remove')), false);
+		assert.strictEqual(server.isDisposed, false);
+		// A synthetic pty exit removes its UI; it is still part of the service's pending native stop.
+		terminals = [];
+		ended = true;
+		await service.removeWorktree(w2);
+		assert.strictEqual(server.isDisposed, true);
+		assert.strictEqual(steps.some(step => step.endsWith(' remove')), true);
 	});
 
 	test('deleted without asking, its files open in the window are read-only from the last look to git\'s end - one opened meanwhile too - and then as they were: nothing typed into one after the look goes unseen (N-41)', async () => {

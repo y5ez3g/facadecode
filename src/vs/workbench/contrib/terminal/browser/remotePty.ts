@@ -50,6 +50,12 @@ export class RemotePty extends BasePty implements ITerminalChildProcess {
 		return this._remoteTerminalChannel.detachFromProcess(this.id, forcePersist);
 	}
 
+	/** Facade Code: do not treat a client-side dispose as proof the remote process tree exited. */
+	async shutdownAndWait(): Promise<boolean> {
+		await this._startBarrier.wait();
+		return this._remoteTerminalChannel.shutdownAndWait(this.id);
+	}
+
 	shutdown(immediate: boolean): void {
 		this._startBarrier.wait().then(_ => {
 			this._remoteTerminalChannel.shutdown(this.id, immediate);

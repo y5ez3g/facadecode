@@ -27,6 +27,11 @@ export class LocalPty extends BasePty implements ITerminalChildProcess {
 		return this._proxy.detachFromProcess(this.id, forcePersist);
 	}
 
+	/** Facade Code: native process-tree exit, confirmed by the local pty host. */
+	async shutdownAndWait(): Promise<boolean> {
+		return this._proxy.shutdownAndWait?.(this.id) ?? false;
+	}
+
 	shutdown(immediate: boolean): void {
 		this._proxy.shutdown(this.id, immediate);
 	}

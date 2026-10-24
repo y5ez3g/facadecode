@@ -486,6 +486,23 @@ export class PtyService extends Disposable implements IPtyService {
 		return pty ? pty.start() : { message: `Could not find pty with id "${id}"` };
 	}
 
+	/** Facade Code: keep a stopping pty after its synthetic exit, so a refused deletion can retry the native wait. */
+	private readonly _stoppingPtys = new Map<number, PersistentTerminalProcess>();
+
+	@traceRpc
+	async shutdownAndWait(id: number): Promise<boolean> {
+		const pty = this._stoppingPtys.get(id) ?? this._ptys.get(id);
+		if (!pty) {
+			return true;
+		}
+		this._stoppingPtys.set(id, pty);
+		const ended = await pty.shutdownAndWait();
+		if (ended) {
+			this._stoppingPtys.delete(id);
+		}
+		return ended;
+	}
+
 	@traceRpc
 	async shutdown(id: number, immediate: boolean): Promise<void> {
 		// Don't throw if the pty is already shutdown
@@ -937,6 +954,11 @@ class PersistentTerminalProcess extends Disposable {
 		this.triggerReplay();
 		return undefined;
 	}
+	/** Facade Code: native exit confirmation for worktree deletion. */
+	shutdownAndWait(): Promise<boolean> {
+		return this._terminalProcess.shutdownAndWait();
+	}
+
 	shutdown(immediate: boolean): void {
 		return this._terminalProcess.shutdown(immediate);
 	}
