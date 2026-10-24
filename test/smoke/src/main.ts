@@ -26,6 +26,7 @@ import { setup as setupMultirootTests } from './areas/multiroot/multiroot.test';
 import { setup as setupLocalizationTests } from './areas/workbench/localization.test';
 import { setup as setupLaunchTests } from './areas/workbench/launch.test';
 import { setup as setupTerminalTests } from './areas/terminal/terminal.test';
+import { setup as setupFacadeAgentsTests } from './areas/facadeAgents/facadeAgents.test';
 import { setup as setupTaskTests } from './areas/task/task.test';
 import { setup as setupChatTests } from './areas/chat/chatDisabled.test';
 import { setup as setupCopilotCliTests } from './areas/chat/copilotCli.test';
@@ -432,6 +433,7 @@ describe(`VSCode Smoke Tests (${opts.web ? 'Web' : 'Electron'})`, () => {
 	if (!opts.web) { setupNotebookTests(logger); }
 	setupLanguagesTests(logger);
 	setupTerminalTests(logger);
+	if (!opts.web) { setupFacadeAgentsTests(logger); }
 	setupTaskTests(logger);
 	setupStatusbarTests(logger);
 	if (quality !== Quality.Dev && quality !== Quality.OSS) { setupExtensionTests(logger); }

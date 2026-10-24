@@ -10,6 +10,7 @@ import { messageOf, stackOf } from './base/errors';
 import { ScreenDocuments } from './host/screenDocuments';
 import { agentsLogOf, AgentsService } from './host/service';
 import { registerShowLaunch } from './host/showLaunch';
+import { detectInstalledCliIds } from './host/startAgent';
 
 /** Stops Facade's agents as the extension stops; settles once the workspace's ledger is closed. */
 let stopAgents: (() => Promise<void>) | undefined;
@@ -122,6 +123,18 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (folder instanceof vscode.Uri && folder.scheme === 'file') {
 				service?.worktreeDeleteFailed(folder.fsPath);
 			}
+		}),
+		// `(folder?)`: the ids of the built-in agent CLIs this machine has and the person offers, found as a
+		// start finds them - for the window's agent menu on a remote, which cannot look itself (REMOTE.md R3).
+		// Needs no service: the menu asks in windows whose record another window has too.
+		vscode.commands.registerCommand('_facade.agents.detectClis', async (folder?: unknown): Promise<string[]> => {
+			// A folder on this machine, whatever its scheme - the window's folders on a remote are `vscode-remote` (REMOTE.md R3)
+			return detectInstalledCliIds(folder instanceof vscode.Uri ? folder.fsPath : undefined);
+		}),
+		// `(ticket)`: whether the window may still do the operation with that ticket - granted while its
+		// caller still waits, refused after that, and where there is no service to want anything (REMOTE.md R4, R7)
+		vscode.commands.registerCommand('_facade.agents.claimTicket', async (ticket?: unknown): Promise<{ readonly granted: boolean }> => {
+			return service?.claimTicket(ticket) ?? { granted: false };
 		}),
 		vscode.commands.registerCommand('facade.agents.startAgent', async (args?: unknown) => {
 			// The first start can come as the extension comes up - the person trusted the workspace from the

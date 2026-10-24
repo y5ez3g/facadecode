@@ -266,6 +266,15 @@ export interface WorktreeDeletion {
 	readonly leftover?: boolean;
 }
 
+/**
+ * How `Git.deleteWorktree` came out within its caller's wait: done; never taken on by the window, so never done; or
+ * taken on and under way, how it ends told `late` (REMOTE.md R4). Its failures reject it.
+ */
+export type WorktreeDeleted =
+	| { readonly outcome: 'done' }
+	| { readonly outcome: 'not_applied' }
+	| { readonly outcome: 'unknown'; readonly late: Promise<void> };
+
 /** The repositories of the workspace's folders. */
 export interface Git {
 	/** The repository `folder` is in; undefined for a folder with none. */
@@ -293,12 +302,13 @@ export interface Git {
 	 */
 	plannedWorktreeFolder(main: string, branch: string): string;
 	/**
-	 * A worktree on the new branch `branch`, starting at `startPoint`, made through the window's New
-	 * Worktree without its dialog; answers once it is made and its setup started (WT-5.11) - with its folder,
-	 * and what could not be copied into it and how a git hook failed, which its caller says. Rejects with
-	 * why it could not be made.
+	 * A worktree on the new branch `branch`, starting at `startPoint`, for the run `run`, made through
+	 * the window's New Worktree without its dialog; answers once it is made and its setup started
+	 * (WT-5.11) - with its folder, and what could not be copied into it and how a git hook failed,
+	 * which its caller says. Undefined where the run was stopped while it waited for the window: refused,
+	 * nothing was made (REMOTE.md R7). Rejects with why it could not be made.
 	 */
-	makeWorktree(main: string, branch: string, startPoint: string): Promise<MadeWorktreeFolder>;
+	makeWorktree(main: string, branch: string, startPoint: string, run: number): Promise<MadeWorktreeFolder | undefined>;
 	/** How the setup of the worktree `folder`, which `makeWorktree` made, came out, once it has. */
 	setupOutcome(folder: string): Promise<SetupOutcome>;
 	/**
@@ -321,9 +331,11 @@ export interface Git {
 	 * workspace, the window has the agents working in it stopped, by `Facade.worktreeStopping`, and looks again before
 	 * git deletes it (WORKTREE.md WT-8). Rejects with why it could not, and what it did all the same. Changes git would
 	 * lose, as the window finds them deleting it, refuse it unless `discardChanges` - all but `ownFiles`, what Facade
-	 * put there that nobody changed.
+	 * put there that nobody changed. The window takes it on - claims its ticket - before it stops or deletes anything,
+	 * while its caller still waits, `waitMs` at most: past that, one it never took on is never done, and one it took on
+	 * is under way, `late` telling how it came out once the window answers (REMOTE.md R4, R7).
 	 */
-	deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void>;
+	deleteWorktree(folder: string, options: WorktreeDeletion, waitMs: number): Promise<WorktreeDeleted>;
 	/**
 	 * The `info/exclude` of the repository `folder` is in, which git reads as a `.gitignore` of its
 	 * own for every worktree, and the root of `folder`'s worktree, where its lines start from;

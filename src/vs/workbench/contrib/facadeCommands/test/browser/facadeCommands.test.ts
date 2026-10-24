@@ -8,37 +8,54 @@ import { IAction } from '../../../../../base/common/actions.js';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { errorHandler, setUnexpectedErrorHandler } from '../../../../../base/common/errors.js';
 import { Emitter } from '../../../../../base/common/event.js';
-import { IProcessEnvironment, isMacintosh, isWindows } from '../../../../../base/common/platform.js';
+import { IProcessEnvironment, isMacintosh, isWindows, OperatingSystem } from '../../../../../base/common/platform.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/virtualScheduling/index.js';
-import { CommandsRegistry } from '../../../../../platform/commands/common/commands.js';
+import { CommandsRegistry, ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { INotification, INotificationHandle, INotificationService, NotificationPriority, Severity } from '../../../../../platform/notification/common/notification.js';
 import { IProductService } from '../../../../../platform/product/common/productService.js';
-import { IMergedEnvironmentVariableCollection } from '../../../../../platform/terminal/common/environmentVariable.js';
+import { EnvironmentVariableMutatorType, IMergedEnvironmentVariableCollection } from '../../../../../platform/terminal/common/environmentVariable.js';
+import { MergedEnvironmentVariableCollection } from '../../../../../platform/terminal/common/environmentVariableCollection.js';
 import { IShellLaunchConfig, ITerminalBackend } from '../../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
+import { IDidEnterWorkspaceEvent, IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { extUri } from '../../../../../base/common/resources.js';
 import { IConfigurationResolverService } from '../../../../services/configurationResolver/common/configurationResolver.js';
+import { AbstractVariableResolverService } from '../../../../services/configurationResolver/common/variableResolver.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
 import { ILifecycleService, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
+import { IRemoteAgentEnvironment } from '../../../../../platform/remote/common/remoteAgentEnvironment.js';
+import { IRemoteAgentConnection, IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
+import { ConnectionLostEvent, PersistentConnectionEvent } from '../../../../../platform/remote/common/remoteAgentConnection.js';
+import { IStorageService } from '../../../../../platform/storage/common/storage.js';
+import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalConfigurationService, ITerminalContribution, ITerminalInstance, ITerminalInstanceService } from '../../../terminal/browser/terminal.js';
 import { IEnvironmentVariableService } from '../../../terminal/common/environmentVariable.js';
 import { ITerminalConfiguration, ITerminalProfileResolverService } from '../../../terminal/common/terminal.js';
 import { IMadeWorktree, IWorktreeService } from '../../../worktrees/browser/worktrees.js';
 import { FacadeAgentTerminal, IAgentKeysOptions, IAgentTerminalOptions, IAgentTypeOptions } from '../../browser/facadeAgentTerminal.js';
-import '../../browser/facadeCommands.contribution.js';
+import { WindowRecordCarrier } from '../../browser/facadeCommands.contribution.js';
 import { FacadeNotifications } from '../../browser/facadeNotifications.js';
 import { FacadeRunProcess, IFacadeRunsService } from '../../browser/facadeRuns.js';
-import { facadeRunOf, facadeRunProperties, IFacadeRun, IPreparingRun } from '../../common/facadeRun.js';
+import { WindowAwayRecord } from '../../browser/facadeWindowAway.js';
+import { facadeRunOf, facadeRunProperties, IFacadeRun, IFacadeRunTerminal, IPreparingRun } from '../../common/facadeRun.js';
+
+/** The window's variable resolver, including `${env:NAME}` read according to the target terminal's OS. */
+class EnvironmentResolver extends AbstractVariableResolverService {
+	constructor() {
+		super(upcastPartial<ConstructorParameters<typeof AbstractVariableResolverService>[0]>({}));
+	}
+}
 
 /** A terminal as the folder terminals open one: made before its process is started, its id known once that is ready. */
 class TestTerminal {
@@ -124,6 +141,10 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 	let runs: Map<string, { terminal?: TestTerminal; process: FacadeRunProcess }>;
 	/** What becomes of each terminal once it is made: by default its process is ready a moment later. */
 	let afterOpening: (terminal: TestTerminal) => void;
+	/** Each ticket claimed as the window would act, and whether it was granted. */
+	let claimed: { ticket: unknown; granted: boolean }[];
+	/** Whether the agents' extension grants the ticket claimed: refused, nothing is done. */
+	let grantClaims: boolean;
 	let instantiationService: TestInstantiationService;
 
 	/** As the command service runs one: a handler that throws answers with a rejection. */
@@ -188,7 +209,19 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		launched = [];
 		runs = new Map();
 		afterOpening = terminal => setTimeout(() => terminal.ready(4242));
+		claimed = [];
+		grantClaims = true;
 		instantiationService = store.add(new TestInstantiationService());
+		instantiationService.stub(ICommandService, {
+			executeCommand: async <R,>(id: string, ...args: unknown[]): Promise<R | undefined> => {
+				if (id !== '_facade.agents.claimTicket') {
+					return undefined;
+				}
+				claimed.push({ ticket: args[0], granted: grantClaims });
+				const answer: unknown = { granted: grantClaims };
+				return answer as R | undefined;
+			}
+		});
 		instantiationService.stub(IConfigurationService, new TestConfigurationService());
 		instantiationService.stub(IActiveFolderService, { activeFolder: undefined });
 		instantiationService.stub(IUriIdentityService, upcastPartial<IUriIdentityService>({ extUri }));
@@ -251,9 +284,9 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 	});
 
 	test('a worktree is made from the commit it is given, or HEAD, and answered with its folder and what could not be copied into it', async () => {
-		const made = await run('_facade.worktree.create', URI.file('/lab'), 'clamp', 'a'.repeat(40), false) as IMadeWorktree;
+		const made = await run('_facade.worktree.create', URI.file('/lab'), 'clamp', 'a'.repeat(40), false, 't1') as IMadeWorktree;
 		// As the extension host gives what it leaves out
-		const fromHead = await run('_facade.worktree.create', URI.file('/lab'), 'tidy', null, null) as IMadeWorktree;
+		const fromHead = await run('_facade.worktree.create', URI.file('/lab'), 'tidy', null, null, 't2') as IMadeWorktree;
 
 		assert.deepStrictEqual({ made: { ...made, worktree: made.worktree.path }, fromHead: fromHead.worktree.path, steps }, {
 			made: { worktree: '/home/me/.facade/worktrees/lab/clamp', copyFailures: [] },
@@ -269,6 +302,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			await failureOf('_facade.worktree.create', URI.file('/lab'), 42),
 			await failureOf('_facade.worktree.create', URI.file('/lab'), 'clamp', 42),
 			await failureOf('_facade.worktree.create', URI.file('/lab'), 'clamp', undefined, 'yes'),
+			await failureOf('_facade.worktree.create', URI.file('/lab'), 'clamp', undefined, undefined, 42),
 		];
 
 		assert.deepStrictEqual({ failures, steps }, {
@@ -278,6 +312,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 				'Unexpected type, expected \'string\'',
 				'Unexpected type, expected \'string\'',
 				'Unexpected type, expected \'boolean\'',
+				'Unexpected type, expected \'string\'',
 			],
 			steps: [],
 		});
@@ -295,24 +330,28 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		});
 	});
 
-	test('a worktree is deleted without asking, as the worktrees delete one, answered once it is gone, told what the caller knows of it - its own files by hash, its main checkout, the runs stopped in it; why it could not be is the rejection, and a folder that is no URI, or options of another shape, are refused', async () => {
+	test('a worktree is deleted without asking, as the worktrees delete one, its ticket claimed first, answered once it is gone, told what the caller knows of it - its own files by hash, its main checkout, the runs stopped in it; why it could not be is the rejection; one with no ticket is refused, nothing done, and a folder that is no URI, or options or a ticket of another shape, are refused (REMOTE.md R4, R7)', async () => {
 		const clamp = URI.file('/home/me/.facade/worktrees/lab/clamp');
-		const deleted = await run('_facade.worktree.delete', clamp);
-		const told = await run('_facade.worktree.delete', clamp, { discardChanges: false, ownFiles: [{ path: '.mcp.json', sha256: 'ab'.repeat(32) }], main: URI.file('/lab'), runs: [{ workspace: 'a1b2', id: 2 }] });
-		const mainCheckout = await failureOf('_facade.worktree.delete', URI.file('/lab'));
+		const deleted = await run('_facade.worktree.delete', clamp, null, 'd1');
+		const told = await run('_facade.worktree.delete', clamp, { discardChanges: false, ownFiles: [{ path: '.mcp.json', sha256: 'ab'.repeat(32) }], main: URI.file('/lab'), runs: [{ workspace: 'a1b2', id: 2 }] }, 'd2');
+		const mainCheckout = await failureOf('_facade.worktree.delete', URI.file('/lab'), null, 'd3');
+		const noTicket = await run('_facade.worktree.delete', clamp);
 		const notAUri = await failureOf('_facade.worktree.delete', '/home/me/.facade/worktrees/lab/clamp');
 		const wrongOptions = [
 			await failureOf('_facade.worktree.delete', clamp, { ownFiles: ['.mcp.json'] }),
 			await failureOf('_facade.worktree.delete', clamp, { main: '/lab' }),
 			await failureOf('_facade.worktree.delete', clamp, { runs: [{ workspace: 'a1b2', id: 0 }] }),
 		];
+		const wrongTicket = await failureOf('_facade.worktree.delete', clamp, null, 42);
 
-		assert.deepStrictEqual({ deleted, told, mainCheckout, notAUri, wrongOptions, steps }, {
+		assert.deepStrictEqual({ deleted, told, mainCheckout, noTicket, notAUri, wrongOptions, wrongTicket, steps }, {
 			deleted: undefined,
 			told: undefined,
 			mainCheckout: '/lab is its repository\'s main checkout, which is never deleted.',
+			noTicket: { refused: true },
 			notAUri: 'Unexpected type, expected \'URI\'',
 			wrongOptions: Array(3).fill('Unexpected type, expected \'IRemoveWorktreeOptions\''),
+			wrongTicket: 'Unexpected type, expected \'string\'',
 			steps: [
 				'delete /home/me/.facade/worktrees/lab/clamp',
 				`delete /home/me/.facade/worktrees/lab/clamp {"discardChanges":false,"ownFiles":[{"path":".mcp.json","sha256":"${'ab'.repeat(32)}"}],"main":"/lab","runs":[{"workspace":"a1b2","id":2}]}`,
@@ -364,6 +403,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 
 	test('a terminal is opened for its folder as it is described - an agent\'s drawn as its CLI, and marked with its run - and answered once its process is ready', async () => {
 		const claude = await run('_facade.terminal.create', URI.file('/lab'), {
+			ticket: 't1',
 			name: '@main #1 · Claude Code',
 			// npm's Claude Code, run as the Node script it runs
 			executable: 'node.exe',
@@ -373,10 +413,10 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			agent: 'claude',
 			run: { workspace: 'a1b2', id: 1 }
 		});
-		const antigravity = await run('_facade.terminal.create', URI.file('/lab'), { name: '@docs #2 · Antigravity', executable: 'agy', cwd: URI.file('/lab/docs'), agent: 'agy' });
-		const noLogo = await run('_facade.terminal.create', URI.file('/lab'), { name: '@tidy #3 · Gemini', executable: 'gemini', agent: 'gemini' });
+		const antigravity = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: '@docs #2 · Antigravity', executable: 'agy', cwd: URI.file('/lab/docs'), agent: 'agy' });
+		const noLogo = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: '@tidy #3 · Gemini', executable: 'gemini', agent: 'gemini' });
 		// As the extension host gives what it leaves out
-		const plain = await run('_facade.terminal.create', URI.file('/lab'), null);
+		const plain = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1' });
 
 		assert.deepStrictEqual({ answers: [claude, antigravity, noLogo, plain], launched: launched.map(launchOf), registered: steps.filter(step => step.startsWith('register')) }, {
 			answers: Array(4).fill({ processId: 4242, closed: false, exitCode: undefined }),
@@ -418,32 +458,32 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 
 	test('the person\'s start is put in front only where they still are: moved on to another folder while it was made, the window stays there, and the terminal is held for its own (PS-15; C-WB-15; X-34)', async () => {
 		instantiationService.stub(IActiveFolderService, { activeFolder: upcastPartial<IWorkspaceFolder>({ uri: URI.file('/lab') }) });
-		await run('_facade.terminal.create', URI.file('/lab'), { name: 'here', reveal: true });
+		await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'here', reveal: true });
 		instantiationService.stub(IActiveFolderService, { activeFolder: upcastPartial<IWorkspaceFolder>({ uri: URI.file('/other') }) });
-		await run('_facade.terminal.create', URI.file('/lab'), { name: 'moved on', reveal: true });
+		await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'moved on', reveal: true });
 
 		assert.deepStrictEqual(steps.filter(step => step.startsWith('reveal')), ['reveal here']);
 	});
 
 	test('a terminal asked to be revealed is put in front once it is open, and answered all the same when it is not', async () => {
-		const shown = await run('_facade.terminal.create', URI.file('/lab'), { name: 'shown', reveal: true });
+		const shown = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'shown', reveal: true });
 
 		instantiationService.stub(IFolderTerminalsService, 'reveal', async (instance: ITerminalInstance) => {
 			steps.push(`reveal ${instance.title}`);
 			return false;
 		});
-		const notInFront = await run('_facade.terminal.create', URI.file('/lab'), { name: 'not in front', reveal: true });
+		const notInFront = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'not in front', reveal: true });
 
 		// Not waited for: it waits for the window to go to the terminal's folder
 		instantiationService.stub(IFolderTerminalsService, 'reveal', (instance: ITerminalInstance) => {
 			steps.push(`reveal ${instance.title}`);
 			return new Promise<boolean>(() => { });
 		});
-		const stillGoing = await run('_facade.terminal.create', URI.file('/lab'), { name: 'still going', reveal: true });
+		const stillGoing = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'still going', reveal: true });
 
 		instantiationService.stub(IFolderTerminalsService, 'reveal', async () => { throw new Error('the folder has gone'); });
 		const reported: string[] = [];
-		const failed = await reportingTo(reported, () => run('_facade.terminal.create', URI.file('/lab'), { name: 'failed', reveal: true }));
+		const failed = await reportingTo(reported, () => run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'failed', reveal: true }));
 
 		assert.deepStrictEqual({ answers: [shown, notInFront, stillGoing, failed], reported, steps }, {
 			answers: Array(4).fill({ processId: 4242, closed: false, exitCode: undefined }),
@@ -461,7 +501,7 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		// On Windows the id comes with the process's first output
 		afterOpening = () => { };
 		const started = Date.now();
-		const opened = await run('_facade.terminal.create', URI.file('/lab'), { name: 'silent', executable: 'cmd.exe' });
+		const opened = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'silent', executable: 'cmd.exe' });
 
 		assert.deepStrictEqual({ opened, waited: Date.now() - started }, {
 			opened: { processId: undefined, closed: false, exitCode: undefined },
@@ -473,12 +513,12 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		// Its process could not start: the terminal says why, and closes a moment after it was made
 		afterOpening = terminal => setTimeout(() => terminal.close(2));
 		const started = Date.now();
-		const whileWaiting = await run('_facade.terminal.create', URI.file('/lab'), { name: '@main · Codex', executable: 'codex', agent: 'codex' });
+		const whileWaiting = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: '@main · Codex', executable: 'codex', agent: 'codex' });
 		const waited = Date.now() - started;
 
 		// Closed by the time it is looked at, nothing left of it to wait on
 		afterOpening = terminal => terminal.close(undefined);
-		const before = await run('_facade.terminal.create', URI.file('/lab'), { name: '@clamp · Codex', executable: 'codex', agent: 'codex' });
+		const before = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: '@clamp · Codex', executable: 'codex', agent: 'codex' });
 
 		assert.deepStrictEqual({ whileWaiting, waited, before }, {
 			whileWaiting: { processId: undefined, closed: true, exitCode: 2 },
@@ -560,14 +600,14 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		runs.set('a1b2#2', { terminal: stubborn, process: { state: 'present' } });
 		runs.set('a1b2#3', { process: { state: 'unknown' } });
 
-		const stopped = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 1 });
+		const stopped = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 1 }, undefined, 't1');
 		const started = Date.now();
-		const notYet = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 2 });
+		const notYet = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 2 }, undefined, 't1');
 		const waited = Date.now() - started;
-		const unknown = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 3 });
-		const goneAlready = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 4 });
+		const unknown = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 3 }, undefined, 't1');
+		const goneAlready = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 4 }, undefined, 't1');
 		// A stop that outlived its time escalates (X-22)
-		const killed = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 2 }, 'SIGKILL');
+		const killed = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 2 }, 'SIGKILL', 't1');
 		const notASignal = await failureOf('_facade.terminal.stop', { workspace: 'a1b2', id: 2 }, 'SIGUSR1');
 
 		// Windows has no signals: there the terminal is closed
@@ -583,6 +623,42 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			stubborn: isWindows ? ['dispose', 'dispose'] : ['signal SIGHUP', 'signal SIGKILL'],
 		});
 	}));
+
+	test('each operation claims its ticket before it acts: granted, it is done; refused - the extension host no longer wants it done - nothing is made, ended or read (REMOTE.md R4, R7)', async () => {
+		const lead = new TestTerminal('@lead #1 · Claude Code');
+		lead.agent = agentTerminal(lead.title, false, lead.done);
+		runs.set('a1b2#1', { terminal: lead, process: { state: 'present' } });
+		grantClaims = false;
+		const refusedCreate = await run('_facade.terminal.create', URI.file('/lab'), { ticket: 'refused', name: 'never' });
+		const refusedStop = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 1 }, undefined, 'refused');
+		const refusedRead = await run('_facade.terminal.read', { workspace: 'a1b2', id: 1 }, 20, 'refused');
+		// A worktree for a start stopped while the window was away: git is never asked
+		const refusedWorktree = await run('_facade.worktree.create', URI.file('/lab'), 'never', null, null, 'refused');
+		// A deletion whose caller stopped waiting while the window was away: nothing is stopped or deleted
+		const refusedDeletion = await run('_facade.worktree.delete', URI.file('/home/me/.facade/worktrees/lab/clamp'), null, 'refused');
+		grantClaims = true;
+		const stopped = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 1 }, undefined, 'granted');
+		assert.deepStrictEqual({ refusedCreate, refusedStop, refusedRead, refusedWorktree, refusedDeletion, stopped, claimed, made: launched.length, worktreesMade: steps.filter(step => step.startsWith('make ')), worktreesDeleted: steps.filter(step => step.startsWith('delete ')), lead: lead.done }, {
+			refusedCreate: { processId: undefined, closed: true, exitCode: undefined, refused: true },
+			refusedStop: false,
+			refusedRead: undefined,
+			refusedWorktree: { refused: true },
+			refusedDeletion: { refused: true },
+			stopped: isWindows ? {} : { exitCode: 129 },
+			claimed: [
+				{ ticket: 'refused', granted: false },
+				{ ticket: 'refused', granted: false },
+				{ ticket: 'refused', granted: false },
+				{ ticket: 'refused', granted: false },
+				{ ticket: 'refused', granted: false },
+				{ ticket: 'granted', granted: true }
+			],
+			made: 0,
+			worktreesMade: [],
+			worktreesDeleted: [],
+			lead: isWindows ? ['close the input of @lead #1 · Claude Code', 'dispose'] : ['close the input of @lead #1 · Claude Code', 'signal SIGHUP'],
+		});
+	});
 
 	test('the environment a terminal opened in a folder gets is the window\'s resolved shell environment where terminals inherit it - the PATH a login shell sets, not the one the Dock gave the window - with the person\'s setting over it, its variables resolved, and what extensions add', async () => {
 		const platformKey = isWindows ? 'windows' : isMacintosh ? 'osx' : 'linux';
@@ -638,9 +714,173 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 	test('an agent\'s terminal starts from the shell environment only where terminals inherit it', async () => {
 		instantiationService.stub(IConfigurationService, new TestConfigurationService({ terminal: { integrated: { inheritEnv: false } } }));
 
-		await run('_facade.terminal.create', URI.file('/lab'), { name: '@main #1 · Claude Code', executable: 'claude', agent: 'claude' });
+		await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: '@main #1 · Claude Code', executable: 'claude', agent: 'claude' });
 
 		assert.deepStrictEqual(launched.map(config => config.useShellEnvironment), [false]);
+	});
+
+	test('a terminal opened for an agent\'s run is marked with its folder as a URI - a remote folder\'s own (REMOTE.md R7)', async () => {
+		const remote = URI.parse('vscode-remote://ssh-remote+monster/home/person/work');
+		await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'local', run: { workspace: 'a1b2', id: 1 } });
+		await run('_facade.terminal.create', remote, { ticket: 't1', name: 'remote', run: { workspace: 'a1b2', id: 2 } });
+
+		assert.deepStrictEqual(launched.map(config => (config.reconnectionProperties?.data as IFacadeRunTerminal | undefined)?.folder), ['file:///lab', remote.toString()]);
+	});
+
+	test('a run\'s process is ended by its own OS - a remote run\'s remote\'s, not the window\'s - as the terminal knows it, else as its remote says (REMOTE.md R7)', () => runWithFakedTimers({ useFakeTimers: true }, async () => {
+		// A Linux remote from a window of any OS, and a Windows one: signals for the first, closed for the second
+		const linuxRemote = new TestTerminal('@lead #1 · Claude Code');
+		Object.assign(linuxRemote, { os: OperatingSystem.Linux, remoteAuthority: 'ssh-remote+monster' });
+		const windowsRemote = new TestTerminal('@win #2 · Codex');
+		Object.assign(windowsRemote, { os: OperatingSystem.Windows, remoteAuthority: 'ssh-remote+winbox' });
+		const unsaid = new TestTerminal('@unsaid #3 · Claude Code');
+		Object.assign(unsaid, { os: undefined, remoteAuthority: 'ssh-remote+monster' });
+		runs.set('a1b2#1', { terminal: linuxRemote, process: { state: 'present' } });
+		runs.set('a1b2#2', { terminal: windowsRemote, process: { state: 'present' } });
+		runs.set('a1b2#3', { terminal: unsaid, process: { state: 'present' } });
+		instantiationService.stub(IRemoteAgentService, { getEnvironment: async () => upcastPartial<IRemoteAgentEnvironment>({ os: OperatingSystem.Linux }) });
+
+		const stopped = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 1 }, undefined, 't1');
+		const closed = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 2 }, undefined, 't1');
+		const asked = await run('_facade.terminal.stop', { workspace: 'a1b2', id: 3 }, undefined, 't1');
+
+		assert.deepStrictEqual({ stopped, closed, asked, linuxRemote: linuxRemote.done, windowsRemote: windowsRemote.done, unsaid: unsaid.done }, {
+			stopped: { exitCode: 129 },
+			closed: {},
+			asked: { exitCode: 129 },
+			linuxRemote: ['signal SIGHUP'],
+			windowsRemote: ['dispose'],
+			unsaid: ['signal SIGHUP'],
+		});
+	}));
+
+	test('the environment a terminal opened in a remote folder gets comes from its remote\'s backend, with the setting for the remote\'s own OS; nothing where the remote cannot say its OS (REMOTE.md R7)', async () => {
+		const folder = URI.parse('vscode-remote://ssh-remote+monster/home/person/work');
+		const seen: (string | undefined)[] = [];
+		const lab: IWorkspaceFolder = upcastPartial<IWorkspaceFolder>({ uri: folder, name: 'work', index: 0 });
+		instantiationService.stub(ITerminalProfileResolverService, {
+			getEnvironment: async (authority?: string) => {
+				seen.push(authority);
+				return {};
+			}
+		});
+		instantiationService.stub(ITerminalInstanceService, {
+			getBackend: async (authority?: string) => {
+				seen.push(authority);
+				return upcastPartial<ITerminalBackend>({ getShellEnvironment: async () => ({}) });
+			}
+		});
+		instantiationService.stub(IConfigurationResolverService, { resolveWithEnvironment: async (_env: IProcessEnvironment, _folder: IWorkspaceFolder | undefined, value: string) => value });
+		instantiationService.stub(IEnvironmentVariableService, { mergedCollection: upcastPartial<IMergedEnvironmentVariableCollection>({ applyToProcessEnvironment: async () => { } }) });
+		instantiationService.stub(IWorkspaceContextService, { getWorkspaceFolder: () => lab });
+		instantiationService.stub(IActiveFolderService, { activeFolder: undefined });
+		instantiationService.stub(IProductService, { version: '1.138.0' });
+		instantiationService.stub(ITerminalConfigurationService, { config: upcastPartial<ITerminalConfiguration>({ detectLocale: 'off' }) });
+		const environmentWith = async (inheritEnv: boolean | undefined, os: OperatingSystem | undefined) => {
+			instantiationService.stub(IConfigurationService, new TestConfigurationService({ terminal: { integrated: { inheritEnv, env: { windows: { ONLY_WINDOWS: '1' }, linux: { ONLY_LINUX: '1' } } } } }));
+			instantiationService.stub(IRemoteAgentService, { getEnvironment: async () => os === undefined ? null : upcastPartial<IRemoteAgentEnvironment>({ os }) });
+			return run('_facade.terminal.environment', folder);
+		};
+
+		const linux = await environmentWith(true, OperatingSystem.Linux) as IProcessEnvironment;
+		const windows = await environmentWith(false, OperatingSystem.Windows) as IProcessEnvironment;
+		instantiationService.stub(IRemoteAgentService, { getEnvironment: async () => null });
+		const unreachable = await failureOf('_facade.terminal.environment', folder);
+
+		assert.deepStrictEqual({
+			seen,
+			linuxOnly: linux.ONLY_LINUX,
+			linuxWindows: linux.ONLY_WINDOWS,
+			windowsOnly: windows.ONLY_WINDOWS,
+			windowsLinux: windows.ONLY_LINUX,
+			unreachable,
+		}, {
+			seen: ['ssh-remote+monster', 'ssh-remote+monster', 'ssh-remote+monster', 'ssh-remote+monster'],
+			linuxOnly: '1',
+			linuxWindows: undefined,
+			windowsOnly: '1',
+			windowsLinux: undefined,
+			unreachable: 'Cannot determine the remote\'s OS',
+		});
+	});
+
+	test('a remote folder\'s environment starts from what a terminal of the remote starts from: the agents\' extension host\'s own there, the login shell\'s included, where terminals inherit it; else the server\'s with the resolver\'s over it - never the resolver\'s alone (REMOTE.md R3, R7)', async () => {
+		const folder = URI.parse('vscode-remote://ssh-remote+monster/home/person/work');
+		const lab: IWorkspaceFolder = upcastPartial<IWorkspaceFolder>({ uri: folder, name: 'work', index: 0 });
+		// A server started without the login shell's PATH, and a resolver that gives only its agent's socket
+		instantiationService.stub(ITerminalProfileResolverService, { getEnvironment: async () => ({ PATH: '/usr/bin:/bin', HOME: '/home/person' }) });
+		instantiationService.stub(ITerminalInstanceService, { getBackend: async () => upcastPartial<ITerminalBackend>({ getShellEnvironment: async () => ({ SSH_AUTH_SOCK: '/tmp/agent.sock' }) }) });
+		instantiationService.stub(IConfigurationResolverService, { resolveWithEnvironment: async (_env: IProcessEnvironment, _folder: IWorkspaceFolder | undefined, value: string) => value });
+		instantiationService.stub(IEnvironmentVariableService, { mergedCollection: upcastPartial<IMergedEnvironmentVariableCollection>({ applyToProcessEnvironment: async () => { } }) });
+		instantiationService.stub(IWorkspaceContextService, { getWorkspaceFolder: () => lab });
+		instantiationService.stub(IActiveFolderService, { activeFolder: undefined });
+		instantiationService.stub(IProductService, { version: '1.138.0' });
+		instantiationService.stub(ITerminalConfigurationService, { config: upcastPartial<ITerminalConfiguration>({ detectLocale: 'off' }) });
+		instantiationService.stub(IRemoteAgentService, { getEnvironment: async () => upcastPartial<IRemoteAgentEnvironment>({ os: OperatingSystem.Linux }) });
+		// The agents' extension host there: the login shell's PATH, and a variable of its own that no terminal gets
+		const hostEnvironment = { PATH: '/home/person/.local/bin:/usr/bin:/bin', HOME: '/home/person', SSH_AUTH_SOCK: '/tmp/agent.sock', VSCODE_NLS_CONFIG: '{}' };
+		const environmentWith = async (inheritEnv: boolean, ...host: IProcessEnvironment[]) => {
+			instantiationService.stub(IConfigurationService, new TestConfigurationService({ terminal: { integrated: { inheritEnv } } }));
+			const env = await run('_facade.terminal.environment', folder, ...host) as IProcessEnvironment;
+			return { PATH: env.PATH, SSH_AUTH_SOCK: env.SSH_AUTH_SOCK, VSCODE_NLS_CONFIG: env.VSCODE_NLS_CONFIG };
+		};
+
+		assert.deepStrictEqual({
+			fromTheHost: await environmentWith(true, hostEnvironment),
+			notInherited: await environmentWith(false, hostEnvironment),
+			noHost: await environmentWith(true),
+		}, {
+			fromTheHost: { PATH: '/home/person/.local/bin:/usr/bin:/bin', SSH_AUTH_SOCK: '/tmp/agent.sock', VSCODE_NLS_CONFIG: undefined },
+			notInherited: { PATH: '/usr/bin:/bin', SSH_AUTH_SOCK: '/tmp/agent.sock', VSCODE_NLS_CONFIG: undefined },
+			noHost: { PATH: '/usr/bin:/bin', SSH_AUTH_SOCK: '/tmp/agent.sock', VSCODE_NLS_CONFIG: undefined },
+		});
+	});
+
+	test('on a Windows remote a setting replaces the variable it names and reads it, and an extension changes it, whatever case each spells it in and whatever OS the window runs on: one Path, as the remote\'s own terminal makes it (REMOTE.md R7; RM-25)', async () => {
+		const folder = URI.parse('vscode-remote://ssh-remote+winbox/c%3A/work');
+		const lab: IWorkspaceFolder = upcastPartial<IWorkspaceFolder>({ uri: folder, name: 'work', index: 0 });
+		instantiationService.stub(ITerminalProfileResolverService, { getEnvironment: async () => ({}) });
+		instantiationService.stub(ITerminalInstanceService, { getBackend: async () => upcastPartial<ITerminalBackend>({ getShellEnvironment: async () => ({ Path: 'C:/Windows' }) }) });
+		// The window's own resolver and extensions' changes, which ignore case on a Windows window only
+		instantiationService.stub(IConfigurationResolverService, new EnvironmentResolver());
+		instantiationService.stub(IEnvironmentVariableService, {
+			mergedCollection: new MergedEnvironmentVariableCollection(new Map([['publisher.tools', { map: new Map([['PATH', { variable: 'PATH', value: 'C:/tools;', type: EnvironmentVariableMutatorType.Prepend }]]) }]]))
+		});
+		instantiationService.stub(IWorkspaceContextService, { getWorkspaceFolder: () => lab });
+		instantiationService.stub(IActiveFolderService, { activeFolder: undefined });
+		instantiationService.stub(IProductService, { version: '1.138.0' });
+		instantiationService.stub(ITerminalConfigurationService, { config: upcastPartial<ITerminalConfiguration>({ detectLocale: 'off' }) });
+		instantiationService.stub(IConfigurationService, new TestConfigurationService({ terminal: { integrated: { inheritEnv: true, env: { windows: { PATH: '${env:PATH};C:/agents' } } } } }));
+		instantiationService.stub(IRemoteAgentService, { getEnvironment: async () => upcastPartial<IRemoteAgentEnvironment>({ os: OperatingSystem.Windows }) });
+
+		const env = await run('_facade.terminal.environment', folder) as IProcessEnvironment;
+
+		assert.deepStrictEqual(Object.keys(env).filter(key => key.toLowerCase() === 'path').map(key => `${key}=${env[key]}`), ['Path=C:/tools;C:/Windows;C:/agents']);
+	});
+
+	test('on a Unix remote, settings, variable resolution and extension mutators preserve distinct variable names by case even in a Windows window (REMOTE.md R7)', async () => {
+		const folder = URI.parse('vscode-remote://ssh-remote+linux/home/person/work');
+		const lab: IWorkspaceFolder = upcastPartial<IWorkspaceFolder>({ uri: folder, name: 'work', index: 0 });
+		instantiationService.stub(ITerminalProfileResolverService, { getEnvironment: async () => ({ FOO: 'upper', foo: 'lower', REMOVE: 'old' }) });
+		instantiationService.stub(ITerminalInstanceService, { getBackend: async () => upcastPartial<ITerminalBackend>({ getShellEnvironment: async () => ({}) }) });
+		instantiationService.stub(IConfigurationResolverService, new EnvironmentResolver());
+		instantiationService.stub(IEnvironmentVariableService, {
+			mergedCollection: new MergedEnvironmentVariableCollection(new Map([['publisher.tools', { map: new Map([
+				['FOO', { variable: 'FOO', value: '!', type: EnvironmentVariableMutatorType.Append }],
+				['foo', { variable: 'foo', value: '?', type: EnvironmentVariableMutatorType.Prepend }]
+			]) }]]))
+		});
+		instantiationService.stub(IWorkspaceContextService, { getWorkspaceFolder: () => lab });
+		instantiationService.stub(IActiveFolderService, { activeFolder: undefined });
+		instantiationService.stub(IProductService, { version: '1.138.0' });
+		instantiationService.stub(ITerminalConfigurationService, { config: upcastPartial<ITerminalConfiguration>({ detectLocale: 'off' }) });
+		instantiationService.stub(IConfigurationService, new TestConfigurationService({ terminal: { integrated: { inheritEnv: false, env: { linux: { foo: '${env:foo}-changed', COPY: '${env:FOO}', REMOVE: null } } } } }));
+		instantiationService.stub(IRemoteAgentService, { getEnvironment: async () => upcastPartial<IRemoteAgentEnvironment>({ os: OperatingSystem.Linux }) });
+
+		const env = await run('_facade.terminal.environment', folder) as IProcessEnvironment;
+		assert.deepStrictEqual({ FOO: env.FOO, foo: env.foo, COPY: env.COPY, REMOVE: env.REMOVE }, {
+			FOO: 'upper!', foo: '?lower-changed', COPY: 'upper', REMOVE: undefined
+		});
 	});
 
 	test('the window says how it was loaded: an id of this load\'s own, the same each time it is asked, and whether a reload of the window before loaded it, as VS Code tells itself', async () => {
@@ -654,6 +894,54 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			reloaded: answers.map(answer => answer.reloaded),
 			oneId: new Set(answers.map(answer => answer.id)).size === 1 && /^[0-9a-f-]{36}$/.test(answers[0].id)
 		}, { reloaded: [false, true, false], oneId: true });
+	});
+
+	test('a remote window carries its record across the reload VS Code gives it as it enters a workspace: the reload has it, once; a load that is no reload drops it; a local window, whose extension host only restarts, carries nothing (REMOTE.md R7)', async () => {
+		instantiationService.stub(IStorageService, store.add(new TestStorageService()));
+		const entered = store.add(new Emitter<IDidEnterWorkspaceEvent>());
+		instantiationService.stub(IWorkspaceEditingService, { onDidEnterWorkspace: entered.event });
+		const record = (id: string) => ({ id, owner: '444791c6003abc32' });
+		// A load of the window, the last one gone, as the record the extension gave it before says; a workspace entered under it, if any
+		let carrier: WindowRecordCarrier | undefined;
+		const load = async (remoteAuthority: string | undefined, before: string, enter: boolean, startupKind = StartupKind.ReloadedWindow) => {
+			carrier?.dispose();
+			instantiationService.stub(IWorkbenchEnvironmentService, { remoteAuthority });
+			instantiationService.stub(ILifecycleService, { startupKind });
+			await run('_facade.window.record', record(before));
+			carrier = store.add(instantiationService.createInstance(WindowRecordCarrier));
+			const has = (await run('_facade.window.loaded') as { record?: { id: string } }).record?.id;
+			if (enter) {
+				const joined: Promise<void>[] = [];
+				entered.fire(upcastPartial<IDidEnterWorkspaceEvent>({ join: promise => joined.push(promise) }));
+				await Promise.all(joined);
+			}
+			return has;
+		};
+
+		const loads = [
+			await load('ssh-remote+host', '7d65559d-36cd-4b61-8887-32334d9ad05d', true),
+			await load('ssh-remote+host', '00000000-0000-4000-8000-000000000001', false),
+			await load('ssh-remote+host', '00000000-0000-4000-8000-000000000002', false),
+			await load('ssh-remote+host', '5b1a2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d', true),
+			await load('ssh-remote+host', '00000000-0000-4000-8000-000000000003', false, StartupKind.NewWindow),
+			await load('ssh-remote+host', '00000000-0000-4000-8000-000000000004', false),
+			await load(undefined, '00000000-0000-4000-8000-000000000005', true),
+			await load(undefined, '00000000-0000-4000-8000-000000000006', false),
+		];
+
+		// The second load, a reload, has the carried record, which the third no longer finds. The fifth, a window opened
+		// on the workspace anew, drops the one carried for it, so the sixth finds none either. Nothing goes from the
+		// seventh, a local window, to the eighth
+		assert.deepStrictEqual(loads, [
+			'7d65559d-36cd-4b61-8887-32334d9ad05d',
+			'7d65559d-36cd-4b61-8887-32334d9ad05d',
+			'00000000-0000-4000-8000-000000000002',
+			'5b1a2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
+			'00000000-0000-4000-8000-000000000003',
+			'00000000-0000-4000-8000-000000000004',
+			'00000000-0000-4000-8000-000000000005',
+			'00000000-0000-4000-8000-000000000006',
+		]);
 	});
 
 	test('the window keeps the record the extension says it has, and says it with how it was loaded - for an extension host that starts again under the same window; a record of the wrong kind is refused', async () => {
@@ -672,6 +960,22 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			refused: Array(3).fill('Unexpected type, expected \'IFacadeWindowRecord\''),
 			stillKept: { id: '7d65559d-36cd-4b61-8887-32334d9ad05d', owner: '444791c6003abc32' },
 		});
+	});
+
+	test('the window answers a ping that it is there; the extension host recovering its agents hears once whether it was away from its remote, and not after an extension host was heard from since (REMOTE.md R4)', async () => {
+		const storage = store.add(new TestStorageService());
+		instantiationService.stub(IStorageService, storage);
+		const states = store.add(new Emitter<PersistentConnectionEvent>());
+		store.add(new WindowAwayRecord(upcastPartial<IRemoteAgentService>({ getConnection: () => upcastPartial<IRemoteAgentConnection>({ onDidStateChange: states.event }) }), storage));
+
+		states.fire(new ConnectionLostEvent('token', 0));
+		const away = await run('_facade.window.wasAway');
+		const askedAgain = await run('_facade.window.wasAway');
+		states.fire(new ConnectionLostEvent('token', 0));
+		const pinged = await run('_facade.window.ping');
+		const afterPing = await run('_facade.window.wasAway');
+
+		assert.deepStrictEqual({ away, askedAgain, pinged, afterPing }, { away: { away: true }, askedAgain: { away: false }, pinged: true, afterPing: { away: false } });
 	});
 
 	test('the window says once it has its terminals back, as the runs know it', async () => {
@@ -793,8 +1097,8 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 	});
 
 	test('a terminal opened for an agent\'s run is registered as its terminal, its final screen going to its file (AGENT-DEBUGGING.md, D6)', async () => {
-		await run('_facade.terminal.create', URI.file('/lab'), { name: '@lint #a3', executable: 'codex', agent: 'codex', run: { workspace: 'a1b2', id: 3 }, finalScreen: URI.file('/rec/screens/a3.json') });
-		await run('_facade.terminal.create', URI.file('/lab'), { name: 'a shell' });
+		await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: '@lint #a3', executable: 'codex', agent: 'codex', run: { workspace: 'a1b2', id: 3 }, finalScreen: URI.file('/rec/screens/a3.json') });
+		await run('_facade.terminal.create', URI.file('/lab'), { ticket: 't1', name: 'a shell' });
 		const failure = await failureOf('_facade.terminal.create', URI.file('/lab'), { finalScreen: '/rec/screens/a3.json' });
 
 		assert.deepStrictEqual({ failure, steps }, {
@@ -814,14 +1118,14 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 		const none = { workspace: 'a1b2', id: 9 };
 
 		const answers = {
-			read: await run('_facade.terminal.read', three, 20),
-			readEnded: await run('_facade.terminal.read', { workspace: 'a1b2', id: 5 }, 50),
-			readNone: await run('_facade.terminal.read', none, 5),
-			typed: await run('_facade.terminal.type', three, 'yes', { enter: true, enterDelayMs: 250.4, queueTimeoutMs: 120000 }),
-			rung: await run('_facade.terminal.type', three, '[facade] 1 unread message', { enter: true, requiresFramework: true }),
-			typedNone: await run('_facade.terminal.type', none, 'yes', { enter: true }),
-			pressed: await run('_facade.terminal.keys', three, ['Down', 'Enter', 'y'], { queueTimeoutMs: null }),
-			pressedNone: await run('_facade.terminal.keys', none, ['Enter'], {}),
+			read: await run('_facade.terminal.read', three, 20, 't1'),
+			readEnded: await run('_facade.terminal.read', { workspace: 'a1b2', id: 5 }, 50, 't1'),
+			readNone: await run('_facade.terminal.read', none, 5, 't1'),
+			typed: await run('_facade.terminal.type', three, 'yes', { ticket: 't1', enter: true, enterDelayMs: 250.4, queueTimeoutMs: 120000 }),
+			rung: await run('_facade.terminal.type', three, '[facade] 1 unread message', { ticket: 't1', enter: true, requiresFramework: true }),
+			typedNone: await run('_facade.terminal.type', none, 'yes', { ticket: 't1', enter: true }),
+			pressed: await run('_facade.terminal.keys', three, ['Down', 'Enter', 'y'], { ticket: 't1', queueTimeoutMs: null }),
+			pressedNone: await run('_facade.terminal.keys', none, ['Enter'], { ticket: 't1' }),
 			registered: await run('_facade.terminal.register', three, URI.file('/rec/screens/a3.json')),
 			registeredNone: await run('_facade.terminal.register', none, URI.file('/rec/screens/a9.json')),
 			input: await run('_facade.terminal.input', three),
@@ -872,9 +1176,9 @@ suite('Facade commands - what the agents\' extension cannot do itself', () => {
 			steps: [
 				'read 20 of @lint #a3',
 				'read 50 of @gone #a5',
-				'type "yes" into @lint #a3 {"enter":true,"enterDelayMs":250,"queueTimeoutMs":120000,"requiresFramework":false}',
-				'type "[facade] 1 unread message" into @lint #a3 {"enter":true,"enterDelayMs":0,"requiresFramework":true}',
-				'press Down Enter y in @lint #a3 {}',
+				'type "yes" into @lint #a3 {"enter":true,"enterDelayMs":250,"queueTimeoutMs":120000,"requiresFramework":false,"ticket":"t1"}',
+				'type "[facade] 1 unread message" into @lint #a3 {"enter":true,"enterDelayMs":0,"requiresFramework":true,"ticket":"t1"}',
+				'press Down Enter y in @lint #a3 {"ticket":"t1"}',
 				'register @lint #a3 as a1b2#3, its final screen in /rec/screens/a3.json',
 			],
 		});

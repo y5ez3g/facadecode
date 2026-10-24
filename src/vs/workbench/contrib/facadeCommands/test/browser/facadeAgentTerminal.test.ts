@@ -14,6 +14,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/virtualScheduling/index.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { IFileService, IWriteFileOptions } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -51,8 +52,10 @@ class TestTerminal {
 	processId: number | undefined = 4242;
 	/** What it was made with: a terminal the window gives back after a reload attaches to the process the pty host kept. */
 	readonly shellLaunchConfig: IShellLaunchConfig;
+	/** Its authority where it runs on a remote, as a remote terminal instance has it. */
+	remoteAuthority: string | undefined;
 	/** Its process as its process manager has it: the state it is in, what is written to it, and when the pty host's replay is done. */
-	readonly process: { processState: ProcessState; readonly write: (data: string) => Promise<void>; readonly onProcessReplayComplete: Event<void> };
+	readonly process: { processState: ProcessState; readonly write: (data: string) => Promise<void>; writeAndConfirm?: (data: string) => Promise<void>; readonly onProcessReplayComplete: Event<void> };
 
 	/** Its mark, as a terminal instance has it: that of the process it attached to, else its own. */
 	get reconnectionProperties(): IReconnectionProperties | undefined {
@@ -151,8 +154,9 @@ suite('Facade agent terminals', () => {
 	/**
 	 * The contribution of `terminal`, its xterm ready where it has one: registered as the terminal of the
 	 * agent `agent` says - #3's where left out - or, with null, no agent's; `configuration`, the window's settings.
+	 * `claims` answers each ticket claimed as input would be written: granted, where left out.
 	 */
-	function contributionOf(terminal: TestTerminal, agent: IAgentTerminalOptions | null = { run: { workspace: 'a1b2', id: 3 }, finalScreen: URI.file('/record/screens/a3.json') }, configuration = new TestConfigurationService()): FacadeAgentTerminal {
+	function contributionOf(terminal: TestTerminal, agent: IAgentTerminalOptions | null = { run: { workspace: 'a1b2', id: 3 }, finalScreen: URI.file('/record/screens/a3.json') }, configuration = new TestConfigurationService(), claims: (ticket: unknown) => { granted: boolean } = () => ({ granted: true })): FacadeAgentTerminal {
 		const fileService = upcastPartial<IFileService>({
 			writeFile: async (resource: URI, buffer: VSBuffer, options?: IWriteFileOptions) => {
 				const { capturedAt, lastOutput, ...screen } = JSON.parse(buffer.toString());
@@ -162,7 +166,13 @@ suite('Facade agent terminals', () => {
 			}
 		});
 		const lifecycleService = upcastPartial<ILifecycleService>({ onBeforeShutdown: onBeforeShutdown.event, onShutdownVeto: Event.None });
-		const contribution = store.add(new FacadeAgentTerminal({ instance: terminal.asInstance(), processManager: upcastPartial<ITerminalProcessManager>(terminal.process), widgetManager: upcastPartial<TerminalWidgetManager>({}) }, fileService, lifecycleService, new NullLogService(), configuration));
+		const commandService = upcastPartial<ICommandService>({
+			executeCommand: async <R,>(id: string, ...args: unknown[]): Promise<R | undefined> => {
+				const answer: unknown = id === '_facade.agents.claimTicket' ? claims(args[0]) : undefined;
+				return answer as R | undefined;
+			}
+		});
+		const contribution = store.add(new FacadeAgentTerminal({ instance: terminal.asInstance(), processManager: upcastPartial<ITerminalProcessManager>(terminal.process), widgetManager: upcastPartial<TerminalWidgetManager>({}) }, fileService, lifecycleService, new NullLogService(), configuration, commandService));
 		if (agent) {
 			contribution.register(agent);
 		}
@@ -314,10 +324,35 @@ suite('Facade agent terminals', () => {
 			const raw = xterm();
 			await write(raw, '\x1b[?2004h');
 			const terminal = new TestTerminal(store, raw);
-			const effect = await contributionOf(terminal).type('go on', { enter: true, enterDelayMs: 300 });
+			const effect = await contributionOf(terminal).type('go on', { ticket: 't1', enter: true, enterDelayMs: 300 });
 			assert.deepStrictEqual({ effect, written: terminal.written }, {
 				effect: { outcome: 'applied', pasted: true, entered: true },
 				written: ['0 "\\u001b[200~go on\\u001b[201~"', '300 "\\r"']
+			});
+		}));
+
+		test('in a remote terminal a paste is written confirmed, and its Enter counts its delay from the remote having it, not from the window sending it (REMOTE.md R7)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			const terminal = new TestTerminal(store, xterm());
+			terminal.remoteAuthority = 'ssh-remote+host';
+			const confirmed: string[] = [];
+			let held = true;
+			let confirm = () => { };
+			terminal.process.writeAndConfirm = async (data: string) => {
+				confirmed.push(data);
+				if (held) {
+					held = false;
+					await new Promise<void>(resolve => { confirm = resolve; });
+				}
+				terminal.written.push(`${Date.now()} ${JSON.stringify(data)}`);
+			};
+			const agent = contributionOf(terminal);
+			const effect = agent.type('go on', { ticket: 't1', enter: true, enterDelayMs: 300 });
+			await timeout(200);
+			confirm();
+			assert.deepStrictEqual({ effect: await effect, confirmed, written: terminal.written }, {
+				effect: { outcome: 'applied', pasted: true, entered: true },
+				confirmed: ['go on', '\r'],
+				written: ['200 "go on"', '500 "\\r"']
 			});
 		}));
 
@@ -326,7 +361,7 @@ suite('Facade agent terminals', () => {
 			const raw = store.add(new TerminalCtor({ cols: 20, rows: 6, allowProposedApi: true, ignoreBracketedPasteMode: true }));
 			await write(raw, '\x1b[?2004h');
 			const terminal = new TestTerminal(store, raw);
-			const effect = await contributionOf(terminal).type('go on', { enter: true, enterDelayMs: 300 });
+			const effect = await contributionOf(terminal).type('go on', { ticket: 't1', enter: true, enterDelayMs: 300 });
 			const bracketed = xterm();
 			await write(bracketed, '\x1b[?2004h');
 			assert.deepStrictEqual({ effect, written: terminal.written, encoded: [pasteSequence(bracketed, 'a\x1bb\nc'), pasteSequence(xterm(), 'a\r\nb')] }, {
@@ -340,9 +375,9 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
 			const effects = await Promise.all([
-				agent.type('first', { enter: true, enterDelayMs: 100 }),
-				agent.keys(['Down', 'Enter'], {}),
-				agent.type('second', { enter: false, enterDelayMs: 100 })
+				agent.type('first', { ticket: 't1', enter: true, enterDelayMs: 100 }),
+				agent.keys(['Down', 'Enter'], { ticket: 't1' }),
+				agent.type('second', { ticket: 't1', enter: false, enterDelayMs: 100 })
 			]);
 			assert.deepStrictEqual({ effects, written: terminal.written }, {
 				effects: [{ outcome: 'applied', pasted: true, entered: true }, { outcome: 'applied', keysSent: 2 }, { outcome: 'applied', pasted: true, entered: false }],
@@ -354,7 +389,7 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
 			terminal.type('fix th');
-			const effect = agent.type('hello', { enter: true, enterDelayMs: 0 });
+			const effect = agent.type('hello', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			await timeout(4_000);
 			terminal.type('e');
 			await timeout(4_000);
@@ -374,7 +409,7 @@ suite('Facade agent terminals', () => {
 			entered.type('draft');
 			cancelled.type('draft');
 			replied.type('\x1b[5;1R\x1b[I');
-			const effects = agents.map(agent => agent.keys(['y'], {}));
+			const effects = agents.map(agent => agent.keys(['y'], { ticket: 't1' }));
 			await timeout(2_000);
 			entered.type('\r');
 			cancelled.type('\x03');
@@ -387,8 +422,8 @@ suite('Facade agent terminals', () => {
 		test('Facade\'s own Enter does not end the person\'s line: their typing while a paste waits for its Enter holds the next operation back', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
-			const first = agent.type('one', { enter: true, enterDelayMs: 300 });
-			const second = agent.type('two', { enter: false, enterDelayMs: 0 });
+			const first = agent.type('one', { ticket: 't1', enter: true, enterDelayMs: 300 });
+			const second = agent.type('two', { ticket: 't1', enter: false, enterDelayMs: 0 });
 			await timeout(100);
 			terminal.type('x');
 			await Promise.all([first, second]);
@@ -399,7 +434,7 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
 			await terminal.sendText('/lab/notes.md');
-			const effect = await agent.type('hello', { enter: false, enterDelayMs: 0 });
+			const effect = await agent.type('hello', { ticket: 't1', enter: false, enterDelayMs: 0 });
 			assert.deepStrictEqual({ effect, written: terminal.written }, {
 				effect: { outcome: 'applied', pasted: true, entered: false },
 				written: ['10000 "hello"']
@@ -409,7 +444,7 @@ suite('Facade agent terminals', () => {
 		test('tells what the person typed there - whether a line is pending, and their last key - never what Facade typed', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
-			await agent.type('from Facade', { enter: true, enterDelayMs: 0 });
+			await agent.type('from Facade', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			const afterFacade = agent.inputState();
 			await timeout(1_000);
 			terminal.type('draft');
@@ -426,8 +461,8 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
 			const idle = agent.inputState().busy;
-			const typing = agent.type('one', { enter: true, enterDelayMs: 300 });
-			const pressing = agent.keys(['Enter'], {});
+			const typing = agent.type('one', { ticket: 't1', enter: true, enterDelayMs: 300 });
+			const pressing = agent.keys(['Enter'], { ticket: 't1' });
 			const whileTyping = agent.inputState().busy;
 			await typing;
 			const whilePressing = agent.inputState().busy;
@@ -439,14 +474,30 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
 			terminal.type('x');
-			const notice = agent.type('task', { enter: true, enterDelayMs: 0 });
-			const late = agent.type('late', { enter: true, enterDelayMs: 0, queueTimeoutMs: 5_000 });
-			const atDeadline = agent.keys(['Enter'], { queueTimeoutMs: 10_000 });
+			const notice = agent.type('task', { ticket: 't1', enter: true, enterDelayMs: 0 });
+			const late = agent.type('late', { ticket: 't1', enter: true, enterDelayMs: 0, queueTimeoutMs: 5_000 });
+			const atDeadline = agent.keys(['Enter'], { ticket: 't1', queueTimeoutMs: 10_000 });
 			assert.deepStrictEqual({ late: await late, atDeadline: await atDeadline, notice: await notice, written: terminal.written }, {
 				late: { outcome: 'not_applied', reason: 'timeout', pasted: false, entered: false },
 				atDeadline: { outcome: 'not_applied', reason: 'timeout', keysSent: 0 },
 				notice: { outcome: 'applied', pasted: true, entered: true },
 				written: ['10000 "task"', '10000 "\\r"']
+			});
+		}));
+
+		test('claims each input\'s ticket as its turn comes: refused - its caller already told - it is dropped, answered not applied, and nothing of it is ever written; granted, it goes in, and the next is claimed in its turn (REMOTE.md R4, R7)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
+			const terminal = new TestTerminal(store, xterm());
+			const claimed: unknown[] = [];
+			const agent = contributionOf(terminal, undefined, new TestConfigurationService(), ticket => (claimed.push(ticket), { granted: typeof ticket !== 'string' || !ticket.startsWith('refused') }));
+			const granted = agent.type('go on', { ticket: 'granted', enter: true, enterDelayMs: 0 });
+			const refused = agent.type('late', { ticket: 'refused', enter: true, enterDelayMs: 0 });
+			const keys = agent.keys(['Enter'], { ticket: 'refused-keys' });
+			assert.deepStrictEqual({ granted: await granted, refused: await refused, keys: await keys, claimed, written: terminal.written }, {
+				granted: { outcome: 'applied', pasted: true, entered: true },
+				refused: { outcome: 'not_applied', reason: 'timeout', pasted: false, entered: false },
+				keys: { outcome: 'not_applied', reason: 'timeout', keysSent: 0 },
+				claimed: ['granted', 'refused', 'refused-keys'],
+				written: ['0 "go on"', '0 "\\r"']
 			});
 		}));
 
@@ -456,13 +507,13 @@ suite('Facade agent terminals', () => {
 			const agent = contributionOf(terminal, undefined, configuration);
 			// Handed over as the person types there: it waits its turn behind them
 			terminal.type('x');
-			const doorbell = agent.type('[facade] 1 unread message', { enter: true, enterDelayMs: 0, requiresFramework: true });
-			const task = agent.type('task', { enter: true, enterDelayMs: 0 });
+			const doorbell = agent.type('[facade] 1 unread message', { ticket: 't1', enter: true, enterDelayMs: 0, requiresFramework: true });
+			const task = agent.type('task', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			// The person turns the framework off while it waits
 			await configuration.setUserConfiguration('facade.orchestration.enabled', false);
 			const whileOff = { doorbell: await doorbell, task: await task };
 			await configuration.setUserConfiguration('facade.orchestration.enabled', true);
-			const on = await agent.type('[facade] 2 unread messages', { enter: false, enterDelayMs: 0, requiresFramework: true });
+			const on = await agent.type('[facade] 2 unread messages', { ticket: 't1', enter: false, enterDelayMs: 0, requiresFramework: true });
 			assert.deepStrictEqual({ ...whileOff, on, written: terminal.written }, {
 				doorbell: { outcome: 'not_applied', reason: 'frameworkOff', pasted: false, entered: false },
 				task: { outcome: 'applied', pasted: true, entered: true },
@@ -476,11 +527,11 @@ suite('Facade agent terminals', () => {
 			terminal.processId = undefined;
 			const agent = contributionOf(terminal);
 			terminal.type('x');
-			const first = agent.type('task', { enter: true, enterDelayMs: 0 });
+			const first = agent.type('task', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			// Its first output, with which the id comes on Windows
 			terminal.processId = 4242;
 			const effect = await first;
-			const next = agent.type('later', { enter: false, enterDelayMs: 0 });
+			const next = agent.type('later', { ticket: 't1', enter: false, enterDelayMs: 0 });
 			terminal.processId = 777;
 			assert.deepStrictEqual({ effect, next: await next, written: terminal.written }, {
 				effect: { outcome: 'applied', pasted: true, entered: true },
@@ -492,15 +543,15 @@ suite('Facade agent terminals', () => {
 		test('drops what is waiting and the keys left once the process ends; a write that never goes ends with its terminal', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
-			const keys = agent.keys(['Down', 'Down', 'Enter'], {});
-			const waiting = agent.type('after', { enter: true, enterDelayMs: 0 });
+			const keys = agent.keys(['Down', 'Down', 'Enter'], { ticket: 't1' });
+			const waiting = agent.type('after', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			await timeout(60);
 			terminal.exit(130);
-			const after = await agent.type('later', { enter: true, enterDelayMs: 0 });
+			const after = await agent.type('later', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			const stuck = new TestTerminal(store, xterm());
 			stuck.hold = new DeferredPromise<void>().p;
 			const stuckAgent = contributionOf(stuck);
-			const neverWritten = stuckAgent.type('lost', { enter: true, enterDelayMs: 0 });
+			const neverWritten = stuckAgent.type('lost', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			await timeout(100);
 			stuck.exit(1);
 			assert.deepStrictEqual({ keys: await keys, waiting: await waiting, after, neverWritten: await neverWritten, written: terminal.written }, {
@@ -515,11 +566,11 @@ suite('Facade agent terminals', () => {
 		test('drops what is waiting and the keys left once its run is being stopped, its process not ended yet: nothing goes into the stopping CLI (D3; DB-16)', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
-			const keys = agent.keys(['Down', 'Down', 'Enter'], {});
-			const waiting = agent.type('after', { enter: true, enterDelayMs: 0 });
+			const keys = agent.keys(['Down', 'Down', 'Enter'], { ticket: 't1' });
+			const waiting = agent.type('after', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			await timeout(60);
 			agent.closeInput();
-			const after = await agent.type('later', { enter: true, enterDelayMs: 0 });
+			const after = await agent.type('later', { ticket: 't1', enter: true, enterDelayMs: 0 });
 			assert.deepStrictEqual({ keys: await keys, waiting: await waiting, after, written: terminal.written }, {
 				keys: { outcome: 'partial', reason: 'ended', keysSent: 2 },
 				waiting: { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false },
@@ -531,11 +582,11 @@ suite('Facade agent terminals', () => {
 		test('takes a process that exited as ended at once, before its terminal says so: nothing is written to it then', () => runWithFakedTimers({ maxTaskCount: 1000 }, async () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
-			const typing = agent.type('one', { enter: true, enterDelayMs: 300 });
+			const typing = agent.type('one', { ticket: 't1', enter: true, enterDelayMs: 300 });
 			await timeout(100);
 			// The terminal draws what the process wrote last before it tells of its exit
 			terminal.process.processState = ProcessState.KilledByProcess;
-			assert.deepStrictEqual({ typing: await typing, after: await agent.keys(['Enter'], {}), written: terminal.written }, {
+			assert.deepStrictEqual({ typing: await typing, after: await agent.keys(['Enter'], { ticket: 't1' }), written: terminal.written }, {
 				typing: { outcome: 'partial', reason: 'ended', pasted: true, entered: false },
 				after: { outcome: 'not_applied', reason: 'ended', keysSent: 0 },
 				written: ['0 "one"']
@@ -546,7 +597,7 @@ suite('Facade agent terminals', () => {
 			const terminal = new TestTerminal(store, xterm());
 			const agent = contributionOf(terminal);
 			terminal.failNext = new Error('the pty host went away');
-			assert.deepStrictEqual(await agent.type('text', { enter: true, enterDelayMs: 0 }).then(() => 'done', err => (err as Error).message), 'the pty host went away');
+			assert.deepStrictEqual(await agent.type('text', { ticket: 't1', enter: true, enterDelayMs: 0 }).then(() => 'done', err => (err as Error).message), 'the pty host went away');
 		}));
 	});
 

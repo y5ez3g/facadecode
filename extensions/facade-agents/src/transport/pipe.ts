@@ -9,7 +9,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { codeOf, messageOf, stackOf } from '../base/errors';
-import { isJsonObject } from '../base/json';
+import { isJsonObject, JsonObject } from '../base/json';
 import { CallLine, callLineOf, Progress, splitLines } from './protocol';
 
 /** The most a request's body may hold: a call's arguments are at most 1 MB. */
@@ -40,20 +40,32 @@ const BINDING_SUFFIX_MAX = 11;
 /**
  * The path of the pipe with `id`: a named pipe on Windows, a Unix socket elsewhere - in the temporary folder, or,
  * where that folder's path is too long for a socket's, in a folder of the person's own under `/tmp` (C-TR-08; X-70).
- * Throws naming the limit where neither fits.
+ * On a remote (`remote`) always in that private folder, never in `XDG_RUNTIME_DIR` nor in the temporary folder
+ * itself: the first is a login session's, and goes with it while the agents stay, and the second anyone can
+ * list and squat (REMOTE.md R4, R7). Where another user holds that folder, the server falls back to a fresh
+ * private folder beside it. Throws naming the limit where neither fits. `privateFolder` is that folder's name:
+ * the person's, but a test's own in a test, which may remove it without touching the sockets of the machine's
+ * extension hosts.
  */
-export function pipePath(id: string, tmpdir: string = os.tmpdir()): string {
+export function pipePath(id: string, tmpdir: string = os.tmpdir(), remote = false, privateFolder = `facade-${os.userInfo().uid}`): string {
 	if (process.platform === 'win32') {
 		return `\\\\.\\pipe\\facade-agents-${id}`;
 	}
 	const name = `facade-agents-${id}.sock`;
 	const fits = (candidate: string) => Buffer.byteLength(candidate) + BINDING_SUFFIX_MAX <= SOCKET_PATH_MAX;
+	if (remote) {
+		const folder = path.join(SHORT_PIPE_ROOT, privateFolder, name);
+		if (!fits(folder)) {
+			throw new Error(`Cannot open a Facade socket: the path under ${path.dirname(folder)} exceeds this platform's ${SOCKET_PATH_MAX}-byte socket path limit.`);
+		}
+		return folder;
+	}
 	const dir = process.platform !== 'darwin' && process.env.XDG_RUNTIME_DIR ? process.env.XDG_RUNTIME_DIR : tmpdir;
 	const preferred = path.join(dir, name);
 	if (fits(preferred)) {
 		return preferred;
 	}
-	const fallback = path.join(SHORT_PIPE_ROOT, `facade-${os.userInfo().uid}`, name);
+	const fallback = path.join(SHORT_PIPE_ROOT, privateFolder, name);
 	if (!fits(fallback)) {
 		throw new Error(`Cannot open a Facade socket: paths under both ${dir} and ${path.dirname(fallback)} exceed this platform's ${SOCKET_PATH_MAX}-byte socket path limit.`);
 	}
@@ -73,9 +85,54 @@ function ensurePrivateFolder(pipe: string): void {
 		return;
 	}
 	fs.mkdirSync(dir, { mode: 0o700, recursive: true });
+	checkPrivateDir(dir);
+}
+
+/** `dir` holds Facade's socket only where it is a private directory of this user's. */
+function checkPrivateDir(dir: string): void {
 	const stat = fs.lstatSync(dir);
 	if (!stat.isDirectory() || stat.uid !== os.userInfo().uid || (stat.mode & 0o077) !== 0) {
 		throw new Error(`Cannot open a Facade socket: ${dir} must be a private directory owned by this user.`);
+	}
+}
+
+/**
+ * Whether `dir` exists held by another user - or not a private directory at all: predictable under
+ * `/tmp`, another user may have made it first.
+ */
+function isSquatted(dir: string): boolean {
+	let stat: fs.Stats | undefined;
+	try {
+		stat = fs.lstatSync(dir);
+	} catch {
+		return false;
+	}
+	return !stat.isDirectory() || stat.uid !== os.userInfo().uid || (stat.mode & 0o077) !== 0;
+}
+
+/**
+ * The folder a pipe under `/tmp` is first bound in: its own, made where missing, where no other user
+ * holds it - else a new private folder with an unguessable name, made 0700 and checked like the
+ * first: `/tmp/facade-<uid>` is predictable, and another user may have made it first (REMOTE.md R4).
+ * Throws naming the limit where the fallback's path is too long for a socket's.
+ */
+function bindDirFor(pipe: string): string {
+	const dir = path.dirname(pipe);
+	if (path.dirname(dir) !== SHORT_PIPE_ROOT || !isSquatted(dir)) {
+		return dir;
+	}
+	const fresh = fs.mkdtempSync(`${dir}-`);
+	try {
+		fs.chmodSync(fresh, 0o700);
+		checkPrivateDir(fresh);
+		const moved = path.join(fresh, path.basename(pipe));
+		if (Buffer.byteLength(moved) + BINDING_SUFFIX_MAX > SOCKET_PATH_MAX) {
+			throw new Error(`Cannot open a Facade socket: the path under ${fresh} exceeds this platform's ${SOCKET_PATH_MAX}-byte socket path limit.`);
+		}
+		return fresh;
+	} catch (err) {
+		fs.rmSync(fresh, { recursive: true, force: true });
+		throw err;
 	}
 }
 
@@ -99,7 +156,28 @@ export interface PipeHandlers<C> {
 	call(caller: C, tool: string, args: unknown, progress: Progress, whenWritten: (listener: ResultListener) => void): Promise<unknown>;
 	/** Writes what went wrong on the pipe that no caller is told of in full: a request the window failed on, a connection it could not take. */
 	log?(message: string): void;
+	/**
+	 * Lets go of the record and the pipe for this window's new extension host, which asked through
+	 * `/release`: called once the answer is on its way, so it may close and dispose everything. One that
+	 * fails is logged, and the takeover ends that process instead. No `/release` where none is given.
+	 */
+	release?(): void;
 }
+
+/** What `PipeServer.listen` serves else, and how it watches its socket. */
+export interface PipeListenOptions {
+	/**
+	 * What another extension host of this window says to ask with `/release` that this one lets go -
+	 * the secret, and when that host started, in milliseconds, for only a newer one to be let go for;
+	 * no `/release` where none is given (L5).
+	 */
+	release?: { readonly secret: string; readonly startedAt: number };
+	/** How often the socket is looked at while it listens, and bound again where it is gone: 30 seconds, unless told otherwise; never on Windows. */
+	rebindMs?: number;
+}
+
+/** How often a pipe looks at whether its socket is still where it was bound. */
+const REBIND_CHECK_MS = 30_000;
 
 /**
  * The window's end of the pipe between each agent's MCP server and the window: HTTP over a named pipe
@@ -107,39 +185,55 @@ export interface PipeHandlers<C> {
  * TCP. Every request carries a bearer token that names its caller. `POST /hello` answers with what the
  * caller's MCP server offers; `POST /call` runs a tool and answers in newline-delimited JSON: progress
  * lines while it runs, then one line with its result or why it failed. A request the window fails on
- * before that is answered `500`, with the failure's code and message.
+ * before that is answered `500`, with the failure's code and message. `POST /release`, with the secret
+ * another extension host of this window says, asks this one to let go for a takeover (REMOTE.md R4).
  */
 export class PipeServer<C> {
 
-	private readonly server: http.Server;
+	private server: http.Server;
 	private readonly sockets = new Set<net.Socket>();
 	/** The socket file's inode once it is in place: only that file is this server's to remove. */
 	private inode: number | undefined;
+	/** Whether another extension host of this window asked this one to let go: nothing new is taken. */
+	private releasing = false;
+	/** How often the socket is looked at while it listens; none on Windows, or once disposed. */
+	private rebindCheck: ReturnType<typeof setInterval> | undefined;
+	/** Whether the socket is being bound again: looked at no more meanwhile. */
+	private rebinding = false;
+	private disposed = false;
 
-	private constructor(readonly path: string, private readonly handlers: PipeHandlers<C>) {
-		this.server = http.createServer((req, res) => this.onRequest(req, res));
-		this.server.on('connection', socket => {
+	private constructor(readonly path: string, private readonly handlers: PipeHandlers<C>, private readonly release?: { readonly secret: string; readonly startedAt: number }) {
+		this.server = this.serving();
+	}
+
+	/** An HTTP server that hands each request to the handlers and tracks its connections with the rest. */
+	private serving(): http.Server {
+		const server = http.createServer((req, res) => this.onRequest(req, res));
+		server.on('connection', socket => {
 			this.sockets.add(socket);
 			socket.on('close', () => this.sockets.delete(socket));
 		});
 		// Only the headers are timed: the rest of a request, and the call it makes, take as long as they take
-		this.server.requestTimeout = 0;
-		this.server.headersTimeout = HEADERS_TIMEOUT_MS;
+		server.requestTimeout = 0;
+		server.headersTimeout = HEADERS_TIMEOUT_MS;
+		return server;
 	}
 
 	/**
-	 * Listens on `pipe`. Elsewhere than Windows it is a socket file, which replaces one a window that
-	 * ended left there, and which only its user can open. ⚠️ It is bound under a name of its own and then
-	 * moved to `pipe`: a server that closes removes the file it was bound to, and so would remove the socket
-	 * another server - the next extension host of the window - has put at `pipe` meanwhile.
+	 * Listens on `pipe` - or, where its folder under `/tmp` is another user's, in a fresh private folder
+	 * beside it, which `path` names. Elsewhere than Windows it is a socket file, which replaces one a
+	 * window that ended left there, and which only its user can open. ⚠️ It is bound under a name of its
+	 * own and then moved to its path: a server that closes removes the file it was bound to, and so would
+	 * remove the socket another server - the next extension host of the window - has put there meanwhile.
 	 */
-	static async listen<C>(pipe: string, handlers: PipeHandlers<C>): Promise<PipeServer<C>> {
-		const bound = process.platform === 'win32' ? pipe : `${pipe}.${process.pid}`;
+	static async listen<C>(pipe: string, handlers: PipeHandlers<C>, options?: PipeListenOptions): Promise<PipeServer<C>> {
+		const actual = process.platform === 'win32' ? pipe : path.join(bindDirFor(pipe), path.basename(pipe));
+		const bound = process.platform === 'win32' ? actual : `${actual}.${process.pid}`;
 		if (process.platform !== 'win32') {
-			ensurePrivateFolder(pipe);
+			ensurePrivateFolder(actual);
 			fs.rmSync(bound, { force: true });
 		}
-		const server = new PipeServer(pipe, handlers);
+		const server = new PipeServer(actual, handlers, options?.release);
 		await new Promise<void>((resolve, reject) => {
 			server.server.once('error', reject);
 			server.server.listen(bound, () => {
@@ -148,27 +242,153 @@ export class PipeServer<C> {
 			});
 		});
 		// Once it listens, a connection it cannot take - out of handles, say - is no reason to stop
-		server.server.on('error', err => handlers.log?.(`Could not accept a connection on pipe ${pipe}: ${stackOf(err)}`));
+		server.server.on('error', err => handlers.log?.(`Could not accept a connection on pipe ${actual}: ${stackOf(err)}`));
 		if (process.platform !== 'win32') {
 			try {
 				fs.chmodSync(bound, 0o600);
-				fs.renameSync(bound, pipe);
-				server.inode = fs.statSync(pipe).ino;
+				fs.renameSync(bound, actual);
+				server.inode = fs.statSync(actual).ino;
 			} catch (err) {
 				server.dispose();
 				throw err;
 			}
+			server.watch(options?.rebindMs);
 		}
 		return server;
 	}
 
+	/** Looks at the socket every `rebindMs`, and binds it again where it is gone - a cleaner of /tmp took it, say. */
+	private watch(rebindMs?: number): void {
+		this.rebindCheck = setInterval(() => {
+			try {
+				this.checkBound();
+			} catch (err) {
+				this.handlers.log?.(`Could not look at whether the Facade socket ${this.path} is still bound: ${stackOf(err)}`);
+			}
+		}, rebindMs ?? REBIND_CHECK_MS);
+		this.rebindCheck.unref?.();
+	}
+
+	/**
+	 * Whether this server's socket is still where it was bound: one gone is made again - its folder too,
+	 * where that is gone - and bound again; one another server's by now ends the watch, and is left alone.
+	 */
+	private checkBound(): void {
+		if (this.disposed || this.releasing || this.rebinding) {
+			return;
+		}
+		let found: fs.Stats | undefined;
+		try {
+			found = fs.statSync(this.path);
+		} catch {
+			found = undefined;
+		}
+		if (found === undefined) {
+			ensurePrivateFolder(this.path);
+			this.rebind();
+		} else if (this.inode !== undefined && found.ino !== this.inode) {
+			clearInterval(this.rebindCheck);
+			this.rebindCheck = undefined;
+		}
+	}
+
+	/**
+	 * Binds the socket again where it was: bound under a name of its own and moved over, as at first, by
+	 * a server that takes over from this one, whose connections run to their end with it. One that cannot
+	 * be bound is logged, and looked at again.
+	 */
+	private rebind(): void {
+		const bound = `${this.path}.${process.pid}`;
+		fs.rmSync(bound, { force: true });
+		const running = this.server;
+		const server = this.serving();
+		this.rebinding = true;
+		const failed = (err: Error) => {
+			this.rebinding = false;
+			server.close();
+			this.handlers.log?.(`Could not bind the Facade socket ${this.path} again: ${stackOf(err)}`);
+		};
+		server.once('error', failed);
+		server.listen(bound, () => {
+			server.off('error', failed);
+			if (this.disposed) {
+				// Disposed while it bound: nothing of it is put at the pipe - another server's by now -
+				// and it listens no more.
+				this.rebinding = false;
+				server.close();
+				fs.rmSync(bound, { force: true });
+				return;
+			}
+			server.on('error', err => this.handlers.log?.(`Could not accept a connection on pipe ${this.path}: ${stackOf(err)}`));
+			try {
+				fs.chmodSync(bound, 0o600);
+				fs.renameSync(bound, this.path);
+				this.inode = fs.statSync(this.path).ino;
+				this.server = server;
+				// Nothing new arrives on the old one; its connections run to their end
+				running.close();
+			} catch (err) {
+				server.close();
+				this.handlers.log?.(`Could not bind the Facade socket ${this.path} again: ${stackOf(err)}`);
+			} finally {
+				this.rebinding = false;
+			}
+		});
+	}
+
 	private onRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+		if (req.url === '/release' && this.release !== undefined && this.handlers.release) {
+			const authorization = req.headers.authorization;
+			if (authorization !== `Bearer ${this.release.secret}`) {
+				req.resume();
+				res.writeHead(401).end();
+				return;
+			}
+			const startedAt = this.release.startedAt;
+			this.readBody(req, res, 409, body => this.onRelease(body, res, startedAt));
+			return;
+		}
 		const acceptBy = Number(req.headers[ACCEPT_BY_HEADER]);
 		const caller = this.callerOf(req, res);
 		if (caller === undefined) {
 			req.resume();
 			return;
 		}
+		this.readBody(req, res, 400, body => {
+			if (req.url === '/hello') {
+				let hello: string;
+				try {
+					const pid = typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0 ? body.pid : undefined;
+					hello = JSON.stringify(this.handlers.hello(caller, pid !== undefined ? { pid } : {}));
+				} catch (err) {
+					this.answerFailure(res, 'completing the handshake', err);
+					return;
+				}
+				res.writeHead(200, { 'Content-Type': 'application/json' }).end(hello);
+				return;
+			}
+			if (req.url === '/call' && typeof body.tool === 'string') {
+				// Letting go for this window's new extension host: not run, as its caller is told; it is sent
+				// again, to the window that takes over (REMOTE.md R4)
+				if (this.releasing) {
+					res.writeHead(408).end();
+					return;
+				}
+				// Read after its caller stopped waiting for it - this window held, and the call left in its pipe: not
+				// run, as its caller was told; it is sent again, or said not to have run (N-43)
+				if (Number.isFinite(acceptBy) && Date.now() > acceptBy) {
+					res.writeHead(408).end();
+					return;
+				}
+				void this.onCall(caller, body.tool, body.args, res);
+				return;
+			}
+			res.writeHead(404).end();
+		});
+	}
+
+	/** Reads one bounded JSON object, answering with `invalidStatus` when it is malformed. */
+	private readBody(req: http.IncomingMessage, res: http.ServerResponse, invalidStatus: number, onBody: (body: JsonObject) => void): void {
 		const chunks: Buffer[] = [];
 		let size = 0;
 		req.on('data', (chunk: Buffer) => {
@@ -191,36 +411,36 @@ export class PipeServer<C> {
 			try {
 				body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
 			} catch {
-				res.writeHead(400).end();
+				res.writeHead(invalidStatus).end();
 				return;
 			}
 			if (!isJsonObject(body)) {
-				res.writeHead(400).end();
+				res.writeHead(invalidStatus).end();
 				return;
 			}
-			if (req.url === '/hello') {
-				let hello: string;
-				try {
-					const pid = typeof body.pid === 'number' && Number.isInteger(body.pid) && body.pid > 0 ? body.pid : undefined;
-					hello = JSON.stringify(this.handlers.hello(caller, pid !== undefined ? { pid } : {}));
-				} catch (err) {
-					this.answerFailure(res, 'completing the handshake', err);
-					return;
-				}
-				res.writeHead(200, { 'Content-Type': 'application/json' }).end(hello);
-				return;
+			onBody(body);
+		});
+	}
+
+	/**
+	 * Whether this window's new extension host may take over: it says when it started, and only one
+	 * that started later than this one, `startedAt`, is let go for - a stale host asking a newer
+	 * holder is refused. One that says none, or none later, is refused too: it cannot prove it is
+	 * newer (L5).
+	 */
+	private onRelease(body: JsonObject, res: http.ServerResponse, startedAt: number): void {
+		if (typeof body.startedAt !== 'number' || body.startedAt <= startedAt) {
+			res.writeHead(409).end();
+			return;
+		}
+		// Nothing new is taken from now on; the answer goes out before anything closes, so it is read
+		this.releasing = true;
+		res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"released":true}', () => {
+			try {
+				this.handlers.release?.();
+			} catch (err) {
+				this.handlers.log?.(`Letting go for this window's new extension host failed: ${stackOf(err)}`);
 			}
-			if (req.url === '/call' && typeof body.tool === 'string') {
-				// Read after its caller stopped waiting for it - this window held, and the call left in its pipe: not
-				// run, as its caller was told; it is sent again, or said not to have run (N-43)
-				if (Number.isFinite(acceptBy) && Date.now() > acceptBy) {
-					res.writeHead(408).end();
-					return;
-				}
-				void this.onCall(caller, body.tool, body.args, res);
-				return;
-			}
-			res.writeHead(404).end();
 		});
 	}
 
@@ -289,6 +509,9 @@ export class PipeServer<C> {
 
 	/** Stops listening and drops every connection; the calls they carried run to their end. Elsewhere than Windows the socket file goes. */
 	dispose(): void {
+		this.disposed = true;
+		clearInterval(this.rebindCheck);
+		this.rebindCheck = undefined;
 		this.server.close();
 		for (const socket of this.sockets) {
 			socket.destroy();
@@ -334,7 +557,7 @@ function failureCodeOf(req: http.ClientRequest): () => string {
 }
 
 /** Why the window did not serve a request, by the status it answered with and, for its own failure, what it said. */
-function refusalOf(status: number | undefined, body: string, request: 'connection' | 'call'): PipeClientError {
+function refusalOf(status: number | undefined, body: string, request: 'connection' | 'call' | 'release'): PipeClientError {
 	if (status === 500) {
 		return new PipeClientError(windowFailureOf(body) ?? `Facade IPC request '${request}' failed with status 500.`, 'FAILED');
 	}
@@ -356,8 +579,9 @@ function windowFailureOf(body: string): string | undefined {
 }
 
 /**
- * An agent's MCP server's end of the pipe, calling as the holder of `token`. Each request opens a
- * connection of its own: one kept open from before may be one the window closed as it reloaded.
+ * An agent's MCP server's end of the pipe, calling as the holder of `token` - or this window's new
+ * extension host, asking with its release secret. Each request opens a connection of its own: one kept
+ * open from before may be one the window closed as it reloaded.
  */
 export class PipeClient {
 
@@ -465,6 +689,32 @@ export class PipeClient {
 			req.on('error', err => settle(() => reject(new PipeClientError(err.message, failureCode()))));
 			signal?.addEventListener('abort', cancel, { once: true });
 			req.end(body);
+		});
+	}
+
+	/**
+	 * Asks the window to let go for this window's new extension host, saying the release secret its window
+	 * record names as this client's token, and when that host started, in milliseconds - only a newer
+	 * one is let go for (L5). True once it is letting go: its calls from now on are not taken, and sent
+	 * again. Aborting `signal` stops waiting for it, as for a window that does not answer.
+	 */
+	release(startedAt: number, signal?: AbortSignal): Promise<true> {
+		return new Promise((resolve, reject) => {
+			const req = http.request({ socketPath: this.pipe, path: '/release', method: 'POST', agent: false, headers: this.headers(), signal }, res => {
+				res.resume();
+				res.on('close', () => {
+					if (!res.complete) {
+						reject(new PipeClientError('Facade closed the connection before it answered letting go.', 'NOT_CONNECTED'));
+					} else if (res.statusCode !== 200) {
+						reject(refusalOf(res.statusCode, '', 'release'));
+					} else {
+						resolve(true);
+					}
+				});
+			});
+			const failureCode = failureCodeOf(req);
+			req.on('error', err => reject(signal?.aborted ? new PipeClientError('The Facade window did not answer letting go in time.', failureCode()) : new PipeClientError(err.message, failureCode())));
+			req.end(JSON.stringify({ startedAt }));
 		});
 	}
 

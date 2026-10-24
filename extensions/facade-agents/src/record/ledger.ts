@@ -6,12 +6,12 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { sleepSync } from '../base/async';
+import { sleepSync, timeout } from '../base/async';
 import { codeOf } from '../base/errors';
 import { HELD_OPEN_CODES } from '../base/files';
 import { isJsonObject } from '../base/json';
 import { removeLockIfUnchanged } from '../base/lock';
-import { isProcessRunning, isSameProgram } from '../base/system';
+import { identifyProcess, isProcessRunning, isSameProgram, ProcessIdentity, processStartTime } from '../base/system';
 import { applyEvent, createState, eventOf, fitsState, LedgerEvent, LedgerEventBody, WorkspaceState } from './events';
 
 /** The ledger's file, in the workspace's folder. */
@@ -62,9 +62,10 @@ export class LedgerLockedError extends Error {
 	/**
 	 * `pid` is the process of the window that has it open - undefined for one that closed it, `closedBy`
 	 * saying how - and `touchedAt` when its lock was last touched, which a window that runs does every
-	 * 30 seconds.
+	 * 30 seconds. `owner`, where the lock names it, which owner holds it: this window's own earlier
+	 * extension host is not another window (REMOTE.md R4).
 	 */
-	constructor(readonly pid: number | undefined, readonly touchedAt: number, closedBy: ClosedBy = 'window') {
+	constructor(readonly pid: number | undefined, readonly touchedAt: number, closedBy: ClosedBy = 'window', readonly owner: string | undefined = undefined) {
 		super(pid !== undefined
 			? `Another Facade window (process ${pid}) manages this workspace's agents.`
 			: closedBy === 'window'
@@ -180,7 +181,7 @@ export class Ledger {
 	/** Opens the ledger in `dir`, taking its lock; throws `LedgerLockedError` while another window has it. */
 	static open(dir: string, options: LedgerOptions = {}): Ledger {
 		fs.mkdirSync(dir, { recursive: true });
-		const mark = `${process.pid} ${crypto.randomBytes(6).toString('hex')}`;
+		const mark = `${process.pid} ${options.owner ?? '-'} ${crypto.randomBytes(6).toString('hex')} ${processStartTime()}`;
 		const found = acquireLock(dir, mark, options.isRunning ?? isProcessRunning, options.owner);
 		const lastClose = found && {
 			by: found.by,
@@ -387,6 +388,34 @@ function holderOf(content: string): number | undefined {
 	return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
+/**
+ * Which owner a live lock names - `<pid> <owner> <random> <started>` - undefined for one that closed it, and for
+ * a live one of a Facade before that named it, `<pid> <random>`, whose owner cannot be told (REMOTE.md R4).
+ */
+export function ownerOf(content: string): string | undefined {
+	const words = content.trim().split(' ');
+	return holderOf(content) !== undefined && words.length >= 3 && words[1] !== '-' ? words[1] : undefined;
+}
+
+/**
+ * When the holder of a live lock started, in milliseconds - its fourth word - undefined for a mark of a
+ * Facade before that worded it: an old mark, older than any holder that says when it started (L5).
+ */
+function startedAtOf(content: string): number | undefined {
+	const words = content.trim().split(' ');
+	const at = words.length >= 4 ? Number(words[3]) : NaN;
+	return holderOf(content) !== undefined && Number.isInteger(at) && at > 0 ? at : undefined;
+}
+
+/**
+ * Whether the holder that started at `holder.at` with `holder.pid` started later than the host that
+ * started at `ours.at` with `ours.pid`: past it, or the same millisecond with the higher process id.
+ * One that says none (an old mark) never did: it is older than any (L5).
+ */
+export function holderStartedLater(holder: { readonly at: number | undefined; readonly pid: number }, ours: { readonly at: number; readonly pid: number }): boolean {
+	return holder.at !== undefined && (holder.at > ours.at || (holder.at === ours.at && holder.pid > ours.pid));
+}
+
 /** A lock that says its ledger was closed: how, by which owner, and in which window load. */
 interface ClosedLock {
 	readonly by: ClosedBy;
@@ -447,11 +476,11 @@ function acquireLock(dir: string, mark: string, isRunning: (pid: number) => bool
 		found = content;
 		const holder = holderOf(content);
 		if (holder !== undefined && holder !== process.pid && isHolding(file, holder, isRunning)) {
-			throw new LedgerLockedError(holder, touchedAt(file));
+			throw new LedgerLockedError(holder, touchedAt(file), 'window', ownerOf(content));
 		}
 		const closed = closedLockOf(content);
 		if (closed?.owner !== undefined && closed.owner !== owner && isTouchedWithin(file, RELOAD_MS)) {
-			throw new LedgerLockedError(undefined, touchedAt(file), closed.by);
+			throw new LedgerLockedError(undefined, touchedAt(file), closed.by, closed.owner);
 		}
 		removeLockIfUnchanged(file, content);
 	}
@@ -575,6 +604,30 @@ function isHolding(file: string, holder: number, isRunning: (pid: number) => boo
 }
 
 /**
+ * The live holder of the lock in `dir` - its process, the owner it names, and when it started, where
+ * its mark says - where one holds it as an opening would find it: its process another's, running, and
+ * touching it. Nothing where none does, the lock closed, gone, or unreadable: the opening decides
+ * then (REMOTE.md R4).
+ */
+export function liveHolderOf(dir: string, isRunning: (pid: number) => boolean = isProcessRunning): { readonly pid: number; readonly owner: string | undefined; readonly startedAt?: number } | undefined {
+	let content: string | undefined;
+	try {
+		content = readLock(dir);
+	} catch {
+		return undefined;
+	}
+	if (content === undefined) {
+		return undefined;
+	}
+	const pid = holderOf(content);
+	if (pid === undefined || pid === process.pid || !isHolding(path.join(dir, LOCK_FILE), pid, isRunning)) {
+		return undefined;
+	}
+	const startedAt = startedAtOf(content);
+	return { pid, owner: ownerOf(content), ...(startedAt !== undefined ? { startedAt } : {}) };
+}
+
+/**
  * What the lock in `dir` says of its window: whether one holds it now - its process runs, and touches it -
  * and the window load that closed it, where a window, or Facade in it, did. A lock another program holds
  * open too long to be read counts as held.
@@ -595,4 +648,130 @@ export function lockStateOf(dir: string, isRunning: (pid: number) => boolean = i
 	}
 	const session = closedLockOf(content)?.session;
 	return { held: false, ...(session !== undefined ? { closedIn: session } : {}) };
+}
+
+/** Why this window may not end the process that holds its ledger's lock and take the lock from it. */
+export type TakeoverRefusal =
+	/** The lock no longer names that process of this window: it moved on, and is opened as usual instead. */
+	| 'moved-on'
+	/** The process is this very one: a window never ends itself. */
+	| 'own-process'
+	/** The holder started later than this host: a stale host never takes the record from a newer one (L5). */
+	| 'newer-holder'
+	/** The process cannot be told to be an extension host of this server: nothing else is ended. */
+	| 'not-extension-host'
+	/** The process still runs: it keeps the ledger, and nothing of this window's is written to it. */
+	| 'still-runs';
+
+/** The lock of this window's earlier extension host is not taken from it, `why` saying why. */
+export class LedgerTakeoverError extends Error {
+	constructor(readonly why: TakeoverRefusal, dir: string, holder: number) {
+		super(why === 'moved-on'
+			? `The ledger in ${dir} is no longer held by process ${holder} of this window.`
+			: why === 'own-process'
+				? `The ledger in ${dir} is held by this very process (${holder}), which is never ended.`
+				: why === 'newer-holder'
+					? `The process that holds the ledger in ${dir} (process ${holder}) started later than this one, so the ledger stays its.`
+					: why === 'not-extension-host'
+						? `The process that holds the ledger in ${dir} (process ${holder}) cannot be told to be an extension host of this server, so it is not ended.`
+						: `The process that holds the ledger in ${dir} (process ${holder}) still runs, so the ledger stays its.`);
+		this.name = 'LedgerTakeoverError';
+	}
+}
+
+/** How a takeover ends the earlier extension host's process, unless told otherwise: still `isRunning`, ended with `kill`, known by `identify`. */
+export interface TakeoverOptions {
+	isRunning?: (pid: number) => boolean;
+	kill?: (pid: number, signal: 'SIGTERM' | 'SIGKILL') => void;
+	identify?: (pid: number) => ProcessIdentity | undefined;
+	/** How long the exit is waited for after SIGTERM, and then after SIGKILL: 2 seconds each, unless told otherwise. */
+	termMs?: number;
+	killMs?: number;
+	/** How often the process is looked at while it is waited for: 50 ms, unless told otherwise. */
+	pollMs?: number;
+	/** When this host started, in milliseconds: a holder that started later is refused - now minus this process's uptime, unless told. */
+	startedAt?: number;
+}
+
+/** How long a takeover waits for the earlier extension host to exit after each signal. */
+const TAKEOVER_WAIT_MS = 2_000;
+/** How often a takeover looks at whether the earlier extension host has exited. */
+const TAKEOVER_POLL_MS = 50;
+
+/**
+ * Ends this window's earlier extension host - the process `holder` the live lock in `dir` names next to
+ * this window's own `owner` - and returns once that process has exited, so that the lock can then be
+ * taken knowing no write of its can come between a lock check and the write (REMOTE.md R4). Only that
+ * one process is ended, never its group: the agents in the PTY host are untouched. Only from a holder
+ * that started earlier than this host: a newer holder is refused (L5). Throws `LedgerTakeoverError`
+ * where the lock moved on, where the process is this very one, where it started later, where it cannot
+ * be told to be an extension host of this server, and where it still runs after SIGTERM and SIGKILL.
+ */
+export async function takeoverLedgerLock(dir: string, holder: number, owner: string, options: TakeoverOptions = {}): Promise<void> {
+	if (holder === process.pid) {
+		throw new LedgerTakeoverError('own-process', dir, holder);
+	}
+	const content = readLock(dir);
+	if (content === undefined || holderOf(content) !== holder || ownerOf(content) !== owner) {
+		throw new LedgerTakeoverError('moved-on', dir, holder);
+	}
+	if (holderStartedLater({ at: startedAtOf(content), pid: holder }, { at: options.startedAt ?? processStartTime(), pid: process.pid })) {
+		throw new LedgerTakeoverError('newer-holder', dir, holder);
+	}
+	const isRunning = options.isRunning ?? isProcessRunning;
+	if (!isRunning(holder)) {
+		return;
+	}
+	if (!isExtensionHost((options.identify ?? identifyProcess)(holder))) {
+		throw new LedgerTakeoverError('not-extension-host', dir, holder);
+	}
+	const kill = options.kill ?? ((pid: number, signal: 'SIGTERM' | 'SIGKILL') => process.kill(pid, signal));
+	const waits = [options.termMs ?? TAKEOVER_WAIT_MS, options.killMs ?? TAKEOVER_WAIT_MS];
+	for (const [signal, waitMs] of [['SIGTERM', waits[0]], ['SIGKILL', waits[1]]] as const) {
+		try {
+			kill(holder, signal);
+		} catch (err) {
+			if (codeOf(err) !== 'ESRCH') {
+				throw new LedgerTakeoverError('still-runs', dir, holder);
+			}
+		}
+		if (await exitedWithin(holder, isRunning, waitMs, options.pollMs ?? TAKEOVER_POLL_MS)) {
+			return;
+		}
+	}
+	throw new LedgerTakeoverError('still-runs', dir, holder);
+}
+
+/**
+ * Whether `identity`, what a process runs, is an extension host of this server: started as an extension
+ * host, by this server's own program - or another commit's under the same server bin folder, a server
+ * updated meanwhile still being Facade's. One that cannot be told, or whose program is another
+ * product's, is not one: nothing is ended that cannot be told to be one (REMOTE.md R4).
+ */
+function isExtensionHost(identity: ProcessIdentity | undefined): boolean {
+	if (identity?.executable === undefined || !identity.words.some(word => word === '--type=extensionHost')) {
+		return false;
+	}
+	const executable = identity.executable;
+	if (executable === process.execPath) {
+		return true;
+	}
+	// Windows paths differ in case between reads: compared without regard to it there.
+	const same = process.platform === 'win32'
+		? (one: string, other: string) => one.toLowerCase() === other.toLowerCase()
+		: (one: string, other: string) => one === other;
+	return same(path.basename(executable), path.basename(process.execPath))
+		&& same(path.dirname(path.dirname(executable)), path.dirname(path.dirname(process.execPath)));
+}
+
+/** Whether `holder` stops running within `ms`, looked at every `pollMs`. */
+async function exitedWithin(holder: number, isRunning: (pid: number) => boolean, ms: number, pollMs: number): Promise<boolean> {
+	const deadline = Date.now() + ms;
+	while (isRunning(holder)) {
+		if (Date.now() >= deadline) {
+			return false;
+		}
+		await timeout(pollMs);
+	}
+	return true;
 }

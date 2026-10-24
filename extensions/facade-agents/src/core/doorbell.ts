@@ -24,6 +24,8 @@ const TYPING_IDLE_MS = 10_000;
 const TYPING_POLL_MS = 1_000;
 /** How long a doorbell that could not be typed waits before it tries again. */
 const RETRY_MS = 60_000;
+/** How long a doorbell waits for the window's answer before the window is what holds it up: away, it rings once the window is back (REMOTE.md R4). */
+const WINDOW_SILENT_MS = 10_000;
 /** How many unread messages a doorbell names: the others it counts. */
 const NAMED = 5;
 
@@ -77,6 +79,12 @@ export class Doorbell implements Disposable {
 	private readonly behind = new Set<number>();
 	/** The agents whose doorbells wait for their MCP servers to connect again: their next hello rings them. */
 	private readonly disconnected = new Set<number>();
+	/** When each agent's doorbell asked the window what it waits for the answer to, while it waits. */
+	private readonly askedAt = new Map<number, number>();
+	/** How long each agent's doorbell under way has waited for the window's answers, the longest wait. */
+	private readonly windowWaited = new Map<number, number>();
+	/** When each agent's doorbell rang that had waited a while for the window - away - for what holds its messages up. */
+	private readonly rangLate = new Map<number, number>();
 	private disposed = false;
 
 	constructor(private readonly context: DoorbellContext) { }
@@ -116,6 +124,7 @@ export class Doorbell implements Disposable {
 		this.timers.delete(id);
 		this.retryAt.delete(id);
 		this.disconnected.delete(id);
+		this.rangLate.delete(id);
 	}
 
 	/** The agent's MCP server said hello: a doorbell that waited for it to connect again is due again. */
@@ -126,11 +135,14 @@ export class Doorbell implements Disposable {
 
 	/**
 	 * What holds the agent's doorbell up, where Facade knows: the person typing in its terminal, Facade's own input
-	 * there, its MCP server not connected, or a doorbell that could not be typed.
+	 * there, its MCP server not connected, the window not answering - away - or a doorbell that could not be typed.
 	 */
 	holdUp(id: number): string | undefined {
 		if (this.disconnected.has(id)) {
 			return 'its MCP server is disconnected; the doorbell waits for reconnection';
+		}
+		if (this.waitsOnWindow(id)) {
+			return 'the window has not answered its doorbell; it rings once the window is back';
 		}
 		if (this.waiting.has(id)) {
 			return 'the doorbell is waiting for the person to submit or cancel terminal input, or leave the keyboard idle for 10 seconds';
@@ -141,7 +153,41 @@ export class Doorbell implements Disposable {
 		if (this.retryAt.has(id)) {
 			return 'the terminal could not receive the doorbell; Facade retries every minute';
 		}
+		const late = this.rangLate.get(id);
+		if (late !== undefined && Date.now() - late < RING_GAP_MS) {
+			return `its doorbell waited for the window, which was away, and rang ${Math.round((Date.now() - late) / 1000)} seconds ago`;
+		}
 		return undefined;
+	}
+
+	/** Whether the agent's doorbell has waited a while for the window to answer: a window away, which rings it once it is back (REMOTE.md R4). */
+	waitsOnWindow(id: number): boolean {
+		const since = this.askedAt.get(id);
+		return since !== undefined && Date.now() - since >= WINDOW_SILENT_MS;
+	}
+
+	/**
+	 * What the window had to do with the agent's doorbell, for what the one told of its messages is to do: it waits for
+	 * the window, away; it waited for it, and rang within the minute; or nothing.
+	 */
+	windowHold(id: number): 'waiting' | 'rang' | undefined {
+		if (this.waitsOnWindow(id)) {
+			return 'waiting';
+		}
+		const late = this.rangLate.get(id);
+		return late !== undefined && Date.now() - late < RING_GAP_MS ? 'rang' : undefined;
+	}
+
+	/** The window's answer to `ask`, for the agent's doorbell: how long it is waited for is noted, for what holds the doorbell up. */
+	private async windowAnswer<T>(id: number, ask: () => Promise<T>): Promise<T> {
+		const since = Date.now();
+		this.askedAt.set(id, since);
+		try {
+			return await ask();
+		} finally {
+			this.askedAt.delete(id);
+			this.windowWaited.set(id, Math.max(this.windowWaited.get(id) ?? 0, Date.now() - since));
+		}
 	}
 
 	/**
@@ -202,7 +248,7 @@ export class Doorbell implements Disposable {
 			// In the terminal's turn, behind what Facade typed there before: its line, then its Enter after the pause its
 			// CLI needs - begun, Facade turned off meanwhile or not, as a line left unsent would wait in its input; the
 			// window drops one Facade is off for when its turn comes, before anything of it goes in (M10)
-			const effect = await this.context.ports.terminals.type(id, line, { enter: true, enterDelayMs: this.context.delaysOf(agent).enterDelay, requiresFramework: true });
+			const effect = await this.windowAnswer(id, () => this.context.ports.terminals.type(id, line, { enter: true, enterDelayMs: this.context.delaysOf(agent).enterDelay, requiresFramework: true }));
 			if (!effect) {
 				throw new Error('its terminal was unavailable');
 			}
@@ -225,6 +271,12 @@ export class Doorbell implements Disposable {
 					this.context.table.messages.rang(id, named);
 				}
 				this.retryAt.delete(id);
+				// One that waited a while for the window - away - is said to have, for a notice of its messages soon after
+				if ((this.windowWaited.get(id) ?? 0) >= WINDOW_SILENT_MS) {
+					this.rangLate.set(id, Date.now());
+				} else {
+					this.rangLate.delete(id);
+				}
 			}
 		} catch (err) {
 			if (!this.disposed) {
@@ -233,6 +285,7 @@ export class Doorbell implements Disposable {
 			}
 		} finally {
 			this.ringing.delete(id);
+			this.windowWaited.delete(id);
 			this.update(id);
 		}
 	}
@@ -248,7 +301,7 @@ export class Doorbell implements Disposable {
 			while (!this.disposed && isLive(this.context.table.get(agent.id))) {
 				let input: PersonInput | undefined;
 				try {
-					input = await this.context.ports.terminals.input(agent.id);
+					input = await this.windowAnswer(agent.id, () => this.context.ports.terminals.input(agent.id));
 				} catch (err) {
 					this.context.log(`Could not determine the human-input state of ${label}'s terminal: ${messageOf(err)}`);
 					return;

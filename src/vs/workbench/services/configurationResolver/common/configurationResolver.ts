@@ -5,7 +5,7 @@
 
 import { IStringDictionary } from '../../../../base/common/collections.js';
 import { ErrorNoTelemetry } from '../../../../base/common/errors.js';
-import { IProcessEnvironment } from '../../../../base/common/platform.js';
+import { IProcessEnvironment, OperatingSystem } from '../../../../base/common/platform.js';
 import { ConfigurationTarget } from '../../../../platform/configuration/common/configuration.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkspaceFolderData } from '../../../../platform/workspace/common/workspace.js';
@@ -19,7 +19,7 @@ export interface IConfigurationResolverService {
 	/** Variables the resolver is able to resolve. */
 	readonly resolvableVariables: ReadonlySet<string>;
 
-	resolveWithEnvironment(environment: IProcessEnvironment, folder: IWorkspaceFolderData | undefined, value: string): Promise<string>;
+	resolveWithEnvironment(environment: IProcessEnvironment, folder: IWorkspaceFolderData | undefined, value: string, os?: OperatingSystem): Promise<string>;
 
 	/**
 	 * Recursively resolves all variables in the given config and returns a copy of it with substituted values.

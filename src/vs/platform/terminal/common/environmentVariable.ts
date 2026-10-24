@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IProcessEnvironment } from '../../../base/common/platform.js';
+import { IProcessEnvironment, OperatingSystem } from '../../../base/common/platform.js';
 import { IWorkspaceFolderData } from '../../workspace/common/workspace.js';
 
 export enum EnvironmentVariableMutatorType {
@@ -83,7 +83,7 @@ export interface IMergedEnvironmentVariableCollection {
 	 * @param variableResolver An optional function to use to resolve variables within the
 	 * environment values.
 	 */
-	applyToProcessEnvironment(env: IProcessEnvironment, scope: EnvironmentVariableScope | undefined, variableResolver?: VariableResolver): Promise<void>;
+	applyToProcessEnvironment(env: IProcessEnvironment, scope: EnvironmentVariableScope | undefined, variableResolver?: VariableResolver, os?: OperatingSystem): Promise<void>;
 
 	/**
 	 * Generates a diff of this collection against another. Returns undefined if the collections are

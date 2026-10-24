@@ -77,6 +77,7 @@ function cliParameter(available: string): object {
  * confirmed.
  */
 export const startAgentTool: ContractTool = {
+	findsClis: true,
 	definition: {
 		name: 'start_agent',
 		title: 'Start an agent',

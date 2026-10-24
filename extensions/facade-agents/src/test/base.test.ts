@@ -8,13 +8,13 @@ import { spawn } from 'child_process';
 import { getEventListeners } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import { DeferredPromise, sleepSync, timeout } from '../base/async';
+import { askUntil, DeferredPromise, sleepSync, timeout, withDeadline } from '../base/async';
 import { codeOf, messageOf, stackOf } from '../base/errors';
 import { canonicalFolder, FileChangedError, formatJson, isEqualPath, JsonFile, jsonLayoutOf, parseJson, readJsonFile, replaceFile, updateJsonFile, writeJsonFile } from '../base/files';
 import { isJsonObject, isStringArray } from '../base/json';
 import { disposeAll } from '../base/lifecycle';
 import { removeLockIfUnchanged, withFileLock } from '../base/lock';
-import { isProcessRunning } from '../base/system';
+import { identifyProcess, isProcessRunning } from '../base/system';
 import { cutNextWriteShort, outcomeOf, replaceFsFunction, tempDir } from './util';
 
 const BOM = String.fromCharCode(0xfeff);
@@ -60,6 +60,22 @@ suite('Base: errors, JSON values, processes and promises', () => {
 		assert.deepStrictEqual([isProcessRunning(process.pid), isProcessRunning(0), isProcessRunning(-1), isProcessRunning(1.5), isProcessRunning(2 ** 30)], [true, false, false, false, false]);
 	});
 
+	test('a process is known by its command line\'s words and its program\'s path; one that is gone, or no PID, is not known (REMOTE.md R4)', () => {
+		const self = identifyProcess(process.pid);
+
+		assert.deepStrictEqual({
+			words: (self?.words.length ?? 0) > 0,
+			program: self?.executable !== undefined ? path.basename(self.executable) : undefined,
+			gone: identifyProcess(2 ** 30),
+			none: [identifyProcess(0), identifyProcess(-1), identifyProcess(1.5)]
+		}, {
+			words: true,
+			program: path.basename(process.execPath),
+			gone: undefined,
+			none: [undefined, undefined, undefined]
+		});
+	});
+
 	test('a deferred promise settles once, as the first of complete and error says', async () => {
 		const completed = new DeferredPromise<string>();
 		completed.complete('first');
@@ -93,6 +109,32 @@ suite('Base: errors, JSON values, processes and promises', () => {
 		sleepSync(50);
 
 		assert.strictEqual(Date.now() - start >= 45, true);
+	});
+
+	test('what comes first: a promise in time is its value, a slow one its fallback, its late value dropped; a rejection is its own', async () => {
+		const slow = new DeferredPromise<string>();
+		const late: string[] = [];
+		void slow.p.then(value => late.push(value), () => late.push('rejected'));
+		const onTime = withDeadline(Promise.resolve('in time'), 20, () => 'fallback');
+		const timedOut = withDeadline(slow.p, 20, () => 'fallback');
+		const failing = withDeadline(Promise.reject(new Error('broke')), 20, () => 'fallback');
+		// A fallback that refuses - a deletion that cannot tell what is inside the folder - fails the answer, not the timer
+		const refusing = withDeadline(new DeferredPromise<string>().p, 20, () => { throw new Error('refused'); });
+		const results = await Promise.all([onTime, timedOut, failing.then(() => 'kept', messageOf), refusing.then(() => 'kept', messageOf)]);
+		slow.complete('late');
+		await Promise.resolve();
+
+		assert.deepStrictEqual({ results, late }, { results: ['in time', 'fallback', 'broke', 'refused'], late: ['late'] });
+	});
+
+	test('asked until it can tell, or its time is over: an answer that tells ends it at once; each ask is waited for as long as is left, so one never answered is unknown at the deadline, not later', async () => {
+		const answers = ['unknown', 'unknown', 'present'];
+		const told = await askUntil(async () => answers.shift() ?? 'gone', answer => answer !== 'unknown', 'unknown', 1_000, 5);
+		const started = Date.now();
+		const never = await askUntil(() => new Promise<string>(() => { }), answer => answer !== 'unknown', 'unknown', 60, 5);
+		const waited = Date.now() - started;
+
+		assert.deepStrictEqual({ told, asksLeft: answers.length, never, atDeadline: waited >= 55 && waited < 1_000 }, { told: 'present', asksLeft: 0, never: 'unknown', atDeadline: true });
 	});
 });
 

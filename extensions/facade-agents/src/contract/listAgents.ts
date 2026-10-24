@@ -90,6 +90,7 @@ function cliLine(cli: StartableCli): string {
  * is doing, its terminal shows.
  */
 export const listAgentsTool: ContractTool = {
+	findsClis: true,
 	definition: {
 		name: 'list_agents',
 		title: 'List agents',

@@ -13,12 +13,12 @@ import * as path from 'path';
 import { PassThrough } from 'stream';
 import { DeferredPromise } from '../base/async';
 import { toolDefinitions } from '../contract/tools';
-import { PipeEndpoint } from '../transport/endpoint';
+import { PipeEndpoint, readWindowRecord } from '../transport/endpoint';
 import { McpStdioServer } from '../transport/mcpServer';
 import { PipeClient, PipeClientError, PipeHandlers, PipeServer, pipePath } from '../transport/pipe';
 import { helloOf, toolResultOf } from '../transport/protocol';
 import { StdioMcpClient } from './mcpClient';
-import { outcomeOf, sleep, tempDir, waitFor } from './util';
+import { outcomeOf, replaceFsFunction, sleep, tempDir, waitFor } from './util';
 
 /** An MCP server on in-memory streams, whose tools are found once `toolsFound` resolves, and a way to talk to it. */
 function mcpHarness(slowTool: (signal: AbortSignal, progress: (message: string) => void) => Promise<string>, toolsFound: Promise<void> = Promise.resolve()) {
@@ -256,6 +256,14 @@ suite('Transport: MCP over stdio', () => {
 
 suite('Transport: the pipe', () => {
 
+	/**
+	 * A private folder under /tmp of the test's own, in place of the person's `facade-<uid>`: the sockets of the
+	 * machine's extension hosts are in theirs, and a test may remove its own.
+	 */
+	function testPrivateFolder(): string {
+		return `facade-test-${crypto.randomBytes(4).toString('hex')}`;
+	}
+
 	test('a call whose caller left runs to its end all the same, its answer going nowhere: what a tool starts is carried through, and the window goes on', async () => {
 		const release = new DeferredPromise<void>();
 		const finished: string[] = [];
@@ -289,7 +297,10 @@ suite('Transport: the pipe', () => {
 		}
 	});
 
-	test('a server that closes leaves alone the socket another server has put at its pipe meanwhile, as the next extension host of the window does', async () => {
+	test('a server that closes leaves alone the socket another server has put at its pipe meanwhile, as the next extension host of the window does', async function () {
+		if (process.platform === 'win32') {
+			this.skip(); // Windows named pipes cannot replace a name while its first server still listens.
+		}
 		const pipe = pipePath(`test-${crypto.randomBytes(4).toString('hex')}`);
 		const handlers = (name: string) => ({ authenticate: () => 'someone', hello: () => ({ name }), call: async () => name });
 		const before = await PipeServer.listen<string>(pipe, handlers('before'));
@@ -301,6 +312,232 @@ suite('Transport: the pipe', () => {
 			assert.deepStrictEqual({ answered, socket: fs.existsSync(pipe) }, { answered: 'after', socket: true });
 		} finally {
 			after.dispose();
+		}
+	});
+
+	test('another extension host of the window asks with /release that this one lets go: with the secret it is letting go, takes nothing new, and lets go once the answer is out; else refused, and let alone (REMOTE.md R4)', async () => {
+		let lettingGo = 0;
+		const startedAt = 1729000000000;
+		const server = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
+			authenticate: () => 'someone',
+			hello: caller => ({ caller }),
+			call: async () => 'ran',
+			release: () => { lettingGo++; }
+		}, { release: { secret: 'secret', startedAt } });
+		try {
+			const pipe = server.path;
+			const wrong = await outcomeOf(new PipeClient(pipe, 'wrong').release(startedAt + 1));
+			const missing = await outcomeOf(new PipeClient(pipe, '').release(startedAt + 1));
+			const still = await new PipeClient(pipe, 'good').call('quick', {}, () => { });
+			const asked = await new PipeClient(pipe, 'secret').release(startedAt + 1);
+			await waitFor(() => lettingGo === 1);
+			const after = await outcomeOf(new PipeClient(pipe, 'good').call('late', {}, () => { }));
+
+			assert.deepStrictEqual({ wrong, missing, still, asked, lettingGo, after }, {
+				wrong: 'UNAUTHORIZED: Facade IPC request \'release\' was rejected (status 401).',
+				missing: 'UNAUTHORIZED: Facade IPC request \'release\' was rejected (status 401).',
+				still: 'ran',
+				asked: true,
+				lettingGo: 1,
+				after: 'UNREACHABLE: The Facade window did not accept request \'call\' before its deadline. The request did not run.'
+			});
+		} finally {
+			server.dispose();
+		}
+		const plain = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
+			authenticate: () => 'someone',
+			hello: caller => ({ caller }),
+			call: async () => 'ran'
+		});
+		try {
+			const none = await outcomeOf(new PipeClient(plain.path, 'secret').release(startedAt + 1));
+
+			assert.deepStrictEqual(none, 'REJECTED: Facade IPC request \'release\' was rejected (status 404).');
+		} finally {
+			plain.dispose();
+		}
+	});
+
+	test('/release carries when its asker started: only one that started later is let go for - an earlier one, one that says none, and one tied to the millisecond are refused, and it is let alone (L5)', async () => {
+		let lettingGo = 0;
+		const startedAt = 1729000000000;
+		const server = await PipeServer.listen<string>(pipePath(`test-${crypto.randomBytes(4).toString('hex')}`), {
+			authenticate: () => 'someone',
+			hello: caller => ({ caller }),
+			call: async () => 'ran',
+			release: () => { lettingGo++; }
+		}, { release: { secret: 'secret', startedAt } });
+		const ask = (body: string) => new Promise<string>(resolve => {
+			const req = http.request({ socketPath: server.path, path: '/release', method: 'POST', agent: false, headers: { 'Authorization': 'Bearer secret', 'Content-Type': 'application/json' } }, res => {
+				res.resume();
+				res.on('close', () => resolve(`${res.statusCode ?? 'none'}${res.complete ? '' : ' cut'}`));
+			});
+			req.on('error', (err: Error) => resolve(err.message));
+			req.end(body);
+		});
+		try {
+			const earlier = await outcomeOf(new PipeClient(server.path, 'secret').release(startedAt - 1));
+			const tied = await outcomeOf(new PipeClient(server.path, 'secret').release(startedAt));
+			const missing = await ask('{}');
+			const malformed = await ask('{no');
+			const oversized = await ask('x'.repeat(1024 * 1024 + 1));
+			const newer = await new PipeClient(server.path, 'secret').release(startedAt + 1);
+			await waitFor(() => lettingGo === 1);
+
+			assert.deepStrictEqual({ earlier, tied, missing, malformed, oversized, newer, lettingGo }, {
+				earlier: 'REJECTED: Facade IPC request \'release\' was rejected (status 409).',
+				tied: 'REJECTED: Facade IPC request \'release\' was rejected (status 409).',
+				missing: '409',
+				malformed: '409',
+				oversized: '413',
+				newer: true,
+				lettingGo: 1
+			});
+		} finally {
+			server.dispose();
+		}
+	});
+
+	test('a socket gone while its server listens - a cleaner of /tmp took it, its folder with it - is made and bound again, and reached (REMOTE.md R4)', async function () {
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		const long = path.join(os.tmpdir(), `fe-${'x'.repeat(90)}`);
+		const id = `test-${crypto.randomBytes(4).toString('hex')}`;
+		// A private folder under /tmp, which a cleaner of /tmp takes - the test's own, never the runtime folder of the
+		// person's login, whose sockets are their session's: the folder the pipe is in is removed
+		const privateFolder = testPrivateFolder();
+		const runtime = process.env.XDG_RUNTIME_DIR;
+		let pipe: string;
+		try {
+			delete process.env.XDG_RUNTIME_DIR;
+			pipe = pipePath(id, long, false, privateFolder);
+		} finally {
+			if (runtime !== undefined) {
+				process.env.XDG_RUNTIME_DIR = runtime;
+			}
+		}
+		assert.strictEqual(path.dirname(pipe), path.join('/tmp', privateFolder));
+		const logged: string[] = [];
+		const server = await PipeServer.listen<string>(pipe, {
+			authenticate: () => 'caller',
+			hello: () => ({}),
+			call: async () => 'answered',
+			log: message => logged.push(message)
+		}, { rebindMs: 20 });
+		try {
+			fs.rmSync(path.dirname(pipe), { recursive: true, force: true });
+			await waitFor(() => fs.existsSync(pipe));
+			const answer = await new PipeClient(pipe, 'good').call('echo', {}, () => { });
+
+			assert.deepStrictEqual({ answer, folder: fs.statSync(path.dirname(pipe)).mode & 0o777, logged }, { answer: 'answered', folder: 0o700, logged: [] });
+		} finally {
+			server.dispose();
+			fs.rmSync(path.dirname(pipe), { recursive: true, force: true });
+		}
+	});
+
+	test('on a remote the pipe is bound again in its private folder, remade where a cleaner of /tmp took it with the socket, and reached (REMOTE.md R4, R7)', async function () {
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		const id = `test-${crypto.randomBytes(4).toString('hex')}`;
+		const privateFolder = testPrivateFolder();
+		const pipe = pipePath(id, undefined, true, privateFolder);
+		const server = await PipeServer.listen<string>(pipe, {
+			authenticate: () => 'caller',
+			hello: () => ({}),
+			call: async () => 'answered'
+		}, { rebindMs: 20 });
+		try {
+			fs.rmSync(path.dirname(pipe), { recursive: true, force: true });
+			await waitFor(() => fs.existsSync(pipe));
+			const answer = await new PipeClient(pipe, 'good').call('echo', {}, () => { });
+
+			assert.deepStrictEqual({ pipe, answer, folder: fs.statSync(path.dirname(pipe)).mode & 0o777 }, {
+				pipe: path.join('/tmp', privateFolder, `facade-agents-${id}.sock`),
+				answer: 'answered',
+				folder: 0o700
+			});
+		} finally {
+			server.dispose();
+			fs.rmSync(path.dirname(pipe), { recursive: true, force: true });
+		}
+	});
+
+	test('a private folder another user holds - the predictable one, squatted - is not used: the socket lands in a fresh private folder with an unguessable name, and is reached (REMOTE.md R4)', async function () {
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		// The predictable folder squatted, as another user would make it first: anyone can enter it
+		const privateFolder = testPrivateFolder();
+		const squat = path.join('/tmp', privateFolder);
+		fs.mkdirSync(squat);
+		fs.chmodSync(squat, 0o755);
+		const id = `test-${crypto.randomBytes(4).toString('hex')}`;
+		const server = await PipeServer.listen<string>(pipePath(id, undefined, true, privateFolder), {
+			authenticate: () => 'caller',
+			hello: () => ({}),
+			call: async () => 'answered'
+		});
+		try {
+			const dir = path.dirname(server.path);
+			const folder = fs.lstatSync(dir);
+			const answer = await new PipeClient(server.path, 'good').call('echo', {}, () => { });
+
+			assert.deepStrictEqual({
+				unguessable: dir !== squat && dir.startsWith(`${squat}-`),
+				folder: folder.isDirectory() && folder.uid === os.userInfo().uid && (folder.mode & 0o777) === 0o700,
+				socket: path.basename(server.path),
+				answer
+			}, {
+				unguessable: true,
+				folder: true,
+				socket: `facade-agents-${id}.sock`,
+				answer: 'answered'
+			});
+		} finally {
+			server.dispose();
+			fs.rmSync(path.dirname(server.path), { recursive: true, force: true });
+			fs.rmSync(squat, { recursive: true, force: true });
+		}
+	});
+
+	test('a server disposed while its socket binds again puts nothing at its pipe - another server\'s by now - and listens no more', async function () {
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		const id = `test-${crypto.randomBytes(4).toString('hex')}`;
+		const pipe = pipePath(id, undefined, true, testPrivateFolder());
+		const server = await PipeServer.listen<string>(pipe, {
+			authenticate: () => 'caller',
+			hello: () => ({}),
+			call: async () => 'answered'
+		}, { rebindMs: 20 });
+		const bound = `${pipe}.${process.pid}`;
+		let disposed = false;
+		// Disposed between the rebind's listen and its answer: as its binding file is cleared for it - with
+		// the next extension host's socket put at the pipe meanwhile
+		const restore = replaceFsFunction('rmSync', original => (file, options) => {
+			const removed = original(file, options);
+			if (!disposed && String(file) === bound) {
+				disposed = true;
+				server.dispose();
+				fs.writeFileSync(pipe, 'theirs');
+			}
+			return removed;
+		});
+		try {
+			fs.rmSync(pipe, { force: true });
+			await waitFor(() => disposed);
+			await sleep(100);
+			const after = fs.statSync(pipe).isSocket() ? 'a socket' : fs.readFileSync(pipe, 'utf8');
+
+			assert.deepStrictEqual({ pipe: after, bound: fs.existsSync(bound) }, { pipe: 'theirs', bound: false });
+		} finally {
+			restore();
+			server.dispose();
+			fs.rmSync(path.dirname(pipe), { recursive: true, force: true });
 		}
 	});
 
@@ -626,6 +863,30 @@ suite('Transport: the pipe', () => {
 		}
 	});
 
+	test('on a remote the pipe is always in the private folder - never in a login session\'s runtime folder, which goes with it, nor in the temporary folder itself, which anyone can list and squat (REMOTE.md R4, R7)', () => {
+		const runtime = process.env.XDG_RUNTIME_DIR;
+		try {
+			process.env.XDG_RUNTIME_DIR = '/run/user/1000';
+			const local = pipePath('x');
+			const remote = pipePath('x', undefined, true);
+			const privateFolder = path.join('/tmp', `facade-${os.userInfo().uid}`, 'facade-agents-x.sock');
+
+			if (process.platform === 'win32') {
+				assert.deepStrictEqual({ same: remote === local, named: local.startsWith('\\\\.\\pipe\\') }, { same: true, named: true });
+			} else if (process.platform === 'darwin') {
+				assert.deepStrictEqual([local, remote], [path.join(os.tmpdir(), 'facade-agents-x.sock'), privateFolder]);
+			} else {
+				assert.deepStrictEqual([local, remote], ['/run/user/1000/facade-agents-x.sock', privateFolder]);
+			}
+		} finally {
+			if (runtime === undefined) {
+				delete process.env.XDG_RUNTIME_DIR;
+			} else {
+				process.env.XDG_RUNTIME_DIR = runtime;
+			}
+		}
+	});
+
 	test('a temporary folder too long for a socket\'s path - 104 bytes on macOS - puts the pipe in a folder of the person\'s own under /tmp, made private, where a window listens and is reached (C-TR-08; X-70)', async function () {
 		if (process.platform === 'win32') {
 			this.skip();
@@ -765,7 +1026,7 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 	}
 
 	/** The window record the endpoint keeps beside the ledger. */
-	function windowRecord(): { pipe?: string; pid?: number } | undefined {
+	function windowRecord(): { pipe?: string; pid?: number; release?: string; enabled?: boolean } | undefined {
 		try {
 			return JSON.parse(fs.readFileSync(path.join(temp.dir, 'window.json'), 'utf8'));
 		} catch {
@@ -829,6 +1090,34 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
 
 		assert.deepStrictEqual({ pipe: record?.pipe, pid: record?.pid, said: said.text, afterwards }, { pipe, pid: process.pid, said: '@you said hi to echo', afterwards: undefined });
+	});
+
+	test('the window record names the secret another extension host of the window asks /release with, which a window before that secret does not name; the framework\'s switch keeps it (REMOTE.md R4)', async () => {
+		const record = windowRecord();
+		const read = readWindowRecord(temp.dir);
+		endpoint.setEnabled(false);
+		const kept = windowRecord();
+		endpoint.setEnabled(true);
+		endpoint.dispose();
+		fs.writeFileSync(path.join(temp.dir, 'window.json'), JSON.stringify({ pipe, pid: process.pid, enabled: true }));
+		const before = readWindowRecord(temp.dir);
+		endpoint = await PipeEndpoint.start(pipe, temp.dir, echo);
+
+		assert.deepStrictEqual({
+			release: typeof record?.release,
+			hex: /^[0-9a-f]{32}$/.test(record?.release ?? ''),
+			read: read?.release === record?.release,
+			kept: kept?.release === record?.release,
+			enabled: kept?.enabled,
+			before
+		}, {
+			release: 'string',
+			hex: true,
+			read: true,
+			kept: true,
+			enabled: false,
+			before: { pipe, pid: process.pid, enabled: true }
+		});
 	});
 
 	test('an agent the window no longer knows is told to stop working', async () => {
@@ -966,7 +1255,10 @@ suite('Transport: the shim and the window\'s end of the pipe', function () {
 		assert.deepStrictEqual({ code: cut.data?.code, outcome: cut.data?.outcome, mayHaveRun: /may have taken effect/.test(cut.text), hanging }, { code: 'UNAVAILABLE', outcome: 'unknown', mayHaveRun: true, hanging: 1 });
 	});
 
-	test('a window that does not read its pipe - its extension host stopped in a debugger - takes no call: one is tried each second up to the agent\'s wait, then said not to have run, and the next said so at once; the window, back, runs none of the calls it reads too late (N-43)', async () => {
+	test('a window that does not read its pipe - its extension host stopped in a debugger - takes no call: one is tried each second up to the agent\'s wait, then said not to have run, and the next said so at once; the window, back, runs none of the calls it reads too late (N-43)', async function () {
+		if (process.platform === 'win32') {
+			this.skip(); // Named-pipe requests begin only after this process resumes accepting them.
+		}
 		const main = agentWith('main', { FACADE_AGENTS_WAIT_MS: '1500' });
 		await main.initialize();
 		// This process is the window's end: held, what the agent's server sends it waits in the pipe, unread

@@ -6,7 +6,9 @@
 import * as vscode from 'vscode';
 import { isJsonObject } from '../base/json';
 import { Environment } from '../clis/cli';
+import { installedClis } from '../clis/registry';
 import { agentIconId } from './agentIcons';
+import { configFor } from './settings';
 import { terminalEnvironment } from './terminals';
 
 /** An agent the person can start, as Start Agent offers it. */
@@ -56,10 +58,21 @@ export async function folderOnScreen(): Promise<string | undefined> {
 }
 
 /**
- * Where the CLIs are looked for, as a terminal finds them (X-39): the folder on screen - else the window's first on this
+ * Where the CLIs are looked for, as a terminal finds them (X-39): `preferred` where given - the window's
+ * agent menu looks in the folder on screen - else the folder on screen, else the window's first on this
  * machine - and the environment a terminal there starts with; with no folder, this process's own.
  */
-export async function terminalPlace(): Promise<{ readonly folder?: string; readonly env: Environment }> {
-	const folder = await folderOnScreen() ?? vscode.workspace.workspaceFolders?.find(each => each.uri.scheme === 'file')?.uri.fsPath;
+export async function terminalPlace(preferred?: string): Promise<{ readonly folder?: string; readonly env: Environment }> {
+	const folder = preferred ?? await folderOnScreen() ?? vscode.workspace.workspaceFolders?.find(each => each.uri.scheme === 'file')?.uri.fsPath;
 	return folder === undefined ? { env: process.env } : { folder, env: await terminalEnvironment(folder) };
+}
+
+/**
+ * The ids of the built-in agent CLIs this machine has and the person offers, found as a start in
+ * `folder` finds them - for the window's agent menu on a remote, which cannot look itself (REMOTE.md
+ * R3). Needs no record: the menu asks in windows whose agents another window has too.
+ */
+export async function detectInstalledCliIds(folder?: string): Promise<string[]> {
+	const place = await terminalPlace(folder);
+	return installedClis(configFor, place.env, place.folder).map(found => found.cli.id);
 }

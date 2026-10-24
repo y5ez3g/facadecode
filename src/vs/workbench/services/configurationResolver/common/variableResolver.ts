@@ -6,7 +6,7 @@
 import { IStringDictionary } from '../../../../base/common/collections.js';
 import { normalizeDriveLetter } from '../../../../base/common/labels.js';
 import * as paths from '../../../../base/common/path.js';
-import { IProcessEnvironment, isWindows } from '../../../../base/common/platform.js';
+import { IProcessEnvironment, OS, OperatingSystem } from '../../../../base/common/platform.js';
 import * as process from '../../../../base/common/process.js';
 import * as types from '../../../../base/common/types.js';
 import { URI as uri } from '../../../../base/common/uri.js';
@@ -55,9 +55,9 @@ export abstract class AbstractVariableResolverService implements IConfigurationR
 		}
 	}
 
-	private prepareEnv(envVariables: IProcessEnvironment): IProcessEnvironment {
+	private prepareEnv(envVariables: IProcessEnvironment, os: OperatingSystem = OS): IProcessEnvironment {
 		// windows env variables are case insensitive
-		if (isWindows) {
+		if (os === OperatingSystem.Windows) {
 			const ev: IProcessEnvironment = Object.create(null);
 			Object.keys(envVariables).forEach(key => {
 				ev[key.toLowerCase()] = envVariables[key];
@@ -67,11 +67,11 @@ export abstract class AbstractVariableResolverService implements IConfigurationR
 		return envVariables;
 	}
 
-	public async resolveWithEnvironment(environment: IProcessEnvironment, folder: IWorkspaceFolderData | undefined, value: string): Promise<string> {
+	public async resolveWithEnvironment(environment: IProcessEnvironment, folder: IWorkspaceFolderData | undefined, value: string, os: OperatingSystem = OS): Promise<string> {
 		const expr = ConfigurationResolverExpression.parse(value);
 
 		for (const replacement of expr.unresolved()) {
-			const resolvedValue = await this.evaluateSingleVariable(replacement, folder?.uri, environment);
+			const resolvedValue = await this.evaluateSingleVariable(replacement, folder?.uri, environment, undefined, os);
 			if (resolvedValue !== undefined) {
 				expr.resolve(replacement, String(resolvedValue));
 			}
@@ -114,11 +114,11 @@ export abstract class AbstractVariableResolverService implements IConfigurationR
 		return this._labelService ? this._labelService.getUriLabel(displayUri, { noPrefix: true }) : displayUri.fsPath;
 	}
 
-	protected async evaluateSingleVariable(replacement: Replacement, folderUri: uri | undefined, processEnvironment?: IProcessEnvironment, commandValueMapping?: IStringDictionary<IResolvedValue>): Promise<IResolvedValue | string | undefined> {
+	protected async evaluateSingleVariable(replacement: Replacement, folderUri: uri | undefined, processEnvironment?: IProcessEnvironment, commandValueMapping?: IStringDictionary<IResolvedValue>, os: OperatingSystem = OS): Promise<IResolvedValue | string | undefined> {
 
 
 		const environment: Environment = {
-			env: (processEnvironment !== undefined) ? this.prepareEnv(processEnvironment) : await this._envVariablesPromise,
+			env: (processEnvironment !== undefined) ? this.prepareEnv(processEnvironment, os) : await this._envVariablesPromise,
 			userHome: (processEnvironment !== undefined) ? undefined : await this._userHomePromise
 		};
 
@@ -169,7 +169,7 @@ export abstract class AbstractVariableResolverService implements IConfigurationR
 			case 'env':
 				if (argument) {
 					if (environment.env) {
-						const env = environment.env[isWindows ? argument.toLowerCase() : argument];
+						const env = environment.env[os === OperatingSystem.Windows ? argument.toLowerCase() : argument];
 						if (types.isString(env)) {
 							return env;
 						}

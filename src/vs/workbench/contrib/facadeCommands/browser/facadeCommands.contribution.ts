@@ -7,20 +7,23 @@ import { coalesce } from '../../../../base/common/arrays.js';
 import { raceTimeout } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Event } from '../../../../base/common/event.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
-import { IProcessEnvironment, isMacintosh, isWindows } from '../../../../base/common/platform.js';
+import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../base/common/network.js';
+import { IProcessEnvironment, OS, OperatingSystem } from '../../../../base/common/platform.js';
 import { assertType, isBoolean, isNumber, isObject, isString, isUndefined, isUndefinedOrNull } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
-import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
+import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ITerminalEnvironment, TerminalExitReason, TerminalSettingId } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { ILifecycleService, StartupKind } from '../../../services/lifecycle/common/lifecycle.js';
+import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalConfigurationService, ITerminalInstanceService } from '../../terminal/browser/terminal.js';
 import { IEnvironmentVariableService } from '../../terminal/common/environmentVariable.js';
@@ -28,14 +31,17 @@ import { ITerminalProfileResolverService } from '../../terminal/common/terminal.
 import { createTerminalEnvironment, createVariableResolver, getWorkspaceForTerminal, mergeEnvironments } from '../../terminal/common/terminalEnvironment.js';
 import { agentIcon } from '../../terminalLaunchers/common/terminalLaunchers.js';
 import { IOwnedWorktreeFile, IRemoveWorktreeOptions, IWorktreeService, IWorktreeSetupState } from '../../worktrees/browser/worktrees.js';
-import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
-import { facadeRunOf, facadeRunProperties, IFacadeRun, isFacadeRun, isPreparingRun } from '../common/facadeRun.js';
+import { claimTicket, facadeRunOf, facadeRunProperties, IFacadeRun, isFacadeRun, isPreparingRun } from '../common/facadeRun.js';
 import { isAgentKey } from './facadeAgentKeys.js';
 import { MOST_SCREEN_LINES } from './facadeAgentScreen.js';
 import { FacadeAgentTerminal, IAgentInputEffect, IAgentInputState, IAgentScreenRead } from './facadeAgentTerminal.js';
 import { FacadeNotifications } from './facadeNotifications.js';
 import { IFacadeRunsService } from './facadeRuns.js';
+import { consumeWindowAway, forgetWindowAway, WindowAwayRecord } from './facadeWindowAway.js';
 
 /** How long `_facade.terminal.create` waits for the new terminal's process id. */
 const PROCESS_READY_TIMEOUT_MS = 5_000;
@@ -74,6 +80,8 @@ interface IFacadeTerminalOptions {
 	readonly run?: IFacadeRun;
 	/** The file the run's final screen is written to as its terminal ends (`FacadeAgentTerminal.register`). */
 	readonly finalScreen?: URI;
+	/** Its ticket, claimed before it is made: refused, nothing is made (REMOTE.md R4, R7). */
+	readonly ticket?: string;
 }
 
 /** What `_facade.terminal.read` answers with: the bottom lines of an agent's terminal's screen, and what they are. */
@@ -93,6 +101,8 @@ interface IFacadeTerminal {
 	readonly closed: boolean;
 	/** The code its process exited with, once it has. */
 	readonly exitCode: number | undefined;
+	/** Set where its ticket was refused: nothing was made, the start stopped first (REMOTE.md R7). */
+	readonly refused?: true;
 }
 
 /** What `_facade.window.loaded` answers with. */
@@ -125,7 +135,7 @@ function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTermin
 		return false;
 	}
 
-	const { name, executable, args, env, cwd, agent, reveal, run, finalScreen } = candidate as Record<string, unknown>;
+	const { name, executable, args, env, cwd, agent, reveal, run, finalScreen, ticket } = candidate as Record<string, unknown>;
 	return (isUndefined(name) || isString(name))
 		&& (isUndefined(executable) || isString(executable))
 		&& (isUndefined(args) || (Array.isArray(args) && args.every(isString)))
@@ -134,7 +144,8 @@ function isFacadeTerminalOptions(candidate: unknown): candidate is IFacadeTermin
 		&& (isUndefined(agent) || isString(agent))
 		&& (isUndefined(reveal) || isBoolean(reveal))
 		&& (isUndefined(run) || isFacadeRun(run))
-		&& (isUndefined(finalScreen) || URI.isUri(finalScreen));
+		&& (isUndefined(finalScreen) || URI.isUri(finalScreen))
+		&& (isUndefinedOrNull(ticket) || isString(ticket));
 }
 
 /** Whether `candidate` is a number of milliseconds a call can wait: none, or a finite number from 0. */
@@ -146,6 +157,11 @@ function isWait(candidate: unknown): candidate is number | null | undefined {
 function agentTerminalOf(accessor: ServicesAccessor, run: IFacadeRun): FacadeAgentTerminal | undefined {
 	const instance = accessor.get(IFacadeRunsService).terminalOf(run);
 	return instance && FacadeAgentTerminal.get(instance) || undefined;
+}
+
+/** Whether `candidate` is an environment: an object of strings. */
+function isEnvironment(candidate: unknown): candidate is IProcessEnvironment {
+	return isObject(candidate) && Object.values(candidate).every(isString);
 }
 
 /** Whether a terminal's process starts from the window's resolved shell environment (`terminal.integrated.inheritEnv`). */
@@ -172,7 +188,8 @@ CommandsRegistry.registerCommand('_facade.window.loaded', (accessor): IFacadeWin
  * The record this load of the window has. Kept here, in the window, because the extension host can start
  * again under it: a folder window becoming a workspace, Save Workspace As, a restart or a crash of the
  * extension host. VS Code then gives the extension the new workspace's storage, which knows nothing of the
- * record, while the agents of the window run on (AGENT-LAUNCHER.md, L12). A reload starts with none.
+ * record, while the agents of the window run on (AGENT-LAUNCHER.md, L12). A reload starts with none, but for
+ * the one that enters a workspace in a remote window, across which `WindowRecordCarrier` carries it.
  */
 let windowRecord: IFacadeWindowRecord | undefined;
 
@@ -183,25 +200,97 @@ CommandsRegistry.registerCommand('_facade.window.record', (_accessor, ...args) =
 	windowRecord = { id: record.id, owner: record.owner };
 });
 
+/** Where a remote window keeps its record across the reload that enters a workspace, for that workspace's next load. */
+const CARRIED_RECORD_KEY = 'facade.windowRecord.carried';
+
+/**
+ * Carries the window's record across the reload that enters a workspace in a remote window. As a folder window
+ * becomes a workspace - a folder added to it - or is saved as one, VS Code restarts a local window's extension
+ * host but reloads a remote window (`enterWorkspace`), and a reload starts with no record. The record goes into
+ * the new workspace's storage as the window enters it, and the reload takes it back, once (REMOTE.md R7). Any
+ * other load of that workspace - the reload vetoed or the window gone first, then the workspace opened again -
+ * drops it: no window carried agents across into that load, and its record is its own (L12).
+ */
+export class WindowRecordCarrier extends Disposable implements IWorkbenchContribution {
+
+	static readonly ID = 'workbench.contrib.facadeWindowRecordCarrier';
+
+	constructor(
+		@IWorkspaceEditingService workspaceEditingService: IWorkspaceEditingService,
+		@IStorageService storageService: IStorageService,
+		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
+		@ILifecycleService lifecycleService: ILifecycleService
+	) {
+		super();
+		const carried = storageService.get(CARRIED_RECORD_KEY, StorageScope.WORKSPACE);
+		if (carried !== undefined) {
+			storageService.remove(CARRIED_RECORD_KEY, StorageScope.WORKSPACE);
+			if (lifecycleService.startupKind === StartupKind.ReloadedWindow) {
+				windowRecord = recordIn(carried) ?? windowRecord;
+			}
+		}
+		if (environmentService.remoteAuthority) {
+			this._register(workspaceEditingService.onDidEnterWorkspace(e => {
+				if (windowRecord) {
+					// The new workspace's storage: the window switched to it before saying it entered
+					storageService.store(CARRIED_RECORD_KEY, JSON.stringify(windowRecord), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+					e.join(storageService.flush());
+				}
+			}));
+		}
+	}
+}
+
+/** The record `value` holds, as `WindowRecordCarrier` stored it; undefined for anything else. */
+function recordIn(value: string): IFacadeWindowRecord | undefined {
+	try {
+		const record: unknown = JSON.parse(value);
+		return isFacadeWindowRecord(record) ? { id: record.id, owner: record.owner } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// `()`: answers that the window is there - called about every 20 seconds by the extension host of a remote
+// window, so the record's last-heard time stays within a minute - and, the window heard from with it,
+// lets go of having been away: that extension host saw whatever ended meanwhile (REMOTE.md R4)
+CommandsRegistry.registerCommand('_facade.window.ping', accessor => {
+	forgetWindowAway(accessor.get(IStorageService));
+	return true;
+});
+
+// `()`: whether this window was away from its remote since an extension host last answered for it, for
+// the one recovering its agents: true once, then false until it is away again (`WindowAwayRecord`;
+// REMOTE.md R4)
+CommandsRegistry.registerCommand('_facade.window.wasAway', accessor => ({ away: consumeWindowAway(accessor.get(IStorageService)) }));
+
 // `()`: settles once the window has its terminals back - those reconnected to their processes, the
 // editor area's and floating windows' restored - so that a run not found is gone (`IFacadeRunsService`).
 CommandsRegistry.registerCommand('_facade.terminal.whenRestored', async accessor => {
 	await accessor.get(IFacadeRunsService).whenRestored;
 });
 
-// `(main, branch, startPoint?, show?)`: a worktree of the repository whose main checkout is `main`, made
-// as New Worktree makes one, without its dialog, for an agent sending a child out
+// `(main, branch, startPoint?, show?, ticket?)`: a worktree of the repository whose main checkout is `main`,
+// made as New Worktree makes one, without its dialog, for an agent sending a child out
 // (`IWorktreeService.makeWorktree`). Answers with its folder - and what could not be copied into it, how a
 // git hook failed - once its setup has started (WT-5.11); `_facade.worktree.setupOutcome` says how that went.
+// Its ticket is claimed before git begins: refused - the start was stopped while the window was away - or
+// none given, nothing is made, and the answer says so (REMOTE.md R4, R7).
 CommandsRegistry.registerCommand('_facade.worktree.create', async (accessor, ...args) => {
-	const [main, branch, startPoint, show] = args;
+	const [main, branch, startPoint, show, ticket] = args;
 	assertType(URI.isUri(main), 'URI');
 	assertType(isString(branch), 'string');
 	// An argument the extension host gives as undefined comes as null
 	assertType(isUndefinedOrNull(startPoint) || isString(startPoint), 'string');
 	assertType(isUndefinedOrNull(show) || isBoolean(show), 'boolean');
+	assertType(isUndefinedOrNull(ticket) || isString(ticket), 'string');
+	const worktrees = accessor.get(IWorktreeService);
+	const commands = accessor.get(ICommandService);
 
-	return accessor.get(IWorktreeService).makeWorktree(main, branch, { startPoint: startPoint ?? undefined, show: show ?? undefined });
+	if (!await claimTicket(commands, ticket)) {
+		return { refused: true as const };
+	}
+	return worktrees.makeWorktree(main, branch, { startPoint: startPoint ?? undefined, show: show ?? undefined });
 });
 
 // `(worktree)`: how the setup of a worktree `_facade.worktree.create` made came out, once it has
@@ -239,14 +328,22 @@ CommandsRegistry.registerCommand('_facade.worktree.stopSetup', (accessor, ...arg
 // for a bar that lists no worktrees; `options.runs` the agents' runs working in it that the caller looked at, the only
 // agents' terminals it closes; `options.leftover` says it is what a deletion in this window left of one, which git no
 // longer lists. Rejects with why it could not, in the product's words, and what was done all the same: a main checkout
-// is never deleted.
+// is never deleted. Its ticket is claimed before anything is stopped or deleted: refused - its caller stopped waiting
+// while the window was away - or none given, nothing is done, and the answer says so (REMOTE.md R4, R7).
 CommandsRegistry.registerCommand('_facade.worktree.delete', async (accessor, ...args) => {
-	const [worktree, options] = args;
+	const [worktree, options, ticket] = args;
 	assertType(URI.isUri(worktree), 'URI');
 	// An argument the extension host gives as undefined comes as null
 	assertType(isUndefinedOrNull(options) || isRemoveWorktreeOptions(options), 'IRemoveWorktreeOptions');
+	assertType(isUndefinedOrNull(ticket) || isString(ticket), 'string');
+	const worktrees = accessor.get(IWorktreeService);
+	const commands = accessor.get(ICommandService);
 
-	await accessor.get(IWorktreeService).removeWorktree(worktree, options ?? undefined);
+	if (!await claimTicket(commands, ticket)) {
+		return { refused: true as const };
+	}
+	await worktrees.removeWorktree(worktree, options ?? undefined);
+	return undefined;
 });
 
 // `(worktree, options?)`: what `_facade.worktree.delete` with these options would lose, each named as its refusal
@@ -314,7 +411,7 @@ CommandsRegistry.registerCommand('_facade.terminal.elsewhere', async (accessor, 
 
 // `(folder, options?)`: a terminal for `folder`, opened without disturbing the window
 // (`IFolderTerminalsService.openFor`), and registered under the agent's run it is for. Answers with it as
-// it is once its process is ready (`IFacadeTerminal`).
+// it is once its process is ready (`IFacadeTerminal`) - refused, nothing is made, and the answer says so.
 CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...args): Promise<IFacadeTerminal> => {
 	const [folder, options] = args;
 	assertType(URI.isUri(folder), 'URI');
@@ -323,6 +420,14 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 	const runs = accessor.get(IFacadeRunsService);
 	const activeFolder = accessor.get(IActiveFolderService);
 	const uriIdentity = accessor.get(IUriIdentityService);
+	const configuration = accessor.get(IConfigurationService);
+	const commands = accessor.get(ICommandService);
+
+	// Its ticket claimed before anything is made: a start stopped while its terminal waited for the window
+	// makes nothing (REMOTE.md R4, R7)
+	if (!await claimTicket(commands, options?.ticket)) {
+		return { processId: undefined, closed: true, exitCode: undefined, refused: true as const };
+	}
 
 	const instance = await folderTerminals.openFor(folder, {
 		name: options?.name,
@@ -336,10 +441,10 @@ CommandsRegistry.registerCommand('_facade.terminal.create', async (accessor, ...
 		// terminal's shell would set up - the window's resolved shell environment - as VS Code's own
 		// terminals do (`terminal.integrated.inheritEnv`). Started from the Dock, the window's own PATH is
 		// launchd's, without the person's CLIs on it.
-		useShellEnvironment: inheritsShellEnvironment(accessor.get(IConfigurationService)),
+		useShellEnvironment: inheritsShellEnvironment(configuration),
 		cwd: options?.cwd ?? folder,
 		icon: options?.agent !== undefined ? agentIcon(options.agent, options.custom) : undefined,
-		reconnectionProperties: options?.run ? facadeRunProperties(options.run, { name: options.name, folder: folder.fsPath, finalScreen: options.finalScreen?.toString() }) : undefined
+		reconnectionProperties: options?.run ? facadeRunProperties(options.run, { name: options.name, folder: folder.toString(), finalScreen: options.finalScreen?.toString() }) : undefined
 	});
 	if (options?.run) {
 		runs.register(instance, options.run);
@@ -385,15 +490,23 @@ CommandsRegistry.registerCommand('_facade.terminal.processes', (accessor, ...arg
 	return accessor.get(IFacadeRunsService).processes(workspace, ids ?? undefined);
 });
 
-// `(run, signal?)`: ends the run's own process, as closing its tab ends it - with the hang-up, or the
+// `(run, signal?, ticket?)`: ends the run's own process, as closing its tab ends it - with the hang-up, or the
 // `signal` a stop that outlived its time escalates to - and answers once it is gone: how it ended, its exit code
 // where the window saw one; false while it is not, a few seconds on - or while the window cannot tell yet where it is.
 CommandsRegistry.registerCommand('_facade.terminal.stop', async (accessor, ...args) => {
-	const [run, signal] = args;
+	const [run, signal, ticket] = args;
 	assertType(isFacadeRun(run), 'IFacadeRun');
 	// An argument the extension host gives as undefined comes as null
 	assertType(isUndefinedOrNull(signal) || signal === 'SIGHUP' || signal === 'SIGTERM' || signal === 'SIGKILL', 'SIGHUP | SIGTERM | SIGKILL');
+	assertType(isUndefinedOrNull(ticket) || isString(ticket), 'string');
 	const runs = accessor.get(IFacadeRunsService);
+	const commands = accessor.get(ICommandService);
+	const remoteAgent = accessor.get(IRemoteAgentService);
+
+	// Its ticket claimed before anything is ended (REMOTE.md R4, R7)
+	if (!await claimTicket(commands, ticket)) {
+		return false;
+	}
 
 	const [where] = runs.processes(run.workspace, [run.id]);
 	const instance = runs.terminalOf(run);
@@ -406,9 +519,11 @@ CommandsRegistry.registerCommand('_facade.terminal.stop', async (accessor, ...ar
 
 	// ⚠️ Not closed outright where it can be helped: the terminal's process manager lets go of the process
 	// as it closes, and nothing would say when it is gone. Sent the hang-up closing its tab sends, it ends as
-	// it would then, and its terminal closes after it. Windows has no signals: there its console is closed,
-	// with every process attached to it.
-	if (isWindows) {
+	// it would then, and its terminal closes after it. A Windows process has no signals: there its console is
+	// closed, with every process attached to it. The OS is the run's process's own - a remote run's remote's
+	// (REMOTE.md R7) - as the terminal knows it, else as its remote says, else the window's own.
+	const remoteOs = instance.os === undefined && instance.remoteAuthority ? (await remoteAgent.getEnvironment())?.os : undefined;
+	if ((instance.os ?? remoteOs ?? OS) === OperatingSystem.Windows) {
 		instance.dispose(TerminalExitReason.Extension);
 		return {};
 	}
@@ -439,10 +554,15 @@ CommandsRegistry.registerCommand('_facade.terminal.register', (accessor, ...args
 // them, and whether its process has ended (`IFacadeTerminalScreen`). Reading changes nothing of it: not its focus,
 // scroll, size, nor where the window is. None where it runs in none, or the terminal has no screen yet (D2).
 CommandsRegistry.registerCommand('_facade.terminal.read', async (accessor, ...args): Promise<IFacadeTerminalScreen | undefined> => {
-	const [run, lines] = args;
+	const [run, lines, ticket] = args;
 	assertType(isFacadeRun(run), 'IFacadeRun');
 	assertType(isNumber(lines) && Number.isInteger(lines) && lines >= 1 && lines <= MOST_SCREEN_LINES, 'number');
+	assertType(isUndefinedOrNull(ticket) || isString(ticket), 'string');
 	const terminal = agentTerminalOf(accessor, run);
+	// Its ticket claimed before anything is read (REMOTE.md R4, R7)
+	if (!await claimTicket(accessor.get(ICommandService), ticket)) {
+		return undefined;
+	}
 	const screen = await terminal?.read(lines);
 	return terminal && screen && { ...screen, exited: terminal.exited };
 });
@@ -457,11 +577,12 @@ CommandsRegistry.registerCommand('_facade.terminal.type', async (accessor, ...ar
 	assertType(isFacadeRun(run), 'IFacadeRun');
 	assertType(isString(text), 'string');
 	assertType(isObject(options), 'object');
-	const { enter, enterDelayMs, queueTimeoutMs, requiresFramework } = options as Record<string, unknown>;
+	const { enter, enterDelayMs, queueTimeoutMs, requiresFramework, ticket } = options as Record<string, unknown>;
 	assertType(isUndefinedOrNull(enter) || isBoolean(enter), 'boolean');
 	assertType(isUndefinedOrNull(requiresFramework) || isBoolean(requiresFramework), 'boolean');
 	assertType(isWait(enterDelayMs) && isWait(queueTimeoutMs), 'number');
-	return agentTerminalOf(accessor, run)?.type(text, { enter: enter === true, enterDelayMs: Math.round(enterDelayMs ?? 0), queueTimeoutMs: queueTimeoutMs ?? undefined, requiresFramework: requiresFramework === true });
+	assertType(isUndefinedOrNull(ticket) || isString(ticket), 'string');
+	return agentTerminalOf(accessor, run)?.type(text, { enter: enter === true, enterDelayMs: Math.round(enterDelayMs ?? 0), queueTimeoutMs: queueTimeoutMs ?? undefined, requiresFramework: requiresFramework === true, ticket: ticket ?? undefined });
 });
 
 // `(run, keys, options)`: presses `keys` in the terminal the run's own process runs in, each as the terminal sends
@@ -473,9 +594,10 @@ CommandsRegistry.registerCommand('_facade.terminal.keys', async (accessor, ...ar
 	assertType(isFacadeRun(run), 'IFacadeRun');
 	assertType(Array.isArray(keys) && keys.length > 0 && keys.every(key => isString(key) && isAgentKey(key)), 'string[]');
 	assertType(isObject(options), 'object');
-	const { queueTimeoutMs } = options as Record<string, unknown>;
+	const { queueTimeoutMs, ticket } = options as Record<string, unknown>;
 	assertType(isWait(queueTimeoutMs), 'number');
-	return agentTerminalOf(accessor, run)?.keys(keys, { queueTimeoutMs: queueTimeoutMs ?? undefined });
+	assertType(isUndefinedOrNull(ticket) || isString(ticket), 'string');
+	return agentTerminalOf(accessor, run)?.keys(keys, { queueTimeoutMs: queueTimeoutMs ?? undefined, ticket: ticket ?? undefined });
 });
 
 // `(run)`: what holds Facade's input into the terminal the run's own process runs in back now: what the person typed
@@ -489,6 +611,8 @@ CommandsRegistry.registerCommand('_facade.terminal.input', (accessor, ...args): 
 
 // Before the extension host starts, which asks once whether the window keeps Facade's notifications
 registerWorkbenchContribution2(FacadeNotifications.ID, FacadeNotifications, WorkbenchPhase.BlockStartup);
+registerWorkbenchContribution2(WindowAwayRecord.ID, WindowAwayRecord, WorkbenchPhase.BlockStartup);
+registerWorkbenchContribution2(WindowRecordCarrier.ID, WindowRecordCarrier, WorkbenchPhase.BlockStartup);
 
 // `(run)`: puts the terminal the run's own process runs in in front, moving the window onto the folder it
 // is held for when that is another's, as a click on its row would (`IFolderTerminalsService.reveal`).
@@ -502,31 +626,60 @@ CommandsRegistry.registerCommand('_facade.terminal.reveal', async (accessor, ...
 	return instance ? folderTerminals.reveal(instance) : false;
 });
 
-// `(folder)`: the environment a terminal opened in `folder` gets, as VS Code makes one: the window's, with
-// `terminal.integrated.env.<platform>` over it, its variables resolved, and what extensions add to it
-// (`TerminalProcessManager._resolveEnvironment`). Where an agent's CLI keeps its files can depend on it.
+/**
+ * The OS of a folder's machine and its `terminal.integrated.env.<os>` key: the window's for a local
+ * folder, the remote's for a remote one (REMOTE.md R7). Throws when the remote cannot say its OS.
+ */
+async function terminalEnvironmentPlatformKey(accessor: ServicesAccessor, remoteAuthority: string | undefined): Promise<{ platformKey: 'windows' | 'osx' | 'linux'; os: OperatingSystem }> {
+	const os = remoteAuthority ? (await accessor.get(IRemoteAgentService).getEnvironment())?.os : OS;
+	if (os === undefined) {
+		throw new Error('Cannot determine the remote\'s OS');
+	}
+	return { platformKey: os === OperatingSystem.Windows ? 'windows' : os === OperatingSystem.Macintosh ? 'osx' : 'linux', os };
+}
+
+// `(folder, hostEnvironment?)`: the environment a terminal opened in `folder` gets, as VS Code makes one: its
+// machine's, with `terminal.integrated.env.<platform>` for that machine's OS over it, its variables resolved, and
+// what extensions add to it (`TerminalProcessManager._resolveEnvironment`). Where an agent's CLI keeps its
+// files can depend on it. A remote folder's starts from what a terminal of its remote starts from, which the
+// remote builds itself (REMOTE.md R3, R7): `hostEnvironment` is the agents' extension host's own there.
 CommandsRegistry.registerCommand('_facade.terminal.environment', async (accessor, ...args): Promise<IProcessEnvironment> => {
-	const [folder] = args;
+	const [folder, hostEnvironment] = args;
 	assertType(URI.isUri(folder), 'URI');
+	assertType(isUndefined(hostEnvironment) || isEnvironment(hostEnvironment), 'environment');
+	const remoteAuthority = folder.scheme === Schemas.vscodeRemote ? folder.authority : undefined;
 	const profileResolverService = accessor.get(ITerminalProfileResolverService);
 	const instanceService = accessor.get(ITerminalInstanceService);
 	const configurationResolverService = accessor.get(IConfigurationResolverService);
 	const environmentVariableService = accessor.get(IEnvironmentVariableService);
 	const workspaceFolder = getWorkspaceForTerminal(folder, accessor.get(IWorkspaceContextService), accessor.get(IActiveFolderService));
 	const configurationService = accessor.get(IConfigurationService);
-	const envFromConfig = configurationService.getValue<ITerminalEnvironment | undefined>(`terminal.integrated.env.${isWindows ? 'windows' : isMacintosh ? 'osx' : 'linux'}`);
 	const version = accessor.get(IProductService).version;
 	const detectLocale = accessor.get(ITerminalConfigurationService).config.detectLocale;
+	// After every service is got: awaiting ends what the accessor answers
+	const { platformKey, os } = await terminalEnvironmentPlatformKey(accessor, remoteAuthority);
+	const envFromConfig = configurationService.getValue<ITerminalEnvironment | undefined>(`terminal.integrated.env.${platformKey}`);
 
 	// The base an agent's terminal gets (`_facade.terminal.create`): the resolved shell environment where
-	// terminals inherit it, as `TerminalProcessManager._resolveEnvironment` chooses.
-	const backend = await instanceService.getBackend();
+	// terminals inherit it, as `TerminalProcessManager._resolveEnvironment` chooses. A remote builds its own
+	// (`buildUserEnvironment`): its server's, the login shell's over it where terminals inherit it, and the
+	// resolver's - a remote backend's shell environment is the resolver's alone. The agents' extension host there
+	// is built the same way, the login shell's included; the window can read only the server's and the resolver's.
+	const backend = await instanceService.getBackend(remoteAuthority);
 	const shellEnv = await backend?.getShellEnvironment();
-	const baseEnv = inheritsShellEnvironment(configurationService) && shellEnv ? shellEnv : await profileResolverService.getEnvironment(undefined);
+	let baseEnv: IProcessEnvironment;
+	if (!remoteAuthority) {
+		baseEnv = inheritsShellEnvironment(configurationService) && shellEnv ? shellEnv : await profileResolverService.getEnvironment(remoteAuthority);
+	} else if (inheritsShellEnvironment(configurationService) && hostEnvironment) {
+		baseEnv = hostEnvironment;
+	} else {
+		baseEnv = { ...await profileResolverService.getEnvironment(remoteAuthority) };
+		mergeEnvironments(baseEnv, shellEnv, os);
+	}
 	const envForResolver = { ...baseEnv };
-	mergeEnvironments(envForResolver, shellEnv);
-	const variableResolver = createVariableResolver(workspaceFolder, envForResolver, configurationResolverService);
-	const env = await createTerminalEnvironment({ cwd: folder }, envFromConfig, variableResolver, version, detectLocale, baseEnv);
-	await environmentVariableService.mergedCollection.applyToProcessEnvironment(env, { workspaceFolder }, variableResolver);
+	mergeEnvironments(envForResolver, shellEnv, os);
+	const variableResolver = createVariableResolver(workspaceFolder, envForResolver, configurationResolverService, os);
+	const env = await createTerminalEnvironment({ cwd: folder }, envFromConfig, variableResolver, version, detectLocale, baseEnv, os);
+	await environmentVariableService.mergedCollection.applyToProcessEnvironment(env, { workspaceFolder }, variableResolver, os);
 	return env;
 });

@@ -5,6 +5,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { timeout } from '../base/async';
 import { isInsideFolder } from '../base/files';
 import { isProcessRunning } from '../base/system';
 import { AgentCli, Environment, launchArgs, skillMarkdown } from '../clis/cli';
@@ -13,7 +14,7 @@ import { customAgentOf } from '../clis/custom';
 import { Facade, StartRequest, Started } from '../core/facade';
 import { customAgentNameProblem } from '../core/launch';
 import { Fetched, FetchRequest } from '../core/mail';
-import { Disposable, EndedAgent, EndTold, Git, InputEffect, KeysOptions, ListedWorktree, MadeWorktreeFolder, Notification, Person, PersonInput, Repository, SetupOutcome, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TerminalsInside, TypeOptions, WorktreeChanges, WorktreeDeletion } from '../core/ports';
+import { Disposable, EndedAgent, EndTold, Git, InputEffect, KeysOptions, ListedWorktree, MadeWorktreeFolder, Notification, Person, PersonInput, Repository, SetupOutcome, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalLaunch, Terminals, TerminalScreen, TerminalsInside, TypeOptions, WorktreeChanges, WorktreeDeleted, WorktreeDeletion } from '../core/ports';
 import { AgentTable } from '../record/agents';
 import { Agent, Caller } from '../record/events';
 import { ClosedBy, Ledger } from '../record/ledger';
@@ -76,6 +77,8 @@ export class FakeTerminals implements Terminals {
 	failNext: string | undefined;
 	/** While set, a stop leaves the process running, as one that will not end. */
 	stubborn = false;
+	/** While set, a stop waits for it before it is carried out, as a window away does not answer. */
+	holdStop: Promise<void> | undefined;
 	/** While set, a launch waits for it before its terminal opens, as a window slow to make one. */
 	hold: Promise<void> | undefined;
 	/** While set, called with each launch as it reaches the window, before its terminal opens. */
@@ -156,6 +159,9 @@ export class FakeTerminals implements Terminals {
 	readonly exitCodes = new Map<number, number>();
 
 	async stop(id: number, signal: StopSignal = 'SIGHUP'): Promise<{ readonly exitCode?: number }> {
+		if (this.holdStop) {
+			await this.holdStop;
+		}
 		const title = this.titleOf(id);
 		this.signals.push(`#a${id} ${signal}`);
 		if (title === undefined) {
@@ -173,8 +179,11 @@ export class FakeTerminals implements Terminals {
 
 	/** The agents working inside each folder by their terminals' cwd, beyond those started there: this record's, how many of another's, and other windows' by their titles. */
 	readonly working = new Map<string, Partial<TerminalsInside>>();
+	/** While set, looking at which terminals work inside a folder waits for it, as a window away does not answer. */
+	holdInside: Promise<void> | undefined;
 
 	async inside(folder: string): Promise<TerminalsInside> {
+		await this.holdInside;
 		const working = this.working.get(folder);
 		return { agents: working?.agents ?? [], others: working?.others ?? 0, elsewhere: working?.elsewhere ?? [] };
 	}
@@ -184,7 +193,11 @@ export class FakeTerminals implements Terminals {
 		return this.titleOf(id) !== undefined;
 	}
 
+	/** While set, a screen read waits for it before it is answered, as a window away does not answer. */
+	holdRead: Promise<void> | undefined;
+
 	async read(id: number, lines: number, _waitMs: number): Promise<TerminalScreen | undefined> {
+		await this.holdRead;
 		if (this.titleOf(id) === undefined) {
 			return undefined;
 		}
@@ -224,7 +237,11 @@ export class FakeTerminals implements Terminals {
 		return next ?? { outcome: 'applied', keysSent: keys.length };
 	}
 
+	/** While set, the window's answer to who types in a terminal waits for it, as a window away does not answer. */
+	holdInput: Promise<void> | undefined;
+
 	async input(id: number): Promise<PersonInput | undefined> {
+		await this.holdInput;
 		return this.titleOf(id) === undefined ? undefined : this.inputs.get(id) ?? { pending: false };
 	}
 
@@ -294,6 +311,8 @@ export class FakeGit implements Git {
 	making: Promise<void> | undefined;
 	/** While set, a worktree to make waits for it before git is asked: in the window's queue, its branch not made yet. */
 	queued: Promise<void> | undefined;
+	/** While set, the next worktree to make is refused - its start was stopped - and none is made. */
+	refuseNextWorktree = false;
 	/** What could not be copied into a worktree made, and how a hook failed, as the window answers. */
 	copyFailures: readonly string[] = [];
 	hookFailure: string | undefined;
@@ -308,6 +327,8 @@ export class FakeGit implements Git {
 	readonly windowOnlyLoss = new Map<string, readonly string[]>();
 	/** Where the setup of each worktree is while it runs, by its folder, as the window tells it: none unless a test says. */
 	readonly setupStates = new Map<string, SetupProgress>();
+	/** While set, asking where a worktree's setup is waits for it, as a window away does not answer. */
+	holdSetupState: Promise<void> | undefined;
 	/** While set, deleting a worktree fails with this. */
 	failDelete: string | undefined;
 	/**
@@ -400,14 +421,40 @@ export class FakeGit implements Git {
 	 */
 	stopping: (folder: string) => Promise<{ readonly stopping: readonly string[]; readonly why?: string }> = async () => ({ stopping: [] });
 
+	/** While set, the window's check of what a deletion would lose waits for it, as a window away does not answer. */
+	holdLoss: Promise<void> | undefined;
+
 	/** What the window's own check finds deleting the worktree `folder` would lose, `options` applied: as it words each. */
 	async deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]> {
 		this.steps.push(`check the deletion of ${folder}`);
+		await this.holdLoss;
 		const changes = this.changes.get(folder);
 		return [...(options.leftover ? [] : changes?.files ?? []).filter(file => !options.ownFiles.some(owned => owned.path === file)), ...(changes?.unsaved ?? []).map(file => `${file} (unsaved)`), ...this.windowOnlyLoss.get(folder) ?? []];
 	}
 
-	async deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void> {
+	/**
+	 * While set, the window takes a deletion on only once it settles: a window away. `deletionClaimed` says it took it on
+	 * before it went, and deletes it once this settles; else the caller's wait is over first, and it never does.
+	 */
+	holdDeletion: Promise<void> | undefined;
+	deletionClaimed = false;
+
+	async deleteWorktree(folder: string, options: WorktreeDeletion, waitMs: number): Promise<WorktreeDeleted> {
+		const held = this.holdDeletion;
+		if (held && !await Promise.race([held.then(() => true), timeout(waitMs).then(() => false)])) {
+			if (!this.deletionClaimed) {
+				return { outcome: 'not_applied' };
+			}
+			const late = held.then(() => this.deleteNow(folder, options));
+			late.catch(() => undefined);
+			return { outcome: 'unknown', late };
+		}
+		await this.deleteNow(folder, options);
+		return { outcome: 'done' };
+	}
+
+	/** The window's deletion of the worktree `folder`, as it takes it on. */
+	private async deleteNow(folder: string, options: WorktreeDeletion): Promise<void> {
 		this.deletions.set(folder, options);
 		const found = this.worktreeAt(folder);
 		if (!options.leftover && (!found || found.main === found.worktree.folder)) {
@@ -452,8 +499,12 @@ export class FakeGit implements Git {
 		return worktreeFolder(main, branch);
 	}
 
-	async makeWorktree(main: string, branch: string, startPoint: string): Promise<MadeWorktreeFolder> {
+	async makeWorktree(main: string, branch: string, startPoint: string, _run: number): Promise<MadeWorktreeFolder | undefined> {
 		await this.queued;
+		if (this.refuseNextWorktree) {
+			this.refuseNextWorktree = false;
+			return undefined;
+		}
 		const worktrees = this.worktrees.get(main) ?? [];
 		if (await this.hasBranch(main, branch)) {
 			throw new Error(`A branch named ${branch} already exists. Choose another name.`);
@@ -477,6 +528,7 @@ export class FakeGit implements Git {
 	}
 
 	async setupState(folder: string): Promise<SetupProgress | undefined> {
+		await this.holdSetupState;
 		return this.setupStates.get(folder);
 	}
 
@@ -800,8 +852,8 @@ export interface WorldOptions {
 	readonly platform?: NodeJS.Platform;
 	/** Whether a process the ledger's lock names runs, as the operating system says unless set. */
 	readonly isRunning?: (pid: number) => boolean;
-	/** The folder on the person's screen: none unless set. */
-	readonly activeFolder?: string;
+	/** The folder on the person's screen, or how the window answers which it is: none unless set. */
+	readonly activeFolder?: string | (() => Promise<string | undefined>);
 	/** Who opens the ledger: the workspace `lab`'s window unless set. */
 	readonly owner?: string;
 	/** The load of the window it opens in: a new one for each world unless set. */
@@ -847,18 +899,20 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 	const processFolders = new Map<number, readonly string[]>();
 	const processStarts = new Map<number, number>();
 	const killed: string[] = [];
-	const refreshes = { count: 0 };
+	/** How many looks for the CLIs this machine has began, and what each waits on: a test's own, for a window that does not answer. */
+	const refreshes: { count: number; waiting?: Promise<void> } = { count: 0 };
 	const ignoringTermination = new Set<number>();
 	const facade = new Facade({
 		...(options.platform ? { platform: options.platform } : {}),
 		table,
-		ports: { terminals, git, workspace: { folders: () => [...options.firstFolders ?? [], ...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => options.activeFolder, worktreesManaged: () => switches.worktrees }, person },
+		ports: { terminals, git, workspace: { folders: () => [...options.firstFolders ?? [], ...Object.keys(options.repositories ?? {}), ...options.folders ?? []], activeFolder: async () => typeof options.activeFolder === 'function' ? options.activeFolder() : options.activeFolder, worktreesManaged: () => switches.worktrees }, person },
 		clis: {
 			known,
 			custom: () => Object.entries(custom).map(([name, value]) => customAgentOf(name, value, customAgentNameProblem(name, new Set(known.map(cli => cli.id))))),
 			installed,
 			refresh: async () => {
 				refreshes.count++;
+				await refreshes.waiting;
 			},
 			locate: (cli, config, env) => {
 				const found = options.locate ? options.locate(cli.id, env) : onMachine(cli) ? executableOf(cli) : undefined;
@@ -916,7 +970,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		processStarts,
 		/** The signals sent to processes by their ids: `<pid> <signal>`. */
 		killed,
-		/** How many times the CLIs this machine has were looked for again. */
+		/** How many times the CLIs this machine has were looked for again, and what a look waits on. */
 		refreshes,
 		/** The processes, by their ids, that a termination does not end: only a kill. */
 		ignoringTermination,

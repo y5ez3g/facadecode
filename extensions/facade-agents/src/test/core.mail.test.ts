@@ -6,6 +6,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { DeferredPromise } from '../base/async';
 import { messageOf } from '../base/errors';
 import { ErrorOutcome, FacadeError } from '../core/errors';
 import { Fetched, headingOf } from '../core/mail';
@@ -902,6 +903,37 @@ suite('Core: messages', () => {
 				`@docs #a3 has not fetched #m4 after 32 seconds: the terminal could not receive the doorbell; Facade retries every minute. ${tail(3)}`,
 				`@lint #a2 has not fetched #m3 after 32 seconds: the doorbell is queued behind earlier Facade input. ${tail(2)}`
 			]);
+		});
+
+		test('a doorbell the window does not answer - away - is said to wait for the window, which rings it once it is back, never a CLI menu: an agent told of it reads the screen once the window answers again (REMOTE.md R4; M6)', async () => {
+			world.timing.startTimeoutMs = 30_000;
+			const { lead } = await team('lint');
+			// The window away: who types in @lint's terminal is never answered
+			world.terminals.holdInput = new Promise(() => { });
+			world.facade.mail.send(lead, ['@lint'], 'Report?', undefined);
+			await sleep(33_000);
+
+			assert.deepStrictEqual(world.facadeMessagesTo(1, 'unread'), [
+				'@lint #a2 has not fetched #m2 after 32 seconds: the window has not answered its doorbell; it rings once the window is back. The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. Call read_screen with agent #a2 once the window answers again. Do not resend the messages.'
+			]);
+		});
+
+		test('a doorbell that waited for the window - away - and rang a moment before its messages\' time was over is said to have: the agent may still be at what came, and no CLI menu is guessed at (REMOTE.md R4; M6)', async () => {
+			world.timing.startTimeoutMs = 30_000;
+			const { lead } = await team('lint');
+			// The window away for most of the wait, back a few seconds before it is over
+			const back = new DeferredPromise<void>();
+			world.terminals.holdInput = back.p;
+			world.facade.mail.send(lead, ['@lint'], 'Report?', undefined);
+			await sleep(28_000);
+			world.terminals.holdInput = undefined;
+			back.complete();
+			await sleep(5_000);
+
+			assert.deepStrictEqual({ rang: world.table.state.mail.rungAt.has(2), told: world.facadeMessagesTo(1, 'unread') }, {
+				rang: true,
+				told: ['@lint #a2 has not fetched #m2 after 32 seconds: its doorbell waited for the window, which was away, and rang 4 seconds ago. The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. Call read_screen with agent #a2 to see whether it is still at what came meanwhile. Do not resend the messages.']
+			});
 		});
 
 		test('a mailbox is summed up by its ten oldest unread messages and a count of the rest: in ps, and when they wait unfetched', async () => {

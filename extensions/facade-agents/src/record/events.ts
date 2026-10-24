@@ -578,6 +578,7 @@ export function applyEvent(state: WorkspaceState, event: LedgerEvent): void {
 			const agent = state.agents.get(event.id);
 			if (agent && agent.state !== 'ended') {
 				agent.state = 'ended';
+				agent.connected = false;
 				agent.stopping = undefined;
 				agent.end = { kind: event.kind, ...(event.by !== undefined ? { by: event.by } : {}), reason: event.reason, time: event.time, ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}) };
 			}

@@ -197,6 +197,16 @@ suite('Workbench - TerminalEnvironment', () => {
 				c: 'd'
 			});
 		});
+
+		test('uses the terminal OS when merging environments across machines', () => {
+			const unix = { FOO: 'upper', foo: 'lower', REMOVE: 'old' };
+			mergeEnvironments(unix, { foo: 'changed', REMOVE: null }, OperatingSystem.Linux);
+			deepStrictEqual(unix, { FOO: 'upper', foo: 'changed' });
+
+			const windows = { Path: 'C:/Windows', Remove: 'old' };
+			mergeEnvironments(windows, { PATH: 'C:/tools', REMOVE: null }, OperatingSystem.Windows);
+			deepStrictEqual(windows, { Path: 'C:/tools' });
+		});
 	});
 
 	suite('getCwd', () => {

@@ -13,21 +13,21 @@ import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { sanitizeProcessEnvironment } from '../../../../base/common/processes.js';
 import { IShellLaunchConfig, ITerminalBackend, ITerminalEnvironment, ShellIntegrationTimeoutOverride, TerminalSettingId, TerminalShellType, WindowsShellType } from '../../../../platform/terminal/common/terminal.js';
-import { IProcessEnvironment, isWindows, isMacintosh, language, OperatingSystem } from '../../../../base/common/platform.js';
+import { IProcessEnvironment, isWindows, language, OS, OperatingSystem } from '../../../../base/common/platform.js';
 import { escapeNonWindowsPath, sanitizeCwd } from '../../../../platform/terminal/common/terminalEnvironment.js';
 import { isNumber, isString } from '../../../../base/common/types.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import type { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 
-export function mergeEnvironments(parent: IProcessEnvironment, other: ITerminalEnvironment | undefined): void {
+export function mergeEnvironments(parent: IProcessEnvironment, other: ITerminalEnvironment | undefined, os: OperatingSystem = OS): void {
 	if (!other) {
 		return;
 	}
 
 	// On Windows apply the new values ignoring case, while still retaining
 	// the case of the original key.
-	if (isWindows) {
+	if (os === OperatingSystem.Windows) {
 		for (const configKey in other) {
 			let actualKey = configKey;
 			for (const envKey in parent) {
@@ -234,11 +234,11 @@ async function _resolveCwd(cwd: string, variableResolver: VariableResolver | und
 
 export type VariableResolver = (str: string) => Promise<string>;
 
-export function createVariableResolver(lastActiveWorkspace: IWorkspaceFolder | undefined, env: IProcessEnvironment, configurationResolverService: IConfigurationResolverService | undefined): VariableResolver | undefined {
+export function createVariableResolver(lastActiveWorkspace: IWorkspaceFolder | undefined, env: IProcessEnvironment, configurationResolverService: IConfigurationResolverService | undefined, os: OperatingSystem = OS): VariableResolver | undefined {
 	if (!configurationResolverService) {
 		return undefined;
 	}
-	return (str) => configurationResolverService.resolveWithEnvironment(env, lastActiveWorkspace, str);
+	return (str) => configurationResolverService.resolveWithEnvironment(env, lastActiveWorkspace, str, os);
 }
 
 export async function createTerminalEnvironment(
@@ -247,7 +247,8 @@ export async function createTerminalEnvironment(
 	variableResolver: VariableResolver | undefined,
 	version: string | undefined,
 	detectLocale: 'auto' | 'off' | 'on',
-	baseEnv: IProcessEnvironment
+	baseEnv: IProcessEnvironment,
+	os: OperatingSystem = OS
 ): Promise<IProcessEnvironment> {
 	// Create a terminal environment based on settings, launch config and permissions
 	const env: IProcessEnvironment = {};
@@ -276,7 +277,7 @@ export async function createTerminalEnvironment(
 		// can still inherit these variables.
 		// We are not bypassing the restrictions implied in https://github.com/electron/electron/pull/40770
 		// since this only affects integrated terminal and not the application itself.
-		if (isMacintosh) {
+		if (os === OperatingSystem.Macintosh) {
 			// Restore NODE_OPTIONS if it was set
 			if (env['VSCODE_NODE_OPTIONS']) {
 				env['NODE_OPTIONS'] = env['VSCODE_NODE_OPTIONS'];
@@ -295,8 +296,8 @@ export async function createTerminalEnvironment(
 		sanitizeProcessEnvironment(env, 'VSCODE_IPC_HOOK_CLI');
 
 		// Merge config (settings) and ShellLaunchConfig environments
-		mergeEnvironments(env, allowedEnvFromConfig);
-		mergeEnvironments(env, shellLaunchConfig.env);
+		mergeEnvironments(env, allowedEnvFromConfig, os);
+		mergeEnvironments(env, shellLaunchConfig.env, os);
 
 		// Adding other env keys necessary to create the process
 		addTerminalEnvironmentKeys(env, version, language, detectLocale);

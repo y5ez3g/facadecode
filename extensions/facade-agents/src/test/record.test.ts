@@ -12,7 +12,8 @@ import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
 import { agentName, AgentTable, countOnFrom, nameOfWorktree, NewAgent, numberedUpTo } from '../record/agents';
 import { agentRef, describe, LedgerEventBody, parseAgentReference, PERSON } from '../record/events';
-import { isLedgerHeld, Ledger, LedgerLockedError, lockStateOf, lockWait } from '../record/ledger';
+import { ProcessIdentity } from '../base/system';
+import { holderStartedLater, isLedgerHeld, Ledger, LedgerLockedError, LedgerTakeoverError, liveHolderOf, lockStateOf, lockWait, ownerOf, takeoverLedgerLock } from '../record/ledger';
 import { earlierRecordOf, identityOf, isWorkspaceId, recordDirOf, recordFor } from '../record/identity';
 import { AGENTS_LOG } from '../record/log';
 import { injectedFile, workspacesRoot } from '../record/paths';
@@ -47,6 +48,11 @@ function outcome(call: () => unknown): string {
 /** What a window is told once another window took the ledger in `dir`. */
 function takenFrom(dir: string): string {
 	return `Another Facade window has taken over this workspace's agents. The ledger in '${dir}' is locked.`;
+}
+
+/** What a takeover is told a process runs: its command line's `words`, and its program's path. */
+function identified(words: readonly string[], executable: string | undefined): ProcessIdentity {
+	return { words, executable };
 }
 
 /** Makes reading `file` fail with `code` while `failing` says so; returns what puts reading back. */
@@ -208,6 +214,7 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		const states = [main.agent.state];
 		table.launched(main.agent.id, 4242);
 		table.connected(main.agent.id);
+		const whileRunning = main.agent.connected;
 		states.push(main.agent.state);
 		table.running(main.agent.id);
 		states.push(main.agent.state);
@@ -217,9 +224,10 @@ suite('Record: agents, their numbers, names and tokens', () => {
 		const second = table.end(main.agent.id, 'exited', 'its CLI ended with exit code 1', { exitCode: 1 });
 		table.running(main.agent.id);
 
-		assert.deepStrictEqual({ states, connected: main.agent.connected, processId: main.agent.processId, first: first && { ...first, time: 0 }, second, state: main.agent.state, end: main.agent.end === first, stopping: main.agent.stopping }, {
+		assert.deepStrictEqual({ states, whileRunning, connected: main.agent.connected, processId: main.agent.processId, first: first && { ...first, time: 0 }, second, state: main.agent.state, end: main.agent.end === first, stopping: main.agent.stopping }, {
 			states: ['starting', 'starting', 'running', 'stopping'],
-			connected: true,
+			whileRunning: true,
+			connected: false,
 			processId: 4242,
 			first: { kind: 'stopped', by: 'human', reason: 'with stop_agent', exitCode: 143, time: 0 },
 			second: undefined,
@@ -880,6 +888,218 @@ suite('Record: the ledger on disk', () => {
 		} finally {
 			still.kill();
 		}
+	});
+
+	test('a live lock names its owner as well as its process, which a locked opening is told, so this window\'s own earlier extension host is not another window; a live one of a Facade before that named it names no owner (REMOTE.md R4)', () => {
+		const lock = path.join(temp.dir, LOCK);
+		fs.writeFileSync(lock, '424242 lab 0123456789ab');
+		let refused: LedgerLockedError | undefined;
+		try {
+			Ledger.open(temp.dir, { owner: 'other', isRunning: () => true });
+		} catch (err) {
+			refused = err as LedgerLockedError;
+		}
+		const own = path.join(temp.dir, 'own');
+		fs.mkdirSync(own, { recursive: true });
+		const held = Ledger.open(own, { owner: 'lab' });
+		const words = fs.readFileSync(path.join(own, LOCK), 'utf8').split(' ');
+		held.close();
+
+		assert.deepStrictEqual({
+			refused: refused === undefined ? 'opened' : { pid: refused.pid, owner: refused.owner },
+			mark: { pid: words[0], owner: words[1], token: words[2].length, words: words.length, started: Number(words[3]) <= Date.now() },
+			before: ownerOf('424242 0123456789ab'),
+			closed: ownerOf('closed lab load-1')
+		}, {
+			refused: { pid: 424242, owner: 'lab' },
+			mark: { pid: String(process.pid), owner: 'lab', token: 12, words: 4, started: true },
+			before: undefined,
+			closed: undefined
+		});
+	});
+
+	test('an opening finds the lock\'s live holder where one holds it as it would: another process, running, and touching it - its owner named; else nothing (REMOTE.md R4)', () => {
+		const lock = path.join(temp.dir, LOCK);
+		fs.writeFileSync(lock, '424242 lab 0123456789ab');
+		const live = liveHolderOf(temp.dir, () => true);
+		const dead = liveHolderOf(temp.dir, () => false);
+		fs.writeFileSync(lock, `${process.pid} lab 0123456789ab`);
+		const own = liveHolderOf(temp.dir, () => true);
+		fs.writeFileSync(lock, 'closed lab load-1');
+		const closed = liveHolderOf(temp.dir, () => true);
+		fs.rmSync(lock);
+		const gone = liveHolderOf(temp.dir, () => true);
+		fs.writeFileSync(lock, '424242 lab 0123456789ab 1729000000001');
+		const dated = liveHolderOf(temp.dir, () => true);
+
+		assert.deepStrictEqual({ live, dead, own, closed, gone, dated },
+			{ live: { pid: 424242, owner: 'lab' }, dead: undefined, own: undefined, closed: undefined, gone: undefined, dated: { pid: 424242, owner: 'lab', startedAt: 1729000000001 } });
+	});
+
+	test('a takeover of this window\'s earlier extension host ends its process - a real one, held between its lock check and its write - and its lock is taken only after it has exited; it writes nothing after (RM-30)', async () => {
+		const lock = path.join(temp.dir, LOCK);
+		// The earlier host: another process, which opens the ledger, checks its lock, and is then held before it writes
+		const child = spawn(process.execPath, ['-e', [
+			`const { Ledger } = require(${JSON.stringify(path.join(__dirname, '..', 'record', 'ledger.js'))});`,
+			`const ledger = Ledger.open(${JSON.stringify(temp.dir)}, { owner: 'lab' });`,
+			'ledger.assertOpen();',
+			'console.log("checked");',
+			'process.stdin.resume();'
+		].join('\n')], { stdio: ['pipe', 'pipe', 'ignore'] });
+		let exited = false;
+		child.on('exit', () => { exited = true; });
+		try {
+			let said = '';
+			child.stdout?.on('data', (chunk: Buffer) => { said += chunk.toString('utf8'); });
+			await waitFor(() => said.includes('checked'));
+			if (child.pid === undefined) {
+				throw new Error('The earlier host runs in no process.');
+			}
+			const holder = child.pid;
+			assert.strictEqual(fs.readFileSync(lock, 'utf8').split(' ')[0], String(holder));
+			// Who it is is told, as on Windows no command line can be read; whether it runs and its end are real.
+			// The child runs as the earlier host although it started after this test's process: this host's start
+			// is pinned past the child's, as a window taking over is newer than its earlier host (L5).
+			await takeoverLedgerLock(temp.dir, holder, 'lab', { identify: () => identified([process.execPath, '--type=extensionHost'], process.execPath), startedAt: Date.now() });
+			await waitFor(() => exited, 1000);
+			const next = Ledger.open(temp.dir, { owner: 'lab' });
+			const took = fs.readFileSync(lock, 'utf8').startsWith(`${process.pid} lab `);
+			next.close();
+			assert.deepStrictEqual({ exited, took, ledger: fs.existsSync(path.join(temp.dir, LEDGER)) }, { exited: true, took: true, ledger: false });
+		} finally {
+			child.kill();
+		}
+	});
+
+	test('a takeover from a holder that started later than this host is refused, and nothing is ended; from an older one it ends as ever - a mark without a start is older than any (L5)', async () => {
+		const lock = path.join(temp.dir, LOCK);
+		const host = identified([process.execPath, '--type=extensionHost'], process.execPath);
+		let running = true;
+		const ended: string[] = [];
+		const attempt = async (mark: string, startedAt: number) => {
+			running = true;
+			ended.length = 0;
+			fs.writeFileSync(lock, mark);
+			const outcome = await takeoverLedgerLock(temp.dir, 424242, 'lab', {
+				isRunning: () => running,
+				kill: (pid, signal) => { ended.push(`${pid} ${signal}`); running = false; },
+				identify: () => host,
+				startedAt, termMs: 10, killMs: 10, pollMs: 1
+			}).then(() => 'taken', (err: LedgerTakeoverError) => err.why);
+			return { outcome, ended: [...ended] };
+		};
+		const now = Date.now();
+		const newer = await attempt(`424242 lab 0123456789ab ${now + 60_000}`, now);
+		const older = await attempt(`424242 lab 0123456789ab ${now - 60_000}`, now);
+		const oldMark = await attempt('424242 lab 0123456789ab', now);
+
+		assert.deepStrictEqual({ newer, older, oldMark }, {
+			newer: { outcome: 'newer-holder', ended: [] },
+			older: { outcome: 'taken', ended: ['424242 SIGTERM'] },
+			oldMark: { outcome: 'taken', ended: ['424242 SIGTERM'] }
+		});
+	});
+
+	test('a holder is newer past this host\'s start, or the same millisecond with the higher process id; one that says none - an old mark - never is (L5)', () => {
+		const ours = { at: 1729000000000, pid: 1000 };
+
+		assert.deepStrictEqual([
+			holderStartedLater({ at: 1729000000001, pid: 1 }, ours),
+			holderStartedLater({ at: 1728999999999, pid: 999999 }, ours),
+			holderStartedLater({ at: 1729000000000, pid: 1001 }, ours),
+			holderStartedLater({ at: 1729000000000, pid: 1000 }, ours),
+			holderStartedLater({ at: 1729000000000, pid: 999 }, ours),
+			holderStartedLater({ at: undefined, pid: 999999 }, ours)
+		], [true, false, true, false, false, false]);
+	});
+
+	test('a takeover is resolved only once the earlier host has exited, ending it with SIGTERM, and with SIGKILL where it stands its end; one that still runs keeps its lock (RM-30)', async () => {
+		const lock = path.join(temp.dir, LOCK);
+		const host = identified([process.execPath, '--type=extensionHost'], process.execPath);
+		fs.writeFileSync(lock, '424242 lab 0123456789ab');
+		let running = true;
+		const signals: string[] = [];
+		let resolved = false;
+		const taking = takeoverLedgerLock(temp.dir, 424242, 'lab', {
+			isRunning: () => running,
+			kill: (pid, signal) => { signals.push(`${pid} ${signal}`); },
+			identify: () => host,
+			termMs: 100, killMs: 100, pollMs: 1
+		}).then(() => { resolved = true; });
+		await sleep(10);
+		const whileRunning = resolved;
+		running = false;
+		await taking;
+		// One that stands its end with SIGTERM is ended with SIGKILL
+		fs.writeFileSync(lock, '434343 lab 0123456789ab');
+		let stubborn = true;
+		const signalsAgain: string[] = [];
+		await takeoverLedgerLock(temp.dir, 434343, 'lab', {
+			isRunning: () => stubborn,
+			kill: (pid, signal) => { signalsAgain.push(`${pid} ${signal}`); stubborn = signal !== 'SIGKILL'; },
+			identify: () => host,
+			termMs: 20, killMs: 20, pollMs: 1
+		});
+		// One that still runs after both keeps its lock
+		fs.writeFileSync(lock, '444444 lab 0123456789ab');
+		const refused = await takeoverLedgerLock(temp.dir, 444444, 'lab', {
+			isRunning: () => true, kill: () => { }, identify: () => host, termMs: 20, killMs: 20, pollMs: 1
+		}).then(() => 'taken', (err: LedgerTakeoverError) => err.why);
+		assert.deepStrictEqual({ whileRunning, resolved, signals, signalsAgain, refused, lock: fs.readFileSync(lock, 'utf8') },
+			{ whileRunning: false, resolved: true, signals: ['424242 SIGTERM'], signalsAgain: ['434343 SIGTERM', '434343 SIGKILL'], refused: 'still-runs', lock: '444444 lab 0123456789ab' });
+	});
+
+	test('a takeover ends nothing it cannot tell to be an extension host of this server - another product\'s, say, whose id was reused - nor this very process, nor where the lock moved on; and nothing where its holder is already gone (RM-30)', async () => {
+		const lock = path.join(temp.dir, LOCK);
+		const ended: string[] = [];
+		const kill = (pid: number, signal: 'SIGTERM' | 'SIGKILL') => { ended.push(`${pid} ${signal}`); };
+		const attempt = (holder: number, owner: string, identity?: ProcessIdentity) => takeoverLedgerLock(temp.dir, holder, owner, {
+			isRunning: () => true, kill, identify: () => identity, termMs: 10, killMs: 10, pollMs: 1
+		}).then(() => 'taken', (err: LedgerTakeoverError) => err.why);
+		fs.writeFileSync(lock, '424242 lab 0123456789ab');
+		const plain = await attempt(424242, 'lab', identified([process.execPath, 'server.js'], process.execPath));
+		const unreadable = await attempt(424242, 'lab', undefined);
+		const foreign = await attempt(424242, 'lab', identified(['/elsewhere/notnode', '--type=extensionHost'], '/elsewhere/notnode'));
+		const otherProduct = await attempt(424242, 'lab', identified(['/home/u/.vscode-server/bin/abc/node', '--type=extensionHost'], '/home/u/.vscode-server/bin/abc/node'));
+		const movedOn = await attempt(424242, 'other', identified([process.execPath, '--type=extensionHost'], process.execPath));
+		fs.rmSync(lock);
+		const goneLock = await attempt(424242, 'lab', identified([process.execPath, '--type=extensionHost'], process.execPath));
+		fs.writeFileSync(lock, `${process.pid} lab 0123456789ab`);
+		const own = await attempt(process.pid, 'lab', identified([process.execPath, '--type=extensionHost'], process.execPath));
+		// Another commit's under the same server bin folder, the server updated meanwhile: still Facade's
+		fs.writeFileSync(lock, '424242 lab 0123456789ab');
+		const sibling = path.join(path.dirname(path.dirname(process.execPath)), 'othercommit', path.basename(process.execPath));
+		let updatedRunning = true;
+		const updatedEnded: string[] = [];
+		const updated = await takeoverLedgerLock(temp.dir, 424242, 'lab', {
+			isRunning: () => updatedRunning,
+			kill: (pid, signal) => { updatedEnded.push(`${pid} ${signal}`); updatedRunning = false; },
+			identify: () => identified([sibling, '--type=extensionHost'], sibling),
+			termMs: 10, killMs: 10, pollMs: 1
+		}).then(() => 'taken', (err: LedgerTakeoverError) => err.why);
+		// Its holder gone: taken without ending anything, and without asking who it was
+		let asked = false;
+		const took = await takeoverLedgerLock(temp.dir, 424242, 'lab', {
+			isRunning: () => false, kill, identify: () => { asked = true; return identified([process.execPath, '--type=extensionHost'], process.execPath); }
+		}).then(() => 'taken', (err: LedgerTakeoverError) => err.why);
+		assert.deepStrictEqual({ plain, unreadable, foreign, otherProduct, movedOn, goneLock, own, updated, updatedEnded, took, asked, ended },
+			{ plain: 'not-extension-host', unreadable: 'not-extension-host', foreign: 'not-extension-host', otherProduct: 'not-extension-host', movedOn: 'moved-on', goneLock: 'moved-on', own: 'own-process', updated: 'taken', updatedEnded: ['424242 SIGTERM'], took: 'taken', asked: false, ended: [] });
+	});
+
+	test('the earlier host, held between its lock check and its write while its lock is taken over, has its write refused: nothing of its is written late, and the ledger\'s sequence has no gap or repeat (RM-30)', async () => {
+		const earlier = Ledger.open(temp.dir, { owner: 'lab' });
+		const first = earlier.append(made('first'));
+		earlier.assertOpen();
+		// Held: its lock, in another process's hands, names that process now
+		fs.writeFileSync(path.join(temp.dir, LOCK), '424242 lab 0123456789ab');
+		await takeoverLedgerLock(temp.dir, 424242, 'lab', { isRunning: () => false });
+		const next = Ledger.open(temp.dir, { owner: 'lab' });
+		const after = next.append(made('next'));
+		const refused = outcome(() => earlier.append(made('late')));
+		const lines = fs.readFileSync(path.join(temp.dir, LEDGER), 'utf8');
+		next.close();
+		assert.deepStrictEqual({ first: first.seq, after: after.seq, refused, late: lines.includes('"late"'), next: lines.includes('"next"') },
+			{ first: 1, after: 2, refused: takenFrom(temp.dir), late: false, next: true });
 	});
 
 	test('a ledger says how the window that had it before let go of it - as the window went: it quit, closed or reloaded; or as Facade let go of its agents, the window staying - and which window that was: this workspace\'s or another\'s, this very window or another load of it; nothing the first time, nor after a crash, its lock left behind', () => {

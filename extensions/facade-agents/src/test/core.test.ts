@@ -11,6 +11,7 @@ import { DeferredPromise } from '../base/async';
 import { readCliConfig } from '../clis/config';
 import { instructionsFor } from '../contract/prompts';
 import { FacadeError } from '../core/errors';
+import { lostWhileAwayNotice } from '../core/facade';
 import { Injections } from '../core/injections';
 import { SetupOutcome } from '../core/ports';
 import { Caller, End, PERSON } from '../record/events';
@@ -712,6 +713,114 @@ suite('Core: starting an agent, step by step', () => {
 		});
 	});
 
+	test('a start during an outage answers unconfirmed at its timeout, not at about twice it: its screen excerpt is waited for a moment past it, and left out where it does not come (O3)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		const at = Date.now();
+		const starting = world.facade.startAgent(PERSON, { name: 'main', cli: 'arg', task: 'One.', folder: lab });
+		await until(() => world.terminals.launched.length === 1);
+		// The window away: its screen reads are never answered
+		world.terminals.holdRead = new Promise(() => { });
+		let answeredAt = 0;
+		const outcome = starting.then(launched => { answeredAt = Date.now(); return launched; });
+		await sleep(5_000);
+		const atTimeout = answeredAt === 0 ? 'waiting' : 'answered';
+		await sleep(5_000);
+		const unconfirmed = await outcome;
+
+		assert.deepStrictEqual({ atTimeout, answered: answeredAt - at, status: unconfirmed.status, screen: unconfirmed.screen?.text }, {
+			atTimeout: 'waiting',
+			answered: 10_000,
+			status: 'unconfirmed',
+			screen: undefined
+		});
+	});
+
+	test('a start\'s screen excerpt that comes a moment past its timeout is in its unconfirmed answer (O3)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		const starting = world.facade.startAgent(PERSON, { name: 'main', cli: 'arg', task: 'One.', folder: lab });
+		await until(() => world.terminals.launched.length === 1);
+		const at = Date.now();
+		world.terminals.screens.set(1, { lines: ['$ slow'], buffer: 'normal', older: false, trimmed: false, capturedAt: 1000, exited: false });
+		const back = new DeferredPromise<void>();
+		world.terminals.holdRead = back.p;
+		let answeredAt = 0;
+		const outcome = starting.then(launched => { answeredAt = Date.now(); return launched; });
+		await sleep(5_000);
+		await sleep(1_000);
+		back.complete();
+		const unconfirmed = await outcome;
+
+		assert.deepStrictEqual({ answered: answeredAt - at, status: unconfirmed.status, screen: unconfirmed.screen?.text }, {
+			answered: 6_000,
+			status: 'unconfirmed',
+			screen: '$ slow'
+		});
+	});
+
+	test('a start the window does not answer - away - goes on with the terminal environment the window gave last for a folder of its repository: recorded at once, unconfirmed at its time in its phase, its terminal made for that same run once the window is back; with only another repository\'s given, refused at its time, nothing made (REMOTE.md R4; O9; AGENT-LAUNCHER.md, L10)', async () => {
+		const other = path.join(temp.dir, 'other');
+		fs.mkdirSync(other);
+		let away: Promise<void> | undefined;
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs'], [other]: [] }, environment: async () => { await away; return {}; } });
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { name: 'elsewhere', cli: 'arg', folder: other });
+		// The window away: another repository's environment is not this one's
+		away = new Promise(() => { });
+		const refusing = failureOf(world.facade.startAgent(PERSON, { name: 'first', cli: 'arg', folder: lab }));
+		await sleep(5_000);
+		const refused = await refusing;
+		const none = agents(world);
+		// The window back, the environment of a worktree of the repository is kept; then away again, neither its
+		// environment nor a terminal comes
+		away = undefined;
+		await world.startUp(PERSON, { name: 'docs', cli: 'arg', folder: worktreeFolder(lab, 'docs') });
+		away = new Promise(() => { });
+		const back = new DeferredPromise<void>();
+		world.terminals.hold = back.p;
+		const at = Date.now();
+		let answeredAt = 0;
+		const starting = world.facade.startAgent(PERSON, { name: 'second', cli: 'arg', folder: lab }).then(started => { answeredAt = Date.now(); return started; });
+		await sleep(2_000);
+		const recorded = agents(world);
+		await sleep(3_000);
+		const { status, why, phase } = await starting;
+		back.complete();
+		await until(() => world.terminals.launched.length === 3);
+		world.hello(3);
+
+		assert.deepStrictEqual({ refused, none, recorded, answered: answeredAt - at, unconfirmed: { status, why, phase }, launched: world.terminals.launched.map(launch => launch.name), agents: agents(world) }, {
+			refused: { code: 'UNAVAILABLE', message: `Cannot start @first: the window did not answer within 5 seconds, so it is not known where a terminal in ${lab} finds Arg Code. Nothing was started. Retry once the window is available.`, data: { phase: 'validating' } },
+			none: ['#a1 @elsewhere by @human running'],
+			recorded: ['#a1 @elsewhere by @human running', '#a2 @docs by @human running', '#a3 @second by @human starting'],
+			answered: 5_000,
+			unconfirmed: { status: 'unconfirmed', why: 'after 5 seconds, the CLI is still launching', phase: 'launching_cli' },
+			launched: ['@elsewhere #a1', '@docs #a2', '@second #a3'],
+			agents: ['#a1 @elsewhere by @human running', '#a2 @docs by @human running', '#a3 @second by @human running']
+		});
+	});
+
+	test('the person\'s start with no folder, the window not answering which folder is selected - away - is refused at its time, nothing made; one naming its folder is not held up by it (REMOTE.md R4; O9)', async () => {
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: ['docs'] }, activeFolder: () => new Promise(() => { }) });
+		world.timing.startTimeoutMs = 5_000;
+		const refusing = failureOf(world.facade.startAgent(PERSON, { name: 'one', cli: 'arg' }));
+		await sleep(5_000);
+		const refused = await refusing;
+		// A new worktree starts at the commit of the checkout on their screen: that is asked too
+		const refusingNew = failureOf(world.facade.startAgent(PERSON, { name: 'three', cli: 'arg', folder: lab, newWorktree: true }));
+		await sleep(5_000);
+		const refusedNew = await refusingNew;
+		const named = await world.startUp(PERSON, { name: 'two', cli: 'arg', folder: lab });
+
+		assert.deepStrictEqual({ refused, refusedNew, named: named.status, agents: agents(world) }, {
+			refused: { code: 'UNAVAILABLE', message: 'Cannot start @one: the window did not answer within 5 seconds, so which folder the person has selected is not known. Nothing was started. Provide folder, or retry once the window is available.', data: { phase: 'validating' } },
+			refusedNew: { code: 'UNAVAILABLE', message: 'Cannot start @three: the window did not answer within 5 seconds, so which folder the person has selected is not known. Nothing was started. Retry once the window is available.', data: { phase: 'validating' } },
+			named: 'started',
+			agents: ['#a1 @two by @human running']
+		});
+	});
+
 	test('the first line of a CLI told of its task in its terminal is typed by its doorbell as one operation - its text, then Enter after its launch\'s pause - in the terminal\'s turn, behind the person\'s typing there (AGENT-MESSAGES.md, M7; AGENT-DEBUGGING.md, D3)', async () => {
 		world.settings.told = { launch: { enterDelay: 2_000 } };
 		const started = await world.startUp(PERSON, { name: 'main', cli: 'told', model: 'deep', effort: 'high', task: 'Plan.', folder: lab });
@@ -1197,7 +1306,8 @@ suite('Core: list_agents and stop_agent', () => {
 		world.timing.startTimeoutMs = 2_000;
 		world.terminals.stubborn = true;
 		const stopping = outcomeOf(world.facade.stopAgent(PERSON, '#a1'));
-		await sleep(3_000);
+		// The escalation's grace from the hang-up's delivery: termination a full grace after it (M8)
+		await sleep(6_000);
 		const pending = await stopping;
 		const meanwhile = agents(world);
 		world.terminals.stubborn = false;
@@ -1208,6 +1318,27 @@ suite('Core: list_agents and stop_agent', () => {
 			meanwhile: ['#a1 @main by @human stopped by @human: with stop_agent'],
 			agents: ['#a1 @main by @human stopped by @human: with stop_agent'],
 			told: []
+		});
+	});
+
+	test('a stop the window does not answer - away - answers pending at its time, and is carried out when the window is back; one background round goes on, not two (REMOTE.md R4)', async () => {
+		await world.startUp(PERSON, { name: 'main', cli: 'arg', task: 'Lead.', folder: lab });
+		world.timing.startTimeoutMs = 2_000;
+		const back = new DeferredPromise<void>();
+		world.terminals.holdStop = back.p;
+		const stopping = outcomeOf(world.facade.stopAgent(PERSON, '#a1'));
+		await sleep(3_000);
+		const pending = await stopping;
+		const meanwhile = agents(world);
+		const rounds = world.logs.filter(line => line.includes('has not ended yet'));
+		back.complete();
+		await until(() => agents(world)[0].endsWith(': with stop_agent'));
+
+		assert.deepStrictEqual({ pending, meanwhile, rounds, agents: agents(world) }, {
+			pending: 'UNAVAILABLE: @main #a1 is still stopping: its process has not exited after 2 seconds. Facade will continue trying to stop it; list_agents shows whether it has ended.',
+			meanwhile: ['#a1 @main by @human stopping'],
+			rounds: ['@main #a1 has not ended yet: the window has not answered'],
+			agents: ['#a1 @main by @human stopped by @human: with stop_agent']
 		});
 	});
 });
@@ -1355,6 +1486,19 @@ suite('Core: after a reload', () => {
 		return world;
 	}
 
+	test('an ended agent stays disconnected in the record and list after a window reload (D2; M13)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'One.', name: 'one', folder: lab });
+		await world.facade.stopAgent(PERSON, '#a1');
+		const before = world.table.get(1)?.connected;
+		const after = reopen();
+		await after.facade.recover(true);
+		const recorded = after.table.get(1);
+		const listed = after.facade.listAgents(PERSON).agents.find(agent => agent.id === 1);
+
+		assert.deepStrictEqual({ before, state: recorded?.state, recorded: recorded?.connected, listed: listed?.connected },
+			{ before: false, state: 'ended', recorded: false, listed: false });
+	});
+
 	test('an agent that comes back with no terminal while its own process runs on - a CLI that ignored the hang-up its terminal\'s going sent it - is ended by its process, its end recorded once it is gone, not before (LA-15; N-24)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'One.', name: 'one', folder: lab });
 		const pid = world.terminals.processes.get(1)!;
@@ -1427,6 +1571,117 @@ suite('Core: after a reload', () => {
 				...process.platform === 'win32' ? ['error: @killed #a4 exited: its CLI ended with exit code 137 while Facade was not running. (#a4\'s terminal)'] : []
 			]
 		});
+	});
+
+	test('a window coming back from away says once which agents ended while it was away, and how long ago it was last connected - the earlier host\'s last hearing of it, else the agents alone; away false says nothing (M1)', async () => {
+		const heard = Date.now() - 90_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'One.', name: 'one', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Two.', name: 'two', folder: lab });
+		await reopen().facade.recover(true, false, { away: true, lastHeard: heard });
+		const withHeard = [...world.person.told];
+		await world.startUp(PERSON, { cli: 'arg', task: 'Three.', name: 'three', folder: lab });
+		await reopen().facade.recover(true, false, { away: true });
+		const neither = [...world.person.told];
+		await world.startUp(PERSON, { cli: 'arg', task: 'Four.', name: 'four', folder: lab });
+		await reopen().facade.recover(true, false, { away: false, lastHeard: heard });
+		const local = [...world.person.told];
+
+		assert.deepStrictEqual({ withHeard, neither, local }, {
+			withHeard: ['warning: Agents that ended while this window was away from its host: @one #a1, @two #a2. Last connected 1 minute ago.'],
+			neither: ['warning: Agents that ended while this window was away from its host: @three #a3.'],
+			local: []
+		});
+	});
+
+	test('a close while away, then a reopen after the agents died: they are recorded lost, never stopped as the window went - even where the earlier host closed the ledger by window - and named in the away notice (M1)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'One.', name: 'one', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Two.', name: 'two', folder: lab });
+		const after = reopen();
+		await after.facade.recover(false, false, { away: true });
+
+		assert.deepStrictEqual({ ends: history(after).filter(line => line.startsWith('ended')), told: after.person.told }, {
+			ends: [
+				'ended    @one #a1  lost: its terminal was missing when Facade restarted',
+				'ended    @two #a2  lost: its terminal was missing when Facade restarted'
+			],
+			told: ['warning: Agents that ended while this window was away from its host: @one #a1, @two #a2.']
+		});
+	});
+
+	test('a reopen whose window could not say whether it was away takes none to have gone with the window: they are recorded lost, not stopped as it went, and none is named as having ended while it was away (M1)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'One.', name: 'one', folder: lab });
+		const after = reopen();
+		await after.facade.recover(false, false, { away: 'unknown' });
+
+		assert.deepStrictEqual({ ends: history(after).filter(line => line.startsWith('ended')), told: after.person.told }, {
+			ends: ['ended    @one #a1  lost: its terminal was missing when Facade restarted'],
+			told: []
+		});
+	});
+
+	test('a crash with an agent gone and away false gives no away notice: its end is told as ever (M1)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'One.', name: 'one', folder: lab });
+		const after = crash();
+		after.terminals.seenEnds.set(1, { exitCode: 1, byThePerson: false });
+		await after.facade.recover(false, false, { away: false });
+
+		assert.deepStrictEqual({ ends: history(after).filter(line => line.startsWith('ended')), told: after.person.told }, {
+			ends: ['ended    @one #a1  exited: its CLI ended with exit code 1 while Facade was not running'],
+			told: ['error: @one #a1 exited: its CLI ended with exit code 1 while Facade was not running. (#a1\'s terminal)']
+		});
+	});
+
+	test('while away the notice names every agent that ended: a clean exit, a nonzero exit and a loss together, each named once - their own notices quiet, their creators\' told as ever (M2)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: worktreeFolder(lab, 'work') });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(PERSON, { cli: 'arg', task: 'Clean.', name: 'clean', folder: lab });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Dirty.', name: 'dirty', folder: lab });
+		await world.startUp(lead, { cli: 'arg', task: 'Child.', name: 'child' });
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lost.', name: 'lost', folder: lab });
+		await world.fetched(4);
+		const after = reopen('@lead #a1');
+		after.terminals.seenEnds.set(2, { exitCode: 0, byThePerson: false });
+		after.terminals.seenEnds.set(3, { exitCode: 1, byThePerson: false });
+		after.terminals.seenEnds.set(4, { exitCode: 1, byThePerson: false });
+		await after.facade.recover(true, false, { away: true });
+		// The creator's notice of its child's end, once its last screen is kept (M8)
+		await until(() => after.facadeMessagesTo(1).length > 0);
+
+		assert.deepStrictEqual({ agents: agents(after), told: after.person.told, notices: after.facadeMessagesTo(1).map(text => text.split('\n')[0]) }, {
+			agents: [
+				'#a1 @lead by @human running',
+				'#a2 @clean by @human exited: its CLI ended with exit code 0 while Facade was not running',
+				'#a3 @dirty by @human exited: its CLI ended with exit code 1 while Facade was not running',
+				'#a4 @child by #a1 exited: its CLI ended with exit code 1 while Facade was not running',
+				'#a5 @lost by @human lost: its terminal was missing when Facade restarted'
+			],
+			told: ['warning: Agents that ended while this window was away from its host: @clean #a2, @dirty #a3, @child #a4, @lost #a5.'],
+			notices: ['@child #a4 ended: it exited: its CLI ended with exit code 1 while Facade was not running. It can no longer receive messages. No final screen was saved. Call read_screen with agent #a4 to find out why.']
+		});
+	});
+
+	test('the notice of the agents that ended while the window was away names them and how long ago it was last connected - minutes, hours, days - else them alone (REMOTE.md R4)', () => {
+		const now = 1729000000000;
+		const minute = 60_000;
+		assert.deepStrictEqual([
+			lostWhileAwayNotice(['@one #a1', '@two #a2'], now - 30_000, now),
+			lostWhileAwayNotice(['@one #a1'], now - minute, now),
+			lostWhileAwayNotice(['@one #a1'], now - 3 * minute, now),
+			lostWhileAwayNotice(['@one #a1'], now - 60 * minute, now),
+			lostWhileAwayNotice(['@one #a1'], now - 3 * 60 * minute, now),
+			lostWhileAwayNotice(['@one #a1'], now - 24 * 60 * minute, now),
+			lostWhileAwayNotice(['@one #a1'], now - 3 * 24 * 60 * minute, now),
+			lostWhileAwayNotice(['@one #a1'], undefined, now)
+		], [
+			'Agents that ended while this window was away from its host: @one #a1, @two #a2. Last connected less than a minute ago.',
+			'Agents that ended while this window was away from its host: @one #a1. Last connected 1 minute ago.',
+			'Agents that ended while this window was away from its host: @one #a1. Last connected 3 minutes ago.',
+			'Agents that ended while this window was away from its host: @one #a1. Last connected 1 hour ago.',
+			'Agents that ended while this window was away from its host: @one #a1. Last connected 3 hours ago.',
+			'Agents that ended while this window was away from its host: @one #a1. Last connected 1 day ago.',
+			'Agents that ended while this window was away from its host: @one #a1. Last connected 3 days ago.',
+			'Agents that ended while this window was away from its host: @one #a1.'
+		]);
 	});
 
 	test('a stop under way as the person closed the window ends as that stop when the window opens again, and nobody is told of it: the session it was part of is gone (L6; XS-13)', async () => {
@@ -2719,6 +2974,34 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 		});
 	});
 
+	test('a stop whose first answer arrives late - an outage - escalates a full grace after it: no further signal until the window answered the stop before (M8)', async () => {
+		world.timing.startTimeoutMs = 2_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Stubborn.', name: 'stubborn', folder: lab });
+		world.terminals.stubborn = true;
+		const back = new DeferredPromise<void>();
+		world.terminals.holdStop = back.p;
+		const stopping = outcomeOf(world.facade.stopAgent(PERSON, '#a1'));
+		await sleep(2_000);
+		const pending = await stopping;
+		const signalsWhileOut = [...world.terminals.signals];
+		back.complete();
+		const answeredAt = Date.now();
+		await sleep(4_000);
+		const signalsDuringGrace = [...world.terminals.signals];
+		await until(() => world.terminals.signals.some(signal => signal.endsWith('SIGTERM')));
+		const escalatedAt = Date.now();
+		await until(() => world.table.get(1)?.state === 'ended');
+
+		assert.deepStrictEqual({ pending, signalsWhileOut, signalsDuringGrace, grace: escalatedAt - answeredAt, escalated: world.terminals.signals, agents: agents(world) }, {
+			pending: 'UNAVAILABLE: @stubborn #a1 is still stopping: its process has not exited after 2 seconds. Facade will continue trying to stop it; list_agents shows whether it has ended.',
+			signalsWhileOut: [],
+			signalsDuringGrace: ['#a1 SIGHUP'],
+			grace: 5_000,
+			escalated: ['#a1 SIGHUP', '#a1 SIGTERM', '#a1 SIGKILL'],
+			agents: ['#a1 @stubborn by @human stopped by @human: with stop_agent']
+		});
+	});
+
 	test('a deletion that waits for an agent still stopping says which agents it stopped and which are still stopping, its data the same facts as its text; the worktree stays (AGENT-ORCHESTRATION.md, O2, O5; XS-02)', async () => {
 		world.timing.startTimeoutMs = 5_000;
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
@@ -2741,6 +3024,107 @@ suite('Core: stopping an agent and deleting its worktree', () => {
 				data: { outcome: 'pending', agent: 2, stopped: [3], stopping: [2] }
 			},
 			exists: true
+		});
+	});
+
+	test('a deletion whose window does not answer which terminals work in its worktree is refused before anything is stopped: a timeout is never read as nothing inside (O5)', async () => {
+		world.timing.startTimeoutMs = 2_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		// The window away: which terminals work inside is never answered
+		world.terminals.holdInside = new Promise(() => { });
+		const failure = await failureOf(settled(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true })));
+
+		assert.deepStrictEqual({ failure, agents: agents(world), signals: world.terminals.signals, exists: fs.existsSync(clamp) }, {
+			failure: {
+				code: 'UNAVAILABLE',
+				message: `Could not check ${clamp} for agents working in it: the window did not answer within 2 seconds. Nothing was stopped.`,
+				data: undefined
+			},
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running'],
+			signals: [],
+			exists: true
+		});
+	});
+
+	test('a deletion whose window says late which terminals work in its worktree, then not what deleting it would lose - away - is refused at the call\'s time, counted from its acceptance, before anything is stopped (O5; O9; REMOTE.md R4)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		// The window slow to say which terminals work inside, then away: what deleting it would lose is never answered
+		const inside = new DeferredPromise<void>();
+		world.terminals.holdInside = inside.p;
+		world.git.holdLoss = new Promise(() => { });
+		const at = Date.now();
+		let answeredAt = 0;
+		const stopping = failureOf(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true }).finally(() => { answeredAt = Date.now(); }));
+		await sleep(3_000);
+		inside.complete();
+		await sleep(2_000);
+		const failure = await stopping;
+
+		assert.deepStrictEqual({ failure, answered: answeredAt - at, agents: agents(world), signals: world.terminals.signals, exists: fs.existsSync(clamp) }, {
+			failure: {
+				code: 'UNAVAILABLE',
+				message: `Could not check ${clamp} for work that deletion would lose: the window did not answer within 5 seconds. Nothing was stopped.`,
+				data: undefined
+			},
+			answered: 5_000,
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running'],
+			signals: [],
+			exists: true
+		});
+	});
+
+	test('a deletion the window never takes on - away - answers at the call\'s time that nothing was deleted or stopped, and the window back, is not done late (REMOTE.md R4, R7)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		const back = new DeferredPromise<void>();
+		world.git.holdDeletion = back.p;
+		const failure = await failureOf(settled(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true })));
+		back.complete();
+		await sleep(1_000);
+
+		assert.deepStrictEqual({ failure, agents: agents(world), exists: fs.existsSync(clamp), deleted: world.git.deletions.has(clamp) }, {
+			failure: { code: 'UNAVAILABLE', message: `${clamp} was not deleted: the window did not answer within 5 seconds. Nothing was stopped.`, data: undefined },
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 running'],
+			exists: true,
+			deleted: false
+		});
+	});
+
+	test('a deletion the window took on and did not finish by the call\'s time - away - answers that its outcome is unknown, is not done again, and how it ends is recorded once the window answers (WORKTREE.md WT-8.6; REMOTE.md R4)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		await world.startUp(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		const clamp = worktreeFolder(lab, 'clamp');
+		const back = new DeferredPromise<void>();
+		world.git.holdDeletion = back.p;
+		world.git.deletionClaimed = true;
+		const failure = await failureOf(settled(world.facade.stopAgent(lead, '#a2', { deleteWorktree: true })));
+		const meanwhile = fs.existsSync(clamp);
+		back.complete();
+		await until(() => !fs.existsSync(clamp));
+		await until(() => agents(world)[1].includes('stopped'));
+
+		assert.deepStrictEqual({ failure, meanwhile, exists: fs.existsSync(clamp), agents: agents(world), logged: world.logs.filter(line => line.startsWith('Deleted ')) }, {
+			failure: {
+				code: 'UNAVAILABLE',
+				message: `The deletion of ${clamp} was under way when the window stopped answering, and it did not finish within 5 seconds: its outcome is unknown. It is not repeated; how it ends is recorded once the window answers. Check the folder and list_agents before calling stop_agent with delete_worktree:true again.`,
+				data: { outcome: 'unknown', agent: 2, worktree: clamp, stopped: [] }
+			},
+			meanwhile: true,
+			exists: false,
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent to delete its worktree'],
+			logged: [`Deleted ${clamp} through stop_agent requested by @lead #a1, after the call was told its outcome was unknown.`]
 		});
 	});
 
@@ -3332,6 +3716,50 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		const starting = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true }));
 		return { lead, starting, clamp: worktreeFolder(lab, 'clamp') };
 	}
+
+	test('a worktree create the window refuses - its start was stopped while it waited - makes nothing: no worktree is recorded, and the start ends as the stop says (REMOTE.md R7)', async () => {
+		let turn = () => { };
+		world.git.queued = new Promise<void>(resolve => turn = resolve);
+		const { lead, starting, clamp } = await leadStarting();
+		await until(() => world.table.get(2) !== undefined);
+		await world.facade.stopAgent(lead, '#a2');
+		world.git.refuseNextWorktree = true;
+		turn();
+		const outcome = await starting;
+
+		assert.deepStrictEqual({ outcome, agents: agents(world), made: world.table.madeWorktree(clamp), branch: await world.git.hasBranch(lab, 'clamp'), steps: world.git.steps }, {
+			outcome: 'FAILED: Arg Code did not start as @clamp #a2: it was stopped with stop_agent',
+			agents: ['#a1 @lead by @human running', '#a2 @clamp by #a1 stopped by #a1: with stop_agent'],
+			made: undefined,
+			branch: false,
+			steps: []
+		});
+	});
+
+	test('a start in its worktree\'s setup during an outage answers unconfirmed at its timeout, not at about twice it: where the setup is, is waited for a moment past it, and left out where it does not come (O3)', async () => {
+		world.timing.startTimeoutMs = 5_000;
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+		const lead = callerOf(world.agent(1));
+		// The window away: the setup's outcome and its state are never answered
+		world.git.setup = new Promise<SetupOutcome>(() => { });
+		world.git.holdSetupState = new Promise(() => { });
+		const at = Date.now();
+		const starting = world.facade.startAgent(lead, { cli: 'arg', task: 'Clamp.', name: 'clamp', newWorktree: true });
+		await until(() => world.table.get(2)?.phase === 'running_setup');
+		let answeredAt = 0;
+		const outcome = starting.then(launched => { answeredAt = Date.now(); return launched; });
+		await sleep(5_000);
+		const atTimeout = answeredAt === 0 ? 'waiting' : 'answered';
+		await sleep(5_000);
+		const unconfirmed = await outcome;
+
+		assert.deepStrictEqual({ atTimeout, answered: answeredAt - at, status: unconfirmed.status, settingUp: unconfirmed.settingUp }, {
+			atTimeout: 'waiting',
+			answered: 10_000,
+			status: 'unconfirmed',
+			settingUp: undefined
+		});
+	});
 
 	test('a folder named that the window does not have: one that is there, or a file, is refused - it exists, out of reach - and one that is not there is not found (O2)', async () => {
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });

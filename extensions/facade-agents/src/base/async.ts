@@ -24,6 +24,43 @@ export function timeout(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+/**
+ * What comes first: `promise`'s value - or, once `ms` pass, `onTimeout()`'s, the promise running
+ * on, its late outcome dropped; an `onTimeout` that throws rejects with what it threw. A rejection of
+ * the promise is its own, thrown as ever, whenever it comes. No timer is left running either way.
+ */
+export function withDeadline<T>(promise: Promise<T>, ms: number, onTimeout: () => T): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		promise,
+		new Promise<T>((resolve, reject) => {
+			timer = setTimeout(() => {
+				// What `onTimeout` throws is the answer's failure, not an error of the timer's
+				try {
+					resolve(onTimeout());
+				} catch (err) {
+					reject(err);
+				}
+			}, ms);
+		})
+	]).finally(() => { if (timer !== undefined) { clearTimeout(timer); } });
+}
+
+/**
+ * Asks with `ask`, `pollMs` apart, until an answer `tells` or `ms` pass: each ask waited for as long as is left, and
+ * read as `unknown` past it - one never answered, by a window away, holds nothing up beyond `ms` (REMOTE.md R4).
+ */
+export async function askUntil<T>(ask: () => Promise<T>, tells: (answer: T) => boolean, unknown: T, ms: number, pollMs: number): Promise<T> {
+	const deadline = Date.now() + ms;
+	const asked = () => withDeadline(ask(), Math.max(0, deadline - Date.now()), () => unknown);
+	let answer = await asked();
+	while (!tells(answer) && Date.now() < deadline) {
+		await timeout(pollMs);
+		answer = await asked();
+	}
+	return answer;
+}
+
 /** A promise that whoever holds it settles, once: what comes after the first `complete` or `error` is ignored. */
 export class DeferredPromise<T> {
 

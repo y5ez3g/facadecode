@@ -7,23 +7,22 @@ import { DeferredPromise, disposableTimeout, RunOnceScheduler } from '../../../.
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableMap, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
-import { URI } from '../../../../base/common/uri.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { IStorageService } from '../../../../platform/storage/common/storage.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { TerminalExitReason } from '../../../../platform/terminal/common/terminal.js';
-import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { GroupModelChangeKind } from '../../../common/editor.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { FolderTerminalEndReason, IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../terminal/browser/terminal.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
-import { facadeRunOf, facadeRunTerminalOf, IFacadeRun, IPreparingRun, isFacadeRunTerminal } from '../common/facadeRun.js';
+import { AGENT_RECORD_STORAGE_KEY, facadeRunOf, facadeRunTerminalOf, IFacadeRun, IPreparingRun, isFacadeRunTerminal, runFolderUri, setAgentRecordForAttach } from '../common/facadeRun.js';
 
 /** How a run's own process ended, as this load of the window saw it end. */
 export interface IFacadeRunEnd {
@@ -49,8 +48,8 @@ export interface IFacadeRunEnd {
  * What the window knows of a run's own process: `present` in one of its terminals, with its id once told -
  * which the agents' extension keeps for an agent it finds again (N-79); `gone` from every one of them and
  * from the pty host, with how it ended where this load of the window saw it end; `unknown`
- * while the window cannot tell - its terminals not all back yet, its process's id not told yet, its
- * terminal going with the window, or its process still the pty host's for a window that went.
+ * while the window cannot tell - its terminals not all back yet, its record not said yet, its process's id
+ * not told yet, its terminal going with the window, or its process still the pty host's for a window that went.
  */
 export type FacadeRunProcess =
 	| { readonly state: 'present'; readonly processId?: number }
@@ -160,6 +159,13 @@ const TAKE_BACK_WAIT_MS = 90_000;
  */
 const EDITORS_WAIT_MS = 10_000;
 
+/**
+ * How long the take-back waits for the agents' extension to say the window's record: only its runs are
+ * taken back, and warned about (REMOTE.md R7). Past it, with the extension silent, there is nothing to
+ * take back, and a run not found is gone. Within what the extension waits for the window's terminals.
+ */
+const LIVE_WAIT_MS = 30_000;
+
 /** How soon an agent's tab placed is kept: a moment on, once a move - out of one group, into another - is done. */
 const KEEP_PLACE_MS = 1_000;
 
@@ -192,6 +198,9 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 	/** Whether the window has every terminal it had back (`whenRestored`). */
 	private _restored = false;
 
+	/** Settled once the agents' extension has said the window's record (`setLive`). */
+	private readonly _liveKnown = new DeferredPromise<void>();
+
 	/**
 	 * The runs of this workspace whose processes the pty host still runs for a window that went - one
 	 * reloaded again before the pty host saw it go - by `keyOf`: neither present nor gone, until they are
@@ -206,13 +215,20 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 		@IFolderTerminalsService private readonly _folderTerminalsService: IFolderTerminalsService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILifecycleService lifecycleService: ILifecycleService,
-		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@IWorkbenchEnvironmentService private readonly _environmentService: IWorkbenchEnvironmentService,
 		@ILogService private readonly _logService: ILogService,
 		@IEditorGroupsService editorGroupsService: IEditorGroupsService,
 		@IEditorService editorService: IEditorService,
-		@IStorageService storageService: IStorageService
+		@IStorageService private readonly _storageService: IStorageService
 	) {
 		super();
+
+		// The record told last time, known synchronously at this start: attaching terminals are
+		// decided with it until the agents' extension says this start's (REMOTE.md R7; RM-20)
+		const remembered = this._storageService.get(AGENT_RECORD_STORAGE_KEY, StorageScope.WORKSPACE);
+		if (remembered) {
+			this._attachRecord.value = setAgentRecordForAttach(remembered);
+		}
 
 		// ⚠️ Floating windows' terminals come back last: after the editor area's, with their windows - once the
 		// editor parts are restored, which no phase of the window's waits for. The agents whose processes outlived
@@ -222,7 +238,13 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 		const editorsRestored = new DeferredPromise<void>();
 		editorGroupsService.whenRestored.then(() => editorsRestored.complete(), () => editorsRestored.complete());
 		this._register(disposableTimeout(() => editorsRestored.complete(), EDITORS_WAIT_MS));
-		this.whenRestored = Promise.all([this._terminalService.whenConnected, lifecycleService.when(LifecyclePhase.Eventually), editorsRestored.p])
+		// And after the window's record is known: only its runs are taken back, two windows on the same
+		// workspace - two computers on the same remote folder - keeping their own (REMOTE.md R7). Past a
+		// while, with the extension silent, there is nothing to take back.
+		const liveKnown = new DeferredPromise<void>();
+		this._liveKnown.p.then(() => liveKnown.complete(), () => liveKnown.complete());
+		this._register(disposableTimeout(() => liveKnown.complete(), LIVE_WAIT_MS));
+		this.whenRestored = Promise.all([this._terminalService.whenConnected, lifecycleService.when(LifecyclePhase.Eventually), editorsRestored.p, liveKnown.p])
 			.then(() => this._takeBack())
 			.then(() => this._learnExitsAway())
 			.then(undefined, onUnexpectedError)
@@ -236,7 +258,7 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 		// An agent's tab placed - opened in the editor area or a floating window, or moved - is kept now, not with
 		// the window's next save a minute on: its process outlives a crash of the window, which then comes back
 		// as it was last kept - its tab in a floating window made since in the main editor area (N-49; WIN-13)
-		const keepPlaces = this._register(new RunOnceScheduler(() => storageService.flush().then(undefined, onUnexpectedError), KEEP_PLACE_MS));
+		const keepPlaces = this._register(new RunOnceScheduler(() => this._storageService.flush().then(undefined, onUnexpectedError), KEEP_PLACE_MS));
 		this._register(editorService.onDidEditorsChange(({ event }) => {
 			if ((event.kind === GroupModelChangeKind.EDITOR_OPEN || event.kind === GroupModelChangeKind.EDITOR_MOVE || event.kind === GroupModelChangeKind.EDITOR_CLOSE) && isFacadeRunTerminal(this._terminalService.getInstanceFromResource(event.editor?.resource))) {
 				keepPlaces.schedule();
@@ -282,6 +304,9 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 	private readonly _onDidChangeLive = this._register(new Emitter<void>());
 	readonly onDidChangeLive = this._onDidChangeLive.event;
 
+	/** What answers the window's record for an attaching terminal while this load of the window has one (`setLive`). */
+	private readonly _attachRecord = this._register(new MutableDisposable());
+
 	get live(): IFacadeLiveRuns | undefined {
 		return this._live;
 	}
@@ -289,10 +314,14 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 	setLive(workspace: string, ids: readonly number[], preparing: readonly IPreparingRun[]): void {
 		const known = this._live?.workspace === workspace;
 		this._live = { workspace, ids: [...ids], preparing: [...preparing] };
+		this._liveKnown.complete();
+		this._attachRecord.value = setAgentRecordForAttach(workspace);
+		// Remembered for the next start: layout restore decides with it before the extension says the record (RM-20)
+		this._storageService.store(AGENT_RECORD_STORAGE_KEY, workspace, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		this._onDidChangeLive.fire();
 		// The window's record known now: its runs from before the window became a workspace are taken back too (X-31)
 		if (!known) {
-			this.whenRestored.then(() => this._store.isDisposed ? undefined : this._takeBack()).then(undefined, onUnexpectedError);
+			this.whenRestored.then(() => this._store.isDisposed ? undefined : this._takeBack().then(() => this._learnExitsAway())).then(undefined, onUnexpectedError);
 		}
 	}
 
@@ -354,7 +383,8 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 
 		const instance = this._terminalService.instances.find(each => !each.isDisposed && isMadeFor(each, run));
 		if (!instance) {
-			if (!this._restored || this._elsewhere.has(keyOf(run))) {
+			// The window's record not said yet: nothing taken back, and a run not found is not gone (REMOTE.md R7)
+			if (!this._restored || !this._live || this._elsewhere.has(keyOf(run))) {
 				return { state: 'unknown' };
 			}
 			// Exited while the window was away, as the pty host saw it: how is known (N-14)
@@ -410,10 +440,11 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 	}
 
 	/**
-	 * Takes back the runs of this workspace whose processes the pty host still runs for no window: those of
-	 * a window that crashed, reopened as a new window, which brings no agent's terminal back itself
-	 * (`isAgentGoneAtStartup`). One the pty host revived after a restart of the app has no process yet, and
-	 * is never started: it would run its agent's CLI again. Another workspace's are that workspace's window's.
+	 * Takes back the runs of this window's record whose processes the pty host still runs for no window:
+	 * those of a window that crashed, reopened as a new window, which brings no agent's terminal back
+	 * itself (`isAgentGoneAtStartup`). One the pty host revived after a restart of the app has no process
+	 * yet, and is never started: it would run its agent's CLI again. Another window's - another record's,
+	 * two computers on the same remote folder sharing the workspace's id - are that window's (REMOTE.md R7).
 	 */
 	private _takeBack(): Promise<void> {
 		// One at a time: two looking at once would each take back the same process
@@ -423,15 +454,14 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 	}
 
 	private async _takeBackNow(): Promise<void> {
-		const backend = await this._terminalInstanceService.getBackend();
-		const workspaceId = this._workspaceContextService.getWorkspace().id;
+		const backend = await this._terminalInstanceService.getBackend(this._environmentService.remoteAuthority);
 		// Every persistent process, not only the orphans: one a window that just went had taken back is not an
 		// orphan until the pty host sees that window gone, and gone it is not - it runs, cut off
 		const elsewhere = new Set<string>();
 		for (const details of await backend?.listProcesses({ attached: true }) ?? []) {
 			const run = facadeRunOf(details);
-			// This workspace's - or this window's record's, a folder window having become a workspace since (X-31)
-			const ours = details.workspaceId === workspaceId || (run !== undefined && this._live?.workspace === run.workspace);
+			// Only this window's record's: a folder window become a workspace keeps it, and only it (X-31)
+			const ours = run !== undefined && this._live?.workspace === run.workspace;
 			// One that ended here - its tab closed by the person before it reconnected - is not brought back (N-54)
 			if (this._store.isDisposed || !run || !ours || details.pid <= 0 || this._processOf(run).state === 'present' || this._runs.get(keyOf(run))?.end) {
 				continue;
@@ -448,7 +478,7 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 			// As it was opened: its name, read as an agent's tab reads it, and held for the run's folder, not where
 			// its process went since (X-31)
 			const opened = facadeRunTerminalOf(details);
-			await this._folderTerminalsService.openFor(URI.file(opened?.folder ?? details.cwd), {
+			await this._folderTerminalsService.openFor(runFolderUri(opened?.folder ?? details.cwd, this._environmentService.remoteAuthority), {
 				attachPersistentProcess: details,
 				...(opened?.name ? { name: opened.name, titleTemplate: `\${sequence}\${separator}${opened.name}` } : {})
 			});
@@ -458,16 +488,15 @@ export class FacadeRunsService extends Disposable implements IFacadeRunsService 
 	}
 
 	/**
-	 * Learns which runs of this window's the pty host saw exit lately - while the window was away, reloading -
-	 * and how: the agent's end is its exit, with its code, not a process gone unseen (L12: a known exit is
-	 * recorded; N-14).
+	 * Learns which runs of this window's record the pty host saw exit lately - while the window was away,
+	 * reloading - and how: the agent's end is its exit, with its code, not a process gone unseen (L12: a
+	 * known exit is recorded; N-14).
 	 */
 	private async _learnExitsAway(): Promise<void> {
-		const backend = await this._terminalInstanceService.getBackend();
-		const workspaceId = this._workspaceContextService.getWorkspace().id;
+		const backend = await this._terminalInstanceService.getBackend(this._environmentService.remoteAuthority);
 		for (const details of await backend?.listProcesses({ exited: true }) ?? []) {
 			const run = facadeRunOf(details);
-			if (run && (details.workspaceId === workspaceId || this._live?.workspace === run.workspace)) {
+			if (run && this._live?.workspace === run.workspace) {
 				this._exitedAway.set(keyOf(run), details.exitCode);
 			}
 		}

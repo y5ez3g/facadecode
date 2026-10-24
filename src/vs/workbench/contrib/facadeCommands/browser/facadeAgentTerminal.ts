@@ -10,6 +10,7 @@ import { toErrorMessage } from '../../../../base/common/errorMessage.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -17,7 +18,7 @@ import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.
 import { ITerminalContribution, ITerminalInstance, IXtermTerminal } from '../../terminal/browser/terminal.js';
 import { registerTerminalContribution, type ITerminalContributionContext } from '../../terminal/browser/terminalExtensions.js';
 import { ITerminalProcessManager, ProcessState } from '../../terminal/common/terminal.js';
-import { facadeRunOf, facadeRunTerminalOf, IFacadeRun, isFacadeRunTerminal } from '../common/facadeRun.js';
+import { claimTicket, facadeRunOf, facadeRunTerminalOf, IFacadeRun, isFacadeRunTerminal } from '../common/facadeRun.js';
 import { inputPieces, keySequences, pasteSequence } from './facadeAgentKeys.js';
 import { finalScreen, IAgentFinalScreen, IAgentScreen, MOST_SCREEN_LINES, readScreen } from './facadeAgentScreen.js';
 
@@ -89,12 +90,16 @@ export interface IAgentTypeOptions {
 	 * turn comes (AGENT-MESSAGES.md, M10; AGENT-LAUNCHER.md, L13).
 	 */
 	readonly requiresFramework?: boolean;
+	/** Its ticket, claimed as it would be written: refused, it goes in not at all (REMOTE.md R4, R7). */
+	readonly ticket?: string;
 }
 
 /** How keys are pressed: how long they may wait for their turn. */
 export interface IAgentKeysOptions {
 	/** How long they may wait for their turn; none to wait as long as the person's typing holds them. */
 	readonly queueTimeoutMs?: number;
+	/** Their ticket, claimed as they would be pressed: refused, they go in not at all (REMOTE.md R4, R7). */
+	readonly ticket?: string;
 }
 
 /** What the person typed into an agent's terminal, never what Facade typed there. */
@@ -178,6 +183,8 @@ interface IQueuedInput {
 	readonly notApplied: IAgentInputEffect;
 	/** Ends its wait at its deadline, wherever it is in the queue. */
 	expiry?: ReturnType<typeof setTimeout>;
+	/** Its ticket, claimed as it would begin: refused, it is dropped, never written later. */
+	readonly ticket: string | undefined;
 }
 
 /**
@@ -195,7 +202,8 @@ class InputQueue extends Disposable {
 	constructor(
 		private readonly instance: ITerminalInstance,
 		private readonly processManager: ITerminalProcessManager,
-		private readonly person: PersonInput
+		private readonly person: PersonInput,
+		private readonly claim: (ticket: string | undefined) => Promise<boolean>
 	) {
 		super();
 		this._register(instance.onExit(() => this.end()));
@@ -219,13 +227,13 @@ class InputQueue extends Disposable {
 		return this.draining || this.queued.length > 0;
 	}
 
-	add(run: IQueuedInput['run'], queueTimeoutMs: number | undefined, notApplied: IAgentInputEffect): Promise<IAgentInputEffect> {
+	add(run: IQueuedInput['run'], queueTimeoutMs: number | undefined, notApplied: IAgentInputEffect, ticket: string | undefined): Promise<IAgentInputEffect> {
 		const done = new DeferredPromise<IAgentInputEffect>();
 		if (this.ended.isSettled || !this.isRunning(this.instance.processId)) {
 			done.complete({ ...notApplied, reason: 'ended' });
 			return done.p;
 		}
-		const item: IQueuedInput = { run, deadline: queueTimeoutMs === undefined ? undefined : Date.now() + queueTimeoutMs, processId: this.instance.processId, done, notApplied };
+		const item: IQueuedInput = { run, deadline: queueTimeoutMs === undefined ? undefined : Date.now() + queueTimeoutMs, processId: this.instance.processId, done, notApplied, ticket };
 		if (queueTimeoutMs !== undefined) {
 			// Behind other operations as much as behind the person
 			item.expiry = setTimeout(() => this.expire(item), queueTimeoutMs);
@@ -284,6 +292,13 @@ class InputQueue extends Disposable {
 				this.leave(item);
 				if (turn !== 'go') {
 					item.done.complete({ ...item.notApplied, reason: turn });
+					continue;
+				}
+				// Its turn come, its ticket is claimed: the extension host grants it only while its caller still
+				// waits. Refused - its caller was already told it was not applied - it is dropped, and goes in
+				// never, not even late, after the reconnection delivers the window's part (REMOTE.md R4, R7).
+				if (!await this.claim(item.ticket)) {
+					item.done.complete({ ...item.notApplied, reason: 'timeout' });
 					continue;
 				}
 				try {
@@ -405,10 +420,11 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 		@IFileService private readonly fileService: IFileService,
 		@ILifecycleService lifecycleService: ILifecycleService,
 		@ILogService private readonly logService: ILogService,
-		@IConfigurationService private readonly configurationService: IConfigurationService
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ICommandService private readonly commandService: ICommandService
 	) {
 		super();
-		this.queue = this._register(new InputQueue(ctx.instance, ctx.processManager, this.person));
+		this.queue = this._register(new InputQueue(ctx.instance, ctx.processManager, this.person, ticket => claimTicket(this.commandService, ticket)));
 		// Before the terminal disposes its contributions, this one among them: its buffer is still there
 		this._register(ctx.instance.onWillDispose(() => this.capture(true)));
 		this._register(ctx.instance.onExit(() => this.captureWhenParsed()));
@@ -511,7 +527,7 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 				return { outcome: 'partial', reason: 'ended', pasted: true, entered: false };
 			}
 			return { outcome: 'applied', pasted: true, entered: true };
-		}, options.queueTimeoutMs, notApplied);
+		}, options.queueTimeoutMs, notApplied, options.ticket);
 	}
 
 	/**
@@ -533,7 +549,7 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 				}
 			}
 			return { outcome: 'applied', keysSent: keys.length };
-		}, options.queueTimeoutMs, notApplied);
+		}, options.queueTimeoutMs, notApplied, options.ticket);
 	}
 
 	/**
@@ -574,8 +590,13 @@ export class FacadeAgentTerminal extends Disposable implements ITerminalContribu
 	private async send(data: string): Promise<boolean> {
 		const buffer = this.raw?.buffer.active;
 		const viewport = buffer && buffer.viewportY < buffer.baseY ? buffer.viewportY : undefined;
+		// In a remote terminal, writing settles once the remote's terminal host has the data: paste-then-Enter
+		// counts the Enter delay from then, not from when the window sent it (REMOTE.md R7)
+		const write = this.ctx.instance.remoteAuthority !== undefined && this.ctx.processManager.writeAndConfirm
+			? this.ctx.processManager.writeAndConfirm(data)
+			: this.ctx.processManager.write(data);
 		// A process that never got going leaves its write waiting: the terminal's end settles it
-		const written = await Promise.race([this.ctx.processManager.write(data).then(() => true), this.queue.whenEnded.then(() => false)]);
+		const written = await Promise.race([write.then(() => true), this.queue.whenEnded.then(() => false)]);
 		if (viewport !== undefined) {
 			this.raw?.scrollToLine(viewport);
 		}

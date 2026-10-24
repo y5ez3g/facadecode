@@ -344,12 +344,39 @@ suite('Contract: what the model sees, and what it gets back', () => {
 		});
 	});
 
-	test('each call looks for the CLIs this machine has again first, where a terminal finds them: one installed since, or taken away, shows at the next call (X-39; LS-07)', async () => {
+	test('each call that names the CLIs this machine has looks for them again first, where a terminal finds them: one installed since, or taken away, shows at the next call (X-39; LS-07)', async () => {
 		const before = world.refreshes.count;
 		await call(PERSON, 'list_agents', {});
 		await call(PERSON, 'list_agents', {});
 
 		assert.deepStrictEqual(world.refreshes.count - before, 2);
+	});
+
+	test('no call waits on the window to look for the CLIs: while it does not answer, a message is sent and read at once, without a look, and list_agents answers after two seconds with those found last, the look under way not begun again (REMOTE.md R2)', async () => {
+		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: work });
+		let answer = () => { };
+		world.refreshes.waiting = new Promise(resolve => answer = resolve);
+		const before = world.refreshes.count;
+		const timed = async (caller: Caller, tool: string, args: unknown) => {
+			const start = Date.now();
+			const result = await settled(contract.call(caller, tool, args, () => undefined));
+			return { tookMs: Date.now() - start, error: result.isError === true };
+		};
+
+		const sent = await timed(PERSON, 'send_message', { to: '#a1', text: 'During the cut.' });
+		const read = await timed(callerOf(world.agent(1)), 'read_messages', {});
+		const listed = await timed(PERSON, 'list_agents', {});
+		const listedAgain = await timed(PERSON, 'list_agents', {});
+		const looks = world.refreshes.count - before;
+		answer();
+
+		assert.deepStrictEqual({ sent: sent.tookMs <= 10 && !sent.error, read: read.tookMs <= 10 && !read.error, listed, listedAgain, looks }, {
+			sent: true,
+			read: true,
+			listed: { tookMs: 2000, error: false },
+			listedAgain: { tookMs: 2000, error: false },
+			looks: 1
+		});
 	});
 
 	test('a task is kept as it was written, its spaces and line breaks too; one with nothing in it is refused (X-56; C-CORE-27)', async () => {

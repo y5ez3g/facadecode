@@ -703,7 +703,7 @@ export class Mail implements Disposable {
 			this.record({
 				from: FACADE,
 				to: agent.creator ?? HUMAN,
-				text: `${describe(agent)} has not fetched task #m${task} since starting${why ? `: ${why}` : ''}. The task is still queued; Facade retries the doorbell automatically. ${whereToLook(id, agent.creator ?? HUMAN, 'task')}`,
+				text: `${describe(agent)} has not fetched task #m${task} since starting${why ? `: ${why}` : ''}. The task is still queued; Facade retries the doorbell automatically. ${whereToLook(id, agent.creator ?? HUMAN, 'task', this.doorbell.windowHold(id))}`,
 				facade: 'taskNotFetched',
 				about: id
 			});
@@ -786,7 +786,7 @@ export class Mail implements Disposable {
 			this.record({
 				from: FACADE,
 				to: oldest.from ?? HUMAN,
-				text: `${describe(agent)} has not fetched ${ids} after ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. ${whereToLook(id, oldest.from ?? HUMAN, 'messages')}`,
+				text: `${describe(agent)} has not fetched ${ids} after ${durationOf(Date.now() - unread[0].time)}${why ? `: ${why}` : ''}. The messages are still queued; Facade retries the doorbell automatically. Any messages still unread when the agent ends will be returned to their senders. ${whereToLook(id, oldest.from ?? HUMAN, 'messages', this.doorbell.windowHold(id))}`,
 				facade: 'delayed',
 				about: id
 			});
@@ -841,12 +841,20 @@ export class Mail implements Disposable {
 /**
  * Where the one told of agent `id` sees what holds it up: an agent reads its screen with read_screen, the person has its
  * terminal. An agent is told too what to do of a menu that took the doorbell: answer it, and send nothing again - what was
- * sent waits under its number (AGENT-DEBUGGING.md, D7; DB-09).
+ * sent waits under its number (AGENT-DEBUGGING.md, D7; DB-09). Where the window held the doorbell (`windowHold`), no menu is
+ * guessed at: one still waiting for the window, away, is read once the window answers again; one that rang just now,
+ * after the window came back, is read for what the agent is still at (REMOTE.md R4).
  */
-function whereToLook(id: number, told: Recipient | typeof FACADE, waiting: 'task' | 'messages'): string {
-	return told === HUMAN
-		? 'Facade cannot determine what the CLI is doing. Inspect its terminal.'
-		: `Call read_screen with agent #a${id}. A CLI menu may have consumed the doorbell; answer it with type_text or press_keys. Do not resend ${waiting === 'task' ? 'the task or start a replacement agent for it' : 'the messages'}.`;
+function whereToLook(id: number, told: Recipient | typeof FACADE, waiting: 'task' | 'messages', windowHold: 'waiting' | 'rang' | undefined): string {
+	const again = `Do not resend ${waiting === 'task' ? 'the task or start a replacement agent for it' : 'the messages'}.`;
+	if (told === HUMAN) {
+		return 'Facade cannot determine what the CLI is doing. Inspect its terminal.';
+	}
+	return windowHold === 'waiting'
+		? `Call read_screen with agent #a${id} once the window answers again. ${again}`
+		: windowHold === 'rang'
+			? `Call read_screen with agent #a${id} to see whether it is still at what came meanwhile. ${again}`
+			: `Call read_screen with agent #a${id}. A CLI menu may have consumed the doorbell; answer it with type_text or press_keys. ${again}`;
 }
 
 /** The number of the message `text` names, as `#m42`; throws, saying why, for what is none - an agent's number among them. */

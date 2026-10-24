@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as l10n from '@vscode/l10n';
-import { DeferredPromise } from '../base/async';
+import { DeferredPromise, withDeadline } from '../base/async';
 import { clauseOf, messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { AgentCli, capabilitiesOf, Connection, connectionFor, effectiveSandbox, Environment, Injected, InstalledCli, LaunchInput, LaunchSpec, launchFor } from '../clis/cli';
@@ -28,6 +28,13 @@ import { excerptText, ScreenRead } from './screens';
  * and for an agent's MCP server to find the window again.
  */
 export const START_TIMEOUT_MS = 120_000;
+
+/**
+ * How long a start that is not confirmed waits past its time for what its answer says - the last
+ * lines of its screen, or where its worktree's setup is: a moment, so that a start during an
+ * outage answers at its timeout, with what there is, not at about twice it (O3).
+ */
+const UNCONFIRMED_READ_MS = 5_000;
 
 /**
  * Why `name` cannot be a custom agent's, as a clause for the list of what its settings have wrong: not an
@@ -702,8 +709,8 @@ export class Launcher implements Disposable {
 		// Read for the caller that waits: what its CLI shows is often why - or, its worktree's setup running, with no
 		// terminal of its own yet, what that setup shows: a slow install, or one waiting on a prompt (O3)
 		const now = this.context.table.get(agent.id);
-		const screen = now?.processId !== undefined ? await this.context.excerptOf(agent) : undefined;
-		const settingUp = now?.processId === undefined && now?.phase === 'running_setup' ? await this.setupOf(now.folder) : undefined;
+		const screen = now?.processId !== undefined ? await withDeadline(this.context.excerptOf(agent), UNCONFIRMED_READ_MS, () => undefined) : undefined;
+		const settingUp = now?.processId === undefined && now?.phase === 'running_setup' ? await withDeadline(this.setupOf(now.folder), UNCONFIRMED_READ_MS, () => undefined) : undefined;
 		startup.up.complete({ why, ...(screen ? { screen } : {}), ...(settingUp ? { settingUp } : {}) });
 	}
 

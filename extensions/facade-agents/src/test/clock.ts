@@ -74,7 +74,13 @@ export class FakeClock {
 		for (let due = this.nextDue(end); due; due = this.nextDue(end)) {
 			this.timers.delete(due[0]);
 			this.now = Math.max(this.now, due[1].at);
-			due[1].run();
+			try {
+				due[1].run();
+			} catch (err) {
+				// A timer's throw is the process's, never the tick's: real timers report it uncaught - failing
+				// the test - and whoever moved time must never catch it as the promise's own failure.
+				this.real.setImmediate(() => { throw err; });
+			}
 			await this.settle();
 		}
 		this.now = end;

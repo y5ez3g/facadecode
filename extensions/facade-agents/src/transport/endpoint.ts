@@ -3,20 +3,27 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
+import { processStartTime } from '../base/system';
 import { PipeHandlers, PipeServer } from './pipe';
 import { McpTool, TOOLS_FILE } from './protocol';
 
 const WINDOW_FILE = 'window.json';
 
-/** What the window that serves a workspace's agents writes of itself: its pipe, its process, and whether the agent framework is on. */
-interface WindowRecord {
+/**
+ * What the window that serves a workspace's agents writes of itself: its pipe, its process, whether the
+ * agent framework is on, and the secret another extension host of this window says to ask with `/release`
+ * that this one lets go - one a window before that secret does not name (REMOTE.md R4).
+ */
+export interface WindowRecord {
 	readonly pipe: string;
 	readonly pid: number;
 	readonly enabled: boolean;
+	readonly release?: string;
 }
 
 /** How to start an MCP server that calls this endpoint. */
@@ -41,26 +48,28 @@ export class PipeEndpoint<C> {
 	private readonly runtime = process.execPath;
 	private readonly shim = path.join(__dirname, 'shim.js');
 
-	private constructor(private readonly dir: string, private readonly server: PipeServer<C>, private enabled: boolean) { }
+	private constructor(private readonly dir: string, private readonly server: PipeServer<C>, private enabled: boolean, private readonly releaseSecret: string) { }
 
 	/**
 	 * Listens on `pipe` and records it in `dir`, the workspace's folder under ~/.facade/workspaces, with
-	 * whether the agent framework is on - and, where given, `tools`, the tools it serves, which an agent's MCP
-	 * server lists while the window does not answer (`TOOLS_FILE`). One that cannot record where it listens does
-	 * not listen: its pipe is left for the next try.
+	 * whether the agent framework is on and the secret another extension host of this window asks `/release`
+	 * with - and, where given, `tools`, the tools it serves, which an agent's MCP server lists while the
+	 * window does not answer (`TOOLS_FILE`). One that cannot record where it listens does not listen: its
+	 * pipe is left for the next try.
 	 */
 	static async start<C>(pipe: string, dir: string, handlers: PipeHandlers<C>, enabled = true, tools?: readonly McpTool[]): Promise<PipeEndpoint<C>> {
-		const server = await PipeServer.listen(pipe, handlers);
+		const release = crypto.randomBytes(16).toString('hex');
+		const server = await PipeServer.listen(pipe, handlers, { release: { secret: release, startedAt: processStartTime() } });
 		try {
 			if (tools) {
 				replaceFile(path.join(dir, TOOLS_FILE), JSON.stringify(tools));
 			}
-			writeWindowRecord(dir, { pipe: server.path, pid: process.pid, enabled });
+			writeWindowRecord(dir, { pipe: server.path, pid: process.pid, enabled, release });
 		} catch (err) {
 			server.dispose();
 			throw err;
 		}
-		return new PipeEndpoint(dir, server, enabled);
+		return new PipeEndpoint(dir, server, enabled, release);
 	}
 
 	/**
@@ -70,7 +79,7 @@ export class PipeEndpoint<C> {
 	setEnabled(enabled: boolean): void {
 		if (enabled !== this.enabled) {
 			this.enabled = enabled;
-			writeWindowRecord(this.dir, { pipe: this.server.path, pid: process.pid, enabled });
+			writeWindowRecord(this.dir, { pipe: this.server.path, pid: process.pid, enabled, release: this.releaseSecret });
 		}
 	}
 
@@ -132,14 +141,16 @@ export class PipeEndpoint<C> {
 }
 
 /** The record of the window that serves `dir`'s agents, each field checked: undefined when there is none, or it is not one. */
-function readWindowRecord(dir: string): WindowRecord | undefined {
+export function readWindowRecord(dir: string): WindowRecord | undefined {
 	try {
 		const read: unknown = JSON.parse(fs.readFileSync(path.join(dir, WINDOW_FILE), 'utf8'));
 		if (!isJsonObject(read)) {
 			return undefined;
 		}
-		const { pipe, pid, enabled } = read;
-		return typeof pipe === 'string' && typeof pid === 'number' ? { pipe, pid, enabled: enabled !== false } : undefined;
+		const { pipe, pid, enabled, release } = read;
+		return typeof pipe === 'string' && typeof pid === 'number'
+			? { pipe, pid, enabled: enabled !== false, ...(typeof release === 'string' && release ? { release } : {}) }
+			: undefined;
 	} catch {
 		return undefined;
 	}

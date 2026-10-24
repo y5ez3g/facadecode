@@ -8,7 +8,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { canonicalFolder, isInsideFolder } from '../base/files';
-import { Git, ListedWorktree, MadeWorktreeFolder, OwnedFile, Repository, SetupOutcome, SetupProgress, WorktreeChanges, WorktreeDeletion } from '../core/ports';
+import { Git, ListedWorktree, MadeWorktreeFolder, OwnedFile, Repository, SetupOutcome, SetupProgress, WorktreeChanges, WorktreeDeleted, WorktreeDeletion } from '../core/ports';
+import { runUntimedTicketedCall, TicketRegistry } from '../core/tickets';
 import { changedFilesIn, excludeIn, fileAtIn, hasBranchIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreeRootIn, worktreesIn } from './gitCli';
 
 /** The options the window's `_facade.worktree.delete` and `_facade.worktree.removalLoss` take: its `IRemoveWorktreeOptions`. */
@@ -32,8 +33,11 @@ export class HostGit implements Git {
 	/** Its real path, worked out once it is there: it is under this machine's home, which does not change. */
 	private realWorktreesFolder: string | undefined;
 
-	/** `workspace` is the id of the record the agents are in: their runs are known by it. */
-	constructor(private readonly workspace: string) { }
+	/**
+	 * `workspace` is the id of the record the agents are in: their runs are known by it; `tickets`,
+	 * the tickets of the operations asked of the window.
+	 */
+	constructor(private readonly workspace: string, private readonly tickets: TicketRegistry) { }
 
 	async repositoryOf(folder: string): Promise<Repository | undefined> {
 		return repositoryAt(folder);
@@ -68,8 +72,13 @@ export class HostGit implements Git {
 		return path.join(this.worktreesFolder, path.basename(main), worktreeFolderName(branch));
 	}
 
-	async makeWorktree(main: string, branch: string, startPoint: string): Promise<MadeWorktreeFolder> {
-		const made = await vscode.commands.executeCommand<{ readonly worktree: vscode.Uri; readonly copyFailures: readonly string[]; readonly hookFailure?: string }>('_facade.worktree.create', vscode.Uri.file(main), branch, startPoint, false);
+	async makeWorktree(main: string, branch: string, startPoint: string, run: number): Promise<MadeWorktreeFolder | undefined> {
+		const made = await runUntimedTicketedCall(this.tickets, 'create', run, async ticket =>
+			vscode.commands.executeCommand<{ readonly worktree: vscode.Uri; readonly copyFailures: readonly string[]; readonly hookFailure?: string; readonly refused?: true }>('_facade.worktree.create', vscode.Uri.file(main), branch, startPoint, false, ticket));
+		// Refused: the run was stopped while its worktree waited for the window - nothing was made (REMOTE.md R7)
+		if (made.refused) {
+			return undefined;
+		}
 		return { folder: made.worktree.fsPath, copyFailures: made.copyFailures, ...(made.hookFailure ? { hookFailure: made.hookFailure } : {}) };
 	}
 
@@ -98,8 +107,31 @@ export class HostGit implements Git {
 		return { files, unsaved, submodules };
 	}
 
-	async deleteWorktree(folder: string, options: WorktreeDeletion): Promise<void> {
-		await vscode.commands.executeCommand('_facade.worktree.delete', vscode.Uri.file(folder), this.deletionOf(options));
+	async deleteWorktree(folder: string, options: WorktreeDeletion, waitMs: number): Promise<WorktreeDeleted> {
+		// Its ticket, for no run: the window claims it before it stops or deletes anything, granted while the caller waits
+		const ticket = this.tickets.issue('delete', 0);
+		const answer = Promise.resolve(vscode.commands.executeCommand<{ readonly refused?: true } | undefined>('_facade.worktree.delete', vscode.Uri.file(folder), this.deletionOf(options), ticket)).then(answered => {
+			if (answered?.refused) {
+				throw new Error(`${folder} was not deleted: the window took up the deletion only after its caller stopped waiting.`);
+			}
+		});
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const over = await Promise.race([answer.then(() => false), new Promise<true>(resolve => timer = setTimeout(() => resolve(true), waitMs))]);
+			if (!over) {
+				this.tickets.answered(ticket);
+				return { outcome: 'done' };
+			}
+		} catch (err) {
+			this.tickets.answered(ticket);
+			throw err;
+		} finally {
+			clearTimeout(timer);
+		}
+		// The caller's wait is over: never claimed, the window's late claim is refused and nothing is done; claimed, the
+		// deletion is under way, and how it ends is told once the window answers (REMOTE.md R4)
+		answer.catch(() => undefined);
+		return this.tickets.timeout(ticket) === 'not_applied' ? { outcome: 'not_applied' } : { outcome: 'unknown', late: answer };
 	}
 
 	async deletionLoss(folder: string, options: WorktreeDeletion): Promise<readonly string[]> {

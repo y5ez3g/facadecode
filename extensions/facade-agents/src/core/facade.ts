@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as l10n from '@vscode/l10n';
-import { DeferredPromise, timeout } from '../base/async';
+import { DeferredPromise, timeout, withDeadline } from '../base/async';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
 import { canonicalFolder, isEqualPath, isInsideFolder } from '../base/files';
@@ -27,7 +27,7 @@ import { ErrorOutcome, FacadeError } from './errors';
 import { Injections, InjectionUser, UnchangedFile } from './injections';
 import { delaysOf, inBackground, Launched, Launcher, LaunchProgress, notConnectedNotice, Prepared, timingOf, windowClosed } from './launch';
 import { Mail, Mailbox } from './mail';
-import { AgentSetup, CliCatalog, Disposable, EndedAgent, EndTold, MadeWorktreeFolder, OwnedFile, Ports, Repository, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalsInside, Timing, WORKTREES_SETTING } from './ports';
+import { AgentSetup, CliCatalog, Disposable, EndedAgent, EndTold, MadeWorktreeFolder, OwnedFile, Ports, Repository, SetupProgress, Severity, StopSignal, TerminalEnd, TerminalsInside, Timing, WorktreeDeleted, WORKTREES_SETTING } from './ports';
 import { ScreenRead, Screens } from './screens';
 
 /**
@@ -55,6 +55,11 @@ const FIND_AGAIN_TRIES = 8;
  * CLIs', so that nothing is typed into it too soon.
  */
 const UNKNOWN_DELAYS: LaunchDelays = { enterDelay: 900, taskDelay: 2_000 };
+/**
+ * How long a start through start_agent waits for the window's terminal environment where the window gave one before:
+ * past it - the window away - it goes on with that one (REMOTE.md R4).
+ */
+const ENVIRONMENT_WAIT_MS = 2_000;
 
 /** What the core is made with: the record, the window's ports, the CLIs, and what agents are given. */
 export interface FacadeOptions {
@@ -220,6 +225,8 @@ interface DeletionStops {
 	began: boolean;
 	readonly stopped: number[];
 	readonly stopping: number[];
+	/** A deletion the window took on that outlived its call - away - recorded once it ends: the deletion is the call's till then (REMOTE.md R4). */
+	settling?: Promise<void>;
 }
 
 /** A folder of the window an agent can start in, and the worktree it is. */
@@ -272,6 +279,12 @@ const PROCESS_START_SLACK_MS = 3_000;
 
 /** How long a process sent a signal by its id is given to end before the next, stronger one. */
 const PROCESS_END_WAIT_MS = 5_000;
+
+/**
+ * The grace a stop's escalation waits past the window's answer to the stop before: the hang-up's
+ * delivery, not its sending, is what the next signal waits for (M8).
+ */
+const STOP_ESCALATION_GRACE_MS = 5_000;
 
 /**
  * What `stop_agent` deletes: a worktree of the repository whose main checkout is `main`, at `head` - or what a
@@ -371,6 +384,8 @@ export class Facade implements Disposable {
 	 * unread messages go back to another of them.
 	 */
 	private settling: [Agent, EndNotice][] | undefined;
+	/** The agents recorded lost, exited or failed as Facade came back, for the notice of those that ended while the window was away: none outside that settling. */
+	private endedWhileAway: Agent[] | undefined;
 	/** The delays of each agent's launch, as its run's plan has them, by number: read once. */
 	private readonly delays = new Map<number, LaunchDelays>();
 	/** The new branches starts are making worktrees on, by their repositories' main checkouts: a second start on one is refused. */
@@ -409,6 +424,10 @@ export class Facade implements Disposable {
 	private sameWindow = false;
 	/** The custom agents whose programs a terminal finds, by name, as `refreshClis` last looked; all of them before it has. */
 	private customFound: ReadonlySet<string> | undefined;
+	/** `refreshClis`'s look under way, which another asked for meanwhile waits on: no looks pile up on a window that does not answer. */
+	private looking: Promise<void> | undefined;
+	/** The terminal environment the window gave last, by folder, the latest last: what a start goes on with while the window is away (REMOTE.md R4). */
+	private readonly environments = new Map<string, Environment>();
 
 	constructor(private readonly options: FacadeOptions) {
 		this.table = options.table;
@@ -540,14 +559,20 @@ export class Facade implements Disposable {
 	}
 
 	/** The agents an agent can start: the built-ins this machine has and the person offers, then the person's custom agents, each with what its launch takes. */
-	/** Finds the CLIs this machine has again, as a terminal would now; what fails is said, the last found kept. */
-	async refreshClis(): Promise<void> {
+	/** Finds the CLIs this machine has again, as a terminal would now, one look at a time: one asked for while another is under way is that one. */
+	refreshClis(): Promise<void> {
+		this.looking ??= this.lookForClis().finally(() => this.looking = undefined);
+		return this.looking;
+	}
+
+	/** A look for the CLIs, asked of the window where a terminal is made: what fails is said, the last found kept. */
+	private async lookForClis(): Promise<void> {
 		try {
 			await this.options.clis.refresh?.();
 			// The custom agents' programs too, where a terminal in the folder on screen finds them, as the built-ins are
 			const folder = await this.ports.workspace.activeFolder() ?? this.ports.workspace.folders().at(0);
 			if (folder !== undefined) {
-				const env = await this.options.clis.environment(folder);
+				const env = await this.terminalEnvironment(folder);
 				this.customFound = new Set(this.options.clis.custom().filter(({ cli, config }) => this.options.clis.locate(cli, config, { ...env, ...config.launch.environment }, folder)).map(({ cli }) => cli.id));
 			}
 		} catch (err) {
@@ -598,6 +623,9 @@ export class Facade implements Disposable {
 	 * process's.
 	 */
 	private isConnected(agent: Agent): boolean {
+		if (agent.state === 'ended') {
+			return false;
+		}
 		const servers = this.servers.get(agent.id);
 		if (!agent.connected || servers === undefined) {
 			return agent.connected;
@@ -799,8 +827,9 @@ export class Facade implements Disposable {
 
 	/** `startAgent`, which tells `onRecorded` once the child is recorded. */
 	private async startChecked(caller: Caller, request: StartRequest, progress: LaunchProgress | undefined, onRecorded: () => void): Promise<Started> {
-		// Its time counts from now, when it is accepted, whatever it waits for after (O9).
+		// Its time counts from now, when it is accepted, whatever it waits for after (O9): what it asks of the window too.
 		const acceptedAt = Date.now();
+		const deadline = acceptedAt + this.timing().startTimeoutMs;
 		this.stillOpen();
 		// Facade makes no worktree with worktree management off: the call is refused whole, before anything is made for it
 		// (WORKTREE.md WT-9.3; O3)
@@ -816,13 +845,13 @@ export class Facade implements Disposable {
 		const effort = request.effort?.trim() || undefined;
 		const task = request.task?.trim() ? request.task : undefined;
 		// Everything that can refuse the call is asked before anything is made for it.
-		const place = await this.placeOf(caller, request.folder, request.newWorktree === true, name);
+		const place = await this.placeOf(caller, request.folder, request.newWorktree === true, name, deadline);
 		// A new branch is this start's from here until its worktree is made, or the start ends without one: a second
 		// start on it is refused at once, before anything is allocated for it (AS-21)
 		const reserved = place.kind === 'new' ? this.reserveBranch(place.repository.main, place.branch) : undefined;
 		try {
 			const home = place.kind === 'new' ? place.repository.main : place.folder;
-			const { installed, config } = await this.startableHere(request.cli, home, false, true);
+			const { installed, config, terminal } = await this.startableHere(request.cli, home, false, true, { at: deadline, name, ...(place.kind === 'new' ? { repository: place.repository.main } : place.outsideGit ? {} : { repository: place.main }) });
 			// Through start_agent, where nobody may be watching: its launch's unattended part (L4)
 			const launch = launchFor(config, true);
 			const capabilities = capabilitiesOf(installed.cli, launch);
@@ -853,7 +882,7 @@ export class Facade implements Disposable {
 					throw new FacadeError('INVALID', `The ${what} '${value}' starts with a dash, so ${installed.cli.displayName} would treat it as an option instead of the ${what}. Remove the leading dash.`);
 				}
 			}
-			const env = await this.environmentOf(installed, home, true);
+			const env = await this.environmentOf(installed, home, true, terminal);
 			this.stillOpen();
 			// Recorded as asked for; given to the CLI only where its launch has a group for it.
 			const repository = place.kind === 'new' ? place.repository.main : place.main;
@@ -892,18 +921,24 @@ export class Facade implements Disposable {
 			let made: string | undefined;
 			const prepare = async (agent: Agent): Promise<Prepared> => {
 				progress?.(`Creating worktree ${place.branch} for ${describe(agent)}.`);
-				let worktree: MadeWorktreeFolder;
+				let worktree: MadeWorktreeFolder | undefined;
 				// Where git makes it is known once it has: a stop that deletes it meanwhile waits for that (O4)
 				const making = new DeferredPromise<string | undefined>();
 				this.worktreesMaking.set(agent.id, making.p);
 				try {
-					worktree = await this.ports.git.makeWorktree(place.repository.main, place.branch, place.head);
+					worktree = await this.ports.git.makeWorktree(place.repository.main, place.branch, place.head, agent.id);
 				} catch (err) {
 					making.complete(undefined);
 					throw new FacadeError('FAILED', `Could not create worktree ${place.branch}: ${messageOf(err)}`, { outcome: 'failed', agent: agent.id });
 				} finally {
 					// Made, git has the branch; not made, it is free again
 					reserved?.dispose();
+				}
+				if (worktree === undefined) {
+					// Refused: the run was stopped while its worktree waited for the window - nothing was
+					// made, and none is recorded (REMOTE.md R7)
+					making.complete(undefined);
+					throw new Error('startup was stopped during worktree creation');
 				}
 				const folder = made = worktree.folder;
 				// Recorded even where the window closed or the agent was stopped meanwhile: it was made, and stays.
@@ -1108,6 +1143,8 @@ export class Facade implements Disposable {
 	 */
 	async stopAgent(caller: Caller, target: string, options: { readonly deleteWorktree?: boolean; readonly discardChanges?: boolean } = {}): Promise<Stopped> {
 		this.stillOpen();
+		// A deletion's time counts from now, when it is accepted, whatever it waits for after: git, and the window (O9; REMOTE.md R4)
+		const deadline = Date.now() + this.timing().startTimeoutMs;
 		if (options.discardChanges && !options.deleteWorktree) {
 			throw new FacadeError('INVALID', 'discard_changes:true requires delete_worktree:true; it controls whether worktree deletion may discard changes.');
 		}
@@ -1144,7 +1181,7 @@ export class Facade implements Disposable {
 			}
 			// Git's answer, or none once the wait is over - its timer cleared as soon as git answers
 			const over = new AbortController();
-			const made = await Promise.race([making.then(result => ({ folder: result })), timeout(this.timing().startTimeoutMs, over.signal).then(() => undefined, () => undefined)]);
+			const made = await Promise.race([making.then(result => ({ folder: result })), timeout(Math.max(0, deadline - Date.now()), over.signal).then(() => undefined, () => undefined)]);
 			over.abort();
 			if (!made) {
 				throw new FacadeError('UNAVAILABLE', `${describe(agent)} ${ended && !alreadyEnded ? 'was stopped, but its' : 'ended, and its'} worktree ${agent.worktree} is still being created. It was not deleted. Git may finish creating it; the worktree and branch will be kept. Call stop_agent again with delete_worktree:true after creation ends.`, { outcome: 'pending', agent: agent.id });
@@ -1158,14 +1195,14 @@ export class Facade implements Disposable {
 		}
 		const stoppedFirst = ended && !alreadyEnded ? [this.factsOf(this.table.get(agent.id) ?? agent)] : [];
 		if (stoppedFirst.length) {
-			const deleted = await this.deleteMade(caller, agent, folder, by, options);
+			const deleted = await this.deleteMade(caller, agent, folder, by, deadline, options);
 			return { ...deleted, alreadyEnded: false, stopped: [...stoppedFirst, ...deleted.stopped.filter(each => each.id !== agent.id)] };
 		}
-		return this.deleteMade(caller, agent, folder, by, options, alreadyEnded);
+		return this.deleteMade(caller, agent, folder, by, deadline, options, alreadyEnded);
 	}
 
-	/** Deletes the worktree `folder` of `agent` - stopped already, or `alreadyEnded` not - with the agents in it (O5). */
-	private async deleteMade(caller: Caller, agent: Agent, folder: string, by: StoppedBy, options: { readonly discardChanges?: boolean }, alreadyEnded = true): Promise<Stopped> {
+	/** Deletes the worktree `folder` of `agent` - stopped already, or `alreadyEnded` not - with the agents in it, the call's time over at `deadline` (O5). */
+	private async deleteMade(caller: Caller, agent: Agent, folder: string, by: StoppedBy, deadline: number, options: { readonly discardChanges?: boolean }, alreadyEnded = true): Promise<Stopped> {
 		// A worktree whose folder is gone already - deleted by hand - has nothing left to delete: the agent alone is
 		// stopped, and the answer says so, rather than what git says of a folder that is not there (X-37).
 		if (!fs.existsSync(folder)) {
@@ -1218,18 +1255,25 @@ export class Facade implements Disposable {
 		}
 		const deleting = new DeferredPromise<Stopped>();
 		deleting.p.catch(() => undefined);
-		const entry = { folder, done: deleting.p, by, stops: { began: false, stopped: [], stopping: [] } };
+		const stops: DeletionStops = { began: false, stopped: [], stopping: [] };
+		const entry = { folder, done: deleting.p, by, stops };
 		this.deletions.push(entry);
 		try {
 			const target: DeletionTarget = repository ? { main: repository.main, branch: repository.worktree, ...(repository.head !== undefined ? { head: repository.head } : {}) } : { main: leftover!.repository, leftover: leftover!.name };
-			const stopped = await this.deleteWorktreeOf(caller, agent, folder, target, by, alreadyEnded, options, entry.stops);
+			const stopped = await this.deleteWorktreeOf(caller, agent, folder, target, by, alreadyEnded, options, entry.stops, deadline);
 			deleting.complete(stopped);
 			return stopped;
 		} catch (err) {
 			deleting.error(err);
 			throw err;
 		} finally {
-			this.deletions.splice(this.deletions.indexOf(entry), 1);
+			// One the window took on that outlived the call stays the call's - the agents it stops, and no start there - until it ends
+			const over = () => this.deletions.splice(this.deletions.indexOf(entry), 1);
+			if (entry.stops.settling) {
+				void entry.stops.settling.finally(over);
+			} else {
+				over();
+			}
 		}
 	}
 
@@ -1238,10 +1282,10 @@ export class Facade implements Disposable {
 	 * once no other is under way: refused, nothing stopped, where an agent working in it is out of the caller's reach
 	 * or it has work deleting it would lose; else the window's Delete Worktree, which stops every agent working in it
 	 * once it is off it and it is out of the workspace, looks again, and deletes it, its branch kept (WORKTREE.md WT-8;
-	 * AGENT-ORCHESTRATION.md, O5). What it stopped is in `stops`.
+	 * AGENT-ORCHESTRATION.md, O5). What it stopped is in `stops`. Its checks wait for the window until `deadline`.
 	 */
-	private async deleteWorktreeOf(caller: Caller, agent: Agent, folder: string, target: DeletionTarget, by: StoppedBy, alreadyEnded: boolean, options: { readonly discardChanges?: boolean }, stops: DeletionStops): Promise<Stopped> {
-		const { inside, terminals } = await this.workingIn(folder);
+	private async deleteWorktreeOf(caller: Caller, agent: Agent, folder: string, target: DeletionTarget, by: StoppedBy, alreadyEnded: boolean, options: { readonly discardChanges?: boolean }, stops: DeletionStops, deadline: number): Promise<Stopped> {
+		const { inside, terminals } = await this.workingIn(folder, deadline);
 		// One the window holds for another record is no agent of this list to stop
 		if (terminals.others) {
 			throw new FacadeError('REFUSED', `Cannot delete ${folder}: ${terminals.others === 1 ? 'an agent' : `${terminals.others} agents`} working there ${terminals.others === 1 ? 'is' : 'are'} missing from this window's agent list. Deleting the worktree would end ${terminals.others === 1 ? 'it' : 'them'} without an explicit stop. Nothing was stopped. Stop the unlisted agents first.`);
@@ -1261,7 +1305,7 @@ export class Facade implements Disposable {
 		// The shared Delete Worktree's own preflight, before any agent is stopped: what it would refuse - an unsaved editor
 		// of any kind among it, where the extension host sees text and notebooks alone - refuses it here, all left running
 		// (O5; O8; OR-19; OR-04)
-		const changes = options.discardChanges ? undefined : await this.lossIn(folder, target, agents);
+		const changes = options.discardChanges ? undefined : await this.lossIn(folder, target, agents, deadline);
 		if (changes) {
 			throw lossRefusal(folder, changes);
 		}
@@ -1269,16 +1313,18 @@ export class Facade implements Disposable {
 			const stopped = this.table.get(id);
 			return stopped ? [this.factsOf(stopped)] : [];
 		});
+		let deleted: WorktreeDeleted;
 		try {
 			// Nothing is stopped ahead of it: the window stops them once it is off the worktree and the worktree is out of
-			// the workspace, and looks again before git deletes it (WT-8, steps 5 and 6)
-			await this.ports.git.deleteWorktree(folder, {
+			// the workspace, and looks again before git deletes it (WT-8, steps 5 and 6) - having taken it on while this
+			// call waits, until its time is over (REMOTE.md R4)
+			deleted = await this.ports.git.deleteWorktree(folder, {
 				discardChanges: !!options.discardChanges,
 				ownFiles: target.leftover === undefined ? await this.ownFilesIn(folder, target) : [],
 				main: target.main,
 				agents,
 				...(target.leftover !== undefined ? { leftover: true } : {})
-			});
+			}, Math.max(0, deadline - Date.now()));
 		} catch (err) {
 			// Its agents not all ended in time: what happened all the same, said and given as the same facts - the agents it
 			// stopped, and those whose stops answered pending, still stopping (O2)
@@ -1307,6 +1353,18 @@ export class Facade implements Disposable {
 			this.recordRemoval({ folder, by, deleted: false, reason: messageOf(err), main: target.main, ...(branch !== undefined ? { branch } : {}) });
 			return { agent: this.factsOf(this.table.get(agent.id) ?? agent), alreadyEnded, stopped: stoppedNow(), worktree: { folder, deleted: false, why: messageOf(err) } };
 		}
+		const seconds = Math.round(this.timing().startTimeoutMs / 1000);
+		// The window never took it on - away - and never will: nothing was stopped or deleted (REMOTE.md R4)
+		if (deleted.outcome === 'not_applied') {
+			throw new FacadeError('UNAVAILABLE', `${folder} was not deleted: the window did not answer within ${seconds} seconds. Nothing was stopped.`);
+		}
+		// Taken on, and under way as the window stopped answering: what came of it is recorded once it answers, and it is not
+		// done again (WORKTREE.md WT-8.6; REMOTE.md R4)
+		if (deleted.outcome === 'unknown') {
+			stops.settling = deleted.late.then(() => this.removalSettled(folder, by, target), err => this.removalSettled(folder, by, target, messageOf(err)));
+			const already = stoppedNow();
+			throw new FacadeError('UNAVAILABLE', `The deletion of ${folder} was under way when the window stopped answering, and it did not finish within ${seconds} seconds: its outcome is unknown. It is not repeated; how it ends is recorded once the window answers.${already.length ? ` Agents already stopped: ${already.map(each => describe(each)).join(', ')}.` : ''} Check the folder and list_agents before calling stop_agent with delete_worktree:true again.`, { outcome: 'unknown', agent: agent.id, worktree: folder, stopped: [...stops.stopped] });
+		}
 		this.recordRemoval({ folder, by, deleted: true });
 		this.table.forgetWorktree(folder);
 		this.log(`Deleted ${folder} through stop_agent requested by ${this.whoIs(by)}.`);
@@ -1314,11 +1372,39 @@ export class Facade implements Disposable {
 	}
 
 	/**
+	 * How a deletion through stop_agent whose caller was told its outcome is unknown came out, once the window answers:
+	 * recorded as any other's - deleted, or not and `failure` why - where the window that asked is still there (O11; WT-8.6).
+	 */
+	private removalSettled(folder: string, by: StoppedBy, target: DeletionTarget, failure?: string): void {
+		if (this.disposed) {
+			return;
+		}
+		try {
+			if (failure === undefined) {
+				this.recordRemoval({ folder, by, deleted: true });
+				this.table.forgetWorktree(folder);
+				this.log(`Deleted ${folder} through stop_agent requested by ${this.whoIs(by)}, after the call was told its outcome was unknown.`);
+				return;
+			}
+			this.log(`Failed to delete ${folder} through stop_agent requested by ${this.whoIs(by)}: ${failure}`);
+			const branch = target.leftover ?? target.branch;
+			this.recordRemoval({ folder, by, deleted: false, reason: failure, main: target.main, ...(branch !== undefined ? { branch } : {}) });
+		} catch (err) {
+			this.log(`Could not record how the deletion of ${folder} came out: ${messageOf(err)}`);
+		}
+	}
+
+	/**
 	 * The agents of this window's list working in `folder` - started there, or gone there since: a CLI that cd'd into
 	 * it - wherever they were started, with the window's terminals inside it, whose agents go with it (O5; X-74).
+	 * The window's answer is waited for until the call's `deadline` at most - its time from now unless given: past it
+	 * the deletion is refused, before anything is stopped - a timeout is never read as nothing inside.
 	 */
-	private async workingIn(folder: string): Promise<{ readonly inside: LiveAgent[]; readonly terminals: TerminalsInside }> {
-		const terminals = await this.ports.terminals.inside(folder);
+	private async workingIn(folder: string, deadline?: number): Promise<{ readonly inside: LiveAgent[]; readonly terminals: TerminalsInside }> {
+		const ms = this.timing().startTimeoutMs;
+		const terminals = await withDeadline(this.ports.terminals.inside(folder), Math.max(0, (deadline ?? Date.now() + ms) - Date.now()), () => {
+			throw new FacadeError('UNAVAILABLE', `Could not check ${folder} for agents working in it: the window did not answer within ${Math.round(ms / 1000)} seconds. Nothing was stopped.`);
+		});
 		const live = this.liveAgents();
 		// Its terminal the window cannot see go there - the CLI itself, or a shell it runs, cd'd - its processes say
 		const startedElsewhere = live.filter(each => !isEqualPath(each.folder, folder) && !isInsideFolder(each.folder, folder) && !terminals.agents.includes(each.id) && each.processId !== undefined);
@@ -1343,8 +1429,12 @@ export class Facade implements Disposable {
 	 * @param reloaded Whether a reload of the window before loaded this one.
 	 * @param sameWindow Whether this very window had the record before, its extension host started again - as the
 	 * window remembers it, however the host before went: killed, it left no word of its going in the ledger (WIN-18).
+	 * @param away Whether the window before went away from its remote - its own connection state, not last heard -
+	 * with when that window was last heard from. Gone agents are recorded lost then, never stopped with the window,
+	 * and those that ended are named once, in the away notice (M1; M2). `'unknown'` where the window could not say:
+	 * none is taken to have gone with the window, and none is named as having ended while it was away.
 	 */
-	async recover(reloaded = false, sameWindow = false): Promise<void> {
+	async recover(reloaded = false, sameWindow = false, away?: { readonly away: boolean | 'unknown'; readonly lastHeard?: unknown }): Promise<void> {
 		this.sameWindow = sameWindow;
 		if (this.sweep()) {
 			this.takeBackLater();
@@ -1388,7 +1478,11 @@ export class Facade implements Disposable {
 		// very window, whose extension host started again, and not Facade letting go of its agents
 		const last = this.table.lastClose;
 		const windowClosed = last?.by === 'window' && !last.thisWindow && (!last.ownWindow || !reloaded);
-		const closedByThePerson = windowClosed && !cameBack;
+		// Away, none went with the window: gone agents are recorded lost, never stopped as it went - even
+		// where the earlier host closed the ledger by 'window', as VS Code giving the window up runs
+		// deactivate (M1). Not known either way, none is taken to have gone with it: their ends are recorded
+		// as what was seen, or lost
+		const closedByThePerson = windowClosed && !cameBack && away?.away !== true && away?.away !== 'unknown';
 		// A worktree git finished making after the window went - its start cut, git's answer never heard - is
 		// the one made for it all the same: recorded, and its end says where it stays (LC-renderer_crash-creating_worktree)
 		for (const agent of gone) {
@@ -1401,6 +1495,7 @@ export class Facade implements Disposable {
 		}
 		// They ended together: none's unread messages go back to another of them (AGENT-MESSAGES.md, M10)
 		this.settling = [];
+		this.endedWhileAway = away?.away === true ? [] : undefined;
 		try {
 			for (const agent of gone) {
 				// The window has no terminal for it, yet its own process runs on - a CLI that ignored the hang-up its
@@ -1410,14 +1505,17 @@ export class Facade implements Disposable {
 					this.background(`Ending ${describe(agent)} after losing its terminal`, this.endCutOff(agent, closedByThePerson));
 					continue;
 				}
-				this.endedUnseen(agent, closedByThePerson);
+				this.endedUnseen(agent, closedByThePerson, away?.away === true);
 			}
 		} finally {
 			const settled = this.settling;
 			this.settling = undefined;
+			const ended = this.endedWhileAway ?? [];
+			this.endedWhileAway = undefined;
 			for (const [agent, notice] of settled) {
 				this.messagesOfEnded(agent, notice);
 			}
+			this.sayEndedWhileAway(ended, away);
 		}
 		// What was put into folders for agents that ended while no window was there to see it.
 		if (this.sweep()) {
@@ -1492,9 +1590,10 @@ export class Facade implements Disposable {
 	 * recorded) - but one killed, which is no exit of its CLI's, is lost, its reason naming the signal (D11); any
 	 * other went with its window, or is lost - failed, had it not started. The person hears of what L6 tells them -
 	 * a nonzero exit, a stop they did not ask for - as when Facade sees it, unless they closed the window, which
-	 * ended its session: nothing of that is news to them, nor is a loss nobody saw.
+	 * ended its session: nothing of that is news to them, nor is a loss nobody saw. Away, the ended are named
+	 * once, in the away notice: their own notices stay quiet (M2).
 	 */
-	private endedUnseen(agent: LiveAgent, closedByThePerson: boolean): void {
+	private endedUnseen(agent: LiveAgent, closedByThePerson: boolean, away = false): void {
 		const end = this.ports.terminals.endOf?.(agent.id);
 		// Cut before its CLI ran: in its worktree's preparation, or as its CLI was being launched - no process recorded,
 		// and no terminal the window saw end - a pre-launch run that is definitely absent (O11; OR-14)
@@ -1515,7 +1614,7 @@ export class Facade implements Disposable {
 		} else if (end?.byThePerson || end?.reason === 'folderGone') {
 			this.ended(agent, 'stopped', closedBecause(end), { ...(end.byThePerson ? { by: 'human' as const } : {}), ...(end.exitCode !== undefined ? { exitCode: end.exitCode } : {}), quiet: end.byThePerson || closedByThePerson });
 		} else if (end?.exitCode !== undefined && end.exitCode >= 0 && signalOf(end.exitCode) === undefined) {
-			this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', `${exitedWith(end.exitCode)} while Facade was not running`, { exitCode: end.exitCode, quiet: closedByThePerson });
+			this.ended(agent, agent.state === 'starting' ? 'failed' : 'exited', `${exitedWith(end.exitCode)} while Facade was not running`, { exitCode: end.exitCode, quiet: closedByThePerson || away });
 		} else if (end?.exitCode !== undefined) {
 			// Killed, which Facade did not see - no exit of its CLI's own: lost, saying what is known (D11)
 			const signal = signalOf(end.exitCode);
@@ -1633,9 +1732,14 @@ export class Facade implements Disposable {
 		// Its time counts from the stop's acceptance - a launch it waits for included (X-15)
 		const ms = this.timing().startTimeoutMs;
 		const deadline = Date.now() + ms;
+		// Every stop sent, and when the first was answered: the escalation waits for the window's
+		// answers, and its grace counts from the first answer's delivery (M8)
+		const sent: Promise<{ readonly exitCode?: number }>[] = [];
+		let firstAnsweredAt = 0;
+		const noteAnswer = () => { if (!firstAnsweredAt) { firstAnsweredAt = Date.now(); } };
 		const pending = (cause: string) => {
 			this.log(`${describe(agent)} has not ended yet: ${cause}`);
-			this.keepStopping(agent, stopBy, why);
+			this.keepStopping(agent, stopBy, why, sent.length ? { stops: sent, answeredAt: () => firstAnsweredAt } : undefined);
 			return new FacadeError('UNAVAILABLE', `${describe(agent)} is still stopping: its process has not exited after ${Math.round(ms / 1000)} seconds. Facade will continue trying to stop it; list_agents shows whether it has ended.`, { outcome: 'pending', agent: agent.id });
 		};
 		// A launch under way opens its terminal first, or gives up seeing the stop: never one afterwards (O9).
@@ -1648,7 +1752,24 @@ export class Facade implements Disposable {
 		let exitCode: number | undefined;
 		for (; ;) {
 			try {
-				exitCode = (await this.ports.terminals.stop(agent.id)).exitCode;
+				// The caller's wait ends at the deadline even where the window does not answer - away - while
+				// the stop itself goes on, and is carried out when the window is back (REMOTE.md R4)
+				const over = new AbortController();
+				const stopping = this.ports.terminals.stop(agent.id);
+				stopping.then(noteAnswer, noteAnswer);
+				sent.push(stopping);
+				// The race may settle first: a late end below is dropped, the stop having gone on, and a late
+				// failure never surfaces - keepStopping tries again.
+				stopping.then(() => { }, () => { });
+				const stopped = await Promise.race([
+					stopping.then(stop => ({ stop })),
+					timeout(Math.max(0, deadline - Date.now()), over.signal).then(() => undefined, () => undefined)
+				]);
+				over.abort();
+				if (!stopped) {
+					throw new Error('the window has not answered');
+				}
+				exitCode = stopped.stop.exitCode;
 				// The window says it is gone; its process says so too, or it is not (N-24)
 				if (this.runningProcessOf(agent) !== undefined) {
 					throw new Error('the window cannot find its terminal, but its process is still running');
@@ -1750,14 +1871,23 @@ export class Facade implements Disposable {
 
 	/**
 	 * Goes on stopping an agent whose process outlived its stop's time, as its answer said it would (X-22):
-	 * termination, then a kill it cannot ignore; its end recorded once its process is gone.
+	 * termination, then a kill it cannot ignore; its end recorded once its process is gone. No further
+	 * signal until the window has answered the stop before - sent earlier, they would arrive with it on
+	 * reconnection - and the escalation's grace counts from that answer's delivery (M8).
 	 */
-	private keepStopping(agent: Agent, by: StoppedBy | undefined, why: string): void {
+	private keepStopping(agent: Agent, by: StoppedBy | undefined, why: string, previous?: { readonly stops: readonly Promise<unknown>[]; readonly answeredAt: () => number }): void {
 		if (this.disposed) {
 			return;
 		}
 		this.background(`Stopping ${describe(agent)}`, (async () => {
 			await this.launcher.whenOpened(agent.id);
+			if (previous !== undefined) {
+				await Promise.allSettled(previous.stops);
+				const graceUntil = previous.answeredAt() + STOP_ESCALATION_GRACE_MS;
+				if (graceUntil > Date.now()) {
+					await timeout(graceUntil - Date.now());
+				}
+			}
 			for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
 				if (this.disposed || !isLive(this.table.get(agent.id))) {
 					return;
@@ -1822,15 +1952,23 @@ export class Facade implements Disposable {
 	 * put there and nobody changed applied as for the deletion - its check alone, nothing stopped, closed or removed
 	 * (AGENT-ORCHESTRATION.md, O5, O8; OR-04) - each as it words it; and beside it what only Facade knows: what of
 	 * its own someone changed since, which git may not show, a worktree's submodules, and what a deletion left of it
-	 * holds that its branch does not.
+	 * holds that its branch does not. The window's check is waited for until the call's `deadline` at most - its time
+	 * from now unless given: past it, the window away, the deletion is refused before anything is stopped (REMOTE.md R4).
 	 */
-	private async lossIn(folder: string, repository: DeletionTarget, agents: readonly number[]): Promise<string | undefined> {
+	private async lossIn(folder: string, repository: DeletionTarget, agents: readonly number[], deadline?: number): Promise<string | undefined> {
 		const named = (list: readonly string[]) => list.length > SHOWN_CHANGES ? `${list.slice(0, SHOWN_CHANGES).join(', ')} and ${list.length - SHOWN_CHANGES} more` : list.join(', ');
 		const leftover = repository.leftover;
+		const ms = this.timing().startTimeoutMs;
 		let shared: readonly string[];
 		try {
-			shared = await this.ports.git.deletionLoss(folder, { discardChanges: false, ownFiles: leftover === undefined ? await this.ownFilesIn(folder, repository) : [], main: repository.main, agents, ...(leftover !== undefined ? { leftover: true } : {}) });
+			const checked = this.ports.git.deletionLoss(folder, { discardChanges: false, ownFiles: leftover === undefined ? await this.ownFilesIn(folder, repository) : [], main: repository.main, agents, ...(leftover !== undefined ? { leftover: true } : {}) });
+			shared = await withDeadline(checked, Math.max(0, (deadline ?? Date.now() + ms) - Date.now()), () => {
+				throw new FacadeError('UNAVAILABLE', `Could not check ${folder} for work that deletion would lose: the window did not answer within ${Math.round(ms / 1000)} seconds. Nothing was stopped.`);
+			});
 		} catch (err) {
+			if (err instanceof FacadeError) {
+				throw err;
+			}
 			throw new FacadeError('FAILED', `Could not check ${folder} for work that deletion would lose. Nothing was stopped. Reason: ${messageOf(err)}`);
 		}
 		// What a deletion left holds no git to ask: what of it the branch does not hold as it is, is work
@@ -1939,13 +2077,18 @@ export class Facade implements Disposable {
 	 * worktree management is on, and a new worktree outside any repository, on a branch that is there or that git
 	 * takes for no branch, or with no commit to start at.
 	 */
-	private async placeOf(caller: Caller, named: string | undefined, newWorktree: boolean, name: string): Promise<Place> {
+	private async placeOf(caller: Caller, named: string | undefined, newWorktree: boolean, name: string, deadline: number): Promise<Place> {
 		// Worktree management as the start is accepted, as new_worktree's refusal read it (WORKTREE.md WT-9.3)
 		const request: PlaceRequest = { caller, newWorktree, managed: this.ports.workspace.worktreesManaged() };
 		const own = this.agentOf(caller)?.folder;
-		// The person's own is the folder on their screen (AGENT-ORCHESTRATION.md, O3).
-		const here = own ?? (caller.id === undefined ? await this.ports.workspace.activeFolder() : undefined);
 		const wanted = named?.trim();
+		// The person's own is the folder on their screen (AGENT-ORCHESTRATION.md, O3) - where they name none, a branch, or
+		// a new worktree, which starts at that checkout's commit - asked of the window for the call's time at most: past
+		// it, the window away, nothing is started (REMOTE.md R4; O9)
+		const needed = !wanted || !path.isAbsolute(wanted) || newWorktree;
+		const here = own ?? (caller.id === undefined && needed ? await withDeadline(this.ports.workspace.activeFolder(), Math.max(0, deadline - Date.now()), () => {
+			throw new FacadeError('UNAVAILABLE', `Cannot start @${name}: the window did not answer within ${Math.round(this.timing().startTimeoutMs / 1000)} seconds, so which folder the person has selected is not known. Nothing was started. ${wanted && path.isAbsolute(wanted) ? 'Retry' : 'Provide folder, or retry'} once the window is available.`);
+		}) : undefined);
 		const folder = !wanted ? here : path.isAbsolute(wanted) ? await this.windowFolderAt(wanted, request) : await this.worktreeOnBranch(here, wanted, request);
 		if (folder === undefined) {
 			throw new FacadeError('INVALID', 'Argument \'folder\' is required because the person has no selected folder. Provide the absolute path of a folder in this window.');
@@ -2118,6 +2261,9 @@ export class Facade implements Disposable {
 		if (!end) {
 			return undefined;
 		}
+		if (kind === 'lost' || kind === 'exited' || kind === 'failed') {
+			this.endedWhileAway?.push(agent);
+		}
 		this.log(`${describe(agent)} ended (${kind}): ${reason}`);
 		this.launcher.ended(agent.id, reason);
 		this.withdraw(agent);
@@ -2156,6 +2302,18 @@ export class Facade implements Disposable {
 		} catch (err) {
 			this.log(`Could not record all returned unread messages and the creator's end notice for ${describe(agent)}: ${messageOf(err)}`);
 		}
+	}
+
+	/**
+	 * Tells the person once which agents ended while the window was away from its remote - lost, exited,
+	 * or failed to start - and how long ago it was last connected where that is known: the last time
+	 * the earlier extension host heard from its window (REMOTE.md R4).
+	 */
+	private sayEndedWhileAway(ended: Agent[], away: { readonly away: boolean | 'unknown'; readonly lastHeard?: unknown } | undefined): void {
+		if (away?.away !== true || !ended.length) {
+			return;
+		}
+		this.ports.person.tell(lostWhileAwayNotice(ended.map(agent => describe(agent)), awayTime(away.lastHeard), Date.now()), undefined, 'warning');
 	}
 
 	/** Ends an agent whose launch failed before it had a process: recorded as failed, and its terminal closed. */
@@ -2249,11 +2407,12 @@ export class Facade implements Disposable {
 
 	/**
 	 * The agent `id` names - a built-in by its id, or a custom agent by its name; with `custom`, only the
-	 * custom agent - as the person has Facade start it, found as a terminal in `folder` would find it.
-	 * Refused, saying why and what can be started: one turned off, one not on this machine, and one whose
-	 * settings are wrong.
+	 * custom agent - as the person has Facade start it, found as a terminal in `folder` would find it, in that
+	 * terminal's environment, which it gives with it. Refused, saying why and what can be started: one turned off,
+	 * one not on this machine, and one whose settings are wrong. With `deadline`, a start through start_agent's - of
+	 * the agent `name`, in `repository` where the folder is in one - that environment is asked as `terminalEnvironment` says.
 	 */
-	private async startableHere(id: string, folder: string, custom = false, unattended = false): Promise<{ readonly installed: InstalledCli; readonly config: CliConfig }> {
+	private async startableHere(id: string, folder: string, custom = false, unattended = false, deadline?: { readonly at: number; readonly name: string; readonly repository?: string }): Promise<{ readonly installed: InstalledCli; readonly config: CliConfig; readonly terminal: Environment }> {
 		const found = this.cliOf(id, custom);
 		const startable = () => this.startable().map(each => each.id).join(', ') || 'none';
 		if (!found) {
@@ -2266,14 +2425,54 @@ export class Facade implements Disposable {
 		if (config.wrong) {
 			throw new FacadeError('UNAVAILABLE', `Cannot start ${cli.displayName} until the person corrects its settings: ${config.wrong.join('; ')}. Open Show Agent Launch to inspect them.`);
 		}
-		const env = { ...await this.options.clis.environment(folder), ...launchFor(config, unattended).launch.environment };
+		const terminal = await this.terminalEnvironment(folder, deadline && {
+			at: deadline.at,
+			...(deadline.repository !== undefined ? { repository: deadline.repository } : {}),
+			refusal: seconds => `Cannot start @${deadline.name}: the window did not answer within ${seconds} seconds, so it is not known where a terminal in ${folder} finds ${cli.displayName}. Nothing was started. Retry once the window is available.`
+		});
+		const env = { ...terminal, ...launchFor(config, unattended).launch.environment };
 		this.stillOpen();
 		// Found as its terminal will find it: in the environment a terminal there has, with its starter's launch's (L10).
 		const installed = this.options.clis.locate(cli, config, env, folder);
 		if (!installed) {
 			throw new FacadeError('UNAVAILABLE', `Cannot start ${cli.displayName} in ${folder}: ${whyNotInstalled(cli, config, 'the PATH used by a terminal in that folder')}.`);
 		}
-		return { installed, config };
+		return { installed, config, terminal };
+	}
+
+	/**
+	 * The environment a terminal in `folder` starts with, as the window answers it: each answer kept. With `deadline`,
+	 * a start through start_agent's: where the window gave one before - for that folder, else for another of its
+	 * `repository`, which shares its checked-in settings - it is waited for a moment, and past that, the window away,
+	 * the start goes on with that one, so that it is recorded and answers at its time in its phase. Another
+	 * repository's never: where a CLI keeps its configuration and trust may differ by folder (AGENT-LAUNCHER.md, L10).
+	 * With none such given yet, it is waited for until `deadline`, and the start refused then, nothing made (REMOTE.md
+	 * R4; AGENT-ORCHESTRATION.md, O9).
+	 */
+	private async terminalEnvironment(folder: string, deadline?: { readonly at: number; readonly repository?: string; readonly refusal: (seconds: number) => string }): Promise<Environment> {
+		const asked = this.options.clis.environment(folder).then(env => {
+			this.environments.delete(folder);
+			this.environments.set(folder, env);
+			return env;
+		});
+		if (!deadline) {
+			return asked;
+		}
+		// What the window answers once the start went on without it - or its failure - is kept, or dropped
+		asked.catch(() => undefined);
+		const known = this.environments.get(folder) ?? (deadline.repository !== undefined ? await this.environmentInRepository(deadline.repository) : undefined);
+		const left = Math.max(0, deadline.at - Date.now());
+		return known
+			? withDeadline(asked, Math.min(ENVIRONMENT_WAIT_MS, left), () => known)
+			: withDeadline(asked, left, () => {
+				throw new FacadeError('UNAVAILABLE', deadline.refusal(Math.round(this.timing().startTimeoutMs / 1000)));
+			});
+	}
+
+	/** The terminal environment the window gave last for a folder of the repository whose main checkout is `main` - it, or a worktree of it, as git lists them; undefined for none. */
+	private async environmentInRepository(main: string): Promise<Environment | undefined> {
+		const folders = [main, ...(await this.ports.git.worktreesOf(main).catch(() => [])).map(each => each.folder)];
+		return [...this.environments].reverse().find(([folder]) => folders.some(each => isEqualPath(each, folder)))?.[1];
 	}
 
 	/**
@@ -2317,10 +2516,10 @@ export class Facade implements Disposable {
 	/**
 	 * The environment a CLI starts with in `folder`: the terminals' there, with what its launch sets in it - for one
 	 * started through `start_agent`, `unattended`, its launch's unattended part too - where its trust and its
-	 * configuration are found (AGENT-LAUNCHER.md, L10).
+	 * configuration are found (AGENT-LAUNCHER.md, L10). `terminal`, where given, is the terminals' environment there.
 	 */
-	private async environmentOf(installed: InstalledCli, folder: string, unattended: boolean): Promise<Environment> {
-		return { ...await this.options.clis.environment(folder), ...launchFor(installed.config, unattended).launch.environment };
+	private async environmentOf(installed: InstalledCli, folder: string, unattended: boolean, terminal?: Environment): Promise<Environment> {
+		return { ...terminal ?? await this.terminalEnvironment(folder), ...launchFor(installed.config, unattended).launch.environment };
 	}
 
 	/**
@@ -2572,6 +2771,41 @@ function endSeverity(end: End): Severity {
 		case 'stopped':
 			return 'information';
 	}
+}
+
+/** A time the notice of the agents that ended while the window was away names: a timestamp, else none. */
+function awayTime(when: unknown): number | undefined {
+	return typeof when === 'number' && Number.isFinite(when) && when > 0 ? when : undefined;
+}
+
+/**
+ * What the person is told once of the agents that ended while a remote window was away from its host:
+ * which, and how long ago it was last connected where `when` names it - else the agents alone, no guess.
+ * Relative, as both times are the remote's clock: no time zone, no skew (REMOTE.md R4).
+ */
+export function lostWhileAwayNotice(described: readonly string[], when: number | undefined, now: number): string {
+	const agents = described.join(', ');
+	if (when === undefined) {
+		return l10n.t("Agents that ended while this window was away from its host: {0}.", agents);
+	}
+	return l10n.t("Agents that ended while this window was away from its host: {0}. Last connected {1}.", agents, lastConnectedAgo(when, now));
+}
+
+/** How long ago `when` was, as the notice of the agents that ended while the window was away says it. */
+function lastConnectedAgo(when: number, now: number): string {
+	const minutes = Math.max(Math.floor((now - when) / 60_000), 0);
+	if (minutes < 1) {
+		return l10n.t("less than a minute ago");
+	}
+	if (minutes < 60) {
+		return minutes === 1 ? l10n.t("1 minute ago") : l10n.t("{0} minutes ago", minutes);
+	}
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) {
+		return hours === 1 ? l10n.t("1 hour ago") : l10n.t("{0} hours ago", hours);
+	}
+	const days = Math.floor(hours / 24);
+	return days === 1 ? l10n.t("1 day ago") : l10n.t("{0} days ago", days);
 }
 
 function endNotice(agent: Agent, end: End, stopper: string): string {

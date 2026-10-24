@@ -7,6 +7,7 @@ import { execFile, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf } from './errors';
+import { isJsonObject } from './json';
 
 /**
  * Whether the running process `pid` runs the same program as this one - another Facade window's extension
@@ -20,6 +21,67 @@ export function isSameProgram(pid: number): boolean | undefined {
 	const found = spawnSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 2_000 });
 	const program = found.status === 0 ? found.stdout.trim() : '';
 	return program ? path.basename(program) === path.basename(process.execPath) : false;
+}
+
+/** How a process is known: its command line's words, and its program's path where that can be told. */
+export interface ProcessIdentity {
+	readonly words: readonly string[];
+	readonly executable: string | undefined;
+}
+
+/**
+ * What process `pid` is, read at once: its command line's words, and its program's path - how a
+ * takeover tells an extension host of this server. On Linux from `/proc`, the words apart by NUL and
+ * the program by its link; on Windows from the processes' inventory, with a timeout; on macOS from
+ * `ps`, whose words apart by spaces mis-split a path with spaces - refusing safely - and whose first
+ * word stands for the program. Undefined where it cannot be told, or the process is gone (REMOTE.md R4).
+ */
+export function identifyProcess(pid: number): ProcessIdentity | undefined {
+	if (!Number.isInteger(pid) || pid <= 0) {
+		return undefined;
+	}
+	if (process.platform === 'win32') {
+		return identifyWindowsProcess(pid);
+	}
+	try {
+		const words = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(word => word !== '');
+		if (words.length) {
+			let executable: string | undefined;
+			try {
+				executable = fs.readlinkSync(`/proc/${pid}/exe`);
+			} catch {
+				executable = undefined;
+			}
+			return { words, executable };
+		}
+	} catch {
+		// No /proc (macOS): ps instead.
+	}
+	const found = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 2_000 });
+	const words = found.status === 0 ? found.stdout.trim().split(/\s+/).filter(word => word !== '') : [];
+	return words.length ? { words, executable: words[0] } : undefined;
+}
+
+/** What a Windows process runs, from its inventory's command line and executable path: nothing where it cannot be told. */
+function identifyWindowsProcess(pid: number): ProcessIdentity | undefined {
+	// PowerShell writes redirected output in the OEM code page, which mangles a non-ASCII path; asked for UTF-8 it writes it exactly.
+	const found = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' | Select-Object ExecutablePath,CommandLine | ConvertTo-Json -Compress`], { encoding: 'utf8', timeout: PROCESS_READ_TIMEOUT_MS });
+	if (found.status !== 0) {
+		return undefined;
+	}
+	try {
+		// A byte-order mark would choke JSON.parse; stripped as a guard, though none was seen.
+		const read: unknown = JSON.parse(found.stdout.replace(/^\uFEFF/, ''));
+		const entry = Array.isArray(read) ? read[0] : read;
+		if (!isJsonObject(entry)) {
+			return undefined;
+		}
+		const { ExecutablePath, CommandLine } = entry;
+		const words = typeof CommandLine === 'string' ? CommandLine.trim().split(/\s+/).filter(word => word !== '') : [];
+		return words.length ? { words, executable: typeof ExecutablePath === 'string' && ExecutablePath ? ExecutablePath : undefined } : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** How long reading the processes may take before what it found is taken as nothing. */
@@ -105,6 +167,17 @@ export function processStartedAt(pid: number): number | undefined {
 	const found = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2_000, env: { ...process.env, LC_ALL: 'C' } });
 	const time = found.status === 0 ? Date.parse(found.stdout.trim()) : NaN;
 	return Number.isNaN(time) ? undefined : time;
+}
+
+/** When this process started, in milliseconds since the epoch: read once, so every comparison is by the same time (L5). */
+let startedAt: number | undefined;
+
+/** When this process started, in milliseconds since the epoch: now, minus its uptime. */
+export function processStartTime(): number {
+	if (startedAt === undefined) {
+		startedAt = Date.now() - Math.round(process.uptime() * 1000);
+	}
+	return startedAt;
 }
 
 /** Whether the operating system process `pid` is running, including one of another user's. */

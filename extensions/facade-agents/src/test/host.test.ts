@@ -11,6 +11,8 @@ import { processStartedAt, workingFoldersOf } from '../base/system';
 import { knownClis } from '../clis/registry';
 import { agentIconId } from '../host/agentIcons';
 import { changedFilesIn, excludeIn, fileAtIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreeRootIn, worktreesIn } from '../host/gitCli';
+import { releaseEarlierHost, TakeoverPorts } from '../host/takeover';
+import { WAS_AWAY_ASK_MS, WAS_AWAY_COMMAND, windowWasAway } from '../host/windowAway';
 import { JsonFileState } from '../host/windowState';
 import { outcomeOf, tempDir } from './util';
 
@@ -460,5 +462,205 @@ suite('Host: git\'s records, read with git', function () {
 			git: /prunable/.test(git(lab, 'worktree', 'list', '--porcelain').stdout),
 			listed: (await worktreesIn('git', lab)).map(each => path.relative(temp.dir, each.folder))
 		}, { git: true, listed: ['lab'] });
+	});
+});
+
+suite('Host: a window takes over from its earlier extension host (R4)', () => {
+
+	const HOLDER = 424242;
+	const OTHER = 434343;
+	const OWNER = 'window-owner';
+	const LOCK = 'ledger.lock';
+	const WINDOW = 'window.json';
+
+	let temp: { dir: string; remove(): void };
+
+	setup(() => {
+		temp = tempDir('facade-takeover-');
+		fs.writeFileSync(path.join(temp.dir, LOCK), `${HOLDER} ${OWNER} abc123`);
+		fs.writeFileSync(path.join(temp.dir, WINDOW), JSON.stringify({ pipe: 'facade-test', pid: HOLDER, release: 'secret' }));
+	});
+	teardown(() => temp.remove());
+
+	interface TakeoverWorld {
+		readonly killed: [number, string][];
+		readonly infos: string[];
+		readonly warns: string[];
+		readonly ports: TakeoverPorts;
+	}
+
+	function world(askRelease: TakeoverPorts['askRelease'], identify?: TakeoverPorts['identify']): TakeoverWorld {
+		const alive = new Set([HOLDER, OTHER]);
+		const killed: [number, string][] = [];
+		const infos: string[] = [];
+		const warns: string[] = [];
+		const ports: TakeoverPorts = {
+			info: message => infos.push(message),
+			warn: message => warns.push(message),
+			isRunning: pid => alive.has(pid),
+			kill: (pid, signal) => { killed.push([pid, signal]); alive.delete(pid); },
+			identify: identify ?? (() => ({ words: ['node', '--type=extensionHost'], executable: process.execPath })),
+			askRelease,
+			askMs: 30, closeMs: 60, handoverMs: 60, pollMs: 5
+		};
+		return { killed, infos, warns, ports };
+	}
+
+	test('an earlier extension host that answers and lets go is waited for, and its process is left to close itself', async () => {
+		const holds = world(async () => { fs.rmSync(path.join(temp.dir, LOCK)); });
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, holds.ports), 'taken');
+		assert.deepStrictEqual({ killed: holds.killed, warns: holds.warns }, { killed: [], warns: [] });
+		assert.ok(holds.infos.join('\n').includes('is letting go'));
+	});
+
+	test('one that answers but still holds is ended, checked first to be an extension host', async () => {
+		const seen: number[] = [];
+		const holds = world(async () => { }, pid => {
+			seen.push(pid);
+			return { words: ['node', '--type=extensionHost'], executable: process.execPath };
+		});
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, holds.ports), 'taken');
+		assert.deepStrictEqual({ seen, killed: holds.killed }, { seen: [HOLDER], killed: [[HOLDER, 'SIGTERM']] });
+		assert.ok(holds.warns.join('\n').includes('still holds the lock'));
+	});
+
+	test('one that refuses is given the handover wait while it closes, and ended only after', async () => {
+		const holds = world(async () => { throw new Error('ECONNREFUSED'); });
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, holds.ports), 'taken');
+		assert.deepStrictEqual(holds.killed, [[HOLDER, 'SIGTERM']]);
+		assert.ok(holds.infos.join('\n').includes('could not be asked to let go'));
+	});
+
+	test('one that answers nothing in time is ended at once, without the handover wait', async () => {
+		const holds = world((_pipe, _secret, signal) => new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')))));
+		holds.ports.handoverMs = 1500;
+		const started = Date.now();
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, holds.ports), 'taken');
+		assert.deepStrictEqual(holds.killed, [[HOLDER, 'SIGTERM']]);
+		assert.ok(holds.warns.join('\n').includes('did not answer letting go in time'));
+		assert.ok(Date.now() - started < 1000, 'the handover wait must be skipped where nothing answered');
+	});
+
+	test('one that names no release is waited for through the handover, then ended', async () => {
+		fs.writeFileSync(path.join(temp.dir, WINDOW), JSON.stringify({ pipe: 'facade-test', pid: HOLDER }));
+		const holds = world(async () => { throw new Error('must not be asked without a release'); });
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, holds.ports), 'taken');
+		assert.deepStrictEqual(holds.killed, [[HOLDER, 'SIGTERM']]);
+		assert.ok(holds.infos.join('\n').includes('names no release'));
+	});
+
+	test('a reload that lands while waited for wins: the lock moved to a new extension host is left alone', async () => {
+		const holds = world(async () => { throw new Error('ECONNREFUSED'); });
+		holds.ports.handoverMs = 1000;
+		setTimeout(() => fs.writeFileSync(path.join(temp.dir, LOCK), `${OTHER} ${OWNER} xyz789`), 10);
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, holds.ports), 'taken');
+		assert.deepStrictEqual(holds.killed, []);
+	});
+
+	test('a process that is not an extension host is never ended: the takeover fails instead', async () => {
+		const holds = world(async () => { }, () => ({ words: ['node'], executable: process.execPath }));
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, holds.ports), 'failed');
+		assert.deepStrictEqual(holds.killed, []);
+		assert.ok(holds.warns.length > 0);
+	});
+
+	test('one whose service stopped while it was waited for is left to close itself: nothing is ended, and no ending said', async () => {
+		const held = world(async () => { });
+		held.ports.stopped = () => true;
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, held.ports), 'failed');
+		assert.deepStrictEqual({ killed: held.killed, warns: held.warns, infos: held.infos }, {
+			killed: [],
+			warns: [],
+			infos: ['This window\'s earlier extension host (process 424242) is letting go of the workspace\'s agents.']
+		});
+	});
+
+	test('a stale host never takes the record from a newer holder: no ask, no wait, no kill (L5)', async () => {
+		fs.writeFileSync(path.join(temp.dir, LOCK), `${HOLDER} ${OWNER} abc123 ${Date.now() + 60_000}`);
+		let asked = 0;
+		const stale = world(async () => { asked++; });
+		stale.ports.startedAt = Date.now();
+		stale.ports.askMs = 1500;
+		stale.ports.closeMs = 1500;
+		stale.ports.handoverMs = 1500;
+		const started = Date.now();
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, stale.ports), 'newer-holder');
+		assert.deepStrictEqual({ asked, killed: stale.killed, warns: stale.warns, infos: stale.infos }, { asked: 0, killed: [], warns: [], infos: [] });
+		assert.ok(Date.now() - started < 1000, 'a newer holder is given up to at once, before any ask, wait or kill');
+	});
+
+	test('a newer host takes over from an older holder as ever: asked, waited for, ended (L5)', async () => {
+		fs.writeFileSync(path.join(temp.dir, LOCK), `${HOLDER} ${OWNER} abc123 ${Date.now() - 60_000}`);
+		let asked = 0;
+		const newer = world(async () => { asked++; });
+		newer.ports.startedAt = Date.now();
+
+		assert.strictEqual(await releaseEarlierHost(temp.dir, HOLDER, OWNER, newer.ports), 'taken');
+		assert.deepStrictEqual({ asked, killed: newer.killed }, { asked: 1, killed: [[HOLDER, 'SIGTERM']] });
+	});
+});
+
+suite('Host: the window is pinged, and last heard written, within a minute (REMOTE.md RM-08)', () => {
+
+	test('every 20 seconds a ping, at most every 15 a write of last heard', () => {
+		const service = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'host', 'service.ts'), 'utf8');
+
+		assert.deepStrictEqual(
+			[/const WINDOW_PING_MS = ([\d_]+);/.exec(service)?.[1], /const HEARD_WRITE_MS = ([\d_]+);/.exec(service)?.[1]],
+			['20_000', '15_000']);
+	});
+});
+
+suite('Host: a timeout says what the window\'s answers say (D3)', () => {
+
+	test('every answer the window gives stamps when it came - no heard() call bypasses the stamp - and a ping\'s answer and a ticket\'s claim stamp too', () => {
+		const terminals = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'host', 'terminals.ts'), 'utf8');
+		const service = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'host', 'service.ts'), 'utf8');
+
+		assert.deepStrictEqual({
+			bare: terminals.match(/this\.heard\(\)/g),
+			stamps: terminals.includes('this.lastHeardAt = Date.now();'),
+			sinceWaitBegan: terminals.includes('this.lastHeardAt >= started'),
+			serviceNotes: service.match(/this\.noteHeard\(\)/g)
+		}, {
+			bare: ['this.heard()'],
+			stamps: true,
+			sinceWaitBegan: true,
+			serviceNotes: ['this.noteHeard()', 'this.noteHeard()']
+		});
+	});
+});
+
+suite('Host: whether the window was away as the service recovers (M1)', () => {
+
+	test('the window\'s own answer, asked once: true where it was away; false where it was not, says otherwise, or has no such command; unknown where the asking fails or no answer comes in time', async () => {
+		const commands = (known: readonly string[]) => async () => known;
+		const asked: unknown[] = [];
+		const ask = (answer: unknown) => async () => { asked.push(answer); return answer; };
+		const calls = [
+			windowWasAway(commands([WAS_AWAY_COMMAND]), ask({ away: true }), 20),
+			windowWasAway(commands([WAS_AWAY_COMMAND]), ask({ away: false }), 20),
+			windowWasAway(commands([WAS_AWAY_COMMAND]), ask({}), 20),
+			windowWasAway(commands([]), ask({ away: true }), 20),
+			windowWasAway(commands([WAS_AWAY_COMMAND]), async () => { throw new Error('gone'); }, 20),
+			windowWasAway(async () => { throw new Error('gone'); }, ask({ away: true }), 20),
+			windowWasAway(commands([WAS_AWAY_COMMAND]), () => new Promise(() => { }), 20),
+			windowWasAway(() => new Promise(() => { }), ask({ away: true }), 20)
+		];
+
+		assert.deepStrictEqual({ answers: await Promise.all(calls), asked, askMs: WAS_AWAY_ASK_MS }, {
+			answers: [true, false, false, false, undefined, undefined, undefined, undefined],
+			asked: [{ away: true }, { away: false }, {}],
+			askMs: 30_000
+		});
 	});
 });

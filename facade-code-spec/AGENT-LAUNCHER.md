@@ -28,7 +28,9 @@ a record of tests already passed.
 
 The first release supports local desktop windows on Windows, macOS and Linux,
 with Claude Code, Codex, Muse Code, Antigravity, Qwen Code and configured custom agents.
-Remote SSH, containers and WSL windows are outside this release's scope.
+Remote windows over SSH to a host of a desktop package's platform - Linux x64, macOS
+arm64, Windows x64 - are supported too, their agents running on that host;
+[REMOTE.md](REMOTE.md) owns what that adds, WSL and containers included.
 
 The complete agent framework exposes exactly eight tools:
 
@@ -109,7 +111,8 @@ Choosing an agent:
 
 There is no name, model, task or permissions picker. **Start Agent...** asks only
 which configured agent to start. To start elsewhere, the person selects that folder
-or worktree first. Without a local folder, report that one must be opened.
+or worktree first. Without a folder, report that one must be opened. In a remote
+window every folder is on the remote, and so are its agents (REMOTE.md R3).
 In Restricted Mode, use VS Code's Workspace Trust request, then continue the same
 start if trust is granted. A denied request creates no agent.
 
@@ -282,6 +285,8 @@ Splitting it creates an ordinary shell, not another registered run.
 The person's notification of an unexpected end is limited to agents they created:
 nonzero exit, or a stop not requested by them. Suppress duplicate launch-failure
 notices, known user interrupts, normal exit, shutdown and lost-after-crash notices.
+A remote window's agents that ended while it was away are the exception: REMOTE.md R4
+names them once.
 Do not infer human intent from exit code 130 alone when Facade knows another actor
 sent the interrupt. Child lifecycle messages are specified in M8.
 
@@ -581,7 +586,7 @@ H = human-visible verification. Each row defines an observable outcome.
 | LA-01 | Fresh settings; install/remove a built-in between menu opens | Correct menu and order; settings remain unchanged | I,V,H |
 | LA-02 | Disabled built-in; missing custom executable; empty catalog | Disabled agent unavailable to both human and tool; clear custom error and empty state | I,H |
 | LA-03 | Start each CLI in main checkout, worktree, detached worktree, second repository and non-Git folder | Correct cwd, unique id, logo and focused terminal; no launch questionnaire | V,H |
-| LA-04 | No folder, remote window, untrusted workspace; grant and deny trust | Explicit supported flow; denial/rejection creates no run or side effects | I,H |
+| LA-04 | No folder, remote window, untrusted workspace; grant and deny trust | Explicit supported flow; denial/rejection creates no run or side effects; a remote window's start runs on the remote, as REMOTE.md RM-02 and RM-04 require | I,H |
 | LA-05 | UI launch names; named start_agent call as @human; duplicate names; CLI title changes; user renames a tab | UI defaults and supplied tool names follow L2; stable distinct numbers; title updates preserve agent identity | I,V,H |
 | LA-06 | Agents across folders, including an unjoined worktree | Accurate count, row markers and live Quick Pick; navigation reveals the right run | I,H |
 | LA-07 | Invalid launch field, placeholder, path or delay | Named configuration error before acceptance; no silent fallback | U,I |

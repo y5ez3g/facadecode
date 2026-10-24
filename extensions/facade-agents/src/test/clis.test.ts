@@ -781,6 +781,13 @@ suite('CLIs: how the person has Facade start each one', () => {
 		});
 	});
 
+	test('YOLO is each machine\'s own: a false the person sets on their computer does not reach a remote, whose next agent is on (RM-27)', () => {
+		const { sections } = manifest();
+		const own = sections.find(each => each.id === 'facade.agents')?.properties ?? {};
+
+		assert.strictEqual(own['facade.agents.yolo']?.scope, 'machine');
+	});
+
 	test('settings.json checks a custom agent\'s name as the person types it, as a start checks it: one an agent can have, neither a built-in\'s id nor a reserved name - and says what a name is (L9)', () => {
 		const { sections, texts } = manifest();
 		const names = sections.find(each => each.id === 'facade.agents.custom')?.properties['facade.agents.custom']?.propertyNames;
