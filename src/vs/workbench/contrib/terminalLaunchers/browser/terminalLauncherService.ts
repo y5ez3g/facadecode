@@ -22,6 +22,7 @@ import { TerminalExitReason } from '../../../../platform/terminal/common/termina
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IFacadeRunsService } from '../../facadeCommands/browser/facadeRuns.js';
@@ -109,16 +110,19 @@ export interface ITerminalLauncherService {
 	/** Opens VS Code's settings at the agents' own, the same search every time. */
 	configure(): Promise<void>;
 
-	/** The built-ins this machine has and the person offers, by id, as last found. Changes with `onDidChangeAvailable`. */
+	/** The built-ins the agents' machine has and the person offers, by id, as last found. Changes with `onDidChangeAvailable`. */
 	readonly available: ReadonlySet<string>;
+
+	/** Whether they were ever found: until then `available` is not yet known, not none. Changes with `onDidChangeAvailable`. */
+	readonly availableKnown: boolean;
 
 	/** Fires when `available` changed. */
 	readonly onDidChangeAvailable: Event<void>;
 
 	/**
 	 * Looks for the built-ins again, as a terminal in the folder on screen would find them: the path setting
-	 * of each the person offers, else its command on the PATH a terminal gets. Nothing is written into the
-	 * settings.
+	 * of each the person offers, else its command on the PATH a terminal gets. On a remote, asked of the
+	 * agents' extension host. Nothing is written into the settings.
 	 */
 	refreshAvailable(): Promise<void>;
 
@@ -155,6 +159,8 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	private readonly _names: Map<string, IAgentName>;
 
 	private _available: ReadonlySet<string> = new Set();
+	/** Whether the built-ins were ever found: until then the menu says nothing of having none. */
+	private _looked = false;
 	private readonly _onDidChangeAvailable = this._register(new Emitter<void>());
 	readonly onDidChangeAvailable = this._onDidChangeAvailable.event;
 	/** Set while the built-ins are looked for; looked for again once that is done, where asked meanwhile. */
@@ -174,6 +180,7 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 		@ICommandService private readonly _commandService: ICommandService,
 		@ILogService private readonly _logService: ILogService,
 		@IFacadeRunsService private readonly _facadeRunsService: IFacadeRunsService,
+		@IWorkbenchEnvironmentService private readonly _environmentService: IWorkbenchEnvironmentService,
 		@IPathService private readonly _pathService: IPathService
 	) {
 		super();
@@ -338,11 +345,20 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	}
 
 	async configure(): Promise<void> {
+		// The remote's settings on a remote: the agents' settings are the remote machine's there (REMOTE.md R3)
+		if (this._environmentService.remoteAuthority) {
+			await this._commandService.executeCommand('workbench.action.openRemoteSettings', { query: AGENT_SETTINGS_QUERY });
+			return;
+		}
 		await this._commandService.executeCommand('workbench.action.openSettings', AGENT_SETTINGS_QUERY);
 	}
 
 	get available(): ReadonlySet<string> {
 		return this._available;
+	}
+
+	get availableKnown(): boolean {
+		return this._looked;
 	}
 
 	refreshAvailable(): Promise<void> {
@@ -363,10 +379,21 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 	/**
 	 * The built-ins the person offers, each at its path setting or its command, found as a start finds them
 	 * (AGENT-LAUNCHER.md, L10): in the environment a terminal in the folder on screen gets, with what the
-	 * built-in's launch sets in it, and its path setting as that terminal takes it.
+	 * built-in's launch sets in it, and its path setting as that terminal takes it. On a remote, asked of
+	 * the agents' extension host in one command: the window cannot look there itself (REMOTE.md R3).
 	 */
 	private async _lookForBuiltIns(): Promise<void> {
 		const folder = (this._activeFolderService.activeFolder ?? this._workspaceContextService.getWorkspace().folders.at(0))?.uri;
+		if (this._environmentService.remoteAuthority) {
+			const detection = this._instantiationService.createInstance(TerminalLauncherDetection);
+			const found = await detection.detectRemote(folder);
+			// Not asked - the extension host not up yet: the last set stands, still unknown, and the
+			// menu shows no empty state for it; asked again as its command comes, and as the menu opens
+			if (found !== undefined) {
+				this._setAvailable(found);
+			}
+			return;
+		}
 		const [env, userHome] = await Promise.all([this._terminalEnvironment(folder), this._pathService.userHome()]);
 		const detection = this._instantiationService.createInstance(TerminalLauncherDetection);
 		const found = new Set<string>();
@@ -384,8 +411,15 @@ export class TerminalLauncherService extends Disposable implements ITerminalLaun
 					found.add(id);
 				}
 			}));
-		if (found.size !== this._available.size || [...found].some(id => !this._available.has(id))) {
-			this._available = found;
+		this._setAvailable(found);
+	}
+
+	/** The built-ins as found now: kept, and told, where they moved - or were never found before. */
+	private _setAvailable(found: ReadonlySet<string>): void {
+		const changed = !this._looked || found.size !== this._available.size || [...found].some(id => !this._available.has(id));
+		this._available = found;
+		this._looked = true;
+		if (changed) {
 			this._onDidChangeAvailable.fire();
 		}
 	}

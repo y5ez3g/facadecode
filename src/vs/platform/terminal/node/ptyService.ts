@@ -371,11 +371,11 @@ export class PtyService extends Disposable implements IPtyService {
 	}
 
 	@traceRpc
-	async attachToProcess(id: number): Promise<void> {
+	async attachToProcess(id: number, record?: string): Promise<void> {
 		try {
 			const persistentProcess = this._throwIfNoPty(id);
-			// Facade Code: an agent's process is one window's (`mayAttachProcess`; N-68)
-			if (!await mayAttachProcess(persistentProcess)) {
+			// Facade Code: an agent's process is its own record's window's (`mayAttachProcess`; N-68, REMOTE.md R7)
+			if (!await mayAttachProcess(persistentProcess, record)) {
 				throw new Error(`because another window holds this agent's process`);
 			}
 			await persistentProcess.attach();

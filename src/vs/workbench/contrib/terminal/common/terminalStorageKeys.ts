@@ -12,6 +12,8 @@ export const enum TerminalStorageKeys {
 	EnvironmentVariableCollections = 'terminal.integrated.environmentVariableCollectionsV2',
 	TerminalBufferState = 'terminal.integrated.bufferState',
 	TerminalLayoutInfo = 'terminal.integrated.layoutInfo',
+	// Facade Code: a remote window's layout, carried across the reload that enters a workspace (`TerminalService`)
+	CarriedLayoutInfo = 'terminal.integrated.carriedLayoutInfo',
 	PinnedRecentCommandsPrefix = 'terminal.pinnedRecentCommands',
 	TerminalSuggestSize = 'terminal.integrated.suggestSize',
 }

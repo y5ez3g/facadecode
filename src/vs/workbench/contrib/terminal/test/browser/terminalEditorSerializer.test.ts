@@ -8,10 +8,13 @@ import { Codicon } from '../../../../../base/common/codicons.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { IReconnectionProperties, TerminalIcon, TitleEventSource } from '../../../../../platform/terminal/common/terminal.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
 import { ILifecycleService, ShutdownReason, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
-import { facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
+import { TestStorageService } from '../../../../test/common/workbenchTestServices.js';
+import { AGENT_RECORD_STORAGE_KEY, facadeRunProperties } from '../../../facadeCommands/common/facadeRun.js';
 import { AGENT_TERMINAL_ICON } from '../../../terminalLaunchers/common/terminalLaunchers.js';
 import { IDeserializedTerminalEditorInput, ISerializedTerminalEditorInput, ITerminalEditorService, ITerminalInstance } from '../../browser/terminal.js';
 import { TerminalEditorInput } from '../../browser/terminalEditorInput.js';
@@ -30,8 +33,13 @@ suite('Terminal editor serializer - bringing a terminal tab back', () => {
 	/**
 	 * Whether a tab drawn with `icon` - and marked as an agent's run, with `reconnectionProperties` - comes back as
 	 * the window starts the way `kind` says, its workspace's last shutdown having been `last` - none, after a crash.
+	 * On a remote - `remoteAuthority` - with the record `record` told, as the window's storage remembers it.
 	 */
-	function comesBack(kind: StartupKind, last: ShutdownReason | undefined, icon: TerminalIcon | undefined, reconnectionProperties?: IReconnectionProperties): boolean {
+	function comesBack(kind: StartupKind, last: ShutdownReason | undefined, icon: TerminalIcon | undefined, reconnectionProperties?: IReconnectionProperties, remoteAuthority?: string, record?: string): boolean {
+		const storage = store.add(new TestStorageService());
+		if (record !== undefined) {
+			storage.store(AGENT_RECORD_STORAGE_KEY, record, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		}
 		const serializer = new TerminalInputSerializer(
 			new class extends mock<ITerminalEditorService>() {
 				override reviveInput(_input: IDeserializedTerminalEditorInput): EditorInput {
@@ -41,7 +49,9 @@ suite('Terminal editor serializer - bringing a terminal tab back', () => {
 			new class extends mock<ILifecycleService>() {
 				override readonly startupKind = kind;
 				override readonly lastShutdownReason = last;
-			}
+			},
+			storage,
+			upcastPartial<IWorkbenchEnvironmentService>({ remoteAuthority })
 		);
 		const tab: ISerializedTerminalEditorInput = { id: 7, pid: 1, title: 'Claude Code', titleSource: TitleEventSource.Process, cwd: '', icon, color: undefined, reconnectionProperties, shellIntegrationNonce: '' };
 
@@ -49,7 +59,7 @@ suite('Terminal editor serializer - bringing a terminal tab back', () => {
 	}
 
 	test('a tab a reload brought back is written with its run mark and its title as kept, not the label made from it - so the next reload still knows the agent\'s run, and adds no second suffix (N-25, N-03)', () => {
-		const serializer = new TerminalInputSerializer(new class extends mock<ITerminalEditorService>() { }, new class extends mock<ILifecycleService>() { });
+		const serializer = new TerminalInputSerializer(new class extends mock<ITerminalEditorService>() { }, new class extends mock<ILifecycleService>() { }, store.add(new TestStorageService()), upcastPartial<IWorkbenchEnvironmentService>({}));
 		const run = facadeRunProperties({ workspace: 'w', id: 3 });
 		const written = (instance: Partial<ITerminalInstance>) => {
 			const text = serializer.serialize(upcastPartial<TerminalEditorInput>({ terminalInstance: upcastPartial<ITerminalInstance>({ persistentProcessId: 8, processId: 41, shouldPersist: true, icon: AGENT_TERMINAL_ICON, shellIntegrationNonce: 'n', ...instance }) }));
@@ -103,7 +113,9 @@ suite('Terminal editor serializer - bringing a terminal tab back', () => {
 			new class extends mock<ILifecycleService>() {
 				override readonly startupKind = StartupKind.ReloadedWindow;
 				override readonly lastShutdownReason = ShutdownReason.RELOAD;
-			}
+			},
+			store.add(new TestStorageService()),
+			upcastPartial<IWorkbenchEnvironmentService>({})
 		);
 		const written = (instance: Partial<ITerminalInstance>) => serializer.serialize(upcastPartial<TerminalEditorInput>({ terminalInstance: upcastPartial<ITerminalInstance>({ persistentProcessId: 9, processId: 42, shouldPersist: false, icon: AGENT_TERMINAL_ICON, shellLaunchConfig: {}, title: 'Claude Code', titleSource: TitleEventSource.Process, shellIntegrationNonce: 'n', ...instance }) }));
 		const agentTab = written({ reconnectionProperties: facadeRunProperties({ workspace: 'w', id: 2 }) });
@@ -116,6 +128,22 @@ suite('Terminal editor serializer - bringing a terminal tab back', () => {
 			agentWritten: true,
 			agentComesBack: false,
 			shellWritten: false
+		});
+	});
+
+	test('on a remote, an agent\'s tab comes back only for the window\'s record as told: with none told yet, or another\'s, no tab comes back - neither attached nor saying it is elsewhere - for the take-back to bring this window\'s back once its record is known; an ordinary terminal comes back as ever (REMOTE.md R7; RM-20)', () => {
+		const run = facadeRunProperties({ workspace: 'w', id: 1 });
+		const remote = (reconnectionProperties?: IReconnectionProperties, record?: string) => comesBack(StartupKind.ReloadedWindow, ShutdownReason.RELOAD, AGENT_TERMINAL_ICON, reconnectionProperties, 'ssh-remote+host', record);
+		assert.deepStrictEqual({
+			ownRecord: remote(run, 'w'),
+			recordUnknown: remote(run, undefined),
+			otherRecord: remote(run, 'other'),
+			shellUnknown: remote(undefined, undefined)
+		}, {
+			ownRecord: true,
+			recordUnknown: false,
+			otherRecord: false,
+			shellUnknown: true
 		});
 	});
 });

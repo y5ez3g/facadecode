@@ -21,6 +21,7 @@ import { IReconnectionProperties, IShellLaunchConfig, TerminalExitReason, Termin
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustManagementService, IWorkspaceTrustRequestService } from '../../../../../platform/workspace/common/workspaceTrust.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
 import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { TestPathService } from '../../../../test/browser/workbenchTestServices.js';
@@ -109,7 +110,7 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 	 * The launcher service over `terminals`, its settings `configuration`, the commands it runs kept in `ran`;
 	 * `trust` is whether the workspace is trusted, and what the person answers VS Code's question with.
 	 */
-	function launcherService(terminals: TestTerminalService, storage: TestStorageService, configuration: TestConfigurationService, ran: string[] = [], trust: { readonly trusted: boolean; readonly answer?: boolean } = { trusted: true }, runs: Partial<IFacadeRunsService> = { live: undefined, onDidChangeLive: Event.None }): TerminalLauncherService {
+	function launcherService(terminals: TestTerminalService, storage: TestStorageService, configuration: TestConfigurationService, ran: string[] = [], trust: { readonly trusted: boolean; readonly answer?: boolean } = { trusted: true }, runs: Partial<IFacadeRunsService> = { live: undefined, onDidChangeLive: Event.None }, remoteAuthority: string | undefined = undefined, folders: URI[] = [], answer: (id: string, args: unknown[]) => unknown = () => undefined): TerminalLauncherService {
 		const instantiationService = disposables.add(new TestInstantiationService());
 		instantiationService.stub(IFacadeRunsService, runs);
 		instantiationService.stub(ITerminalService, terminals);
@@ -118,7 +119,8 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		instantiationService.stub(IConfigurationService, configuration);
 		instantiationService.stub(ILogService, new NullLogService());
 		instantiationService.stub(IActiveFolderService, {});
-		instantiationService.stub(IWorkspaceContextService, {});
+		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ folders: folders.map((uri, index) => upcastPartial<IWorkspaceFolder>({ uri, name: uri.path.split('/').pop(), index })) }) });
+		instantiationService.stub(IWorkbenchEnvironmentService, { remoteAuthority });
 		instantiationService.stub(IWorkspaceTrustManagementService, { isWorkspaceTrusted: () => trust.trusted });
 		instantiationService.stub(IWorkspaceTrustRequestService, {
 			requestWorkspaceTrust: async () => {
@@ -127,9 +129,9 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 			}
 		});
 		instantiationService.stub(ICommandService, {
-			executeCommand: async (id: string, ...args: unknown[]) => {
+			executeCommand: async <R,>(id: string, ...args: unknown[]): Promise<R | undefined> => {
 				ran.push(`${id} ${JSON.stringify(args)}`);
-				return undefined;
+				return answer(id, args) as R | undefined;
 			}
 		});
 		return disposables.add(instantiationService.createInstance(TerminalLauncherService));
@@ -224,6 +226,7 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 			instantiationService.stub(ILogService, new NullLogService());
 			instantiationService.stub(IActiveFolderService, { activeFolder: folder && upcastPartial<IWorkspaceFolder>({ uri: folder }) });
 			instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => upcastPartial<IWorkspace>({ folders: [] }) });
+			instantiationService.stub(IWorkbenchEnvironmentService, { remoteAuthority: undefined });
 			// A terminal there gets `env`, as `_facade.terminal.environment` answers
 			const answers = new Map<string, unknown>([['_facade.terminal.environment', env]]);
 			instantiationService.stub(ICommandService, { executeCommand: async <R>(id: string) => answers.get(id) as R | undefined });
@@ -248,13 +251,64 @@ suite('Terminal launchers - what a window keeps of its agents', () => {
 		});
 	});
 
-	test('Configure Agents opens VS Code\'s settings at the agents\' own, the same search every time', async () => {
+	test('on a remote, the built-ins offered are those the agents\' extension host finds, asked once with the folder on screen (REMOTE.md R3)', async () => {
+		const ran: string[] = [];
+		const folder = URI.parse('vscode-remote://ssh-remote+monster/home/person/work');
+		const service = launcherService(new TestTerminalService(), disposables.add(new TestStorageService()), new TestConfigurationService(), ran, { trusted: true }, { live: undefined, onDidChangeLive: Event.None }, 'ssh-remote+monster', [folder], id => id === '_facade.agents.detectClis' ? ['claude', 'muse'] : undefined);
+		let changed = 0;
+		disposables.add(service.onDidChangeAvailable(() => changed++));
+		await service.refreshAvailable();
+		await service.refreshAvailable();
+
+		assert.deepStrictEqual({ available: [...service.available], changed, asked: ran.filter(step => step.startsWith('_facade.agents.detectClis')).length }, {
+			available: ['claude', 'muse'],
+			changed: 1,
+			asked: 2,
+		});
+	});
+
+	test('on a remote, while the extension host cannot be asked the last set stands, still unknown - the menu shows no empty state for it; once it answers, and when it stops again, the menu learns and keeps what it found (REMOTE.md R3)', async () => {
+		let up = false;
+		const folder = URI.parse('vscode-remote://ssh-remote+monster/home/person/work');
+		const service = launcherService(new TestTerminalService(), disposables.add(new TestStorageService()), new TestConfigurationService(), [], { trusted: true }, { live: undefined, onDidChangeLive: Event.None }, 'ssh-remote+monster', [folder], id => {
+			if (id !== '_facade.agents.detectClis') {
+				return undefined;
+			}
+			if (!up) {
+				throw new Error('unknown command');
+			}
+			return ['claude'];
+		});
+		let changed = 0;
+		disposables.add(service.onDidChangeAvailable(() => changed++));
+		await service.refreshAvailable();
+		const unknown = { known: service.availableKnown, available: [...service.available], changed };
+		up = true;
+		await service.refreshAvailable();
+		const answered = { known: service.availableKnown, available: [...service.available], changed };
+		up = false;
+		await service.refreshAvailable();
+
+		assert.deepStrictEqual({ unknown, answered, kept: { known: service.availableKnown, available: [...service.available], changed } }, {
+			unknown: { known: false, available: [], changed: 0 },
+			answered: { known: true, available: ['claude'], changed: 1 },
+			kept: { known: true, available: ['claude'], changed: 1 },
+		});
+	});
+
+	test('Configure Agents opens VS Code\'s settings at the agents\' own, the same search every time - the remote\'s on a remote (REMOTE.md R3)', async () => {
 		const ran: string[] = [];
 		const service = launcherService(new TestTerminalService(), disposables.add(new TestStorageService()), new TestConfigurationService(), ran);
 		await service.configure();
 		await service.configure();
+		const remoteRan: string[] = [];
+		const remote = launcherService(new TestTerminalService(), disposables.add(new TestStorageService()), new TestConfigurationService(), remoteRan, { trusted: true }, { live: undefined, onDidChangeLive: Event.None }, 'ssh-remote+monster');
+		await remote.configure();
 
-		assert.deepStrictEqual(ran, ['workbench.action.openSettings ["@ext:vscode.facade-agents"]', 'workbench.action.openSettings ["@ext:vscode.facade-agents"]']);
+		assert.deepStrictEqual({ ran, remoteRan }, {
+			ran: ['workbench.action.openSettings ["@ext:vscode.facade-agents"]', 'workbench.action.openSettings ["@ext:vscode.facade-agents"]'],
+			remoteRan: ['workbench.action.openRemoteSettings [{"query":"@ext:vscode.facade-agents"}]'],
+		});
 	});
 
 	test('an agent\'s name is kept as its terminal starts, not with the window\'s next save, and one a floating window brings back last keeps its own: after a crash a moment on, the Codex child\'s tab read only its folder (N-49; WIN-13)', async () => {

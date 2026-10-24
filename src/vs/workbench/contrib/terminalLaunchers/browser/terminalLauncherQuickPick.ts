@@ -25,10 +25,11 @@ import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/worksp
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { TerminalEditorInput } from '../../terminal/browser/terminalEditorInput.js';
-import { facadeRunOf, IPreparingRun } from '../../facadeCommands/common/facadeRun.js';
+import { facadeRunOf, IPreparingRun, runFolderUri } from '../../facadeCommands/common/facadeRun.js';
 import { AGENT_TERMINAL_ICON } from '../common/terminalLaunchers.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
@@ -178,7 +179,8 @@ export class TerminalLauncherQuickPick extends Disposable {
 		@IActiveFolderService activeFolderService: IActiveFolderService,
 		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService,
 		@IEditorGroupsService private readonly _editorGroupsService: IEditorGroupsService,
-		@IInstantiationService private readonly _instantiationService: IInstantiationService
+		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+		@IWorkbenchEnvironmentService private readonly _environmentService: IWorkbenchEnvironmentService
 	) {
 		super();
 
@@ -199,7 +201,7 @@ export class TerminalLauncherQuickPick extends Disposable {
 				this._folderTerminalsService.reveal(selected.instance).then(undefined, onUnexpectedError);
 			} else if (selected.preparing.folder) {
 				// Its worktree, where its setup runs: as a click on its row in the bar goes there
-				this._workspaceBarService.show(URI.file(selected.preparing.folder)).then(undefined, onUnexpectedError);
+				this._workspaceBarService.show(runFolderUri(selected.preparing.folder, this._environmentService.remoteAuthority)).then(undefined, onUnexpectedError);
 			}
 		}));
 
@@ -268,7 +270,7 @@ export class TerminalLauncherQuickPick extends Disposable {
 			return row === -1 ? rows.length : row;
 		};
 
-		this._quickPick.items = agentPicks(agents, preparing, agent => this._placeOf(agent, rowOf), run => this._placeOfFolder(run.folder !== undefined ? URI.file(run.folder) : undefined, rowOf));
+		this._quickPick.items = agentPicks(agents, preparing, agent => this._placeOf(agent, rowOf), run => this._placeOfFolder(run.folder !== undefined ? runFolderUri(run.folder, this._environmentService.remoteAuthority) : undefined, rowOf));
 		this._quickPick.placeholder = agents.length || preparing.length ? localize('agentPicker.placeholder', "Select an agent") : localize('agentPicker.empty', "No active agents");
 
 		// The rows are new objects each time, so the one somebody was on is found again by its terminal, or its number

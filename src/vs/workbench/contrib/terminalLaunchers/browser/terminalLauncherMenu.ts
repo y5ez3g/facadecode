@@ -6,19 +6,26 @@
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Disposable, DisposableMap, DisposableStore, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IActionViewItemService } from '../../../../platform/actions/browser/actionViewItemService.js';
-import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
+import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
-import { localize } from '../../../../nls.js';
+import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
+import { localize, localize2 } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { ContextKeyExpression, IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+import { ContextKeyExpr, ContextKeyExpression, IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { ILabelService } from '../../../../platform/label/common/label.js';
+import { Schemas } from '../../../../base/common/network.js';
+import { RemoteNameContext } from '../../../common/contextkeys.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IEditorGroup, IEditorGroupsService, IEditorPart } from '../../../services/editor/common/editorGroupsService.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
+import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { TerminalContextKeys } from '../../terminal/common/terminalContextKey.js';
 import { agentIcon, BUILT_IN_LAUNCHERS, CUSTOM_AGENTS_SETTING, ITerminalLauncher, readCustomAgents } from '../common/terminalLaunchers.js';
 import { AGENT_MENU, AGENT_MENU_GROUP, CONFIGURE_AGENTS, createAgentMenuActionViewItem } from './terminalLauncherActions.js';
+import { DETECT_CLIS_COMMAND } from './terminalLauncherDetection.js';
 import { ITerminalLauncherService } from './terminalLauncherService.js';
 
 /** What an agent's command is called: a built-in's id, or `custom.` and a custom agent's name, is the last part. */
@@ -35,22 +42,28 @@ const AGENT_EMPTY_ICON = Codicon.info;
 /** Whether the menu has no agent to offer: no built-in found, and no custom agent. */
 const NO_AGENTS = new RawContextKey<boolean>('facadeNoAgents', false);
 
+/** The line an empty menu on a remote has in place of agents: what is wrong, which runs nothing. */
+const REMOTE_NONE_FOUND = 'facade.agent.remoteNoneFound';
+
+/** Open Terminal, a terminal of the remote in the selected folder, which an empty menu on a remote offers. */
+const OPEN_REMOTE_TERMINAL = 'facade.agent.openRemoteTerminal';
+
 /**
- * Keeps the agent menu in step with this machine and the settings (AGENT-LAUNCHER.md, L3): the built-ins it
- * has and the person offers, in the menu's order, then the person's custom agents in theirs - listed found
- * or not, for choosing one to say what is wrong - and, with none of either, a line that says so above
- * Configure Agents. The built-ins are looked for again as the menu opens, as the settings change, and as
- * the window comes back to the front: nothing found is written into the settings.
+ * Keeps the agent menu in step with the agents' machine and the settings (AGENT-LAUNCHER.md, L3): the
+ * built-ins it has and the person offers, in the menu's order, then the person's custom agents in theirs -
+ * listed found or not, for choosing one to say what is wrong - and, with none of either, a line that says
+ * so above Configure Agents. The built-ins are looked for again as the menu opens, as the settings change,
+ * and as the window comes back to the front: nothing found is written into the settings.
  */
 export class TerminalLauncherMenu extends Disposable implements IWorkbenchContribution {
 
 	static readonly ID = 'workbench.contrib.terminalLaunchers';
 
 	private readonly _agents = this._register(new MutableDisposable<DisposableStore>());
+	/** The line an empty menu on a remote has, named for the remote as it is named now. */
+	private readonly _remoteNoneFound = this._register(new MutableDisposable());
 	private readonly _available: ReadonlyMap<string, IContextKey<boolean>>;
 	private readonly _none: IContextKey<boolean>;
-	/** Whether the built-ins have been looked for once: until then the menu says nothing of having none. */
-	private _looked = false;
 	/** One store per watched group and per watched part, released when that group or part goes. */
 	private readonly _groups = this._register(new DisposableMap<IEditorGroup>());
 	private readonly _parts = this._register(new DisposableMap<IEditorPart>());
@@ -62,7 +75,9 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 		@IEditorGroupsService private readonly _editorGroupsService: IEditorGroupsService,
 		@ITerminalLauncherService private readonly _launcherService: ITerminalLauncherService,
 		@IContextKeyService contextKeyService: IContextKeyService,
-		@IHostService hostService: IHostService
+		@IHostService hostService: IHostService,
+		@IWorkbenchEnvironmentService private readonly _environmentService: IWorkbenchEnvironmentService,
+		@ILabelService private readonly _labelService: ILabelService
 	) {
 		super();
 
@@ -91,13 +106,22 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 				this._launcherService.refreshAvailable().catch(onUnexpectedError);
 			}
 		}));
-		this._launcherService.refreshAvailable().then(() => {
-			this._looked = true;
-			this._showAvailable();
-		}, onUnexpectedError);
+		// What the first look finds comes through `onDidChangeAvailable`, as every look's does
+		this._launcherService.refreshAvailable().catch(onUnexpectedError);
+		// On a remote that look finds no extension host yet to say what the machine has (REMOTE.md R3): looked for
+		// again the moment the agents' extension host can be asked - its command there, which comes with the
+		// extension's activation once the window has started - not first as the menu opens: that opening would show
+		// none of them while it asks, more than half a second over a slow link (RM-16)
+		if (this._environmentService.remoteAuthority) {
+			this._register(CommandsRegistry.onDidRegisterCommand(id => {
+				if (id === DETECT_CLIS_COMMAND) {
+					this._launcherService.refreshAvailable().catch(onUnexpectedError);
+				}
+			}));
+		}
 	}
 
-	/** The built-ins, each a command and a row shown while this machine has it and the person offers it. */
+	/** The built-ins, each a command and a row shown while the agents' machine has it and the person offers it. */
 	private _registerBuiltIns(): void {
 		for (const [order, launcher] of BUILT_IN_LAUNCHERS.entries()) {
 			this._registerAgent(this._store, launcher, `${OPEN_AGENT_PREFIX}${launcher.id}`, order, availableKey(launcher.id).isEqualTo(true));
@@ -107,8 +131,59 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 			command: { id: CONFIGURE_AGENTS, title: localize('facade.agent.noneFound', "No Agents Found: Configure Agents..."), icon: AGENT_EMPTY_ICON },
 			group: AGENT_MENU_GROUP,
 			order: 0,
-			when: NO_AGENTS.isEqualTo(true)
+			when: ContextKeyExpr.and(NO_AGENTS.isEqualTo(true), RemoteNameContext.isEqualTo(''))
 		}));
+
+		// On a remote with none found, the menu names the remote - as the window's remote indicator
+		// names it - and says how to get one: a line that says what is wrong, and Open Terminal, a
+		// terminal of the remote in the selected folder, above Configure Agents (REMOTE.md R3)
+		const remoteAuthority = this._environmentService.remoteAuthority;
+		if (remoteAuthority) {
+			this._registerRemoteNoneFound(remoteAuthority);
+			// The SSH extension names its host as it resolves the connection, after this menu is made: the
+			// line follows the name, as the remote indicator does
+			this._register(this._labelService.onDidChangeFormatters(() => this._registerRemoteNoneFound(remoteAuthority)));
+			this._register(registerAction2(class extends Action2 {
+				constructor() {
+					super({
+						id: OPEN_REMOTE_TERMINAL,
+						title: localize2('facade.agent.openRemoteTerminal', "Open Terminal"),
+						icon: Codicon.terminal,
+						menu: { id: AGENT_MENU, group: AGENT_MENU_GROUP, order: 1, when: NO_AGENTS.isEqualTo(true) }
+					});
+				}
+				async run(accessor: ServicesAccessor): Promise<void> {
+					const folder = accessor.get(IActiveFolderService).activeFolder?.uri;
+					if (folder) {
+						const folderTerminals = accessor.get(IFolderTerminalsService);
+						await folderTerminals.reveal(await folderTerminals.openFor(folder, {}), { join: false });
+						return;
+					}
+					await accessor.get(ICommandService).executeCommand('workbench.action.terminal.new');
+				}
+			}));
+		}
+	}
+
+	/**
+	 * The line an empty menu on a remote has, naming the remote as the window's remote indicator names it
+	 * now (REMOTE.md R3): made again whenever that name changes.
+	 */
+	private _registerRemoteNoneFound(remoteAuthority: string): void {
+		const host = this._labelService.getHostLabel(Schemas.vscodeRemote, remoteAuthority) || remoteAuthority;
+		// The one before goes first: a command is registered once at a time
+		this._remoteNoneFound.clear();
+		this._remoteNoneFound.value = registerAction2(class extends Action2 {
+			constructor() {
+				super({
+					id: REMOTE_NONE_FOUND,
+					title: localize2('facade.agent.remoteNoneFound', "No agent CLI found on {0}. Install and sign in to one there.", host),
+					precondition: ContextKeyExpr.false(),
+					menu: { id: AGENT_MENU, group: AGENT_MENU_GROUP, order: 0, when: NO_AGENTS.isEqualTo(true) }
+				});
+			}
+			run(): void { /* Never runs: the line says what is wrong */ }
+		});
 	}
 
 	/** A command that starts `launcher`, and its row in the menu. */
@@ -132,7 +207,7 @@ export class TerminalLauncherMenu extends Disposable implements IWorkbenchContri
 		for (const [id, key] of this._available) {
 			key.set(available.has(id));
 		}
-		this._none.set(this._looked && available.size === 0 && readCustomAgents(this._configurationService.getValue(CUSTOM_AGENTS_SETTING)).length === 0);
+		this._none.set(this._launcherService.availableKnown && available.size === 0 && readCustomAgents(this._configurationService.getValue(CUSTOM_AGENTS_SETTING)).length === 0);
 	}
 
 	/**

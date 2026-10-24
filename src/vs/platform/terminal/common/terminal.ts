@@ -234,13 +234,22 @@ export function processExitCode(end: { readonly exitCode: number; readonly signa
 }
 
 /**
- * Facade Code: whether a window may attach `process`, a persistent process: an agent's run's not while another window
- * has it - its tab there answers that it does - as a window opening a workspace's old file would attach it, that
- * file's last layout and editors naming it still: two windows drove one agent, and either could end it (N-68). The
- * window attaching does not answer for it yet. Any other process as upstream.
+ * Facade Code: whether a window of `record` - its agents' record, as the agents' extension says it - may
+ * attach `process`, a persistent process: an agent's run's only its own window's, orphaned or not - two
+ * computers on the same remote folder share the workspace's id, but not their records (REMOTE.md R7) -
+ * and not while another window has it: as a window opening a workspace's old file would attach it, that
+ * file's last layout and editors naming it still: two windows drove one agent, and either could end it
+ * (N-68). The window attaching does not answer for it yet. With the record not said yet, as before: the
+ * window's own terminals come back before the extension says it. Any other process as upstream.
  */
-export async function mayAttachProcess(process: { readonly shellLaunchConfig: IShellLaunchConfig; isOrphaned(): Promise<boolean> }): Promise<boolean> {
-	return process.shellLaunchConfig.reconnectionProperties?.ownerId !== FACADE_RUN_OWNER || await process.isOrphaned();
+export async function mayAttachProcess(process: { readonly shellLaunchConfig: IShellLaunchConfig; isOrphaned(): Promise<boolean> }, record?: string): Promise<boolean> {
+	if (process.shellLaunchConfig.reconnectionProperties?.ownerId !== FACADE_RUN_OWNER) {
+		return true;
+	}
+	if (record !== undefined && (process.shellLaunchConfig.reconnectionProperties?.data as { workspace?: unknown } | undefined)?.workspace !== record) {
+		return false;
+	}
+	return process.isOrphaned();
 }
 
 export type TerminalType = 'Task' | 'Local' | undefined;
@@ -369,7 +378,8 @@ export interface IPtyService {
 		workspaceId: string,
 		workspaceName: string
 	): Promise<number>;
-	attachToProcess(id: number): Promise<void>;
+	/** Facade Code: `record` is the attaching window's agents-record id, for an agent's process (`mayAttachProcess`). */
+	attachToProcess(id: number, record?: string): Promise<void>;
 	detachFromProcess(id: number, forcePersist?: boolean): Promise<void>;
 	shutdownAll(): Promise<void>;
 
@@ -871,6 +881,12 @@ export interface ITerminalChildProcess {
 	 */
 	shutdown(immediate: boolean): void;
 	input(data: string): void;
+	/**
+	 * Facade Code: `input`, settling once the pty host has the data - for a remote terminal, once it
+	 * crossed to the remote - where the process supports it. Paste-then-Enter counts its Enter delay
+	 * from then (REMOTE.md R7).
+	 */
+	inputAndConfirm?(data: string): Promise<void>;
 	sendSignal(signal: string): void;
 	processBinary(data: string): Promise<void>;
 	resize(cols: number, rows: number, pixelWidth?: number, pixelHeight?: number): void;
@@ -1204,7 +1220,8 @@ export interface ITerminalBackend extends ITerminalBackendPtyServiceContribution
 
 	readonly onDidRequestDetach: Event<{ requestId: number; workspaceId: string; instanceId: number }>;
 
-	attachToProcess(id: number): Promise<ITerminalChildProcess | undefined>;
+	/** Facade Code: `record` is the attaching window's agents-record id, for an agent's process (`mayAttachProcess`). */
+	attachToProcess(id: number, record?: string): Promise<ITerminalChildProcess | undefined>;
 	attachToRevivedProcess(id: number): Promise<ITerminalChildProcess | undefined>;
 	listProcesses(options?: IListProcessesOptions): Promise<IProcessDetails[]>;
 	getLatency(): Promise<IPtyHostLatencyMeasurement[]>;

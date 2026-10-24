@@ -5,21 +5,25 @@
 
 import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
-import { Emitter } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { extUri } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { IConfirmation, IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
+import { ILabelService } from '../../../../../platform/label/common/label.js';
+import { ConnectionGainEvent, ConnectionLostEvent, PersistentConnectionEvent, ReconnectionPermanentFailureEvent } from '../../../../../platform/remote/common/remoteAgentConnection.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import type { IWorkspaceBarRepository, IWorkspaceBarWorktree } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
 import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
 import { ILifecycleService, ShutdownReason } from '../../../../services/lifecycle/common/lifecycle.js';
-import { IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
+import { IRemoteAgentConnection, IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
 import { TestLifecycleService, workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
+import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../../terminal/browser/terminal.js';
 import { TerminalService } from '../../../terminal/browser/terminalService.js';
@@ -47,15 +51,21 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 	const pwsh = terminal(5, 'pwsh');
 	const folders = new Map<ITerminalInstance, URI>([[claude, api.uri], [codex, fix.uri], [muse, api.uri]]);
 
+	const question = (remoteAuthority: string | undefined, states: Emitter<PersistentConnectionEvent>) => new RunningWorkShutdownQuestion(
+		upcastPartial<ITerminalLauncherService>({ agentTerminals: [claude, codex, muse] }),
+		upcastPartial<IFolderTerminalsService>({ folderOf: instance => folders.get(instance) }),
+		upcastPartial<IWorkspaceContextService>({ getWorkspace: () => upcastPartial<IWorkspace>({ folders: [api, fix] }) }),
+		upcastPartial<IWorkspaceBarService>({ repositoryFor: () => repository }),
+		upcastPartial<IWorkspaceBarCustomizationService>({ nameFor: folder => folder.name, get: () => undefined }),
+		upcastPartial<IUriIdentityService>({ extUri }),
+		upcastPartial<IWorkbenchEnvironmentService>({ remoteAuthority }),
+		upcastPartial<IRemoteAgentService>({ getConnection: () => upcastPartial<IRemoteAgentConnection>({ onDidStateChange: states.event }) }),
+		upcastPartial<ILabelService>({ getHostLabel: () => 'monster' })
+	);
+
 	test('WS-49 VS Code\'s question is told what would stop - every agent and terminal, one to a line, agents first, each by kind and name, then its place as the bar names it - and counts agents apart from terminals; with no agent it is VS Code\'s question, and past ten lines it counts the rest', () => {
-		const contribution = new RunningWorkShutdownQuestion(
-			upcastPartial<ITerminalLauncherService>({ agentTerminals: [claude, codex, muse] }),
-			upcastPartial<IFolderTerminalsService>({ folderOf: instance => folders.get(instance) }),
-			upcastPartial<IWorkspaceContextService>({ getWorkspace: () => upcastPartial<IWorkspace>({ folders: [api, fix] }) }),
-			upcastPartial<IWorkspaceBarService>({ repositoryFor: () => repository }),
-			upcastPartial<IWorkspaceBarCustomizationService>({ nameFor: folder => folder.name, get: () => undefined }),
-			upcastPartial<IUriIdentityService>({ extUri })
-		);
+		const states = store.add(new Emitter<PersistentConnectionEvent>());
+		const contribution = question(undefined, states);
 		const told = {
 			everything: terminalShutdownQuestion()?.describe([pwsh, server, muse, codex, claude]),
 			terminals: terminalShutdownQuestion()?.describe([pwsh]),
@@ -80,11 +90,45 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 		});
 	});
 
+	test('while the window cannot reach its remote the question names the remote and says its agents keep running there as long as its server runs; back, it is the question as ever (REMOTE.md R4)', () => {
+		const states = store.add(new Emitter<PersistentConnectionEvent>());
+		const contribution = question('ssh-remote+monster', states);
+		const ask = (terminals: readonly ITerminalInstance[]) => terminalShutdownQuestion()?.describe(terminals)?.message;
+		const button = () => terminalShutdownQuestion()?.describe([claude])?.primaryButton;
+		const buttons: (string | undefined)[] = [button()];
+		const seen = {
+			connected: ask([claude, server]),
+			lost: (states.fire(new ConnectionLostEvent('token', 0)), buttons.push(button()), ask([claude, server])),
+			agent: ask([claude]),
+			agents: ask([claude, codex]),
+			terminal: ask([server]),
+			terminals: ask([server, pwsh]),
+			agentAndTerminal: ask([claude, server]),
+			back: (states.fire(new ConnectionGainEvent('token', 0, 1)), buttons.push(button()), ask([claude, server])),
+			givenUp: (states.fire(new ReconnectionPermanentFailureEvent('token', 0, 1, false)), buttons.push(button()), ask([claude])),
+		};
+		contribution.dispose();
+
+		assert.deepStrictEqual({ ...seen, buttons }, {
+			connected: 'Do you want to terminate 1 agent and 1 terminal?',
+			lost: 'Do you want to close the window? monster cannot be reached. Its agent and terminal keep running there as long as its server runs.',
+			agent: 'Do you want to close the window? monster cannot be reached. Its agent keeps running there as long as its server runs.',
+			agents: 'Do you want to close the window? monster cannot be reached. Its 2 agents keep running there as long as its server runs.',
+			terminal: 'Do you want to close the window? monster cannot be reached. Its terminal keeps running there as long as its server runs.',
+			terminals: 'Do you want to close the window? monster cannot be reached. Its 2 terminals keep running there as long as its server runs.',
+			agentAndTerminal: 'Do you want to close the window? monster cannot be reached. Its agent and terminal keep running there as long as its server runs.',
+			back: 'Do you want to terminate 1 agent and 1 terminal?',
+			givenUp: 'Do you want to close the window? monster cannot be reached. Its agent keeps running there as long as its server runs.',
+			// Confirming closes the window and stops nothing there, and its button says so; connected, it is VS Code's Terminate
+			buttons: [undefined, '&&Close Window', undefined, '&&Close Window'],
+		});
+	});
+
 	suite('in VS Code\'s terminal service', () => {
 
 		/** What closing for `reason` asked with a busy terminal in the background, and whether the window stayed. */
-		/** `told`: what Facade tells the question - nothing, what would stop, or that and its own message as well. */
-		async function close(reason: ShutdownReason, told: boolean | string) {
+		/** `told`: what Facade tells the question - nothing, what would stop, or that and its own message as well - and `button`, its own button. */
+		async function close(reason: ShutdownReason, told: boolean | string, button?: string) {
 			const asked: IConfirmation[] = [];
 			const configurationService = new TestConfigurationService({ files: {}, terminal: { integrated: { confirmOnExit: 'hasChildProcesses', enablePersistentSessions: true } } });
 			const instantiationService = workbenchInstantiationService({ configurationService: () => configurationService }, store);
@@ -92,6 +136,7 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 			instantiationService.stub(ITerminalInstanceService, 'getBackend', undefined);
 			instantiationService.stub(ITerminalInstanceService, 'getRegisteredBackends', []);
 			instantiationService.stub(IRemoteAgentService, 'getConnection', null);
+			instantiationService.stub(IWorkspaceEditingService, { onDidEnterWorkspace: Event.None });
 
 			const disposed = store.add(new Emitter<ITerminalInstance>());
 			const parked = upcastPartial<ITerminalInstance>({ instanceId: 7, title: 'Claude Code', hasChildProcesses: true, onDisposed: disposed.event });
@@ -104,7 +149,7 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 			await timeout(0);
 			terminalService.registerProcessSupport(true);
 			await terminalService.createTerminal({ config: { hideFromUser: true }, skipContributedProfileCheck: true });
-			const question = told ? setTerminalShutdownQuestion({ describe: terminals => ({ message: told === true ? undefined : told, detail: `${terminals.length} named` }) }) : undefined;
+			const question = told ? setTerminalShutdownQuestion({ describe: terminals => ({ message: told === true ? undefined : told, detail: `${terminals.length} named`, ...(button ? { primaryButton: button } : {}) }) }) : undefined;
 
 			const vetoes: (boolean | Promise<boolean>)[] = [];
 			(instantiationService.get(ILifecycleService) as TestLifecycleService).fireBeforeShutdown({ reason, veto: value => { vetoes.push(value); }, finalVeto: () => { } });
@@ -122,10 +167,13 @@ suite('Agent launchers - VS Code\'s question before the window closes', () => {
 				close: await close(ShutdownReason.CLOSE, true),
 				quit: await close(ShutdownReason.QUIT, true),
 				agents: await close(ShutdownReason.CLOSE, 'Do you want to terminate 1 agent?'),
+				// Away from its remote, confirming terminates nothing: the question's own button (REMOTE.md R4)
+				away: await close(ShutdownReason.CLOSE, 'Do you want to close the window? monster cannot be reached.', '&&Close Window'),
 			}, {
 				close: { asked: [question], kept: true },
 				quit: { asked: [question], kept: true },
 				agents: { asked: [{ ...question, message: 'Do you want to terminate 1 agent?' }], kept: true },
+				away: { asked: [{ ...question, message: 'Do you want to close the window? monster cannot be reached.', primaryButton: '&&Close Window' }], kept: true },
 			});
 		});
 

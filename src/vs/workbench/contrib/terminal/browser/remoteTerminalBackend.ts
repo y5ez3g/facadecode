@@ -212,13 +212,13 @@ class RemoteTerminalBackend extends BaseTerminalBackend implements ITerminalBack
 		return pty;
 	}
 
-	async attachToProcess(id: number): Promise<ITerminalChildProcess | undefined> {
+	async attachToProcess(id: number, record?: string): Promise<ITerminalChildProcess | undefined> {
 		if (!this._remoteTerminalChannel) {
 			throw new Error(`Cannot create remote terminal when there is no remote!`);
 		}
 
 		try {
-			await this._remoteTerminalChannel.attachToProcess(id);
+			await this._remoteTerminalChannel.attachToProcess(id, record);
 			const pty = this._instantiationService.createInstance(RemotePty, id, true, this._remoteTerminalChannel);
 			this._ptys.set(id, pty);
 			return pty;

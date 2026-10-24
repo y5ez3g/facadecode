@@ -219,10 +219,10 @@ class LocalTerminalBackend extends BaseTerminalBackend implements ITerminalBacke
 		return pty;
 	}
 
-	async attachToProcess(id: number): Promise<ITerminalChildProcess | undefined> {
+	async attachToProcess(id: number, record?: string): Promise<ITerminalChildProcess | undefined> {
 		await this._connectToDirectProxy();
 		try {
-			await this._proxy.attachToProcess(id);
+			await this._proxy.attachToProcess(id, record);
 			const pty = new LocalPty(id, true, this._proxy);
 			this._ptys.set(id, pty);
 			return pty;

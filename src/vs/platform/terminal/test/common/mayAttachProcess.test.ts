@@ -26,4 +26,27 @@ suite('Terminal: which window attaches a process', () => {
 			taskAnotherWindowHas: true
 		});
 	});
+
+	test('an agent\'s process is attached only by a window of its own record, told or not; with the record not said yet, as before (REMOTE.md R7)', async () => {
+		const agent: IShellLaunchConfig = { reconnectionProperties: { ownerId: FACADE_RUN_OWNER, data: { workspace: 'w', id: 1 } } };
+		const process = (shellLaunchConfig: IShellLaunchConfig, orphan: boolean) => ({ shellLaunchConfig, isOrphaned: async () => orphan });
+
+		deepStrictEqual({
+			ownRecordOrphan: await mayAttachProcess(process(agent, true), 'w'),
+			ownRecordHeld: await mayAttachProcess(process(agent, false), 'w'),
+			otherRecordOrphan: await mayAttachProcess(process(agent, true), 'other'),
+			otherRecordHeld: await mayAttachProcess(process(agent, false), 'other'),
+			recordUnknownOrphan: await mayAttachProcess(process(agent, true)),
+			recordUnknownHeld: await mayAttachProcess(process(agent, false)),
+			shellOtherRecord: await mayAttachProcess(process({}, true), 'other')
+		}, {
+			ownRecordOrphan: true,
+			ownRecordHeld: false,
+			otherRecordOrphan: false,
+			otherRecordHeld: false,
+			recordUnknownOrphan: true,
+			recordUnknownHeld: false,
+			shellOtherRecord: true
+		});
+	});
 });

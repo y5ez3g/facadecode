@@ -11,13 +11,17 @@ import { EditorInput } from '../../../common/editor/editorInput.js';
 import { ISerializedTerminalEditorInput, ITerminalEditorService, ITerminalInstance, type IDeserializedTerminalEditorInput } from './terminal.js';
 import { TerminalEditorInput } from './terminalEditorInput.js';
 import { ILifecycleService } from '../../../services/lifecycle/common/lifecycle.js';
+import { IStorageService, StorageScope } from '../../../../platform/storage/common/storage.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
-import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+import { AGENT_RECORD_STORAGE_KEY, agentRestoreDeferred, isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 export class TerminalInputSerializer implements IEditorSerializer {
 	constructor(
 		@ITerminalEditorService private readonly _terminalEditorService: ITerminalEditorService,
-		@ILifecycleService private readonly _lifecycleService: ILifecycleService
+		@ILifecycleService private readonly _lifecycleService: ILifecycleService,
+		@IStorageService private readonly _storageService: IStorageService,
+		@IWorkbenchEnvironmentService private readonly _environmentService: IWorkbenchEnvironmentService
 	) { }
 
 	public canSerialize(editorInput: TerminalEditorInput): editorInput is TerminalEditorInput & { readonly terminalInstance: ITerminalInstance } {
@@ -49,6 +53,11 @@ export class TerminalInputSerializer implements IEditorSerializer {
 		// agent tab in one was closed - its agent with it - when the window left that folder. Nor one
 		// whose terminal was not kept: its agent ended with the window (`notKept`, N-88)
 		if (editorInput.notKept || isAgentGoneAtStartup(editorInput, this._lifecycleService)) {
+			return undefined;
+		}
+		// Facade Code: on a remote, an agent's tab of a record not this window's - or none told yet - is left
+		// out, for the take-back: no tab for another window's agent, attached or saying it is elsewhere (RM-20)
+		if (agentRestoreDeferred(editorInput, this._storageService.get(AGENT_RECORD_STORAGE_KEY, StorageScope.WORKSPACE), this._environmentService.remoteAuthority)) {
 			return undefined;
 		}
 		return this._terminalEditorService.reviveInput(editorInput);

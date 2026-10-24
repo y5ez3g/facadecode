@@ -7,13 +7,14 @@ import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { EditorActivation } from '../../../../../platform/editor/common/editor.js';
-import { FileOperationError, FileOperationResult, FileSystemProviderCapabilities, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
+import { FileOperationError, FileOperationResult, FileSystemProviderCapabilities, IFileService, IFileStatWithPartialMetadata, IFileSystemProviderRegistrationEvent } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { INotificationService, IPromptChoice, Severity } from '../../../../../platform/notification/common/notification.js';
 import { StorageScope, WillSaveStateReason } from '../../../../../platform/storage/common/storage.js';
@@ -380,7 +381,7 @@ class TestActiveFolderService extends mock<IActiveFolderService>() {
 
 	async switchTo(to: IWorkspaceFolder): Promise<void> {
 		const joins: Promise<void>[] = [];
-		this._onWillChange.fire({ from: this.activeFolder, to, join: promise => { joins.push(promise); } });
+		this._onWillChange.fire({ from: this.activeFolder, to: to.uri, join: promise => { joins.push(promise); } });
 		await Promise.all(joins);
 
 		this.activeFolder = to;
@@ -456,6 +457,9 @@ class TestFileService extends mock<IFileService>() {
 
 	readonly gone = new Set<string>();
 	readonly unreadable = new Set<string>();
+	override onDidChangeFileSystemProviderRegistrations: Event<IFileSystemProviderRegistrationEvent> = Event.None;
+	override onDidChangeFileSystemProviderCapabilities = Event.None;
+	override async activateProvider(): Promise<void> { }
 
 	override async stat(resource: URI): Promise<IFileStatWithPartialMetadata> {
 		// What is in a folder goes with it
@@ -613,6 +617,74 @@ suite('Folder terminals - a terminal outlives leaving its folder', () => {
 			tabs: ['agent'],
 			folder: '/w/beta',
 		});
+	});
+
+	/**
+	 * A remote window on a Windows host's folders `repo` and `other`, on `repo` with the terminals `live` in its editor area,
+	 * before the remote's file system is registered - as the workbench comes up - which `register` does: one that ignores
+	 * case where the keys made before kept it (REMOTE.md R7).
+	 */
+	function remoteWindow(live: TestInstance[] = []) {
+		const store = disposables.add(new DisposableStore());
+		const remote = (name: string, index: number) => new WorkspaceFolder({ uri: URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+win', path: `/c:/Users/me/${name}` }), name, index });
+		const repo = remote('repo', 0);
+		const other = remote('other', 1);
+		const column = new TestGroup(0, live.map(tabFor));
+		const groups = new TestEditorGroupsService([column], []);
+		const terminals = new TestTerminalService(groups);
+		terminals.instances = live.map(instance => instance.asInstance());
+		const folders = new TestActiveFolderService();
+		folders.activeFolder = repo;
+		const context = new TestContextService();
+		context.folders = [repo, other];
+		const bar = new TestWorkspaceBarService();
+		let registered = false;
+		const registrations = store.add(new Emitter<IFileSystemProviderRegistrationEvent>());
+		const uriIdentityService = store.add(new UriIdentityService(new class extends mock<IFileService>() {
+			override onDidChangeFileSystemProviderRegistrations = registrations.event;
+			override onDidChangeFileSystemProviderCapabilities = Event.None;
+			override hasProvider(resource: URI) { return resource.scheme !== Schemas.vscodeRemote || registered; }
+			override hasCapability(_resource: URI, capability: FileSystemProviderCapabilities): boolean {
+				return capability !== FileSystemProviderCapabilities.PathCaseSensitive;
+			}
+		}));
+		const files = new TestFileService();
+		files.onDidChangeFileSystemProviderRegistrations = registrations.event;
+		const folderTerminals = store.add(new FolderTerminals(
+			folders, bar, terminals, context, groups,
+			new TestConfigurationService(), uriIdentityService, files, store.add(new TestStorageService()), new NullLogService(), new TestNotifications()
+		));
+		const register = () => {
+			registered = true;
+			registrations.fire({ added: true, scheme: Schemas.vscodeRemote, provider: undefined! });
+		};
+		return { repo, other, column, terminals, folders, bar, folderTerminals, register };
+	}
+
+	test('a terminal opened for the folder a remote window opened on comes up, the remote\'s file system registered after the window was: a Windows host\'s, which ignores case where the window took paths to keep it (REMOTE.md R7)', async () => {
+		const { repo, column, terminals, folderTerminals, register } = remoteWindow();
+
+		register();
+		const agent = await folderTerminals.openFor(repo.uri, { name: 'agent' });
+		await timeout(0);
+
+		assert.deepStrictEqual({ shown: terminals.shown, tabs: column.names(), folder: folderTerminals.folderOf(agent)?.path }, {
+			shown: ['agent'],
+			tabs: ['agent'],
+			folder: '/c:/Users/me/repo'
+		});
+	});
+
+	test('a remote window\'s terminal, its folder left before the remote\'s file system registered, comes back with the window once it has (REMOTE.md R7)', async () => {
+		const local = new TestInstance('local');
+		const { repo, other, column, terminals, folders, bar, folderTerminals, register } = remoteWindow([local]);
+
+		await switchTo(folders, bar, other);
+		register();
+		const held = folderTerminals.terminalsOf(repo.uri).map(instance => (instance as unknown as TestInstance).name);
+		await switchTo(folders, bar, repo);
+
+		assert.deepStrictEqual({ held, shown: terminals.shown, tabs: column.names() }, { held: ['local'], shown: ['local'], tabs: ['local'] });
 	});
 
 	test('a terminal opened for the folder on screen comes up behind the tab in front, without the focus; one for a folder neither in the workspace nor a row of the bar is the panel\'s', async () => {

@@ -4,20 +4,24 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { deepStrictEqual, fail, strictEqual } from 'assert';
-import { timeout } from '../../../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
-import { upcastPartial } from '../../../../../base/test/common/mock.js';
+import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { TestDialogService } from '../../../../../platform/dialogs/test/common/testDialogService.js';
-import { TerminalLocation, TitleEventSource, type ITerminalBackend, type TerminalIcon } from '../../../../../platform/terminal/common/terminal.js';
-import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../browser/terminal.js';
+import { TerminalLocation, TitleEventSource, type IPtyHostAttachTarget, type IShellLaunchConfig, type ITerminalBackend, type ITerminalsLayoutInfo, type TerminalIcon } from '../../../../../platform/terminal/common/terminal.js';
+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
+import { ITerminalGroup, ITerminalGroupService, ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../browser/terminal.js';
 import { TerminalService, whenReplayed } from '../../browser/terminalService.js';
-import { TERMINAL_CONFIG_SECTION } from '../../common/terminal.js';
+import { ITerminalProfileService, TERMINAL_CONFIG_SECTION } from '../../common/terminal.js';
 import { IRemoteAgentService } from '../../../../services/remote/common/remoteAgentService.js';
-import { workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
+import { TestTerminalGroupService, workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
+import { TestLifecycleService } from '../../../../test/common/workbenchTestServices.js';
+import { ILifecycleService, InternalBeforeShutdownEvent, ShutdownReason, StartupKind } from '../../../../services/lifecycle/common/lifecycle.js';
+import { IDidEnterWorkspaceEvent, IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
 import type { IConfigurationChangeEvent } from '../../../../../platform/configuration/common/configuration.js';
 import { IWorkspace, IWorkspaceContextService, WorkbenchState } from '../../../../../platform/workspace/common/workspace.js';
 
@@ -48,6 +52,7 @@ suite('Workbench - TerminalService', () => {
 		instantiationService.stub(ITerminalInstanceService, 'getBackend', undefined);
 		instantiationService.stub(ITerminalInstanceService, 'getRegisteredBackends', []);
 		instantiationService.stub(IRemoteAgentService, 'getConnection', null);
+		instantiationService.stub(IWorkspaceEditingService, { onDidEnterWorkspace: Event.None });
 
 		terminalService = store.add(instantiationService.createInstance(TerminalService));
 		instantiationService.stub(ITerminalService, terminalService);
@@ -83,6 +88,133 @@ suite('Workbench - TerminalService', () => {
 				strictEqual(disposalEmitters[i].hasListeners(), false);
 			}
 		});
+	});
+
+	test('a remote window brings back the terminals held in the background, as a local one does - a folder\'s put away by a switch among them: else a reload loses every shell of a folder not on screen, its process left running on the remote (REMOTE.md R7) - those no window has, as the panel\'s: not another window\'s a second time', async () => {
+		const authority = 'ssh-remote+host';
+		instantiationService.set(IWorkbenchEnvironmentService, new class extends mock<IWorkbenchEnvironmentService>() {
+			override get remoteAuthority() { return authority; }
+		});
+		const backend = upcastPartial<ITerminalBackend>({
+			onDidRequestDetach: Event.None,
+			// 8 another window has, as it does when this window's workspace became another and the old one is opened again
+			getTerminalLayoutInfo: async () => ({ tabs: [], background: [upcastPartial<IPtyHostAttachTarget>({ id: 7, isOrphan: true }), upcastPartial<IPtyHostAttachTarget>({ id: 8, isOrphan: false })] }),
+			reduceConnectionGraceTime: async () => { },
+		});
+		instantiationService.stub(ITerminalInstanceService, 'getBackend', async (remoteAuthority?: string) => remoteAuthority === authority ? backend : undefined);
+		instantiationService.stub(ITerminalProfileService, 'getContributedDefaultProfile', async () => undefined);
+		const created: IShellLaunchConfig[] = [];
+		instantiationService.stub(ITerminalInstanceService, 'convertProfileToShellLaunchConfig', (config: IShellLaunchConfig) => config);
+		instantiationService.stub(ITerminalInstanceService, 'createInstance', (config: IShellLaunchConfig) => {
+			created.push(config);
+			// Every event of it quiet, as the service listens to each of them
+			return new Proxy<Record<string | symbol, unknown>>({ instanceId: created.length, shellLaunchConfig: config }, {
+				get: (target, property) => Reflect.has(target, property) ? target[property] : typeof property === 'string' && property.startsWith('on') ? Event.None : undefined
+			}) as unknown as ITerminalInstance;
+		});
+
+		const service = store.add(instantiationService.createInstance(TerminalService));
+		service.registerProcessSupport(true);
+		await service.whenConnected;
+
+		deepStrictEqual(created.map(config => ({ attached: config.attachPersistentProcess?.id, hidden: config.hideFromUser })), [{ attached: 7, hidden: true }]);
+	});
+
+	test('a window saves its terminals\' layout only once it has taken back the one it had: an editor terminal coming back first - an agent\'s, its dimensions changing as it is laid out - would save one without the panel\'s terminals still to come back, in place of the one the pty host is about to give back (REMOTE.md R7)', async () => {
+		const authority = 'ssh-remote+host';
+		instantiationService.set(IWorkbenchEnvironmentService, new class extends mock<IWorkbenchEnvironmentService>() {
+			override get remoteAuthority() { return authority; }
+		});
+		// What the pty host is asked, in order, and when the layout it had came back
+		const asked: string[] = [];
+		const layout = new DeferredPromise<ITerminalsLayoutInfo>();
+		const backend = upcastPartial<ITerminalBackend>({
+			onDidRequestDetach: Event.None,
+			setTerminalLayoutInfo: async () => { asked.push('set'); },
+			getTerminalLayoutInfo: () => { asked.push('get'); return layout.p.then(info => { asked.push('got'); return info; }); },
+			reduceConnectionGraceTime: async () => { },
+		});
+		instantiationService.stub(ITerminalInstanceService, 'getBackend', async (remoteAuthority?: string) => remoteAuthority === authority ? backend : undefined);
+		instantiationService.stub(ITerminalProfileService, 'getContributedDefaultProfile', async () => undefined);
+		const service = store.add(instantiationService.createInstance(TerminalService));
+		service.registerProcessSupport(true);
+		await timeout(0);
+		// eslint-disable-next-line @typescript-eslint/naming-convention
+		const saveNow = () => (service as unknown as { _saveStateNow(): void })._saveStateNow();
+
+		// As an editor terminal laid out before the layout came back asks, then once it has
+		saveNow();
+		layout.complete({ tabs: [], background: [] });
+		await service.whenConnected;
+		saveNow();
+
+		deepStrictEqual(asked, ['get', 'got', 'set']);
+	});
+
+	test('a remote window carries its terminals\' layout across the reload VS Code gives it as it enters a workspace - a folder window given a second folder - its connection down meanwhile: the reload gives it to the pty host, which keeps layouts by workspace, before reading it, so that the panel\'s terminals are back; a load that is no reload drops it (REMOTE.md R7)', async () => {
+		const authority = 'ssh-remote+host';
+		instantiationService.set(IWorkbenchEnvironmentService, new class extends mock<IWorkbenchEnvironmentService>() {
+			override get remoteAuthority() { return authority; }
+		});
+		const entered = store.add(new Emitter<IDidEnterWorkspaceEvent>());
+		instantiationService.stub(IWorkspaceEditingService, { onDidEnterWorkspace: entered.event });
+		// What the pty host is asked, in order
+		let asked: string[] = [];
+		const backend = upcastPartial<ITerminalBackend>({
+			onDidRequestDetach: Event.None,
+			setTerminalLayoutInfo: async layout => { asked.push(`set ${JSON.stringify(layout)}`); },
+			getTerminalLayoutInfo: async () => { asked.push('get'); return { tabs: [], background: [] }; },
+			reduceConnectionGraceTime: async () => { },
+		});
+		instantiationService.stub(ITerminalInstanceService, 'getBackend', async (remoteAuthority?: string) => remoteAuthority === authority ? backend : undefined);
+		instantiationService.stub(ITerminalProfileService, 'getContributedDefaultProfile', async () => undefined);
+		// The panel's one group, of the terminal of process 4; and another, of process 5's
+		const groupOf = (id: number) => upcastPartial<ITerminalGroup>({ getLayoutInfo: isActive => ({ isActive, activePersistentProcessId: id, terminals: [{ relativeSize: 1, terminal: id }] }) });
+		const [group, other] = [groupOf(4), groupOf(5)];
+		const groupService = instantiationService.get(ITerminalGroupService) as TestTerminalGroupService;
+		const lifecycleService = instantiationService.get(ILifecycleService) as TestLifecycleService;
+		// A load of the window, the last one gone, and a workspace entered under it, if any, with the panel's groups, the
+		// window then reloading once the event's joiners are done - `meanwhile` what one of them does: what it asked the pty host
+		let service: TerminalService | undefined;
+		const load = async (startupKind: StartupKind, enter: boolean, groups = [group], meanwhile?: () => void) => {
+			service?.dispose();
+			asked = [];
+			lifecycleService.startupKind = startupKind;
+			groupService.groups = groups;
+			groupService.activeGroup = groups[0];
+			service = store.add(instantiationService.createInstance(TerminalService));
+			service.registerProcessSupport(true);
+			await service.whenConnected;
+			// What its constructor puts off to the next turn, done before it can go
+			await timeout(0);
+			if (enter) {
+				const joined: Promise<void>[] = [];
+				entered.fire(upcastPartial<IDidEnterWorkspaceEvent>({ join: promise => joined.push(promise) }));
+				meanwhile?.();
+				await Promise.all(joined);
+				lifecycleService.fireBeforeShutdown(upcastPartial<InternalBeforeShutdownEvent>({ reason: ShutdownReason.RELOAD, veto: () => { } }));
+			}
+			return asked;
+		};
+
+		const loads = [
+			await load(StartupKind.NewWindow, true),
+			await load(StartupKind.ReloadedWindow, false),
+			await load(StartupKind.ReloadedWindow, true),
+			await load(StartupKind.ReopenedWindow, false),
+			await load(StartupKind.ReloadedWindow, true, []),
+			await load(StartupKind.ReloadedWindow, false),
+			await load(StartupKind.ReloadedWindow, true, [group], () => { groupService.groups = [other]; groupService.activeGroup = other; }),
+			await load(StartupKind.ReloadedWindow, false),
+		];
+
+		// The second load, the reload, gives the pty host the layout carried before reading one. The fourth, a window
+		// opened on the workspace anew, drops the one carried for it, which the fifth no longer finds. The fifth, its
+		// panel empty, carries none for the sixth: a layout of nothing would only take the place of one the pty host has.
+		// The seventh's joiner changes its panel, as one putting a folder's terminals away does (`WorkspaceBarSwitcher.startOn`):
+		// the eighth is given the panel the window had as it reloaded
+		const layoutOf = (id: number) => ({ tabs: [{ isActive: true, activePersistentProcessId: id, terminals: [{ relativeSize: 1, terminal: id }] }], background: [] });
+		deepStrictEqual(loads, [['get'], [`set ${JSON.stringify(layoutOf(4))}`, 'get'], ['get'], ['get'], ['get'], ['get'], ['get'], [`set ${JSON.stringify(layoutOf(5))}`, 'get']]);
 	});
 
 	test('the window is connected once each terminal that came back has replayed what its process wrote, or never will: its process failed to start - its folder gone - or ended, before or after, or its terminal closed (N-67)', async () => {
@@ -251,7 +383,7 @@ suite('Workbench - TerminalService', () => {
 			strictEqual(backend.lastIconUserInitiated, true);
 		});
 
-		test('a window whose workspace became another - a folder window given a second folder - keeps its terminals\' layout under the new one at once, not a debounce later: reloaded right after, it finds them (N-50)', () => {
+		test('a window whose workspace became another - a folder window given a second folder - keeps its terminals\' layout under the new one at once, not a debounce later: reloaded right after, it finds them (N-50)', async () => {
 			let id = 'folder';
 			const stateChanged = store.add(new Emitter<WorkbenchState>());
 			instantiationService.set(IWorkspaceContextService, upcastPartial<IWorkspaceContextService>({
@@ -262,6 +394,8 @@ suite('Workbench - TerminalService', () => {
 				onDidChangeWorkspaceName: Event.None
 			}));
 			const service = store.add(instantiationService.createInstance(TerminalService));
+			// It saves a layout only once it has taken back the one it had
+			await service.whenConnected;
 			const savedUnder: string[] = [];
 			(service as unknown as { _primaryBackend: Partial<ITerminalBackend> })._primaryBackend = { setTerminalLayoutInfo: async () => { savedUnder.push(id); } };
 			// eslint-disable-next-line @typescript-eslint/naming-convention
@@ -272,6 +406,20 @@ suite('Workbench - TerminalService', () => {
 			stateChanged.fire(WorkbenchState.WORKSPACE);
 
 			deepStrictEqual(savedUnder, ['untitled']);
+		});
+
+		test('a window started with persistent sessions off saves its terminals\' layout once they are on: it waits for no layout it never took back', async () => {
+			await setPersistentSessions(configurationService, false);
+			const service = store.add(instantiationService.createInstance(TerminalService));
+			await service.whenConnected;
+			const saved: string[] = [];
+			(service as unknown as { _primaryBackend: Partial<ITerminalBackend> })._primaryBackend = { setTerminalLayoutInfo: async () => { saved.push('set'); } };
+
+			await setPersistentSessions(configurationService, true);
+			// eslint-disable-next-line @typescript-eslint/naming-convention
+			(service as unknown as { _saveStateNow(): void })._saveStateNow();
+
+			deepStrictEqual(saved, ['set']);
 		});
 
 		test('a title an escape sequence set is kept as the sequence, not as the label its template made of it (N-03)', async () => {
@@ -301,6 +449,14 @@ async function setConfirmOnKill(configurationService: TestConfigurationService, 
 	configurationService.onDidChangeConfigurationEmitter.fire({
 		affectsConfiguration: () => true,
 		affectedKeys: ['terminal.integrated.confirmOnKill']
+	} as unknown as IConfigurationChangeEvent);
+}
+
+async function setPersistentSessions(configurationService: TestConfigurationService, value: boolean) {
+	await configurationService.setUserConfiguration(TERMINAL_CONFIG_SECTION, { confirmOnKill: 'never', enablePersistentSessions: value });
+	configurationService.onDidChangeConfigurationEmitter.fire({
+		affectsConfiguration: () => true,
+		affectedKeys: ['terminal.integrated.enablePersistentSessions']
 	} as unknown as IConfigurationChangeEvent);
 }
 

@@ -46,7 +46,7 @@ import { IAccessibilityService } from '../../../../platform/accessibility/common
 import { BugIndicatingError } from '../../../../base/common/errors.js';
 import type { MaybePromise } from '../../../../base/common/async.js';
 import { isString } from '../../../../base/common/types.js';
-import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+import { agentRecordForAttach, isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 
 /**
  * Facade Code: what an agent's terminal says when it could not attach to its process: another window has it - a
@@ -306,7 +306,8 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 				const env = await this._resolveEnvironment(backend, variableResolver, shellLaunchConfig);
 				const shouldPersist = ((this._configurationService.getValue(TaskSettingId.Reconnection) && shellLaunchConfig.reconnectionProperties) || !shellLaunchConfig.isFeatureTerminal) && this._terminalConfigurationService.config.enablePersistentSessions && !shellLaunchConfig.isTransient;
 				if (shellLaunchConfig.attachPersistentProcess) {
-					const result = await backend.attachToProcess(shellLaunchConfig.attachPersistentProcess.id);
+					// Facade Code: an agent's process attaches to its own record's window only (`mayAttachProcess`)
+					const result = await backend.attachToProcess(shellLaunchConfig.attachPersistentProcess.id, agentRecordForAttach());
 					if (result) {
 						newProcess = result;
 					} else {
@@ -359,7 +360,8 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 				}
 			} else {
 				if (shellLaunchConfig.attachPersistentProcess) {
-					const result = shellLaunchConfig.attachPersistentProcess.findRevivedId ? await backend.attachToRevivedProcess(shellLaunchConfig.attachPersistentProcess.id) : await backend.attachToProcess(shellLaunchConfig.attachPersistentProcess.id);
+					// Facade Code: an agent's process attaches to its own record's window only (`mayAttachProcess`)
+					const result = shellLaunchConfig.attachPersistentProcess.findRevivedId ? await backend.attachToRevivedProcess(shellLaunchConfig.attachPersistentProcess.id) : await backend.attachToProcess(shellLaunchConfig.attachPersistentProcess.id, agentRecordForAttach());
 					if (result) {
 						newProcess = result;
 					} else {
@@ -689,6 +691,17 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 			this._logService.debug('queueing data in prelaunch input queue', data);
 			this._preLaunchInputQueue.push(data);
 		}
+	}
+
+	// Facade Code: {@link ITerminalProcessManager.writeAndConfirm} - through `write` where the process cannot confirm it
+	async writeAndConfirm(data: string): Promise<void> {
+		await this.ptyProcessReady;
+		if (this._process?.inputAndConfirm && (this.shellProcessId || this._processType === ProcessType.PsuedoTerminal)) {
+			this._dataFilter.disableSeamlessRelaunch();
+			this._hasWrittenData = true;
+			return this._process.inputAndConfirm(data);
+		}
+		return this.write(data);
 	}
 
 	async sendSignal(signal: string): Promise<void> {

@@ -7,6 +7,7 @@ import { DeferredPromise } from '../../../../base/common/async.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { basename, joinPath } from '../../../../base/common/resources.js';
 import { isBoolean, isNumber, isObject, isString } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -21,7 +22,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IShellLaunchConfig, TerminalExitReason, TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
-import { folderKey } from '../../../browser/parts/workspacebar/workspaceBar.js';
+import { folderKey, onDidChangeFolderKeys, rekeyFolder } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { getWorkbenchContribution, IWorkbenchContribution } from '../../../common/contributions.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
@@ -202,7 +203,8 @@ interface IHeldRow {
 
 /** A terminal opened for a folder (`openFor`), and that folder (`FolderTerminals._openedFor`). */
 interface IOpenedFor {
-	readonly key: string;
+	/** Made again as its file system registers (`FolderTerminals._rekeyFolders`). */
+	key: string;
 	readonly uri: URI;
 
 	/** Whether it was a folder of the workspace when the workspace's folders last changed, not a row that had not joined it. */
@@ -328,6 +330,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 	/** The folders whose terminals are being shown again right now. */
 	private readonly _unparking = new Set</*folder*/string>();
 
+	/**
+	 * The folders whose terminals were being shown again as their keys changed (`_rekeyFolders`), each with the key it
+	 * has now: the record is the queue meanwhile (`_unpark`), held under that key once it stops.
+	 */
+	private readonly _keyedAgain = new Map</*folder*/string, string>();
+
 	/** Fires with each terminal as it is shown again. */
 	private readonly _onDidUnpark = this._register(new Emitter<ITerminalInstance>());
 
@@ -373,6 +381,10 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		// folder the window opened on are up
 		const opened = this._activeFolderService.activeFolder;
 		this._editorsUpFor = opened && this._key(opened.uri);
+
+		// In a remote window the workbench is up before the remote's file system registers, which can key its folders
+		// another way: what was kept by the keys made before is kept by the ones made now (REMOTE.md R7)
+		this._register(onDidChangeFolderKeys(this._fileService)(scheme => this._rekeyFolders(scheme)));
 
 		this._register(this._activeFolderService.onWillChangeActiveFolder(e => {
 			// Every switch, including one that has nothing to park, so that a restore in flight stops
@@ -499,8 +511,10 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			return opened.key;
 		}
 
+		// Recorded before its folder's file system registered, by the key the folder has now (`_rekeyFolders`)
 		const origin = this._origins.get(instance);
-		return origin !== undefined && this._folderFor(origin) ? origin : undefined;
+		const home = origin === undefined ? undefined : this._key(URI.parse(origin));
+		return home !== undefined && this._folderFor(home) ? home : undefined;
 	}
 
 	/** {@link IFolderTerminalsService.reveal}. */
@@ -845,6 +859,12 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		this._unrestoredOpenedFor = openedFor;
 		try {
 			await this._terminalService.whenConnected;
+
+			// And a remote's file system, which keys its folders as the kept records are: it can be there after its
+			// terminals are (REMOTE.md R7), and a folder keyed otherwise would be one that left
+			if (this._contextService.getWorkspace().folders.some(folder => folder.uri.scheme === Schemas.vscodeRemote)) {
+				await this._fileService.activateProvider(Schemas.vscodeRemote);
+			}
 		} finally {
 			this._unrestored = undefined;
 			this._unrestoredOpenedFor = undefined;
@@ -1082,11 +1102,25 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 			this._unparking.delete(key);
 			this._onDidStopUnparking.fire(key);
 
+			// Keyed again meanwhile (`_rekeyFolders`): what is left of it held under the key the folder has now -
+			// or, all of it back, the row it was held under gone with it, as it would have gone under that key
+			const now = this._keyedAgain.get(key);
+			this._keyedAgain.delete(key);
+			if (now !== undefined && this._parked.has(key)) {
+				this._rehold(key, now);
+			} else if (now !== undefined && !this._parked.has(now)) {
+				this._rows.delete(now);
+			}
+			// And said under that key, to a reveal waiting under it (`_bringBack`) - unless they are coming back under it
+			if (now !== undefined && !this._unparking.has(now)) {
+				this._onDidStopUnparking.fire(now);
+			}
+
 			// Stopped by a move: started again at once when what it was for is up again - the window back on
 			// the folder, or for those on its way with it any folder - as the editors put up meanwhile did
 			// not start it a second time (`_unparkUp`); else the editors still to be put up start it
 			if (movedOn) {
-				this._unparkIfUp(key);
+				this._unparkIfUp(now ?? key);
 			}
 		}
 	}
@@ -1128,6 +1162,48 @@ export class FolderTerminals extends Disposable implements IWorkbenchContributio
 		parked.splice(index, 1);
 		if (!parked.length && !this._unparking.has(key)) {
 			this._drop(key);
+		}
+	}
+
+	/**
+	 * Every key kept, as `_key` makes it now that `scheme`'s file system has registered or changed (`onDidChangeFolderKeys`):
+	 * each record of terminals held under its folder's key, and watched under it - one whose terminals are coming back once
+	 * that stops (`_unpark`). One recorded for a terminal that came along with the window is read as such (`_homeOf`).
+	 */
+	private _rekeyFolders(scheme: string): void {
+		const rekey = (key: string) => rekeyFolder(key, scheme, uri => this._key(uri));
+		const rekeyAll = (keys: ReadonlySet<string> | undefined) => keys && new Set([...keys].map(rekey));
+
+		this._known = new Map([...this._known.values()].map(uri => [this._key(uri), uri]));
+		if (this._editorsUpFor !== undefined) {
+			this._editorsUpFor = rekey(this._editorsUpFor);
+		}
+		for (const [key, row] of [...this._rows]) {
+			this._rows.delete(key);
+			this._rows.set(rekey(key), { uri: row.uri, members: rekeyAll(row.members) });
+		}
+		for (const opened of this._openedFor.values()) {
+			opened.key = rekey(opened.key);
+			opened.members = rekeyAll(opened.members);
+		}
+		for (const key of [...this._parked.keys()]) {
+			const now = rekey(key);
+			if (now !== key && this._unparking.has(key)) {
+				this._keyedAgain.set(key, now);
+			} else if (now !== key) {
+				this._rehold(key, now);
+			}
+		}
+	}
+
+	/** Moves what is held under `from` to `to`, watched under it there: into the record there is there already, if any. */
+	private _rehold(from: string, to: string): void {
+		const parked = this._parked.get(from) ?? [];
+		this._parked.delete(from);
+		this._watching.get(from)?.dispose();
+		this._watching.delete(from);
+		if (parked.length) {
+			this._hold(to, parked);
 		}
 	}
 

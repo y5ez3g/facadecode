@@ -303,6 +303,12 @@ export interface ITerminalProcessManager extends IDisposable, ITerminalProcessIn
 	createProcess(shellLaunchConfig: IShellLaunchConfig, cols: number, rows: number): Promise<ITerminalLaunchError | ITerminalLaunchResult | undefined>;
 	relaunch(shellLaunchConfig: IShellLaunchConfig, cols: number, rows: number, reset: boolean): Promise<ITerminalLaunchError | ITerminalLaunchResult | undefined>;
 	write(data: string): Promise<void>;
+	/**
+	 * Facade Code: `write`, settling once the pty host has the data - for a remote terminal, once it
+	 * crossed to the remote - where the process supports it, else as `write`. Paste-then-Enter counts
+	 * its Enter delay from then (REMOTE.md R7).
+	 */
+	writeAndConfirm?(data: string): Promise<void>;
 	sendSignal(signal: string): Promise<void>;
 	setDimensions(cols: number, rows: number, sync?: undefined, pixelWidth?: number, pixelHeight?: number): Promise<void>;
 	setDimensions(cols: number, rows: number, sync: false, pixelWidth?: number, pixelHeight?: number): Promise<void>;

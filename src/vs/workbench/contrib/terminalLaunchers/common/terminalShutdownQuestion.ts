@@ -8,10 +8,11 @@ import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js'
 /** What VS Code's question before shutdown is told by {@link setTerminalShutdownQuestion}. */
 export interface ITerminalShutdownQuestion {
 	/**
-	 * The question about `terminals`, every one of which would stop: its message where it is not VS Code's own, and
-	 * its detail - what would stop, one to a line.
+	 * The question about `terminals`, every one of which would stop: its message where it is not VS Code's own, its
+	 * detail - what would stop, one to a line - and its button where it is not VS Code's Terminate: where confirming
+	 * stops nothing (REMOTE.md R4).
 	 */
-	describe(terminals: readonly object[]): { readonly message: string | undefined; readonly detail: string };
+	describe(terminals: readonly object[]): { readonly message: string | undefined; readonly detail: string; readonly primaryButton?: string };
 }
 
 let question: ITerminalShutdownQuestion | undefined;

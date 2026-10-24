@@ -66,6 +66,16 @@ export class RemotePty extends BasePty implements ITerminalChildProcess {
 		});
 	}
 
+	/** Facade Code: {@link ITerminalChildProcess.inputAndConfirm} - the channel answers once the remote's pty host took the data. */
+	async inputAndConfirm(data: string): Promise<void> {
+		if (this._inReplay) {
+			return;
+		}
+
+		await this._startBarrier.wait();
+		return this._remoteTerminalChannel.input(this.id, data);
+	}
+
 	sendSignal(signal: string): void {
 		if (this._inReplay) {
 			return;

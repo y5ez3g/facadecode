@@ -31,6 +31,7 @@ import { EditorInput } from '../../../../common/editor/editorInput.js';
 import { IActiveFolderService } from '../../../../services/activeFolder/common/activeFolder.js';
 import { IEditorGroup, IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';
 import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
 import { facadeRunProperties, IPreparingRun } from '../../../facadeCommands/common/facadeRun.js';
 import { IFolderTerminalsService } from '../../../folderTerminals/browser/folderTerminals.js';
@@ -272,7 +273,7 @@ suite('Agent picker - every agent open, in one list', () => {
 	 * confirmation is answered. What going to one or closing one did is in `steps`, with whether the picker stayed
 	 * open through it.
 	 */
-	function showActiveAgents(agents: readonly TestAgent[], preparing: readonly IPreparingRun[], folders: ReadonlyMap<TestAgent, URI>, rows: readonly URI[], tabs: readonly TestAgent[] = [], confirmed = true) {
+	function showActiveAgents(agents: readonly TestAgent[], preparing: readonly IPreparingRun[], folders: ReadonlyMap<TestAgent, URI>, rows: readonly URI[], tabs: readonly TestAgent[] = [], confirmed = true, remoteAuthority: string | undefined = undefined) {
 		const steps: string[] = [];
 		const quickPick = new TestQuickPick();
 		const open = () => quickPick.ignoreFocusOut ? ', the picker kept open' : '';
@@ -298,7 +299,7 @@ suite('Agent picker - every agent open, in one list', () => {
 			rowOrder: () => rows,
 			repositoryFor: () => undefined,
 			show: async folder => {
-				steps.push(`go to ${folder.path}`);
+				steps.push(`go to ${folder.toString()}`);
 				return { kind: 'shown' };
 			}
 		});
@@ -319,6 +320,7 @@ suite('Agent picker - every agent open, in one list', () => {
 		instantiationService.stub(ITerminalInstanceService, {});
 		instantiationService.stub(ILifecycleService, { onWillShutdown: Event.None });
 		instantiationService.stub(IContextKeyService, new MockContextKeyService());
+		instantiationService.stub(IWorkbenchEnvironmentService, { remoteAuthority });
 		const picker = store.add(instantiationService.createInstance(TerminalLauncherQuickPick));
 		picker.show();
 		return { quickPick, steps };
@@ -371,7 +373,26 @@ suite('Agent picker - every agent open, in one list', () => {
 		quickPick.close(making);
 		quickPick.close(settingUp);
 
-		assert.deepStrictEqual(steps, ['go to /w/a-fix', 'stop #a2', 'stop #a5']);
+		assert.deepStrictEqual(steps, ['go to file:///w/a-fix', 'stop #a2', 'stop #a5']);
+	});
+
+	test('an agent still preparing on a remote is listed on its remote row, and chosen goes to its worktree\'s remote folder (REMOTE.md R7)', () => {
+		const work = URI.parse('vscode-remote://ssh-remote+monster/home/person/work');
+		const fix = URI.parse('vscode-remote://ssh-remote+monster/home/person/work-fix');
+		const b = URI.parse('vscode-remote://ssh-remote+monster/home/person/b');
+		const lead = new TestAgent(1, 'Planning', '@lead #a1', TerminalLocation.Editor, undefined, { number: 1 });
+		const web = new TestAgent(2, 'Styling', '@web #a4', TerminalLocation.Editor, undefined, { number: 4 });
+		const settingUp: IPreparingRun = { id: 5, name: 'fix', phase: 'running_setup', folder: '/home/person/work-fix' };
+		const { quickPick, steps } = showActiveAgents([lead, web], [settingUp], new Map([[lead, work], [web, b]]), [work, fix, b], [], true, 'ssh-remote+monster');
+		quickPick.choose(settingUp);
+
+		assert.deepStrictEqual({
+			items: quickPick.items.map(item => item.instance?.title ?? `@${item.preparing?.name} #a${item.preparing?.id}`),
+			steps
+		}, {
+			items: ['Planning - @lead #a1', '@fix #a5', 'Styling - @web #a4'],
+			steps: [`go to ${fix.toString()}`],
+		});
 	});
 
 	test('closing an agent closes its terminal the way VS Code closes it where it is - its tab in the editor area through the editor service, one in the panel as Kill Terminal does, and one of the editor area whose tab was put away with its folder asked as closing its tab asks, by its own editor input, and ended only if confirmed - so that VS Code\'s own confirmation, by its setting and in its words, is the one asked; the picker stays open through it (L6; VC-07)', async () => {

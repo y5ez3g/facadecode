@@ -25,6 +25,7 @@ import { iconForeground } from '../../../../platform/theme/common/colorRegistry.
 import { getIconRegistry } from '../../../../platform/theme/common/iconRegistry.js';
 import { isDark } from '../../../../platform/theme/common/theme.js';
 import { IThemeService, Themable } from '../../../../platform/theme/common/themeService.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { VirtualWorkspaceContext } from '../../../common/contextkeys.js';
@@ -36,6 +37,7 @@ import { TerminalProfileQuickpick } from './terminalProfileQuickpick.js';
 import { getInstanceFromResource, getTerminalUri, parseTerminalUri } from './terminalUri.js';
 import { IRemoteTerminalAttachTarget, IStartExtensionTerminalRequest, ITerminalProcessExtHostProxy, ITerminalProfileService } from '../common/terminal.js';
 import { TerminalContextKeys } from '../common/terminalContextKey.js';
+import { TerminalStorageKeys } from '../common/terminalStorageKeys.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { columnToEditorGroup } from '../../../services/editor/common/editorGroupColumn.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
@@ -43,8 +45,9 @@ import { ACTIVE_GROUP, ACTIVE_GROUP_TYPE, AUX_WINDOW_GROUP, AUX_WINDOW_GROUP_TYP
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { ILifecycleService, ShutdownReason, StartupKind, WillShutdownEvent } from '../../../services/lifecycle/common/lifecycle.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { isAgentGoneAtStartup } from '../../terminalLaunchers/common/terminalLaunchers.js';
-import { isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
+import { AGENT_RECORD_STORAGE_KEY, agentRestoreDeferred, isFacadeRunTerminal } from '../../facadeCommands/common/facadeRun.js';
 import { terminalShutdownQuestion } from '../../terminalLaunchers/common/terminalShutdownQuestion.js';
 import { IRemoteAgentService } from '../../../services/remote/common/remoteAgentService.js';
 import { XtermTerminal } from './xterm/xtermTerminal.js';
@@ -88,6 +91,16 @@ export function whenReplayed(instance: Pick<ITerminalInstance, 'isDisposed' | 'o
 	});
 }
 
+/** Facade Code: the layout `value` holds, as a remote window carried it across the reload that entered its workspace. */
+function layoutIn(value: string): ITerminalsLayoutInfoById | undefined {
+	try {
+		const layout: Partial<ITerminalsLayoutInfoById> | null = JSON.parse(value);
+		return layout && Array.isArray(layout.tabs) && (layout.background === null || Array.isArray(layout.background)) ? { tabs: layout.tabs, background: layout.background } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export class TerminalService extends Disposable implements ITerminalService {
 	declare _serviceBrand: undefined;
 
@@ -98,6 +111,17 @@ export class TerminalService extends Disposable implements ITerminalService {
 	private readonly _terminalShellTypeContextKey: IContextKey<string>;
 
 	private _isShuttingDown: boolean = false;
+	/**
+	 * Facade Code: whether the window has taken back the layout it had, and so whether one it saves is its own. One saved
+	 * before - an editor terminal laid out as it comes back, an agent's, its dimensions changing - leaves out the panel's
+	 * terminals still to come back, and takes the place of the layout the pty host is about to give back (REMOTE.md R7).
+	 */
+	private _layoutTakenBack = false;
+	/**
+	 * Facade Code: whether the remote window has entered a workspace, which each reload from then on carries the layout into
+	 * (REMOTE.md R7): one another participant vetoes leaves the window there, for the next to carry what it has then.
+	 */
+	private _carryDue = false;
 	private _backgroundedTerminalInstances: IBackgroundTerminal[] = [];
 	private readonly _backgroundedTerminalDisposables = this._register(new DisposableMap<number>());
 	/** Facade Code: the terminals whose processes have ended, which will replay nothing (`whenReplayed`). */
@@ -214,7 +238,9 @@ export class TerminalService extends Disposable implements ITerminalService {
 		@IActiveFolderService private readonly _activeFolderService: IActiveFolderService,
 		@IKeybindingService private readonly _keybindingService: IKeybindingService,
 		@ITimerService private readonly _timerService: ITimerService,
-		@IThemeService private readonly _themeService: IThemeService
+		@IThemeService private readonly _themeService: IThemeService,
+		@IStorageService private readonly _storageService: IStorageService,
+		@IWorkspaceEditingService private readonly _workspaceEditingService: IWorkspaceEditingService
 	) {
 		super();
 
@@ -345,6 +371,8 @@ export class TerminalService extends Disposable implements ITerminalService {
 			reconnectedPromise = Promise.resolve();
 		}
 		reconnectedPromise.then(async () => {
+			// Facade Code: whichever way the window took back its layout, or had none to take back (`_layoutTakenBack`)
+			this._layoutTakenBack = true;
 			this._setConnected();
 			mark('code/terminal/didReconnect');
 			mark('code/terminal/willReplay');
@@ -486,12 +514,29 @@ export class TerminalService extends Disposable implements ITerminalService {
 		if (!backend) {
 			return;
 		}
+		// Facade Code: the layout carried across the reload that entered this workspace, given to the pty host under
+		// this workspace before it is read; any other load drops it (`_attachProcessLayoutListeners`)
+		const carried = this._storageService.get(TerminalStorageKeys.CarriedLayoutInfo, StorageScope.WORKSPACE);
+		if (carried !== undefined) {
+			this._storageService.remove(TerminalStorageKeys.CarriedLayoutInfo, StorageScope.WORKSPACE);
+			const layout = this._lifecycleService.startupKind === StartupKind.ReloadedWindow ? layoutIn(carried) : undefined;
+			if (layout) {
+				await backend.setTerminalLayoutInfo(layout);
+			}
+			this._logService.trace(layout ? `Gave the pty host the terminal layout carried into this workspace: ${layout.tabs.length} tab(s), ${layout.background?.length ?? 0} in the background` : 'Dropped the terminal layout carried into this workspace: no reload brought it');
+		}
 		mark('code/terminal/willGetTerminalLayoutInfo');
 		const layoutInfo = await backend.getTerminalLayoutInfo();
 		mark('code/terminal/didGetTerminalLayoutInfo');
 		backend.reduceConnectionGraceTime();
 		mark('code/terminal/willRecreateTerminalGroups');
 		await this._recreateTerminalGroups(layoutInfo);
+		// Facade Code: and those held in the background, as for a local window - a folder's put away by a switch
+		// (`FolderTerminals`) among them, which a reload otherwise loses while its process runs on (REMOTE.md R7)
+		if (layoutInfo?.background?.length) {
+			const revivedInstances = await this._reviveBackgroundTerminalInstances(layoutInfo.background);
+			this._backgroundedTerminalInstances = revivedInstances.map(instance => ({ instance }));
+		}
 		mark('code/terminal/didRecreateTerminalGroups');
 		// now that terminals have been restored,
 		// attach listeners to update remote when terminals are changed
@@ -552,12 +597,20 @@ export class TerminalService extends Disposable implements ITerminalService {
 		const instances: ITerminalInstance[] = [];
 		for (const bg of bgTerminals) {
 			const attachPersistentProcess = bg;
-			if (!attachPersistentProcess) {
+			// Facade Code: as the panel's, only those no window has. A workspace's layout the pty host still keeps under
+			// its old id, the window gone on to another (`_attachProcessLayoutListeners`), lists that window's: a window
+			// opened on the old one again would take them a second time
+			if (!attachPersistentProcess?.isOrphan) {
 				continue;
 			}
 			// Facade Code: an agent put away by a folder switch is gone once the app restarted, and revived
 			// it would be held where nothing shows it (`isAgentGoneAtStartup`)
 			if (isAgentGoneAtStartup(attachPersistentProcess, this._lifecycleService)) {
+				continue;
+			}
+			// Facade Code: on a remote, an agent's of a record not this window's - or none told yet - is left to the
+			// take-back, which brings this window's back once its record is known (`agentRestoreDeferred`)
+			if (agentRestoreDeferred(attachPersistentProcess, this._storageService.get(AGENT_RECORD_STORAGE_KEY, StorageScope.WORKSPACE), this._environmentService.remoteAuthority)) {
 				continue;
 			}
 			const instance = await this.createTerminal({ config: { attachPersistentProcess, hideFromUser: true, forcePersist: true }, location: TerminalLocation.Panel });
@@ -575,6 +628,11 @@ export class TerminalService extends Disposable implements ITerminalService {
 			}
 			// Facade Code: nor an agent's, which is gone once the app restarted as a task's is (`isAgentGoneAtStartup`)
 			if (isAgentGoneAtStartup(attachPersistentProcess, this._lifecycleService)) {
+				continue;
+			}
+			// Facade Code: on a remote, an agent's of a record not this window's - or none told yet - is left out, for
+			// the take-back: no tab, attached or saying it is elsewhere, for another window's agent (REMOTE.md R7; RM-20)
+			if (agentRestoreDeferred(attachPersistentProcess, this._storageService.get(AGENT_RECORD_STORAGE_KEY, StorageScope.WORKSPACE), this._environmentService.remoteAuthority)) {
 				continue;
 			}
 			mark(`code/terminal/willRecreateTerminal/${attachPersistentProcess.id}-${attachPersistentProcess.pid}`);
@@ -616,6 +674,29 @@ export class TerminalService extends Disposable implements ITerminalService {
 		this._register(this._workspaceContextService.onDidChangeWorkbenchState(onWorkspaceChange));
 		this._register(this._workspaceContextService.onDidChangeWorkspaceFolders(onWorkspaceChange));
 		this._register(this._workspaceContextService.onDidChangeWorkspaceName(onWorkspaceChange));
+		// Facade Code: a remote window instead reloads as it enters the workspace, before it is the new one and with
+		// its connection down, gone with its extension hosts (`enterWorkspace`): the layout goes into the new
+		// workspace's storage, which the window switched to before saying it entered, for the reload to give the pty
+		// host (`_reconnectToRemoteTerminals`) - else the panel's terminals, those held in the background too, are in
+		// no layout after it, their processes left running on the remote (REMOTE.md R7)
+		if (this._environmentService.remoteAuthority) {
+			// Taken as the window reloads (`_onBeforeShutdown`), once the event's joiners are done: one of them can put
+			// terminals in the background - a folder's put away by the switch that moves the window onto the folder it
+			// starts on (`WorkspaceBarSwitcher.startOn`) - and a layout taken before would have them nowhere
+			this._register(this._workspaceEditingService.onDidEnterWorkspace(() => this._carryDue = true));
+		}
+	}
+
+	/** Puts the layout in the storage of the workspace entered, for the reload to give the pty host (`_reconnectToRemoteTerminals`). */
+	private _carryLayout(): void {
+		const layout = this._layoutState();
+		// None for nothing: an empty layout would only take the place of one the pty host has under the new one
+		if (this._terminalConfigurationService.config.enablePersistentSessions && (layout.tabs.length || layout.background?.length)) {
+			this._storageService.store(TerminalStorageKeys.CarriedLayoutInfo, JSON.stringify(layout), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+			this._logService.trace(`Carried the terminal layout into the workspace entered: ${layout.tabs.length} tab(s), ${layout.background?.length ?? 0} in the background`);
+		} else {
+			this._logService.trace('Carried no terminal layout into the workspace entered: no terminal to carry');
+		}
 	}
 
 	private _handleInstanceContextKeys(): void {
@@ -670,6 +751,11 @@ export class TerminalService extends Disposable implements ITerminalService {
 	}
 
 	private _onBeforeShutdown(reason: ShutdownReason): MaybePromise<boolean> {
+		// Facade Code: before the storage closes, which `onWillShutdown` joins, and with every terminal still there
+		if (this._carryDue && reason === ShutdownReason.RELOAD) {
+			this._carryLayout();
+		}
+
 		// Never veto on web as this would block all windows from being closed. This disables
 		// process revive as we can't handle it on shutdown.
 		if (isWeb) {
@@ -781,15 +867,19 @@ export class TerminalService extends Disposable implements ITerminalService {
 
 	private _saveStateNow(): void {
 		// Avoid saving state when shutting down as that would override process state to be revived
-		if (this._isShuttingDown) {
+		if (this._isShuttingDown || !this._layoutTakenBack) {
 			return;
 		}
 		if (!this._terminalConfigurationService.config.enablePersistentSessions) {
 			return;
 		}
+		this._primaryBackend?.setTerminalLayoutInfo(this._layoutState());
+	}
+
+	/** The panel's groups and the terminals held in the background, by their processes' ids, as the pty host keeps them. */
+	private _layoutState(): ITerminalsLayoutInfoById {
 		const tabs = this._terminalGroupService.groups.map(g => g.getLayoutInfo(g === this._terminalGroupService.activeGroup));
-		const state: ITerminalsLayoutInfoById = { tabs, background: this._backgroundedTerminalInstances.map(bg => bg.instance).filter(i => i.shellLaunchConfig.forcePersist).map(i => i.persistentProcessId).filter((e): e is number => e !== undefined) };
-		this._primaryBackend?.setTerminalLayoutInfo(state);
+		return { tabs, background: this._backgroundedTerminalInstances.map(bg => bg.instance).filter(i => i.shellLaunchConfig.forcePersist).map(i => i.persistentProcessId).filter((e): e is number => e !== undefined) };
 	}
 
 	@debounce(500)
@@ -1014,7 +1104,8 @@ export class TerminalService extends Disposable implements ITerminalService {
 			type: 'warning',
 			message,
 			detail: told?.detail,
-			primaryButton: nls.localize({ key: 'terminate', comment: ['&& denotes a mnemonic'] }, "&&Terminate")
+			// Facade Code: the question's own button where confirming stops nothing (`terminalShutdownQuestion`)
+			primaryButton: told?.primaryButton ?? nls.localize({ key: 'terminate', comment: ['&& denotes a mnemonic'] }, "&&Terminate")
 		});
 		return !confirmed;
 	}

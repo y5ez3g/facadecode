@@ -5,11 +5,16 @@
 
 import { IProcessEnvironment, isWindows } from '../../../../base/common/platform.js';
 import { joinPath } from '../../../../base/common/resources.js';
+import { isString } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IConfigurationResolverService } from '../../../services/configurationResolver/common/configurationResolver.js';
 import { commandExecutable, executableFileNames, isPathLike, ITerminalLauncher, searchPathEntries, WINDOWS_PATH_EXTENSIONS } from '../common/terminalLaunchers.js';
+
+/** `_facade.agents.detectClis(folder?)`: the ids of the built-in agent CLIs the agents' extension host finds. */
+export const DETECT_CLIS_COMMAND = '_facade.agents.detectClis';
 
 /**
  * Reports which launchers can be started on this machine.
@@ -32,8 +37,25 @@ export class TerminalLauncherDetection {
 	constructor(
 		@IFileService private readonly _fileService: IFileService,
 		@IConfigurationResolverService private readonly _configurationResolverService: IConfigurationResolverService,
+		@ICommandService private readonly _commandService: ICommandService,
 		@ILogService private readonly _logService: ILogService
 	) { }
+
+	/**
+	 * The ids of the built-ins the agents' extension host finds on its machine - the remote's, in a
+	 * remote window - asked in one command (`_facade.agents.detectClis`): the window cannot look on a
+	 * remote itself (REMOTE.md R3). Undefined when the extension host cannot be asked - not up yet,
+	 * the command being internal and activating nothing - which is not none found.
+	 */
+	async detectRemote(folder: URI | undefined): Promise<Set<string> | undefined> {
+		try {
+			const found = await this._commandService.executeCommand<string[]>(DETECT_CLIS_COMMAND, ...(folder ? [folder] : []));
+			return new Set((found ?? []).filter(isString));
+		} catch (error) {
+			this._logService.trace('[terminalLauncherDetection] Could not ask the agents\' extension host which agents it finds', error);
+			return undefined;
+		}
+	}
 
 	/**
 	 * The ids of the launchers whose command was found.

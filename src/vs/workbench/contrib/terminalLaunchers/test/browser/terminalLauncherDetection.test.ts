@@ -6,8 +6,9 @@
 import assert from 'assert';
 import { isWindows } from '../../../../../base/common/platform.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { mock } from '../../../../../base/test/common/mock.js';
+import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { IWorkspaceFolderData } from '../../../../../platform/workspace/common/workspace.js';
@@ -51,6 +52,7 @@ suite('Terminal launchers - is it on this machine', () => {
 	const detector = (present: string[], env: Record<string, string>) => new TerminalLauncherDetection(
 		new TestFileService(new Set(present.map(p => p.toLowerCase()))),
 		new TestResolverService(env),
+		upcastPartial<ICommandService>({}),
 		new NullLogService()
 	);
 
@@ -121,5 +123,44 @@ suite('Terminal launchers - is it on this machine', () => {
 			.detect([launcher('muse', where), launcher('gone', gone)]);
 
 		assert.deepStrictEqual([found.has('muse'), found.has('gone')], [true, false]);
+	});
+
+	test('on a remote, the ids the agents\' extension host finds, asked in one command; unknown - not none - when it cannot be asked (REMOTE.md R3)', async () => {
+		const calls: unknown[][] = [];
+		const remote = (answer: unknown) => new TerminalLauncherDetection(
+			new TestFileService(new Set()),
+			new TestResolverService({}),
+			upcastPartial<ICommandService>({
+				executeCommand: async <R,>(...args: unknown[]): Promise<R | undefined> => {
+					calls.push(args);
+					if (answer instanceof Error) {
+						throw answer;
+					}
+					return answer as R | undefined;
+				}
+			}),
+			new NullLogService()
+		);
+
+		const folder = URI.parse('vscode-remote://ssh-remote+host/home/person/work');
+		const found = await remote(['claude', 'muse']).detectRemote(folder);
+		const missing = await remote(new Error('unknown command')).detectRemote(folder);
+		const unanswered = await remote(undefined).detectRemote(undefined);
+		const unshaped = await remote(['claude', 42, null]).detectRemote(folder);
+		assert.deepStrictEqual({
+			found: found && [...found],
+			commands: calls.map(call => call[0]),
+			folders: calls.map(call => call[1] === undefined ? undefined : (call[1] as URI).toString()),
+			missing,
+			unanswered: unanswered && [...unanswered],
+			unshaped: unshaped && [...unshaped],
+		}, {
+			found: ['claude', 'muse'],
+			commands: ['_facade.agents.detectClis', '_facade.agents.detectClis', '_facade.agents.detectClis', '_facade.agents.detectClis'],
+			folders: [folder.toString(), folder.toString(), undefined, folder.toString()],
+			missing: undefined,
+			unanswered: [],
+			unshaped: ['claude'],
+		});
 	});
 });
