@@ -76,12 +76,21 @@ export interface IActiveFolderService {
 
 	/** Moves to a workspace root; rejects when a will-change listener fails, with a `CancellationError` when the folder left meanwhile. */
 	setActiveFolder(folder: IWorkspaceFolder | URI): Promise<void>;
+
+	/**
+	 * Where the window starts on its next load: a folder joining the workspace with the reload that enters one, which
+	 * a remote window makes (`enterWorkspace`). `setActiveFolder` cannot be told of a folder the workspace does not have yet.
+	 * Announced first, as a move is, since the reload keeps what is on screen; rejects when a will-change listener fails,
+	 * the window then starting on the folder it is on.
+	 */
+	startOn(folder: URI): Promise<void>;
 }
 
 /** Lets a listener `join` work the change waits for, as `IWorkspaceFoldersWillChangeEvent` does; a rejection stops it (WORKSPACE.md W6.2). */
 export interface IActiveFolderWillChangeEvent {
 	readonly from: IWorkspaceFolder | undefined;
-	readonly to: IWorkspaceFolder;
+	/** One of the workspace's roots, or the folder the window starts on once the reload that enters a workspace has added it (`startOn`). */
+	readonly to: URI;
 	join(promise: Promise<void>): void;
 }
 

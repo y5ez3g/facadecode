@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "Se as árvores de trabalho estão expandidas na linha do repositório com foco",
 			"workspaceBar.rowKindContext": "Se a linha com foco é uma pasta, um repositório ou uma árvore de trabalho",
 			"workspaceBar.rowOffersWorktreeContext": "Se a linha com foco oferece uma nova árvore de trabalho",
+			"workspaceBar.rowSchemeContext": "O esquema da pasta da linha com foco",
 			"workspaceBar.toggleCollapsed": "Alternar Barra de Workspaces",
 			"workspaceBar.toggleIcon": "Ícone para recolher e expandir a barra de workspaces.",
 			"workspaceBar.worktrees": "Controla se a barra de workspaces mostra as árvores de trabalho do Git sob cada repositório."
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "Falha ao ler a pasta '{0}': {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "Abrir em Nova Janela",
 			"workspaceBar.trustAndAdd": "&&Confiar e Adicionar",
 			"workspaceBar.trustParent": "Confiar nos autores de todos os arquivos na pasta pai '{0}'",
 			"workspaceBar.untrustedConsequence": "Este workspace é confiável. Adicionar uma pasta não confiável mudará todo o workspace e os agentes ativos para o Modo Restrito.",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "Você confia nos autores dos arquivos nesta pasta?",
 			"workspaceBar.untrustedMessageMany": "Você confia nos autores dos arquivos nestas {0} pastas?",
 			"workspaceBar.untrustedMore": "e mais {0}",
-			"workspaceBar.untrustedTakenOut": "A pasta '{0}' foi removida porque não é confiável e mudaria o workspace para o Modo Restrito."
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} agentes",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "Informações",
 			"setting.deprecationMessageSeverity.warning": "Aviso"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "Conectar ao Host...",
+			"facadeRemote.connectToWsl": "Conectar ao WSL"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "O Acesso ao Túnel Remoto está habilitado para {0}. Você pode [configurar](command:{1}) ou [desativar](command:{2}) esse acesso pelo menu Contas do {3}.",
 			"remoteTunnel.actions.rename": "Renomear Túnel",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "Agentes"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "Nenhum Agente Encontrado: Configurar Agentes..."
+			"facade.agent.noneFound": "Nenhum Agente Encontrado: Configurar Agentes...",
+			"facade.agent.openRemoteTerminal": "Abrir Terminal",
+			"facade.agent.remoteNoneFound": "Nenhuma CLI de agente encontrada em {0}. Instale uma lá e entre nela."
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "Deseja encerrar 1 agente e {0} terminais?",
 			"runningWork.agents": "Deseja encerrar {0} agentes?",
 			"runningWork.agentsAndTerminal": "Deseja encerrar {0} agentes e 1 terminal?",
-			"runningWork.agentsAndTerminals": "Deseja encerrar {0} agentes e {1} terminais?"
+			"runningWork.agentsAndTerminals": "Deseja encerrar {0} agentes e {1} terminais?",
+			"runningWork.awayAgent": "Deseja fechar a janela? Não é possível acessar {0}. Seu agente continua em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.awayAgentAndTerminal": "Deseja fechar a janela? Não é possível acessar {0}. Seu agente e seu terminal continuam em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.awayAgentAndTerminals": "Deseja fechar a janela? Não é possível acessar {0}. Seu agente e seus {1} terminais continuam em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.awayAgents": "Deseja fechar a janela? Não é possível acessar {0}. Seus {1} agentes continuam em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.awayAgentsAndTerminal": "Deseja fechar a janela? Não é possível acessar {0}. Seus {1} agentes e seu terminal continuam em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.awayAgentsAndTerminals": "Deseja fechar a janela? Não é possível acessar {0}. Seus {1} agentes e {2} terminais continuam em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.awayTerminal": "Deseja fechar a janela? Não é possível acessar {0}. Seu terminal continua em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.awayTerminals": "Deseja fechar a janela? Não é possível acessar {0}. Seus {1} terminais continuam em execução lá enquanto o servidor estiver ativo.",
+			"runningWork.closeWindow": "&&Fechar Janela"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Ícone de um terminal que executa o Antigravity.",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: falha ao ler o arquivo da última tela '{1}': {2}. Como terminou: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: nenhuma última tela foi salva. Como terminou: {1}. A última tela só é salva quando o terminal de um agente é fechado enquanto a janela está aberta.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: com o YOLO desativado, {1} nega as ferramentas do Facade",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Agents that ended while this window was away from its host: {0}.": "Agentes que terminaram enquanto esta janela estava desconectada do host: {0}.",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "Agentes que terminaram enquanto esta janela estava desconectada do host: {0}. Última conexão {1}.",
+			"less than a minute ago": "há menos de um minuto",
+			"1 minute ago": "há 1 minuto",
+			"{0} minutes ago": "há {0} minutos",
+			"1 hour ago": "há 1 hora",
+			"{0} hours ago": "há {0} horas",
+			"1 day ago": "há 1 dia",
+			"{0} days ago": "há {0} dias",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "O host de extensão anterior desta janela (processo {0}) ainda gerencia os agentes deste workspace, e o Facade não conseguiu interrompê-lo. Encerre esse processo e recarregue esta janela para gerenciá-los aqui."
 		},
 		"package": {
 			"command.category": "Agentes",

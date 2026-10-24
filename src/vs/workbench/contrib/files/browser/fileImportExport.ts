@@ -21,7 +21,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { extractEditorsAndFilesDropData } from '../../../../platform/dnd/browser/dnd.js';
-import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
+import { IWorkspaceBarService } from '../../../browser/parts/workspacebar/workspaceBarService.js';
 import { isWeb } from '../../../../base/common/platform.js';
 import { getActiveWindow, isDragEvent, triggerDownload } from '../../../../base/browser/dom.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -398,7 +398,7 @@ export class ExternalFileImport {
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IDialogService private readonly dialogService: IDialogService,
-		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
+		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
 		@IExplorerService private readonly explorerService: IExplorerService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IProgressService private readonly progressService: IProgressService,
@@ -490,8 +490,10 @@ export class ExternalFileImport {
 			});
 
 			// Add folders
+			// Facade Code: through the bar, which asks before a folder that is not trusted joins a trusted window
+			// (WORKSPACE.md W5)
 			if (result === ImportChoice.Add) {
-				return this.workspaceEditingService.addFolders(folders);
+				return this.workspaceBarService.add(folders.map(folder => folder.uri));
 			}
 
 			// Copy resources

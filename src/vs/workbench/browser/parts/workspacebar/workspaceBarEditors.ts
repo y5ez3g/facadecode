@@ -7,6 +7,7 @@ import { Disposable, DisposableStore, toDisposable } from '../../../../base/comm
 import { ResourceMap } from '../../../../base/common/map.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -19,7 +20,7 @@ import { IEditorService } from '../../../services/editor/common/editorService.js
 import { IHeldEditorsService } from '../../../services/heldEditors/common/heldEditors.js';
 import { IPutAwayEditorsService } from '../../../services/putAwayEditors/common/putAwayEditors.js';
 import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
-import { folderKey } from './workspaceBar.js';
+import { folderKey, onDidChangeFolderKeys, rekeyFolders } from './workspaceBar.js';
 import { raceTimeout } from '../../../../base/common/async.js';
 import { IEditorGroupView } from '../editor/editor.js';
 import { ITextModelService } from '../../../../editor/common/services/resolverService.js';
@@ -48,6 +49,9 @@ export class WorkspaceBarEditors extends Disposable {
 	/** References that keep the text files of folders out of sight loaded (WORKSPACE.md W13). */
 	private readonly resident = new Map<string, DisposableStore>();
 
+	/** What the last prune was given: pruned by again once a scheme's file system registers, and its folders are keyed for good. */
+	private pruned: { readonly members: readonly URI[]; readonly removing: (folder: URI) => boolean } | undefined;
+
 	constructor(
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
 		@IStorageService private readonly storageService: IStorageService,
@@ -58,10 +62,33 @@ export class WorkspaceBarEditors extends Disposable {
 		@IWorkingCopyService private readonly workingCopyService: IWorkingCopyService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@ITextModelService private readonly textModelService: ITextModelService,
+		@IFileService private readonly fileService: IFileService,
 	) {
 		super();
 
 		this.load();
+
+		// Loaded, or captured, before a remote's file system registers, which can key its folders another way
+		// (REMOTE.md R7): of a folder's two sets that way, the one captured since it was loaded
+		this._register(onDidChangeFolderKeys(fileService)(scheme => {
+			const key = (uri: URI) => this.key(uri);
+			rekeyFolders(this.resident, scheme, key, (kept, rekeyed) => {
+				kept.dispose();
+				return rekeyed;
+			});
+			const rekeyed = rekeyFolders(this.sets, scheme, key, (kept, captured) => {
+				this.editorGroupsService.deleteWorkingSet(kept);
+				return captured;
+			});
+			if (rekeyed) {
+				this.save();
+			}
+
+			// What a prune kept back while the scheme's folders could still be keyed another way
+			if (this.pruned && [...this.sets.keys(), ...this.resident.keys()].some(each => each.startsWith(`${scheme}:`))) {
+				this.prune(this.pruned.members, this.pruned.removing).catch(error => this.logService.error(error));
+			}
+		}));
 		this._register(toDisposable(() => {
 			for (const store of this.resident.values()) {
 				store.dispose();
@@ -155,11 +182,15 @@ export class WorkspaceBarEditors extends Disposable {
 	 * away by a folder that left any way but Remove Folder are opened again here (W9.6).
 	 */
 	async prune(members: readonly URI[], removing: (folder: URI) => boolean): Promise<void> {
+		this.pruned = { members, removing };
 		const keys = new Set(members.map(member => this.key(member)));
 		let dropped = false;
 
+		// One whose scheme's file system has not registered yet is neither found nor missed: a reloaded window
+		// prunes before the remote is back, and a Windows host's folders are keyed as they were stored, ignoring
+		// case, only once it is (REMOTE.md R7)
 		for (const [key, set] of [...this.sets]) {
-			if (keys.has(key)) {
+			if (keys.has(key) || !this.keyedForGood(key)) {
 				continue;
 			}
 
@@ -169,7 +200,7 @@ export class WorkspaceBarEditors extends Disposable {
 		}
 
 		for (const [key, store] of [...this.resident]) {
-			if (!keys.has(key)) {
+			if (!keys.has(key) && this.keyedForGood(key)) {
 				store.dispose();
 				this.resident.delete(key);
 			}
@@ -205,6 +236,11 @@ export class WorkspaceBarEditors extends Disposable {
 
 	private key(uri: URI): string {
 		return folderKey(this.uriIdentityService, uri);
+	}
+
+	/** Whether a folder kept by `key` is keyed as it will stay: its scheme's file system has registered. */
+	private keyedForGood(key: string): boolean {
+		return this.fileService.hasProvider(URI.parse(key));
 	}
 
 	/** Workspace scoped, as the working sets it points at are. */

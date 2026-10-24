@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "フォーカスされているリポジトリ行で作業ツリーが展開されているかどうか",
 			"workspaceBar.rowKindContext": "フォーカスされている行がフォルダー、リポジトリ、作業ツリーのいずれであるか",
 			"workspaceBar.rowOffersWorktreeContext": "フォーカスされている行で新しい作業ツリーを作成できるかどうか",
+			"workspaceBar.rowSchemeContext": "フォーカスされている行のフォルダーのスキーム",
 			"workspaceBar.toggleCollapsed": "ワークスペース バーの切り替え",
 			"workspaceBar.toggleIcon": "ワークスペース バーの折りたたみと展開に使用するアイコン。",
 			"workspaceBar.worktrees": "ワークスペース バーで、各リポジトリの下に Git の作業ツリーを表示するかどうかを制御します。"
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "フォルダー '{0}' を読み取れませんでした: {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "新しいウィンドウで開く",
 			"workspaceBar.trustAndAdd": "信頼して追加(&&T)",
 			"workspaceBar.trustParent": "親フォルダー '{0}' 内のすべてのファイルの作成者を信頼します",
 			"workspaceBar.untrustedConsequence": "このワークスペースは信頼されています。信頼されていないフォルダーを追加すると、ワークスペース全体と実行中のエージェントが制限モードに切り替わります。",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "このフォルダー内のファイルの作成者を信頼しますか?",
 			"workspaceBar.untrustedMessageMany": "これらの {0} 個のフォルダー内のファイルの作成者を信頼しますか?",
 			"workspaceBar.untrustedMore": "ほか {0} 個",
-			"workspaceBar.untrustedTakenOut": "フォルダー '{0}' は信頼されておらず、ワークスペースが制限モードに切り替わるため、ワークスペースから削除されました。"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} 個のエージェント",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "情報",
 			"setting.deprecationMessageSeverity.warning": "警告"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "ホストに接続...",
+			"facadeRemote.connectToWsl": "WSL に接続"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "{0} のリモート トンネル アクセスが有効になりました。{3} の [アカウント] メニューから、このアクセスを [構成](command:{1}) または [オフ](command:{2}) にできます。",
 			"remoteTunnel.actions.rename": "トンネルの名前を変更",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "エージェント"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "エージェントが見つかりません: エージェントの構成..."
+			"facade.agent.noneFound": "エージェントが見つかりません: エージェントの構成...",
+			"facade.agent.openRemoteTerminal": "ターミナルを開く",
+			"facade.agent.remoteNoneFound": "{0} にエージェント CLI が見つかりません。そこでインストールしてサインインしてください。"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "1 個のエージェントと {0} 個のターミナルを終了しますか?",
 			"runningWork.agents": "{0} 個のエージェントを終了しますか?",
 			"runningWork.agentsAndTerminal": "{0} 個のエージェントと 1 個のターミナルを終了しますか?",
-			"runningWork.agentsAndTerminals": "{0} 個のエージェントと {1} 個のターミナルを終了しますか?"
+			"runningWork.agentsAndTerminals": "{0} 個のエージェントと {1} 個のターミナルを終了しますか?",
+			"runningWork.awayAgent": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにあるエージェントは実行され続けます。",
+			"runningWork.awayAgentAndTerminal": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにあるエージェントとターミナルは実行され続けます。",
+			"runningWork.awayAgentAndTerminals": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにあるエージェントと {1} 個のターミナルは実行され続けます。",
+			"runningWork.awayAgents": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにある {1} 個のエージェントは実行され続けます。",
+			"runningWork.awayAgentsAndTerminal": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにある {1} 個のエージェントとターミナルは実行され続けます。",
+			"runningWork.awayAgentsAndTerminals": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにある {1} 個のエージェントと {2} 個のターミナルは実行され続けます。",
+			"runningWork.awayTerminal": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにあるターミナルは実行され続けます。",
+			"runningWork.awayTerminals": "ウィンドウを閉じますか? {0} に接続できません。サーバーが実行されている限り、そこにある {1} 個のターミナルは実行され続けます。",
+			"runningWork.closeWindow": "ウィンドウを閉じる(&&C)"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Antigravity を実行しているターミナルのアイコン。",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: 最後の画面のファイル '{1}' を読み取れませんでした: {2}。終了理由: {3}。",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: 最後の画面は保存されていません。終了理由: {1}。最後の画面は、ウィンドウが開いている間にエージェントのターミナルが閉じた場合にのみ保存されます。",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO がオフの場合、{1} が Facade ツールを拒否します",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}",
+			"Agents that ended while this window was away from its host: {0}.": "このウィンドウがホストから切断されている間に終了したエージェント: {0}。",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "このウィンドウがホストから切断されている間に終了したエージェント: {0}。最終接続: {1}。",
+			"less than a minute ago": "1 分以内",
+			"1 minute ago": "1 分前",
+			"{0} minutes ago": "{0} 分前",
+			"1 hour ago": "1 時間前",
+			"{0} hours ago": "{0} 時間前",
+			"1 day ago": "1 日前",
+			"{0} days ago": "{0} 日前",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "このウィンドウの以前の拡張機能ホスト (プロセス {0}) が引き続きこのワークスペースのエージェントを管理しており、Facade はそれを停止できませんでした。ここで管理するには、そのプロセスを終了してから、このウィンドウを再読み込みします。"
 		},
 		"package": {
 			"command.category": "エージェント",

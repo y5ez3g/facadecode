@@ -25,6 +25,9 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
+import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { Part } from '../../part.js';
 import { FACADE_BAR_BACKGROUND, FACADE_BAR_BORDER, FACADE_BAR_FOREGROUND } from './workspaceBarColors.js';
@@ -197,6 +200,9 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IHostService private readonly hostService: IHostService,
 		@ILifecycleService lifecycleService: ILifecycleService,
+		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
+		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
 	) {
 		super(
 			Parts.WORKSPACEBAR_PART,
@@ -393,11 +399,15 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		}
 		const here = admitted.here;
 
-		let added: readonly URI[];
+		let added: readonly URI[] | undefined;
 		try {
 			added = await this.addForShow(here);
 		} catch (error) {
 			return this.couldNotAdd(here[here.length - 1], toErrorMessage(error));
+		}
+		// The window reloads onto the last of them
+		if (!added) {
+			return { kind: 'shown' };
 		}
 		return this.doShow(here[here.length - 1], added);
 	}
@@ -437,7 +447,12 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		// the folder is new to the window or one it already has.
 		let added: readonly URI[];
 		try {
-			added = [...addedBefore, ...await this.addForShow([uri])];
+			const more = await this.addForShow([uri]);
+			// The window reloads onto it
+			if (!more) {
+				return { kind: 'shown' };
+			}
+			added = [...addedBefore, ...more];
 		} catch (error) {
 			return this.couldNotAdd(uri, toErrorMessage(error));
 		}
@@ -462,13 +477,48 @@ export class WorkspaceBarPart extends Part implements IWorkspaceBarService {
 		return { kind: 'failed', reason };
 	}
 
-	/** Adds folders to move onto and waits for their rows to be read from git; returns the ones added. */
-	private async addForShow(uris: readonly URI[]): Promise<readonly URI[]> {
-		const added = await this.model.add(uris);
+	/**
+	 * Adds folders to move onto and waits for their rows to be read from git; returns the ones added. Undefined when the
+	 * window reloads for them instead: a remote window does as they make it a workspace (`enterWorkspace`), its connection
+	 * down until then, and starts on the last of them (REMOTE.md R7).
+	 */
+	private async addForShow(uris: readonly URI[]): Promise<readonly URI[] | undefined> {
+		let reloading = false;
+		const entering = this.workspaceEditingService.onDidEnterWorkspace(e => {
+			if (this.environmentService.remoteAuthority) {
+				reloading = true;
+				e.join(this.startOn(uris[uris.length - 1]));
+			}
+		});
+		let added: readonly URI[];
+		try {
+			added = await this.model.add(uris);
+		} finally {
+			entering.dispose();
+		}
+
+		if (reloading) {
+			return undefined;
+		}
 		if (added.length > 0) {
 			await this.git.refresh();
 		}
 		return added;
+	}
+
+	/** Starts the window on `uri` after the reload, the editors on screen moved off as a switch moves them (REMOTE.md R7). */
+	private async startOn(uri: URI): Promise<void> {
+		try {
+			if (this.switcher) {
+				await this.switcher.startOn(uri);
+			} else {
+				await this.activeFolderService.startOn(uri);
+			}
+		} catch (error) {
+			this.logService.error(`[workspaceBar] Could not start on ${uri.toString(true)}`, error);
+		} finally {
+			await this.storageService.flush();
+		}
 	}
 
 	remove(uris: readonly URI[], options?: IRemoveOptions): Promise<RemoveResult> {

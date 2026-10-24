@@ -31,7 +31,8 @@ import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '.
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { workbenchConfigurationNodeBase } from '../../../common/configuration.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
-import { InEditorZenModeContext } from '../../../common/contextkeys.js';
+import { InEditorZenModeContext, RemoteNameContext } from '../../../common/contextkeys.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { TitleBarLeftMenu } from '../titlebar/titlebarLeftToolbar.js';
 
 /** The toolbar at the right end of the bar's header. */
@@ -100,6 +101,12 @@ const onFolderRow = WorkspaceBarRowKindContext.notEqualsTo('worktree');
  * Collapsed to its icons, the bar has no triangles, and the menu is how a repository opens and closes.
  */
 export const WorkspaceBarRowExpansionContext = new RawContextKey<'' | 'expanded' | 'collapsed'>('facadeWorkspaceBarRowExpansion', '', localize('workspaceBar.rowExpansionContext', "Whether worktrees are expanded for the focused repository row"));
+
+/**
+ * The scheme of the focused row's folder: `file` on this machine, `vscode-remote` on a remote.
+ * Set by the view beside `WorkspaceBarRowKindContext`.
+ */
+export const WorkspaceBarRowSchemeContext = new RawContextKey<string>('facadeWorkspaceBarRowScheme', 'file', localize('workspaceBar.rowSchemeContext', "The scheme of the focused row's folder"));
 
 /** Creates a worktree of a repository (WORKTREE.md WT-5); registered by `contrib/worktrees`, which can reach terminals. */
 export const NEW_WORKTREE_COMMAND = 'facade.workspaceBar.newWorktree';
@@ -238,6 +245,9 @@ class ToggleCollapsedAction extends Action2 {
  * ⚠️ Through upstream's own `revealFileInOS` rather than the native host service: this file is
  * in `browser/`, and reaching for an electron-only service from here is a layer violation that the
  * checker catches - and a command is what the explorer's own menu item uses anyway.
+ *
+ * Local folders only: a remote folder lives on its remote, where the person has no File Explorer
+ * to show it in (REMOTE.md R3).
  */
 class RevealFolderAction extends Action2 {
 
@@ -252,13 +262,16 @@ class RevealFolderAction extends Action2 {
 					: localize2('workspaceBar.revealInLinux', "Open Containing Folder"),
 			category: WORKSPACE_BAR_CATEGORY,
 			f1: true,
-			menu: { id: WorkspaceBarContextMenu, group: 'navigation', order: 3 }
+			// Not offered in a remote window, whose folders are all its remote's (REMOTE.md R1, R3): the row's scheme is
+			// known only in the bar, not where the Command Palette looks
+			precondition: RemoteNameContext.isEqualTo(''),
+			menu: { id: WorkspaceBarContextMenu, group: 'navigation', order: 3, when: WorkspaceBarRowSchemeContext.isEqualTo(Schemas.file) }
 		});
 	}
 
 	override async run(accessor: ServicesAccessor, uri?: URI): Promise<void> {
 		const folder = uri ?? accessor.get(IWorkspaceBarService).folderForCommand();
-		if (!folder) {
+		if (!folder || folder.scheme !== Schemas.file) {
 			return;
 		}
 

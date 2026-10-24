@@ -32,7 +32,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { defaultCountBadgeStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { asCssVariable } from '../../../../platform/theme/common/colorUtils.js';
 import { FolderKey, orderWorktrees } from './workspaceBar.js';
-import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
+import { areWorktreesShown, SHOW_WORKTREES, WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowSchemeContext, WorkspaceBarRowToolbar } from './workspaceBarActions.js';
 import { IWorkspaceBarAgentsService } from './workspaceBarAgents.js';
 import { FACADE_AGENT_BADGE_BACKGROUND, FACADE_AGENT_BADGE_FOREGROUND } from './workspaceBarColors.js';
 import { folderGlyphFor, folderRowNameFor, IWorkspaceBarCustomizationService, worktreeIcon, worktreeNameFor } from './workspaceBarCustomization.js';
@@ -521,6 +521,7 @@ export class WorkspaceBarView extends Disposable {
 	private readonly rowKind: IContextKey<'folder' | 'repository' | 'worktree'>;
 	private readonly rowOffersWorktree: IContextKey<boolean>;
 	private readonly rowExpansion: IContextKey<'' | 'expanded' | 'collapsed'>;
+	private readonly rowScheme: IContextKey<string>;
 	/** The repositories somebody closed, by their main checkout's key (`CLOSED_STORAGE_KEY`). */
 	private readonly closed: Set<string>;
 	/** The worktrees being deleted, by key, whose rows are left out (`hideWorktree`). */
@@ -703,6 +704,7 @@ export class WorkspaceBarView extends Disposable {
 		this.rowKind = WorkspaceBarRowKindContext.bindTo(this.tree.contextKeyService);
 		this.rowOffersWorktree = WorkspaceBarRowOffersWorktreeContext.bindTo(this.tree.contextKeyService);
 		this.rowExpansion = WorkspaceBarRowExpansionContext.bindTo(this.tree.contextKeyService);
+		this.rowScheme = WorkspaceBarRowSchemeContext.bindTo(this.tree.contextKeyService);
 		this._register(this.tree.onDidChangeFocus(e => this.setRowKind(e.elements[0] ?? undefined)));
 
 		this._register(this.tree.onContextMenu(e => this.onContextMenu(e)));
@@ -861,12 +863,14 @@ export class WorkspaceBarView extends Disposable {
 			this.rowKind.set('folder');
 			this.rowOffersWorktree.reset();
 			this.rowExpansion.set('');
+			this.rowScheme.reset();
 			return;
 		}
 
 		this.rowKind.set(row.kind === 'worktree' ? 'worktree' : row.repository ? 'repository' : 'folder');
 		this.rowOffersWorktree.set(row.kind === 'folder' && row.offersWorktree);
 		this.rowExpansion.set(this.expansionOf(row));
+		this.rowScheme.set(uriOf(row).scheme);
 	}
 
 	/**

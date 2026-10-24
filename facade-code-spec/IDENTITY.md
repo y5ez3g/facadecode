@@ -182,6 +182,7 @@ Code unchanged; Facade Code does not.
 | Windows Apps & features, the executables' file version | the release version |
 | macOS `Info.plist`, what Finder shows | the release version |
 | the Ubuntu package's version, what `apt show` shows | the release version |
+| the server package's file name, and the download address `serverDownloadUrlTemplate` names | the release version |
 | the issue reporter, the first line of each log | both |
 | `vscode.version`, `engines.vscode`, the gallery's compatibility check, the remote server's handshake | the engine version |
 
@@ -202,6 +203,7 @@ One source and one check keep this true as packages are added:
 | macOS disk image | `Developer ID Application: Yuanzhe Zhang`, notarized | RELEASE.md |
 | Windows installer | Yuanzhe Zhang's code signing certificate | |
 | Ubuntu `.deb` | not signed: apt checks the signatures of repositories, and there is none | `.rpm` and Snap are not part of L1 |
+| server `.tar.gz`: Linux x64, macOS arm64, Windows x64 | Windows: its executables and native modules with Yuanzhe Zhang's code signing certificate, as the installer. macOS and Linux: not signed, as the remote downloads them over HTTPS from the release | what a remote window runs on the remote; REMOTE.md R6 |
 
 The Ubuntu package is named `facade`; no package of that name exists in Ubuntu's
 archive. It installs `/usr/bin/facade`, gives `Yuanzhe Zhang <y5ez3g@gmail.com>` as its
@@ -220,7 +222,8 @@ VS Code but one: GitHub sign-in, for now, below.
 
 | Service | What Facade Code uses |
 | --- | --- |
-| extension gallery | Open VSX. Microsoft's Marketplace is for Microsoft's products; an extension published only there, Microsoft's Remote Development extensions included, is not offered |
+| extension gallery | Open VSX. Microsoft's Marketplace is for Microsoft's products; an extension published only there, Microsoft's Remote Development extensions included, is not offered. SSH is open-remote-ssh, built in (REMOTE.md R5) |
+| remote server | the remote downloads Facade's own server package from the release's GitHub Release (REMOTE.md R6); never Microsoft's |
 | extension signatures | not verified: `extensions.verifySignature` is off by default. The verifier, `@vscode/vsce-sign`, is Microsoft's, under its own licence, and not in the product; on without it, every install fails with "Signature verification was not executed" |
 | AI | upstream's chat and Copilot are not fronted (I11) |
 | voice | none: `product.json` names no voice service |

@@ -127,6 +127,27 @@ suite('Active folder - which root the window is on', () => {
 		assert.strictEqual(active(build({ storage, lastActive: URI.file('/w/web') }).service), '/w/notes');
 	});
 
+	test('a window told to start on a folder its workspace does not have yet - one joining with the reload that enters a workspace - starts on it once it has (REMOTE.md R7)', async () => {
+		const storage = disposables.add(new InMemoryStorageService());
+		await build({ storage, paths: ['/w/api'] }).service.startOn(URI.file('/w/web'));
+
+		assert.strictEqual(active(build({ storage, paths: ['/w/api', '/w/web'], lastActive: URI.file('/w/api') }).service), '/w/web');
+	});
+
+	test('a start on another folder is announced first, as a move is, and one a joiner fails is not made: the window starts again on the folder it is on (REMOTE.md R7)', async () => {
+		const storage = disposables.add(new InMemoryStorageService());
+		const { service } = build({ storage, paths: ['/w/api'] });
+		const heard: string[] = [];
+		disposables.add(service.onWillChangeActiveFolder(e => {
+			heard.push(`${e.from?.uri.path} -> ${e.to.path}`);
+			e.join(Promise.reject(new Error('the editors could not be read')));
+		}));
+
+		await assert.rejects(() => service.startOn(URI.file('/w/web')));
+
+		assert.deepStrictEqual({ heard, startsOn: active(build({ storage, paths: ['/w/api', '/w/web'], lastActive: URI.file('/w/api') }).service) }, { heard: ['/w/api -> /w/web'], startsOn: '/w/api' });
+	});
+
 	test('WS-23 a remembered root that is no longer one falls back', async () => {
 		const storage = disposables.add(new InMemoryStorageService());
 		await build({ storage }).service.setActiveFolder(URI.file('/w/notes'));
@@ -207,7 +228,7 @@ suite('Active folder - which root the window is on', () => {
 	test('the joiner is told where the window is going, and where from', async () => {
 		const { service } = build();
 		let seen: string | undefined;
-		disposables.add(service.onWillChangeActiveFolder(e => { seen = `${e.from?.uri.path} -> ${e.to.uri.path}`; }));
+		disposables.add(service.onWillChangeActiveFolder(e => { seen = `${e.from?.uri.path} -> ${e.to.path}`; }));
 
 		await service.setActiveFolder(URI.file('/w/notes'));
 

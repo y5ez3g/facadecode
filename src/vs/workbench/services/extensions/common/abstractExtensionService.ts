@@ -56,6 +56,11 @@ import { IExtensionHostExitInfo, IRemoteAgentService } from '../../remote/common
 
 const hasOwnProperty = Object.hasOwnProperty;
 const NO_OP_VOID_PROMISE = Promise.resolve<void>(undefined);
+/**
+ * Facade Code: how long resolving an authority with the extension hosts stopped is only temporarily not available:
+ * entering a workspace starts them again, or reloads the window, within seconds (REMOTE.md R7).
+ */
+const RESTART_WAIT_MS = 30_000;
 
 export abstract class AbstractExtensionService extends Disposable implements IExtensionService {
 
@@ -97,6 +102,8 @@ export abstract class AbstractExtensionService extends Disposable implements IEx
 	private readonly _extensionHostManagers = this._register(new ExtensionHostCollection());
 
 	private _resolveAuthorityAttempt: number = 0;
+	/** Facade Code: when the extension hosts were stopped, while none has started since. */
+	private _extensionHostsStoppedAt: number | undefined;
 
 	constructor(
 		options: { hasLocalProcess: boolean; allowRemoteExtensionsInLocalWebWorker: boolean },
@@ -706,7 +713,12 @@ export abstract class AbstractExtensionService extends Disposable implements IEx
 		const extensionHosts = this._getExtensionHostManagers(kind);
 		if (extensionHosts.length === 0) {
 			// no local process extension hosts
-			throw new Error(`Cannot resolve authority`);
+			// Facade Code: none for a while after they stop - entering a workspace stops them, and starts them again or
+			// reloads the window. A resolver that keeps its connection in one, as open-remote-ssh does, loses it as they
+			// stop: a reconnection meanwhile tries again once they are back, rather than giving the window up. Past the
+			// while, with none started again, it fails, so that the window offers a reload rather than trying forever (REMOTE.md R7)
+			const restarting = this._extensionHostsStoppedAt !== undefined && Date.now() - this._extensionHostsStoppedAt < RESTART_WAIT_MS;
+			throw restarting ? new RemoteAuthorityResolverError(`Cannot resolve authority`, RemoteAuthorityResolverErrorCode.TemporarilyNotAvailable) : new Error(`Cannot resolve authority`);
 		}
 
 		this._resolveAuthorityAttempt++;
@@ -750,6 +762,7 @@ export abstract class AbstractExtensionService extends Disposable implements IEx
 		}
 
 		await this._extensionHostManagers.stopAllInReverse();
+		this._extensionHostsStoppedAt = Date.now();
 		for (const extensionStatus of this._extensionStatus.values()) {
 			extensionStatus.clearRuntimeStatus();
 		}
@@ -818,6 +831,7 @@ export abstract class AbstractExtensionService extends Disposable implements IEx
 	}
 
 	private _startExtensionHostsIfNecessary(isInitialStart: boolean, initialActivationEvents: string[]): void {
+		this._extensionHostsStoppedAt = undefined;
 		const locations: ExtensionRunningLocation[] = [];
 		for (let affinity = 0; affinity <= this._runningLocations.maxLocalProcessAffinity; affinity++) {
 			locations.push(new LocalProcessRunningLocation(affinity));

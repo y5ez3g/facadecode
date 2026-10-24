@@ -30,7 +30,7 @@ import { FileSystemProviderCapabilities, IFileService, IFileStat } from '../../.
 import { createDecorator, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { INotificationService, IPromptChoice } from '../../../../platform/notification/common/notification.js';
 import { IProgressService, ProgressLocation } from '../../../../platform/progress/common/progress.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { ICommandDetectionCapability, TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
@@ -55,7 +55,7 @@ import { IWorkingCopy } from '../../../services/workingCopy/common/workingCopy.j
 import { worktreeRepositoryOf } from '../../../services/workspaces/common/gitFiles.js';
 import { IWorkingCopyService } from '../../../services/workingCopy/common/workingCopyService.js';
 import { IFacadeRunsService } from '../../facadeCommands/browser/facadeRuns.js';
-import { facadeRunOf, IFacadeRun } from '../../facadeCommands/common/facadeRun.js';
+import { facadeRunOf, facadeRunTerminalOf, IFacadeRun, runFolderUri } from '../../facadeCommands/common/facadeRun.js';
 import { IFolderTerminalsService } from '../../folderTerminals/browser/folderTerminals.js';
 import { ITerminalInstance, ITerminalInstanceService, ITerminalService } from '../../terminal/browser/terminal.js';
 import { getFullBufferLineAsString } from '../../terminal/browser/xterm/xtermTerminal.js';
@@ -1382,6 +1382,13 @@ export class WorktreeService implements IWorktreeService {
 			this.notificationService.error(check);
 			return;
 		}
+		// And another window's agent working in it, which refuses it as a lock does: asking first would ask about a
+		// deletion that cannot happen (REMOTE.md RM-41). Looked for again once it is decided, for one started meanwhile
+		const elsewhere = await this.agentElsewhere(worktree);
+		if (elsewhere) {
+			this.notificationService.error(elsewhere);
+			return;
+		}
 
 		// 2  confirm, naming all that would be lost, unsaved editors and running terminals too (WT-8.1, WT-8.2): a terminal
 		//    that goes with it, working inside it or one of its editor area whatever it started in
@@ -1631,21 +1638,37 @@ export class WorktreeService implements IWorktreeService {
 	}
 
 	async otherWindowsAgentsIn(worktree: URI): Promise<string[]> {
-		if (worktree.scheme !== Schemas.file) {
+		const remoteAuthority = worktree.scheme === Schemas.vscodeRemote ? worktree.authority : undefined;
+		if (worktree.scheme !== Schemas.file && !remoteAuthority) {
 			return [];
 		}
-		const own = this.contextService.getWorkspace().id;
+		// Another window's are another record's: two computers on the same remote folder share the
+		// workspace's id, but not their records (REMOTE.md R3, R7). With the window's record not said
+		// yet, none of the agents running are its own.
+		const own = this.facadeRunsService.live?.workspace;
 		try {
-			const backend = await this.terminalInstanceService.getBackend();
+			const backend = await this.terminalInstanceService.getBackend(remoteAuthority);
 			// Every window's, the attached ones too: another window's agent is attached to that window, no orphan (run 4: SP-18)
 			const processes = await backend?.listProcesses({ attached: true }) ?? [];
 			return processes
-				.filter(each => facadeRunOf(each) !== undefined && each.workspaceId !== own && each.pid > 0 && !!each.cwd && this.uriIdentityService.extUri.isEqualOrParent(URI.file(each.cwd), worktree))
-				.map(each => each.title);
+				.filter(each => {
+					const run = facadeRunOf(each);
+					return run !== undefined && run.workspace !== own && each.pid > 0 && !!each.cwd && this.uriIdentityService.extUri.isEqualOrParent(runFolderUri(each.cwd, remoteAuthority), worktree);
+				})
+				// By the name its terminal was opened with: its title is whatever its CLI set since - Codex's, the folder's name
+				.map(each => facadeRunTerminalOf(each)?.name || each.title);
 		} catch {
 			// The pty host does not answer: nothing more to tell than the window knows
 			return [];
 		}
+	}
+
+	/** Why deleting `worktree` is refused for agents of other windows working in it, naming them; undefined when none is. */
+	private async agentElsewhere(worktree: URI): Promise<string | undefined> {
+		const elsewhere = await this.otherWindowsAgentsIn(worktree);
+		return elsewhere.length
+			? localize('worktrees.agentElsewhere', "'{0}' was not deleted because an agent from another window is working in it ({1}). Stop that agent in its window first.", this.labelService.getUriLabel(worktree), elsewhere.join(', '))
+			: undefined;
 	}
 
 	/**
@@ -1668,9 +1691,9 @@ export class WorktreeService implements IWorktreeService {
 				// An agent of another window working inside it - the pty host has every window's terminals - would
 				// lose its folder under it, and that window book its end as the person's: refused, before anything
 				// is closed or moved (SP-18; N-37)
-				const elsewhere = await this.otherWindowsAgentsIn(worktree);
-				if (elsewhere.length) {
-					return { kind: 'refused', why: localize('worktrees.agentElsewhere', "'{0}' was not deleted because an agent from another window is working in it ({1}). Stop that agent in its window first.", this.labelService.getUriLabel(worktree), elsewhere.join(', ')) };
+				const elsewhere = await this.agentElsewhere(worktree);
+				if (elsewhere) {
+					return { kind: 'refused', why: elsewhere };
 				}
 
 				// Decided by a caller, whether it goes is settled before anything is moved, closed or removed: a deletion
@@ -1777,7 +1800,7 @@ export class WorktreeService implements IWorktreeService {
 		// The agents' record forgets a worktree Facade made, now that git is done: told so here, where the extension
 		// host that asked for the deletion may have started again meanwhile (O5). Told of the person's that it is over
 		// otherwise, which keeps agents from starting there until it is (OR-10).
-		if (outcome?.kind === 'removed' && worktree.scheme === Schemas.file) {
+		if (outcome?.kind === 'removed' && agentsSee(worktree)) {
 			this.tellAgents('_facade.agents.worktreeDeleted', worktree, 'is deleted');
 		} else if (done.toldAgents) {
 			this.tellAgents('_facade.agents.worktreeDeleteFailed', worktree, 'is not deleted');
@@ -1833,7 +1856,7 @@ export class WorktreeService implements IWorktreeService {
 	 * (WT-8, step 3; OR-10). Answers whether they were told; without Facade's agents there are none to tell.
 	 */
 	private async tellAgentsDeleting(worktree: URI): Promise<boolean> {
-		if (worktree.scheme !== Schemas.file) {
+		if (!agentsSee(worktree)) {
 			return false;
 		}
 		try {
@@ -1850,7 +1873,7 @@ export class WorktreeService implements IWorktreeService {
 	 * when the stop timeout was over (AGENT-ORCHESTRATION.md, O5). Without Facade's agents there are none.
 	 */
 	private async stopAgentsIn(worktree: URI): Promise<IAgentsStopping | undefined> {
-		if (worktree.scheme !== Schemas.file || !CommandsRegistry.getCommand('_facade.agents.worktreeStopping')) {
+		if (!agentsSee(worktree) || !CommandsRegistry.getCommand('_facade.agents.worktreeStopping')) {
 			return undefined;
 		}
 		const answer = await this.commandService.executeCommand<IAgentsStopping>('_facade.agents.worktreeStopping', worktree);
@@ -1894,7 +1917,7 @@ export class WorktreeService implements IWorktreeService {
 		} else {
 			// No answer at all: nothing is said to have happened that cannot be seen to have.
 			this.notificationService.prompt(Severity.Error, localize('worktrees.deleteUnknown', "Unable to confirm deletion of worktree '{0}'. The workspace bar reflects the current Git status.", name),
-				[{ label: revealLabel(), run: () => this.commandService.executeCommand('revealFileInOS', worktree) }]);
+				revealChoice(worktree, run => this.commandService.executeCommand('revealFileInOS', run)));
 		}
 	}
 
@@ -1955,7 +1978,7 @@ export class WorktreeService implements IWorktreeService {
 			leftBehind(leftover),
 			[
 				// Kept open, so that Retry is still there after a look at the folder
-				{ label: revealLabel(), keepOpen: true, run: () => this.commandService.executeCommand('revealFileInOS', worktree) },
+				...revealChoice(worktree, run => this.commandService.executeCommand('revealFileInOS', run), true),
 				{
 					label: localize('worktrees.retry', "Retry"),
 					run: async () => {
@@ -1969,7 +1992,7 @@ export class WorktreeService implements IWorktreeService {
 							this.reportLeftover(main, worktree, again);
 						} else if (again?.kind === 'removed') {
 							this.leftovers.delete(worktree);
-							if (worktree.scheme === Schemas.file) {
+							if (agentsSee(worktree)) {
 								this.tellAgents('_facade.agents.worktreeDeleted', worktree, 'is deleted');
 							}
 						} else {
@@ -2156,6 +2179,22 @@ function revealLabel(): string {
 	return isWindows ? localize('worktrees.revealInWindows', "Reveal in File Explorer")
 		: isMacintosh ? localize('worktrees.revealInMac', "Reveal in Finder")
 			: localize('worktrees.revealInLinux', "Open Containing Folder");
+}
+
+/**
+ * The notification choice that shows `worktree` where it lives - none on a remote, where the person
+ * has no File Explorer to show it in (REMOTE.md R3) - kept open while asked, for a look before Retry.
+ */
+function revealChoice(worktree: URI, run: (worktree: URI) => void, keepOpen?: boolean): IPromptChoice[] {
+	return worktree.scheme === Schemas.file ? [{ label: revealLabel(), ...(keepOpen ? { keepOpen } : {}), run: () => run(worktree) }] : [];
+}
+
+/**
+ * Whether the agents' extension host is told of `worktree` and stops its agents: one on this machine,
+ * or on the window's remote, which that extension host sees as a file of its own (REMOTE.md R3, R7).
+ */
+function agentsSee(worktree: URI): boolean {
+	return worktree.scheme === Schemas.file || worktree.scheme === Schemas.vscodeRemote;
 }
 
 /**

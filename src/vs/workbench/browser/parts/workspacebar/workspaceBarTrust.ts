@@ -7,7 +7,6 @@ import { distinct } from '../../../../base/common/arrays.js';
 import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
 import { basename } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
@@ -16,15 +15,12 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILabelService } from '../../../../platform/label/common/label.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { openLinkFromMarkdown } from '../../../../platform/markdown/browser/markdownRenderer.js';
-import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { Severity } from '../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IWorkspaceContextService, IWorkspaceFolder } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService } from '../../../../platform/workspace/common/workspaceTrust.js';
-import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { repositoryFolderOf, worktreeRepositoryOf } from '../../../services/workspaces/common/gitFiles.js';
-import { IWorkspaceBarService } from './workspaceBarService.js';
 
 /** The folders to add here after the trust question: all of them, or none when they went to a new window (WORKSPACE.md W5). */
 export interface IAdmission {
@@ -173,57 +169,3 @@ export class WorkspaceBarTrustGate {
 		return uris.every(uri => extUri.isEqual(extUri.dirname(uri), parent)) ? parent : undefined;
 	}
 }
-
-/** Takes a folder that joined without asking first back out when VS Code's trust question is answered No (WORKSPACE.md W5). */
-export class UntrustedFolderEviction extends Disposable implements IWorkbenchContribution {
-
-	static readonly ID = 'workbench.contrib.facadeUntrustedFolderEviction';
-
-	/** Whether the window was trusted when the change now being made was announced. */
-	private trustedBefore = false;
-
-	constructor(
-		@IWorkspaceContextService contextService: IWorkspaceContextService,
-		@IWorkspaceTrustEnablementService private readonly enablementService: IWorkspaceTrustEnablementService,
-		@IWorkspaceTrustManagementService private readonly trustService: IWorkspaceTrustManagementService,
-		@IWorkspaceBarService private readonly workspaceBarService: IWorkspaceBarService,
-		@INotificationService private readonly notificationService: INotificationService,
-		@IHostService private readonly hostService: IHostService,
-		@ILogService private readonly logService: ILogService,
-	) {
-		super();
-
-		// Read as the change is announced, before VS Code's question - joined to the same event - is answered
-		this._register(contextService.onWillChangeWorkspaceFolders(e => {
-			this.trustedBefore = !e.fromCache && this.enablementService.isWorkspaceTrustEnabled() && this.trustService.isWorkspaceTrusted();
-		}));
-		this._register(contextService.onDidChangeWorkspaceFolders(e => {
-			if (this.trustedBefore && e.added.length) {
-				this.evictRefused(e.added).catch(error => this.logService.error(error));
-			}
-		}));
-	}
-
-	private async evictRefused(added: readonly IWorkspaceFolder[]): Promise<void> {
-		const trust = await Promise.all(added.map(folder => this.trustService.getUriTrustInfo(folder.uri)));
-		const refused = added.filter((_, at) => !trust[at].trusted);
-		if (!refused.length) {
-			return;
-		}
-
-		// Nothing has run in them yet: out, with nothing to ask
-		const result = await this.workspaceBarService.remove(refused.map(folder => folder.uri), { confirmed: true });
-		if (result.kind !== 'removed') {
-			return;
-		}
-
-		this.notificationService.prompt(Severity.Info,
-			localize('workspaceBar.untrustedTakenOut', "Folder '{0}' was removed because it is untrusted and would switch the workspace to Restricted Mode.", refused.map(folder => basename(folder.uri)).join(', ')),
-			[{
-				label: localize('workspaceBar.openInNewWindow', "Open in New Window"),
-				run: () => this.hostService.openWindow(refused.map(folder => ({ folderUri: folder.uri })), { forceNewWindow: true })
-			}]);
-	}
-}
-
-registerWorkbenchContribution2(UntrustedFolderEviction.ID, UntrustedFolderEviction, WorkbenchPhase.AfterRestored);

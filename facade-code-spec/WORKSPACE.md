@@ -242,13 +242,9 @@ repository that is not trusted is asked about as that repository - the question 
 the repository's folder, and Trust and Add trusts it and every worktree of it. A
 folder that arrives where
 nothing can ask first - the file edited by hand, an extension - meets VS Code's own
-trust question; answered No, the folder is taken back out of the list, and a
-notification offers to open it in a new window. The default workspace's own file is
-trusted. Batch additions share one admission decision. On a file or API edit VS
-Code's question is asked while the edit waits, but nothing can refuse the edit: a No
-leaves the window in Restricted Mode until the folder has been taken back out (W18).
-Serialize that removal with other workspace edits; do not overwrite unrelated edits
-made while the question was open.
+trust question. Answered No, the folder remains in the workspace and the window enters
+Restricted Mode, as VS Code does. The default workspace's own file is trusted. Batch
+additions through Facade's paths share one admission decision.
 
 When adding or showing a folder fails, keep the last valid selection, show the
 reason and return a failed result. If adding succeeded but activation failed, retain
@@ -741,14 +737,14 @@ Code's in-window ones do: on Windows the primary button first, on macOS and Linu
 | Event | Required result |
 | --- | --- |
 | Reload Window | Restore the active folder, row layout, editor sets including hidden dirty editors, scope and bar state. Reconnect terminals whose processes survived. Agents reconnect to those same processes; do not ask to stop them |
-| Close window or quit | Ask once before stopping agents or terminals running a process, including hidden ones: VS Code's own question (`terminal.integrated.confirmOnExit`, `hasChildProcesses` by Facade's default), Terminate or Cancel. Facade has it count the terminals kept in the background for folders the window is not on, which stock does not see, and list under it every agent and terminal that would stop, with its place, as W10.7 writes a line; with agents among them it counts them apart: "Do you want to terminate 2 agents and 3 terminals?" (`terminalShutdownQuestion`). Use normal unsaved-file handling, including hidden dirty editors; VS Code's question names each file with the folder it is found in (W6.2), as W10.7 writes a line (`unsavedNamesOf`). Any cancellation cancels shutdown |
+| Close window or quit | Ask once before stopping agents or terminals running a process, including hidden ones: VS Code's own question (`terminal.integrated.confirmOnExit`, `hasChildProcesses` by Facade's default), Terminate or Cancel. Facade has it count the terminals kept in the background for folders the window is not on, which stock does not see, and list under it every agent and terminal that would stop, with its place, as W10.7 writes a line; with agents among them it counts them apart: "Do you want to terminate 2 agents and 3 terminals?" (`terminalShutdownQuestion`). Use normal unsaved-file handling, including hidden dirty editors; VS Code's question names each file with the folder it is found in (W6.2), as W10.7 writes a line (`unsavedNamesOf`). Any cancellation cancels shutdown, whatever was answered alongside it: an untitled workspace saved or let go at VS Code's question is deleted only as the window does close, so a window kept by another question keeps its workspace and folders |
 | Start the app again with `window.restoreWindows` | Restore folders, editor state, scope and layout. Terminal scrollback or a revived shell is not proof the old process survived. End agent runs whose processes ended; never label a replacement shell as the previous live agent |
 | Renderer crash with surviving processes | Reconnect using the recorded process/run identities. Preserve unsaved backups; do not relaunch an agent or replay setup merely because its UI was restored |
 | Save Workspace As | Transfer active folder, editor sets, scope and collapsed repositories to the new workspace storage; keep the file in the ordinary format |
 | Open the same workspace from another window | Bring the existing window forward, as stock |
 | Switch profile | Use that profile's width; retain workspace membership, names, colors, icons, worktree order, collapsed state and active folder |
 | File > Close Workspace | Apply the same checks before disposing this workspace, then make the window EMPTY |
-| Use a remote window | Match folder and terminal URIs by scheme and authority. A caller needing a local path must not receive a remote folder |
+| Use a remote window | Match folder and terminal URIs by scheme and authority. A caller needing a local path must not receive a remote folder. Closing a window that cannot reach its remote follows REMOTE.md R4 |
 
 Closing, quitting and replacing a workspace use the same lifetime checks. A folder
 switch or repository collapse never counts as closing a workspace. Agent lifetime
@@ -949,7 +945,7 @@ unchanged across both documents.
 | WS-42 | I, H | Measure the grid, widths, toggle position on Windows and macOS, header, overflow glyph and title bar drag regions | W10.1, with drag regions asked of the window manager |
 | WS-43 | H | Every W10 mark, ink and folder colour in Dark Modern, Light Modern, HC Dark, HC Light and the nineteen themes | W10.3-W10.6: the marks and ink as specified, contrast composited onto the real background; folder colours are W10.6's ten, none under 2.90 on the nineteen backgrounds |
 | WS-44 | I | Run the cold/warm performance procedure in W19.6 on the pinned fixture and baseline | Report distributions, not six selected timings; warm p95 within 100 ms and within the comparison gate; no extension-host restart during switches |
-| WS-48 | U, I | With trust on, add an untrusted folder through Open Folder, a drop, `facade <folder>` and the file by hand; drop several at once, trusted and not, in one parent folder and in two, and twelve; answer each choice, the box ticked and not, and follow the link | Facade's paths ask first, once, with VS Code's trust question in the window: the shield, the folders not trusted - ten named, the rest counted - two buttons, the parent-folder box only when they share one, and the link. Trust and Add adds them all, those listed trusted (their parent, ticked); the link opens all of them in one new window and adds none here; Cancel adds none. The file's path meets VS Code's question; No takes the folder back out and offers a new window. Facade's own paths never put the window in Restricted Mode; the file's path does only until the folder is out again |
+| WS-48 | U, I | With trust on, add an untrusted folder through Open Folder, a drop, `facade <folder>` and the file by hand; drop several at once, trusted and not, in one parent folder and in two, and twelve; answer each choice, the box ticked and not, and follow the link | Facade's paths ask first, once, with VS Code's trust question in the window: the shield, the folders not trusted - ten named, the rest counted - two buttons, the parent-folder box only when they share one, and the link. Trust and Add adds them all, those listed trusted (their parent, ticked); the link opens all of them in one new window and adds none here; Cancel adds none. The file's path meets VS Code's question; No keeps the folder and enters Restricted Mode. Facade's own paths never put the window in Restricted Mode |
 | WS-49 | I | Close the window and quit with an agent running in a folder not on screen, then with a running terminal, then with nothing running; reload with an agent running | One question, VS Code's, Terminate or Cancel, listing what will stop when something runs, each with its place - the agent in the folder not on screen too - none when nothing does; the reload asks nothing and the agent reconnects |
 | WS-50 | I | Set git's editor to `facade --wait`, start `git commit` in a terminal, switch folders before saving the message, switch back; the same with a merge editor opened from the command line | The waited-on editor stays open through the switches; git waits until the person closes it |
 | WS-51 | I, H | Open the settings editor's Workspace tab and an extension's Enable/Disable (Workspace) in a window of three folders | Each says it applies to all folders in this window |
@@ -1019,9 +1015,8 @@ plan before declaring L1 complete.
   exceptions. These are visible design limits, not proof of accessibility compliance.
 - Remote workspaces, non-TypeScript symbol providers, notebook kernels and edit
   sessions need their actual integration evidence. Record unsupported combinations
-  explicitly rather than inferring support from local unit tests.
-- A folder refused on VS Code's trust question after a file or API edit has already
-  joined: the window is in Restricted Mode until the folder is taken back out.
+  explicitly rather than inferring support from local unit tests. Remote workspaces'
+  cases are REMOTE.md R9.
   Refusing the edit before it applies needs a veto in upstream's workspace service,
   which is not built (W5).
 - Merging complete workspace files is out of scope. Their settings, tasks and launch

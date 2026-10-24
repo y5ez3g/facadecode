@@ -10,12 +10,13 @@ import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { createFileSystemProviderError, FileSystemProviderErrorCode, IFileService, IFileStatWithPartialMetadata } from '../../../../../platform/files/common/files.js';
+import { Schemas } from '../../../../../base/common/network.js';
+import { createFileSystemProviderError, FileSystemProviderCapabilities, FileSystemProviderErrorCode, IFileService, IFileStatWithPartialMetadata, IFileSystemProvider, IFileSystemProviderCapabilitiesChangeEvent } from '../../../../../platform/files/common/files.js';
 import { IHistoryService } from '../../../../services/history/common/history.js';
 import { IWorkspaceEditingService } from '../../../../services/workspaces/common/workspaceEditing.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
-import { InMemoryStorageService } from '../../../../../platform/storage/common/storage.js';
+import { InMemoryStorageService, StorageScope } from '../../../../../platform/storage/common/storage.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { WorkspaceBarEditors } from '../../../../browser/parts/workspacebar/workspaceBarEditors.js';
@@ -124,10 +125,23 @@ class TestContextService extends mock<IWorkspaceContextService>() {
 }
 
 class TestFileService extends mock<IFileService>() {
-	override onDidChangeFileSystemProviderCapabilities = Event.None;
+	private readonly _onDidChangeCapabilities = new Emitter<IFileSystemProviderCapabilitiesChangeEvent>();
+	override onDidChangeFileSystemProviderCapabilities = this._onDidChangeCapabilities.event;
 	override onDidChangeFileSystemProviderRegistrations = Event.None;
 	/** Paths whose read fails, with what it fails with. Everything else is there. */
 	readonly failing = new Map<string, Error>();
+	private caseSensitive = true;
+
+	/** The folders' file system ignoring case from now on, as a Windows or macOS remote's does once it registers (REMOTE.md R7). */
+	ignoreCase(): void {
+		this.caseSensitive = false;
+		this._onDidChangeCapabilities.fire({ scheme: Schemas.file, provider: upcastPartial<IFileSystemProvider>({}) });
+	}
+
+	override dispose(): void {
+		this._onDidChangeCapabilities.dispose();
+	}
+
 	override async exists(): Promise<boolean> { return true; }
 	override async stat(resource: URI): Promise<IFileStatWithPartialMetadata> {
 		const failure = this.failing.get(resource.path);
@@ -137,7 +151,7 @@ class TestFileService extends mock<IFileService>() {
 		return upcastPartial<IFileStatWithPartialMetadata>({ resource, isDirectory: true });
 	}
 	override hasProvider(): boolean { return true; }
-	override hasCapability(): boolean { return true; }
+	override hasCapability(_resource: URI, capability: FileSystemProviderCapabilities): boolean { return capability !== FileSystemProviderCapabilities.PathCaseSensitive || this.caseSensitive; }
 	override async realpath(resource: URI): Promise<URI | undefined> { return resource; }
 }
 
@@ -158,6 +172,8 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		/** What the window told the person, in order. */
 		readonly said: string[];
 		readonly disk: TestFileService;
+		/** The folder the window starts on when it loads again, as it stored it. */
+		readonly startsOn: () => string | undefined;
 	}
 
 	function openWindow(paths: string[] = ['/w/a', '/w/b', '/w/c']): IWindow {
@@ -167,6 +183,7 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		store.add({ dispose: () => workspace.dispose() });
 
 		const fileService = new TestFileService();
+		store.add({ dispose: () => fileService.dispose() });
 		const uriIdentityService = store.add(new UriIdentityService(fileService));
 		const storageService = store.add(new InMemoryStorageService());
 		const logService = new NullLogService();
@@ -177,8 +194,8 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		const activeFolderService = store.add(new ActiveFolderService(workspace, storageService, uriIdentityService, historyService));
 
 		const groups = new TestEditorGroups();
-		const putAway = store.add(new PutAwayEditorsService(storageService, uriIdentityService));
-		const editors = store.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, logService, { isHeld: () => false } as unknown as IHeldEditorsService, putAway, { getEditors: () => [] } as unknown as IEditorService, { isDirty: () => false } as unknown as IWorkingCopyService, uriIdentityService, { createModelReference: async () => ({ object: {}, dispose: () => { } }) } as unknown as ITextModelService));
+		const putAway = store.add(new PutAwayEditorsService(storageService, uriIdentityService, fileService));
+		const editors = store.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, logService, { isHeld: () => false } as unknown as IHeldEditorsService, putAway, { getEditors: () => [] } as unknown as IEditorService, { isDirty: () => false } as unknown as IWorkingCopyService, uriIdentityService, { createModelReference: async () => ({ object: {}, dispose: () => { } }) } as unknown as ITextModelService, fileService));
 
 		// ⚠️ The switcher only asks the model to re-read what is reachable, so nothing here edits the
 		// workspace; an editing service that is never called is the honest stand-in.
@@ -224,7 +241,11 @@ suite('Workspace bar - switching, as one piece of work', () => {
 			switcher, groups, workspace, focused, containers, said,
 			disk: fileService,
 			folders: workspace.getWorkspace().folders,
-			go: folder => activeFolderService.setActiveFolder(folder)
+			go: folder => activeFolderService.setActiveFolder(folder),
+			startsOn: () => {
+				const stored = storageService.get('workbench.activeFolder', StorageScope.WORKSPACE);
+				return stored === undefined ? undefined : URI.parse(stored).path;
+			}
 		};
 	}
 
@@ -336,6 +357,18 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		assert.deepStrictEqual(window.focused, [Parts.EDITOR_PART, Parts.PANEL_PART]);
 	});
 
+	test('WS-52 and there, its file system having come to ignore case meanwhile - as a Windows or macOS remote\'s does, registering after the window is up (REMOTE.md R7)', async () => {
+		const window = openWindow(['/w/Repo', '/w/b']);
+		await window.go(window.folders[0]);
+		window.containers.get(Parts.PANEL_PART)!.firstChild!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+
+		window.disk.ignoreCase();
+		await window.switcher.switchTo(window.folders[1].uri);
+		await window.switcher.switchTo(window.folders[0].uri);
+
+		assert.deepStrictEqual(window.focused, [Parts.EDITOR_PART, Parts.PANEL_PART]);
+	});
+
 	test('⭐ renaming the folder the window is on does not put its old editors back', async () => {
 		// ⚠️ `reconcile` fires the same event for "the window moved" and "this root was renamed",
 		// because the name is drawn in the title and the explorer's header. Restoring on the second
@@ -350,6 +383,19 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		await new Promise(resolve => setTimeout(resolve, 0));
 
 		assert.strictEqual(window.groups.applied.length, applied, 'a rename restored something');
+	});
+
+	test('nor once the folders\' file system has come to ignore case, keying them another way - as a Windows or macOS remote\'s does, registering after the window is up (REMOTE.md R7)', async () => {
+		const window = openWindow(['/w/Repo', '/w/b']);
+		await window.go(window.folders[0]);
+		window.groups.type('what the person has open');
+
+		const applied = window.groups.applied.length;
+		window.disk.ignoreCase();
+		window.workspace.set([{ path: '/w/Repo', name: 'renamed' }, { path: '/w/b', name: 'b' }]);
+		await new Promise(resolve => setTimeout(resolve, 0));
+
+		assert.deepStrictEqual({ restored: window.groups.applied.length - applied, on: window.switcher.active?.path }, { restored: 0, on: '/w/Repo' });
 	});
 
 	test('and the window is still on that folder afterwards', async () => {
@@ -398,5 +444,28 @@ suite('Workspace bar - switching, as one piece of work', () => {
 		const last = window.groups.applied[window.groups.applied.length - 1];
 		assert.ok(last.endsWith('/w/c') || last === 'empty', `ended showing ${last}`);
 		assert.strictEqual(window.switcher.active?.path, '/w/c');
+	});
+
+	test('a folder the window starts on with the reload that enters a workspace, as a remote window\'s does: the editors on screen are kept as the folder\'s it leaves, and the incoming folder\'s are put up for the reload to keep (REMOTE.md R7)', async () => {
+		const window = openWindow(['/w/a']);
+		window.groups.type('a-tabs');
+
+		await window.switcher.startOn(URI.file('/w/new'));
+
+		assert.deepStrictEqual({
+			saved: window.groups.saved.map(save => `${save.key.slice(save.key.lastIndexOf('/'))}: ${save.held}`),
+			applied: window.groups.applied,
+			startsOn: window.startsOn()
+		}, { saved: ['/a: a-tabs'], applied: ['empty'], startsOn: '/w/new' });
+	});
+
+	test('and when they cannot be kept, the window starts again on the folder it is on, its editors left on screen', async () => {
+		const window = openWindow(['/w/a']);
+		window.groups.type('a-tabs');
+		window.groups.failCapture = true;
+
+		await window.switcher.startOn(URI.file('/w/new'));
+
+		assert.deepStrictEqual({ applied: window.groups.applied, startsOn: window.startsOn() }, { applied: [], startsOn: undefined });
 	});
 });

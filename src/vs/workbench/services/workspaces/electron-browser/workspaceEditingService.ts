@@ -6,7 +6,7 @@
 import { localize } from '../../../../nls.js';
 import { IWorkspaceEditingService } from '../common/workspaceEditing.js';
 import { URI } from '../../../../base/common/uri.js';
-import { hasWorkspaceFileExtension, isUntitledWorkspace, isWorkspaceIdentifier, IWorkspaceContextService, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
+import { hasWorkspaceFileExtension, isUntitledWorkspace, isWorkspaceIdentifier, IWorkspaceContextService, IWorkspaceIdentifier, toWorkspaceIdentifier } from '../../../../platform/workspace/common/workspace.js';
 import { IJSONEditingService } from '../../configuration/common/jsonEditing.js';
 import { IWorkspacesService } from '../../../../platform/workspaces/common/workspaces.js';
 import { WorkspaceService } from '../../configuration/browser/configurationService.js';
@@ -37,6 +37,9 @@ import { ConfigurationTarget } from '../../../../platform/configuration/common/c
 import { ILogService } from '../../../../platform/log/common/log.js';
 
 export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingService {
+
+	/** Facade Code: the untitled workspace saved or let go as the window closes, deleted once it does close. */
+	private untitledAnsweredFor: IWorkspaceIdentifier | undefined;
 
 	constructor(
 		@IJSONEditingService jsonEditingService: IJSONEditingService,
@@ -70,8 +73,22 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 
 	private registerListeners(): void {
 		this._register(this.lifecycleService.onBeforeShutdown(e => {
+			this.untitledAnsweredFor = undefined; // Facade Code: answered for this close, or for none
 			const saveOperation = this.saveUntitledBeforeShutdown(e.reason);
 			e.veto(saveOperation, 'veto.untitledWorkspace');
+		}));
+
+		// Facade Code: the untitled workspace answered for goes once the window does, not as it is answered. Another
+		// question asked alongside - the agents' and terminals' (WORKSPACE.md W11) - can still keep the window, and
+		// it would be left on a workspace that is gone, its folders with it (REMOTE.md RM-39)
+		this._register(this.lifecycleService.onShutdownVeto(() => this.untitledAnsweredFor = undefined));
+		this._register(this.lifecycleService.onWillShutdown(() => {
+			const untitled = this.untitledAnsweredFor;
+			this.untitledAnsweredFor = undefined;
+			if (untitled) {
+				// Sent to the main process at once, so it is done whatever the window does next
+				this.workspacesService.deleteUntitledWorkspace(untitled).catch(error => this.logService.error(error));
+			}
 		}));
 	}
 
@@ -92,7 +109,7 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 
 		const confirmSaveUntitledWorkspace = this.configurationService.getValue<boolean>('window.confirmSaveUntitledWorkspace') !== false;
 		if (!confirmSaveUntitledWorkspace) {
-			await this.workspacesService.deleteUntitledWorkspace(workspaceIdentifier);
+			this.untitledAnsweredFor = workspaceIdentifier;
 
 			return false; // no confirmation configured
 		}
@@ -123,7 +140,7 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 							}]);
 
 							// Delete the untitled one
-							await this.workspacesService.deleteUntitledWorkspace(workspaceIdentifier);
+							this.untitledAnsweredFor = workspaceIdentifier;
 						} catch (error) {
 							// ignore
 						}
@@ -134,7 +151,7 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 				{
 					label: localize({ key: 'doNotSave', comment: ['&& denotes a mnemonic'] }, "Do&&n't Save"),
 					run: async () => {
-						await this.workspacesService.deleteUntitledWorkspace(workspaceIdentifier);
+						this.untitledAnsweredFor = workspaceIdentifier;
 
 						return false;
 					}
@@ -182,7 +199,7 @@ export class NativeWorkspaceEditingService extends AbstractWorkspaceEditingServi
 		}
 
 		const oldWorkspace = toWorkspaceIdentifier(this.contextService.getWorkspace());
-		const result = await this.doEnterWorkspace(workspaceUri);
+		const result = await this.doEnterWorkspace(workspaceUri, !!this.environmentService.remoteAuthority);
 		if (result) {
 
 			// Migrate storage to new workspace

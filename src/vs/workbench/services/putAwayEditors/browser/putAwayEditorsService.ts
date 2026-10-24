@@ -7,9 +7,11 @@ import { Emitter } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../../base/common/map.js';
 import { URI } from '../../../../base/common/uri.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
+import { onDidChangeFolderKeys } from '../../../browser/parts/workspacebar/workspaceBar.js';
 import { IPutAwayEditorsService } from '../common/putAwayEditors.js';
 
 const STORAGE_KEY = 'workbench.putAwayEditors';
@@ -26,11 +28,34 @@ export class PutAwayEditorsService extends Disposable implements IPutAwayEditors
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
+		@IFileService fileService: IFileService,
 	) {
 		super();
 
 		this.held = new ResourceMap<readonly URI[]>(uri => this.uriIdentityService.extUri.getComparisonKey(uri));
 		this.load();
+
+		// Loaded before a remote's file system registers, which can key its folders another way (REMOTE.md R7)
+		this._register(onDidChangeFolderKeys(fileService)(scheme => this.rekey(scheme)));
+	}
+
+	/** Each folder of `scheme` keyed as its keys are now; two that are one folder that way hold what both did. */
+	private rekey(scheme: string): void {
+		const entries = [...this.held];
+		if (!entries.some(([folder]) => folder.scheme === scheme)) {
+			return;
+		}
+
+		this.held.clear();
+		for (const [folder, resources] of entries) {
+			const before = this.held.get(folder) ?? [];
+			this.held.set(folder, [...before, ...resources.filter(resource => !before.some(candidate => this.uriIdentityService.extUri.isEqual(candidate, resource)))]);
+		}
+
+		if (this.held.size !== entries.length) {
+			this.save();
+		}
+		this._onDidChange.fire();
 	}
 
 	set(folder: URI, resources: readonly URI[]): void {

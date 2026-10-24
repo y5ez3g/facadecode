@@ -5,11 +5,9 @@
 
 import assert from 'assert';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
-import { Emitter } from '../../../../../base/common/event.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { extUri } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IDialogService, IPrompt } from '../../../../../platform/dialogs/common/dialogs.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
@@ -18,14 +16,11 @@ import { InMemoryFileSystemProvider } from '../../../../../platform/files/common
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILabelService } from '../../../../../platform/label/common/label.js';
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
-import { INotificationService, IPromptChoice } from '../../../../../platform/notification/common/notification.js';
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IUriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWindowOpenable, IOpenWindowOptions, isFolderToOpen } from '../../../../../platform/window/common/window.js';
-import { IWorkspaceContextService, IWorkspaceFoldersChangeEvent, IWorkspaceFoldersWillChangeEvent, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustUriInfo } from '../../../../../platform/workspace/common/workspaceTrust.js';
-import { IWorkspaceBarService } from '../../../../browser/parts/workspacebar/workspaceBarService.js';
-import { UntrustedFolderEviction, WorkspaceBarTrustGate } from '../../../../browser/parts/workspacebar/workspaceBarTrust.js';
+import { WorkspaceBarTrustGate } from '../../../../browser/parts/workspacebar/workspaceBarTrust.js';
 import { IHostService } from '../../../../services/host/browser/host.js';
 
 suite('Workspace bar - a folder not trusted, on its way into a trusted window', () => {
@@ -191,54 +186,4 @@ suite('Workspace bar - a folder not trusted, on its way into a trusted window', 
 		});
 	});
 
-	/** A folder added where nothing could ask first, with VS Code's own question answered as `trusted` says. */
-	async function addedByHand(window: IWindow, answeredYes: boolean) {
-		const { instantiationService, steps } = services(window);
-		const willChange = store.add(new Emitter<IWorkspaceFoldersWillChangeEvent>());
-		const didChange = store.add(new Emitter<IWorkspaceFoldersChangeEvent>());
-		const prompted: IPromptChoice[] = [];
-		instantiationService.stub(IWorkspaceContextService, { onWillChangeWorkspaceFolders: willChange.event, onDidChangeWorkspaceFolders: didChange.event });
-		instantiationService.stub(IWorkspaceBarService, {
-			remove: async (uris, options) => {
-				steps.push(`remove ${uris.map(uri => uri.path).join(' ')}${options?.confirmed ? '' : ', asking'}`);
-				return { kind: 'removed', folders: uris };
-			}
-		});
-		instantiationService.stub(INotificationService, {
-			prompt: (_severity, message, choices) => {
-				steps.push(`said: ${message}`);
-				prompted.push(...choices);
-				return undefined!;
-			}
-		});
-		store.add(instantiationService.createInstance(UntrustedFolderEviction));
-
-		const folder = new WorkspaceFolder({ uri: URI.file('/tmp/a'), index: 1, name: 'a' });
-		willChange.fire(upcastPartial<IWorkspaceFoldersWillChangeEvent>({ fromCache: false, changes: { added: [folder], removed: [], changed: [] }, join: () => { } }));
-		// VS Code's question, answered while the edit waits
-		if (answeredYes) {
-			window.trustedFolders.add('/tmp/a');
-		} else {
-			window.trusted = false;
-		}
-		didChange.fire({ added: [folder], removed: [], changed: [] });
-		await new Promise(resolve => setTimeout(resolve, 0));
-		await prompted.find(choice => choice.label === 'Open in New Window')?.run();
-		return steps;
-	}
-
-	test('WS-48 a folder added by hand and not trusted at VS Code\'s question is taken back out, said, with a window of its own offered', async () => {
-		assert.deepStrictEqual(await addedByHand(trustedWindow(), false), [
-			'remove /tmp/a',
-			'said: Folder \'a\' was removed because it is untrusted and would switch the workspace to Restricted Mode.',
-			'new window /tmp/a'
-		]);
-	});
-
-	test('one trusted at the question stays, and a window in Restricted Mode before is left as it was', async () => {
-		assert.deepStrictEqual({
-			trustedAtTheQuestion: await addedByHand(trustedWindow(), true),
-			restrictedBefore: await addedByHand({ ...trustedWindow(), trusted: false }, false),
-		}, { trustedAtTheQuestion: [], restrictedBefore: [] });
-	});
 });

@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "Развернуты ли рабочие деревья у строки репозитория, находящейся в фокусе",
 			"workspaceBar.rowKindContext": "Является ли строка в фокусе папкой, репозиторием или рабочим деревом",
 			"workspaceBar.rowOffersWorktreeContext": "Предлагает ли строка в фокусе создать новое рабочее дерево",
+			"workspaceBar.rowSchemeContext": "Схема папки строки в фокусе",
 			"workspaceBar.toggleCollapsed": "Переключить панель рабочих пространств",
 			"workspaceBar.toggleIcon": "Значок для сворачивания и разворачивания панели рабочих пространств.",
 			"workspaceBar.worktrees": "Определяет, отображаются ли на панели рабочих пространств рабочие деревья Git под каждым репозиторием."
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "Не удалось прочитать папку \"{0}\": {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "Открыть в новом окне",
 			"workspaceBar.trustAndAdd": "&&Доверять и добавить",
 			"workspaceBar.trustParent": "Доверять авторам всех файлов в родительской папке \"{0}\"",
 			"workspaceBar.untrustedConsequence": "Эта рабочая область является доверенной. При добавлении недоверенной папки вся рабочая область и активные агенты перейдут в ограниченный режим.",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "Вы доверяете авторам файлов в этой папке?",
 			"workspaceBar.untrustedMessageMany": "Вы доверяете авторам файлов в этих папках ({0})?",
 			"workspaceBar.untrustedMore": "и еще {0}",
-			"workspaceBar.untrustedTakenOut": "Папка \"{0}\" удалена из рабочей области, так как она не является доверенной и перевела бы рабочую область в ограниченный режим."
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "Агентов: {0}",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "Информация",
 			"setting.deprecationMessageSeverity.warning": "Предупреждение"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "Подключиться к узлу...",
+			"facadeRemote.connectToWsl": "Подключиться к WSL"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "Удаленный доступ через туннель включен для {0}. Вы можете [настроить](command:{1}) или [отключить](command:{2}) этот доступ в меню учетных записей {3}.",
 			"remoteTunnel.actions.rename": "Переименовать туннель",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "Агенты"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "Агенты не найдены: настроить агентов..."
+			"facade.agent.noneFound": "Агенты не найдены: настроить агентов...",
+			"facade.agent.openRemoteTerminal": "Открыть терминал",
+			"facade.agent.remoteNoneFound": "На {0} не найден ни один CLI агента. Установите его там и выполните в нём вход."
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "Завершить работу 1 агента и терминалов ({0})?",
 			"runningWork.agents": "Завершить работу агентов ({0})?",
 			"runningWork.agentsAndTerminal": "Завершить работу агентов ({0}) и 1 терминала?",
-			"runningWork.agentsAndTerminals": "Завершить работу агентов ({0}) и терминалов ({1})?"
+			"runningWork.agentsAndTerminals": "Завершить работу агентов ({0}) и терминалов ({1})?",
+			"runningWork.awayAgent": "Закрыть окно? {0} недоступен. Его агент продолжит работать там, пока работает сервер.",
+			"runningWork.awayAgentAndTerminal": "Закрыть окно? {0} недоступен. Его агент и терминал продолжат работать там, пока работает сервер.",
+			"runningWork.awayAgentAndTerminals": "Закрыть окно? {0} недоступен. Его агент и терминалы ({1}) продолжат работать там, пока работает сервер.",
+			"runningWork.awayAgents": "Закрыть окно? {0} недоступен. Его агенты ({1}) продолжат работать там, пока работает сервер.",
+			"runningWork.awayAgentsAndTerminal": "Закрыть окно? {0} недоступен. Его агенты ({1}) и терминал продолжат работать там, пока работает сервер.",
+			"runningWork.awayAgentsAndTerminals": "Закрыть окно? {0} недоступен. Его агенты ({1}) и терминалы ({2}) продолжат работать там, пока работает сервер.",
+			"runningWork.awayTerminal": "Закрыть окно? {0} недоступен. Его терминал продолжит работать там, пока работает сервер.",
+			"runningWork.awayTerminals": "Закрыть окно? {0} недоступен. Его терминалы ({1}) продолжат работать там, пока работает сервер.",
+			"runningWork.closeWindow": "&&Закрыть окно"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Значок для терминала, в котором запущен Antigravity.",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: не удалось прочитать файл последнего экрана \"{1}\": {2}. Причина завершения: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: последний экран не сохранен. Причина завершения: {1}. Последний экран сохраняется, только если терминал агента закрывается, пока окно открыто.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: при отключенном YOLO {1} запрещает инструменты Facade",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Agents that ended while this window was away from its host: {0}.": "Агенты, завершившиеся, пока это окно было отключено от узла: {0}.",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "Агенты, завершившиеся, пока это окно было отключено от узла: {0}. Последнее подключение: {1}.",
+			"less than a minute ago": "менее минуты назад",
+			"1 minute ago": "1 минуту назад",
+			"{0} minutes ago": "{0} мин. назад",
+			"1 hour ago": "1 час назад",
+			"{0} hours ago": "{0} ч назад",
+			"1 day ago": "1 день назад",
+			"{0} days ago": "{0} дн. назад",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Прежний узел расширений этого окна (процесс {0}) по-прежнему управляет агентами этой рабочей области, и Facade не удалось его остановить. Завершите этот процесс и перезагрузите это окно, чтобы управлять агентами здесь."
 		},
 		"package": {
 			"command.category": "Агенты",

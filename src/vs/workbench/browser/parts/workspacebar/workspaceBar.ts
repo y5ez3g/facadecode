@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { toErrorMessage } from '../../../../base/common/errorMessage.js';
+import { Event } from '../../../../base/common/event.js';
 import { basename, dirname, isEqual, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
@@ -18,6 +19,48 @@ export type FolderKey = (uri: URI) => string;
 
 export function folderKey(uriIdentityService: IUriIdentityService, uri: URI): string {
 	return uriIdentityService.extUri.getComparisonKey(uri);
+}
+
+/**
+ * Fires with a scheme as its file system registers, leaves or changes: the rule `folderKey` keys its folders by can
+ * change then. ⚠️ A remote window's workbench is up before the remote's file system registers (REMOTE.md R7): until
+ * then a key keeps the case of the path, which a Windows or macOS remote's ignores once it is there. What was keyed
+ * before is keyed again then (`rekeyFolders`), or it is never found again.
+ */
+export function onDidChangeFolderKeys(fileService: IFileService): Event<string> {
+	return Event.any(
+		Event.map(fileService.onDidChangeFileSystemProviderRegistrations, e => e.scheme),
+		Event.map(fileService.onDidChangeFileSystemProviderCapabilities, e => e.scheme)
+	);
+}
+
+/**
+ * `key` as `folderKey` makes it now, for one it made before `scheme`'s file system changed (`onDidChangeFolderKeys`):
+ * a key is the folder's URI, its path lowercased where case is ignored, so it is read back as one. Any other as it is -
+ * another scheme's, or one that is no folder's.
+ */
+export function rekeyFolder(key: string, scheme: string, folderKey: FolderKey): string {
+	return key.startsWith(`${scheme}:`) ? folderKey(URI.parse(key)) : key;
+}
+
+/**
+ * Keys `map` again in place (`rekeyFolder`), and says whether a key changed. Two that become one keep what `merge`
+ * makes of them: by default the value of the one keyed before, which was set since the other was loaded.
+ */
+export function rekeyFolders<T>(map: Map<string, T>, scheme: string, folderKey: FolderKey, merge: (kept: T, rekeyed: T) => T = (_kept, rekeyed) => rekeyed): boolean {
+	let changed = false;
+	for (const [key, value] of [...map]) {
+		const now = rekeyFolder(key, scheme, folderKey);
+		if (now === key) {
+			continue;
+		}
+
+		map.delete(key);
+		const kept = map.get(now);
+		map.set(now, kept === undefined ? value : merge(kept, value));
+		changed = true;
+	}
+	return changed;
 }
 
 /** Where the product makes worktrees, under the home folder: `<home>/.facade/worktrees/<repository>/<name>` (WORKTREE.md WT-2.1). */

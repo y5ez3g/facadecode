@@ -49,7 +49,10 @@ language, so the person gets whichever loaded last. Facade's own strings are onl
   (README, "Still VS Code") - whose strings stay as far as Microsoft has translated them. In
   the window's modules these are `vs/sessions/` and every module under a `chat`, `chatSessions`,
   `inlineChat`, `sessions`, `agentHost`, `agentsVoice`, `mcp`, `aiStats`, `remoteCodingAgents`
-  or `copilot` folder; among the extensions, `github.copilot-chat`.
+  or `copilot` folder; among the extensions, `github.copilot-chat`. The built-in SSH and
+  WSL extensions, `jeanp413.open-remote-ssh` and `jeanp413.open-remote-wsl`, are the other
+  exception: their author ships no translations, so their own strings are English in every
+  language (REMOTE.md R5).
 - **The product is called Facade Code.** No translation names VS Code where the English
   does not. Microsoft's translations write the name into some strings that, in Facade Code,
   take it from the product; those strings are translated again.

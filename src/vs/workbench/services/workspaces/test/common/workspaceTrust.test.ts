@@ -4,18 +4,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { mock } from '../../../../../base/test/common/mock.js';
+import { mock, upcastPartial } from '../../../../../base/test/common/mock.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IFileService, IStat } from '../../../../../platform/files/common/files.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { IRemoteAuthorityResolverService } from '../../../../../platform/remote/common/remoteAuthorityResolver.js';
+import { IRemoteAuthorityResolverService, ResolvedAuthority, ResolverResult } from '../../../../../platform/remote/common/remoteAuthorityResolver.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService, toWorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustInfo } from '../../../../../platform/workspace/common/workspaceTrust.js';
@@ -306,6 +307,62 @@ suite('Workspace Trust', () => {
 			});
 		});
 
+		test('a remote worktree is read as one once the remote is resolved, its trust its repository\'s then; the workspace is resolved before, as the window connects to the remote only after it (REMOTE.md R7)', async () => {
+			await configurationService.setUserConfiguration('security', getUserSettings(true, true));
+			const authority = 'ssh-remote+host';
+			const remote = (path: string) => URI.from({ scheme: Schemas.vscodeRemote, authority, path });
+			const fileService = store.add(new FileService(new NullLogService()));
+			const remoteFiles = store.add(new RemoteFiles());
+			store.add(fileService.registerProvider(Schemas.vscodeRemote, remoteFiles));
+			instantiationService.stub(IFileService, fileService);
+			// The repository /repo on the remote, trusted, with a worktree at /wt
+			const files: Record<string, string> = {
+				'/repo/.git/HEAD': 'ref: refs/heads/main',
+				'/repo/.git/worktrees/wt/commondir': '../..',
+				'/repo/.git/worktrees/wt/gitdir': '/wt/.git',
+				'/wt/.git': 'gitdir: /repo/.git/worktrees/wt',
+			};
+			for (const [path, content] of Object.entries(files)) {
+				await fileService.writeFile(remote(path), VSBuffer.fromString(content));
+			}
+			remoteFiles.readBeforeResolved.length = 0;
+			const trustInfo: IWorkspaceTrustInfo = { uriTrustInfo: [{ uri: remote('/repo'), trusted: true }] };
+			storageService.store(WORKSPACE_TRUST_STORAGE_KEY, JSON.stringify(trustInfo), StorageScope.APPLICATION_SHARED, StorageTarget.MACHINE);
+			workspaceService.setWorkspace(new Workspace('remote worktree', [toWorkspaceFolder(remote('/wt'))]));
+			instantiationService.stub(IWorkbenchEnvironmentService, { ...environmentService, remoteAuthority: authority });
+			const resolved = new DeferredPromise<ResolverResult>();
+			instantiationService.stub(IRemoteAuthorityResolverService, new class extends mock<IRemoteAuthorityResolverService>() {
+				override resolveAuthority() { return resolved.p; }
+				override async getCanonicalURI(uri: URI) { return uri; }
+			});
+
+			const testObject = store.add(instantiationService.createInstance(WorkspaceTrustManagementService));
+			await testObject.workspaceResolved;
+			const beforeResolved = { read: [...remoteFiles.readBeforeResolved], trusted: testObject.isWorkspaceTrusted() };
+			remoteFiles.resolved = true;
+			resolved.complete(upcastPartial<ResolverResult>({ authority: upcastPartial<ResolvedAuthority>({ authority }) }));
+			await testObject.workspaceTrustInitialized;
+
+			assert.deepStrictEqual({ beforeResolved, trusted: testObject.isWorkspaceTrusted() }, { beforeResolved: { read: [], trusted: false }, trusted: true });
+		});
+
+		test('a folder of a file system an extension provides is read as no worktree, nothing activated for it: the window starts its extensions only after the trust is first calculated (REMOTE.md R7)', async () => {
+			await configurationService.setUserConfiguration('security', getUserSettings(true, true));
+			const fileService = store.add(new FileService(new NullLogService()));
+			instantiationService.stub(IFileService, fileService);
+			// Activating the extension that provides it waits for the extension host, which waits for the trust
+			const activated: string[] = [];
+			store.add(fileService.onWillActivateFileSystemProvider(e => {
+				activated.push(e.scheme);
+				e.join(new Promise<void>(() => { }));
+			}));
+			workspaceService.setWorkspace(new Workspace('ssh fs', [toWorkspaceFolder(URI.from({ scheme: 'ssh', authority: 'host', path: '/repo' }))]));
+
+			const testObject = await initializeTestObject();
+
+			assert.deepStrictEqual({ activated, trusted: testObject.isWorkspaceTrusted() }, { activated: [], trusted: true });
+		});
+
 		async function initializeTestObject(): Promise<WorkspaceTrustManagementService> {
 			const workspaceTrustManagementService = store.add(instantiationService.createInstance(WorkspaceTrustManagementService));
 			await workspaceTrustManagementService.workspaceTrustInitialized;
@@ -318,3 +375,25 @@ suite('Workspace Trust', () => {
 		return { workspace: { trust: { emptyWindow, enabled } } };
 	}
 });
+
+/** A remote's files, which can be read only once the remote is resolved: what is read before is recorded. */
+class RemoteFiles extends InMemoryFileSystemProvider {
+	resolved = false;
+	readonly readBeforeResolved: string[] = [];
+
+	override async stat(resource: URI): Promise<IStat> {
+		this.noteRead(resource);
+		return super.stat(resource);
+	}
+
+	override async readFile(resource: URI): Promise<Uint8Array> {
+		this.noteRead(resource);
+		return super.readFile(resource);
+	}
+
+	private noteRead(resource: URI): void {
+		if (!this.resolved) {
+			this.readBeforeResolved.push(resource.path);
+		}
+	}
+}

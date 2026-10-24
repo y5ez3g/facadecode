@@ -11,8 +11,10 @@ import { WorkspaceBarEditors } from '../../../../browser/parts/workspacebar/work
 import { IEditorGroupsService, IEditorWorkingSet, IEditorWorkingSetOptions } from '../../../../services/editor/common/editorGroupsService.js';
 import { IHeldEditorsService } from '../../../../services/heldEditors/common/heldEditors.js';
 import { EditorInput } from '../../../../common/editor/editorInput.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
+import { NullFileSystemProvider } from '../../../../../platform/files/test/common/nullFileSystemProvider.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { PutAwayEditorsService } from '../../../../services/putAwayEditors/browser/putAwayEditorsService.js';
@@ -86,12 +88,19 @@ suite('Workspace bar - folder editors', () => {
 		return { held, released, service };
 	}
 
-	function editorsFor(groups: TestEditorGroups, storageService: IStorageService, held: Pick<IHeldEditorsService, 'isHeld'> = { isHeld: () => false }, open: EditorInput[] = [], textModelService: ITextModelService = models().service): WorkspaceBarEditors {
-		const uriIdentityService = disposables.add(new UriIdentityService(disposables.add(new FileService(new NullLogService()))));
-		const putAway = disposables.add(new PutAwayEditorsService(storageService, uriIdentityService));
+	/** A file service with the local file system, which a window always has. */
+	function localFiles(): FileService {
+		const fileService = disposables.add(new FileService(new NullLogService()));
+		disposables.add(fileService.registerProvider(Schemas.file, new NullFileSystemProvider()));
+		return fileService;
+	}
+
+	function editorsFor(groups: TestEditorGroups, storageService: IStorageService, held: Pick<IHeldEditorsService, 'isHeld'> = { isHeld: () => false }, open: EditorInput[] = [], textModelService: ITextModelService = models().service, fileService: FileService = localFiles()): WorkspaceBarEditors {
+		const uriIdentityService = disposables.add(new UriIdentityService(fileService));
+		const putAway = disposables.add(new PutAwayEditorsService(storageService, uriIdentityService, fileService));
 		const editorService = { getEditors: () => open.map(editor => ({ editor, groupId: 1 })) } as unknown as IEditorService;
 		const workingCopyService = { isDirty: () => false } as unknown as IWorkingCopyService;
-		return disposables.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, new NullLogService(), held as IHeldEditorsService, putAway, editorService, workingCopyService, uriIdentityService, textModelService));
+		return disposables.add(new WorkspaceBarEditors(groups as unknown as IEditorGroupsService, storageService, new NullLogService(), held as IHeldEditorsService, putAway, editorService, workingCopyService, uriIdentityService, textModelService, fileService));
 	}
 
 	test('WS-50 putting up the editors of a folder leaves the ones a program waits on where they are', async () => {
@@ -186,6 +195,59 @@ suite('Workspace bar - folder editors', () => {
 		editorsFor(groups, storageService).capture(URI.parse('file:///a'));
 
 		assert.deepStrictEqual(groups.names, ['file:///a']);
+	});
+
+	test('a remote folder captured again before a Windows host\'s file system registered - which ignores case where the window kept it - has the set captured last once it has, and one set (REMOTE.md R7)', async () => {
+		const groups = new TestEditorGroups();
+		const storageService = storage();
+		const repo = URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+win', path: '/c:/Users/me/repo' });
+		const other = URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+win', path: '/c:/Users/me/other' });
+
+		// The window before, the remote's file system there
+		const before = disposables.add(new FileService(new NullLogService()));
+		disposables.add(before.registerProvider(Schemas.vscodeRemote, new NullFileSystemProvider()));
+		editorsFor(groups, storageService, undefined, undefined, undefined, before).capture(repo);
+
+		// Reloaded, and left before it is
+		const fileService = disposables.add(new FileService(new NullLogService()));
+		const editors = editorsFor(groups, storageService, undefined, undefined, undefined, fileService);
+		editors.capture(repo);
+		disposables.add(fileService.registerProvider(Schemas.vscodeRemote, new NullFileSystemProvider()));
+		await editors.restore(other);
+		await editors.restore(repo);
+
+		assert.deepStrictEqual({ sets: groups.sets.map(set => set.id), applied: groups.applied.map(set => set === 'empty' ? set : set.id) }, { sets: ['set-1'], applied: ['empty', 'set-1'] });
+	});
+
+	test('a reloaded window does not prune a remote folder\'s set before the remote\'s file system registers - a Windows host\'s keys it the way it was stored only then - and prunes what left once it has (RM-38; REMOTE.md R7)', async () => {
+		const groups = new TestEditorGroups();
+		const storageService = storage();
+		const a = URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+win', path: '/c:/Users/me/repo-a' });
+		const b = URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+win', path: '/c:/Users/me/repo-b' });
+		const gone = URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+win', path: '/c:/Users/me/gone' });
+
+		// The window before: b's editors and those of a folder since taken out by hand, captured with the remote's file system there
+		const before = disposables.add(new FileService(new NullLogService()));
+		disposables.add(before.registerProvider(Schemas.vscodeRemote, new NullFileSystemProvider()));
+		const captured = editorsFor(groups, storageService, undefined, undefined, undefined, before);
+		captured.capture(b);
+		captured.capture(gone);
+
+		// Reloaded on a: the bar prunes as it comes up, before the connection is back
+		const fileService = disposables.add(new FileService(new NullLogService()));
+		const editors = editorsFor(groups, storageService, undefined, undefined, undefined, fileService);
+		await editors.prune([a, b], () => false);
+		const beforeRegistered = [...groups.names];
+		disposables.add(fileService.registerProvider(Schemas.vscodeRemote, new NullFileSystemProvider()));
+		await timeout(0);
+		const registered = [...groups.names];
+		await editors.restore(b);
+
+		assert.deepStrictEqual({ beforeRegistered, registered, applied: groups.applied.map(set => set === 'empty' ? set : set.name) }, {
+			beforeRegistered: [b.with({ path: b.path.toLowerCase() }).toString(), gone.with({ path: gone.path.toLowerCase() }).toString()],
+			registered: [b.with({ path: b.path.toLowerCase() }).toString()],
+			applied: [b.with({ path: b.path.toLowerCase() }).toString()]
+		});
 	});
 
 	test('references the editor part no longer has are dropped', () => {

@@ -11,6 +11,7 @@ import { basename, basenameOrAuthority } from '../../../../base/common/resources
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
@@ -18,6 +19,7 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IWorkspaceContextService, IWorkspaceFolder, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
+import { onDidChangeFolderKeys, rekeyFolders } from './workspaceBar.js';
 
 /**
  * The colours a folder can be given.
@@ -229,6 +231,7 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService,
 		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
+		@IFileService fileService: IFileService,
 	) {
 		super();
 		this.inherited = this.adoptEarlierRecords();
@@ -257,6 +260,32 @@ export class WorkspaceBarCustomizationService extends Disposable implements IWor
 		}));
 
 		this._register(this.contextService.onDidChangeWorkspaceFolders(e => this.moveNamesIntoWorkspace(e.added)));
+
+		// Loaded, or set, before a remote's file system registers, which can key its folders another way (REMOTE.md R7)
+		this._register(onDidChangeFolderKeys(fileService)(scheme => this.rekey(scheme)));
+	}
+
+	/**
+	 * Each folder of `scheme` keyed as its keys are now; of a folder's two records that way, the one set since the other was
+	 * loaded. Each is announced: what its row asked for before found nothing.
+	 */
+	private rekey(scheme: string): void {
+		const key = (uri: URI) => this.key(uri);
+		if (rekeyFolders(this.byFolder, scheme, key)) {
+			this.save();
+		}
+		if (rekeyFolders(this.worktreesByRepository, scheme, key)) {
+			this.saveWorktreeOrder();
+		}
+		rekeyFolders(this.madeWith, scheme, key);
+		rekeyFolders(this.defaultNames, scheme, key);
+
+		const folders = new Set([...this.byFolder.keys(), ...this.worktreesByRepository.keys(), ...this.madeWith.keys(), ...this.defaultNames.keys()]);
+		for (const folder of folders) {
+			if (folder.startsWith(`${scheme}:`)) {
+				this._onDidChange.fire(URI.parse(folder));
+			}
+		}
 	}
 
 	/** Writes the names of rows that joined into their `folders[].name`, unless the file already names them. */

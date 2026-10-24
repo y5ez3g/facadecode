@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "聚焦的存放庫列是否已展開其工作樹",
 			"workspaceBar.rowKindContext": "聚焦的列是資料夾、存放庫還是工作樹",
 			"workspaceBar.rowOffersWorktreeContext": "聚焦的列是否提供新增工作樹",
+			"workspaceBar.rowSchemeContext": "聚焦的列所對應資料夾的配置",
 			"workspaceBar.toggleCollapsed": "切換工作區列",
 			"workspaceBar.toggleIcon": "用於摺疊和展開工作區列的圖示。",
 			"workspaceBar.worktrees": "控制工作區列是否在每個存放庫底下顯示 Git 工作樹。"
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "無法讀取資料夾 '{0}': {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "在新視窗中開啟",
 			"workspaceBar.trustAndAdd": "信任並新增(&&T)",
 			"workspaceBar.trustParent": "信任父資料夾 '{0}' 中所有檔案的作者",
 			"workspaceBar.untrustedConsequence": "此工作區已受信任。新增不受信任的資料夾，會讓整個工作區和執行中的 agent 切換為受限模式。",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "您是否信任此資料夾中檔案的作者?",
 			"workspaceBar.untrustedMessageMany": "您是否信任這 {0} 個資料夾中檔案的作者?",
 			"workspaceBar.untrustedMore": "及其他 {0} 個",
-			"workspaceBar.untrustedTakenOut": "已移除資料夾 '{0}'，因為它不受信任，會讓工作區切換為受限模式。"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} 個 agent",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "資訊",
 			"setting.deprecationMessageSeverity.warning": "警告"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "連線到主機...",
+			"facadeRemote.connectToWsl": "連線到 WSL"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "已為 {0} 啟用遠端通道存取。您可以透過 {3} [帳戶] 功能表[設定](command:{1})或[關閉](command:{2})此存取。",
 			"remoteTunnel.actions.rename": "重新命名通道",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "Agent"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "找不到 agent: 設定 agent..."
+			"facade.agent.noneFound": "找不到 agent: 設定 agent...",
+			"facade.agent.openRemoteTerminal": "開啟終端機",
+			"facade.agent.remoteNoneFound": "在 {0} 上找不到 agent CLI。請在該處安裝一個並登入。"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "要終止 1 個 agent 和 {0} 個終端機嗎?",
 			"runningWork.agents": "要終止 {0} 個 agent 嗎?",
 			"runningWork.agentsAndTerminal": "要終止 {0} 個 agent 和 1 個終端機嗎?",
-			"runningWork.agentsAndTerminals": "要終止 {0} 個 agent 和 {1} 個終端機嗎?"
+			"runningWork.agentsAndTerminals": "要終止 {0} 個 agent 和 {1} 個終端機嗎?",
+			"runningWork.awayAgent": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 agent 就會繼續執行。",
+			"runningWork.awayAgentAndTerminal": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 agent 和終端機就會繼續執行。",
+			"runningWork.awayAgentAndTerminals": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 agent 和 {1} 個終端機就會繼續執行。",
+			"runningWork.awayAgents": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 {1} 個 agent 就會繼續執行。",
+			"runningWork.awayAgentsAndTerminal": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 {1} 個 agent 和終端機就會繼續執行。",
+			"runningWork.awayAgentsAndTerminals": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 {1} 個 agent 和 {2} 個終端機就會繼續執行。",
+			"runningWork.awayTerminal": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的終端機就會繼續執行。",
+			"runningWork.awayTerminals": "要關閉視窗嗎? 無法連線到 {0}。只要其伺服器仍在執行，其上的 {1} 個終端機就會繼續執行。",
+			"runningWork.closeWindow": "關閉視窗(&&C)"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "執行 Antigravity 的終端機圖示。",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: 無法讀取最後畫面檔案 '{1}': {2}。結束方式: {3}。",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: 未儲存最後畫面。結束方式: {1}。只有在視窗開啟期間 agent 的終端機關閉時，才會儲存最後畫面。",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO 關閉時，{1} 會拒絕 Facade 工具",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0}{1}",
+			"Agents that ended while this window was away from its host: {0}.": "此視窗與主機中斷連線期間結束的 agent: {0}。",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "此視窗與主機中斷連線期間結束的 agent: {0}。上次連線: {1}。",
+			"less than a minute ago": "不到 1 分鐘前",
+			"1 minute ago": "1 分鐘前",
+			"{0} minutes ago": "{0} 分鐘前",
+			"1 hour ago": "1 小時前",
+			"{0} hours ago": "{0} 小時前",
+			"1 day ago": "1 天前",
+			"{0} days ago": "{0} 天前",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "此視窗先前的延伸主機 (處理序 {0}) 仍在管理此工作區的 agent，且 Facade 無法將其停止。請結束該處理序並重新載入此視窗，以便在這裡管理。"
 		},
 		"package": {
 			"command.category": "Agent",

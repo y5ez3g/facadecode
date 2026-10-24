@@ -200,5 +200,11 @@ export async function openOrShow(
 		return;
 	}
 
+	// A folder this window cannot reach goes to a window that can - a new one, or one already on it - never this
+	// one: the main process would reuse it, replacing its list (W5)
+	if (isFolderToOpen(toOpen) && !reaches(toOpen.folderUri, environmentService)) {
+		return hostService.openWindow([toOpen], { ...options, forceNewWindow: true });
+	}
+
 	return hostService.openWindow([toOpen], options);
 }

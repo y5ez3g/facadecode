@@ -205,6 +205,17 @@ export class WorkspaceTrustRequestHandler extends Disposable implements IWorkben
 		this._register(this.workspaceTrustRequestService.onDidInitiateWorkspaceTrustRequest(async requestOptions => {
 			await this.workspaceTrustManagementService.workspaceResolved;
 
+			// Facade Code: a remote window's trust is worked out only once its remote is resolved - a worktree's is its
+			// repository's, read from git's files there - and its terminals come back meanwhile, each asking. Asked once
+			// it is: trusted by then, nothing is asked (REMOTE.md R7)
+			if (this.environmentService.remoteAuthority) {
+				await this.workspaceTrustManagementService.workspaceTrustInitialized;
+				if (this.workspaceTrustManagementService.isWorkspaceTrusted()) {
+					await this.workspaceTrustRequestService.completeWorkspaceTrustRequest(true);
+					return;
+				}
+			}
+
 			// Title
 			const message = this.useWorkspaceLanguage ?
 				localize('workspaceTrust', "Do you trust the authors of the files in this workspace?") :

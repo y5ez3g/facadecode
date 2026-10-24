@@ -18,7 +18,7 @@ import { INotificationService } from '../../../../platform/notification/common/n
 import { IUriIdentityService } from '../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IActiveFolderService } from '../../../services/activeFolder/common/activeFolder.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
-import { folderKey, pathOf, unreachable } from './workspaceBar.js';
+import { folderKey, onDidChangeFolderKeys, pathOf, rekeyFolder, rekeyFolders, unreachable } from './workspaceBar.js';
 import { WorkspaceBarEditors } from './workspaceBarEditors.js';
 import { WorkspaceBarModel } from './workspaceBarModel.js';
 
@@ -61,7 +61,7 @@ export class WorkspaceBarSwitcher extends Disposable {
 
 	constructor(
 		private readonly model: WorkspaceBarModel,
-		editors: WorkspaceBarEditors,
+		private readonly editors: WorkspaceBarEditors,
 		@IActiveFolderService private readonly activeFolderService: IActiveFolderService,
 		@IFileService private readonly fileService: IFileService,
 		@INotificationService private readonly notificationService: INotificationService,
@@ -78,6 +78,15 @@ export class WorkspaceBarSwitcher extends Disposable {
 		// The workbench has already restored the active folder's editors
 		const active = this.active;
 		this.showing = active && this.key(active);
+
+		// Made before the folders' file system keys them another way - a remote's registers after the window is up -
+		// those of the folder on screen and of where work was done are made again: else a rename of the folder on
+		// screen would be a move onto another, and put its editors back over the ones open (REMOTE.md R7)
+		this._register(onDidChangeFolderKeys(fileService)(scheme => {
+			const key = (uri: URI) => this.key(uri);
+			this.showing = this.showing === undefined ? undefined : rekeyFolder(this.showing, scheme, key);
+			rekeyFolders(this.lastWorkedIn, scheme, key);
+		}));
 
 		// Joined behind any restore in flight, so a failed capture stops the switch before anything closes
 		this._register(this.activeFolderService.onWillChangeActiveFolder(e => {
@@ -137,6 +146,29 @@ export class WorkspaceBarSwitcher extends Disposable {
 		this.waiting = { uri, added, done };
 		void this.drain();
 		return done.p;
+	}
+
+	/**
+	 * Moves the window's editors onto a folder it starts on once the reload that enters a workspace has added it, as a
+	 * remote window's does (REMOTE.md R7): those on screen kept as the folder's it leaves, as a switch keeps them, and the
+	 * incoming folder's put up for the reload to keep. When they cannot be kept, it starts again on the folder it is on.
+	 */
+	async startOn(uri: URI): Promise<void> {
+		try {
+			await this.activeFolderService.startOn(uri);
+		} catch (error) {
+			this.logService.error(`[workspaceBar] Could not save editor state before starting on ${this.key(uri)}`, error);
+			return;
+		}
+
+		const key = this.key(uri);
+		this.showing = key;
+		this.restoreFailure = undefined;
+		this.settled = this.editors.restore(uri).then(undefined, error => {
+			this.restoreFailure = error;
+			this.logService.error(`[workspaceBar] Failed to restore editors for ${key}`, error);
+		});
+		await this.settled;
 	}
 
 	private async drain(): Promise<void> {

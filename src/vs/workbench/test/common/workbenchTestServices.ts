@@ -222,6 +222,10 @@ export class TestActiveFolderService implements IActiveFolderService {
 	async setActiveFolder(): Promise<void> {
 		throw new Error('TestActiveFolderService cannot switch folders');
 	}
+
+	async startOn(): Promise<void> {
+		throw new Error('TestActiveFolderService cannot switch folders');
+	}
 }
 
 export class TestWorkingCopy extends Disposable implements IWorkingCopy {

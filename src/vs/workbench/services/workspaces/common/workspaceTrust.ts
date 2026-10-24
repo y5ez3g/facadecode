@@ -439,8 +439,18 @@ export class WorkspaceTrustManagementService extends Disposable implements IWork
 		return { trusted: resultState, uri: resultUri };
 	}
 
-	/** Facade Code: reads whether `uri` is a linked worktree, and of which repository, for `doGetUriTrustInfo`. */
+	/**
+	 * Facade Code: reads whether `uri` is a linked worktree, and of which repository, for `doGetUriTrustInfo`. Only
+	 * where git's files can be read without waiting on the window: this machine's folders, and the remote's once it
+	 * is resolved. The window connects to its remote and starts its extensions only after the trust is first
+	 * calculated, so a read before the remote is resolved, or through a file system an extension provides, would wait
+	 * for what waits for it. The trust is calculated again once the remote is resolved, its worktrees read then; a
+	 * folder of any other file system is no worktree.
+	 */
 	private async resolveWorktreeRepository(uri: URI): Promise<void> {
+		if (uri.scheme !== Schemas.file && !(uri.scheme === Schemas.vscodeRemote && this._remoteAuthority)) {
+			return;
+		}
 		const repository = await worktreeRepositoryOf(this.fileService, this.uriIdentityService.extUri, uri);
 		if (repository) {
 			this._worktreeRepositories.set(uri, repository);

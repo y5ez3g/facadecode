@@ -7,10 +7,14 @@ import assert from 'assert';
 import { timeout } from '../../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { mock } from '../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { FileService } from '../../../../../platform/files/common/fileService.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { NullFileSystemProvider } from '../../../../../platform/files/test/common/nullFileSystemProvider.js';
+import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { InMemoryStorageService, IS_NEW_KEY, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
 import { IWorkspaceContextService, IWorkspaceFolder, IWorkspaceFoldersChangeEvent, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
@@ -49,19 +53,19 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 	 * The service over a workspace's storage that holds `stored`; `storage` is that of a workspace opened before, unless
 	 * given.
 	 */
-	function setup(stored?: string, storage = disposables.add(new InMemoryStorageService())): ISetup {
+	function setup(stored?: string, storage = disposables.add(new InMemoryStorageService()), fileService: IFileService = new TestFileService()): ISetup {
 		const store = disposables.add(new DisposableStore());
 		if (stored !== undefined) {
 			storage.store(STORAGE_KEY, stored, StorageScope.WORKSPACE, StorageTarget.MACHINE);
 		}
 
-		const uriIdentityService = store.add(new UriIdentityService(new TestFileService()));
+		const uriIdentityService = store.add(new UriIdentityService(fileService));
 		const joining = store.add(new Emitter<IWorkspaceFoldersChangeEvent>());
 		const renamed: [string, string | undefined][] = [];
 		const result = { state: WorkbenchState.WORKSPACE } as ISetup;
 		const contextService = { onDidChangeWorkspaceFolders: joining.event, getWorkbenchState: () => result.state } as unknown as IWorkspaceContextService;
 		const workspaceEditingService = { renameFolder: async (uri: URI, name: string | undefined) => { renamed.push([uri.path, name]); } } as unknown as IWorkspaceEditingService;
-		const build = () => store.add(new WorkspaceBarCustomizationService(storage, uriIdentityService, contextService, workspaceEditingService));
+		const build = () => store.add(new WorkspaceBarCustomizationService(storage, uriIdentityService, contextService, workspaceEditingService, fileService));
 
 		return Object.assign(result, {
 			service: build(),
@@ -85,6 +89,36 @@ suite('Workspace bar - what somebody has changed about a folder', () => {
 		assert.strictEqual(after?.name, 'API');
 		assert.strictEqual(after?.color, 'teal');
 		assert.strictEqual(after?.icon, 'server', 'the icon did not survive');
+	});
+
+	test('a Windows host\'s folder set again before the remote\'s file system registered - which ignores case where the window kept it - has the look set last once it has, kept once, and the rows are drawn again with it (REMOTE.md R7)', () => {
+		const repo = URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+win', path: '/c:/Users/me/repo' });
+		const storage = disposables.add(new InMemoryStorageService());
+
+		// The window before, the remote's file system there
+		const before = disposables.add(new FileService(new NullLogService()));
+		disposables.add(before.registerProvider(Schemas.vscodeRemote, new NullFileSystemProvider()));
+		setup(undefined, storage, before).service.set(repo, { color: 'teal' });
+
+		// Reloaded, and set again before it is
+		const fileService = disposables.add(new FileService(new NullLogService()));
+		const { service, reopen } = setup(undefined, storage, fileService);
+		const changed: string[] = [];
+		disposables.add(service.onDidChange(uri => changed.push(uri.path)));
+		service.set(repo, { color: 'pink' });
+		disposables.add(fileService.registerProvider(Schemas.vscodeRemote, new NullFileSystemProvider()));
+
+		assert.deepStrictEqual({
+			now: service.get(repo)?.color,
+			kept: Object.keys(JSON.parse(storage.get(STORAGE_KEY, StorageScope.WORKSPACE) ?? '{}')).length,
+			reloaded: reopen().get(repo)?.color,
+			changed
+		}, {
+			now: 'pink',
+			kept: 1,
+			reloaded: 'pink',
+			changed: ['/c:/Users/me/repo', '/c:/users/me/repo']
+		});
 	});
 
 	test('one field on its own is enough to be remembered', () => {

@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "포커스가 있는 리포지토리 행의 작업 트리가 확장되어 있는지 여부",
 			"workspaceBar.rowKindContext": "포커스가 있는 행이 폴더인지, 리포지토리인지, 작업 트리인지 여부",
 			"workspaceBar.rowOffersWorktreeContext": "포커스가 있는 행에서 새 작업 트리를 만들 수 있는지 여부",
+			"workspaceBar.rowSchemeContext": "포커스가 있는 행에 해당하는 폴더의 체계",
 			"workspaceBar.toggleCollapsed": "워크스페이스 바 설정/해제",
 			"workspaceBar.toggleIcon": "워크스페이스 바를 축소하고 확장하는 아이콘입니다.",
 			"workspaceBar.worktrees": "워크스페이스 바에서 각 리포지토리 아래에 Git 작업 트리를 표시할지 여부를 제어합니다."
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "폴더 '{0}'을(를) 읽지 못했습니다: {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "새 창에서 열기",
 			"workspaceBar.trustAndAdd": "신뢰 및 추가(&&T)",
 			"workspaceBar.trustParent": "부모 폴더 '{0}'에서 모든 파일의 작성자를 신뢰합니다.",
 			"workspaceBar.untrustedConsequence": "이 작업 영역은 신뢰할 수 있는 작업 영역입니다. 신뢰할 수 없는 폴더를 추가하면 작업 영역 전체와 활성 에이전트가 제한 모드로 전환됩니다.",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "이 폴더에 있는 파일의 작성자를 신뢰합니까?",
 			"workspaceBar.untrustedMessageMany": "이 폴더 {0}개에 있는 파일의 작성자를 신뢰합니까?",
 			"workspaceBar.untrustedMore": "외 {0}개",
-			"workspaceBar.untrustedTakenOut": "폴더 '{0}'은(는) 신뢰할 수 없어 작업 영역을 제한 모드로 전환하게 되므로 제거되었습니다."
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "에이전트 {0}개",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "정보",
 			"setting.deprecationMessageSeverity.warning": "경고"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "호스트에 연결...",
+			"facadeRemote.connectToWsl": "WSL에 연결"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "{0}에 대해 원격 터널 액세스가 활성화되었습니다. {3} 계정 메뉴에서 이 액세스를 [구성](command:{1})하거나 [비활성화](command:{2})할 수 있습니다.",
 			"remoteTunnel.actions.rename": "터널 이름 바꾸기",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "에이전트"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "에이전트를 찾을 수 없음: 에이전트 구성..."
+			"facade.agent.noneFound": "에이전트를 찾을 수 없음: 에이전트 구성...",
+			"facade.agent.openRemoteTerminal": "터미널 열기",
+			"facade.agent.remoteNoneFound": "{0}에서 에이전트 CLI를 찾을 수 없습니다. 그곳에 하나를 설치하고 로그인하세요."
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "에이전트 1개와 터미널 {0}개를 종료하시겠습니까?",
 			"runningWork.agents": "에이전트 {0}개를 종료하시겠습니까?",
 			"runningWork.agentsAndTerminal": "에이전트 {0}개와 터미널 1개를 종료하시겠습니까?",
-			"runningWork.agentsAndTerminals": "에이전트 {0}개와 터미널 {1}개를 종료하시겠습니까?"
+			"runningWork.agentsAndTerminals": "에이전트 {0}개와 터미널 {1}개를 종료하시겠습니까?",
+			"runningWork.awayAgent": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 에이전트는 계속 실행됩니다.",
+			"runningWork.awayAgentAndTerminal": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 에이전트와 터미널은 계속 실행됩니다.",
+			"runningWork.awayAgentAndTerminals": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 에이전트와 터미널 {1}개는 계속 실행됩니다.",
+			"runningWork.awayAgents": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 에이전트 {1}개는 계속 실행됩니다.",
+			"runningWork.awayAgentsAndTerminal": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 에이전트 {1}개와 터미널은 계속 실행됩니다.",
+			"runningWork.awayAgentsAndTerminals": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 에이전트 {1}개와 터미널 {2}개는 계속 실행됩니다.",
+			"runningWork.awayTerminal": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 터미널은 계속 실행됩니다.",
+			"runningWork.awayTerminals": "창을 닫으시겠습니까? {0}에 연결할 수 없습니다. 서버가 실행되는 동안 그곳의 터미널 {1}개는 계속 실행됩니다.",
+			"runningWork.closeWindow": "창 닫기(&&C)"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Antigravity를 실행하는 터미널의 아이콘입니다.",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: 마지막 화면 파일 '{1}'을(를) 읽지 못했습니다: {2}. 종료 사유: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: 저장된 마지막 화면이 없습니다. 종료 사유: {1}. 마지막 화면은 창이 열려 있는 동안 에이전트의 터미널이 닫힐 때만 저장됩니다.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO가 꺼져 있을 때 {1}에서 Facade 도구를 거부함",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Agents that ended while this window was away from its host: {0}.": "이 창이 호스트와 연결이 끊어진 동안 종료된 에이전트: {0}.",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "이 창이 호스트와 연결이 끊어진 동안 종료된 에이전트: {0}. 마지막 연결: {1}.",
+			"less than a minute ago": "1분 이내",
+			"1 minute ago": "1분 전",
+			"{0} minutes ago": "{0}분 전",
+			"1 hour ago": "1시간 전",
+			"{0} hours ago": "{0}시간 전",
+			"1 day ago": "1일 전",
+			"{0} days ago": "{0}일 전",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "이 창의 이전 확장 호스트(프로세스 {0})가 아직 이 작업 영역의 에이전트를 관리하고 있으며 Facade에서 이를 중지할 수 없습니다. 여기서 관리하려면 해당 프로세스를 종료하고 이 창을 다시 로드하세요."
 		},
 		"package": {
 			"command.category": "에이전트",

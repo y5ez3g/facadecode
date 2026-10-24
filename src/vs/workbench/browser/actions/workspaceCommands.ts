@@ -66,14 +66,17 @@ CommandsRegistry.registerCommand({
 CommandsRegistry.registerCommand({
 	id: ADD_ROOT_FOLDER_COMMAND_ID,
 	handler: async (accessor) => {
-		const workspaceEditingService = accessor.get(IWorkspaceEditingService);
+		const workspaceBarService = accessor.get(IWorkspaceBarService);
 
 		const folders = await selectWorkspaceFolders(accessor);
 		if (!folders?.length) {
 			return;
 		}
 
-		await workspaceEditingService.addFolders(folders.map(folder => ({ uri: folder })));
+		// Facade Code: through the bar, which asks before a folder that is not trusted joins a trusted window, as every
+		// way of adding one does - VS Code's own question comes once it has joined, its No putting the window in
+		// Restricted Mode (WORKSPACE.md W5)
+		await workspaceBarService.add(folders);
 	}
 });
 

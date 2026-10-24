@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "Odaklanılan depo satırında çalışma ağaçlarının genişletilmiş olup olmadığı",
 			"workspaceBar.rowKindContext": "Odaklanılan satırın klasör mü, depo mu, yoksa çalışma ağacı mı olduğu",
 			"workspaceBar.rowOffersWorktreeContext": "Odaklanılan satırın yeni bir çalışma ağacı sunup sunmadığı",
+			"workspaceBar.rowSchemeContext": "Odaklanılan satırdaki klasörün şeması",
 			"workspaceBar.toggleCollapsed": "Çalışma Alanı Çubuğunu Aç/Kapat",
 			"workspaceBar.toggleIcon": "Çalışma alanı çubuğunu daraltma ve genişletme simgesi.",
 			"workspaceBar.worktrees": "Çalışma alanı çubuğunun her deponun altında Git çalışma ağaçlarını gösterip göstermeyeceğini denetler."
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "'{0}' klasörü okunamadı: {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "Yeni Pencerede Aç",
 			"workspaceBar.trustAndAdd": "&&Güven ve Ekle",
 			"workspaceBar.trustParent": "'{0}' üst klasöründeki tüm dosyaları oluşturanlara güven",
 			"workspaceBar.untrustedConsequence": "Bu çalışma alanına güveniliyor. Güvenilmeyen bir klasör eklemek, çalışma alanının tamamını ve etkin ajanları Kısıtlı Mod'a geçirir.",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "Bu klasördeki dosyaları oluşturanlara güveniyor musunuz?",
 			"workspaceBar.untrustedMessageMany": "Bu {0} klasördeki dosyaları oluşturanlara güveniyor musunuz?",
 			"workspaceBar.untrustedMore": "ve {0} tane daha",
-			"workspaceBar.untrustedTakenOut": "'{0}' klasörüne güvenilmediği ve çalışma alanını Kısıtlı Mod'a geçireceği için klasör kaldırıldı."
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} ajan",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "Bilgi",
 			"setting.deprecationMessageSeverity.warning": "Uyarı"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "Konağa Bağlan...",
+			"facadeRemote.connectToWsl": "WSL'ye Bağlan"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "Uzak Tünel Erişimi {0} için etkinleştirildi. Bu erişimi {3} Hesaplar menüsünden [yapılandırabilir](command:{1}) veya [kapatabilirsiniz](command:{2}).",
 			"remoteTunnel.actions.rename": "Tüneli Yeniden Adlandır",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "Ajanlar"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "Ajan Bulunamadı: Ajanları Yapılandır..."
+			"facade.agent.noneFound": "Ajan Bulunamadı: Ajanları Yapılandır...",
+			"facade.agent.openRemoteTerminal": "Terminali Aç",
+			"facade.agent.remoteNoneFound": "{0} üzerinde ajan CLI bulunamadı. Orada bir tane yükleyip oturum açın."
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "1 ajanı ve {0} terminali sonlandırmak istiyor musunuz?",
 			"runningWork.agents": "{0} ajanı sonlandırmak istiyor musunuz?",
 			"runningWork.agentsAndTerminal": "{0} ajanı ve 1 terminali sonlandırmak istiyor musunuz?",
-			"runningWork.agentsAndTerminals": "{0} ajanı ve {1} terminali sonlandırmak istiyor musunuz?"
+			"runningWork.agentsAndTerminals": "{0} ajanı ve {1} terminali sonlandırmak istiyor musunuz?",
+			"runningWork.awayAgent": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki ajan, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.awayAgentAndTerminal": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki ajan ve terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.awayAgentAndTerminals": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki ajan ve {1} terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.awayAgents": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki {1} ajan, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.awayAgentsAndTerminal": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki {1} ajan ve terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.awayAgentsAndTerminals": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki {1} ajan ve {2} terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.awayTerminal": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.awayTerminals": "Pencereyi kapatmak istiyor musunuz? {0} ile bağlantı kurulamıyor. Oradaki {1} terminal, sunucusu çalıştığı sürece çalışmaya devam eder.",
+			"runningWork.closeWindow": "&&Pencereyi Kapat"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Antigravity çalıştıran bir terminalin simgesi.",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: '{1}' son ekran dosyası okunamadı: {2}. Nasıl sona erdiği: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: Son ekran kaydedilmedi. Nasıl sona erdiği: {1}. Son ekran yalnızca pencere açıkken bir ajanın terminali kapandığında kaydedilir.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: YOLO kapalıyken {1}, Facade araçlarını reddeder",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Agents that ended while this window was away from its host: {0}.": "Bu pencerenin konakla bağlantısı kesikken sona eren ajanlar: {0}.",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "Bu pencerenin konakla bağlantısı kesikken sona eren ajanlar: {0}. Son bağlantı: {1}.",
+			"less than a minute ago": "bir dakikadan kısa süre önce",
+			"1 minute ago": "1 dakika önce",
+			"{0} minutes ago": "{0} dakika önce",
+			"1 hour ago": "1 saat önce",
+			"{0} hours ago": "{0} saat önce",
+			"1 day ago": "1 gün önce",
+			"{0} days ago": "{0} gün önce",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Bu pencerenin önceki uzantı konağı ({0} işlemi) bu çalışma alanının ajanlarını hâlâ yönetiyor ve Facade onu durduramadı. Ajanları burada yönetmek için o işlemi sonlandırın ve bu pencereyi yeniden yükleyin."
 		},
 		"package": {
 			"command.category": "Ajanlar",

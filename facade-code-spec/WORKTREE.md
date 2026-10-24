@@ -550,7 +550,9 @@ Prepare and perform a deletion in this order:
    (WT-1.3), and a request to delete one - an agent's stop_agent among them
    (AGENT-ORCHESTRATION.md, O5) - is refused before anything is done. Read tracked
    changes, untracked files, ignored local paths, submodule state and deletion
-   restrictions. Reject a known lock before stopping any work.
+   restrictions. Reject a known lock before stopping any work, and an agent of another
+   window working inside it as well, naming that agent: the person stops it in its own
+   window (REMOTE.md R3).
 2. In the workbench, collect dirty editors whose resources are inside the directory,
    including editors visible in another folder context and hidden editors. Also
    identify affected folder-owned editors and all related terminals/agents.

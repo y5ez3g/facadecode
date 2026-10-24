@@ -157,11 +157,7 @@ export class ActiveFolderService extends Disposable implements IActiveFolderServ
 		}
 
 		const from = this._activeFolder;
-		const joiners: Promise<void>[] = [];
-		this._onWillChangeActiveFolder.fire({ from, to: target, join(promise) { joiners.push(promise); } });
-
-		// A joiner that fails stops the move while nothing has changed yet (WORKSPACE.md W6.2)
-		await Promises.settled(joiners);
+		await this.willChange(from, target.uri);
 
 		// The folder may have left, been renamed or moved while the joiners ran
 		const current = this.folderFor(target.uri);
@@ -176,6 +172,23 @@ export class ActiveFolderService extends Disposable implements IActiveFolderServ
 		this._activeFolder = current;
 		this.save();
 		this._onDidChangeActiveFolder.fire();
+	}
+
+	async startOn(folder: URI): Promise<void> {
+		// The editors on screen are the folder's being left, and the reload keeps what is on screen
+		if (!this._activeFolder || !this.uriIdentityService.extUri.isEqual(this._activeFolder.uri, folder)) {
+			await this.willChange(this._activeFolder, folder);
+		}
+
+		// As the folder it is on is kept: what `restore` reads, the workspace by then having it
+		this.storageService.store(STORAGE_KEY, folder.toString(), StorageScope.WORKSPACE, StorageTarget.MACHINE);
+	}
+
+	/** Announces a move and waits for the work its listeners join; a joiner that fails stops it while nothing has changed yet (WORKSPACE.md W6.2). */
+	private async willChange(from: IWorkspaceFolder | undefined, to: URI): Promise<void> {
+		const joiners: Promise<void>[] = [];
+		this._onWillChangeActiveFolder.fire({ from, to, join(promise) { joiners.push(promise); } });
+		await Promises.settled(joiners);
 	}
 
 	private save(): void {

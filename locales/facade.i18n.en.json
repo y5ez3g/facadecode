@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "Whether worktrees are expanded for the focused repository row",
 			"workspaceBar.rowKindContext": "Whether the focused row is a folder, repository, or worktree",
 			"workspaceBar.rowOffersWorktreeContext": "Whether the focused row offers a new worktree",
+			"workspaceBar.rowSchemeContext": "The scheme of the focused row's folder",
 			"workspaceBar.toggleCollapsed": "Toggle Workspace Bar",
 			"workspaceBar.toggleIcon": "Icon for collapsing and expanding the workspace bar.",
 			"workspaceBar.worktrees": "Controls whether the workspace bar shows Git worktrees under each repository."
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "Failed to read folder '{0}': {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "Open in New Window",
 			"workspaceBar.trustAndAdd": "&&Trust and Add",
 			"workspaceBar.trustParent": "Trust the authors of all files in the parent folder '{0}'",
 			"workspaceBar.untrustedConsequence": "This workspace is trusted. Adding an untrusted folder will switch the entire workspace and active agents to Restricted Mode.",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "Do you trust the authors of the files in this folder?",
 			"workspaceBar.untrustedMessageMany": "Do you trust the authors of the files in these {0} folders?",
 			"workspaceBar.untrustedMore": "and {0} more",
-			"workspaceBar.untrustedTakenOut": "Folder '{0}' was removed because it is untrusted and would switch the workspace to Restricted Mode."
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} agents",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "Info",
 			"setting.deprecationMessageSeverity.warning": "Warning"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "Connect to Host...",
+			"facadeRemote.connectToWsl": "Connect to WSL"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "Remote Tunnel Access is enabled for {0}. You can [configure](command:{1}) or [turn off](command:{2}) this access via the {3} Accounts menu.",
 			"remoteTunnel.actions.rename": "Rename Tunnel",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "Agents"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "No Agents Found: Configure Agents..."
+			"facade.agent.noneFound": "No Agents Found: Configure Agents...",
+			"facade.agent.openRemoteTerminal": "Open Terminal",
+			"facade.agent.remoteNoneFound": "No agent CLI found on {0}. Install and sign in to one there."
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "Do you want to terminate 1 agent and {0} terminals?",
 			"runningWork.agents": "Do you want to terminate {0} agents?",
 			"runningWork.agentsAndTerminal": "Do you want to terminate {0} agents and 1 terminal?",
-			"runningWork.agentsAndTerminals": "Do you want to terminate {0} agents and {1} terminals?"
+			"runningWork.agentsAndTerminals": "Do you want to terminate {0} agents and {1} terminals?",
+			"runningWork.awayAgent": "Do you want to close the window? {0} cannot be reached. Its agent keeps running there as long as its server runs.",
+			"runningWork.awayAgentAndTerminal": "Do you want to close the window? {0} cannot be reached. Its agent and terminal keep running there as long as its server runs.",
+			"runningWork.awayAgentAndTerminals": "Do you want to close the window? {0} cannot be reached. Its agent and {1} terminals keep running there as long as its server runs.",
+			"runningWork.awayAgents": "Do you want to close the window? {0} cannot be reached. Its {1} agents keep running there as long as its server runs.",
+			"runningWork.awayAgentsAndTerminal": "Do you want to close the window? {0} cannot be reached. Its {1} agents and terminal keep running there as long as its server runs.",
+			"runningWork.awayAgentsAndTerminals": "Do you want to close the window? {0} cannot be reached. Its {1} agents and {2} terminals keep running there as long as its server runs.",
+			"runningWork.awayTerminal": "Do you want to close the window? {0} cannot be reached. Its terminal keeps running there as long as its server runs.",
+			"runningWork.awayTerminals": "Do you want to close the window? {0} cannot be reached. Its {1} terminals keep running there as long as its server runs.",
+			"runningWork.closeWindow": "&&Close Window"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Icon for a terminal running Antigravity.",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: with YOLO off, {1} denies Facade tools",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Agents that ended while this window was away from its host: {0}.": "Agents that ended while this window was away from its host: {0}.",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "Agents that ended while this window was away from its host: {0}. Last connected {1}.",
+			"less than a minute ago": "less than a minute ago",
+			"1 minute ago": "1 minute ago",
+			"{0} minutes ago": "{0} minutes ago",
+			"1 hour ago": "1 hour ago",
+			"{0} hours ago": "{0} hours ago",
+			"1 day ago": "1 day ago",
+			"{0} days ago": "{0} days ago",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here."
 		},
 		"package": {
 			"command.category": "Agents",

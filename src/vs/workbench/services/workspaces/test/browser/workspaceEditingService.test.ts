@@ -8,6 +8,11 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { DidEnterWorkspaceEvent } from '../../browser/abstractWorkspaceEditingService.js';
 import { UNKNOWN_EMPTY_WINDOW_WORKSPACE } from '../../../../../platform/workspace/common/workspace.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IWorkspacesService } from '../../../../../platform/workspaces/common/workspaces.js';
+import { IJSONEditingService } from '../../../configuration/common/jsonEditing.js';
+import { BrowserWorkspaceEditingService } from '../../browser/workspaceEditingService.js';
+import { workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
 
 suite('WorkspaceEditingService', () => {
 
@@ -83,4 +88,34 @@ suite('WorkspaceEditingService', () => {
 	});
 
 	ensureNoDisposablesAreLeakedInTestSuite();
+});
+
+suite('WorkspaceEditingService - entering a workspace', () => {
+
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	class TestWorkspaceEditingService extends BrowserWorkspaceEditingService {
+		enter(workspaceUri: URI, reloading: boolean) {
+			return this.doEnterWorkspace(workspaceUri, reloading);
+		}
+	}
+
+	test('a window that reloads once it has entered it - a remote one - leaves its configuration to that reload: read before, a remote folder\'s would wait on the connection the stopped extension hosts took down (REMOTE.md R7)', async () => {
+		const instantiationService = workbenchInstantiationService(undefined, disposables);
+		const workspaceUri = URI.file('/w/team.code-workspace');
+		const workspace = { id: 'team', configPath: workspaceUri };
+		const initialized: string[] = [];
+		instantiationService.stub(IConfigurationService, 'initialize', async (identifier: { id: string }) => { initialized.push(identifier.id); });
+		instantiationService.stub(IJSONEditingService, { write: async () => { } });
+		instantiationService.stub(IWorkspacesService, {
+			getWorkspaceIdentifier: async () => workspace,
+			enterWorkspace: async () => ({ workspace })
+		});
+		const service = disposables.add(instantiationService.createInstance(TestWorkspaceEditingService));
+
+		const reloading = await service.enter(workspaceUri, true);
+		const staying = await service.enter(workspaceUri, false);
+
+		assert.deepStrictEqual({ initialized, entered: [reloading?.workspace.id, staying?.workspace.id] }, { initialized: ['team'], entered: ['team', 'team'] });
+	});
 });

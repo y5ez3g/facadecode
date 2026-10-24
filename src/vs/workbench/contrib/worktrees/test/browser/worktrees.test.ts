@@ -20,7 +20,8 @@ import { URI } from '../../../../../base/common/uri.js';
 import { upcastPartial } from '../../../../../base/test/common/mock.js';
 import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { isIMenuItem, MenuRegistry, registerAction2 } from '../../../../../platform/actions/common/actions.js';
+import { isIMenuItem, MenuId, MenuRegistry, registerAction2 } from '../../../../../platform/actions/common/actions.js';
+import { RemoteNameContext } from '../../../../common/contextkeys.js';
 import { CommandsRegistry, ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
@@ -42,7 +43,7 @@ import { IWorkspace, IWorkspaceContextService, IWorkspaceFolder } from '../../..
 import { IWorkspaceTrustEnablementService, IWorkspaceTrustManagementService, IWorkspaceTrustRequestService, IWorkspaceTrustUriInfo } from '../../../../../platform/workspace/common/workspaceTrust.js';
 // For the keys every focused list has, which the bar's own have to win over.
 import '../../../../browser/actions/listCommands.js';
-import { WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
+import { WorkspaceBarContextMenu, WorkspaceBarFocusContext, WorkspaceBarRowExpansionContext, WorkspaceBarRowKindContext, WorkspaceBarRowOffersWorktreeContext, WorkspaceBarRowSchemeContext } from '../../../../browser/parts/workspacebar/workspaceBarActions.js';
 import { IWorkspaceBarCustomizationService } from '../../../../browser/parts/workspacebar/workspaceBarCustomization.js';
 import { IBranchDescription, INewWorktreeAnswer, INewWorktreePreparation, IWorkspaceBarDialogService } from '../../../../browser/parts/workspacebar/workspaceBarCustomize.js';
 import { IWorkspaceBarRepository } from '../../../../browser/parts/workspacebar/workspaceBarGit.js';
@@ -1957,12 +1958,12 @@ suite('Worktrees - making and deleting one', () => {
 		}, { connecting: 'The following agent will be terminated:\nAgent @late #a2', ended: undefined, shell: undefined });
 	});
 
-	test('a worktree in which another window\'s agent works is not deleted - by the person or by a caller - before anything is closed: refused naming it (SP-18; N-37)', async () => {
+	test('a worktree in which another window\'s agent works is not deleted - by the person or by a caller - before anything is closed, nor asked about first: refused naming it as another window\'s, by the name its terminal was opened with rather than the title its CLI gave it since (SP-18; N-37; REMOTE.md RM-41)', async () => {
 		answers.set('_git.deleteWorktreeAt check', checked());
 		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
 		gitIsRunning();
-		// Attached to its own window, as a running agent is: no orphan
-		ptyProcesses = [upcastPartial<IProcessDetails>({ title: '@sp18o #a208', pid: 4242, cwd: `${w2.path}/src`, workspaceId: 'another window', isOrphan: false, reconnectionProperties: facadeRunProperties({ workspace: 'other', id: 208 }) })];
+		// Attached to its own window, as a running agent is: no orphan. Its CLI titles its terminal after the folder, as Codex does
+		ptyProcesses = [upcastPartial<IProcessDetails>({ title: 'w2', pid: 4242, cwd: `${w2.path}/src`, workspaceId: 'another window', isOrphan: false, reconnectionProperties: facadeRunProperties({ workspace: 'other', id: 208 }, { name: '@sp18o #a208' }) })];
 		terminals = [terminal('zsh', w2.path)];
 		const service = instantiationService.createInstance(WorktreeService);
 		const byCaller = await service.removeWorktree(w2, { runs: [] }).then(() => 'deleted', (err: Error) => err.message);
@@ -1972,7 +1973,44 @@ suite('Worktrees - making and deleting one', () => {
 		assert.deepStrictEqual({ byCaller, callerSteps, personSteps: steps }, {
 			byCaller: '\'/home/me/.facade/worktrees/lab/w2\' was not deleted because an agent from another window is working in it (@sp18o #a208). Stop that agent in its window first.',
 			callerSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check'],
-			personSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check', 'confirm', 'error: \'/home/me/.facade/worktrees/lab/w2\' was not deleted because an agent from another window is working in it (@sp18o #a208). Stop that agent in its window first.']
+			personSteps: ['_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 check', 'error: \'/home/me/.facade/worktrees/lab/w2\' was not deleted because an agent from another window is working in it (@sp18o #a208). Stop that agent in its window first.']
+		});
+	});
+
+	test('a worktree with the window\'s own agents in the pty host is its own; on a remote, another computer\'s - the same workspace id, another record - are named (REMOTE.md R3, R7)', async () => {
+		instantiationService.stub(IFacadeRunsService, {
+			closingBecause: (instance, reason) => { closing.push(`${instance.title} ${reason}`); },
+			live: { workspace: 'record', ids: [1], preparing: [] }
+		});
+		const remote = (path: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+box', path });
+		const service = instantiationService.createInstance(WorktreeService);
+		ptyProcesses = [upcastPartial<IProcessDetails>({ title: '@own #a1', pid: 1111, cwd: `${w2.path}/src`, workspaceId: 'lab-workspace', isOrphan: false, reconnectionProperties: facadeRunProperties({ workspace: 'record', id: 1 }) })];
+		const own = await service.otherWindowsAgentsIn(w2);
+		ptyProcesses = [upcastPartial<IProcessDetails>({ title: '@theirs #a9', pid: 2222, cwd: `${w2.path}/src`, workspaceId: 'lab-workspace', isOrphan: true, reconnectionProperties: facadeRunProperties({ workspace: 'z9y8', id: 9 }) })];
+		const theirs = await service.otherWindowsAgentsIn(remote(w2.path));
+
+		assert.deepStrictEqual({ own, theirs }, { own: [], theirs: ['@theirs #a9'] });
+	});
+
+	test('WTA-23 on a remote, a folder left behind is said without a way to see it, with Retry (REMOTE.md R3)', async () => {
+		const remote = (path: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+box', path });
+		const worktree = remote(w2.path);
+		repository = { kind: 'repository', main: remote('/lab'), folder: undefined, branch: 'main', members: [], worktrees: [{ uri: worktree, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
+		answers.set('_git.deleteWorktreeAt check', checked());
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'incomplete', path: w2.path, gitRecord: 'absent', recovery: 'leftover-1', message: 'EBUSY: resource busy or locked' });
+		answers.set('_git.deleteWorktreeAt cleanup', { kind: 'removed' });
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(worktree);
+		await prompted.find(choice => choice.label === 'Retry')!.run();
+
+		assert.deepStrictEqual({
+			said: steps.filter(step => step.startsWith('prompt:')),
+			choices: prompted.map(choice => choice.label),
+			retried: steps.filter(step => step.startsWith('_git.deleteWorktreeAt')).pop()
+		}, {
+			said: [`prompt: Worktree was removed from Git, but its folder could not be deleted: ${w2.path}. EBUSY: resource busy or locked`],
+			choices: ['Retry'],
+			retried: '_git.deleteWorktreeAt /lab /home/me/.facade/worktrees/lab/w2 cleanup leftover-1'
 		});
 	});
 
@@ -2019,6 +2057,23 @@ suite('Worktrees - making and deleting one', () => {
 		});
 	});
 
+	test('RM-14 on a remote, the agents\' extension hears of the person\'s deletion, stops the agents working in it at step 6, and hears that it is deleted, as for a local one (REMOTE.md R3, R7)', async () => {
+		const remote = (path: string) => URI.from({ scheme: Schemas.vscodeRemote, authority: 'ssh-remote+box', path });
+		const worktree = remote(w2.path);
+		repository = { kind: 'repository', main: remote('/lab'), folder: undefined, branch: 'main', members: [], worktrees: [{ uri: worktree, branch: 'w2', label: 'w2', exists: true, folder: undefined }] };
+		store.add(CommandsRegistry.registerCommand('_facade.agents.worktreeStopping', () => { }));
+		answers.set('_git.deleteWorktreeAt check', checked());
+		answers.set('_git.deleteWorktreeAt remove', { kind: 'removed' });
+
+		await instantiationService.createInstance(WorktreeService).deleteWorktree(worktree);
+
+		assert.deepStrictEqual(steps.filter(step => step.startsWith('_facade.agents.')), [
+			'_facade.agents.worktreeDeleting /home/me/.facade/worktrees/lab/w2',
+			'_facade.agents.worktreeStopping /home/me/.facade/worktrees/lab/w2',
+			'_facade.agents.worktreeDeleted /home/me/.facade/worktrees/lab/w2',
+		]);
+	});
+
 	test('a terminal of the worktree\'s editor area is said to be running whatever it started in: deleting the worktree stops it too', async () => {
 		editorAreaTerminals = [terminal('a server moved into its editor area', '/lab', { running: true })];
 		answers.set('_git.deleteWorktreeAt check', checked());
@@ -2063,12 +2118,14 @@ suite('Worktrees - the row menu and its keys', () => {
 	/**
 	 * What a row of `kind` has on its menu, its groups in the order the menu draws them, with worktrees listed.
 	 * `offersWorktree` as the view sets it: false for a worktree's row, and for another tool's worktree (WT-1.3).
+	 * `scheme` as the view sets it: the folder's own.
 	 */
-	function menu(kind: 'folder' | 'repository' | 'worktree', expansion: '' | 'expanded' | 'collapsed', offersWorktree = kind !== 'worktree'): string[] {
+	function menu(kind: 'folder' | 'repository' | 'worktree', expansion: '' | 'expanded' | 'collapsed', offersWorktree = kind !== 'worktree', scheme = 'file'): string[] {
 		const contextKeyService = contextKeys();
 		WorkspaceBarRowKindContext.bindTo(contextKeyService).set(kind);
 		WorkspaceBarRowOffersWorktreeContext.bindTo(contextKeyService).set(offersWorktree);
 		WorkspaceBarRowExpansionContext.bindTo(contextKeyService).set(expansion);
+		WorkspaceBarRowSchemeContext.bindTo(contextKeyService).set(scheme);
 		const rank = (group: string | undefined) => group === 'navigation' ? '' : group ?? '';
 
 		return MenuRegistry.getMenuItems(WorkspaceBarContextMenu)
@@ -2112,6 +2169,36 @@ suite('Worktrees - the row menu and its keys', () => {
 				'9_remove facade.workspaceBar.deleteWorktree',
 			],
 		});
+	});
+
+	test('WTA-09 on a remote, no row offers to reveal its folder: it lives where the person has no File Explorer (REMOTE.md R3)', () => {
+		assert.deepStrictEqual({ folder: menu('folder', '', true, 'vscode-remote'), worktree: menu('worktree', '', false, 'vscode-remote') }, {
+			folder: [
+				'navigation facade.workspaceBar.newWorktree',
+				'2_arrange facade.workspaceBar.customizeFolder',
+				'2_arrange facade.workspaceBar.moveFolderUp',
+				'2_arrange facade.workspaceBar.moveFolderDown',
+				'9_remove facade.workspaceBar.removeFolder',
+			],
+			worktree: [
+				'2_arrange facade.workspaceBar.customizeFolder',
+				'2_arrange facade.workspaceBar.moveWorktreeUp',
+				'2_arrange facade.workspaceBar.moveWorktreeDown',
+				'9_remove facade.workspaceBar.deleteWorktree',
+			],
+		});
+	});
+
+	test('WTA-09 a remote window\'s Command Palette offers no Reveal either, its folders all being its remote\'s; a local window\'s does (REMOTE.md R1, R3)', () => {
+		const offered = (remoteName: string) => {
+			const contextKeyService = contextKeys();
+			RemoteNameContext.bindTo(contextKeyService).set(remoteName);
+			return MenuRegistry.getMenuItems(MenuId.CommandPalette)
+				.filter(isIMenuItem)
+				.some(item => item.command.id === 'facade.workspaceBar.revealFolder' && contextKeyService.contextMatchesRules(item.when));
+		};
+
+		assert.deepStrictEqual({ local: offered(''), remote: offered('ssh-remote') }, { local: true, remote: false });
 	});
 
 	test('WTA-09 Alt+Up and Alt+Down on a row move it, over the keys every focused list has for them', () => {

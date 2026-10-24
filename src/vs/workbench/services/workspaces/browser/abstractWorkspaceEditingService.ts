@@ -416,7 +416,10 @@ export abstract class AbstractWorkspaceEditingService extends Disposable impleme
 		}
 	}
 
-	protected async doEnterWorkspace(workspaceUri: URI): Promise<IEnterWorkspaceResult | undefined> {
+	/**
+	 * Enters `workspaceUri`. `reloading`: the window reloads once it has, and reads the workspace's configuration then.
+	 */
+	protected async doEnterWorkspace(workspaceUri: URI, reloading = false): Promise<IEnterWorkspaceResult | undefined> {
 		if (this.environmentService.extensionTestsLocationURI) {
 			throw new Error('Entering a new workspace is not possible in tests.');
 		}
@@ -428,7 +431,12 @@ export abstract class AbstractWorkspaceEditingService extends Disposable impleme
 			await this.migrateWorkspaceSettings(workspace);
 		}
 
-		await this.configurationService.initialize(workspace);
+		// Facade Code: a window that reloads reads it after the reload. A remote window does, its extension hosts
+		// stopped meanwhile - and with them the connection, which an SSH extension can hold in the local one - so a
+		// remote folder's configuration read now would wait until the window gave the connection up (REMOTE.md R7)
+		if (!reloading) {
+			await this.configurationService.initialize(workspace);
+		}
 
 		return this.workspacesService.enterWorkspace(workspaceUri);
 	}

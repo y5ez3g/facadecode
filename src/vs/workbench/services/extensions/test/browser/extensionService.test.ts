@@ -6,7 +6,9 @@
 import assert from 'assert';
 import { Event } from '../../../../../base/common/event.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { timeout } from '../../../../../base/common/async.js';
 import { mock } from '../../../../../base/test/common/mock.js';
+import { runWithFakedTimers } from '../../../../../base/test/common/timeTravelScheduler.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../platform/configuration/test/common/testConfigurationService.js';
@@ -22,7 +24,7 @@ import { TestNotificationService } from '../../../../../platform/notification/te
 import product from '../../../../../platform/product/common/product.js';
 import { IProductService } from '../../../../../platform/product/common/productService.js';
 import { RemoteAuthorityResolverService } from '../../../../../platform/remote/browser/remoteAuthorityResolverService.js';
-import { IRemoteAuthorityResolverService, ResolverResult } from '../../../../../platform/remote/common/remoteAuthorityResolver.js';
+import { IRemoteAuthorityResolverService, RemoteAuthorityResolverError, ResolverResult } from '../../../../../platform/remote/common/remoteAuthorityResolver.js';
 import { IRemoteExtensionsScannerService } from '../../../../../platform/remote/common/remoteExtensionsScanner.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
 import { NullTelemetryService } from '../../../../../platform/telemetry/common/telemetryUtils.js';
@@ -242,6 +244,9 @@ suite('ExtensionService', () => {
 		protected _resolveAuthority(remoteAuthority: string): Promise<ResolverResult> {
 			throw new Error('Method not implemented.');
 		}
+		public resolveAuthorityOnLocalProcess(remoteAuthority: string): Promise<ResolverResult> {
+			return this._resolveAuthorityOnExtensionHosts(ExtensionHostKind.LocalProcess, remoteAuthority);
+		}
 	}
 
 	let disposables: DisposableStore;
@@ -289,6 +294,21 @@ suite('ExtensionService', () => {
 		await extService.stopExtensionHosts('foo');
 		assert.deepStrictEqual(extService.order, (['create 1', 'create 2', 'create 3', 'dispose 3', 'dispose 2', 'dispose 1']));
 	});
+
+	test('resolving an authority while the extension hosts are stopped is temporarily not available for half a minute - entering a workspace restarts them, or reloads the window - so that a reconnection tries again; past it, with none started again, a failure, which offers the window a reload rather than trying forever (REMOTE.md R7)', () => runWithFakedTimers({}, async () => {
+		await extService.stopExtensionHosts('foo');
+		const resolving = () => extService.resolveAuthorityOnLocalProcess('ssh-remote+host').then(() => undefined, (err: unknown) => err);
+
+		const soon = await resolving();
+		await timeout(30_001);
+		const later = await resolving();
+
+		assert.deepStrictEqual({
+			soon: RemoteAuthorityResolverError.isTemporarilyNotAvailable(soon),
+			later: RemoteAuthorityResolverError.isTemporarilyNotAvailable(later),
+			laterFails: later instanceof Error
+		}, { soon: true, later: false, laterFails: true });
+	}));
 
 	test('Extension host disposed when awaited', async () => {
 		await extService.stopExtensionHosts('foo');

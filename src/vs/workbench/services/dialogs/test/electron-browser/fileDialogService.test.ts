@@ -268,6 +268,41 @@ suite('FileDialogService', function () {
 		assert.deepStrictEqual(opened.map(uri => uri.fsPath), files.map(file => file.fsPath));
 	});
 
+	test(`WS-03 ⭐ a folder of this computer picked in a remote window - the dialog's Show Local - opens in a window of its own, never this one: this window cannot show it, and its list stays (REMOTE.md RM-32)`, async function () {
+		const folder = URI.file('/test/local');
+		const shown: URI[] = [];
+		const windowed: unknown[] = [];
+
+		instantiationService.set(IWorkbenchEnvironmentService, new class extends mock<BrowserWorkbenchEnvironmentService>() {
+			override get remoteAuthority() {
+				return 'ssh-remote+box';
+			}
+		});
+		class TestSimpleFileDialog implements ISimpleFileDialog {
+			async showOpenDialog(): Promise<URI[] | undefined> {
+				return [folder];
+			}
+			async showSaveDialog(): Promise<URI | undefined> {
+				return undefined;
+			}
+			dispose(): void { }
+		}
+		instantiationService.stub(IFileService, new class extends mock<IFileService>() {
+			override async stat(resource: URI) { return { isDirectory: true, resource } as never; }
+		});
+		instantiationService.stub(IHostService, new class extends mock<IHostService>() {
+			override async openWindow(...args: unknown[]) { windowed.push(args); }
+		});
+		instantiationService.stub(IWorkspaceBarService, new class extends mock<IWorkspaceBarService>() {
+			override async addAndShow(uris: readonly URI[]) { shown.push(...uris); return { kind: 'shown' } as const; }
+		});
+
+		const dialogService = instantiationService.createInstance(TestFileDialogService, new TestSimpleFileDialog());
+		await dialogService.pickFolderAndOpen({ forceNewWindow: false });
+
+		assert.deepStrictEqual({ shown: shown.length, windowed }, { shown: 0, windowed: [[[{ folderUri: folder }], { forceNewWindow: true, remoteAuthority: undefined }]] });
+	});
+
 	test(`WS-03 ⭐ and several folders all join this window, in one request`, async function () {
 		const folders = [URI.file('/test/alpha'), URI.file('/test/beta')];
 		const shown: URI[][] = [];

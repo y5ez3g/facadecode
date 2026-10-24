@@ -96,6 +96,7 @@
 			"workspaceBar.rowExpansionContext": "Gibt an, ob die Worktrees der fokussierten Repositoryzeile erweitert sind",
 			"workspaceBar.rowKindContext": "Gibt an, ob die fokussierte Zeile ein Ordner, ein Repository oder ein Worktree ist",
 			"workspaceBar.rowOffersWorktreeContext": "Gibt an, ob die fokussierte Zeile einen neuen Worktree anbietet",
+			"workspaceBar.rowSchemeContext": "Das Schema des Ordners der fokussierten Zeile",
 			"workspaceBar.toggleCollapsed": "Workspace-Leiste umschalten",
 			"workspaceBar.toggleIcon": "Symbol zum Reduzieren und Erweitern der Workspace-Leiste.",
 			"workspaceBar.worktrees": "Steuert, ob die Workspace-Leiste unter jedem Repository dessen Git-Worktrees anzeigt."
@@ -225,7 +226,6 @@
 			"workspaceBar.unreadable": "Der Ordner „{0}“ konnte nicht gelesen werden: {1}"
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarTrust": {
-			"workspaceBar.openInNewWindow": "In neuem Fenster öffnen",
 			"workspaceBar.trustAndAdd": "&&Vertrauen und hinzufügen",
 			"workspaceBar.trustParent": "Den Autoren aller Dateien im übergeordneten Ordner „{0}“ vertrauen",
 			"workspaceBar.untrustedConsequence": "Dieser Arbeitsbereich ist vertrauenswürdig. Wenn Sie einen nicht vertrauenswürdigen Ordner hinzufügen, werden der gesamte Arbeitsbereich und die aktiven Agenten in den eingeschränkten Modus versetzt.",
@@ -235,7 +235,6 @@
 			"workspaceBar.untrustedMessage": "Vertrauen Sie den Autoren der Dateien in diesem Ordner?",
 			"workspaceBar.untrustedMessageMany": "Vertrauen Sie den Autoren der Dateien in diesen {0} Ordnern?",
 			"workspaceBar.untrustedMore": "und {0} weitere",
-			"workspaceBar.untrustedTakenOut": "Der Ordner „{0}“ wurde entfernt, weil er nicht vertrauenswürdig ist und den Arbeitsbereich in den eingeschränkten Modus versetzen würde."
 		},
 		"vs/workbench/browser/parts/workspacebar/workspaceBarView": {
 			"workspaceBar.agentsAria": "{0} Agenten",
@@ -372,6 +371,10 @@
 			"setting.deprecationMessageSeverity.info": "Info",
 			"setting.deprecationMessageSeverity.warning": "Warnung"
 		},
+		"vs/workbench/contrib/remote/browser/facadeRemoteStartLabels": {
+			"facadeRemote.connectToHost": "Mit Host verbinden...",
+			"facadeRemote.connectToWsl": "Mit WSL verbinden"
+		},
 		"vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution": {
 			"progress.turnOn.final.noLink": "Der Remotetunnelzugriff ist für {0} aktiviert. Sie können diesen Zugriff über das Kontenmenü von {3} [konfigurieren](command:{1}) oder [deaktivieren](command:{2}).",
 			"remoteTunnel.actions.rename": "Tunnel umbenennen",
@@ -458,7 +461,9 @@
 			"facade.agents.category": "Agenten"
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherMenu": {
-			"facade.agent.noneFound": "Keine Agenten gefunden: Agenten konfigurieren..."
+			"facade.agent.noneFound": "Keine Agenten gefunden: Agenten konfigurieren...",
+			"facade.agent.openRemoteTerminal": "Terminal öffnen",
+			"facade.agent.remoteNoneFound": "Auf {0} wurde keine Agent-CLI gefunden. Installieren Sie dort eine, und melden Sie sich an."
 		},
 		"vs/workbench/contrib/terminalLaunchers/browser/terminalLauncherQuickPick": {
 			"agentPicker.agentAndTitle": "{0} · {1}",
@@ -481,7 +486,16 @@
 			"runningWork.agentAndTerminals": "Möchten Sie 1 Agenten und {0} Terminals beenden?",
 			"runningWork.agents": "Möchten Sie {0} Agenten beenden?",
 			"runningWork.agentsAndTerminal": "Möchten Sie {0} Agenten und 1 Terminal beenden?",
-			"runningWork.agentsAndTerminals": "Möchten Sie {0} Agenten und {1} Terminals beenden?"
+			"runningWork.agentsAndTerminals": "Möchten Sie {0} Agenten und {1} Terminals beenden?",
+			"runningWork.awayAgent": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Sein Agent läuft dort weiter, solange sein Server läuft.",
+			"runningWork.awayAgentAndTerminal": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Sein Agent und sein Terminal laufen dort weiter, solange sein Server läuft.",
+			"runningWork.awayAgentAndTerminals": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Sein Agent und seine {1} Terminals laufen dort weiter, solange sein Server läuft.",
+			"runningWork.awayAgents": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Seine {1} Agenten laufen dort weiter, solange sein Server läuft.",
+			"runningWork.awayAgentsAndTerminal": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Seine {1} Agenten und sein Terminal laufen dort weiter, solange sein Server läuft.",
+			"runningWork.awayAgentsAndTerminals": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Seine {1} Agenten und {2} Terminals laufen dort weiter, solange sein Server läuft.",
+			"runningWork.awayTerminal": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Sein Terminal läuft dort weiter, solange sein Server läuft.",
+			"runningWork.awayTerminals": "Möchten Sie das Fenster schließen? {0} ist nicht erreichbar. Seine {1} Terminals laufen dort weiter, solange sein Server läuft.",
+			"runningWork.closeWindow": "&&Fenster schließen"
 		},
 		"vs/workbench/contrib/terminalLaunchers/common/terminalLaunchers": {
 			"agentIcon.antigravity": "Symbol für ein Terminal, in dem Antigravity ausgeführt wird.",
@@ -790,7 +804,17 @@
 			"{0}: Failed to read the last screen file '{1}': {2}. How it ended: {3}.": "{0}: Die Datei mit dem letzten Bildschirminhalt „{1}“ konnte nicht gelesen werden: {2}. Art der Beendigung: {3}.",
 			"{0}: No last screen was saved. How it ended: {1}. A last screen is saved only when an agent's terminal closes while the window is open.": "{0}: Es wurde kein letzter Bildschirminhalt gespeichert. Art der Beendigung: {1}. Der letzte Bildschirminhalt wird nur gespeichert, wenn das Terminal eines Agenten geschlossen wird, während das Fenster geöffnet ist.",
 			"{0}: with YOLO off, {1} denies Facade tools": "{0}: bei deaktiviertem YOLO verweigert {1} Facade-Tools",
-			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}"
+			"{0} {1}/{0} is one or more sentences, {1} the sentence that follows them": "{0} {1}",
+			"Agents that ended while this window was away from its host: {0}.": "Agenten, die beendet wurden, während dieses Fenster von seinem Host getrennt war: {0}.",
+			"Agents that ended while this window was away from its host: {0}. Last connected {1}.": "Agenten, die beendet wurden, während dieses Fenster von seinem Host getrennt war: {0}. Zuletzt verbunden {1}.",
+			"less than a minute ago": "vor weniger als einer Minute",
+			"1 minute ago": "vor 1 Minute",
+			"{0} minutes ago": "vor {0} Minuten",
+			"1 hour ago": "vor 1 Stunde",
+			"{0} hours ago": "vor {0} Stunden",
+			"1 day ago": "vor 1 Tag",
+			"{0} days ago": "vor {0} Tagen",
+			"This window's earlier extension host (process {0}) still manages this workspace's agents, and Facade could not stop it. End that process and reload this window to manage them here.": "Der frühere Erweiterungshost dieses Fensters (Prozess {0}) verwaltet weiterhin die Agenten dieses Arbeitsbereichs, und Facade konnte ihn nicht beenden. Beenden Sie diesen Prozess, und laden Sie dieses Fenster neu, um die Agenten hier zu verwalten."
 		},
 		"package": {
 			"command.category": "Agenten",

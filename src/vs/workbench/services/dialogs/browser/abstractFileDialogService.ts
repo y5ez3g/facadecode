@@ -317,9 +317,11 @@ export abstract class AbstractFileDialogService implements IFileDialogService {
 
 		// ⚠️ The same question `openOrShow` asks, through the same function: a folder on a remote this
 		// window is not connected to needs a window that is, the same way an explicit "in New Window"
-		// does. Two copies of that test drifted apart once already.
+		// does - a new one, or one already on it, never this one: the main process reuses the window a
+		// folder was picked in, which would replace this window's list. Two copies of that test drifted
+		// apart once already.
 		if (options.forceNewWindow || !uris.every(uri => reaches(uri, this.environmentService))) {
-			return this.hostService.openWindow(uris.map(folderUri => ({ folderUri })), { forceNewWindow: options.forceNewWindow, remoteAuthority: options.remoteAuthority });
+			return this.hostService.openWindow(uris.map(folderUri => ({ folderUri })), { forceNewWindow: true, remoteAuthority: options.remoteAuthority });
 		}
 
 		// ⚠️ Resolved where it is used, not injected. `IWorkspaceEditingService` asks this service
