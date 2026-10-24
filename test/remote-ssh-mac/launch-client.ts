@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License. See License.txt in the project root for license information.
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, writeFileSync } from 'node:fs';
@@ -7,14 +9,16 @@ import net from 'node:net';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-const { values } = parseArgs({ options: {
-	app: { type: 'string' },
-	campaign: { type: 'string' },
-	name: { type: 'string' },
-	mirror: { type: 'string' }
-} });
+const { values } = parseArgs({
+	options: {
+		app: { type: 'string' },
+		campaign: { type: 'string' },
+		name: { type: 'string' },
+		mirror: { type: 'string' }
+	}
+});
 if (process.platform !== 'darwin' || !values.app || !values.campaign || !values.name || !/^[a-z0-9-]+$/.test(values.name)) {
-	throw new Error('Usage on macOS: node launch-client.mjs --app <app bundle> --campaign <directory> --name <name> [--mirror <URL template>]');
+	throw new Error('Usage on macOS: node launch-client.ts --app <app bundle> --campaign <directory> --name <name> [--mirror <URL template>]');
 }
 
 const app = resolve(values.app);
@@ -30,7 +34,7 @@ const runDir = mkdtempSync('/tmp/fssh24-' + values.name + '-');
 for (const folder of ['user-data/User', 'extensions', 'shared-data', 'facade-home', 'local-fixture']) {
 	mkdirSync(join(runDir, folder), { recursive: true, mode: 0o700 });
 }
-const settings = {
+const settings: Record<string, unknown> = {
 	'window.title': 'Remote SSH 24h - ${rootName} - ${remoteName} - ${activeEditorShort}',
 	'files.simpleDialog.enable': true,
 	'telemetry.telemetryLevel': 'off',
@@ -51,13 +55,15 @@ writeFileSync(join(runDir, 'user-data/User/settings.json'), JSON.stringify(setti
 writeFileSync(join(runDir, 'local-fixture/sentinel.txt'), 'Local client fixture; remote assertions must name their actual host.\n');
 
 const listener = net.createServer();
-await new Promise((resolve, reject) => {
+await new Promise<void>((resolve, reject) => {
 	listener.once('error', reject);
 	listener.listen(0, '127.0.0.1', resolve);
 });
-const port = listener.address().port;
-await new Promise((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-const env = { ...process.env, FACADE_HOME: join(runDir, 'facade-home') };
+const address = listener.address();
+if (!address || typeof address === 'string') { throw new Error('Actual debug TCP listener has no address.'); }
+const port = address.port;
+await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+const env: NodeJS.ProcessEnv = { ...process.env, FACADE_HOME: join(runDir, 'facade-home') };
 for (const key of ['ELECTRON_RUN_AS_NODE', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'VSCODE_DEV']) {
 	delete env[key];
 }

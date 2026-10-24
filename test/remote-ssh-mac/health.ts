@@ -1,37 +1,49 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License. See License.txt in the project root for license information.
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 // Continuous real HTTP, SSH, Facade MCP and workbench observations. No UI input is sent.
-import { chromium } from 'playwright';
+import { chromium, type Browser } from 'playwright';
 import { execFile } from 'node:child_process';
 import { promisify, parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import type { ICampaignTargets, IHostProbe, ILaunchInfo, IRemoteAgent, IRemoteTarget, IScenarioResults } from './types.ts';
 
 const run = promisify(execFile);
-const { values } = parseArgs({ options: { campaign: { type: 'string' }, until: { type: 'string' } } });
+const { values } = parseArgs({ options: { campaign: { type: 'string' }, until: { type: 'string' }, resume: { type: 'boolean', default: false } } });
 const until = Date.parse(values.until || '');
-if (!values.campaign || !Number.isFinite(until)) { throw new Error('Usage: health.mjs --campaign <dir> --until <UTC timestamp>'); }
+if (!values.campaign || !Number.isFinite(until)) { throw new Error('Usage: health.ts --campaign <dir> --until <UTC timestamp>'); }
 const campaign = resolve(values.campaign);
 const root = resolve(import.meta.dirname, '../..');
 const evidence = join(campaign, 'soak');
 mkdirSync(evidence, { recursive: true, mode: 0o700 });
-const browsers = new Map();
-const streaks = new Map();
-const totals = { cycles: 0, pass: 0, transient: 0, fail: 0 };
+const browsers = new Map<number, Browser>();
+const streaks = new Map<string, number>();
+let totals = { cycles: 0, pass: 0, transient: 0, fail: 0 };
 let lastAlert = 0;
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const json = path => JSON.parse(readFileSync(path, 'utf8'));
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const json = (path: string) => JSON.parse(readFileSync(path, 'utf8'));
+if (values.resume) {
+	const previous: { at: string; totals: typeof totals; results: { target: string; streak: number }[] } = json(join(evidence, 'latest.json'));
+	totals = { ...previous.totals };
+	for (const result of previous.results) { streaks.set(result.target, result.streak); }
+	appendFileSync(join(evidence, 'collector-events.jsonl'), JSON.stringify({
+		event: 'collector-resumed', at: new Date().toISOString(),
+		pid: process.pid, previousSampleAt: previous.at, retainedTotals: totals
+	}) + '\n', { mode: 0o600 });
+}
 const notify = async () => {
 	const config = json(join(campaign, 'notification.json'));
 	if (!config.enabled) { return; }
-	await run(process.execPath, [join(root, 'test/remote-ssh-mac/live-mcp.mjs'), '--client', join(campaign, 'mcpClient.cjs'),
+	await run(process.execPath, [join(root, 'test/remote-ssh-mac/live-mcp.ts'), '--client', join(campaign, 'mcpClient.cjs'),
 		'--shim', config.shim, '--record', config.record,
 		'--tool', 'send_message', '--args-file', config.argsFile, '--timeout-ms', '15000'
 	], { timeout: 20000, maxBuffer: 1024 * 1024 });
 };
-const observe = async (target, cycle) => {
-	const observations = {};
+const observe = async (target: IRemoteTarget, cycle: number) => {
+	const observations: Record<string, unknown> = {};
 	const failures = [];
 	for (const endpoint of target.http) {
 		try {
@@ -45,10 +57,10 @@ const observe = async (target, cycle) => {
 		} catch (error) { failures.push(endpoint.name + ': ' + error); }
 	}
 	try {
-		const result = await run(process.execPath, [join(root, 'test/remote-ssh-mac/control.mjs'), '--campaign', campaign,
+		const result = await run(process.execPath, [join(root, 'test/remote-ssh-mac/control.ts'), '--campaign', campaign,
 			'--target', target.target, '--record', target.record, '--commit', target.commit, '--tool', 'list_agents',
 			'--label', `soak-${target.target}-${cycle}`], { timeout: 25000, maxBuffer: 8 * 1024 * 1024 });
-		const agents = JSON.parse(result.stdout).data.agents;
+		const agents: IRemoteAgent[] = JSON.parse(result.stdout).data.agents;
 		observations.agents = agents;
 		for (const id of target.agents) {
 			const agent = agents.find(agent => agent.id === id);
@@ -57,14 +69,15 @@ const observe = async (target, cycle) => {
 	} catch (error) { failures.push('Actual MCP: ' + String(error).slice(0, 600)); }
 	if (target.probe) {
 		try {
-			const result = await run(process.execPath, [join(root, 'test/remote-ssh-mac/remote.mjs'), '--campaign', campaign,
+			const result = await run(process.execPath, [join(root, 'test/remote-ssh-mac/remote.ts'), '--campaign', campaign,
 				'--target', target.target, '--script', target.probe], { timeout: 20000, maxBuffer: 1024 * 1024 });
-			observations.independentHostProbe = JSON.parse(result.stdout.replace(/^\uFEFF/, ''));
-			if (observations.independentHostProbe.ok !== true) { failures.push('Independent host process/heartbeat check failed'); }
+			const host: IHostProbe = JSON.parse(result.stdout.replace(/^\uFEFF/, ''));
+			observations.independentHostProbe = host;
+			if (host.ok !== true) { failures.push('Independent host process/heartbeat check failed'); }
 		} catch (error) { failures.push('Independent SSH observation: ' + String(error).slice(0, 600)); }
 	}
 	try {
-		const launch = json(target.client);
+		const launch: ILaunchInfo = json(target.client);
 		let browser = browsers.get(launch.cdpPort);
 		if (!browser?.isConnected()) { browser = await chromium.connectOverCDP('http://127.0.0.1:' + launch.cdpPort, { timeout: 5000 }); browsers.set(launch.cdpPort, browser); }
 		const page = browser.contexts().flatMap(context => context.pages()).find(page => page.url().includes('workbench.html'));
@@ -78,15 +91,18 @@ const observe = async (target, cycle) => {
 };
 while (Date.now() < until) {
 	const started = Date.now();
-	let config;
+	let config: ICampaignTargets;
 	try { config = json(join(campaign, 'soak-targets.json')); } catch { await sleep(1000); continue; }
 	if (!config.ready) { await sleep(1000); continue; }
 	const results = await Promise.all(config.targets.map(target => observe(target, totals.cycles)));
 	totals.cycles++;
-	for (const result of results) { totals[result.status.toLowerCase()]++; appendFileSync(join(evidence, 'events.jsonl'), JSON.stringify(result) + '\n', { mode: 0o600 }); }
+	for (const result of results) { totals[result.status.toLowerCase() as 'pass' | 'transient' | 'fail']++; appendFileSync(join(evidence, 'events.jsonl'), JSON.stringify(result) + '\n', { mode: 0o600 }); }
 	const snapshot = { at: new Date().toISOString(), collectionState: 'RUNNING', until: values.until, totals, results };
-	writeFileSync(join(evidence, 'latest.json'), JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600 });
-	const campaignResults = json(join(campaign, 'results.json'));
+	const snapshotPath = join(evidence, 'latest.json');
+	const temporarySnapshot = snapshotPath + '.new-' + process.pid;
+	writeFileSync(temporarySnapshot, JSON.stringify(snapshot, null, 2) + '\n', { mode: 0o600 });
+	renameSync(temporarySnapshot, snapshotPath);
+	const campaignResults: IScenarioResults = json(join(campaign, 'results.json'));
 	const report = '# Remote SSH overnight observations\n\nUpdated: ' + snapshot.at + '. Collection is **RUNNING**. Full acceptance gate is **NOT COMPLETE**.\n\n' +
 		`Continuous checks: ${totals.cycles} cycles; ${totals.pass} passing target observations, ${totals.transient} transient and ${totals.fail} persistent failures. These counts are observations, not distinct acceptance cases.\n\n` +
 		results.map(result => `- ${result.target}: **${result.status}** (${result.commit.slice(0, 8)})${result.failures.length ? ' — ' + result.failures.join('; ') : ''}`).join('\n') + '\n\n' +
@@ -101,5 +117,5 @@ while (Date.now() < until) {
 	await sleep(Math.max(1, Math.min(60000 - (Date.now() - started), until - Date.now())));
 }
 writeFileSync(join(evidence, 'finished.json'), JSON.stringify({ finishedAt: new Date().toISOString(), totals, fullAcceptanceGate: 'See scenario results; completion of sampling is not release approval.' }, null, 2) + '\n');
-await notify().catch(() => {});
+await notify().catch(() => { });
 process.exit(0);

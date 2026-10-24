@@ -39,3 +39,9 @@ Packaged `576ddeea` created a real Windows worktree, an actual Node terminal pro
 Agent 50's first real `type_text` reported pasted text and Enter, but its terminal remained at the unsubmitted task. An independent file check found no output. One explicit Enter after inspecting that screen submitted it and the real model task completed. This timing observation needs repetition; a later successful MCP initial-task journey does not clear it.
 
 Upstream menu items deliberately enable mouse-up activation after 100 ms. The UI driver must allow that guard or use actual keyboard activation. Windows can replace a terminal's accessible name with an environment notice; identify its selected editor tab before using its textbox. Selecting an already selected Explorer activity tab can hide the sidebar. These are driver constraints, not acceptance passes or proof that an underlying operation failed. Settings inputs save after a debounce; independently confirm the actual remote file before closing the modal when a case requires persistence.
+
+Opening a terminal in an untrusted folder can expose its textbox before the trust prompt appears. In the real ProxyJump Windows run, input sent at that point did not execute before trust. After Trust Folder & Continue, the queued command executed in the newly started PowerShell process; it was not resent. Check the real dialog and filesystem before classifying a missing result or sending input again.
+
+## Repository checks
+
+The real runners use native Node 24 TypeScript and a strict standalone type check. The changed files pass ESLint and staged hygiene; the required layer and CSS checks pass. Full-repository hygiene still reports formatting in `extensions/facade-agents/src/core/mail.ts` and `src/vs/workbench/contrib/facadeCommands/test/browser/facadeCommands.test.ts`. Both files are unchanged from the pulled `0a951f4a` baseline. This is a separate validation limit, not evidence that the full check passed.

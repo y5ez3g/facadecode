@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License. See License.txt in the project root for license information.
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -17,8 +19,8 @@ const { values } = parseArgs({
 	}
 });
 
-if (!values.campaign || !values.script || !['linux', 'windows'].includes(values.target)) {
-	throw new Error('Usage: node remote.mjs --campaign <directory> --target linux|windows --script <file> [--timeout-ms <milliseconds>]');
+if (!values.campaign || !values.script || !values.target || !['linux', 'windows'].includes(values.target)) {
+	throw new Error('Usage: node remote.ts --campaign <directory> --target linux|windows --script <file> [--timeout-ms <milliseconds>]');
 }
 
 const timeout = Number(values['timeout-ms']);
@@ -38,7 +40,7 @@ const args = [
 ];
 
 if (values.target === 'windows') {
-	const encoded = Buffer.from("$ProgressPreference='SilentlyContinue'\n" + script, 'utf16le').toString('base64');
+	const encoded = Buffer.from(`$ProgressPreference='SilentlyContinue'\n[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)\n$OutputEncoding=[Console]::OutputEncoding\n` + script, 'utf16le').toString('base64');
 	const command = 'powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ' + encoded;
 	if (command.length > 7500) {
 		throw new Error('Control script exceeds the Windows command limit. Upload it as a test file and invoke that file explicitly.');
@@ -62,7 +64,7 @@ child.on('error', error => {
 });
 
 child.stdin.on('error', error => {
-	if (error.code !== 'EPIPE') {
+	if ((error as NodeJS.ErrnoException).code !== 'EPIPE') {
 		console.error(error.message);
 	}
 });

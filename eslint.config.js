@@ -2307,6 +2307,14 @@ export default defineConfig(
 			'local/code-import-patterns': [
 				'warn',
 				{
+					'target': 'test/remote-ssh-mac/**',
+					'restrictions': [
+						'test/remote-ssh-mac/**',
+						'playwright',
+						'node:*'
+					]
+				},
+				{
 					'target': 'test/smoke/**',
 					'restrictions': [
 						'test/automation',

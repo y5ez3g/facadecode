@@ -1,22 +1,26 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License. See License.txt in the project root for license information.
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-const { values } = parseArgs({ options: {
-	client: { type: 'string' },
-	shim: { type: 'string' },
-	record: { type: 'string' },
-	tool: { type: 'string' },
-	'args-file': { type: 'string' },
-	output: { type: 'string' },
-	'timeout-ms': { type: 'string', default: '180000' }
-} });
+const { values } = parseArgs({
+	options: {
+		client: { type: 'string' },
+		shim: { type: 'string' },
+		record: { type: 'string' },
+		tool: { type: 'string' },
+		'args-file': { type: 'string' },
+		output: { type: 'string' },
+		'timeout-ms': { type: 'string', default: '180000' }
+	}
+});
 if (!values.client || !values.shim || !values.record) {
-	throw new Error('Usage: node live-mcp.mjs --client <compiled real stdio client> --shim <installed product shim> --record <record> [--tool <tool> --args-file <JSON file>] [--output <JSON file>]');
+	throw new Error('Usage: node live-mcp.ts --client <compiled real stdio client> --shim <installed product shim> --record <record> [--tool <tool> --args-file <JSON file>] [--output <JSON file>]');
 }
 const timeout = Number(values['timeout-ms']);
 if (!Number.isSafeInteger(timeout) || timeout <= 0) {
