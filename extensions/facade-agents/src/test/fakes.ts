@@ -525,6 +525,8 @@ export class FakeGit implements Git {
 		return { folder, copyFailures: this.copyFailures, ...(this.hookFailure ? { hookFailure: this.hookFailure } : {}) };
 	}
 
+	cancelPendingWorktreeCreate(_run: number): void { }
+
 	async setupOutcome(folder: string): Promise<SetupOutcome> {
 		this.steps.push(`set up ${folder}`);
 		return await this.setup;
@@ -843,6 +845,8 @@ export interface WorldOptions {
 	readonly gitDir?: string;
 	/** The record of what Facade put into folders: the world's own unless set, for windows that share one. */
 	readonly injected?: string;
+	/** The machine's repository locks, shared by separate workspaces when a test needs them. */
+	readonly repositoryLocks?: string;
 	/** How long a new agent may take to come up, where not two minutes. */
 	readonly startTimeoutMs?: number;
 	/** The environment the agents' terminals start with, by their folder: none of the person's home folders. */
@@ -960,6 +964,7 @@ export function fakeWorld(dir: string, options: WorldOptions = {}) {
 		timing: () => timing,
 		log: message => logs.push(message),
 		injected: options.injected ?? path.join(dir, 'injected.json'),
+		...(options.repositoryLocks ? { repositoryLocks: options.repositoryLocks } : {}),
 		isRunning: isFakeProcessRunning,
 		workingFolders: async roots => new Map(roots.map(root => [root, processFolders.get(root) ?? []])),
 		processStartedAt: pid => processStarts.get(pid),

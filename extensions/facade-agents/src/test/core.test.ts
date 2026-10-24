@@ -3731,6 +3731,36 @@ suite('Core: a start in a new worktree, phase by phase (AGENT-ORCHESTRATION.md, 
 		});
 	});
 
+	test('stopping an unclaimed create releases the repository lock for another workspace', async () => {
+		const locks = path.join(temp.dir, 'repository-locks');
+		world.dispose();
+		world = fakeWorld(path.join(temp.dir, 'workspace'), { repositories: { [lab]: [] }, repositoryLocks: locks, startTimeoutMs: 500 });
+		const other = fakeWorld(path.join(temp.dir, 'other-workspace'), { repositories: { [lab]: [] }, repositoryLocks: locks, startTimeoutMs: 500 });
+		try {
+			await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });
+			await other.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'other', folder: lab });
+			const lead = callerOf(world.agent(1));
+			const otherLead = callerOf(other.agent(1));
+			const unclaimed = new DeferredPromise<Awaited<ReturnType<typeof world.git.makeWorktree>>>();
+			let requested = false;
+			world.git.makeWorktree = async () => { requested = true; return unclaimed.p; };
+			world.git.cancelPendingWorktreeCreate = () => unclaimed.complete(undefined);
+			const first = outcomeOf(world.facade.startAgent(lead, { cli: 'arg', name: 'stalled', newWorktree: true }));
+			await until(() => requested);
+			assert.strictEqual(requested, true);
+			await world.facade.stopAgent(lead, '#a2');
+			const stopped = await first;
+			const second = await other.startUp(otherLead, { cli: 'arg', name: 'healthy', newWorktree: true });
+
+			assert.deepStrictEqual({ stopped, second: second.status, steps: other.git.steps[0] }, {
+				stopped: 'FAILED: Arg Code did not start as @stalled #a2: it was stopped with stop_agent',
+				second: 'started', steps: `make healthy from aaaaaaa in ${lab}`
+			});
+		} finally {
+			other.dispose();
+		}
+	});
+
 	test('a start in its worktree\'s setup during an outage answers unconfirmed at its timeout, not at about twice it: where the setup is, is waited for a moment past it, and left out where it does not come (O3)', async () => {
 		world.timing.startTimeoutMs = 5_000;
 		await world.startUp(PERSON, { cli: 'arg', task: 'Lead.', name: 'lead', folder: lab });

@@ -240,9 +240,10 @@ export class Contract {
 		if (!this.facade.frameworkOn()) {
 			throw new FacadeError('UNAVAILABLE', 'The agent framework is turned off in this workspace (framework_disabled).');
 		}
-		await this.facade.refreshClis();
 		switch (tool) {
 			case WINDOW_REQUESTS.rows: {
+				// Rows advertise this workspace's CLIs, but an unreachable window must not hold the machine's listing.
+				await withDeadline(this.facade.refreshClis(), CLI_LOOK_WAIT_MS, () => undefined);
 				const caller = callerOf();
 				const listed = this.facade.listAgents(caller, true);
 				const now = Date.now();

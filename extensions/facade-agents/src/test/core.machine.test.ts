@@ -263,6 +263,27 @@ suite('Core: the workspaces of the machine', () => {
 		});
 	});
 
+	test('a workspace answers cross-window messages while its CLI look is stuck; rows wait only two seconds (REMOTE.md R2; O8)', async () => {
+		const a = open('alpha');
+		const b = open('beta');
+		const lead = await root(a, 'lead');
+		let release = () => { };
+		b.world.refreshes.waiting = new Promise(resolve => release = resolve);
+		const caller = a.world.facade.identityOf(lead);
+		const ask = (request: string) => b.contract.windowCall(request, { caller, ids: [] }, () => undefined, () => undefined, workbenchOf(b));
+		const start = Date.now();
+		const messages = await settled(ask(WINDOW_REQUESTS.messages));
+		const messageMs = Date.now() - start;
+		const rows = await settled(ask(WINDOW_REQUESTS.rows));
+		const rowsMs = Date.now() - start - messageMs;
+		const looks = b.world.refreshes.count;
+		release();
+
+		assert.deepStrictEqual({ messages: !!messages, prompt: messageMs <= 10, rows: !!rows, rowsMs, looks }, {
+			messages: true, prompt: true, rows: true, rowsMs: 2000, looks: 1
+		});
+	});
+
 	test('list_agents lists the caller\'s own workspace, named once, without all; with all every workspace, a row of another naming it; YOLO off sees its tree in every workspace; a silent workspace is named (O6; OR-31, OR-40)', async () => {
 		const a = open('alpha');
 		const b = open('beta');

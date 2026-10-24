@@ -315,6 +315,8 @@ export interface Git {
 	 * nothing was made (REMOTE.md R7). Rejects with why it could not be made.
 	 */
 	makeWorktree(main: string, branch: string, startPoint: string, run: number): Promise<MadeWorktreeFolder | undefined>;
+	/** Ends an unclaimed worktree request for a stopped run; a claimed request may already be changing Git. */
+	cancelPendingWorktreeCreate(run: number): void;
 	/** How the setup of the worktree `folder`, which `makeWorktree` made, came out, once it has. */
 	setupOutcome(folder: string): Promise<SetupOutcome>;
 	/**

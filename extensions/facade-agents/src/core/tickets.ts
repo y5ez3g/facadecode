@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as crypto from 'crypto';
+import { DeferredPromise } from '../base/async';
 import { FacadeError } from './errors';
 import { InputEffect } from './ports';
 
@@ -50,9 +51,36 @@ export class TicketRegistry implements TicketTimers {
 	private readonly boot = crypto.randomBytes(8).toString('hex');
 	private counter = 0;
 	private readonly tickets = new Map<string, { readonly op: TicketOp; readonly run: number; phase: 'wanted' | 'granted' }>();
+	private readonly pendingCreates = new Map<number, { readonly ticket: string; readonly cancel: () => void }>();
 
 	/** `runs` says whether a run is live: the agent table, as the host reads it. */
 	constructor(private readonly runs: (id: number) => RunLiveness) { }
+
+	/** A worktree request waits without a deadline, but a stop settles it if the window has not claimed it. */
+	async runUnclaimedCreate<T>(run: number, call: (ticket: string) => Promise<T>): Promise<T | undefined> {
+		// The run may have stopped while another workspace held the repository lock.
+		if (this.runs(run) !== 'live') {
+			return undefined;
+		}
+		const ticket = this.issue('create', run);
+		const stopped = new DeferredPromise<undefined>();
+		this.pendingCreates.set(run, { ticket, cancel: () => stopped.complete(undefined) });
+		try {
+			return await Promise.race([call(ticket), stopped.p]);
+		} finally {
+			this.pendingCreates.delete(run);
+			this.answered(ticket);
+		}
+	}
+
+	/** Retires an unclaimed worktree request so its repository lock can be released; claimed Git work must finish. */
+	cancelUnclaimedCreate(run: number): void {
+		const pending = this.pendingCreates.get(run);
+		if (pending && !this.granted(pending.ticket)) {
+			this.answered(pending.ticket);
+			pending.cancel();
+		}
+	}
 
 	/** A ticket for `op` on the run `id`, wanted from now on. */
 	issue(op: TicketOp, run: number): string {

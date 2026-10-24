@@ -77,6 +77,48 @@ suite('Tickets: what the window may still do for the extension host', () => {
 		}, { stoppedCreate: false, stoppingType: false, goneKeys: false, stopStopping: true, stopGone: true, liveCreate: true });
 	});
 
+	test('stopping an unclaimed worktree create settles its wait and refuses a late window claim', async () => {
+		let state: RunLiveness = 'live';
+		const tickets = registry(() => state);
+		const window = new DeferredPromise<string>();
+		let ticket = '';
+		const creating = tickets.runUnclaimedCreate(1, issued => { ticket = issued; return window.p; });
+		state = 'stopping';
+		tickets.cancelUnclaimedCreate(1);
+		const result = await creating;
+		window.complete('made too late');
+
+		assert.deepStrictEqual({ result, lateClaim: tickets.claim(ticket), stillPending: tickets.answered(ticket) }, {
+			result: undefined, lateClaim: false, stillPending: false
+		});
+	});
+
+	test('stopping after the window claimed a worktree create waits for its Git result', async () => {
+		let state: RunLiveness = 'live';
+		const tickets = registry(() => state);
+		const window = new DeferredPromise<string>();
+		let ticket = '';
+		let answered = false;
+		const creating = tickets.runUnclaimedCreate(1, issued => { ticket = issued; return window.p; });
+		void creating.then(() => answered = true);
+		assert.strictEqual(tickets.claim(ticket), true);
+		state = 'stopping';
+		tickets.cancelUnclaimedCreate(1);
+		await Promise.resolve();
+		const before = answered;
+		window.complete('made');
+		const result = await creating;
+
+		assert.deepStrictEqual({ before, result, lateClaim: tickets.claim(ticket) }, { before: false, result: 'made', lateClaim: false });
+	});
+
+	test('a run stopped while waiting for the repository lock sends no worktree request', async () => {
+		const tickets = registry(() => 'stopping');
+		let called = false;
+		const result = await tickets.runUnclaimedCreate(1, async () => { called = true; return 'made'; });
+		assert.deepStrictEqual({ result, called }, { result: undefined, called: false });
+	});
+
 	test('read stays harmless: its claim is granted for any run, live or gone; unknown, or answered before, it is refused like any other (RM-28)', () => {
 		const tickets = registry(() => 'gone');
 		const read = tickets.issue('read', 1);

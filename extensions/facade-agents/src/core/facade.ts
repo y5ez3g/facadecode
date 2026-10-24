@@ -2160,6 +2160,9 @@ export class Facade implements Disposable {
 				this.stoppedWhileAnswered.add(agent.id);
 			}
 			this.table.stopping(agent.id, why, stopBy);
+			if (current.phase === 'creating_worktree') {
+				this.ports.git.cancelPendingWorktreeCreate(agent.id);
+			}
 			this.launcher.ended(agent.id, `it was stopped ${why}`);
 			// A start in its worktree's setup: the setup terminal is the start's, and goes with it (O4)
 			if (current.phase === 'running_setup') {

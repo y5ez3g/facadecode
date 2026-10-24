@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { canonicalFolder, isInsideFolder } from '../base/files';
 import { Git, ListedWorktree, MadeWorktreeFolder, OwnedFile, Repository, SetupOutcome, SetupProgress, WorktreeChanges, WorktreeDeleted, WorktreeDeletion } from '../core/ports';
-import { runUntimedTicketedCall, TicketRegistry } from '../core/tickets';
+import { TicketRegistry } from '../core/tickets';
 import { worktreesRoot } from '../record/paths';
 import { changedFilesIn, excludeIn, fileAtIn, hasBranchIn, leftoverWorkIn, repositoryIn, submodulesIn, trackedIn, untrackedIn, whyNotBranchNameIn, worktreeRootIn, worktreesIn } from './gitCli';
 
@@ -74,13 +74,17 @@ export class HostGit implements Git {
 	}
 
 	async makeWorktree(main: string, branch: string, startPoint: string, run: number): Promise<MadeWorktreeFolder | undefined> {
-		const made = await runUntimedTicketedCall(this.tickets, 'create', run, async ticket =>
-			vscode.commands.executeCommand<{ readonly worktree: vscode.Uri; readonly copyFailures: readonly string[]; readonly hookFailure?: string; readonly refused?: true }>('_facade.worktree.create', vscode.Uri.file(main), branch, startPoint, false, ticket));
+		const made = await this.tickets.runUnclaimedCreate(run, async ticket =>
+			await vscode.commands.executeCommand<{ readonly worktree: vscode.Uri; readonly copyFailures: readonly string[]; readonly hookFailure?: string; readonly refused?: true }>('_facade.worktree.create', vscode.Uri.file(main), branch, startPoint, false, ticket));
 		// Refused: the run was stopped while its worktree waited for the window - nothing was made (REMOTE.md R7)
-		if (made.refused) {
+		if (!made || made.refused) {
 			return undefined;
 		}
 		return { folder: made.worktree.fsPath, copyFailures: made.copyFailures, ...(made.hookFailure ? { hookFailure: made.hookFailure } : {}) };
+	}
+
+	cancelPendingWorktreeCreate(run: number): void {
+		this.tickets.cancelUnclaimedCreate(run);
 	}
 
 	async setupOutcome(folder: string): Promise<SetupOutcome> {
