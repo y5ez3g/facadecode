@@ -252,6 +252,9 @@ builds (IDENTITY.md I9). The WSL extension is open-remote-wsl
     missing token or log, and a server that never listens also report failure.
     Its empty PowerShell initializers use explicit empty strings so that a
     missing listening port cannot be mistaken for a successful startup.
+    Setup waits up to thirty seconds for the real server to listen, rather than
+    three: a cold or busy host can take longer, and giving up closes its SSH
+    setup and ends the server while it is still starting.
   - The Unix setup's failed directory change exits without a result, and its
     failed archive checks and directory creation exit only a subshell before
     the main setup can continue. Packaging makes those failures end the main

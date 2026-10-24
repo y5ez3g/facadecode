@@ -50,8 +50,7 @@ export class StdioMcpClient {
 	}
 
 	/** Starts `shim.js mcp` with the given arguments, as an agent's MCP configuration would: run as Node by this process's executable. */
-	static start(args: readonly string[], env: NodeJS.ProcessEnv = {}): StdioMcpClient {
-		const shim = path.join(__dirname, '..', 'transport', 'shim.js');
+	static start(args: readonly string[], env: NodeJS.ProcessEnv = {}, shim = path.join(__dirname, '..', 'transport', 'shim.js')): StdioMcpClient {
 		const child = spawn(process.execPath, [shim, 'mcp', ...args], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...env } });
 		return new StdioMcpClient(child);
 	}

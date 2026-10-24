@@ -180,6 +180,9 @@ export const extensionPatches: { readonly [name: string]: readonly IExtensionPat
 		// failures never advertise a bogus token, and a server with no listening port cannot look successful.
 		{ version: '0.5.0', file: 'src/scripts/server-setup.ps1', find: '$SERVER_ARCH=\n$SERVER_CONNECTION_TOKEN=\n$SERVER_DOWNLOAD_URL=', replace: '$SERVER_ARCH=""\n$SERVER_CONNECTION_TOKEN=""\n$SERVER_DOWNLOAD_URL=' },
 		{ version: '0.5.0', file: 'src/scripts/server-setup.ps1', find: '$LISTENING_ON=\n$OS_RELEASE_ID=\n$ARCH=\n$PLATFORM=', replace: '$LISTENING_ON=""\n$OS_RELEASE_ID=""\n$ARCH=""\n$PLATFORM=' },
+		// The original three-second startup window can expire before a real Windows server is ready. Closing its
+		// SSH setup then ends the server too. Keep polling for thirty seconds, including cold or busy hosts.
+		{ version: '0.5.0', file: 'src/scripts/server-setup.ps1', find: 'for($I = 1; $I -le 5; $I++) {', replace: 'for($I = 1; $I -le 60; $I++) {' },
 		{ version: '0.5.0', file: 'src/scripts/server-setup.ps1', find: 'function printInstallResults($code) {', replace: 'function printInstallResults($code) {\n  $script:INSTALL_RESULT_PRINTED=$true\n  if($script:LOCK_STREAM) { $script:LOCK_STREAM.Close(); $script:LOCK_STREAM=$null }' },
 		{ version: '0.5.0', file: 'src/scripts/server-setup.ps1', find: '# Test the commit of the installed server against the expected one', replace: 'trap {\n  if(!$script:INSTALL_RESULT_PRINTED) {\n    "Error while setting up server: $($_.ToString())"\n    printInstallResults 1\n  }\n  exit 1\n}\n\n# Test the commit of the installed server against the expected one' },
 		{ version: '0.5.0', file: 'src/scripts/server-setup.ps1', find: '    "Error creating server install directory - $($_.ToString())"\n    exit 1', replace: '    "Error creating server install directory - $($_.ToString())"\n    printInstallResults 1\n    exit 1' },
