@@ -28,7 +28,7 @@ jobs:
       OUT: ${{ github.workspace }}/out
     steps:
       - name: Check out the source icon
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           sparse-checkout: resources/darwin/code.icns
           sparse-checkout-cone-mode: false
