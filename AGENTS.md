@@ -18,8 +18,9 @@ and build process. Moving the repository does not authorize integrating or repla
 
 ## Working safely
 
-Follow current user instructions and preserve unrelated tracked, untracked and ignored files. Work on a feature branch;
-do not stage, commit, merge, push or release unless requested. Never use the owner's live editor windows or agents as
+Follow current user instructions and preserve unrelated tracked, untracked and ignored files. Work on a numbered
+`feature/<number>-<name>` branch as specified in `docs/ide/ENGINEERING.md`; do not stage, commit, merge, push or release
+unless requested. Never use the owner's live editor windows or agents as
 test subjects. Editor tests use separate temporary user-data and extensions directories. Test real CLIs only in isolated
 state; do not run real Qwen probes.
 

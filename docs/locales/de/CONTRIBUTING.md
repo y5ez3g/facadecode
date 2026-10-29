@@ -16,7 +16,7 @@ Sicherheitslücken werden nicht in Issues gemeldet; siehe [`SECURITY.md`](SECURI
 
 Wie dieses Repository funktioniert, steht in [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md): wie du einen Build einrichtest, mit welchen Befehlen du eine Änderung prüfst, und die folgenden Regeln in voller Länge.
 
-- Zweige von `main` als `feature/<name>` ab.
+- Zweige von `main` als `feature/<number>-<name>` ab.
 - Mergen, nie rebasen: Ein Feature landet nach dem Review mit `--no-ff` auf `main`.
 - Halte die Dateien von Facade Code beisammen und füge in den Dateien von VS Code optionale Hooks hinzu, statt ihre Logik umzuschreiben, damit das Mergen neuerer VS-Code-Versionen wenig Aufwand macht.
 - Jedes Feature hat einen Schalter; ist er aus, verhält sich alles wie im unveränderten VS Code.

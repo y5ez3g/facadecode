@@ -21,7 +21,7 @@ setting up a build, the commands that check a change, and the rules below in ful
 folder and run its development commands there. The outer `extension/` directory and `docs/extension/` are reserved
 for the standalone extension. Product documentation is shared under `docs/`.
 
-- Branch from `main` as `feature/<name>`.
+- Branch from `main` as `feature/<number>-<name>`.
 - Merge, never rebase: a feature lands on `main` with `--no-ff`, after review.
 - Keep Facade Code's files together, and in VS Code's files add optional hooks rather than
   rewriting their logic, so that merging a newer VS Code stays cheap.

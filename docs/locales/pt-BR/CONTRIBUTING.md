@@ -16,7 +16,7 @@ Vulnerabilidades de segurança não são reportadas em issues; veja o [`SECURITY
 
 O funcionamento deste repositório está descrito em [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md): como configurar uma build, os comandos que verificam uma alteração e as regras abaixo na íntegra.
 
-- Crie o branch a partir de `main`, com o nome `feature/<name>`.
+- Crie o branch a partir de `main`, com o nome `feature/<number>-<name>`.
 - Faça merge, nunca rebase: uma funcionalidade entra em `main` com `--no-ff`, depois da revisão.
 - Mantenha os arquivos do Facade Code juntos e, nos arquivos do VS Code, adicione hooks opcionais em vez de reescrever a lógica deles, para que incorporar versões mais novas do VS Code continue dando pouco trabalho.
 - Toda funcionalidade tem uma chave para ligar e desligar; desligada, o que fica é o VS Code padrão.

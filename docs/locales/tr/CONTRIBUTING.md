@@ -16,7 +16,7 @@ Güvenlik açıkları issue'larda bildirilmez; bkz. [`SECURITY.md`](SECURITY.md)
 
 Bu deponun nasıl işlediği [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) dosyasında anlatılır: derleme ortamının nasıl kurulacağı, bir değişikliği denetleyen komutlar ve aşağıdaki kuralların tamamı.
 
-- `main` dalından `feature/<name>` adıyla dal açın.
+- `main` dalından `feature/<number>-<name>` adıyla dal açın.
 - Merge edin, asla rebase etmeyin: bir özellik, incelemeden sonra `--no-ff` ile `main` dalına girer.
 - Facade Code'un dosyalarını bir arada tutun; VS Code'un dosyalarında ise mantığı yeniden yazmak yerine isteğe bağlı kancalar (hook) ekleyin. Böylece daha yeni bir VS Code sürümünü birleştirmek az çaba gerektirir.
 - Her özelliğin bir açma/kapama anahtarı vardır ve kapalıyken standart VS Code elde edilir.

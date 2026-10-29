@@ -16,7 +16,7 @@
 
 这个仓库怎么运作，写在 [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) 里：怎么搭好构建环境、用哪些命令检查改动，以及下面这些规则的完整版本。
 
-- 从 `main` 拉分支，命名为 `feature/<name>`。
+- 从 `main` 拉分支，命名为 `feature/<number>-<name>`。
 - 只合并，不 rebase：功能评审通过后，以 `--no-ff` 合并进 `main`。
 - Facade Code 自己的文件放在一起；在 VS Code 的文件里只加可选的钩子，不改写原有逻辑，这样以后合并新版 VS Code 的成本才低。
 - 每个功能都有开关，关掉就是原版 VS Code。

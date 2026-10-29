@@ -16,7 +16,7 @@ Las vulnerabilidades de seguridad no se reportan en issues; consulta [`SECURITY.
 
 Cómo funciona este repositorio está en [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md): cómo preparar una compilación, los comandos que comprueban un cambio y las reglas siguientes al completo.
 
-- Crea la rama desde `main` como `feature/<name>`.
+- Crea la rama desde `main` como `feature/<number>-<name>`.
 - Fusiona, nunca hagas rebase: una funcionalidad llega a `main` con `--no-ff`, después de la revisión.
 - Mantén juntos los archivos de Facade Code y, en los archivos de VS Code, añade hooks opcionales en lugar de reescribir su lógica, para que incorporar una versión más reciente de VS Code siga saliendo barato.
 - Cada funcionalidad tiene un interruptor; si lo desactivas, queda VS Code tal cual.

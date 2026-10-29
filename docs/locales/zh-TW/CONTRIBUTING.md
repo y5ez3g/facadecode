@@ -16,7 +16,7 @@
 
 這個儲存庫的運作方式寫在 [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) 裡：如何設定建置環境、用哪些命令檢查變更，以及下列規則的完整版本。
 
-- 從 `main` 建立分支，命名為 `feature/<name>`。
+- 從 `main` 建立分支，命名為 `feature/<number>-<name>`。
 - 只用合併，不用 rebase：功能審查通過後，以 `--no-ff` 合併進 `main`。
 - Facade Code 自己的檔案集中放在一起；在 VS Code 的檔案裡只加可選的掛鉤（hook），不改寫原本的邏輯，這樣日後合併新版 VS Code 的成本才會低。
 - 每個功能都有開關，關閉時就是原本的 VS Code。

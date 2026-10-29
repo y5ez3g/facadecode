@@ -16,7 +16,7 @@ Luk bezpieczeństwa nie zgłasza się w issues; zobacz [`SECURITY.md`](SECURITY.
 
 Jak pracujemy w tym repozytorium, opisuje [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md): jak przygotować build, jakie polecenia sprawdzają zmianę, a także pełną treść poniższych zasad.
 
-- Twórz gałąź od `main` jako `feature/<name>`.
+- Twórz gałąź od `main` jako `feature/<number>-<name>`.
 - Merge, nigdy rebase: funkcja trafia do `main` przez `--no-ff`, po przeglądzie kodu.
 - Trzymaj pliki Facade Code razem, a w plikach VS Code dodawaj opcjonalne hooki zamiast przepisywać ich logikę, żeby scalanie nowszych wersji VS Code wymagało mniej pracy.
 - Każda funkcja ma przełącznik; po jej wyłączeniu VS Code działa jak oryginał.

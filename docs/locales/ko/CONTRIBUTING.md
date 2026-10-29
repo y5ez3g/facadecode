@@ -16,7 +16,7 @@
 
 이 저장소의 작업 방식은 [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md)에 있습니다. 빌드 준비, 변경 사항을 검사하는 명령, 아래 규칙의 전체 내용이 담겨 있습니다.
 
-- `main`에서 `feature/<name>` 이름으로 브랜치를 만듭니다.
+- `main`에서 `feature/<number>-<name>` 이름으로 브랜치를 만듭니다.
 - rebase하지 않고 항상 merge합니다. 기능은 리뷰를 거쳐 `--no-ff`로 `main`에 들어갑니다.
 - Facade Code의 파일은 한곳에 모으고, VS Code의 파일에는 로직을 다시 쓰는 대신 선택적인 훅을 추가합니다. 그래야 새 VS Code를 병합하는 비용이 낮게 유지됩니다.
 - 모든 기능에는 스위치가 있고, 끄면 순정 VS Code입니다.

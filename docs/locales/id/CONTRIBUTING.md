@@ -16,7 +16,7 @@ Kerentanan keamanan tidak dilaporkan lewat issue; lihat [`SECURITY.md`](SECURITY
 
 Cara kerja repositori ini dijelaskan di [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md): menyiapkan build, perintah untuk memeriksa perubahan, dan versi lengkap aturan di bawah ini.
 
-- Buat branch dari `main` dengan nama `feature/<name>`.
+- Buat branch dari `main` dengan nama `feature/<number>-<name>`.
 - Merge, jangan pernah rebase: sebuah fitur masuk ke `main` dengan `--no-ff`, setelah direview.
 - Kumpulkan file Facade Code di satu tempat, dan di file VS Code tambahkan hook opsional alih-alih menulis ulang logikanya, agar menggabungkan versi VS Code yang lebih baru tidak memerlukan banyak usaha.
 - Setiap fitur punya sakelar, dan kalau dimatikan hasilnya VS Code standar.

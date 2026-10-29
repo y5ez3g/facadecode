@@ -61,9 +61,12 @@ CRLF; line-ending normalization must not silently change an imported vendor snap
 ## Branch discipline
 
 ```
-main              starts at the vendor root commit. Only --no-ff merges, and only after review
-feature/<name>    every change branches from main, gets reviewed, then merges
+main                       starts at the vendor root commit. Only --no-ff merges, and only after review
+feature/<number>-<name>     every change branches from main, gets reviewed, then merges
 ```
+
+Use the next unused feature number after checking local and remote branches, for example
+`feature/63-repository-layout`. The number belongs to the branch sequence, not the pull request number.
 
 ⚠️ **Merge, never rebase.** Feature branches land with `--no-ff` so the history shows
 where a feature began and ended.
@@ -139,6 +142,7 @@ start, so do not diagnose a startup failure without one.
 
 ## Change log
 
+- 2026-10-29: Made the existing numbered feature-branch convention explicit in repository guidance.
 - 2026-10-29: Moved translated documentation under `docs/locales/`, removed the duplicate IDE README, obsolete research
   notes and empty report directory, and repaired the root README's paths. Runtime translations and packaging files
   stay with the IDE.
