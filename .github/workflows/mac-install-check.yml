@@ -30,7 +30,7 @@ jobs:
       - name: Check out the source icon
         uses: actions/checkout@v5
         with:
-          sparse-checkout: resources/darwin/code.icns
+          sparse-checkout: ide/resources/darwin/code.icns
           sparse-checkout-cone-mode: false
 
       - name: Download the dmg
@@ -63,8 +63,8 @@ jobs:
             echo '== Icon files in the bundle'
             ls -la "$APP/Contents/Resources" | grep -Ei '\.(icns|car)$' || true
             echo
-            echo '== Bundle icon vs resources/darwin/code.icns'
-            cmp -s "$ICON" resources/darwin/code.icns && echo 'same file' || echo 'different files'
+            echo '== Bundle icon vs ide/resources/darwin/code.icns'
+            cmp -s "$ICON" ide/resources/darwin/code.icns && echo 'same file' || echo 'different files'
             echo
             echo '== codesign'
             codesign -dvv "$APP" 2>&1 || true
@@ -76,7 +76,7 @@ jobs:
           cat "$OUT/bundle.txt"
           { echo '```'; cat "$OUT/bundle.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           iconutil -c iconset "$ICON" -o "$OUT/icon-in-app.iconset" || sips -s format png "$ICON" --out "$OUT/icon-in-app.png"
-          iconutil -c iconset resources/darwin/code.icns -o "$OUT/icon-in-source.iconset" || sips -s format png resources/darwin/code.icns --out "$OUT/icon-in-source.png"
+          iconutil -c iconset ide/resources/darwin/code.icns -o "$OUT/icon-in-source.iconset" || sips -s format png ide/resources/darwin/code.icns --out "$OUT/icon-in-source.png"
 
       - name: Screenshot the icon as Finder draws it
         timeout-minutes: 3

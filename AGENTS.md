@@ -1,18 +1,26 @@
-# VS Code Agents Instructions
+# Facade Code
 
-This file provides instructions for AI coding agents working with the VS Code codebase.
+This repository contains the IDE and reserves space for its independently distributed extension. Product documentation
+is shared under `docs/`, separated by product.
 
-For detailed project overview, architecture, coding guidelines, and validation steps, see the [Copilot Instructions](.github/copilot-instructions.md).
+## Routing
 
-## Facade Code
+- IDE source, dependencies, build scripts and tests: `ide/`. Read [ide/AGENTS.md](ide/AGENTS.md) and
+  [docs/ide/ENGINEERING.md](docs/ide/ENGINEERING.md) before changing it.
+- Standalone extension: `extension/`, currently reserved for the owner to add the project.
+- IDE specifications: `docs/ide/`. The former `facade-code-spec/` directory has moved here.
+- Translated repository documentation: `docs/locales/`. Runtime translations remain in `ide/locales/`.
+- Extension documentation: `docs/extension/`, currently reserved.
 
-This repository is a fork. Before changing anything, read `facade-code-spec/ENGINEERING.md` for the
-branch rules and the build, then the specifications. The window: `facade-code-spec/IDENTITY.md`,
-`facade-code-spec/ACTIVITY-BAR.md`, `facade-code-spec/WORKSPACE.md` and
-`facade-code-spec/WORKTREE.md`, whose shared validation plan is `WORKSPACE.md` W19. The
-Integrated Browser: `facade-code-spec/BROWSER.md`. The window's languages:
-`facade-code-spec/LOCALIZATION.md`. Its agents:
-`facade-code-spec/AGENT-LAUNCHER.md`, `facade-code-spec/AGENT-ORCHESTRATION.md`,
-`facade-code-spec/AGENT-MESSAGES.md` and `facade-code-spec/AGENT-DEBUGGING.md`, which belong
-together, with their evidence and release gate in `AGENT-LAUNCHER.md` L14. Making a disk image is
-`facade-code-spec/RELEASE.md`.
+Run IDE development commands from `ide/`; open that folder to use its existing editor settings and development tools.
+Keep GitHub workflows and repository-wide metadata at the repository root. Each product keeps its own package manifest
+and build process. Moving the repository does not authorize integrating or replacing the old built-in agent extension.
+
+## Working safely
+
+Follow current user instructions and preserve unrelated tracked, untracked and ignored files. Work on a feature branch;
+do not stage, commit, merge, push or release unless requested. Never use the owner's live editor windows or agents as
+test subjects. Editor tests use separate temporary user-data and extensions directories. Test real CLIs only in isolated
+state; do not run real Qwen probes.
+
+Validate the affected paths, build tools and behavior. Report checks actually run and any remaining limitations.

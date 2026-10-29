@@ -34,7 +34,7 @@ jobs:
       - name: Check out the source icon
         uses: actions/checkout@v5
         with:
-          sparse-checkout: resources/win32/code.ico
+          sparse-checkout: ide/resources/win32/code.ico
           sparse-checkout-cone-mode: false
 
       - name: Download the setup
@@ -194,7 +194,7 @@ jobs:
             try { $icon = [System.Drawing.Icon]::ExtractIcon($env:APP_EXE, 0, $size) } catch { $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:APP_EXE) }
             $icon.ToBitmap().Save("$env:OUT\icon-in-app-$size.png", [System.Drawing.Imaging.ImageFormat]::Png)
           }
-          Copy-Item resources\win32\code.ico "$env:OUT\icon-in-source.ico"
+          Copy-Item ide\resources\win32\code.ico "$env:OUT\icon-in-source.ico"
 
       - name: Screenshot the desktop and the Start menu
         timeout-minutes: 3
