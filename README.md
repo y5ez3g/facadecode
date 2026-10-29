@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="resources/linux/code.png" alt="Facade Code" width="128">
+<img src="ide/resources/linux/code.png" alt="Facade Code" width="128">
 
 # Facade Code
 
@@ -9,10 +9,10 @@
 Built on VS Code. Runs your native agent CLIs, like Claude Code, Codex, Antigravity, Muse Code, and Qwen Code.
 
 [Download](https://github.com/y5ez3g/facadecode/releases) ·
-[Specs](facade-code-spec/) ·
+[Specs](docs/ide/) ·
 [Report a Bug](https://github.com/y5ez3g/facadecode/issues)
 
-**English** · [简体中文](locales/zh-CN/README.md) · [繁體中文](locales/zh-TW/README.md) · [Português (Brasil)](locales/pt-BR/README.md) · [Español](locales/es/README.md) · [Русский](locales/ru/README.md) · [Deutsch](locales/de/README.md) · [日本語](locales/ja/README.md) · [Bahasa Indonesia](locales/id/README.md) · [Français](locales/fr/README.md) · [한국어](locales/ko/README.md) · [Türkçe](locales/tr/README.md) · [Tiếng Việt](locales/vi/README.md) · [Polski](locales/pl/README.md)
+**English** · [简体中文](docs/locales/zh-CN/README.md) · [繁體中文](docs/locales/zh-TW/README.md) · [Português (Brasil)](docs/locales/pt-BR/README.md) · [Español](docs/locales/es/README.md) · [Русский](docs/locales/ru/README.md) · [Deutsch](docs/locales/de/README.md) · [日本語](docs/locales/ja/README.md) · [Bahasa Indonesia](docs/locales/id/README.md) · [Français](docs/locales/fr/README.md) · [한국어](docs/locales/ko/README.md) · [Türkçe](docs/locales/tr/README.md) · [Tiếng Việt](docs/locales/vi/README.md) · [Polski](docs/locales/pl/README.md)
 
 </div>
 
@@ -70,16 +70,16 @@ Most agent tools create a worktree for each agent session. Facade Code works the
 
 A feature often needs more than one agent. The one that writes the code may not explain its work clearly or have a good eye for design, so other agents help with documentation, design, and review, all in the same worktree. Agents come and go; the feature stays.
 
-- **Workspace bar**: Lists every repository and feature in one column. Click one to switch the whole window (explorer, editors, terminals, and source control), restored as you left it. Projects never mix together. See [`WORKSPACE.md`](facade-code-spec/WORKSPACE.md).
-- **Worktree lifecycle**: **New Worktree** creates the branch, syncs local files in `.worktreeinclude`, and runs setup. **Delete Worktree** details what would be lost before removing. See [`WORKTREE.md`](facade-code-spec/WORKTREE.md).
+- **Workspace bar**: Lists every repository and feature in one column. Click one to switch the whole window (explorer, editors, terminals, and source control), restored as you left it. Projects never mix together. See [`WORKSPACE.md`](docs/ide/WORKSPACE.md).
+- **Worktree lifecycle**: **New Worktree** creates the branch, syncs local files in `.worktreeinclude`, and runs setup. **Delete Worktree** details what would be lost before removing. See [`WORKTREE.md`](docs/ide/WORKTREE.md).
 - **Parallel subtasks**: Independent tasks can branch into separate worktrees.
 
 ### A team from every vendor
 
 - **Native CLIs on your own plans**: Claude Code, Codex, Muse Code, Antigravity, and Qwen Code run in their own integrated terminals, using your existing subscriptions.
-- **Agents launch agents**: An agent can start other agents (using any vendor CLI or model) in the current feature or a new worktree, and assign tasks. See [`AGENT-LAUNCHER.md`](facade-code-spec/AGENT-LAUNCHER.md) and [`AGENT-ORCHESTRATION.md`](facade-code-spec/AGENT-ORCHESTRATION.md).
-- **Messaging**: Agents send messages to each other, report results back to their caller, and notify you when a decision needs human approval. See [`AGENT-MESSAGES.md`](facade-code-spec/AGENT-MESSAGES.md).
-- **Unsticking each other**: An agent can read another agent's terminal, answer prompts, and send keystrokes to help a blocked worker without interrupting you. See [`AGENT-DEBUGGING.md`](facade-code-spec/AGENT-DEBUGGING.md).
+- **Agents launch agents**: An agent can start other agents (using any vendor CLI or model) in the current feature or a new worktree, and assign tasks. See [`AGENT-LAUNCHER.md`](docs/ide/AGENT-LAUNCHER.md) and [`AGENT-ORCHESTRATION.md`](docs/ide/AGENT-ORCHESTRATION.md).
+- **Messaging**: Agents send messages to each other, report results back to their caller, and notify you when a decision needs human approval. See [`AGENT-MESSAGES.md`](docs/ide/AGENT-MESSAGES.md).
+- **Unsticking each other**: An agent can read another agent's terminal, answer prompts, and send keystrokes to help a blocked worker without interrupting you. See [`AGENT-DEBUGGING.md`](docs/ide/AGENT-DEBUGGING.md).
 - **You can intervene in every one**: Every agent has its own terminal row under its feature. You see what it is doing and can type directly into it at any time.
 - **Standard MCP**: All orchestration tools are exposed through a standard MCP server.
 
@@ -120,9 +120,9 @@ Facade Code modifies only what multi-project and agent management requires:
 
 ## Building from Source
 
-Hand [`facade-code-spec/RELEASE.md`](facade-code-spec/RELEASE.md) to your agent, and let it build.
+Hand [`docs/ide/RELEASE.md`](docs/ide/RELEASE.md) to your agent, and let it build.
 
-For contribution guidelines and branch discipline, see [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`facade-code-spec/ENGINEERING.md`](facade-code-spec/ENGINEERING.md).
+For contribution guidelines and branch discipline, see [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/ide/ENGINEERING.md`](docs/ide/ENGINEERING.md).
 
 ## Feedback
 

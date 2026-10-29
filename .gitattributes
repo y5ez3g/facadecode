@@ -1,5 +1,8 @@
 * text=auto
 
+# Preserve the upstream snapshot's original CRLF bytes in Git.
+ide/.config/1espt/PipelineAutobaseliningConfig.yml -text
+
 LICENSE.txt eol=crlf
 ThirdPartyNotices.txt eol=crlf
 

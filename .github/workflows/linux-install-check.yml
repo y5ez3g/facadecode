@@ -35,7 +35,7 @@ jobs:
       - name: Check out the source icon
         uses: actions/checkout@v5
         with:
-          sparse-checkout: resources/linux/code.png
+          sparse-checkout: ide/resources/linux/code.png
           sparse-checkout-cone-mode: false
 
       - name: Start Ubuntu's GNOME desktop
@@ -81,8 +81,8 @@ jobs:
             echo "== Icon files named $ICON_NAME"
             find /usr/share/pixmaps /usr/share/icons -name "$ICON_NAME.*" -exec ls -la {} \; 2>/dev/null
             echo
-            echo '== Package icon vs resources/linux/code.png'
-            cmp -s "/usr/share/pixmaps/$ICON_NAME.png" resources/linux/code.png && echo 'same file' || echo 'different files'
+            echo '== Package icon vs ide/resources/linux/code.png'
+            cmp -s "/usr/share/pixmaps/$ICON_NAME.png" ide/resources/linux/code.png && echo 'same file' || echo 'different files'
             echo
             echo '== chrome-sandbox'
             ls -la "$APP_DIR/chrome-sandbox"
