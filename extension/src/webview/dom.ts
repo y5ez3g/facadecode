@@ -1,0 +1,136 @@
+/*---------------------------------------------------------------------------------------------
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { Act, Card, Strings } from './protocol';
+
+declare function acquireVsCodeApi(): { postMessage(message: unknown): void; getState(): unknown; setState(state: unknown): void };
+
+/** The words the panel shows, in the window's language. */
+export const strings = (window as unknown as { readonly FACADE_STRINGS: Strings }).FACADE_STRINGS;
+
+/** Where the agents' avatars are. */
+const logos = (window as unknown as { readonly FACADE_LOGOS: string }).FACADE_LOGOS;
+
+const vscode = acquireVsCodeApi();
+
+/**
+ * This page's generation, made as it loads: the view's webview is a new page each time the view shows, and what the extension sends an
+ * earlier one, late, is not for this one (PANEL-3.1).
+ */
+export const page = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+
+/** Tells the extension something, as this page. */
+export function post(message: { readonly type: string } & Record<string, unknown>): void {
+	vscode.postMessage({ ...message, page });
+}
+
+/** Where the person was on this view's page, its scroll: kept by the webview as the view hides and shows again, never by the extension. */
+export interface Browsing {
+	readonly scrollTop: number;
+}
+
+/** The browsing position the page saved before the view was hidden, if any and well formed (PANEL-3.1); nothing else it saved. */
+export function savedBrowsing(): Browsing | undefined {
+	try {
+		const saved = vscode.getState() as { scrollTop?: unknown } | undefined;
+		if (!saved || typeof saved.scrollTop !== 'number' || !Number.isFinite(saved.scrollTop)) {
+			return undefined;
+		}
+		return { scrollTop: Math.max(0, saved.scrollTop) };
+	} catch {
+		return undefined;
+	}
+}
+
+/** Saves the browsing position, for this view's next page. */
+export function saveBrowsing(browsing: Browsing): void {
+	try {
+		vscode.setState(browsing);
+	} catch {
+		// A page without saved state starts at the top, as a first page does
+	}
+}
+
+let actions = 0;
+
+/**
+ * Has the extension do what the person did, on the card of run `target` where it is a card's (PANEL-3.1). Answers the action's ID,
+ * which the extension's outcome names: this page's generation and a count, so that no other page's action has it.
+ */
+export function act(what: Act, target?: string): string {
+	const action = `${page}-${++actions}`;
+	post({ type: 'act', action, what, ...(target !== undefined ? { target } : {}) });
+	return action;
+}
+
+/** What a field must be: a check of its value. */
+export type Check = (value: unknown) => boolean;
+
+export const isString: Check = value => typeof value === 'string';
+export const isNumber: Check = value => typeof value === 'number' && Number.isFinite(value);
+export const isBoolean: Check = value => typeof value === 'boolean';
+export const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const isStrings: Check = value => Array.isArray(value) && value.every(isString);
+
+/** Whether `value` is an object with each field of `required`, those of `optional` it has, each as its check says - and no other. */
+export function isShaped(value: unknown, required: Readonly<Record<string, Check>>, optional: Readonly<Record<string, Check>> = {}): value is Record<string, unknown> {
+	return isObject(value)
+		&& Object.entries(required).every(([key, check]) => Object.hasOwn(value, key) && check(value[key]))
+		&& Object.keys(value).every(key => Object.hasOwn(required, key) || (Object.hasOwn(optional, key) && optional[key](value[key])));
+}
+
+export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
+	const element = document.createElement(tag);
+	element.className = className;
+	if (text !== undefined) {
+		element.textContent = text;
+	}
+	return element;
+}
+
+/** A button of words, as VS Code's views have them where they have nothing to show. */
+export function button(text: string, run: () => void): HTMLButtonElement {
+	const element = el('button', 'button primary', text);
+	element.type = 'button';
+	element.addEventListener('click', event => {
+		event.stopPropagation();
+		run();
+	});
+	return element;
+}
+
+/** What a card's face is drawn of: a card drawn again with the same keeps its face node, whose image would flash loading again. */
+export function lookOf(avatar: Card['avatar']): string {
+	return avatar ? `file:${avatar.file}` : '';
+}
+
+/**
+ * A card's face (PANEL-1.3): its CLI maker's avatar, cut round; an empty circle for a CLI with none. Decorative: the card's label
+ * says everything it shows.
+ */
+export function face(avatar: Card['avatar']): HTMLElement {
+	const element = el('span', 'face');
+	element.setAttribute('aria-hidden', 'true');
+	if (avatar) {
+		const img = el('img');
+		img.src = `${logos}/${avatar.file}`;
+		img.alt = '';
+		element.append(img);
+	}
+	return element;
+}
+
+/** How long ago `time` was, as the browser says it in the window's language: now, 5 min. ago, yesterday, 3 days ago (UX-2.4). */
+export function relativeTime(time: number): string {
+	const format = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, { numeric: 'auto', style: 'short' });
+	const minutes = Math.floor((Date.now() - time) / 60_000);
+	if (minutes < 1) {
+		return format.format(0, 'second');
+	}
+	if (minutes < 60) {
+		return format.format(-minutes, 'minute');
+	}
+	const hours = Math.floor(minutes / 60);
+	return hours < 24 ? format.format(-hours, 'hour') : format.format(-Math.floor(hours / 24), 'day');
+}

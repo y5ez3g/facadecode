@@ -1,0 +1,258 @@
+{
+	"name": "facadecode",
+	"displayName": "%displayName%",
+	"description": "%description%",
+	"version": "0.0.1",
+	"private": true,
+	"publisher": "facade",
+	"engines": {
+		"vscode": "^1.105.0"
+	},
+	"categories": [
+		"AI",
+		"Other"
+	],
+	"capabilities": {
+		"virtualWorkspaces": false,
+		"untrustedWorkspaces": {
+			"supported": false
+		}
+	},
+	"extensionKind": [
+		"workspace"
+	],
+	"extensionDependencies": [
+		"facade.facadecode-window"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./dist/extension.js",
+	"scripts": {
+		"postinstall": "node scripts/postinstall.mjs",
+		"compile": "node -e \"require('fs').rmSync('build/out',{recursive:true,force:true})\" && tsc -p ./ && tsc -p ./src/webview",
+		"test": "mocha --ui tdd --timeout 30000 --require build/out/test/setup.js \"build/out/test/**/*.test.js\""
+	},
+	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "facade",
+					"title": "%view.container%",
+					"icon": "media/facade.svg"
+				}
+			]
+		},
+		"views": {
+			"facade": [
+				{
+					"type": "webview",
+					"id": "facade.agents",
+					"name": "%view.container%"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "facade.newAgent",
+				"title": "%command.newAgent%",
+				"category": "%command.category%",
+				"icon": "$(new-session)"
+			},
+			{
+				"command": "facade.showActiveAgents",
+				"title": "%command.showActiveAgents%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.renameAgent",
+				"title": "%command.renameAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.copyAgentReference",
+				"title": "%command.copyAgentReference%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.closeAgent",
+				"title": "%command.closeAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.configureAgents",
+				"title": "%command.configureAgents%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.newWorktree",
+				"title": "%command.newWorktree%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.moveUp",
+				"title": "%command.moveUp%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.moveDown",
+				"title": "%command.moveDown%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.revealAgent",
+				"title": "%command.revealAgent%",
+				"category": "%command.category%"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "facade.newAgent",
+					"when": "view == facade.agents",
+					"group": "navigation@3"
+				},
+				{
+					"command": "workbench.action.addRootFolder",
+					"when": "view == facade.agents",
+					"group": "1_locations@1"
+				},
+				{
+					"command": "facade.newWorktree",
+					"when": "view == facade.agents && workspaceFolderCount != 0",
+					"group": "1_locations@2"
+				},
+				{
+					"command": "facade.configureAgents",
+					"when": "view == facade.agents",
+					"group": "9_configure@1"
+				}
+			],
+			"webview/context": [
+				{
+					"command": "facade.renameAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
+					"group": "1_agent@1"
+				},
+				{
+					"command": "facade.copyAgentReference",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
+					"group": "1_agent@3"
+				},
+				{
+					"command": "facade.moveUp",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp",
+					"group": "2_move@1"
+				},
+				{
+					"command": "facade.moveDown",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown",
+					"group": "2_move@2"
+				},
+				{
+					"command": "facade.closeAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
+					"group": "4_close@1"
+				}
+			],
+			"commandPalette": [
+				{
+					"command": "facade.renameAgent",
+					"when": "facade.agentSelected"
+				},
+				{
+					"command": "facade.copyAgentReference",
+					"when": "facade.agentSelected"
+				},
+				{
+					"command": "facade.closeAgent",
+					"when": "facade.agentSelected"
+				},
+				{
+					"command": "facade.newWorktree",
+					"when": "false"
+				},
+				{
+					"command": "facade.moveUp",
+					"when": "false"
+				},
+				{
+					"command": "facade.moveDown",
+					"when": "false"
+				},
+				{
+					"command": "facade.revealAgent",
+					"when": "false"
+				}
+			]
+		},
+		"configuration": [
+			{
+				"id": "facade.agents",
+				"title": "%config.title%",
+				"order": 2,
+				"properties": {
+					"facade.yolo": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.yolo%"
+					}
+				}
+			},
+			{
+				"id": "facade.claude",
+				"title": "%config.claude.title%",
+				"order": 3,
+				"properties": {
+					"facade.claude.path": {
+						"type": "string",
+						"default": "",
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.claude.path%"
+					}
+				}
+			},
+			{
+				"id": "facade.codex",
+				"title": "%config.codex.title%",
+				"order": 4,
+				"properties": {
+					"facade.codex.path": {
+						"type": "string",
+						"default": "",
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.codex.path%"
+					}
+				}
+			}
+		]
+	},
+	"dependencies": {
+		"@xterm/addon-serialize": "^0.14.0",
+		"@xterm/addon-unicode11": "^0.9.0",
+		"@xterm/headless": "^6.0.0",
+		"node-pty": "^1.1.0"
+	},
+	"devDependencies": {
+		"@types/mocha": "^10.0.10",
+		"@types/node": "^22.20.5",
+		"@types/vscode": "1.105.0",
+		"@vscode/test-electron": "^3.1.0",
+		"@vscode/vsce": "4.1.0",
+		"esbuild": "^0.28.2",
+		"mocha": "^11.8.0",
+		"typescript": "^5.9.3"
+	},
+	"l10n": "./l10n",
+	"license": "MIT",
+	"icon": "media/icon.png",
+	"keywords": [
+		"agents",
+		"claude code",
+		"codex"
+	]
+}

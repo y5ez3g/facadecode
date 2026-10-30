@@ -1,0 +1,480 @@
+/*---------------------------------------------------------------------------------------------
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+ * The panel as a VS Code sidebar view: the workbench's own font, sizes, radii and colours, and the agents as a chat app lists its
+ * contacts. The title bar's actions ask in VS Code's own pickers.
+ */
+
+:root {
+	--facade-control-radius: var(--vscode-cornerRadius-small, 4px);
+	--facade-card-radius: var(--vscode-cornerRadius-small, 4px);
+	--facade-body: var(--vscode-fontSize-body1, 13px);
+	--facade-label: var(--vscode-fontSize-label1, 12px);
+	--facade-semibold: var(--vscode-fontWeight-semiBold, 600);
+	--facade-dim: var(--vscode-descriptionForeground);
+	/* What an avatar's presence dot is cut out of: the row's own background, over the side bar's where a theme's hover or selection
+	   colour is translucent, so that the ring is the colour the row shows rather than that colour over the avatar */
+	--facade-base-background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	--facade-row-background: var(--facade-base-background);
+	--facade-avatar: 28px;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-family: var(--vscode-font-family);
+	font-size: var(--facade-body);
+	user-select: none;
+}
+
+button {
+	font: inherit;
+	color: inherit;
+}
+
+[hidden] {
+	display: none !important;
+}
+
+/*
+ * The page scrolls as any page does (PANEL-3.3), its scrollbar drawn as VS Code draws those of its own parts that scroll so: 10px
+ * wide, as its lists' sliders are, in the theme's slider colours, over no track. VS Code's own webview default colours the root's
+ * scrollbar with `scrollbar-color`, with which Chromium ignores the rules below and draws a wider bar on the editor's background.
+ */
+html {
+	scrollbar-color: auto;
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--vscode-scrollbarSlider-background);
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--vscode-scrollbarSlider-hoverBackground);
+}
+
+::-webkit-scrollbar-thumb:active {
+	background: var(--vscode-scrollbarSlider-activeBackground);
+}
+
+
+/* ---- Controls, as the workbench draws them ---- */
+
+.button:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+/* The card a menu was opened on, framed while the menu is up as VS Code's lists frame it; over the dotted edge of the agent chosen,
+   in a high contrast theme. A card is never a Tab stop, so no other frame is the keyboard's (UX-2.3). */
+body.vscode-context-menu-visible #list .item.menu-target {
+	outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
+	outline-offset: -1px;
+}
+
+.button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 60px;
+	height: 26px;
+	padding: 4px 12px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: var(--facade-control-radius);
+	font-size: var(--facade-label);
+	line-height: 16px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.button:focus-visible {
+	outline-offset: 2px;
+}
+
+.button.primary {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
+
+.button.primary:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+
+/* ---- The agents ---- */
+
+/* The cards as VS Code lists rows in a view: 4px in from its sides, the first right under its title */
+#list {
+	display: flex;
+	flex-direction: column;
+	padding: 0 var(--vscode-spacing-size40, 4px);
+}
+
+/*
+ * A card whose contents are as far from each of its edges as the eye sees them: the avatar 8px in, a circle looking 9.5px in; the
+ * capitals of its first line 9px from the top, the baseline of its second 9px from the bottom; where it works 9px from the right.
+ */
+.item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 44px;
+	padding: 8px 9px 8px 8px;
+	border-radius: var(--facade-card-radius);
+	cursor: pointer;
+}
+
+.item:hover:not(.selected) {
+	background: var(--vscode-list-hoverBackground);
+	color: var(--vscode-list-hoverForeground, inherit);
+	--facade-row-background: var(--vscode-list-hoverBackground);
+}
+
+/*
+ * A card is one node under the pointer, its dot apart with a hover of its own (PANEL-1.4, 1.5). Crossing from one of a card's parts
+ * to another clears the editor's tooltip and sets the same one again, which macOS then rarely shows (electron/electron#49843). The
+ * card itself takes every click and menu, so none of its parts needs the pointer.
+ */
+.item.agent * {
+	pointer-events: none;
+}
+
+.item.agent .dot {
+	pointer-events: auto;
+}
+
+/* The agent chosen, in the list's selected colour wherever the focus is */
+#list .item.selected {
+	background: var(--vscode-list-activeSelectionBackground);
+	color: var(--vscode-list-activeSelectionForeground, inherit);
+	--facade-row-background: var(--vscode-list-activeSelectionBackground);
+}
+
+/* The avatar: its maker's app icon, 28px round, edged in the theme's border so that a dark one reads on a dark theme (PANEL-1.3). */
+.avatar {
+	position: relative;
+	flex: 0 0 auto;
+	width: var(--facade-avatar);
+	height: var(--facade-avatar);
+}
+
+.face {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	border-radius: 50%;
+	overflow: hidden;
+}
+
+.face::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	box-shadow: inset 0 0 0 1px var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+.face img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/*
+ * What is known of the agent, on its avatar's corner as a chat app's presence, cut out of the row so that it reads on any background
+ * (RULES-3.2): green and breathing for its start or its CLI working; yellow and still for its CLI not working; red and still for an
+ * error, unknown activity included - there is no fourth state.
+ */
+.dot {
+	position: absolute;
+	right: -1px;
+	bottom: -1px;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	box-shadow: 0 0 0 2px var(--facade-row-background), 0 0 0 2px var(--facade-base-background);
+}
+
+.dot.working {
+	background: var(--vscode-charts-green);
+}
+.dot.working::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	background: linear-gradient(var(--facade-row-background), var(--facade-row-background)), var(--facade-base-background);
+	opacity: 0;
+	animation: facade-breathe 1.8s ease-in-out infinite;
+}
+.dot.not-working { background: var(--vscode-charts-yellow); }
+.dot.error { background: var(--vscode-charts-red); }
+
+/* Work: the dot fades towards the row and back - by opacity alone, its cut-out ring staying as it is (PANEL-1.4) */
+@keyframes facade-breathe {
+	0%, 100% { opacity: 0; }
+	50% { opacity: 0.65; }
+}
+
+body.vscode-reduce-motion .dot.working::after {
+	animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dot.working::after {
+		animation: none;
+	}
+}
+
+/* The two lines as one block in the middle of the card, the avatar's middle: 8px from the first's baseline to the second's capitals */
+.body {
+	flex: 1 1 auto;
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.line {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+/* The name and where it works on one baseline, as a chat app sets a contact's name and the time */
+.line.top {
+	align-items: baseline;
+}
+
+.line.bottom {
+	font-size: var(--facade-label);
+}
+
+/*
+ * Each text trimmed to its capitals and its baseline, whatever the font, so that the card's spacing is measured to its letters. What
+ * a letter has above its capitals or below its baseline still shows: its ellipsis clips that much further out.
+ */
+.name,
+.place,
+.title {
+	text-box: trim-both cap alphabetic;
+	padding-block: 4px;
+	margin-block: -4px;
+}
+
+/* A line its CLI has said nothing on yet as tall as one it has */
+.title:empty::after {
+	content: '\200b';
+}
+
+.name {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/*
+ * Where it works, at the line's end where a chat app puts the time: its own width, never squeezed by the name, but at most 40% of the
+ * line and cut beyond that; the name has the rest (PANEL-1.3, D72).
+ */
+.place {
+	flex: 0 0 auto;
+	max-width: 40%;
+	min-width: 0;
+	margin-left: auto;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-size: var(--facade-label);
+	color: var(--facade-dim);
+}
+
+/*
+ * Where it works, after its workspace folder's name where the window has several: the folder's name gives way first, the location's
+ * last - each trimmed to its letters as the rest of the line is (PANEL-1.3).
+ */
+.place.within {
+	display: flex;
+	align-items: baseline;
+}
+
+.place.within > span {
+	min-width: 0;
+	overflow: hidden;
+	white-space: pre;
+	text-overflow: ellipsis;
+	text-box: trim-both cap alphabetic;
+	padding-block: 4px;
+	margin-block: -4px;
+}
+
+/* The folder's name gives way first, whole: where the place has no room for it, it and its separator go (`narrow`); then the location's, to its ellipsis */
+.place.within > .folder {
+	flex: 0 1000 auto;
+	min-width: 1.5em;
+}
+
+.place.within.narrow > .folder,
+.place.within.narrow > .bullet {
+	display: none;
+}
+
+.place.within > .bullet {
+	flex: 0 0 auto;
+}
+
+.place.within > .tree {
+	flex: 0 1 auto;
+}
+
+.title {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	color: var(--facade-dim);
+}
+
+/* Chosen, its name in the list's selected colour and the rest a little quieter in it, as VS Code's lists keep a label's description */
+.item.selected .place,
+.item.selected .title {
+	color: inherit;
+	opacity: 0.8;
+}
+
+/*
+ * A new card opens from nothing, the cards under it moving down with it, and fades in: quick, slowing to a stop, as VS Code's own
+ * menus move (UX-2.2). A card whose process ended normally fades out in 160 ms; an explicit close never waits for motion.
+ */
+.item.closing {
+	pointer-events: none;
+	animation: facade-card-close 160ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes facade-card-close {
+	to {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+}
+
+.item.opening {
+	overflow: hidden;
+	animation: facade-card-open 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes facade-card-open {
+	from {
+		min-height: 0;
+		height: 0;
+		padding-block: 0;
+		opacity: 0;
+	}
+	to {
+		min-height: 44px;
+		height: 44px;
+		opacity: 1;
+	}
+}
+
+body.vscode-reduce-motion .item.opening,
+body.vscode-reduce-motion .item.closing {
+	animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.item.opening,
+	.item.closing {
+		animation: none;
+	}
+}
+
+/* What only a screen reader is told: the state changes the live region announces (PANEL-1.5) */
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+/*
+ * Nothing to list, said as VS Code's own views say it - Source Control's in a folder with no repository: its words in the view's,
+ * then each button as wide as the view, up to 300px, 1em under what is above it.
+ */
+#empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 0 20px 1em;
+}
+
+#empty > * {
+	margin: 1em 0 0;
+}
+
+#empty > p {
+	width: 100%;
+	line-height: 1.4em;
+}
+
+#empty > .button-container {
+	width: 100%;
+	max-width: 300px;
+}
+
+#empty .button {
+	width: 100%;
+	padding: 4px 8px;
+}
+
+
+/* ---- High contrast: edges, not fills ---- */
+
+/* The agent chosen, edged in dots as VS Code's lists edge their selection: a solid frame is the menu's */
+body.vscode-high-contrast .item.selected,
+body.vscode-high-contrast-light .item.selected {
+	outline: 1px dotted var(--vscode-contrastActiveBorder);
+	outline-offset: -1px;
+}
+
+/* Not over the frame of the card a menu is open on: VS Code's lists dash no framed row */
+body.vscode-high-contrast:not(.vscode-context-menu-visible) .item:hover:not(.selected),
+body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:hover:not(.selected) {
+	outline: 1px dashed var(--vscode-contrastActiveBorder);
+	outline-offset: -1px;
+}
+
+body.vscode-high-contrast .item.selected :is(.place, .title),
+body.vscode-high-contrast-light .item.selected :is(.place, .title) {
+	opacity: 1;
+}
