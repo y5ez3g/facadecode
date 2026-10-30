@@ -1,0 +1,27 @@
+{
+	"name": "facadecode-window",
+	"displayName": "%windowDisplayName%",
+	"description": "%windowDescription%",
+	"version": "0.0.1",
+	"preview": true,
+	"private": true,
+	"publisher": "facade",
+	"repository": { "type": "git", "url": "https://github.com/y5ez3g/facadecode.git", "directory": "extension" },
+	"bugs": { "url": "https://github.com/y5ez3g/facadecode/issues" },
+	"homepage": "https://github.com/y5ez3g/facadecode/tree/main/extension#readme",
+	"engines": {
+		"vscode": "^1.105.0"
+	},
+	"categories": ["Other"],
+	"extensionKind": ["ui"],
+	"api": "none",
+	"activationEvents": ["onStartupFinished"],
+	"main": "./dist/window.js",
+	"capabilities": {
+		"virtualWorkspaces": false,
+		"untrustedWorkspaces": { "supported": false }
+	},
+	"license": "MIT",
+	"icon": "media/icon.png",
+	"l10n": "./l10n"
+}
