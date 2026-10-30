@@ -1,0 +1,33 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/** The message of an error, or the thrown value as text. */
+export function messageOf(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * A sentence as a clause, to be put in a sentence of one's own: without the full stop it ends with. Quoted
+ * whole, one read "(… did not run.)." or "… choose another name.. Show Agent Launch shows them." (N-52, N-56).
+ */
+export function clauseOf(sentence: string): string {
+	return sentence.replace(/[.。]\s*$/, '');
+}
+
+/** The code Node gives an error, such as `ENOENT`. */
+export function codeOf(err: unknown): string | undefined {
+	const code: unknown = err instanceof Error ? Reflect.get(err, 'code') : undefined;
+	return typeof code === 'string' ? code : undefined;
+}
+
+/** What a wait or a call that its caller cancelled ends with: its code is `CANCELLED`. */
+export class CancelledError extends Error {
+	readonly code = 'CANCELLED';
+
+	constructor() {
+		super('Cancelled');
+		this.name = 'CancelledError';
+	}
+}
