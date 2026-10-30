@@ -24,8 +24,8 @@ for (const [stage, native] of [['window', false], ['extension', true]]) {
 	const dir = path.join(root, 'build', stage);
 	const { name, version } = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
 	const file = path.join(out, native ? `${name}-${target}-${version}.vsix` : `${name}-${version}.vsix`);
-	// Its dependencies as the stage holds them - the native backend among them; README links left as they are, with no repository
-	execFileSync(process.execPath, [vsce, 'package', ...(native ? ['--target', target] : []), '--no-rewrite-relative-links', '--allow-missing-repository', '--out', file], { cwd: dir, stdio: 'inherit' });
+	// Its dependencies as the stage holds them - the native backend among them; README links left as they are
+	execFileSync(process.execPath, [vsce, 'package', ...(native ? ['--target', target] : []), '--no-rewrite-relative-links', '--out', file], { cwd: dir, stdio: 'inherit' });
 	const files = filesOfZip(file);
 	const identity = files.find(each => each.name === 'extension.vsixmanifest')?.bytes.toString('utf8').match(/<Identity\b[^>]*>/)?.[0] ?? '';
 	const named = identity.match(/\bTargetPlatform="([^"]*)"/)?.[1];

@@ -3,8 +3,12 @@
 	"displayName": "%windowDisplayName%",
 	"description": "%windowDescription%",
 	"version": "0.0.1",
+	"preview": true,
 	"private": true,
 	"publisher": "facade",
+	"repository": { "type": "git", "url": "https://github.com/y5ez3g/facadecode.git", "directory": "extension" },
+	"bugs": { "url": "https://github.com/y5ez3g/facadecode/issues" },
+	"homepage": "https://github.com/y5ez3g/facadecode/tree/main/extension#readme",
 	"engines": {
 		"vscode": "^1.105.0"
 	},

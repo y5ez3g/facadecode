@@ -48,7 +48,8 @@ for (const file of ['LICENSE.txt', 'ThirdPartyNotices.txt']) {
 // Repository setup links belong to the checkout. Preserve all other README content unchanged (ARCHITECTURE-4.1).
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 fs.writeFileSync(path.join(stage, 'README.md'), packageReadme(readme));
-fs.writeFileSync(path.join(windowStage, 'README.md'), packageReadme(readme));
+// The window component's own page sends people to Facade Code, which installs it
+fs.copyFileSync(path.join(root, 'window', 'README.md'), path.join(windowStage, 'README.md'));
 fs.copyFileSync(path.join(root, 'media', 'icon.png'), path.join(windowStage, 'media', 'icon.png'));
 fs.cpSync(path.join(root, 'media'), path.join(stage, 'media'), { recursive: true, filter: source => path.basename(source) !== '.DS_Store' });
 
