@@ -31,7 +31,12 @@
 	"scripts": {
 		"postinstall": "node scripts/postinstall.mjs",
 		"compile": "node -e \"require('fs').rmSync('build/out',{recursive:true,force:true})\" && tsc -p ./ && tsc -p ./src/webview",
-		"test": "mocha --ui tdd --timeout 30000 --require build/out/test/setup.js \"build/out/test/**/*.test.js\""
+		"watch": "node scripts/build.mjs --watch",
+		"bundle": "node scripts/build.mjs",
+		"test": "mocha --ui tdd --timeout 30000 --require build/out/test/setup.js \"build/out/test/**/*.test.js\"",
+		"package": "node scripts/package.mjs",
+		"test:package": "node --test scripts/package.test.mjs",
+		"test:integration": "node scripts/build-it.mjs && node ./build/out/test/integration/run.js"
 	},
 	"contributes": {
 		"viewsContainers": {
