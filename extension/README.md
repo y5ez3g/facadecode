@@ -119,6 +119,7 @@ These are machine settings: for a remote window, set them in the remote host's s
 
 - **Tested so far**: macOS (Apple silicon) with local folders, and selected Remote - SSH workflows from a macOS client to Linux (x64) and Windows (x64) hosts.
 - **Not yet verified**: Windows or Linux as the local computer, WSL, Dev Containers, other editors compatible with VS Code, the declared minimum VS Code 1.105, complete real conversations with each CLI, many agents in one window, and long-running sessions.
+- **First installation in a remote window**: VS Code installs Facade Code on the remote host first and its Window Component on your computer a moment later, so Facade Code may not start and VS Code may report that the Window Component is disabled. Reload the window once (**Developer: Reload Window**); Facade Code then starts normally. Installing **Facade Code Window Component** in a local window first avoids this.
 - **Remote - SSH reconnects**: If VS Code stops reconnecting to an SSH host and asks you to reload the window, reload it once the network is back. The agents keep running on the host, and the reloaded window shows them again.
 - **Closing a window**: Facade ends a window's agents five minutes after that window's extension host disconnects and nothing reconnects, for example after you close the window.
 
