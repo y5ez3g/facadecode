@@ -152,6 +152,16 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	test('a terminal title longer than any tab shows is kept and told cut, so that no message of the run outgrows a frame (ARCHITECTURE-2.4)', async () => {
+		const client = await connect();
+		const events = eventsOf(client, 'titled');
+		await spawn(client, 'titled', 'printf "\\033]0;%s\\007ready" "$(head -c 20000 /dev/zero | tr "\\0" x)"; sleep 30');
+		const told = await until('its title', () => events.find(event => event.event === 'title') as { title: string } | undefined);
+		const listed = (await client.request('list', { owner: 'w1' })).find(run => run.run === 'titled');
+		assert.deepStrictEqual([told.title.length, listed?.title.length, told.title.startsWith('xxx')], [4096, 4096, true]);
+		await client.request('terminate', { run: 'titled', graceMs: 200 });
+	});
+
 	test('a run held back - its window not reading - is ended and its end confirmed: what it writes is read on as it ends (LIFECYCLE-4.2, ARCHITECTURE-2.4)', async function () {
 		this.timeout(15_000);
 		const run = new runModule.Run({ run: 'flood', owner: 'w1', file: SHELL, args: ['-c', 'yes flood'], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TERM: 'xterm-256color' }, cols: 80, rows: 24, meta: {} });

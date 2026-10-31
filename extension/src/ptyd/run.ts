@@ -69,6 +69,19 @@ const INTERRUPT_EVIDENCE_MS = 2_000;
 /** How long a forced kill has to be confirmed by the process's exit. */
 const KILL_CONFIRM_MS = 2_000;
 
+/** The longest terminal title kept: a tab shows far less, and no message of a run may outgrow ptyd's frames (ARCHITECTURE-2.4). */
+const MOST_TITLE = 4096;
+
+/** `title` cut to {@link MOST_TITLE} code units, at a whole character. */
+function boundedTitle(title: string): string {
+	if (title.length <= MOST_TITLE) {
+		return title;
+	}
+	const cut = title.slice(0, MOST_TITLE);
+	// A character of two code units is not halved
+	return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
 /** How long a Windows console's output pipe may still bring what its program wrote last once it ended: node-pty's own flush time. */
 const CONSOLE_FLUSH_MS = 1_000;
 
@@ -161,8 +174,8 @@ export class Run {
 		terminal.loadAddon(new Unicode11Addon() as never);
 		terminal.unicode.activeVersion = '11';
 		terminal.onTitleChange(title => {
-			this.title = title;
-			this.listener?.title(title);
+			this.title = boundedTitle(title);
+			this.listener?.title(this.title);
 		});
 		this.followStatus();
 		this.programStatus.onDidChange(status => this.listener?.status(status));
