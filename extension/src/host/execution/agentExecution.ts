@@ -182,6 +182,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			throw new Error('The agent was closed before its CLI started.');
 		}
 		pair.cli = plan.cli;
+		// Where it runs now - a new worktree's folder, not the one it was accepted in - and as what: the title rules read them (CLIS-2.3)
+		pair.facts = { ...pair.facts, cwd: plan.cwd, displayName: plan.displayName, command: plan.command, cli: plan.cli };
 		this.listen(pair, client);
 		const size = pair.terminal.pty.dimensions;
 		let info: RunInfo;

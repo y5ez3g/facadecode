@@ -384,6 +384,26 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await port.terminate('run-43'), 'terminated');
 	});
 
+	test('a run started in a new worktree is read by the folder it runs in there: a CLI title naming that folder alone is no title (CLIS-2.3)', async function () {
+		this.timeout(15_000);
+		const port = portOf();
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-wt-'));
+		try {
+			// Accepted in its source folder; the worktree made, it starts in the worktree's
+			port.openPair(facts('run-47', { cli: 'pi', displayName: 'Pi', command: 'pi', cwd: os.tmpdir() }), { reveal: false });
+			open(terminals[0]);
+			await port.spawn('run-47', { ...plan(`process.stdout.write('\\x1b]0;π - ${path.basename(worktree)}\\x07ready\\r\\n'); setInterval(() => {}, 1000);`), cli: 'pi', displayName: 'Pi', command: 'pi', cwd: worktree }, meta('run-47'));
+			await until('its screen', () => screenOf(terminals[0]).includes('ready'));
+			await new Promise(resolve => setTimeout(resolve, 300));
+			assert.deepStrictEqual(reports.filter(report => report.title !== undefined), []);
+			assert.strictEqual(await port.terminate('run-47'), 'terminated');
+		} finally {
+			fs.rmSync(worktree, { recursive: true, force: true });
+		}
+	});
+
 	/** A CLI that says a numbered line every 20 ms, from 1 on. */
 	const COUNTING = `let n = 0; setInterval(() => process.stdout.write('line ' + (++n) + '\\r\\n'), 20);`;
 	/** The numbers of `text`'s lines, in the order written. */
