@@ -221,10 +221,27 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
 		const run = editor.handlers.get('facade.newWorktree')!;
 
-		for (const wrong of [{ location_id: REPO.id }, { location_id: REPO.id, branch: 'x', name: 'y' }, { location_id: REPO.id, branch: 'x', base_ref: 3 }, 'loc-repo']) {
+		for (const wrong of [{ location_id: REPO.id }, { location_id: REPO.id, branch: 'x', name: 'y' }, { location_id: REPO.id, branch: 'x', base_ref: 3 }, 'loc-repo',
+			{ preserveFocus: false, location_id: REPO.id, branch: 'x' }, { preserveFocus: 'yes' }]) {
 			await assert.rejects(run(wrong), (err: unknown) => (err as FacadeError).code === 'INVALID' && (err as FacadeError).reason === 'invalid_argument');
 		}
 		assert.deepStrictEqual(worktrees.calls, []);
+	});
+
+	test('what the editor\'s own menu gives - nothing, null, or a mouse click\'s { preserveFocus } - is no request: the person chooses (WORKTREES-4.3)', async () => {
+		const shown: unknown[] = [];
+		for (const given of [undefined, null, { preserveFocus: false }, { preserveFocus: true }]) {
+			const editor = fakeEditor();
+			const worktrees = fakeWorktrees();
+			const errors: string[] = [];
+			editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: text => errors.push(text), log: quiet });
+			const running = editor.handlers.get('facade.newWorktree')!(given);
+			const branch = await editor.next();
+			shown.push([branch.value, errors]);
+			branch.hide();
+			assert.strictEqual(await running, undefined);
+		}
+		assert.deepStrictEqual(shown, Array(4).fill(['me/', []]));
 	});
 
 	test('a failure goes to the person with what it actually left, kept', async () => {
