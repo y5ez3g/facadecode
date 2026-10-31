@@ -52,6 +52,10 @@ export class AgentService implements Agents, Disposable {
 	private readonly listeners = new Set<(change: RunChange) => void>();
 	private readonly subscriptions: Disposable[] = [];
 	private ownershipLost = false;
+	/** Runs this window closed or saw end: a listing still holding one, its cleanup not done, never brings it back (LIFECYCLE-3.1). */
+	private readonly released = new Set<RunId>();
+	/** Why the last listing of this window's runs failed, said once until it changes. */
+	private listingFailure: string | undefined;
 
 	readonly onDidChange: Event<RunChange> = listener => {
 		this.listeners.add(listener);
@@ -100,10 +104,11 @@ export class AgentService implements Agents, Disposable {
 
 	/**
 	 * Finds this window's runs again after a reload, and the failed launches it retained (LIFECYCLE-3.5, 1.5). Answers how many live
-	 * runs the execution owner reports as held elsewhere. Actual process records take precedence over a retained failed-start
-	 * observation. Ownership is acquired before any retained pair is shown.
+	 * runs the execution owner reports as held elsewhere, or undefined where they could not be listed - its supervisor not answering
+	 * yet - for the caller to try again: a temporary failure loses no agent (LIFECYCLE-3.5). Actual process records take precedence
+	 * over a retained failed-start observation. Ownership is acquired before any retained pair is shown.
 	 */
-	async restore(): Promise<number> {
+	async restore(): Promise<number | undefined> {
 		if (this.ownershipLost) {
 			return 0;
 		}
@@ -111,8 +116,16 @@ export class AgentService implements Agents, Disposable {
 		try {
 			live = await this.deps.execution.live();
 		} catch (err) {
-			this.deps.log.event(`Could not list the agents still running for this window: ${messageOf(err)}`);
-			return 0;
+			const failure = messageOf(err);
+			if (failure !== this.listingFailure) {
+				this.listingFailure = failure;
+				this.deps.log.event(`Could not list the agents still running for this window, trying again: ${failure}`);
+			}
+			return this.ownershipLost ? 0 : undefined;
+		}
+		if (this.listingFailure !== undefined) {
+			this.listingFailure = undefined;
+			this.deps.log.event('Listed the agents still running for this window.');
 		}
 		if (this.ownershipLost) {
 			return 0;
@@ -128,7 +141,7 @@ export class AgentService implements Agents, Disposable {
 				this.deps.retained.remove(facts.id);
 				continue;
 			}
-			if (!this.runs.has(facts.id)) {
+			if (!this.runs.has(facts.id) && !this.released.has(facts.id)) {
 				this.runs.set(facts.id, { facts, closing: false });
 				this.deps.execution.openPair(pairOf(facts), { reveal: false });
 				if (facts.error) {
@@ -142,7 +155,7 @@ export class AgentService implements Agents, Disposable {
 			if (this.ownershipLost) {
 				return 0;
 			}
-			if (this.runs.has(each.run)) {
+			if (this.runs.has(each.run) || this.released.has(each.run)) {
 				continue;
 			}
 			if (each.claimedElsewhere) {
@@ -328,6 +341,7 @@ export class AgentService implements Agents, Disposable {
 		}
 		run.closing = true;
 		this.runs.delete(id);
+		this.released.add(id);
 		this.deps.retained.remove(id);
 		this.deps.execution.removePair(id);
 		this.emit({ run: id, kind: 'removed', cause: 'close' });
@@ -444,6 +458,7 @@ export class AgentService implements Agents, Disposable {
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
 			this.runs.delete(exit.run);
+			this.released.add(exit.run);
 			this.deps.execution.removePair(exit.run);
 			this.emit({ run: exit.run, kind: 'removed', cause: 'exit' });
 			this.deps.log.event(`${run.facts.alias} exited${exit.code !== undefined ? ` with code ${exit.code}` : ''}`);

@@ -15,6 +15,7 @@ import { reasonText } from '../ui/presentation';
 import { registerUi } from '../ui/commands/index';
 import { registerWorktreeCommands } from '../ui/commands/worktree';
 import { AgentExecution } from './execution/agentExecution';
+import { RECONCILE_MS } from './execution/executionSession';
 import { AliasCounter } from '../record/aliases';
 import { AgentLog } from '../record/log';
 import { facadeHome } from '../record/paths';
@@ -31,6 +32,8 @@ import { KeptWorkspaceState } from './workspaceState';
 
 /** Where the window's workspace keeps its key, for the window's reloads (ARCHITECTURE-2.2). */
 const WORKSPACE_KEY = 'facade.workspaceKey';
+/** The longest wait between attempts to list this window's runs: well within the five minutes they are kept for it (RULES-4.1). */
+const MOST_RESTORE_WAIT_MS = 30_000;
 
 /** The workspace this window keeps its runs under: its workspace file, else its first folder (ARCHITECTURE-3.1). */
 function workspaceUri(): string {
@@ -116,8 +119,15 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		describe: (err, english) => worktreeProblemText(err, err instanceof PlanError ? reasonText(err.said, english) : english),
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`
 	});
-	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1)
-	const restored = agents.restore();
+	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1). A window that
+	// cannot list them yet - its ptyd not answering - keeps trying, as they end five minutes after no window claims them (RULES-4.1)
+	let restoreRetry: ReturnType<typeof setTimeout> | undefined;
+	let disposed = false;
+	const restored = (async () => {
+		for (let wait = RECONCILE_MS; await agents.restore() === undefined && !disposed; wait = Math.min(wait * 2, MOST_RESTORE_WAIT_MS)) {
+			await new Promise<void>(resolve => { restoreRetry = setTimeout(resolve, wait); });
+		}
+	})();
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
 	const disposables: vscode.Disposable[] = [
 		...registerUi({
@@ -138,6 +148,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	];
 	context.subscriptions.push(...disposables);
 	return async () => {
+		disposed = true;
+		clearTimeout(restoreRetry);
 		agents.dispose();
 		// One that throws does not keep the rest open (ARCHITECTURE-2.4)
 		disposeAll(disposables, err => log.event(`Could not dispose part of the window: ${messageOf(err)}`));

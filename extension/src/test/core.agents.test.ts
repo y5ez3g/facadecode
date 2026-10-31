@@ -238,6 +238,38 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		]);
 	});
 
+	test('a restore whose listing fails answers undefined and shows nothing; tried again once ptyd answers, it shows the live and retained agents, never one this window closed meanwhile (LIFECYCLE-3.5, 3.1, PANEL-1.1)', async () => {
+		const world = setUp();
+		const failed = 'run-' + '9'.repeat(32);
+		world.retained.set(failed, { id: failed, alias: '#a9', name: 'Failed', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
+		const meta = (name: string): RunMeta => ({ alias: '#a7', name, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 5 });
+		const kept = 'run-' + '7'.repeat(32);
+		let answering = false;
+		world.execution.live = async () => {
+			if (!answering) {
+				throw new Error('ptyd did not answer hello within 5000 ms.');
+			}
+			return [
+				{ run: kept, meta: meta('Kept'), pid: 77, startedAt: 6, claimedElsewhere: false },
+				{ run: closed, meta: meta('Closed'), pid: 4242, startedAt: 7, claimedElsewhere: false }
+			];
+		};
+		assert.strictEqual(await world.agents.restore(), undefined);
+		assert.strictEqual(await world.agents.restore(), undefined);
+		assert.deepStrictEqual([world.agents.list(), [...world.execution.pairs.keys()]], [[], []], 'nothing shown before ownership is known');
+		// Meanwhile the person launched and closed an agent: its process's cleanup is not done when the listing answers
+		const closed = world.agents.launch({ name: 'Closed', location: 'loc-1', cli: 'claude' });
+		await settle();
+		await world.agents.close(closed);
+		answering = true;
+		assert.strictEqual(await world.agents.restore(), 0);
+		assert.deepStrictEqual(world.agents.list().map(run => run.id).sort(), [failed, kept].sort());
+		assert.deepStrictEqual(world.log.filter(line => /list the agents|Listed the agents/.test(line)), [
+			'Could not list the agents still running for this window, trying again: ptyd did not answer hello within 5000 ms.',
+			'Listed the agents still running for this window.'
+		], 'the same failure said once');
+	});
+
 	test('a failed card of a location removed while no window showed it is not brought back after the restart (RULES-2.4)', async () => {
 		const world = setUp({ removedWhileAway: ['loc-gone'] });
 		const id = 'run-' + '8'.repeat(32);
