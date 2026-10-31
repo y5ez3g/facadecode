@@ -119,7 +119,10 @@ the reader does not recognize is unknown: nothing is typed, and the message fail
 naming the CLI and the version Facade found. The version is recorded as a diagnostic, never as a gate. A CLI without an
 input reader fails ordinary messages at once with `unsupported`. Readers are tested against recorded screens of real
 CLI versions; a changed layout becomes a new recorded case, and a reader never guesses an empty input from a layout it
-does not recognize (D83). In a terminal 24 rows high, as an editor's
+does not recognize (D83). `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed, and
+pasted text, messages, Chinese and emoji, a hundred-line message, and Claude Code's lead - without submitting anything, and
+checks each reader and its own-draft recognition against what it drew; it is run once a CLI updates, and the screens it
+saves, each paste's text kept with its screen, become recorded cases (D106). In a terminal 24 rows high, as an editor's
 panel may be, Antigravity and Pi scroll a draft taller than their input box, Antigravity marking it with `↑ 1 more lines`
 first in the box and Pi in its upper rule, `─── ↑ 2 more ───`: their readers say how many rows are out of sight above and
 below, apart from the draft, and a draft whose end in sight is the message's end, nothing being out of sight below, is the
@@ -345,6 +348,8 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 ## Change log
 
 - 2026-10-31: 2.1 reads Antigravity's and Pi's scrolled drafts and Pi's `[paste #N C chars]` (D112).
+- 2026-10-31: 2.1 records input boxes with `scripts/capture-inputs.mjs`, and reads Codex 0.166.0's status at the end of its
+  hints row; Codex always runs embedded (D106).
 - 2026-10-31: 2.2 makes Muse Code's Facade server optional, and 3.2 gives it a one-word first task after startup (D101).
 - 2026-10-31: 2.1's readers report a draft's text or its CLI's paste placeholder, so that a delivery knows its own;
   Enter waits for a paste of its size and is pressed again only over that draft (D98, D99).

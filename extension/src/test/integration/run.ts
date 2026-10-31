@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { EDITOR_FLAGS, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { probeEnvironment } from './probeState';
 
 /** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
 const BUILT_INS: readonly { readonly id: string; readonly segment: string; readonly avatar: string }[] = [
@@ -56,15 +57,19 @@ async function main(): Promise<void> {
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
 	// Real agents, for `real` alone: the built-in FACADE_IT_REAL (Claude Code by default) at FACADE_IT_REAL_PATH - FACADE_IT_CLAUDE
-	// for Claude Code - and Claude Code's configuration folder FACADE_IT_CLAUDE_CONFIG, else the person's own, signed in. Its terminals
+	// for Claude Code - and Claude Code's temporary configuration folder FACADE_IT_CLAUDE_CONFIG, signed in for testing. Its terminals
 	// get FACADE_IT_REAL_ENV, a JSON object - such as a configuration folder of its own - and the variables FACADE_IT_REAL_PASS names,
-	// taken from this environment and never written to a file. FACADE_IT_REAL_HOME=keep leaves them the person's own home folder.
+	// taken from this environment and never written to a file. State paths must be temporary; a personal home is never inherited.
 	const realCli = process.env.FACADE_IT_REAL ?? 'claude';
 	const realPath = process.env.FACADE_IT_REAL_PATH ?? (realCli === 'claude' ? process.env.FACADE_IT_CLAUDE : undefined);
 	const realConfig = process.env.FACADE_IT_CLAUDE_CONFIG;
 	const realEnv = JSON.parse(process.env.FACADE_IT_REAL_ENV ?? '{}') as { [name: string]: string };
 	const realHome = process.env.FACADE_IT_REAL_HOME === 'keep';
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
+	if (only === 'real') {
+		probeEnvironment(realEnv, realHome, realConfig);
+		probeEnvironment(passed, realHome);
+	}
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
 	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
@@ -83,12 +88,15 @@ async function main(): Promise<void> {
 	// terminals' environment names it, as a person's terminal settings could; the editor keeps its own HOME.
 	const agentsHome = path.join(root, 'agents-home');
 	fs.mkdirSync(agentsHome);
+	// Antigravity's settings as it leaves them once it has run there: Facade merges its trust into a file the CLI made, and makes none (D97)
+	fs.mkdirSync(path.join(agentsHome, '.gemini', 'antigravity-cli'), { recursive: true });
+	fs.writeFileSync(path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json'), '{}\n');
 
 	/** What agents' terminals are given - the suite's home folder, and `more` - by the editor's terminal settings. */
 	const terminalEnv = (more: { readonly [name: string]: string } = {}) => ({
-		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, ...more },
-		'terminal.integrated.env.osx': { HOME: agentsHome, ...more },
-		'terminal.integrated.env.linux': { HOME: agentsHome, ...more }
+		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state'), ...more },
+		'terminal.integrated.env.osx': { HOME: agentsHome, XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state'), ...more },
+		'terminal.integrated.env.linux': { HOME: agentsHome, XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state'), ...more }
 	});
 	// Every built-in points to a fake: the suite never starts a person's real CLI.
 	const settings = {
@@ -104,7 +112,7 @@ async function main(): Promise<void> {
 	 * One editor of the suite on `folder`, with user data, extensions and a Facade directory of its own - and shared data: without it
 	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2).
 	 */
-	const run = async (name: string, folder: string, env: { readonly [name: string]: string } = {}, more: { readonly [setting: string]: unknown } = {}, claude: string | null = claudeConfig) => {
+	const run = async (name: string, folder: string, env: { readonly [name: string]: string } = {}, more: { readonly [setting: string]: unknown } = {}, claude = claudeConfig) => {
 		const user = path.join(root, `u-${name}`);
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
@@ -125,8 +133,7 @@ async function main(): Promise<void> {
 					FACADE_HOME: facade,
 					FACADE_IT_RECORD: record,
 					FACADE_IT_AGENTS_HOME: agentsHome,
-					// None: Claude Code's own default, the person's signed-in configuration
-					...(claude !== null ? { CLAUDE_CONFIG_DIR: claude } : {}),
+					CLAUDE_CONFIG_DIR: claude,
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
 					...env
 				}
@@ -223,18 +230,16 @@ async function main(): Promise<void> {
 		if (!cli || !realPath) {
 			throw new Error('FACADE_IT_ONLY=real starts a real CLI: set FACADE_IT_REAL to a built-in and FACADE_IT_REAL_PATH to its executable (FACADE_IT_CLAUDE for Claude Code), and give it a configuration signed in for testing.');
 		}
-		const terminals = realHome
-			? { 'terminal.integrated.env.windows': realEnv, 'terminal.integrated.env.osx': realEnv, 'terminal.integrated.env.linux': realEnv }
-			: terminalEnv(realEnv);
-		const agySettings = path.join(realHome ? os.homedir() : agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
+		const terminals = terminalEnv(realEnv);
+		const agySettings = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
 		const agyBefore = cli.id === 'agy' ? (fs.existsSync(agySettings) ? fs.readFileSync(agySettings) : null) : undefined;
 		try {
 			// The other built-ins not installed: the real one is the one New Agent preselects
 			const others = Object.fromEntries(BUILT_INS.filter(each => each !== cli).map(each => [`facade.${each.segment}.path`, path.join(root, `unavailable-${each.id}`)]));
-			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, 'facade.yolo': false, ...terminals }, cli.id === 'claude' ? realConfig ?? null : claudeConfig);
+			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, 'facade.yolo': false, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
 		} finally {
 			if (cli.id === 'claude') {
-				untrust(realConfig ? path.join(realConfig, '.claude.json') : path.join(os.homedir(), '.claude.json'), root);
+				untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root);
 			}
 			if (agyBefore === null) {
 				fs.rmSync(agySettings, { force: true });

@@ -4,6 +4,7 @@
 
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { Card, PanelState } from '../../webview/protocol';
@@ -172,6 +173,8 @@ function assertTools(alias: string): void {
 
 /** How a creation prompt goes in for this CLI (COLLABORATION-2.2): natively, the option before it, or after startup for Antigravity. */
 const NATIVE: { readonly [cli: string]: string | undefined } = { claude: '--', codex: '--', muse: '--', pi: '--', opencode: '--prompt', agy: undefined };
+/** The reader of each built-in's input (CLIS-2.1), as Copy Diagnostics names it. */
+const INPUT: { readonly [cli: string]: string } = { claude: 'claude-frame', codex: 'codex-prompt', agy: 'agy-frame', muse: 'muse-frame', opencode: 'opencode-frame', pi: 'pi-frame' };
 
 /**
  * A message block as a CLI is given it (COLLABORATION-2.1): its header, the whole text, its footer. The window's label is escaped
@@ -248,6 +251,19 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.deepStrictEqual([ran.content('press_keys')?.status, ran.content('press_keys')?.effects.keys_sent], ['success', 1], JSON.stringify(ran.content('press_keys')));
 		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
 
+		// What Copy Diagnostics copies, with both agents running (ARCHITECTURE-3.3, D110, D111): the versions, each agent with what its
+		// input reads and its last rows, and the log with each tool call, the home folder written ~
+		const diagnostics = await vscode.commands.executeCommand<string>('facade.diagnostics');
+		const version = vscode.extensions.getExtension('facade.facadecode')!.packageJSON.version as string;
+		assert.ok(diagnostics.startsWith('Facade Code diagnostics, ') && diagnostics.includes(`\nFacade Code ${version}; window component ${version}; `), diagnostics.slice(0, 400));
+		for (const each of [alias, childAlias]) {
+			assert.match(diagnostics, new RegExp(`^- @\\S+ ${each} run-\\w+: .*\\n {2}running, .*; input reader ${INPUT[CLI]}, reads usable\\n {2}\\| `, 'm'), diagnostics);
+		}
+		for (const tool of ['list_start_options', 'start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
+			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms$`, 'm'), `${tool} is logged`);
+		}
+		assert.ok(!diagnostics.includes(os.homedir()), 'the home folder is written ~');
+
 		const stop = await script(alias, [{ tool: 'stop_agent', arguments: { agent: child } }, { tool: 'list_agents', arguments: {} }]);
 		assert.strictEqual(stop.content('stop_agent')?.status, 'success', JSON.stringify(stop.content('stop_agent')));
 		await until('the child card to go', async () => (await state()).cards.some(each => each.runId === child) ? undefined : true);
@@ -256,8 +272,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	});
 
-	test('messages: one paste and Enter into the input box; a draft there makes it wait, then fail back to its sender; reading delivers it once', async function () {
-		this.timeout(120_000);
+	test('messages: one paste and Enter into the input box; a draft there is waited for, never typed over; an input it cannot read fails back to its sender; reading delivers it once', async function () {
+		this.timeout(180_000);
 		const { card, alias } = await personAgent();
 		const window = vscode.workspace.name!;
 		const first = await script(alias, [
@@ -267,7 +283,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello from your creator.\nTwo lines, one message.' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Two lines, one message.' },
-			// A draft left in its box: the next message never goes over it (RULES-1.4)
+			// A draft left in its box: the next message never goes over it, and waits for it to go (RULES-1.4, 1.5)
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'half-written' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'half-written' },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Second message.' }, save: { second: 'data.message_id' } },
@@ -287,30 +303,79 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const waiting = first.content('send_message', 1);
 		assert.strictEqual(waiting?.status, 'accepted', JSON.stringify(waiting));
 		assert.deepStrictEqual([waiting.data.obstacle, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'pending', 'none']);
+		// Held by the draft: its deadline ten minutes on, not fifteen seconds (D100)
+		assert.ok(Date.parse(waiting.data.deadline) - Date.now() > 500_000, waiting.data.deadline);
 		const second = waiting.data.alias as string;
 
 		const human = first.content('send_message', 2);
 		assert.strictEqual(human?.status, 'success', JSON.stringify(human));
 		assert.deepStrictEqual([human.data.target, human.data.disposition], ['#human', 'notified']);
 
-		// After its fifteen seconds, the sender hears it failed: a Facade result typed into the sender's own box (RULES-1.5, 1.7)
-		const result = await until('the failure result in the sender\'s box', () => received(alias).find(each => each.includes(`about ${second}`)), 40_000);
-		assert.match(result, /^\[Facade result #m\d+ \| about #m\d+/);
-		assert.ok(result.includes('was not delivered') && result.includes('(input_draft)') && result.includes('This is a Facade result, not a reply from the recipient.'), result);
+		// Past fifteen seconds it still waits: nothing typed over the draft, and no failure for its sender
+		await new Promise(resolve => setTimeout(resolve, 18_000));
 		assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
+		assert.ok(!received(alias).some(each => each.includes(`about ${second}`)), 'its sender heard of no outcome yet');
+		// The draft goes: the message goes in at the next slot, alone, and its sender hears it was submitted
+		await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
+		await until('the waiting message in its box', () => received(childAlias).find(each => each.includes('Second message.')), 20_000);
+		assert.ok(received(childAlias).every(each => !each.includes('half-written')), 'the person\'s draft was never submitted');
+		const delivered = await until('the delivery result in the sender\'s box', () => received(alias).find(each => each.includes(`about ${second}`)), 20_000);
+		assert.ok(delivered.includes('was submitted to its CLI') && delivered.includes('This is a Facade result, not a reply from the recipient.'), delivered);
+
+		// An input its reader cannot recognize: after its fifteen seconds the sender hears it failed (RULES-1.5, 1.7)
+		fs.writeFileSync(`${RECORD}.quirks.${childAlias}`, JSON.stringify({ garble: true }));
+		const third = (await script(alias, [
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Still loading the workspace', wait: 10_000 },
+			{ tool: 'send_message', arguments: { to: '$child', text: 'Third message.' } }
+		])).content('send_message');
+		assert.deepStrictEqual([third?.status, third?.data.obstacle], ['accepted', 'input_unknown'], JSON.stringify(third));
+		const result = await until('the failure result in the sender\'s box', () => received(alias).find(each => each.includes(`about ${third.data.alias}`)), 40_000);
+		assert.match(result, /^\[Facade result #m\d+ \| about #m\d+/);
+		assert.ok(result.includes('was not delivered') && result.includes('(input_unknown)') && result.includes('This is a Facade result, not a reply from the recipient.'), result);
+		fs.rmSync(`${RECORD}.quirks.${childAlias}`);
 
 		// The recipient reads what never reached it: delivered by that read, and only once (COLLABORATION-3.1, D82)
 		const read = await script(childAlias, [
 			{ tool: 'read_messages', arguments: {} },
 			{ tool: 'read_messages', arguments: {}, until: 'Nothing is waiting', wait: 5_000 },
-			{ tool: 'read_messages', arguments: { ids: [second] } }
+			{ tool: 'read_messages', arguments: { ids: [third.data.message_id] } }
 		]);
 		const unread = read.content('read_messages')?.data.messages as { alias: string; text: string; delivery: { status: string; reason?: string } }[];
-		assert.deepStrictEqual(unread.map(each => [each.alias, each.text, each.delivery.status, each.delivery.reason]), [[second, 'Second message.', 'failure', 'input_draft']], JSON.stringify(unread));
+		assert.deepStrictEqual(unread.map(each => [each.alias, each.text, each.delivery.status, each.delivery.reason]), [[third.data.alias, 'Third message.', 'failure', 'input_unknown']], JSON.stringify(unread));
 		assert.deepStrictEqual(read.content('read_messages', 1)?.data.messages, [], JSON.stringify(read.content('read_messages', 1)));
 		const again = read.content('read_messages', 2)?.data.messages as { delivery: { status: string; delivered_via?: string } }[];
 		assert.deepStrictEqual(again.map(each => [each.delivery.status, each.delivery.delivered_via]), [['success', 'read']]);
 
+		await vscode.commands.executeCommand('facade.closeAgent', { run_id: started.data.agent_id });
+		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+	});
+
+	test('a submission its CLI takes slowly, or whose Enter it misses, is pasted once: Enter again over its own draft, never the text (RULES-1.6, D98)', async function () {
+		this.timeout(120_000);
+		const { card, alias } = await personAgent();
+		const first = await script(alias, [
+			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
+			{ tool: 'start_agent', arguments: { name: 'Slow', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.alias' } },
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 }
+		]);
+		const started = first.content('start_agent');
+		const childAlias = started.data.alias as string;
+		const quirks = `${RECORD}.quirks.${childAlias}`;
+		const once = (text: string) => received(childAlias).filter(each => each.includes(text)).length;
+		for (const [quirk, text] of [[{ slowMs: 4_500 }, 'Taken slowly.'], [{ swallow: 1 }, 'Enter missed once.']] as const) {
+			fs.writeFileSync(quirks, JSON.stringify(quirk));
+			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text } }])).content('send_message');
+			assert.ok(sent?.status === 'accepted' || sent?.status === 'success', JSON.stringify(sent));
+			await until(`${text} in its box`, () => once(text) ? true : undefined, 30_000);
+			// The next slots see its own draft, or its empty box: never typed again
+			await new Promise(resolve => setTimeout(resolve, 10_000));
+			assert.strictEqual(once(text), 1, JSON.stringify(received(childAlias)));
+			if (sent.status === 'accepted') {
+				const result = await until(`the result about ${text}`, () => received(alias).find(each => each.includes(`about ${sent.data.alias}`)), 20_000);
+				assert.ok(result.includes('was submitted to its CLI'), result);
+			}
+			fs.rmSync(quirks, { force: true });
+		}
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: started.data.agent_id });
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	});

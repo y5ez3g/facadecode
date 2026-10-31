@@ -28,7 +28,7 @@ IDs remain stable for provenance; the decision column states the current owner-c
 | O11 | Normal exit closes; abnormal retains red; unknown cause no guessed popup | RULES-3.3 |
 | O12 | Explicit agent startup choices remain; all launch origins share the current-setting YOLO rule | MCP-2, RULES-4.3 |
 | O13 | Success means the recipient has the complete message: CLI acceptance by the selected submission path, or a read_messages handback under D82 | RULES-1.3 |
-| O14 | Two-second initial response; five fixed attempts per fifteen-second stage; results to the agent sender for both outcomes, never human fallback | RULES-1.2, 1.5, 1.7, 1.8 |
+| O14 | Two-second initial response; an attempt every three seconds in a fifteen-second stage, waiting up to ten minutes for an input another draft or a native question holds (D100); results to the agent sender for both outcomes, never human fallback | RULES-1.2, 1.5, 1.7, 1.8 |
 | O15 | Ordinary messages protect drafts; no typing-idle timer or post-check human-typing race machinery | RULES-1.4 |
 | O16 | Duplicate delivery is accepted; the injected skill tells the model to deduplicate by message ID | RULES-1.6, MCP-6.2 |
 | O17 | Any window close ends its own agents; no reopening replay; sender-only close needs no guaranteed delivery handover | RULES-1.9 |
@@ -38,7 +38,7 @@ IDs remain stable for provenance; the decision column states the current owner-c
 | O23 | Direct text/keys have no input-policy choice/draft guard or arbitrary text single-line/length cap | COLLABORATION-1.2, MCP-5.2 |
 | O24 | No Git initialization/initial commit; worktree deletion only as D73; native Git creation and no post-create setup gate | WORKTREES-2, 3 |
 | O27 | Agent terminals only in editor | LIFECYCLE-2.2 |
-| O28 | Nine MCP tools; no request_id/get_operation/recall/bulk/rename/deletion extensions; inbox reads only one's incoming messages | MCP-1, 3, 4 |
+| O28 | Nine MCP tools; D104 adds optional request_id to start_agent and send_message; no get_operation/recall/bulk/rename/deletion extensions; inbox reads only one's incoming messages | MCP-1, 3, 4 |
 | O29 | MCP switch affects future injection only; no authentication/tokens/delegation; IDs are addresses, normal tree policy remains | RULES-4.4, ARCHITECTURE-2.1 |
 | O30 | Initial prompt uses native interactive arguments if supported, otherwise automatic post-start message; no unattended overlay | COLLABORATION-2.2, CLIS-3.2 |
 | O31 | Message History is window-local and view-only, automatically cleaned after 30 days; no vendor-history deletion | COLLABORATION-3 |
@@ -226,7 +226,25 @@ full spec revision; it does not authorize publication or unrelated source change
 
 ## Change log
 
-- 2026-10-31: Record diagnostics and working-duration presentation.
+- 2026-10-31: Clarified D103: reporting a blocker to its creator does not request contact with the person.
+- 2026-10-31: Recorded D113: concurrency, recovery, read-during-paste, result budgets, reference resolution and probe isolation.
+- 2026-10-31: Recorded D112: the review's fixes; D98's retyping of a paste that never showed withdrawn.
+- 2026-10-31: Recorded the owner-approved D111: tool calls logged, and the real journey's checks of the models.
+- 2026-10-31: Recorded the owner-approved D110: Copy Diagnostics.
+- 2026-10-31: Recorded the owner-approved D109: results for one terminal in one paste.
+- 2026-10-31: Recorded the owner-approved D108: how long ago a working agent's CLI reported its work.
+- 2026-10-31: Recorded the owner-approved D107: a cut argument refused, and what was found of Codex's paste handling.
+- 2026-10-31: Recorded the owner-approved D106: input-box captures, and what the first found in Codex 0.166.0.
+- 2026-10-31: Recorded the owner-approved D105: MCP 2025-11-25, loading deferred tools, and a tested context budget.
+- 2026-10-31: Recorded the owner-approved D104: request IDs on start_agent and send_message, superseding D11 for them.
+- 2026-10-31: Recorded the owner-approved D103: a started agent's wait on its CLI's question goes to its creator.
+- 2026-10-31: Recorded D101 from Muse Code 1.4.14's observed behavior, and the owner-approved D102: a message's lead for
+  Claude Code.
+- 2026-10-31: Recorded the owner-approved D98-D100: a message is typed at most once and Enter is pressed again only over
+  its own draft, Enter waits for a paste of its size, and a held input is waited for up to ten minutes; O14 follows D100.
+- 2026-10-31: Recorded the owner-approved D95-D97 from the comparison with T3 Code and Orca: Codex starts without its
+  update prompt and waits for its MCP servers before its first turn, the tools' arguments take every provider's shape,
+  and trust is never written for a home folder or into a configuration file the CLI has not made.
 - 2026-10-30: Step 2 of the Facade Code extension: carried the Facade Dots rows that bear on agent collaboration (O01,
   O02, O13–O17, O23, O28–O31; D09–D11, D17, D18, D25, D26, D28, D30, D32–D34, D36, D37, D44, D45, D49, D50, D56),
   updated O05, O07, O09, O12, O18, O21, O22, O34 and O35 for this step, and recorded the owner's decisions of that day

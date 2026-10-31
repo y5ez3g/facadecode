@@ -6,7 +6,8 @@
 // names the CLI - `FACADE_IT_ONLY=real` - as each run signs in and uses an account's usage. YOLO is off: the agent the person starts
 // uses Facade's tools with no approval, starts a second agent of the same CLI with a first task and messages it, and the second
 // answers through Facade's tools. Every message is pasted whole into its recipient's input box and seen submitted (RULES-1.4,
-// COLLABORATION-2.1).
+// COLLABORATION-2.1). What the models did is checked too (D111): each message sent once, one agent started, and no tool called
+// over and over while an answer is awaited, as the tools' instructions ask - the answer comes as a paste.
 
 import * as assert from 'assert';
 import * as fs from 'fs';
@@ -49,6 +50,19 @@ function messages(): MessageRecord[] {
 		}
 	});
 }
+
+/** Each tool call of this window's agents, as its agents log has it (ARCHITECTURE-3.3): when, which tool, by which alias, how it ended. */
+function toolCalls(): { readonly at: number; readonly tool: string; readonly by: string; readonly status: string }[] {
+	const dir = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
+	const logs = fs.existsSync(dir) ? fs.readdirSync(dir).map(key => path.join(dir, key, 'agents.log')).filter(file => fs.existsSync(file)) : [];
+	return logs.flatMap(file => fs.readFileSync(file, 'utf8').split('\n').flatMap(line => {
+		const match = /^(\S+) Tool (\w+) by (\S+): (\w+)/.exec(line);
+		return match ? [{ at: Date.parse(match[1]), tool: match[2], by: match[3], status: match[4] }] : [];
+	}));
+}
+
+/** How often an agent may call a tool that only looks, in the whole journey: more is polling for what a paste brings (D111). */
+const LOOKS = { read_messages: 2, list_agents: 3, read_screen: 2 } as const;
 
 /** How long its CLI takes to show its input, with what its start types before the first turn (COLLABORATION-2.2). */
 const READY_MS = REAL === 'agy' ? 25_000 : 10_000;
@@ -108,6 +122,21 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 		assert.deepStrictEqual([ping.delivery.via, ping.delivery.effects.text_written, ping.delivery.effects.enter_written], ['terminal', 'full', true], JSON.stringify(ping));
 		const pong = await until('its PONG back', () => delivered(second.runId, first.runId, 'PONG'), 240_000);
 		assert.deepStrictEqual([pong.delivery.via, pong.delivery.effects.text_written, pong.delivery.effects.enter_written], ['terminal', 'full', true], JSON.stringify(pong));
+
+		// What the models did (D111): the first answers its PONG, and neither sends a message twice, starts another agent, or polls
+		await new Promise(resolve => setTimeout(resolve, 30_000));
+		const sent = (from: string) => messages().filter(each => each.kind === 'message' && each.from.run === from && each.id !== task.id).map(each => each.text);
+		assert.deepStrictEqual([sent(first.runId).length, sent(second.runId).length], [1, 1], `each sends its message once: ${JSON.stringify([sent(first.runId), sent(second.runId)])}`);
+		assert.strictEqual((await state()).cards.filter(each => !before.has(each.runId)).length, 2, 'one agent started by the first');
+		const calls = toolCalls();
+		for (const card of [first, second]) {
+			const alias = card.tooltip[0].split(' · ')[1];
+			const own = calls.filter(each => each.by === alias);
+			for (const [tool, most] of Object.entries(LOOKS)) {
+				assert.ok(own.filter(each => each.tool === tool).length <= most, `${card.name} called ${tool} more than ${most} times: ${own.map(each => each.tool).join(', ')}`);
+			}
+			assert.ok(own.filter(each => each.tool === 'start_agent' && each.status !== 'failure').length <= 1, `${card.name} started more than one agent`);
+		}
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: second.runId });
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: first.runId });

@@ -12,7 +12,9 @@
 // its MCP panel opens, by `/mcp`, or its first turn - and runs each `<record>.mcp-script.<agent>` that appears, in turn, writing
 // every answer to `<record>.mcp.<agent>` as a JSON line; `$name` strings take values earlier answers saved under that name, and
 // `until` repeats a step until its answer holds a text. With FACADE_IT_SCREEN=muse it is Muse Code as it runs on Windows: it
-// reports nothing, and ptyd reads its status from its screen (CLIS-2.3, D80).
+// reports nothing, and ptyd reads its status from its screen (CLIS-2.3, D80). `<record>.quirks.<agent>`, while there, has it take
+// Enter as a slow or busy CLI does - missing so many Enters, or taking a submission only so long after its Enter - or draw a
+// screen no reader recognizes (RULES-1.6).
 
 import { spawn } from 'child_process';
 import * as fs from 'fs';
@@ -39,6 +41,8 @@ const NBSP = ' ';
 const PLACEHOLDER = 'Try a task';
 const lines: string[] = ['fake agent ready'];
 let draft = '';
+/** Where the paste in its draft starts: what was typed before it stays as typed, as a lead does (D102). */
+let pastedFrom: number | undefined;
 
 // A native prompt: after `--`, or OpenCode's `--prompt`
 const prompt = args.includes('--prompt') ? args.indexOf('--prompt') : args.indexOf('--');
@@ -85,12 +89,46 @@ function inputRows(width: number, shown: string): Row[] {
 	}
 }
 
+/** How a test has it take Enter and draw, from `<record>.quirks.<agent>`: as a CLI does where there is none. */
+interface Quirks {
+	/** Enters it misses, the draft staying. */
+	readonly swallow?: number;
+	/** How long after Enter it takes a submission, the draft shown until then and other Enters missed meanwhile. */
+	readonly slowMs?: number;
+	/** A screen no input reader recognizes, in place of its input. */
+	readonly garble?: boolean;
+}
+const QUIRKS = `${record}.quirks.${agent}`;
+function quirks(): Quirks {
+	try {
+		return JSON.parse(fs.readFileSync(QUIRKS, 'utf8')) as Quirks;
+	} catch {
+		return {};
+	}
+}
+
 /** Redraws the whole screen in one synchronized update, so that no reading ever sees half of it. */
 function draw(): void {
 	const width = Math.max(20, process.stdout.columns || 80);
 	const height = Math.max(8, process.stdout.rows || 24);
-	const collapsed = as === 'opencode' ? `[Pasted ~${draft.split('\n').length} lines]` : as === 'pi' ? `[paste #1 +${draft.split('\n').length} lines]` : `[Pasted text #1 +${draft.split('\n').length} lines]`;
-	const shown = draft.includes('\n') || [...draft].length > width - 6 ? collapsed : draft;
+	if (quirks().garble) {
+		// Its input gone behind a screen of its own: the cursor at its top, nothing a reader knows
+		process.stdout.write(`\x1b[?2026h\x1b[H\x1b[2J\x1b[1;1HStill loading the workspace...\x1b[1;1H\x1b[?2026l`);
+		return;
+	}
+	if (!draft) {
+		pastedFrom = undefined;
+	}
+	// Each CLI's placeholder for a long paste, counted as that CLI counts it (CLIS-2.1), after what was typed before the paste
+	const typed = draft.slice(0, pastedFrom ?? 0);
+	const pasted = draft.slice(pastedFrom ?? 0);
+	const lineCount = pasted.split('\n').length;
+	const collapsed = as === 'opencode' ? `[Pasted ~${lineCount} lines]`
+		: as === 'pi' ? `[paste #1 +${lineCount} lines]`
+			: as === 'codex' || as === 'muse' ? `[Pasted Content ${[...pasted].length} chars]`
+				: as === 'agy' ? `[Pasted text #1 +${lineCount} lines]`
+					: `[Pasted text #1 +${lineCount - 1} lines]`;
+	const shown = pasted.includes('\n') || [...draft].length > width - 6 ? `${typed}${collapsed}` : draft;
 	const input: Row[] = panel
 		// Antigravity's MCP panel in place of its input: its server ready once it was started
 		? [{ text: 'MCP Servers' }, { text: '>  ✓ facade_facade  Tools: list_agents', cursor: 0 }, { text: 'Keyboard: esc Exit' }]
@@ -110,11 +148,35 @@ function draw(): void {
 /** Whether Antigravity's MCP panel is open in place of its input, opened by `/mcp` and closed by Escape. */
 let panel = false;
 
+/** Whether a slow submission is being taken now: Enter does nothing until it is. */
+let taking = false;
+
 /** Enter: what the box held is taken, printed and recorded, and the box is empty again. */
 function submit(): void {
-	if (!draft) {
+	if (!draft || taking) {
 		return;
 	}
+	const quirk = quirks();
+	if (quirk.swallow) {
+		// A missed Enter: the draft stays
+		fs.writeFileSync(QUIRKS, JSON.stringify({ ...quirk, swallow: quirk.swallow - 1 }));
+		return;
+	}
+	if (quirk.slowMs) {
+		// Taken only after a while, its draft shown until then
+		taking = true;
+		setTimeout(() => {
+			taking = false;
+			take();
+			draw();
+		}, quirk.slowMs);
+		return;
+	}
+	take();
+}
+
+/** The box's draft taken: Antigravity's MCP panel opened by `/mcp`, else recorded and printed, the box empty again. */
+function take(): void {
 	if (startsServer) {
 		startsServer();
 		startsServer = undefined;
@@ -159,6 +221,7 @@ function received(chunk: string): void {
 		}
 		if (pending.startsWith('\x1b[200~')) {
 			pasting = true;
+			pastedFrom ??= draft.length;
 			pending = pending.slice(6);
 			continue;
 		}
@@ -216,6 +279,15 @@ function start(): void {
 	process.stdin.setEncoding('utf8');
 	process.stdin.on('data', received);
 	process.stdout.on('resize', draw);
+	// What a test asks of its screen shows within a fifth of a second
+	let quirked = '';
+	setInterval(() => {
+		const now = fs.existsSync(QUIRKS) ? fs.readFileSync(QUIRKS, 'utf8') : '';
+		if (now !== quirked) {
+			quirked = now;
+			draw();
+		}
+	}, 200).unref();
 	// Bracketed paste on, as Claude Code turns it on: a paste comes whole, its line breaks no Enter
 	process.stdout.write('\x1b[?2004h');
 	draw();

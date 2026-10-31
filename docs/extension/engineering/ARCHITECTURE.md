@@ -344,7 +344,9 @@ journeys over Remote-SSH from this computer to a host of a given SSH configurati
 windows, local to SSH and SSH to local, each with Remote-SSH and the editor's server in folders of the run's own.
 `FACADE_IT_ONLY=real` runs real agents of one built-in with YOLO off - never part of a default run, as it signs in and uses
 an account's usage - with `FACADE_IT_REAL` naming the built-in, `FACADE_IT_REAL_PATH` its executable, `FACADE_IT_REAL_ENV`
-the variables its terminals get and `FACADE_IT_REAL_PASS` those taken from the environment, never written to a file. Document changes to these commands before using a different build layout. Lock dependency versions, preserve licenses/notices, and keep generated/runtime files ignored.
+the variables its terminals get and `FACADE_IT_REAL_PASS` those taken from the environment, never written to a file. It
+checks what the models did as well as what Facade delivered: each message sent once, one agent started, and no agent calling
+read_messages, list_agents or read_screen more than two, three and two times, as an answer comes as a paste (D111). Document changes to these commands before using a different build layout. Lock dependency versions, preserve licenses/notices, and keep generated/runtime files ignored.
 Do not repurpose HOME/CODEX_HOME as script scratch variables.
 
 The integration fixture build is staged separately in `build/extension-it/`; `npm run test:integration` assembles it from
@@ -444,6 +446,8 @@ variables. No probe when the CLI cannot be isolated; use recorded evidence and r
 probe** under this repository's standing safety rule. Keep real model probes short. Collaborator assignments and model
 choices follow current user instructions; authorization to start one does not authorize additional collaborators or
 credential/global-configuration changes.
+The real integration runner refuses a personal-home override and state directories outside temporary storage before
+opening an editor. Its default Claude and XDG state is isolated too; opting into a real CLI never opts into global state.
 
 ### 5.4 Working tree and commits
 
@@ -468,7 +472,11 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
-- 2026-10-31: Copy Diagnostics includes component versions and terminal facts; tool logs omit arguments.
+- 2026-10-31: 2.4 retains request-bearing metadata without restoring closed pairs; 5.3 enforces temporary CLI state in
+  integration and input-capture probes (D113).
+- 2026-10-31: 2.2's identity answer names the window component's version, for 3.3's Copy Diagnostics in a remote window (D110).
+- 2026-10-31: 3.3 logs each tool call; 4.1's real run checks what the models did (D111).
+- 2026-10-31: 3.3 adds Copy Diagnostics (D110).
 - 2026-10-31: 4.1's real run takes any built-in, its configuration given to its terminals.
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 makes the window component the client component, using local
   sockets and a client registry without a broker process (D87); 1.3 adds the `schema`, `contract`, `transport` and

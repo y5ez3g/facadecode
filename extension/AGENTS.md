@@ -73,13 +73,18 @@ it, and `FACADE_IT_KEEP=1` keeps what a run left. Linux runs it under `xvfb-run 
 it, and `FACADE_IT_REMOTE_EXTENSION` the extension's folder there, built with `npm run compile`, `npm run bundle` and
 `node scripts/build-it.mjs`. `FACADE_IT_ONLY=ssh`, `ssh-ssh`, `local-ssh` or `ssh-local` runs one scenario.
 
+`node scripts/capture-inputs.mjs <cli>` records a built-in's input box as text is typed and pasted, never submitted, and
+checks the input readers against it; run it once a CLI updates, and keep its screens in `build/captures` as recorded cases.
+It creates a temporary home and working folder. `--home` and `--cwd` accept only temporary folders; sign in there for
+testing or supply temporary state overrides with `FACADE_CAPTURE_ENV`. It never inherits the owner's CLI configuration.
+
 `FACADE_IT_ONLY=real npm run test:integration` runs real agents of one built-in with YOLO off, never by default: it signs
 in and uses an account's usage. `FACADE_IT_REAL` names the built-in (Claude Code by default) and `FACADE_IT_REAL_PATH` its
-executable (`FACADE_IT_CLAUDE` for Claude Code, with `FACADE_IT_CLAUDE_CONFIG` a configuration folder signed in for
+executable (`FACADE_IT_CLAUDE` for Claude Code, with `FACADE_IT_CLAUDE_CONFIG` a temporary configuration folder signed in for
 testing). Its terminals get `FACADE_IT_REAL_ENV`, a JSON object such as its own configuration folders, and the variables
-`FACADE_IT_REAL_PASS` names, taken from your environment and never written to a file; `FACADE_IT_REAL_HOME=keep` leaves
-them your own home folder, for a CLI signed in there. The run takes back the trust each launch gave its folder, and
-restores Antigravity's settings as they were.
+`FACADE_IT_REAL_PASS` names, taken from your environment and never written to a file. State overrides must name temporary
+storage; `FACADE_IT_REAL_HOME=keep` and personal-home overrides are refused. The runner's default Claude configuration,
+terminal home and XDG directories are isolated. The run takes back each launch's temporary trust.
 
 ## 6 Other files
 
