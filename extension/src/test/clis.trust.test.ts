@@ -166,6 +166,58 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		fs.utimesSync(lock, past, past);
 		assert.deepStrictEqual([mergeTrust(target), fs.existsSync(lock), fs.existsSync(target.file)], [{ kind: 'written' }, false, true]);
 	});
+
+	test('a list entry: the folder added at the end of the list at its keys as the file is written - made where there is none, a null taken for nothing - and nothing written where it is there', () => {
+		const file = path.join(home, 'settings.json');
+		const target: TrustTarget = { file, keys: ['trustedWorkspaces'], entry: { item: cwd }, folder: cwd };
+		assert.deepStrictEqual(mergeTrust(target), { kind: 'written' });
+		assert.strictEqual(fs.readFileSync(file, 'utf8'), `${JSON.stringify({ trustedWorkspaces: [cwd] }, undefined, 2)}\n`);
+		const stamp = fs.statSync(file).mtimeMs;
+		assert.deepStrictEqual([mergeTrust(target), writeTrust('Antigravity', target), fs.statSync(file).mtimeMs], [{ kind: 'there' }, undefined, stamp]);
+		// Comments, tabs, the other settings and the other folders kept; the folder goes last
+		const settings = `{\n\t// mine\n\t"theme": "dark",\n\t"trustedWorkspaces": ["/a", "/b"]\n}\n`;
+		fs.writeFileSync(file, settings);
+		assert.deepStrictEqual(mergeTrust(target), { kind: 'written' });
+		assert.strictEqual(fs.readFileSync(file, 'utf8'), settings.replace('"/b"]', `"/b", ${JSON.stringify(cwd)}]`));
+		// An empty list in a file with CRLF line endings and a byte order mark: both kept
+		fs.writeFileSync(file, '\uFEFF{\r\n  "theme": "dark",\r\n  "trustedWorkspaces": []\r\n}\r\n');
+		mergeTrust(target);
+		const written = fs.readFileSync(file, 'utf8');
+		assert.deepStrictEqual([written.startsWith('\uFEFF'), /(?<!\r)\n/.test(written), JSON.parse(written.slice(1))], [true, false, { theme: 'dark', trustedWorkspaces: [cwd] }]);
+		fs.writeFileSync(file, '{"trustedWorkspaces":null,"theme":"dark"}');
+		mergeTrust(target);
+		assert.strictEqual(fs.readFileSync(file, 'utf8'), `{"trustedWorkspaces":${JSON.stringify([cwd])},"theme":"dark"}`);
+		fs.rmSync(file);
+		assert.strictEqual(writeTrust('Antigravity', target), `Trusted ${cwd} for Antigravity: merged ${JSON.stringify({ trustedWorkspaces: [cwd] })} into ${file}.`);
+	});
+
+	test('a list entry is there only when the list names the folder exactly as the CLI does: another case, other slashes or another spelling of it is not, as the CLI may compare text; something else at its keys is left byte for byte, with why', () => {
+		const file = path.join(home, 'settings.json');
+		const target: TrustTarget = { file, keys: ['trustedWorkspaces'], entry: { item: cwd }, folder: cwd };
+		const other = cwd.toUpperCase() === cwd ? cwd.toLowerCase() : cwd.toUpperCase();
+		for (const spelling of [other, cwd.split(path.sep).join(path.sep === '\\' ? '/' : '\\'), `${cwd}${path.sep}`, `${cwd}${path.sep}x${path.sep}..`]) {
+			fs.writeFileSync(file, JSON.stringify({ trustedWorkspaces: [spelling] }));
+			assert.deepStrictEqual(mergeTrust(target), { kind: 'written' }, spelling);
+			assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { trustedWorkspaces: [spelling, cwd] }, spelling);
+			assert.deepStrictEqual(mergeTrust(target), { kind: 'there' }, spelling);
+		}
+		// A relative entry, or one that is not text, is never the folder
+		fs.writeFileSync(file, JSON.stringify({ trustedWorkspaces: [path.basename(cwd), 7, null] }));
+		assert.deepStrictEqual(mergeTrust(target), { kind: 'written' });
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { trustedWorkspaces: [path.basename(cwd), 7, null, cwd] });
+		const unreadable: readonly (readonly [string, string])[] = [
+			['{"trustedWorkspaces":{}}', 'has an object at ["trustedWorkspaces"], where a list belongs'],
+			['{"trustedWorkspaces":"/a"}', 'has "/a" at ["trustedWorkspaces"], where a list belongs'],
+			['{"trustedWorkspaces":true}', 'has true at ["trustedWorkspaces"], where a list belongs']
+		];
+		for (const [text, why] of unreadable) {
+			fs.writeFileSync(file, text);
+			assert.deepStrictEqual(mergeTrust(target), { kind: 'unreadable', why });
+			assert.strictEqual(fs.readFileSync(file, 'utf8'), text);
+		}
+		fs.writeFileSync(file, '{"trustedWorkspaces":{}}');
+		assert.strictEqual(writeTrust('Antigravity', target), `Did not trust ${cwd} for Antigravity: ${file} has an object at ["trustedWorkspaces"], where a list belongs, so Facade left it as it is; Antigravity asks in its terminal.`);
+	});
 });
 
 suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, D62)', () => {
