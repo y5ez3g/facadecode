@@ -23,5 +23,8 @@ export const openCodeAdapter: CliAdapter = {
 	// `OpenCode` until a session has a title, then `OC | {title}`. Its reports title a session it has not named yet with its own
 	// default, `New session - {ISO time}` - `Child session` for a subagent's - which its terminal title never shows
 	title: { names: ['OpenCode', 'opencode', 'OC'], placeholder: /^(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/ },
+	sandbox: () => ({ state: 'none' }),
+	// Its own permission configuration, whose defaults allow every tool, where YOLO is off (D79)
+	approvals: yolo => yolo ? { state: 'bypassed', by: ['--auto'] } : { state: 'native' },
 	interruptExit: sigintExit
 };

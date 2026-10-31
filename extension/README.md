@@ -54,7 +54,7 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 - **A terminal for each agent**: Every agent runs in its own editor terminal. Closing a running agent's terminal asks first; Cancel keeps the agent running and opens its terminal again. See [`LIFECYCLE.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/LIFECYCLE.md).
 - **Filter**: Show only the agents in one working location or workspace folder with **Filter by Working Location...** in the panel's title bar, or with **Filter by This Location** or **Filter by This Folder** in a card's context menu. **Clear Filter** shows every agent again; the panel's badge always counts them all.
 - **Pin and Resume** *(Under development)*: Pin an agent so its conversation returns when you reopen the window, and resume a saved conversation in its original CLI and folder.
-- **Show Agent Launch and Show Agents Log** *(Under development)*: See how an agent was started, and Facade's own log.
+- **Show Agent Launch and Show Agents Log**: In the Command Palette. **Show Agent Launch** shows how each CLI would start in a working location - its program, environment, arguments, YOLO, sandbox, approvals and folder trust - without starting it, with secrets hidden. **Show Agents Log** opens Facade's own log.
 
 ### Folders and worktrees
 
@@ -78,7 +78,6 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 ### More CLIs *(Under development)*
 
 - **Qwen Code and your own CLIs**: Qwen Code as a built-in CLI, and CLIs you add yourself.
-- **Per-CLI settings**: Turn a CLI off, and set its launch arguments and environment.
 
 ### Languages
 
@@ -117,8 +116,10 @@ Facade runs the infrastructure, the CLIs do the work, and you decide the goals a
 | `facade.muse.path` | Empty | Path to Muse Code. Leave empty to use `muse` from the terminal environment's PATH. |
 | `facade.opencode.path` | Empty | Path to OpenCode. Leave empty to use `opencode` from the terminal environment's PATH. |
 | `facade.pi.path` | Empty | Path to Pi. Leave empty to use `pi` from the terminal environment's PATH. |
+| `facade.<cli>.enabled` | On | Controls whether the CLI is offered for new agents. Turning it off does not stop agents that are running. |
+| `facade.<cli>.launch` | `{}` | Advanced: additional command-line `arguments` and `environment` variables for the CLI. **Show Agent Launch** shows what each agent starts with. |
 
-These are machine settings: for a remote window, set them in the remote host's settings.
+`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. These are machine settings: for a remote window, set them in the remote host's settings.
 
 ## Status and Known Limitations
 

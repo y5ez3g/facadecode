@@ -21,7 +21,7 @@ Until agent records are reconciled use native view progress and draw no false em
 card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), New Agent
 (`new-session`), so New Agent is rightmost. The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Configure Agents... in a separate group. Go to Agent... is a Command Palette entry, not a view-menu item. Facade commands
+Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log are Command Palette entries, not view-menu items (D83). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
 
@@ -200,6 +200,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 - 2026-10-31: 2.3's Filter by Working Location steps by folder; All Locations and All Worktrees replace All
   Agents (D82).
+
+- 2026-10-31: 1.1 names Show Agent Launch and Show Agents Log as Command Palette entries, not view-menu items (D83).
 
 - 2026-10-30: Display filters, carried from the Facade Dots specification: 1.1 adds Filter by Working Location before
   New Agent and counts every card whatever is shown; 1.2 adds the filtered empty state; 2.2 the card's filters; 2.3

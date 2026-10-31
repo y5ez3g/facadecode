@@ -21,11 +21,13 @@ import { facadeHome } from '../record/paths';
 import { RetainedFile } from '../record/retained';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
+import { registerAgentsLog } from './agentsLog';
 import { HostClis } from './clis';
 import { WorkspaceLaunchHistory } from './history';
 import { WindowHuman } from './human';
 import { createLocationService, createWorktreeService } from './locations/index';
 import { yolo } from './settings';
+import { registerShowLaunch } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
 
@@ -134,7 +136,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			ready,
 			...(identity.remote ? { remote: identity.remote } : {})
 		}),
-		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log })
+		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
+		registerShowLaunch(clis, locations, log, identity.remote),
+		registerAgentsLog(agentLog.file)
 	];
 	context.subscriptions.push(...disposables);
 	return async () => {

@@ -44,18 +44,40 @@ export function withWorktreeEffects(reason: string, effects?: WorktreeCreationEf
 
 /** Facade's own reason in the person's language (UX-2.4): a CLI's configuration or a launch setting; `otherwise` where it has none. */
 export function reasonText(said: FacadeReason | undefined, otherwise: string): string {
-	const [a = '', b = '', c = ''] = said?.values ?? [];
+	const [a = '', b = '', c = '', d = '', e = ''] = said?.values ?? [];
 	switch (said?.kind) {
-		// {0} is the setting, such as facade.claude; {1} the value it holds
+		// {0} is the setting, such as facade.claude; {1} the type of value it holds, such as number
 		case 'path_type': return vscode.l10n.t("{0}.path must be a string; received {1}", a, b);
 		case 'path_blank': return vscode.l10n.t("{0}.path contains only whitespace. Set the program's path, or leave it empty to find the CLI on PATH", a);
 		case 'path_nul': return vscode.l10n.t("{0}.path contains a NUL character, which no path can hold", a);
+		// {0} is the setting, such as facade.claude; {1} the type of value it holds, such as string
+		case 'enabled_type': return vscode.l10n.t("{0}.enabled must be true or false; received {1}", a, b);
+		case 'launch_type': return vscode.l10n.t("{0}.launch must be an object with arguments and environment; received {1}", a, b);
+		// {0} is the setting, such as facade.claude; {1} a field of its launch that is no setting
+		case 'launch_field': return vscode.l10n.t("{0}.launch.{1} is not a launch setting; launch accepts only arguments and environment", a, b);
+		// {0} is the setting, such as facade.claude.launch.arguments; {1} the argument's place in it, from 0; {2} the option, such as --settings
+		case 'launch_owned': return vscode.l10n.t("{0}[{1}] is {2}, which Facade sets itself; remove it", a, b, c);
+		// {0} is the setting, such as facade.claude.launch.arguments; {1} the type of value it holds, such as object
+		case 'arguments_type': return vscode.l10n.t("{0} must be an array of strings; received {1}", a, b);
+		// {0} is the setting, such as facade.claude.launch.arguments; {1} the argument's place in it, from 0; {2} the type of value there, such as number
+		case 'argument_type': return vscode.l10n.t("{0}[{1}] must be a string; received {2}", a, b, c);
+		case 'argument_nul': return vscode.l10n.t("{0}[{1}] contains a NUL character, which no argument can carry", a, b);
+		// {0} is the setting, such as facade.claude.launch.environment; {1} the type of value it holds, such as array, or a variable's name, quoted
+		case 'environment_type': return vscode.l10n.t("{0} must be an object of variable names to strings or null; received {1}", a, b);
+		case 'environment_name': return vscode.l10n.t("{0} has the variable name {1}, which no environment can hold", a, b);
+		// {0} is the setting, such as facade.claude.launch.environment; {1} a variable's name; {2} the type of value it is given, such as number
+		case 'environment_value': return vscode.l10n.t("{0}.{1} must be a string or null; received {2}", a, b, c);
+		case 'environment_nul': return vscode.l10n.t("{0}.{1} contains a NUL character, which no variable can carry", a, b);
+		// {0} is the CLI's name, such as Claude Code; {1} its setting, such as facade.claude
+		case 'cli_disabled': return vscode.l10n.t("{0} is turned off by {1}.enabled", a, b);
 		// {0} is the CLI's command, {1} the folder, {2} the setting
 		case 'not_on_path': return vscode.l10n.t("{0} was not found on the PATH of a terminal in {1}, and {2}.path does not name its location", a, b, c);
 		case 'path_not_on_path': return vscode.l10n.t("{0}.path is {1}, which was not found on the PATH of a terminal in {2}", a, b, c);
 		case 'not_runnable': return vscode.l10n.t("{0}.path is {1}, and {2} is not a program that can be run", a, b, c);
 		// {0} is the program, {1} the argument, {2} the setting
 		case 'cmd_unsafe': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point", a, b, c);
+		// {0} is the program; {1} the setting, such as facade.claude.launch.arguments; {2} the argument's place in it; {3} the character; {4} the CLI's setting
+		case 'cmd_unsafe_setting': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given {1}[{2}] safely, as that argument contains {3}; set {4}.path to the CLI's own program or Node entry point", a, b, c, d, e);
 		// {0} is the program, {1} the setting
 		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point", a, b);
 		case 'yolo_type': return vscode.l10n.t("facade.yolo must be true or false; received {0}", a);

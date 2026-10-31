@@ -111,6 +111,16 @@
 				"category": "%command.category%"
 			},
 			{
+				"command": "facade.showAgentLaunch",
+				"title": "%command.showAgentLaunch%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.showAgentsLog",
+				"title": "%command.showAgentsLog%",
+				"category": "%command.category%"
+			},
+			{
 				"command": "facade.newWorktree",
 				"title": "%command.newWorktree%",
 				"category": "%command.category%"
@@ -289,12 +299,48 @@
 				"title": "%config.claude.title%",
 				"order": 3,
 				"properties": {
+					"facade.claude.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.claude.enabled%"
+					},
 					"facade.claude.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 1,
+						"order": 2,
 						"markdownDescription": "%config.claude.path%"
+					},
+					"facade.claude.launch": {
+						"type": "object",
+						"default": {},
+						"properties": {
+							"arguments": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"default": [],
+								"markdownDescription": "%config.launch.arguments%"
+							},
+							"environment": {
+								"type": "object",
+								"additionalProperties": {
+									"type": [
+										"string",
+										"null"
+									]
+								},
+								"default": {},
+								"markdownDescription": "%config.launch.environment%"
+							}
+						},
+						"additionalProperties": false,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.claude.launch%"
 					}
 				}
 			},
@@ -303,12 +349,48 @@
 				"title": "%config.codex.title%",
 				"order": 4,
 				"properties": {
+					"facade.codex.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.codex.enabled%"
+					},
 					"facade.codex.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 1,
+						"order": 2,
 						"markdownDescription": "%config.codex.path%"
+					},
+					"facade.codex.launch": {
+						"type": "object",
+						"default": {},
+						"properties": {
+							"arguments": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"default": [],
+								"markdownDescription": "%config.launch.arguments%"
+							},
+							"environment": {
+								"type": "object",
+								"additionalProperties": {
+									"type": [
+										"string",
+										"null"
+									]
+								},
+								"default": {},
+								"markdownDescription": "%config.launch.environment%"
+							}
+						},
+						"additionalProperties": false,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.codex.launch%"
 					}
 				}
 			},
@@ -317,12 +399,48 @@
 				"title": "%config.antigravity.title%",
 				"order": 5,
 				"properties": {
+					"facade.antigravity.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.antigravity.enabled%"
+					},
 					"facade.antigravity.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 1,
+						"order": 2,
 						"markdownDescription": "%config.antigravity.path%"
+					},
+					"facade.antigravity.launch": {
+						"type": "object",
+						"default": {},
+						"properties": {
+							"arguments": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"default": [],
+								"markdownDescription": "%config.launch.arguments%"
+							},
+							"environment": {
+								"type": "object",
+								"additionalProperties": {
+									"type": [
+										"string",
+										"null"
+									]
+								},
+								"default": {},
+								"markdownDescription": "%config.launch.environment%"
+							}
+						},
+						"additionalProperties": false,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.antigravity.launch%"
 					}
 				}
 			},
@@ -331,12 +449,48 @@
 				"title": "%config.muse.title%",
 				"order": 6,
 				"properties": {
+					"facade.muse.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.muse.enabled%"
+					},
 					"facade.muse.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 1,
+						"order": 2,
 						"markdownDescription": "%config.muse.path%"
+					},
+					"facade.muse.launch": {
+						"type": "object",
+						"default": {},
+						"properties": {
+							"arguments": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"default": [],
+								"markdownDescription": "%config.launch.arguments%"
+							},
+							"environment": {
+								"type": "object",
+								"additionalProperties": {
+									"type": [
+										"string",
+										"null"
+									]
+								},
+								"default": {},
+								"markdownDescription": "%config.launch.environment%"
+							}
+						},
+						"additionalProperties": false,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.muse.launch%"
 					}
 				}
 			},
@@ -345,12 +499,48 @@
 				"title": "%config.opencode.title%",
 				"order": 7,
 				"properties": {
+					"facade.opencode.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.opencode.enabled%"
+					},
 					"facade.opencode.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 1,
+						"order": 2,
 						"markdownDescription": "%config.opencode.path%"
+					},
+					"facade.opencode.launch": {
+						"type": "object",
+						"default": {},
+						"properties": {
+							"arguments": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"default": [],
+								"markdownDescription": "%config.launch.arguments%"
+							},
+							"environment": {
+								"type": "object",
+								"additionalProperties": {
+									"type": [
+										"string",
+										"null"
+									]
+								},
+								"default": {},
+								"markdownDescription": "%config.launch.environment%"
+							}
+						},
+						"additionalProperties": false,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.opencode.launch%"
 					}
 				}
 			},
@@ -359,12 +549,48 @@
 				"title": "%config.pi.title%",
 				"order": 8,
 				"properties": {
+					"facade.pi.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.pi.enabled%"
+					},
 					"facade.pi.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 1,
+						"order": 2,
 						"markdownDescription": "%config.pi.path%"
+					},
+					"facade.pi.launch": {
+						"type": "object",
+						"default": {},
+						"properties": {
+							"arguments": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"default": [],
+								"markdownDescription": "%config.launch.arguments%"
+							},
+							"environment": {
+								"type": "object",
+								"additionalProperties": {
+									"type": [
+										"string",
+										"null"
+									]
+								},
+								"default": {},
+								"markdownDescription": "%config.launch.environment%"
+							}
+						},
+						"additionalProperties": false,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.pi.launch%"
 					}
 				}
 			}

@@ -10,7 +10,7 @@ The [saved result](review-2026-10-30.json) records the latest outcome and local-
 
 | Check | Scope |
 | --- | --- |
-| Structure | Ten normative documents, 126 rules, bold decisions, Checks and change logs |
+| Structure | Ten normative documents, 127 rules, bold decisions, Checks and change logs |
 | References | Local Markdown links/anchors and numbered cross-references |
 | Source coverage and migration | Run only when `audit/source-inventory.json`, `audit/migration.json` and `MIGRATION.md` are present; they join in the last step |
 
@@ -26,6 +26,7 @@ revision.
 
 ## Change log
 
+- 2026-10-30: 127 rules, with CLIS-4.1.
 - 2026-10-30: 126 rules, with PANEL-2.3.
 - 2026-10-29: 125 rules, with the owner-approved ARCHITECTURE-4.2.
 - 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots audit report: structure and reference

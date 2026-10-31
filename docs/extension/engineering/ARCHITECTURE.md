@@ -228,9 +228,10 @@ product or prompts.
 
 ### 3.3 Diagnostics
 
-**The agents log records operation and lifecycle facts without secrets or task-policy judgments.**
+**Show Agents Log presents operation and lifecycle facts without secrets or task-policy judgments.**
 
-Use a log with UTC time, safe name/reference, operation ID, phase, effects and actual failure. Redact CLI credentials
+Use a read-only editor log with UTC time, safe name/reference, operation ID, phase, effects and actual failure. An empty
+log opens with `No agent events yet`, with no information toast. Redact CLI credentials
 and sensitive environment values. Correlation IDs connect UI/supervisor observations. Retain 30-day diagnostics subject
 to the capacity policy; no telemetry service is introduced by this refactor.
 
@@ -366,6 +367,8 @@ what was tested and what remains. Task assignments, pauses and discussion author
 See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this design.
 
 ## Change log
+
+- 2026-10-30: 3.3 opens the agents log as Show Agents Log, a read-only document.
 
 - 2026-10-30: Workspace storage keeps the panel's filter (PANEL-2.3); a filter stored by an earlier build is ignored.
 

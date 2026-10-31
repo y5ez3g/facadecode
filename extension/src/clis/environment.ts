@@ -20,7 +20,19 @@ export interface EnvironmentLayers {
 	readonly terminal?: EnvironmentMap;
 	/** The `env` map of the profile `terminal.integrated.defaultProfile.<platform>` names; none adds nothing. */
 	readonly profile?: EnvironmentMap;
+	/** The CLI's `.launch.environment` (CLIS-3.1). */
+	readonly launch?: EnvironmentMap;
 }
+
+/**
+ * What every agent terminal is given over its layers (CLIS-1.2): no ELECTRON_RUN_AS_NODE, which would make an Electron-based CLI run
+ * as Node, and VS Code's terminal program and colour depth.
+ */
+export const AGENT_TERMINAL_VARIABLES: readonly { readonly name: string; readonly value: string | null }[] = [
+	{ name: 'ELECTRON_RUN_AS_NODE', value: null },
+	{ name: 'TERM_PROGRAM', value: 'vscode' },
+	{ name: 'COLORTERM', value: 'truecolor' }
+];
 
 /** The variable CLIs started by Facade are told their run by: its `#aN` alias (CLIS-1.2). */
 export const RUN_VARIABLE = 'FACADE_AGENT';
@@ -89,9 +101,10 @@ export function composeEnvironment(layers: EnvironmentLayers, platform: NodeJS.P
 	}
 	applied(env, layers.terminal, layers.host, platform);
 	applied(env, layers.profile, layers.host, platform);
-	setVariable(env, 'ELECTRON_RUN_AS_NODE', null, platform);
-	setVariable(env, 'TERM_PROGRAM', 'vscode', platform);
-	setVariable(env, 'COLORTERM', 'truecolor', platform);
+	applied(env, layers.launch, layers.host, platform);
+	for (const { name, value } of AGENT_TERMINAL_VARIABLES) {
+		setVariable(env, name, value, platform);
+	}
 	return env;
 }
 

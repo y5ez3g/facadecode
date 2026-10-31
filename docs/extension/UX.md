@@ -23,7 +23,7 @@ beneath the input while typing; asynchronous checks show busy and disable accept
 selection history or filesystem state. Accepted agent launches close the picker and show card/terminal immediately.
 
 Use native view progress for initial loading and human Git operations, and existing card/terminal text for launch/setup.
-No progress, success or copy notifications. Long operation diagnostics are in the agents log. A button/key receives
+No progress, success or copy notifications. Long operation diagnostics are in Show Agents Log. A button/key receives
 immediate visual feedback without waiting for process/Git work. Routine errors keep relevant failure surfaces.
 
 ### 1.2 Notifications and errors
@@ -130,11 +130,14 @@ run and are validated against current state, without falling back to the selecti
 | `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
 | `clearFilter` | Clear Filter | Active filter; card/empty state | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
+| `showAgentLaunch` | Show Agent Launch | Always; Command Palette | CLIS-4.1 |
+| `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 
 PANEL-1.1 places the editor's own Add Folder to Workspace... command in the view menu; it is not another `facade.` command.
-Refresh, New Agent Here, Pin/Unpin Agent, the former working-location rename/navigation/copy/terminal commands, Message
-History, Show Agent Launch and Show Agents Log have no contributed entry or hidden compatibility alias.
+Refresh, New Agent Here, Pin/Unpin Agent, the former working-location rename/navigation/copy/terminal commands and Message
+History have no contributed entry or hidden compatibility alias. Facade Dots' `facade.agents.showLaunch` and
+`facade.agents.showLog` are not aliases of Show Agent Launch and Show Agents Log.
 
 ### 3.2 Context and internal commands
 
@@ -160,9 +163,11 @@ identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSel
 | Setting | Type / default | Scope | Behavioral owner |
 | --- | --- | --- | --- |
 | `facade.yolo` | boolean; true | machine in execution environment | RULES-4.3 |
+| `facade.<cli>.enabled` | boolean; true | machine in execution environment | CLIS-1.1 |
 | `facade.<cli>.path` | string; empty | machine in execution environment | CLIS-1.2 |
+| `facade.<cli>.launch` | object; `{}` | machine in execution environment | CLIS-3 |
 
-`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`; `facade.<cli>.enabled` (CLIS-1.1) and `facade.<cli>.launch` (CLIS-3) join in a later step. Settings sections in order: `Agents` (`facade.yolo`), then one section per built-in CLI in CLIS-1.1
+`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. Settings sections in order: `Agents` (`facade.yolo`), then one section per built-in CLI in CLIS-1.1
 order. Read on use and apply live where RULES-4.4 allows. Do not add an “agent default CLI/model/worktree” setting.
 Local and remote values are clearly scoped in the editor.
 
@@ -228,6 +233,10 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-10-30: 3.1 adds Show Agent Launch (CLIS-4.1) and Show Agents Log (ARCHITECTURE-3.3), Command Palette
+  commands (D83); 4.1 adds each built-in's `.enabled` and `.launch`; 1.1 points long operation diagnostics to Show
+  Agents Log.
 
 - 2026-10-30: 3.1 adds Filter by Working Location... and Clear Filter (PANEL-2.3); 3.2 keeps the card's filters and
   the filled-icon alias out of the palette and adds the `filtered` context key; 2.2 keeps a filter change still.

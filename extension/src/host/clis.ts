@@ -9,7 +9,8 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
-import { catalogOf, SettingsReader } from '../clis/catalog';
+import { CatalogEntry, catalogOf, SettingsReader } from '../clis/catalog';
+import { describeLaunches, LaunchDescription } from '../clis/describe';
 import { CliPlanError, DestinationEnvironment, discover, planLaunch, PlannedLaunch } from '../clis/plan';
 import { writeTrust } from '../clis/trust';
 import { CliCatalogPort, CliChoice, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
@@ -59,6 +60,15 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 			...said ? { said } : {},
 			...notInstalled ? { notInstalled } : {}
 		}));
+	}
+
+	/**
+	 * What Show Agent Launch shows (CLIS-4.1): each CLI as a start in `location` would have it now, with `yolo`, computed without
+	 * running any CLI or writing any file - none without a location - and each CLI's settings as read.
+	 */
+	describe(location: Location | undefined, yolo: boolean): { readonly launches: readonly LaunchDescription[]; readonly entries: readonly CatalogEntry[] } {
+		const catalog = catalogOf(this.read);
+		return { launches: location ? describeLaunches(catalog, this.destination(location), location.path, yolo) : [], entries: catalog.entries };
 	}
 
 	/**

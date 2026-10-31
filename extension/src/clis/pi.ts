@@ -75,5 +75,8 @@ export const piAdapter: CliAdapter = {
 	launchTarget: piInstallerTarget,
 	// `π - {folder}`, or `π - {session name} - {folder}` once the session is named
 	title: { names: ['π', 'Pi', 'pi'] },
+	// No approvals and no sandbox: YOLO has nothing to map (D79)
+	sandbox: () => ({ state: 'none' }),
+	approvals: () => ({ state: 'none' }),
 	interruptExit: sigintExit
 };
