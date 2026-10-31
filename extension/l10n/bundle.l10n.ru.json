@@ -138,6 +138,8 @@
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path задан как {1}, и {2} не является исполняемой программой",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} запускается через cmd.exe, которому невозможно безопасно передать аргумент {1}; задайте в {2}.path собственную программу CLI или точку входа Node",
 	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} запускается через cmd.exe, которому невозможно безопасно передать его путь; задайте в {1}.path собственную программу CLI или точку входа Node",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} запускается через cmd.exe, который не может работать в папке UNC {1}; задайте в {2}.path собственную программу CLI или точку входа Node",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} — это скрипт Node, но в PATH нет Node для его запуска",
 	"facade.yolo must be true or false; received {0}": "facade.yolo должен иметь значение true или false; получено: {0}",
 	"Configure Agents": "Настроить агентов"
 }
