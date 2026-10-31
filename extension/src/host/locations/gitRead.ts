@@ -125,14 +125,27 @@ export async function checkoutOf(git: string, folder: string): Promise<Checkout 
 		}
 		throw err;
 	}
-	const [gitDir, commonDir, inside, up] = linesOf(answer);
+	let lines = linesOf(answer);
+	// Git before 2.31 takes --path-format for a revision's flag and says it back, every answer a line down: asked again without
+	// it, the directories it gives are from the folder asked in
+	if (lines[0] === '--path-format=absolute') {
+		try {
+			lines = linesOf(await runGit(git, ['-C', folder, 'rev-parse', '--git-dir', '--git-common-dir', '--is-inside-work-tree', '--show-cdup']));
+		} catch (err) {
+			if (isNoRepository(err)) {
+				return undefined;
+			}
+			throw err;
+		}
+	}
+	const [gitDir, commonDir, inside, up] = lines;
 	if (inside !== 'true') {
 		return undefined;
 	}
 	if (!gitDir || !commonDir) {
 		throw new GitError(`Git did not return the Git directories of '${folder}'.`, 0);
 	}
-	return { root: path.resolve(folder, up ?? ''), gitDir: path.normalize(gitDir), commonDir: path.normalize(commonDir) };
+	return { root: path.resolve(folder, up ?? ''), gitDir: path.resolve(folder, gitDir), commonDir: path.resolve(folder, commonDir) };
 }
 
 /** A registered worktree, as `git worktree list --porcelain` describes it. */
