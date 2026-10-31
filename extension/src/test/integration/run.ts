@@ -205,8 +205,10 @@ async function main(): Promise<void> {
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
+		// The flags runTests gives the other parts too: Electron's sandbox cannot start where unprivileged user namespaces are
+		// restricted, as on Ubuntu 24.04 and later
 		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-conversion'), '--shared-data-dir', path.join(root, 's-conversion'),
-			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'], {
+			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, '--no-sandbox', '--disable-gpu-sandbox', '--disable-updates', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'], {
 			stdio: 'ignore',
 			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_SECOND: second, CLAUDE_CONFIG_DIR: claudeConfig }
 		});
