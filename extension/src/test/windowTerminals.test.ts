@@ -305,6 +305,15 @@ suite('Window terminal registration: actual objects across workspace host genera
 		assert.deepStrictEqual(old.map(each => each.disposed), [0, 0]);
 	});
 
+	test('an old terminal that never answers for its process keeps its own group alone: the other groups are retired by the wait\'s end', async () => {
+		bind('run-a', 'A'); bind('run-b', 'B').processId = new Promise(() => undefined);
+		const old = restartLocalHost(); bind('run-a', 'A now'); bind('run-b', 'B now');
+		const retiring = registry.request({ ...owner, kind: 'retire', runs: ['run-a', 'run-b'] });
+		await clock.tick(TERMINAL_REGISTRATION_MS);
+		assert.strictEqual(await retiring, true);
+		assert.deepStrictEqual(old.map(each => [each.name, each.disposed]), [['A', 1], ['B', 0]]);
+	});
+
 	test('a late PID result from an earlier owner cannot retire any old resource', async () => {
 		const terminal = bind('run-a', 'same'); let pid!: (value: number) => void;
 		terminal.processId = new Promise(resolve => { pid = resolve; });
