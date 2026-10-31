@@ -372,7 +372,8 @@ suite('Locations: the service on a real disk and Git (WORKTREES-1.2, 1.3; VERIFI
 		git(repo, 'commit', '-q', '--allow-empty', '-m', 'first');
 		git(repo, 'worktree', 'add', '-q', '-b', 'feat', feat);
 		const link = path.join(temp.dir, 'link');
-		fs.symlinkSync(repo, link, 'dir');
+		// A junction on Windows, which needs no administrator; a link elsewhere
+		fs.symlinkSync(repo, link, 'junction');
 		const caseBlind = process.platform === 'darwin' || process.platform === 'win32';
 		const opened = [link, feat, ...(caseBlind ? [path.join(temp.dir, 'REPO')] : [])];
 		const world = new World();

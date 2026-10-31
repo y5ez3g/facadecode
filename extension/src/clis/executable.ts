@@ -19,6 +19,11 @@ import { Environment, variableOf } from './environment';
 const NPM_SHIM_SCRIPT = /(?:"%_prog%"|"%(?:~dp0|dp0%)\\node\.exe"|(?<![\w.%\\-])node(?:\.exe)?)\s+"%(?:~dp0|dp0%)\\(?<script>[^"%]+?\.[cm]?js)"\s+%\*/i;
 /** What npm's shim sets `_prog` to: Node beside it, or Node on PATH - or another program, for a script that names one. */
 const NPM_SHIM_PROGRAM = /SET\s+"_prog=(?<program>[^"]*)"/gi;
+/**
+ * npm's shim for a package's native program, as npm 7 and later write it, whole: it finds its own folder and runs the program
+ * there with every argument, `"%dp0%\node_modules\...\opencode.exe" %*`, and nothing else.
+ */
+const NPM_NATIVE_SHIM = /^@ECHO off\r?\nGOTO start\r?\n:find_dp0\r?\nSET dp0=%~dp0\r?\nEXIT \/b\r?\n:start\r?\nSETLOCAL\r?\nCALL :find_dp0\r?\n"%dp0%\\(?<program>[^"%\r\n]+\.(?:exe|com))"[ \t]+%\*[ \t]*(?:\r?\n)?$/i;
 /** A Node that runs as itself, not through cmd.exe as a `.cmd` or `.bat` of a version manager would. */
 const NODE_EXECUTABLE = /\.(?:exe|com)$/i;
 /**
@@ -115,11 +120,26 @@ export interface LaunchTarget {
 	readonly throughCmd: boolean;
 }
 
+/** Node on the PATH of a launch in `cwd`, where it is a program of its own: not a `.cmd` or `.bat` of a version manager. */
+export function nodeOnPath(env: Environment, platform: NodeJS.Platform, cwd: string): string | undefined {
+	const node = which('node', env, platform, cwd);
+	return node && NODE_EXECUTABLE.test(node) ? node : undefined;
+}
+
+/** `relative`, as a Windows launcher names a file beside it with backslashes, in `dir`; undefined for one that leaves `dir`. */
+export function fileIn(dir: string, relative: string): string | undefined {
+	// Only Windows reads backslashes as separators
+	const target = path.join(dir, ...relative.split(/[\\/]/));
+	const inside = path.relative(dir, target);
+	return inside && inside !== '..' && !inside.startsWith(`..${path.sep}`) && !path.isAbsolute(inside) ? target : undefined;
+}
+
 /**
  * How to start the program `file` on `platform` (CLIS-1.2). On Windows a `.cmd` or `.bat` runs through cmd.exe, which reads `&`,
- * `|` and `%` in its arguments as its own and ends an argument at a line break. npm's shim for a package's command is such a file,
- * which runs the package's script with Node: that script is run with Node directly - the Node beside the shim, as the shim would,
- * or the one on the PATH of a launch in `cwd` where it is a program of its own. Anything else stays as it is, marked `throughCmd`.
+ * `|` and `%` in its arguments as its own and ends an argument at a line break. npm's shim for a package's command is such a file:
+ * one that runs the package's script with Node is run as that script with Node directly - the Node beside the shim, as the shim
+ * would, or the one on the PATH of a launch in `cwd` where it is a program of its own; one that runs a native program of the package
+ * is run as that program. Anything else stays as it is, marked `throughCmd`.
  */
 export function launchTarget(file: string, platform: NodeJS.Platform = process.platform, env: Environment = process.env, cwd: string = process.cwd()): LaunchTarget {
 	if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(file)) {
@@ -131,19 +151,23 @@ export function launchTarget(file: string, platform: NodeJS.Platform = process.p
 	} catch {
 		// Not readable: taken for what it is.
 	}
+	const dir = path.dirname(file);
 	const shim = NPM_SHIM_SCRIPT.exec(text);
 	const script = shim?.groups?.script;
 	const programs = [...text.matchAll(NPM_SHIM_PROGRAM)].map(match => match.groups?.program ?? '');
 	const runsNode = !shim?.[0].startsWith('"%_prog%"') || (programs.length > 0 && programs.every(program => /^(?:%dp0%\\node\.exe|node)$/i.test(program)));
 	if (script && runsNode) {
-		const dir = path.dirname(file);
-		// The shim names it with backslashes, which only Windows reads as separators.
 		const target = path.join(dir, ...script.split(/[\\/]/));
 		const beside = path.join(dir, 'node.exe');
-		const node = fs.existsSync(beside) ? beside : which('node', env, platform, cwd);
-		if (node && NODE_EXECUTABLE.test(node) && fs.existsSync(target)) {
+		const node = fs.existsSync(beside) ? beside : nodeOnPath(env, platform, cwd);
+		if (node && fs.existsSync(target)) {
 			return { executable: node, args: [target], throughCmd: false };
 		}
+	}
+	const native = NPM_NATIVE_SHIM.exec(text)?.groups?.program;
+	const program = native === undefined ? undefined : fileIn(dir, native);
+	if (program && isExecutable(program, platform)) {
+		return { executable: program, args: [], throughCmd: false };
 	}
 	return { executable: file, args: [], throughCmd: true };
 }

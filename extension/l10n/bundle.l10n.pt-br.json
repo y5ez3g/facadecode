@@ -117,7 +117,7 @@
 	"Change Working Location...": "Alterar Local de Trabalho...",
 	"Change Name...": "Alterar Nome...",
 	"Configure Agents...": "Configurar Agentes...",
-	"Install Claude Code or Codex in this environment, or configure the path.": "Instale o Claude Code ou o Codex neste ambiente ou configure o caminho.",
+	"Install a supported CLI in this environment, or configure its path.": "Instale uma CLI compatível neste ambiente ou configure o caminho dela.",
 	"Unavailable": "Indisponível",
 	"Select a CLI": "Selecione uma CLI",
 	"Open Folder...": "Abrir Pasta...",
@@ -135,6 +135,7 @@
 	"{0}.path is {1}, which was not found on the PATH of a terminal in {2}": "{0}.path é {1}, que não foi encontrado no PATH de um terminal em {2}",
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path é {1}, e {2} não é um programa executável",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} é executado por meio do cmd.exe, que não pode receber o argumento {1} com segurança; defina {2}.path como o próprio programa da CLI ou ponto de entrada do Node",
+	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} é executado por meio do cmd.exe, que não pode receber o caminho dele com segurança; defina {1}.path como o próprio programa da CLI ou ponto de entrada do Node",
 	"facade.yolo must be true or false; received {0}": "facade.yolo deve ser true ou false; foi recebido {0}",
 	"Configure Agents": "Configurar Agentes"
 }

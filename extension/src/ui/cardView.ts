@@ -60,9 +60,9 @@ export interface CardStatus {
 
 /**
  * What is known of a run, in RULES-3.2's precedence and PANEL-1.4's second-line priority: an unresolved error is red with its
- * reason; a native blocker is yellow in the CLI's words, leading the second line, red beside unknown activity; startup is green
- * with its stage; reliable activity is green or yellow over the CLI title or a fallback; without reliable activity the dot is red
- * and the second line says why. Never a completion claim.
+ * reason; a native blocker is yellow in the CLI's words, leading the second line, red beside unknown activity; startup - until
+ * its CLI first shows its activity (CLIS-2.3, D81) - is green with its stage; reliable activity is green or yellow over the CLI
+ * title or a fallback; without reliable activity the dot is red and the second line says why. Never a completion claim.
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	if (facts.error || facts.lifecycle === 'ended') {
@@ -78,7 +78,7 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 		const unknown = facts.activityReason?.trim() || words.activityUnavailable;
 		return { dot: 'error', stateText: words.activityUnavailable, line: `${said} · ${unknown}`, reason: said };
 	}
-	if (facts.lifecycle === 'starting') {
+	if (facts.lifecycle === 'starting' || facts.awaitingActivity) {
 		return { dot: 'working', stateText: words.starting, line: facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName) };
 	}
 	if (facts.reporting && facts.activity === 'working') {
@@ -113,7 +113,11 @@ export function referenceOf(facts: Pick<RunFacts, 'name' | 'alias'>): string {
 /** The maker avatars of the built-in CLIs, by API ID, in `media/agents` (PANEL-1.3). */
 const AVATARS: { readonly [cli: string]: string } = {
 	claude: 'avatar-claude.png',
-	codex: 'avatar-codex.png'
+	codex: 'avatar-codex.png',
+	agy: 'avatar-antigravity.png',
+	muse: 'avatar-muse.png',
+	opencode: 'avatar-opencode.png',
+	pi: 'avatar-pi.png'
 };
 
 /** A card's avatar (PANEL-1.3, UX-2.1): its built-in CLI's maker avatar; none for a CLI this build has no avatar of. */

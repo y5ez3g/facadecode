@@ -390,6 +390,7 @@ export class AgentService implements Agents, Disposable {
 		const changes: Partial<Mutable<RunFacts>> = {
 			activity: report.activity,
 			reporting: report.reporting,
+			awaitingActivity: report.awaitingActivity,
 			activityReason: report.reason,
 			blocker: report.blocker,
 			title: report.title ?? run.facts.title

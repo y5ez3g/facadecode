@@ -10,24 +10,29 @@
 
 import { updateJsonFile } from '../base/files';
 import type { JsonObject } from '../base/json';
-import { addMembers, applyJsonEdits, JsonEdit, JsonNode, JsonObjectNode, JsonStyle, jsonStyleOf, memberOf, replaceValue } from '../base/jsonc';
+import { addItems, addMembers, applyJsonEdits, JsonEdit, JsonNode, JsonObjectNode, JsonStyle, jsonStyleOf, memberOf, nodeValue, replaceValue } from '../base/jsonc';
 import { FileLock, withFileLock } from '../base/lock';
 
 /**
  * Where a CLI keeps its trust in the folder a launch starts in, and what (CLIS-3.3): its file, the keys of its entry there,
- * outermost first, and the entry - the value at those keys.
+ * outermost first, and the entry - a value at those keys, or an item of the list at those keys.
  */
 export interface TrustTarget {
 	readonly file: string;
 	readonly keys: readonly string[];
-	/** The value set. */
-	readonly entry: { readonly value: boolean };
+	/** The value set, or the item a list is given. */
+	readonly entry: { readonly value: boolean } | { readonly item: string };
 	/** The folder trusted, as the CLI names it. */
 	readonly folder: string;
 }
 
 /** What became of a trust: written, there already, or the file left as it is, with why. */
 export type TrustOutcome = { readonly kind: 'written' } | { readonly kind: 'there' } | { readonly kind: 'unreadable'; readonly why: string };
+
+/** The entry's value, a list of its item for a list. */
+function leafOf(target: TrustTarget): unknown {
+	return 'item' in target.entry ? [target.entry.item] : target.entry.value;
+}
 
 /** `leaf` inside an object for each of `keys`, outermost first. */
 function nested(keys: readonly string[], leaf: unknown): unknown {
@@ -36,7 +41,7 @@ function nested(keys: readonly string[], leaf: unknown): unknown {
 
 /** The entry with the objects it is in, as JSON: what a file that has none of it is given, and what is shown of it. */
 export function trustEntryJson(target: TrustTarget): JsonObject {
-	return nested(target.keys, target.entry.value) as JsonObject;
+	return nested(target.keys, leafOf(target)) as JsonObject;
 }
 
 /**
@@ -69,8 +74,8 @@ function kindOf(node: JsonNode): string {
 
 /**
  * The edits of `text`, read as `root`, that give it `target`'s entry: the objects at its keys added where they are not there - a
- * null taken for nothing - and the value set, unless what is there already trusts the folder. Why not, where something of another
- * kind is in the entry's way.
+ * null taken for nothing - and the value set, or the item added to the list, unless what is there already trusts the folder. Why
+ * not, where something of another kind is in the entry's way.
  */
 function trustEdits(text: string, root: JsonObjectNode, target: TrustTarget, style: JsonStyle): readonly JsonEdit[] | string {
 	const { keys, entry } = target;
@@ -79,7 +84,7 @@ function trustEdits(text: string, root: JsonObjectNode, target: TrustTarget, sty
 		const member = memberOf(node, key);
 		const there = member && !(member.value.kind === 'scalar' && member.value.value === null) ? member.value : undefined;
 		if (!there) {
-			const value = nested(keys.slice(at + 1), entry.value);
+			const value = nested(keys.slice(at + 1), leafOf(target));
 			return member ? [replaceValue(text, member.value, value, style)] : addMembers(text, node, [[key, value]], style);
 		}
 		const where = JSON.stringify(keys.slice(0, at + 1));
@@ -88,6 +93,13 @@ function trustEdits(text: string, root: JsonObjectNode, target: TrustTarget, sty
 				return `has ${kindOf(there)} at ${where}, where an object belongs`;
 			}
 			node = there;
+		} else if ('item' in entry) {
+			if (there.kind !== 'array') {
+				return `has ${kindOf(there)} at ${where}, where a list belongs`;
+			}
+			// Only the folder as the CLI names it: one in another case or with other slashes may not be the one a CLI that compares
+			// the text trusts, and another item beside it does no harm
+			return there.items.some(had => nodeValue(had) === entry.item) ? [] : addItems(text, there, [entry.item], style);
 		} else {
 			if (there.kind !== 'scalar') {
 				return `has ${kindOf(there)} at ${where}, where ${JSON.stringify(entry.value)} belongs`;

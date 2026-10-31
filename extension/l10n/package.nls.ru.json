@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "Запускайте агентов Claude Code / Codex параллельно в VS Code.",
+	"description": "Запускайте агентов Claude Code, Codex, Antigravity, Muse Code, OpenCode и Pi параллельно в VS Code.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Новый агент...",
@@ -19,6 +19,14 @@
 	"config.claude.path": "Путь к Claude Code. Оставьте пустым, чтобы использовать \"claude\" из PATH среды терминала.",
 	"config.codex.title": "Codex",
 	"config.codex.path": "Путь к Codex. Оставьте пустым, чтобы использовать \"codex\" из PATH среды терминала.",
+	"config.antigravity.title": "Antigravity",
+	"config.antigravity.path": "Путь к Antigravity. Оставьте пустым, чтобы использовать \"agy\" из PATH среды терминала.",
+	"config.muse.title": "Muse Code",
+	"config.muse.path": "Путь к Muse Code. Оставьте пустым, чтобы использовать \"muse\" из PATH среды терминала.",
+	"config.opencode.title": "OpenCode",
+	"config.opencode.path": "Путь к OpenCode. Оставьте пустым, чтобы использовать \"opencode\" из PATH среды терминала.",
+	"config.pi.title": "Pi",
+	"config.pi.path": "Путь к Pi. Оставьте пустым, чтобы использовать \"pi\" из PATH среды терминала.",
 	"windowDisplayName": "Оконный компонент Facade Code",
 	"windowDescription": "Координатор идентификации окон и непрерывности сеансов для Facade Code."
 }

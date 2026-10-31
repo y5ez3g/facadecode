@@ -39,9 +39,10 @@ and do not reinstate a requirement explicitly superseded by the current body.
 deleted behavior must change its expectation; it is not evidence that the deleted feature should be restored.
 
 The Facade Code extension is committed in additive steps, and each commit carries only the specification its step needs.
-This is the subset for step 1, one of a sequence of owner-tested steps: Claude Code and Codex with the whole user interface
-that serves them. Every rule keeps its final number, so the numbering has gaps that later steps fill; their rules, decisions
-and checks are not part of this step.
+This is the subset for two of a sequence of owner-tested steps: step 1, Claude Code and Codex with the whole user
+interface that serves them, and the step that adds Antigravity, Muse Code, OpenCode and Pi at the same level (D77).
+Every rule keeps its final number, so the numbering has gaps that later steps fill; their rules, decisions
+and checks are not part of these steps.
 
 ## 3 Coverage and evidence limits
 
@@ -65,6 +66,8 @@ Resolve routine engineering details within scope; raise concrete rule/scenario/e
 the owner to repeatedly approve speculative edge cases. Verification states remain separate for spec, code and product.
 
 ## Change log
+
+- 2026-10-30: The step summary includes the step adding Antigravity, Muse Code, OpenCode and Pi (D77).
 
 - 2026-10-30: Corrected the stale step summary to include the owner's already-authorized Codex addition to step 1.
 

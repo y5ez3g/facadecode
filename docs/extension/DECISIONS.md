@@ -92,6 +92,11 @@ rejected several of them. Their old implementation/tests must follow the current
 | D74 | Owner-calibrated: the card's hover gives each fact its own line and writes the home folder as ~ (except on Windows), so the editor's tooltip never breaks a long path mid-line; compared on real tooltips before choosing | PANEL-1.5 |
 | D75 | Owner-decided 2026-10-29: without a public close signal, a window's runs end five minutes after its extension host disconnects from ptyd, unless a reloaded or reopened window of the workspace claims them; reload, remote extension-host restart and network loss with the remote host connected keep them. The timer is cleanup policy, not close detection | RULES-4.1 |
 | D76 | Owner-decided 2026-10-30 after a native reproduction that Close All, Close Others and Close Saved closed every agent terminal without a question: closing a terminal tab still closes its agent, but a live agent is asked about first, once for tabs closed together; Cancel keeps it and opens its terminal again; `terminal.integrated.confirmOnKill` is followed | LIFECYCLE-3.1 |
+| D77 | Owner-decided 2026-10-30: Antigravity, Muse Code, OpenCode and Pi are built-ins at the level Claude Code and Codex have in step 1 - offered when installed, `.path`, the YOLO mapping, folder trust (D62), OSC 7501 activity, titles, icon and avatar - ported from Facade Dots where it had them. Their MCP, messages, Resume, Pin, model and effort follow those features' later steps | CLIS-1.1, UX-4.1, PANEL-1.3 |
+| D78 | Owner-decided 2026-10-30: OpenCode is supported on its 2.x line (`@opencode/cli`), which reports its activity by OSC 7501. Its 1.x line (`opencode-ai`) sends no reports: a run of it starts and shows unavailable activity; Facade writes no plugin to make it report | CLIS-2.3 |
+| D79 | Derived from the CLIs' own behavior: Pi has no approvals or sandbox, and OpenCode's default permissions allow every tool, so YOLO off leaves them as they natively are; the README says so, and Facade adds no approval mechanism of its own (RULES-4.3's sandbox applies where a CLI has one) | CLIS-1.3 |
+| D80 | Owner-decided 2026-10-30, after Muse Code was found to send no OSC 7501 on Windows, signed in or not, while it reports on Linux: there is no neutral or gray dot; Muse Code alone gets a fallback, its activity read from its own screen while it sends no reports, as the other built-ins all report themselves | CLIS-2.3 |
+| D81 | Owner-decided 2026-10-30, after seeing every card red for the seconds before its CLI's first report: a run is still starting - green, with its startup stage - until its CLI first shows its activity, by a report or, for Muse Code, its screen, for at most 20 s from its process start. The bound keeps a CLI that never reports, as OpenCode 1.x, from showing it starts forever: past it, the card is red with why | CLIS-2.3, RULES-3.2 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -157,6 +162,10 @@ proven platform limitations instead of silently weakening a product promise. The
 full spec revision; it does not authorize publication or unrelated source changes.
 
 ## Change log
+
+- 2026-10-30: Recorded the owner's addition of Antigravity, Muse Code, OpenCode and Pi (D77), the OpenCode line (D78)
+  and YOLO off for CLIs that natively ask for nothing (D79), Muse Code's screen fallback without a gray dot (D80), and
+  a run's startup that lasts until its CLI first shows its activity, at most 20 s (D81).
 
 - 2026-10-30: Recorded the owner's five-minute cleanup policy (D75) and tab-close confirmation (D76).
 

@@ -70,8 +70,8 @@ rather than treated as proof of exit.
 
 **Working is green, not working is yellow, and an error or unavailable reliable status is red.**
 
-An unresolved error takes precedence. Without such an error, observed work/startup is green and observed not-working
-is yellow. Native permission/login questions are yellow unless a separate error exists. Unknown activity is an error:
+An unresolved error takes precedence. Without such an error, observed work/startup is green - startup lasting until the
+CLI first shows its activity, within CLIS-2.3's bound - and observed not-working is yellow. Native permission/login questions are yellow unless a separate error exists. Unknown activity is an error:
 use red and explain the unavailable status in the second line; there is no neutral/outline fourth state.
 A quiet screen does not prove idle. A turn ending becomes yellow without a notification. Recovery clears only the
 corresponding error. Reduced motion removes breathing, never the accessible state description.
@@ -163,6 +163,8 @@ accumulated-operation counter may permanently disable an otherwise usable enviro
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
 ## Change log
+
+- 2026-10-30: 3.2's startup lasts until the CLI first shows its activity, within CLIS-2.3's bound (D81).
 
 - 2026-10-30: 4.1 states the owner's five-minute policy (D75) after a window's extension host disconnects, replacing the
   prohibition on timed cleanup; 4.4 notes that the disable setting joins in a later step.

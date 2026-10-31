@@ -52,7 +52,7 @@ proves native support.
 | Gate | Required proof | Current evidence / status |
 | --- | --- | --- |
 | G2 True window lifetime | Distinguish reload, extension-host restart, remote loss, close-one, close-last and immediate reopen without mistaken replay/restart | Owner-accepted five-minute policy (D75) implemented in place of a close detector. Candidate 4/5 native evidence on a macOS VS Code 1.143.1 client with Remote-SSH to Linux x64 and Windows x64: reload and remote extension-host restart keep the original runs; close-last then immediate reopen keeps the original processes; no takeover ends them at about 300 s. Evidence stays with the handoff. True close detection remains OPEN |
-| G5 Native environment matrix | Native macOS/Windows/Linux, SSH, WSL and containers, compatible editor, native PTY ABI, paths/quoting/Unicode/keys and package install | Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. Not run: Windows/Linux clients, WSL, containers, a compatible editor, the declared minimum VS Code 1.105, other architectures. OPEN |
+| G5 Native environment matrix | Native macOS/Windows/Linux, SSH, WSL and containers, compatible editor, native PTY ABI, paths/quoting/Unicode/keys and package install | Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. On 2026-10-30, a Windows x64 client with VS Code 1.140.0: the integration suite, and the four CLIs D77 adds started from the panel; a macOS arm64 client with VS Code 1.143.1: the native build, unit and package checks and the integration suite; Linux x64: the native build, unit and package checks. Not run: a full Windows or a Linux client walkthrough, WSL, containers, a compatible editor, the declared minimum VS Code 1.105, other architectures. OPEN |
 
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
@@ -91,7 +91,7 @@ passes.
 | J02 | Multi-folder defaults, last successful CLI/location, missing-location fallback, edit name, search/scroll CLI choices, cancel | Remembered/opened location stays selected independently of main-first display order; current name and actual location remain visible during search; last successful CLI preselected; editable label allows empty strings, `human` and duplicates; canceled choices not remembered; LIFECYCLE-1 |
 | J03 | Open main versus open its worktree, including symlink/case/nested paths | Main checkout first in the picker; the actual opened folder remains the fallback launch location; no duplicate physical lock; WORKTREES-1 |
 | J04 | CLI/worktree creation fails; native post-create setup fails | Actual startup failures retain pair and report to initiator; setup success is not a launch gate; LIFECYCLE-1.5 |
-| J05 | Working, idle, native blocker, unavailable reliable status, blocker plus unavailable status, recovery | RULES-3 dot meanings; PANEL-1.4 leads with the known blocker before generic unavailable text while retaining that explanation; no idle/turn-end popup |
+| J05 | Startup before the CLI's first report and past CLIS-2.3's bound, working, idle, native blocker, unavailable reliable status, blocker plus unavailable status, recovery | RULES-3 dot meanings; startup green until the first activity, then red with why; PANEL-1.4 leads with the known blocker before generic unavailable text while retaining that explanation; no idle/turn-end popup |
 | J06 | Normal exit 0; Ctrl+C ordinary interruption from the person; unexplained nonzero exit | Actor-independent classification; abnormal retained; unknown cause no popup; RULES-3.3 |
 | J07 | Close card/terminal, stop during creation, unreachable remote cleanup; close live agents' tabs alone and with Close All, then Cancel and confirm | Immediately remove pair; cleanup background, no fixed five-second wait; created files remain; one question for tabs closed together, Cancel reopens their terminals, confirm ends them; LIFECYCLE-3.1 |
 | J09 | Reload, extension-host restart, remote loss, close-one, close-last, immediate reopen, close-last without reopen | G2 trace; original process survives reload/disconnect; reopen within five minutes claims the original runs; without it they end at five minutes (RULES-4.1) |
@@ -161,6 +161,9 @@ for review, not acceptance evidence.
 | 4.1, 4.3 | Handoff, spec-amendment log and independent review |
 
 ## Change log
+
+- 2026-10-30: G5 records the Windows x64 and macOS arm64 client and Linux x64 build evidence of the step adding four
+  CLIs (D77); J05 covers startup until the CLI's first report (D81).
 
 - 2026-10-30: J07 covers LIFECYCLE-3.1's confirmation when live agents' tabs are closed alone or together; J09 and G2
   follow the five-minute policy (D75); G2 and G5 record the candidate 4/5 native evidence and what was not run; C01 waits

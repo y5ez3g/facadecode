@@ -99,6 +99,17 @@ suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 		});
 	});
 
+	test('a clear, or a full reset, after a probe and no report since takes nothing away: the program\'s first report is still waited for (CLIS-2.3, D81)', () => {
+		const status = new ProgramStatus();
+		const seen: (RunStatus | undefined)[] = [];
+		status.onDidChange(each => seen.push(each));
+		status.asked();
+		status.clear();
+		status.report({ state: 'clear' });
+		assert.deepStrictEqual(seen.map(each => each && [each.state, each.negotiating]), [['pending', true]]);
+		assert.deepStrictEqual([status.status?.state, status.status?.negotiating], ['pending', true]);
+	});
+
 	test('the title a report gives is kept until another report gives another or the record is cleared; a title change alone keeps the episode\'s time', async () => {
 		const status = new ProgramStatus();
 		status.report({ state: 'working', title: 'Fixing tests' });

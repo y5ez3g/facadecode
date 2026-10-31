@@ -55,7 +55,8 @@ automatically launch an agent. This prerequisite step does not ask the person to
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
 
-Use maker avatars in `media/agents/avatar-claude.png` and `avatar-codex.png`. Location is alias/branch/folder, prefixed by workspace folder in
+Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`,
+`avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Location is alias/branch/folder, prefixed by workspace folder in
 a multi-folder window unless it is named that folder's name already, as a plain folder is (D66). A related worktree can
 be outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
 temporarily disconnected location is retained. The location keeps its own width, as a chat list keeps a message's time,
@@ -67,7 +68,7 @@ all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibili
 **The second line adds the most useful known fact without claiming task completion.**
 
 Priority: retained failure or specific connection/status error; known native blocker; generic activity-unavailable
-explanation; active startup stage; CLI title; fallback. When a known native blocker coexists with unavailable activity,
+explanation; active startup stage, active until the CLI first shows its activity (CLIS-2.3); CLI title; fallback. When a known native blocker coexists with unavailable activity,
 lead with the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
 Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
 `Ready for your first message`. Never `Done, waiting for you` from a turn end. Native blockers use CLI words or
@@ -172,6 +173,9 @@ removes fades/glides. Keyboard Page Up/Down moves fully visible row count minus 
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
+
+- 2026-10-30: 1.3 adds the Antigravity, Muse Code, OpenCode and Pi avatars (D77); 1.4's startup stage lasts until the
+  CLI first shows its activity (D81).
 
 - 2026-10-30: 1.3 adds the Codex avatar; 3.1 names the current source paths.
 

@@ -453,7 +453,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 			await done;
 			assert.deepStrictEqual([noFolder, noCli, nothing, ui.commands, launched], [
 				['Open Folder...'],
-				[['Configure Agents...', 'Unavailable', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Configure Agents...'], 'Install Claude Code or Codex in this environment, or configure the path.', 'facade.claude.path is "/opt/claude", which is not a program that can be run', [['Claude Code', 'gear: Configure Agents']]],
+				[['Configure Agents...', 'Unavailable', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Configure Agents...'], 'Install a supported CLI in this environment, or configure its path.', 'facade.claude.path is "/opt/claude", which is not a program that can be run', [['Claude Code', 'gear: Configure Agents']]],
 				['Configure Agents...', 'Options', 'Change Working Location...', 'Change Name...'],
 				[['vscode.openFolder'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents']],
 				[]

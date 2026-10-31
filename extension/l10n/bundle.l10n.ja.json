@@ -117,7 +117,7 @@
 	"Change Working Location...": "作業場所を変更...",
 	"Change Name...": "名前を変更...",
 	"Configure Agents...": "Agent の構成...",
-	"Install Claude Code or Codex in this environment, or configure the path.": "この環境に Claude Code または Codex をインストールするか、パスを設定してください。",
+	"Install a supported CLI in this environment, or configure its path.": "この環境にサポートされている CLI をインストールするか、そのパスを設定してください。",
 	"Unavailable": "使用不可",
 	"Select a CLI": "CLI を選択",
 	"Open Folder...": "フォルダーを開く...",
@@ -135,6 +135,7 @@
 	"{0}.path is {1}, which was not found on the PATH of a terminal in {2}": "{0}.path は {1} ですが、{2} のターミナルの PATH 上に見つかりませんでした",
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path は {1} ですが、{2} は実行可能なプログラムではありません",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} は cmd.exe 経由で実行されますが、引数 {1} を安全に渡すことができません。{2}.path を CLI 自身のプログラムまたは Node エントリ ポイントに設定してください",
+	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} は cmd.exe 経由で実行されますが、そのパスを安全に渡すことができません。{1}.path を CLI 自身のプログラムまたは Node エントリ ポイントに設定してください",
 	"facade.yolo must be true or false; received {0}": "facade.yolo は true または false である必要があります。受け取った値: {0}",
 	"Configure Agents": "Agent の構成"
 }

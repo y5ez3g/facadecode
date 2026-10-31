@@ -159,7 +159,7 @@ identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSel
 | `facade.yolo` | boolean; true | machine in execution environment | RULES-4.3 |
 | `facade.<cli>.path` | string; empty | machine in execution environment | CLIS-1.2 |
 
-`<cli>` is `claude` or `codex`; `facade.<cli>.enabled` (CLIS-1.1) and `facade.<cli>.launch` (CLIS-3) join in a later step. Settings sections in order: `Agents` (`facade.yolo`), then one section per built-in CLI in CLIS-1.1
+`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`; `facade.<cli>.enabled` (CLIS-1.1) and `facade.<cli>.launch` (CLIS-3) join in a later step. Settings sections in order: `Agents` (`facade.yolo`), then one section per built-in CLI in CLIS-1.1
 order. Read on use and apply live where RULES-4.4 allows. Do not add an “agent default CLI/model/worktree” setting.
 Local and remote values are clearly scoped in the editor.
 
@@ -225,6 +225,9 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-10-30: 4.1 adds the `.path` settings of Antigravity, Muse Code, OpenCode and Pi, each in its own section in
+  CLIS-1.1 order (D77).
 
 - 2026-10-30: 4.1 lists the step 1 settings for Claude Code and Codex, with `.enabled` and `.launch` in a later step;
   3.2 removes two context keys nothing sets or uses.

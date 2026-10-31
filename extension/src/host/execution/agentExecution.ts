@@ -26,6 +26,9 @@ const OPEN_WAIT_MS = 10_000;
 const START_COLUMNS = 120;
 const START_ROWS = 30;
 
+/** How long after its process started a run is still starting while its CLI has shown no activity (CLIS-2.3, D81). */
+const STARTUP_MS = 20_000;
+
 /** What the composition root gives the execution port. */
 export interface AgentExecutionOptions {
 	/** The workspace key ptyd keeps this window's runs under: a reloaded window of it finds them again. */
@@ -41,6 +44,8 @@ export interface AgentExecutionOptions {
 	readonly log: (line: string) => void;
 	/** The local companion registers actual native objects under this activation claim. */
 	readonly terminalOwner?: TerminalOwner & { readonly remote: boolean };
+	/** How long a run is still starting while its CLI shows no activity: {@link STARTUP_MS}, or a test's. */
+	readonly startupMs?: number;
 }
 
 /** One run's pair as this window shows it: its terminal, and its process once it has one. */
@@ -54,6 +59,13 @@ interface Pair {
 	/** The CLI whose adapter reads its reports and exit. */
 	cli: string;
 	process?: { readonly pid: number; readonly startedAt: number };
+	/** When its startup ends, by this window's monotonic clock (CLIS-2.3, D81); and whether it is told again then. */
+	startupEnds?: number;
+	startupCheck?: boolean;
+	/** Whether its CLI has shown its activity to this window: its startup is then over for good (D81). */
+	shown?: boolean;
+	/** Whether the connection its run was heard by is lost: until it is claimed again, it is told as lost alone (RULES-3.1). */
+	lost?: boolean;
 	exited?: RunExit;
 	status?: RunStatus;
 	terminalTitle: string;
@@ -176,7 +188,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		try {
 			info = await client.request('spawn', {
 				run, owner: this.options.owner, file: plan.executable, args: plan.args, cwd: plan.cwd, env: plan.env,
-				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...meta }
+				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...meta },
+				...plan.screenStatus ? { screenStatus: plan.screenStatus } : {}
 			});
 		} catch (err) {
 			if (!(err instanceof PtydLost)) {
@@ -188,6 +201,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			client = recovered.client;
 			info = recovered.attached.info;
 			snapshot = recovered.attached;
+			// Claimed again through a connection of its own
+			pair.lost = false;
 		}
 		if (this.pairs.get(run) !== pair) {
 			// Closed while it started: it ends at once, unseen (RULES-5.2)
@@ -195,6 +210,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			throw new Error('The agent was closed before its CLI started.');
 		}
 		pair.process = { pid: info.pid, startedAt: info.startedAt };
+		pair.startupEnds = this.startupEndOf(info.startedAt);
 		pair.starting = false;
 		pair.status = info.status;
 		pair.terminalTitle = info.title;
@@ -209,6 +225,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	/** Keeps an accepted start visibly disconnected until its actual outcome is known; never replays the start request. */
 	private async recoverStart(pair: Pair): Promise<{ readonly client: PtydClient; readonly attached: Requests['attach']['result'] }> {
 		const reason = vscode.l10n.t("The connection to the agent's process was lost; reconnecting");
+		pair.lost = true;
 		this.reports.fire({ run: pair.run, activity: 'unknown', reporting: false, reason, disconnected: true });
 		while (this.pairs.get(pair.run) === pair && !this.session.closed) {
 			try {
@@ -268,6 +285,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			throw new Error('The agent was closed while reattaching.');
 		}
 		pair.process = { pid: live.pid, startedAt: live.startedAt };
+		pair.startupEnds = this.startupEndOf(live.startedAt);
+		pair.lost = false;
 		pair.exited = info.exited;
 		pair.status = info.status;
 		pair.terminalTitle = info.title;
@@ -459,20 +478,41 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		const facts = activityOf(pair.status);
 		const title = this.titleOf(pair);
 		pair.terminal.pty.setTitle(title);
-		if (!pair.process || pair.exited) {
+		// What it showed before its connection was lost is no news: claimed again, it is told what it shows then
+		if (!pair.process || pair.exited || pair.lost) {
 			return;
 		}
-		const reason = facts.unknown === 'not_reporting'
-			? vscode.l10n.t("The CLI has not reported its activity")
-			: facts.unknown === 'waiting'
-				? vscode.l10n.t("Waiting for the CLI's first activity report")
-				: facts.unknown === 'cleared'
-					? vscode.l10n.t("The CLI cleared its activity report")
-					: undefined;
+		// No report yet - none at all, or a probe answered and none since: still starting until its bound, unless it showed its
+		// activity before (CLIS-2.3, D81)
+		const unshown = facts.unknown === 'not_reporting' || facts.unknown === 'waiting';
+		if (!unshown) {
+			pair.shown = true;
+		}
+		const left = unshown && !pair.shown ? (pair.startupEnds ?? 0) - performance.now() : 0;
+		const awaiting = left > 0;
+		if (awaiting && !pair.startupCheck) {
+			pair.startupCheck = true;
+			void timeout(Math.ceil(left), pair.lifetime.signal).then(() => {
+				pair.startupCheck = false;
+				if (this.pairs.get(pair.run) === pair) {
+					this.tell(pair);
+				}
+			}, () => undefined);
+		}
+		const reason = awaiting
+			? undefined
+			: facts.unknown === 'not_reporting'
+				? vscode.l10n.t("The CLI has not reported its activity")
+				: facts.unknown === 'waiting'
+					? vscode.l10n.t("Waiting for the CLI's first activity report")
+					: facts.unknown === 'cleared'
+						? vscode.l10n.t("The CLI cleared its activity report")
+						: undefined;
 		const report: ActivityReport = {
 			run: pair.run,
 			activity: facts.activity,
 			reporting: facts.reporting,
+			...(awaiting ? { awaitingActivity: true } : {}),
 			...(facts.blocker ? { blocker: facts.blocker } : {}),
 			...(reason ? { reason } : {}),
 			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("The CLI reported an error") } : {}),
@@ -483,6 +523,15 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			pair.told = told;
 			this.reports.fire(report);
 		}
+	}
+
+	/**
+	 * When the startup of a run whose process started at `startedAt`, by ptyd's clock, ends by this window's monotonic one: what is
+	 * left of its bound now - never more than all of it, however the clocks differ - so that no later clock change moves it.
+	 */
+	private startupEndOf(startedAt: number): number {
+		const bound = this.options.startupMs ?? STARTUP_MS;
+		return performance.now() + Math.max(0, Math.min(bound, startedAt + bound - Date.now()));
 	}
 
 	/** The title `pair`'s CLI gives its tab now (CLIS-2.3). */
@@ -552,6 +601,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			}
 			const facts = activityOf(pair.status);
 			const title = this.titleOf(pair);
+			pair.lost = true;
 			const report: ActivityReport = {
 				run: pair.run,
 				activity: 'unknown',
@@ -585,6 +635,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				if (this.pairs.get(pair.run) !== pair || this.session.closed) {
 					continue;
 				}
+				pair.lost = false;
 				pair.terminal.pty.bind(this.binding(client, pair.run), { screen, seq });
 				if (info.exited) {
 					this.ended(pair, info.exited);

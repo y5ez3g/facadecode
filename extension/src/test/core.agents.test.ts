@@ -281,6 +281,17 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.get(id)?.title, 'Fix login', 'the last title stays until the CLI sets another');
 	});
 
+	test('a run is awaiting its CLI\'s activity while its reports say so, and no longer once one does not (CLIS-2.3, D81)', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
+		await settle();
+		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, awaitingActivity: true });
+		assert.deepStrictEqual([world.agents.get(id)?.lifecycle, world.agents.get(id)?.awaitingActivity, world.agents.get(id)?.activityReason], ['running', true, undefined]);
+		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' });
+		const facts = world.agents.get(id)!;
+		assert.deepStrictEqual(['awaitingActivity' in facts, facts.activityReason], [false, 'The CLI has not reported its activity']);
+	});
+
 	test('confirmed location removal closes the agents there; other locations continue (W05, RULES-2.4)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
