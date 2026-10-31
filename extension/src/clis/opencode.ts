@@ -2,8 +2,71 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as path from 'path';
+import { isJsonObject, JsonObject } from '../base/json';
 import { CliAdapter, sigintExit } from './adapter';
-import { NO_TOOLS } from './tools';
+import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';
+
+/** OpenCode's inline configuration: read after its configuration files, it goes on them for the run alone (CLIS-1.2). */
+export const OPENCODE_CONFIG = 'OPENCODE_CONFIG_CONTENT';
+
+/** The run's skill, which its configuration names as instructions: a file of the run alone. */
+const SKILL_PATH = path.join('skills', SERVER_NAME, 'SKILL.md');
+
+/** How long one call to the server may take, in milliseconds: its default 30 seconds is shorter than a start may be. */
+const CALL_MS = 3_600_000;
+
+/**
+ * The run's inline configuration: the server, its tools - named `facade_<tool>` - allowed whatever the person's own rules say, a rule
+ * read later taking precedence, and the skill as instructions (CLIS-1.3, 2.2).
+ */
+export function openCodeConfig(server: McpServer, skill: string): JsonObject {
+	return {
+		mcp: { [SERVER_NAME]: { type: 'local', command: [server.command, ...server.args], environment: { ...server.env }, enabled: true, timeout: CALL_MS } },
+		permission: { [`${SERVER_NAME}_*`]: 'allow' },
+		instructions: [skill]
+	};
+}
+
+/**
+ * The inline configuration a run starts with: `ours` on the person's own `theirs`, where they set one - their servers, rules and
+ * instructions kept, Facade's rule after theirs - and ours alone where theirs is none or no JSON object.
+ */
+export function mergedOpenCodeConfig(ours: string, theirs: string | undefined): string {
+	let mine: unknown;
+	try {
+		mine = theirs === undefined ? undefined : JSON.parse(theirs);
+	} catch {
+		mine = undefined;
+	}
+	const facade = JSON.parse(ours) as JsonObject;
+	if (!isJsonObject(mine)) {
+		return ours;
+	}
+	const permission = typeof mine.permission === 'string' ? { '*': mine.permission } : isJsonObject(mine.permission) ? mine.permission : {};
+	return JSON.stringify({
+		...mine,
+		mcp: { ...isJsonObject(mine.mcp) ? mine.mcp : {}, ...facade.mcp as JsonObject },
+		permission: { ...permission, ...facade.permission as JsonObject },
+		instructions: [...Array.isArray(mine.instructions) ? mine.instructions : [], ...facade.instructions as string[]]
+	});
+}
+
+/**
+ * OpenCode is given the server, its tools' permission and the skill in the run's own inline configuration, `OPENCODE_CONFIG_CONTENT`,
+ * and runs with `--standalone`: its own server process, which reads that configuration - the background service the person's other
+ * sessions share would not - and ends with the run (CLIS-2.2).
+ */
+const openCodeTools: ToolsIntegration = {
+	capability: { state: 'unverified', reason: 'the server, its tools allowed and the skill as instructions in the run\'s own OPENCODE_CONFIG_CONTENT, with --standalone so that the run has its own server process' },
+	where: runDir => `${OPENCODE_CONFIG} of the run alone with --standalone, and the skill in ${path.join(runDir, SKILL_PATH)}`,
+	inject: ({ server, skill, runDir }) => ({
+		values: {},
+		runFiles: [{ path: path.join(runDir, SKILL_PATH), content: skill }],
+		project: [],
+		env: { [OPENCODE_CONFIG]: JSON.stringify(openCodeConfig(server, path.join(runDir, SKILL_PATH))) }
+	})
+};
 
 /**
  * OpenCode in its own UI, its 2.x line (CLIS-1.3, D78). YOLO on: `--auto`, which answers each of its permission questions for the
@@ -18,13 +81,21 @@ export const openCodeAdapter: CliAdapter = {
 	setting: 'facade.opencode',
 	command: 'opencode',
 	groups: {
-		yoloOn: ['--auto']
+		connect: ['--standalone'],
+		yoloOn: ['--auto'],
+		prompt: ['--prompt', '${prompt}']
 	},
+	// Its interface takes no model or effort option; its configuration's model applies
 	takes: { model: false, effort: false },
 	values: () => ({}),
-	tools: NO_TOOLS,
+	tools: openCodeTools,
+	mergeVariable: (name, ours, theirs) => name === OPENCODE_CONFIG ? mergedOpenCodeConfig(ours, theirs) : ours,
+	initialPrompt: { state: 'unverified', reason: 'the prompt as the value of --prompt, which starts the interactive session with it' },
+	promptProblem: prompt => prompt.startsWith('-') ? 'OpenCode would read a prompt that starts with - as an option' : undefined,
 	// `OpenCode` until a session has a title, then `OC | {title}`. Its reports title a session it has not named yet with its own
 	// default, `New session - {ISO time}` - `Child session` for a subagent's - which its terminal title never shows
+	// Its input, recorded on macOS with OpenCode 2.1.4 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
+	input: { adapter: 'opencode-frame', evidence: 'its input box, on its start screen and in a session: empty or its placeholder, a typed, pasted, long-paste, history or slash-command draft, while working, and gone behind its permission question and command palette' },
 	title: { names: ['OpenCode', 'opencode', 'OC'], placeholder: /^(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/ },
 	interruptExit: sigintExit
 };

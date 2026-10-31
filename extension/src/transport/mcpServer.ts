@@ -15,11 +15,22 @@ import { CallFailed } from './ptydLink';
 /** The MCP protocol versions the server speaks, the newest first: the one it answers where a client asks another. */
 export const MCP_VERSIONS: readonly string[] = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
+/** What a server that speaks for no run says: its CLI was not started by Facade Code (CLIS-2.2). */
+const NOT_SERVING = 'This session was not started by Facade Code, so the Facade Code tools are not available in it.';
+
+/** A tool's mark that Antigravity gives it to the model directly rather than on demand (CLIS-2.2). */
+const ALWAYS_LOAD = { 'antigravity/alwaysLoad': true };
+
 /** What the server needs: who it is, and how a tool call reaches the window. */
 export interface McpShimOptions {
 	/** The run's short ID, `#aN`, whose instructions the model is given. */
 	readonly alias: string;
 	readonly version: string;
+	/**
+	 * Whether it speaks for a run: false where its CLI started it without the run's variables - a session the person started by hand
+	 * in a folder that holds a running agent's server entry (CLIS-2.2). It then offers no tools and connects nowhere.
+	 */
+	readonly serving?: boolean;
 	readonly link: {
 		connect(): Promise<void>;
 		call(call: Omit<ToolCall, 'elapsedMs' | 'caller' | 'protocol'>, readAt: number): Promise<unknown>;
@@ -131,23 +142,28 @@ export class McpShim {
 		switch (method) {
 			case 'initialize': {
 				const asked = isObject(params) ? params.protocolVersion : undefined;
-				// Saying hello now tells the window the run's tools are there (MCP-6.1); a call connects again where this fails
-				this.options.link.connect().catch(err => this.options.log(err instanceof Error ? err.message : String(err)));
+				const serving = this.options.serving !== false;
+				if (serving) {
+					// Saying hello now tells the window the run's tools are there (MCP-6.1); a call connects again where this fails
+					this.options.link.connect().catch(err => this.options.log(err instanceof Error ? err.message : String(err)));
+				}
 				return {
 					protocolVersion: typeof asked === 'string' && MCP_VERSIONS.includes(asked) ? asked : MCP_VERSIONS[0],
 					capabilities: { tools: { listChanged: false } },
 					serverInfo: { name: 'facade', version: this.options.version },
-					instructions: instructionsFor(this.options.alias)
+					instructions: serving ? instructionsFor(this.options.alias) : NOT_SERVING
 				};
 			}
 			case 'ping':
 				return {};
 			case 'tools/list':
-				return { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
+				// Each tool given directly where a CLI otherwise loads tools on demand: Antigravity's first turn has them so (CLIS-2.2)
+				return { tools: this.options.serving === false ? [] : TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, _meta: ALWAYS_LOAD })) };
 			case 'tools/call': {
 				if (!isObject(params) || typeof params.name !== 'string') {
 					throw new RpcError(-32602, 'Invalid params: tools/call names its tool by a string `name`.');
 				}
+
 				// MCP's arguments are optional: none given is an empty set, which the window validates as any other (MCP-1.1). A query's
 				// route answers it within ten seconds, the window's or not (MCP-1.3)
 				const call = {

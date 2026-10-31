@@ -279,9 +279,15 @@ authenticated enrollment, source-binding proofs or scoped delegation. A delibera
 protection provided. Basic schema/routing validation remains.
 
 Calls to Facade's own tools never ask for the CLI's approval, with YOLO on or off: CLIS-2.2 pre-approves the `facade`
-server for each CLI. The CLI's own commands and edits keep the approval mode that RULES-4.3 chose for the run. The
-server is never marked required, so a failure to start or connect it leaves a usable CLI with tools_state unavailable.
-The MCP switch affects future injection, not existing connected runs. Version/integration failure leaves a usable CLI.
+server for each CLI that has a rule for one server's tools - Muse Code has none, and its own approvals apply (D94). The
+CLI's own commands and edits keep the approval mode that RULES-4.3 chose for the run. The server is never marked
+required, so a failure to start or connect it leaves a usable CLI with tools_state unavailable. The MCP switch affects
+future injection, not existing connected runs. Version/integration failure leaves a usable CLI.
+
+Each tool the server lists carries `_meta: {"antigravity/alwaysLoad": true}`, which Antigravity reads to give the model
+the tool directly rather than on demand; other CLIs ignore it. A server started without a run's variables - by a session
+the person started in a folder whose shared entry is a running agent's - speaks for no run: it lists no tools and says
+so in its instructions, and a call to it fails with `configuration_invalid` and no effect.
 
 ### 6.2 Protocol and recovery
 
@@ -315,6 +321,8 @@ No migration guide for already-published user skills is required: this is the fi
 
 ## Change log
 
+- 2026-10-31: 6.1 marks the tools for Antigravity to give the model directly, lists none for a session the person started
+  in a folder whose shared entry is a running agent's, and names Muse Code's own approvals (D94).
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots contract with the owner's 2026-10-30
   decisions: one delivery state in which read_messages delivers (D82), no CLI-version gate on message input, with
   `unsupported` and `input_unknown` replacing capability_unverified (D83), Facade's tools pre-approved in both YOLO modes

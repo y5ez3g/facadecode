@@ -272,6 +272,19 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.match(headlineOf(answer), /prompt #m1 is still being delivered after startup; its outcome is recorded later as a Facade result in your inbox/);
 		});
 
+		test('a prompt that goes after startup waits for what the start types before the first turn: its budget starts once the tools are ready (COLLABORATION-2.2)', async () => {
+			const { lead } = team(s);
+			let ready!: () => void;
+			s.agents.warmUps.set(runId(100), new Promise<void>(resolve => ready = resolve));
+			s.messages.respond = () => ({ status: 'success' });
+			const answering = s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.' });
+			await new Promise(resolve => setTimeout(resolve, 10));
+			assert.deepStrictEqual(s.messages.sent, [], 'nothing is sent before the tools are ready');
+			ready();
+			const result = resultOf(await answering);
+			assert.deepStrictEqual([s.messages.sent.length, result.data.prompt.path, result.data.prompt.status], [1, 'post_start', 'success']);
+		});
+
 		test('a failed prompt leaves the started agent running and its start a success', async () => {
 			const { lead } = team(s);
 			s.agents.startWith = { state: 'running', prompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'No mapping.' } } };

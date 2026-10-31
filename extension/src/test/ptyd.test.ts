@@ -342,7 +342,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const idle = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
 		const working = `◈ Thinking (1s · esc to interrupt)\r\n\r\n${idle}`;
 		const drawing = (ask: boolean) => `const out = s => process.stdout.write(s); ${ask ? 'out(\'\\x1b]7501;?\\x1b\\\\\');' : ''} out('\\x1b[2J\\x1b[H' + ${JSON.stringify(idle)}); setTimeout(() => out('\\x1b[2J\\x1b[H' + ${JSON.stringify(working)}), 600); setInterval(() => {}, 1000);`;
-		const start = (run: string, ask: boolean) => client.request('spawn', { run, owner: 'w1', file: process.execPath, args: ['-e', drawing(ask)], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: {}, screenStatus: 'muse' });
+		const start = (run: string, ask: boolean) => client.request('spawn', { run, owner: 'w1', file: process.execPath, args: ['-e', drawing(ask)], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {}, screenStatus: 'muse' });
 		const statesOf = (events: readonly RunEvent[]) => events.flatMap(event => event.event === 'status' && event.status ? [event.status.state] : []);
 		const read = eventsOf(client, 'screen');
 		await start('screen', false);

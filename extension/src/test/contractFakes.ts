@@ -66,7 +66,7 @@ class Deferred<T> {
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
-export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'close' | 'list' | 'get'> {
+export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get'> {
 	readonly runs = new Map<RunId, RunFacts>();
 	readonly launched: LaunchRequest[] = [];
 	readonly closed: RunId[] = [];
@@ -124,6 +124,13 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'close' |
 
 	started(run: RunId): Promise<StartOutcome> {
 		return this.starts.get(run)?.promise ?? Promise.resolve({ state: 'closed' });
+	}
+
+	/** What a start types before its first turn: held per run until a test settles it, settled at once otherwise. */
+	readonly warmUps = new Map<RunId, Promise<void>>();
+
+	warmedUp(run: RunId): Promise<void> {
+		return this.warmUps.get(run) ?? Promise.resolve();
 	}
 
 	async close(run: RunId): Promise<CleanupResult | 'already_ended'> {

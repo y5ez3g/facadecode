@@ -163,6 +163,11 @@ export interface LaunchPlan {
 	readonly input: { readonly adapter?: string; readonly capability: CapabilityState };
 	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
 	readonly screenStatus?: string;
+	/**
+	 * What its start types before its first turn (COLLABORATION-2.2): `text` into its empty input, then `close` once its screen shows
+	 * `ready`, a regular expression's source - where its first turn could not use the Facade tools otherwise.
+	 */
+	readonly warmUp?: { readonly text: string; readonly ready: string; readonly close: string };
 }
 
 /** A reason Facade itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */
@@ -523,6 +528,11 @@ export interface Agents {
 	launch(request: LaunchRequest): RunId;
 	/** Settles when the accepted run's process started, its launch failed or it was closed first. */
 	started(run: RunId): Promise<StartOutcome>;
+	/**
+	 * Settles once what the run's start types before its first turn is done or given up (COLLABORATION-2.2) - at once for a run whose
+	 * CLI needs none, or that this window does not hold.
+	 */
+	warmedUp(run: RunId): Promise<void>;
 	/** Close Agent, the single close action for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
 	close(run: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */

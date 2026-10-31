@@ -27,6 +27,8 @@ const log = (line: string) => process.stderr.write(`facade: ${line}\n`);
 const link = new PtydLink(process.env[SHIM_PTYD] ?? '', process.env[SHIM_RUN] ?? '');
 const shim = new McpShim({
 	alias: process.env[SHIM_AGENT] ?? '',
+	// Started without a run's variables - by a CLI the person started in a folder a running agent's server entry is in - it serves none
+	serving: !!process.env[SHIM_RUN] && !!process.env[SHIM_PTYD],
 	version: versionOf(),
 	link,
 	write: message => process.stdout.write(JSON.stringify(message) + '\n'),

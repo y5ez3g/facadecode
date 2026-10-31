@@ -93,6 +93,20 @@ export interface LaunchInput {
 	readonly platform: NodeJS.Platform;
 	readonly model?: string;
 	readonly effort?: string;
+	/** The environment the launch starts with, where an adapter reads the person's own CLI settings by it. */
+	readonly env?: Environment;
+}
+
+/**
+ * What a run's start types into its CLI before its first turn (COLLABORATION-2.2), where that turn could not use the Facade tools
+ * otherwise: `text` entered into its empty input, its screen waited on until it shows `ready`, then `close` pressed.
+ */
+export interface WarmUp {
+	readonly text: string;
+	/** What its screen shows once the tools are there, as a regular expression's source. */
+	readonly ready: string;
+	/** The key that closes what `text` opened, as press_keys names keys. */
+	readonly close: string;
 }
 
 /** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition. */
@@ -117,6 +131,15 @@ export interface CliAdapter {
 	readonly initialPrompt?: Capability;
 	/** Why `prompt` cannot be its native initial prompt argument, where it cannot - it then goes in after startup. */
 	promptProblem?(prompt: string): string | undefined;
+	/** Why its initial prompt goes in as the first message after startup, where it has no native prompt argument a run can use. */
+	readonly promptAfterStart?: string;
+	/** What its start types before its first turn, where that turn could not use the Facade tools otherwise (COLLABORATION-2.2). */
+	readonly warmUp?: WarmUp;
+	/**
+	 * The value its launch gives the variable `name` the tools set (CLIS-1.2), where the tools' value `ours` must keep the person's
+	 * own value `theirs` of it.
+	 */
+	mergeVariable?(name: string, ours: string, theirs: string | undefined): string;
 	/** What its launch must change in the environment, for a quirk of the CLI's own (CLIS-1.2). */
 	adjustEnvironment?(env: { [name: string]: string }, platform: NodeJS.Platform): void;
 	/**

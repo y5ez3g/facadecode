@@ -5,12 +5,18 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import type { CliAdapter } from '../clis/adapter';
 import { Catalog, catalogOf } from '../clis/catalog';
 import { claudeAdapter } from '../clis/claude';
 import { codexAdapter } from '../clis/codex';
+import { antigravityAdapter } from '../clis/antigravity';
+import { museAdapter } from '../clis/muse';
+import { openCodeAdapter } from '../clis/opencode';
+import { piAdapter } from '../clis/pi';
 import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconcileRuns, releaseProject, releaseRun } from '../clis/injected';
 import { DestinationEnvironment, inputOf, PlanInput, planLaunch } from '../clis/plan';
+import { INPUT_ADAPTERS } from '../ptyd/composer';
 import { McpServer, ProjectWrite, runDirOf, ToolsInput } from '../clis/tools';
 import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
 import type * as HostClisModule from '../host/clis';
@@ -45,7 +51,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	setup(() => {
 		temp = tempDir('fc-inject-');
 		const bin = path.join(temp.dir, 'bin');
-		for (const name of ['claude', 'codex']) {
+		for (const name of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
 			program(bin, name);
 		}
 		cwd = path.join(temp.dir, 'repo');
@@ -101,19 +107,119 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([planned.injection!.runFiles, planned.tools], [[], { state: 'injected' }]);
 	});
 
+	test('Pi: the server registered for the session by a per-run extension, -e, its tools declared to the model directly, and the skill in a per-run --skill folder; nothing in the project', async () => {
+		const planned = plan({ cli: 'pi', tools });
+		const extension = path.join(tools.runDir, 'facade-pi.mjs');
+		assert.deepStrictEqual(planned.args.slice(0, 4), ['-e', extension, '--skill', path.join(tools.runDir, 'skills', 'facade')]);
+		assert.deepStrictEqual([planned.tools, planned.injection!.project, planned.injection!.env, planned.warmUp], [{ state: 'injected' }, [], {}, undefined]);
+		const files = Object.fromEntries(planned.injection!.runFiles.map(each => [path.relative(tools.runDir, each.path), each.content]));
+		assert.deepStrictEqual(Object.keys(files), ['facade-pi.mjs', path.join('skills', 'facade', 'SKILL.md')]);
+		assert.strictEqual(files[path.join('skills', 'facade', 'SKILL.md')], FACADE_SKILL);
+		// The extension as Pi loads it: a module whose default export registers the server for the session
+		fs.mkdirSync(tools.runDir, { recursive: true });
+		fs.writeFileSync(extension, files['facade-pi.mjs']);
+		const registered: [string, unknown][] = [];
+		// A real dynamic import: the compiled tests are CommonJS, whose import() becomes require
+		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
+		const loaded = await importModule(pathToFileURL(extension).href);
+		loaded.default({ registerMcpServer: (name: string, config: unknown) => registered.push([name, config]) });
+		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3600, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
+	});
+
+	test('Antigravity: a plugin in the folder\'s .agents/plugins/facade, shared, the run\'s variables in its environment; its tools allowed for the session beside the person\'s own rules; its MCP panel opened before the first turn', () => {
+		const settings = path.join(temp.dir, '.gemini', 'antigravity-cli', 'settings.json');
+		fs.mkdirSync(path.dirname(settings), { recursive: true });
+		fs.writeFileSync(settings, '{\n\t// theirs\n\t"permissions": { "allow": ["command(ls)"], "deny": ["mcp(other_other/*)"] },\n\t"colorScheme": "dark"\n}\n');
+		const before = fs.readFileSync(settings, 'utf8');
+		const planned = plan({ cli: 'agy', yolo: false, tools });
+		assert.strictEqual(planned.args[0], '--settings');
+		// --settings replaces a key whole for the session: the person's rules go with Facade's (CLIS-1.3)
+		assert.deepStrictEqual(JSON.parse(planned.args[1]), { permissions: { allow: ['command(ls)', 'mcp(facade_facade/*)'], deny: ['mcp(other_other/*)'] } });
+		assert.ok(!planned.args.includes('--dangerously-skip-permissions'), 'YOLO off keeps its own approvals');
+		assert.strictEqual(fs.readFileSync(settings, 'utf8'), before, 'planning writes nothing');
+		const plugin = path.join('.agents', 'plugins', 'facade');
+		assert.deepStrictEqual(planned.injection!.project.map(each => each.path), [path.join(plugin, 'plugin.json'), path.join(plugin, 'mcp_config.json'), path.join(plugin, 'skills', 'facade', 'SKILL.md')]);
+		const config = planned.injection!.project[1] as Extract<ProjectWrite, { kind: 'file' }>;
+		// A shared entry holds no run's identity: the run's variables reach the server through the CLI's environment
+		assert.deepStrictEqual(JSON.parse(config.content), { mcpServers: { facade: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1' } } } });
+		assert.deepStrictEqual(planned.injection!.env, { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' });
+		assert.deepStrictEqual([planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.ELECTRON_RUN_AS_NODE], ['run-1', '/tmp/ptyd.sock', undefined]);
+		assert.deepStrictEqual(planned.warmUp, { text: '/mcp', ready: '✓\\s+facade_facade\\b', close: 'Escape' });
+		// Its first task waits for the tools: it goes as the first message once they are ready
+		const prompted = plan({ cli: 'agy', tools, prompt: 'Review the diff' });
+		assert.deepStrictEqual(prompted.prompt?.path, 'post_start');
+		assert.match(prompted.prompt!.capability.reason, /starts the Facade tools of a folder only with its first turn/);
+		assert.ok(!prompted.args.includes('Review the diff'));
+		// Settings it cannot read give the rule alone; without the tools, no --settings and nothing typed before the first turn
+		fs.writeFileSync(settings, '{ not json');
+		assert.deepStrictEqual(JSON.parse(plan({ cli: 'agy', tools }).args[1]), { permissions: { allow: ['mcp(facade_facade/*)'] } });
+		const without = plan({ cli: 'agy' });
+		assert.deepStrictEqual([without.args.includes('--settings'), without.warmUp], [false, undefined]);
+	});
+
+	test('Muse Code: the server as the facade entry of the project\'s .mcp.json, its variables references to the CLI\'s environment that are empty where unset, and the skill in .agents/skills/facade; no argument carries JSON', () => {
+		const planned = plan({ cli: 'muse', tools, prompt: 'Fix the build' });
+		assert.deepStrictEqual(planned.injection!.project, [
+			{ kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } } },
+			{ kind: 'file', path: path.join('.agents', 'skills', 'facade', 'SKILL.md'), content: FACADE_SKILL }
+		]);
+		assert.deepStrictEqual([planned.injection!.runFiles, planned.injection!.env], [[], { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' }]);
+		assert.strictEqual(planned.env.FACADE_AGENT, '#a1');
+		assert.deepStrictEqual(planned.args, ['--disable-approval', '--disable-sandbox', '--trust-workspace', '--', 'Fix the build']);
+		assert.deepStrictEqual(planned.prompt?.path, 'native');
+	});
+
+	test('OpenCode: the server, its tools allowed and the skill as instructions in the run\'s own OPENCODE_CONFIG_CONTENT, on the person\'s own where they set one, with --standalone for a server process of its own', () => {
+		const planned = plan({ cli: 'opencode', yolo: false, tools, prompt: 'Explain main.ts' });
+		const skill = path.join(tools.runDir, 'skills', 'facade', 'SKILL.md');
+		assert.deepStrictEqual(planned.args, ['--standalone', '--prompt', 'Explain main.ts']);
+		assert.deepStrictEqual(planned.injection!.runFiles, [{ path: skill, content: FACADE_SKILL }]);
+		const facade = { type: 'local', command: [SERVER.command, ...SERVER.args], environment: SERVER.env, enabled: true, timeout: 3_600_000 };
+		assert.deepStrictEqual(JSON.parse(planned.env.OPENCODE_CONFIG_CONTENT), { mcp: { facade }, permission: { 'facade_*': 'allow' }, instructions: [skill] });
+		assert.deepStrictEqual(planned.injection!.project, []);
+		// The person's own inline configuration stays, Facade's rule after theirs
+		const theirs = { ...destination, host: { ...destination.host, OPENCODE_CONFIG_CONTENT: '{"permission":"ask","mcp":{"mine":{"type":"local","command":["x"]}},"instructions":["a.md"],"model":"p/m"}' } };
+		assert.deepStrictEqual(JSON.parse(plan({ cli: 'opencode', tools }, theirs).env.OPENCODE_CONFIG_CONTENT), {
+			permission: { '*': 'ask', 'facade_*': 'allow' }, mcp: { mine: { type: 'local', command: ['x'] }, facade }, instructions: ['a.md', skill], model: 'p/m'
+		});
+		const unreadable = { ...destination, host: { ...destination.host, OPENCODE_CONFIG_CONTENT: 'not json' } };
+		assert.deepStrictEqual(Object.keys(JSON.parse(plan({ cli: 'opencode', tools }, unreadable).env.OPENCODE_CONFIG_CONTENT)), ['mcp', 'permission', 'instructions']);
+		// A prompt it would read as an option goes after startup; without the tools, nothing of Facade's in its environment
+		assert.strictEqual(plan({ cli: 'opencode', tools, prompt: '-v' }).prompt?.path, 'post_start');
+		const without = plan({ cli: 'opencode' }, theirs);
+		assert.deepStrictEqual([without.args.includes('--standalone'), without.env.OPENCODE_CONFIG_CONTENT], [false, theirs.host.OPENCODE_CONFIG_CONTENT]);
+	});
+
+	test('Pi\'s prompt is its message after --, except one it would read as a file to attach', () => {
+		assert.deepStrictEqual(plan({ cli: 'pi', prompt: 'Fix it' }).args.slice(-3), ['--approve', '--', 'Fix it']);
+		const attached = plan({ cli: 'pi', prompt: '@notes.md says why' });
+		assert.deepStrictEqual([attached.prompt?.path, attached.args.includes('@notes.md says why')], ['post_start', false]);
+		assert.match(attached.prompt!.capability.reason, /starts with @ as a file to attach/);
+	});
+
 	test('without tools - orchestration off - nothing is injected and no file is named; planning writes nothing', () => {
-		for (const cli of ['claude', 'codex']) {
+		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
 			const planned = plan({ cli });
 			assert.deepStrictEqual([planned.tools, planned.injection], [{ state: 'not_injected' }, undefined], cli);
-			assert.ok(!planned.args.some(arg => /mcp|plugin-dir|no-daemon|allowedTools/.test(arg)), cli);
-			assert.ok(!('FACADE_RUN' in planned.env), cli);
+			assert.ok(!planned.args.some(arg => /mcp|plugin-dir|no-daemon|allowedTools|^-e$|--skill|--standalone/.test(arg)), `${cli}: ${planned.args.join(' ')}`);
+			// Claude Code's own run settings go with every launch; Antigravity's only with the tools
+			assert.ok(cli !== 'agy' || !planned.args.includes('--settings'), planned.args.join(' '));
+			assert.ok(!('FACADE_RUN' in planned.env) && !('OPENCODE_CONFIG_CONTENT' in planned.env), cli);
 		}
 		plan({ cli: 'claude', tools });
 		assert.ok(!fs.existsSync(tools.runDir), 'planning writes nothing');
 	});
 
-	test('model and effort: each built-in takes both, in its own spelling, only where asked (CLIS-1.4)', () => {
-		assert.deepStrictEqual([claudeAdapter.takes, codexAdapter.takes], [{ model: true, effort: true }, { model: true, effort: true }]);
+	test('model and effort: each built-in takes both, in its own spelling, only where asked - OpenCode, whose interface takes neither, refuses them (CLIS-1.4)', () => {
+		assert.deepStrictEqual([claudeAdapter, codexAdapter, antigravityAdapter, museAdapter, piAdapter, openCodeAdapter].map(each => each.takes),
+			[...Array(5).fill({ model: true, effort: true }), { model: false, effort: false }]);
+		const agy = plan({ cli: 'agy', model: 'gemini-3.8-flash', effort: 'high' });
+		assert.deepStrictEqual(agy.args.slice(agy.args.indexOf('--model'), agy.args.indexOf('--model') + 4), ['--model', 'gemini-3.8-flash', '--effort', 'high']);
+		const muse = plan({ cli: 'muse', model: 'muse-spark-1.3', effort: 'max' });
+		assert.deepStrictEqual(muse.args.slice(muse.args.indexOf('--model'), muse.args.indexOf('--model') + 6), ['--model', 'muse-spark-1.3', '-c', 'reasoning_effort="max"', '-c', 'model_reasoning_efforts={}']);
+		const pi = plan({ cli: 'pi', model: 'qwen/qwen3.8-max', effort: 'low' });
+		assert.deepStrictEqual(pi.args.slice(pi.args.indexOf('--model'), pi.args.indexOf('--model') + 4), ['--model', 'qwen/qwen3.8-max', '--thinking', 'low']);
+		assert.throws(() => plan({ cli: 'opencode', model: 'p/m' }), /OpenCode has no supported way to set a model/);
 		const claude = plan({ cli: 'claude', model: 'opus', effort: 'high' });
 		assert.deepStrictEqual(claude.args.slice(claude.args.indexOf('--model'), claude.args.indexOf('--model') + 4), ['--model', 'opus', '--effort', 'high']);
 		assert.deepStrictEqual([claude.model, claude.effort], ['opus', 'high']);
@@ -127,7 +233,11 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	test('the message input is read by each CLI\'s reader whatever its version; there is no version list (CLIS-2.1, D83)', () => {
 		assert.deepStrictEqual(inputOf(claudeAdapter), { adapter: 'claude-frame', capability: { state: 'supported', reason: inputOf(claudeAdapter).capability.reason } });
 		assert.deepStrictEqual(inputOf(codexAdapter).adapter, 'codex-prompt');
-		for (const each of [claudeAdapter, codexAdapter]) {
+		// Every built-in has a reader ptyd has, recorded on its screens
+		const all = [claudeAdapter, codexAdapter, antigravityAdapter, museAdapter, openCodeAdapter, piAdapter];
+		assert.deepStrictEqual(all.map(each => inputOf(each).adapter), ['claude-frame', 'codex-prompt', 'agy-frame', 'muse-frame', 'opencode-frame', 'pi-frame']);
+		assert.deepStrictEqual(all.map(each => inputOf(each).adapter).filter(id => !INPUT_ADAPTERS.includes(id!)), []);
+		for (const each of all) {
 			assert.strictEqual(inputOf(each).capability.state, 'supported');
 			assert.doesNotMatch(inputOf(each).capability.reason, /\d+\.\d+\.\d+|verified with/);
 		}
@@ -418,6 +528,14 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		assert.deepStrictEqual([claude.takes, claude.initialPrompt?.mapping, claude.initialPrompt?.capability.state, claude.input?.adapter, claude.input?.capability.state],
 			[{ model: true, effort: true }, ['--', '${prompt}'], 'unverified', 'claude-frame', 'supported']);
 		assert.strictEqual(described[1].input?.adapter, 'codex-prompt');
+		// Each new built-in: its reader, its choices, and how its first task goes in - Antigravity's after its tools are ready
+		assert.deepStrictEqual(described.slice(2).map(each => [each.cli, each.input?.adapter, each.takes, each.initialPrompt?.mapping ?? null, each.initialPrompt?.capability.state]), [
+			['agy', 'agy-frame', { model: true, effort: true }, null, 'unavailable'],
+			['muse', 'muse-frame', { model: true, effort: true }, ['--', '${prompt}'], 'unverified'],
+			['opencode', 'opencode-frame', { model: false, effort: false }, ['--prompt', '${prompt}'], 'unverified'],
+			['pi', 'pi-frame', { model: true, effort: true }, ['--', '${prompt}'], 'unverified']
+		]);
+		assert.match(described[2].initialPrompt!.capability.reason, /first task goes in as its first message once they are ready/);
 		// The programs here are no installations naming a version
 		assert.deepStrictEqual(described.map(each => each.version), described.map(() => undefined));
 		assert.ok(!fs.existsSync(home));

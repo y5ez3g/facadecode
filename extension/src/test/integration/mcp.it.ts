@@ -73,7 +73,7 @@ interface Step {
 }
 
 /** Has the agent `alias` run `steps` through its Facade tools, and answers what each step got, by the step's tool and its order. */
-async function script(alias: string, steps: readonly Step[], ms = 45_000): Promise<{ readonly answer: (tool: string, nth?: number) => Answer['result']; readonly content: (tool: string, nth?: number) => any }> {
+async function script(alias: string, steps: readonly Step[], ms = 90_000): Promise<{ readonly answer: (tool: string, nth?: number) => Answer['result']; readonly content: (tool: string, nth?: number) => any }> {
 	const phase = phases.get(alias) ?? 0;
 	phases.set(alias, phase + 1);
 	fs.writeFileSync(`${RECORD}.mcp-script.${alias}`, JSON.stringify(steps));
@@ -110,9 +110,65 @@ function received(alias: string): string[] {
 	return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as string) : [];
 }
 
-function argsOf(alias: string): { readonly cwd: string; readonly args: string[] } {
+function argsOf(alias: string): { readonly cwd: string; readonly args: string[]; readonly env: { readonly [name: string]: string } } {
 	return JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8'));
 }
+
+const after = (args: readonly string[], option: string) => args[args.indexOf(option) + 1];
+
+/**
+ * How the agent `alias` was given its Facade server and skill, as its CLI takes them (CLIS-2.2), and what keeps its tools from asking
+ * with YOLO off (CLIS-1.3): checked by the files and arguments its launch had.
+ */
+function assertTools(alias: string): void {
+	const { cwd, args, env } = argsOf(alias);
+	const routes = (variables: { readonly [name: string]: string }) => ['FACADE_PTYD', 'FACADE_RUN'].every(name => typeof variables[name] === 'string' && variables[name] !== '');
+	switch (CLI) {
+		case 'claude': {
+			const server = JSON.parse(fs.readFileSync(after(args, '--mcp-config'), 'utf8')).mcpServers.facade;
+			assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_PTYD', 'FACADE_RUN']);
+			assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
+			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (D84)');
+			break;
+		}
+		case 'codex':
+			assert.ok(args.includes('mcp_servers.facade.default_tools_approval_mode="approve"'), args.join(' '));
+			assert.ok(args.some(arg => arg.startsWith('mcp_servers.facade.env=') && arg.includes('FACADE_RUN')), args.join(' '));
+			assert.ok(fs.existsSync(path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md')), 'the skill in its folder');
+			break;
+		case 'agy': {
+			assert.ok(JSON.parse(after(args, '--settings')).permissions.allow.includes('mcp(facade_facade/*)'), args.join(' '));
+			const plugin = path.join(cwd, '.agents', 'plugins', 'facade');
+			assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(plugin, 'mcp_config.json'), 'utf8')).mcpServers.facade.env), ['ELECTRON_RUN_AS_NODE']);
+			assert.ok(fs.existsSync(path.join(plugin, 'skills', 'facade', 'SKILL.md')) && routes(env), 'the plugin, and the run\'s variables in its environment');
+			// Its MCP panel was opened before its first turn: that turn has the tools (COLLABORATION-2.2)
+			assert.ok(fs.existsSync(`${RECORD}.panel.${alias}`), 'its MCP panel opened before its first turn');
+			break;
+		}
+		case 'muse': {
+			const entry = JSON.parse(fs.readFileSync(path.join(cwd, '.mcp.json'), 'utf8')).mcpServers.facade;
+			assert.deepStrictEqual(entry.env.FACADE_RUN, '${FACADE_RUN:-}');
+			assert.ok(args.includes('--trust-workspace') && routes(env), args.join(' '));
+			assert.ok(fs.existsSync(path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md')), 'the skill in its folder');
+			break;
+		}
+		case 'opencode': {
+			const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+			assert.deepStrictEqual([config.permission['facade_*'], args[0]], ['allow', '--standalone']);
+			assert.ok(fs.existsSync(config.instructions.at(-1)) && routes(config.mcp.facade.environment), JSON.stringify(config));
+			break;
+		}
+		case 'pi':
+			assert.ok(fs.readFileSync(after(args, '-e'), 'utf8').includes('"exposure":"direct"'), 'its own extension');
+			assert.ok(fs.existsSync(path.join(after(args, '--skill'), 'SKILL.md')), 'its own skill folder');
+			break;
+		default:
+			assert.fail(`no check for ${CLI}`);
+	}
+}
+
+/** How a creation prompt goes in for this CLI (COLLABORATION-2.2): natively, the option before it, or after startup for Antigravity. */
+const NATIVE: { readonly [cli: string]: string | undefined } = { claude: '--', codex: '--', muse: '--', pi: '--', opencode: '--prompt', agy: undefined };
 
 /**
  * A message block as a CLI is given it (COLLABORATION-2.1): its header, the whole text, its footer. The window's label is escaped
@@ -126,21 +182,16 @@ function block(id: string, from: string, window: string, text: string): RegExp {
 
 const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
-(CLI === 'claude' && !PEER ? suite : suite.skip)('Journey: an agent uses its Facade tools in this window (J12, M02, M03, M07, M15, M17)', () => {
+(!PEER ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J12, M02, M03, M07, M15, M17)`, () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
 	});
 
-	test('its CLI gets the Facade server; it lists, starts a child with a native prompt, reads and types into it and stops it', async () => {
+	test('its CLI gets the Facade server; it lists, starts a child with a first task, reads and types into it and stops it', async function () {
+		this.timeout(120_000);
 		const { card, alias } = await personAgent();
-		const launch = argsOf(alias);
-		const config = launch.args[launch.args.indexOf('--mcp-config') + 1];
-		assert.ok(fs.existsSync(config), 'its own --mcp-config file');
-		const server = JSON.parse(fs.readFileSync(config, 'utf8')).mcpServers.facade;
-		assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_PTYD', 'FACADE_RUN']);
-		assert.ok(fs.existsSync(path.join(launch.args[launch.args.indexOf('--plugin-dir') + 1], 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
-		assert.strictEqual(launch.args[launch.args.indexOf('--allowedTools') + 1], 'mcp__facade', 'Facade\'s own tools never ask for approval (D84)');
+		assertTools(alias);
 		const lines = linesOf(alias);
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
 		assert.strictEqual(initialize?.serverInfo?.name, 'facade');
@@ -150,13 +201,13 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const window = vscode.workspace.name!;
 		const ran = await script(alias, [
 			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
-			{ tool: 'start_agent', arguments: { name: 'Reviewer', window_id: '$window', location_id: '$location', cli: 'claude', prompt: 'Review the README.' }, save: { child: 'data.agent_id' } },
+			{ tool: 'start_agent', arguments: { name: 'Reviewer', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Review the README.' }, save: { child: 'data.agent_id' } },
 			{ tool: 'list_agents', arguments: {} },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', wait: 30_000 },
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'typed by its creator' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'typed by its creator' },
 			{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' }
+			{ tool: 'read_screen', arguments: { agent: '$child' } }
 		]);
 		const options = ran.content('list_start_options');
 		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
@@ -164,13 +215,23 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		assert.deepStrictEqual([started.data.prompt.path, started.data.prompt.status, started.data.yolo, started.data.creator], ['native', 'success', true, card.runId]);
+		// Muse Code goes through cmd.exe on Windows, which cannot be given a message block as an argument: it goes after startup there
+		const native = CLI === 'muse' && process.platform === 'win32' ? undefined : NATIVE[CLI];
+		assert.deepStrictEqual([started.data.prompt.path, started.data.yolo, started.data.creator], [native ? 'native' : 'post_start', true, card.runId]);
+		// After startup it may still be on its way when the start answers - a CLI slow to draw its input - and is delivered then (MCP-2.3)
+		assert.ok(native ? started.data.prompt.status === 'success' : ['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));
 		const child = started.data.agent_id as string;
 		const childAlias = started.data.alias as string;
-		// The native argument is the caller's message as any message goes: its header, the whole text and its footer (COLLABORATION-2.1)
-		const [dash, given] = argsOf(childAlias).args.slice(-2);
-		assert.strictEqual(dash, '--');
-		assert.match(given, new RegExp(`^${block(started.data.prompt.alias, alias, window, 'Review the README.').source}$`), 'the prompt went in with the native argument');
+		// The prompt is the caller's message as any message goes: its header, the whole text and its footer (COLLABORATION-2.1)
+		const prompt = new RegExp(`^${block(started.data.prompt.alias, alias, window, 'Review the README.').source}$`);
+		if (native) {
+			const [option, given] = argsOf(childAlias).args.slice(-2);
+			assert.strictEqual(option, native);
+			assert.match(given, prompt, 'the prompt went in with the native argument');
+		} else {
+			// As its first message after startup - Antigravity's once its tools are ready: pasted and submitted
+			await until('its first message', () => received(childAlias).some(each => prompt.test(each)) ? true : undefined, 30_000);
+		}
 		// The child's card opens in the background, says who started it, and the person's focus stays (LIFECYCLE-2.2, PANEL-1.5)
 		const childCard = (await state()).cards.find(each => each.runId === child);
 		assert.ok(childCard, 'the child has a card in this window');
@@ -198,9 +259,9 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const window = vscode.workspace.name!;
 		const first = await script(alias, [
 			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
-			{ tool: 'start_agent', arguments: { name: 'Listener', window_id: '$window', location_id: '$location', cli: 'claude', prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.alias' } },
-			// Its box is drawn: an ordinary message can go in now (RULES-1.4)
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
+			{ tool: 'start_agent', arguments: { name: 'Listener', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.alias' } },
+			// Its box is drawn, its first task taken: an ordinary message can go in now (RULES-1.4)
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello from your creator.\nTwo lines, one message.' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Two lines, one message.' },
 			// A draft left in its box: the next message never goes over it (RULES-1.4)

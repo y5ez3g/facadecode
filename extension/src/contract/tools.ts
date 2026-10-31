@@ -82,7 +82,7 @@ export type ResultWriter = (home: string, kind: 'messages' | 'screen', text: str
 
 export interface ToolServiceDeps {
 	readonly window: ToolWindow;
-	readonly agents: Pick<Agents, 'launch' | 'started' | 'close' | 'list' | 'get'>;
+	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get'>;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'resolve'>;
 	readonly clis: StartCatalog;
 	readonly messages: Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent'>;
@@ -805,6 +805,8 @@ class ToolService {
 		}
 		let sent: SendResult;
 		try {
+			// After what its start types before its first turn: that turn can use the tools then, and the prompt's budget starts there
+			await this.deps.agents.warmedUp(run);
 			sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId });
 		} catch (err) {
 			const failed = errorResult(err, { effects: { outcome: 'unknown' } });

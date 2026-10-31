@@ -49,7 +49,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const runs = new Map([[RUN, FACTS]]);
 		disposables = registerUi({
 			agents: {
-				list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, launch: () => RUN, started: async () => ({ state: 'running' }),
+				list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, launch: () => RUN, started: async () => ({ state: 'running' }), warmedUp: async () => undefined,
 				close: async id => { closed.push(id); runs.delete(id); return cleanup; }, rename: () => undefined
 			},
 			worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },

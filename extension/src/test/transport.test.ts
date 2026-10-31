@@ -256,7 +256,8 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 			'list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'
 		]);
 		// No pagination: the whole list, and nothing else
-		assert.deepStrictEqual(listed, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+		// Each given to the model directly where a CLI otherwise loads tools on demand, as Antigravity does (CLIS-2.2)
+		assert.deepStrictEqual(listed, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, _meta: { 'antigravity/alwaysLoad': true } })) });
 		assert.deepStrictEqual((await shim.request('resources/list', {}, 9)).error?.code, -32601);
 		assert.strictEqual((await shim.request('tools/call', { arguments: {} }, 10)).error?.code, -32602);
 		shim.writeLine('{ not json');
@@ -276,6 +277,14 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		const runless = new McpClient({ [SHIM_PTYD]: socketPath });
 		shims.push(runless);
 		assert.deepStrictEqual(failureOf(await runless.call('list_agents', {})), ['UNAVAILABLE', 'configuration_invalid', 'none']);
+	});
+
+	test('started without a run to speak for - by a session the person started in a folder that holds a running agent\'s server entry - it lists no tools and says why (CLIS-2.2)', async () => {
+		const runless = new McpClient({ [SHIM_PTYD]: socketPath });
+		shims.push(runless);
+		const hello = await runless.request('initialize', { protocolVersion: '2025-06-18' }) as { result: { instructions: string } };
+		assert.match(hello.result.instructions, /not started by Facade Code/);
+		assert.deepStrictEqual((await runless.request('tools/list', {}) as { result: unknown }).result, { tools: [] });
 	});
 
 	test('a call goes to ptyd as the run\'s shim and the window\'s answer comes back as an MCP result; concurrent calls are matched by id; the hello comes once per connection', async () => {

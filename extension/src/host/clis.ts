@@ -87,6 +87,8 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 					cli: adapter.id,
 					takes: adapter.takes,
 					...adapter.initialPrompt ? { initialPrompt: { ...adapter.groups.prompt ? { mapping: adapter.groups.prompt } : {}, capability: adapter.initialPrompt } } : {},
+					// A CLI whose first task waits for what its start types: the prompt goes after it, as its first message (COLLABORATION-2.2)
+					...!adapter.initialPrompt && adapter.promptAfterStart ? { initialPrompt: { capability: { state: 'unavailable' as const, reason: adapter.promptAfterStart } } } : {},
 					input: inputOf(adapter),
 					...version ? { version } : {}
 				};

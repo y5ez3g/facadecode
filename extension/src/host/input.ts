@@ -6,9 +6,9 @@ import { timeout } from '../base/async';
 import { monotonic } from '../base/clock';
 import { messageOf } from '../base/errors';
 import type { InputEffects, InputPort } from '../core/messagePorts';
-import type { CapabilityState, RunFacts, RunId } from '../core/ports';
+import type { CapabilityState, LaunchPlan, RunFacts, RunId } from '../core/ports';
 import { PtydNotSent } from './execution/ptydClient';
-import type { InputEffect, InputReading, InputState } from '../ptyd/protocol';
+import type { InputEffect, InputReading, InputState, ScreenRead } from '../ptyd/protocol';
 
 /** How often the input is read again while a submission waits for it to change. */
 const POLL_MS = 100;
@@ -16,6 +16,10 @@ const POLL_MS = 100;
 const DRAFT_MS = 2_000;
 /** How long the input has to empty after Enter for the CLI to have taken the message (RULES-1.3). */
 const TAKEN_MS = 3_000;
+/** How long a start waits for its CLI's input to read empty before it gives up what it types before the first turn. */
+const WARM_INPUT_MS = 30_000;
+/** How long that typing waits for the CLI's screen to show the tools are there before it closes what it opened. */
+const WARM_READY_MS = 10_000;
 
 const NOTHING: InputEffects = { outcome: 'none', text_written: 'none', enter_written: false };
 const CONFIRMED: InputEffects = { outcome: 'confirmed', text_written: 'full', enter_written: true };
@@ -30,6 +34,8 @@ export interface OrdinaryInputDeps {
 	/** Pastes text, then Enter where asked, in turn with the run's other automated input in ptyd (RULES-1.10). */
 	readonly typeText: (run: RunId, text: string, enter: boolean) => Promise<InputEffect>;
 	readonly pressKeys: (run: RunId, keys: readonly string[]) => Promise<InputEffect>;
+	/** The bottom `lines` lines of the run's screen, where its start waits on what its CLI shows (COLLABORATION-2.2). */
+	readonly readScreen?: (run: RunId, lines: number) => Promise<ScreenRead>;
 	/** A line for Show Agents Log: what a reading rested on, never the text on the screen or of a message (ARCHITECTURE-3.3). */
 	readonly log?: (text: string) => void;
 	/** The clock a submission's waits are held on: this process's monotonic one. */
@@ -83,6 +89,87 @@ export class OrdinaryInput implements InputPort {
 
 	submit(run: RunId, text: string, signal?: AbortSignal): Promise<InputEffects> {
 		return this.inTurn(run, () => this.submitNow(run, text, signal));
+	}
+
+	/**
+	 * What a run's start types before its CLI's first turn (COLLABORATION-2.2), in the run's turn ahead of any message: once its input
+	 * first reads empty, `text` and Enter; once its screen shows `ready`, `close`; then its input is waited on to read empty again. It
+	 * is given up, typing nothing, where the input first reads anything else - the person typing, or a question of the CLI's - or the
+	 * CLI is working: the person's own first turn then starts the tools for the turns after it.
+	 */
+	warmUp(run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>): Promise<void> {
+		return this.inTurn(run, () => this.warmUpNow(run, warmUp));
+	}
+
+	private async warmUpNow(run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>): Promise<void> {
+		const adapter = this.adapterOf(run);
+		if (adapter === undefined) {
+			this.log(run, 'nothing is typed before its first turn: its input cannot be read');
+			return;
+		}
+		const first = await this.firstReading(run, adapter, WARM_INPUT_MS);
+		if (first !== 'usable' || this.deps.get(run)?.activity === 'working') {
+			this.log(run, `nothing is typed before its first turn: its input first read ${first}${first === 'usable' ? ' while it was working' : ''}`);
+			return;
+		}
+		let typed: InputEffect;
+		try {
+			typed = await this.deps.typeText(run, warmUp.text, false);
+		} catch (err) {
+			this.log(run, `what goes before its first turn could not be typed: ${messageOf(err)}`);
+			return;
+		}
+		if (typed.outcome !== 'applied') {
+			this.log(run, `what goes before its first turn was not typed whole: ${typed.outcome}`);
+			return;
+		}
+		const shows = (text: string) => (screen: ScreenRead) => screen.text.some(line => line.includes(text));
+		await this.screenUntil(run, shows(warmUp.text), DRAFT_MS);
+		await this.deps.pressKeys(run, ['Enter']);
+		const ready = new RegExp(warmUp.ready, 'u');
+		const shown = await this.screenUntil(run, screen => screen.text.some(line => ready.test(line)), WARM_READY_MS);
+		await this.deps.pressKeys(run, [warmUp.close]);
+		const usable = await this.until(run, adapter, 'usable', TAKEN_MS, undefined);
+		this.log(run, `before its first turn its tools ${shown ? 'were shown ready' : `did not show ready within ${WARM_READY_MS / 1000} seconds`}, and its input ${usable ? 'reads empty again' : 'did not read empty again'}`);
+	}
+
+	/** The first reading of `run`'s input other than unknown within `ms`: unknown where none comes. */
+	private async firstReading(run: RunId, adapter: string, ms: number): Promise<InputState> {
+		const end = this.mono() + ms;
+		for (; ;) {
+			const { state } = await this.read(run, adapter);
+			if (state !== 'unknown' || this.deps.get(run)?.lifecycle === 'ended') {
+				return state;
+			}
+			const left = end - this.mono();
+			if (left <= 0) {
+				return 'unknown';
+			}
+			await this.wait(Math.min(POLL_MS, left));
+		}
+	}
+
+	/** Whether `run`'s screen satisfies `test` within `ms`, read every {@link POLL_MS}. */
+	private async screenUntil(run: RunId, test: (screen: ScreenRead) => boolean, ms: number): Promise<boolean> {
+		const read = this.deps.readScreen;
+		if (!read) {
+			return false;
+		}
+		const end = this.mono() + ms;
+		for (; ;) {
+			try {
+				if (test(await read(run, 40))) {
+					return true;
+				}
+			} catch {
+				// Not readable now: tried again
+			}
+			const left = end - this.mono();
+			if (left <= 0) {
+				return false;
+			}
+			await this.wait(Math.min(POLL_MS, left));
+		}
 	}
 
 	/**

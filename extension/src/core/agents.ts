@@ -32,6 +32,11 @@ export interface AgentServiceDeps {
 	readonly tools?: (run: RunId) => McpServerLaunch | undefined;
 	/** A failure in the person's language (UX-2.4): Facade's own reasons translated, any other its `english` as it is. */
 	readonly describe?: (err: unknown, english: string) => string;
+	/**
+	 * Types what a run's start needs before its first turn into its CLI, ahead of any other automated input (COLLABORATION-2.2), and
+	 * settles once that is done or given up; none, and nothing is typed.
+	 */
+	readonly warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
 	readonly newRunId: () => RunId;
 }
 
@@ -45,6 +50,8 @@ interface Run {
 	settled: Promise<void>;
 	/** How its creation prompt goes in, once planned. */
 	prompt?: LaunchPlan['prompt'];
+	/** Settles once what its start types before its first turn is done or given up (COLLABORATION-2.2). */
+	warm?: Promise<void>;
 }
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -209,6 +216,14 @@ export class AgentService implements Agents, Disposable {
 		return facts.lifecycle === 'running' ? { state: 'running', ...prompt } : { state: 'failed', ...(facts.error ? { error: facts.error.reason } : {}), ...prompt };
 	}
 
+	async warmedUp(id: RunId): Promise<void> {
+		const run = this.runs.get(id);
+		if (run) {
+			await run.settled;
+			await run.warm;
+		}
+	}
+
 	/** Reports every problem of a request together before any effect (RULES-5.1, MCP-1.1). */
 	private validated(request: LaunchRequest): Location {
 		const problems: string[] = [];
@@ -342,6 +357,11 @@ export class AgentService implements Agents, Disposable {
 				return;
 			}
 			this.update(run, { lifecycle: 'running', phase: 'running', pid: started.pid, startedAt: started.startedAt }, 'lifecycle');
+			if (plan.warmUp && this.deps.warmUp) {
+				// Ahead of its creation prompt and any message: its first turn can use the tools then (COLLABORATION-2.2)
+				const alias = run.facts.alias;
+				run.warm = this.deps.warmUp(run.facts.id, plan.warmUp).catch(err => this.deps.log.event(`Could not prepare ${alias}'s tools before its first turn: ${messageOf(err)}`));
+			}
 			if (run.facts.origin === 'human') {
 				// The person's last successful launch alone is remembered (LIFECYCLE-1.2)
 				this.deps.history.remember(run.facts.location, run.facts.cli);

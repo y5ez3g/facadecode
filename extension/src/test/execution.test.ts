@@ -306,16 +306,18 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await last.next.terminate('run-40'), 'terminated');
 	});
 
-	test('a CLI that asked whether its terminal takes reports and has not reported since is still starting until its bound, then waited for with why (CLIS-2.3, D81)', async () => {
-		const port = portOf(1_500);
+	test('a CLI that asked whether its terminal takes reports and has not reported since is still starting until its bound, then waited for with why (CLIS-2.3, D81)', async function () {
+		this.timeout(20_000);
+		// A bound its program asks well within: Node takes a second or two to start in a Windows console
+		const port = portOf(4_000);
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
 		port.openPair(facts('run-41'), { reveal: false });
 		open(terminals[0]);
 		await port.spawn('run-41', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); setInterval(() => {}, 1000);`), meta('run-41'));
 		await until('its probe answered', () => reports.some(report => report.reporting));
-		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 6_000);
-		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', reporting: true, reason: 'Waiting for the CLI\'s first activity report' });
+		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 10_000);
+		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', reporting: true, reason: 'Waiting for the CLI\'s first activity report' }, JSON.stringify(reports));
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity), JSON.stringify(reports));
 		assert.strictEqual(reports.at(-2)?.reporting, true);
 	});

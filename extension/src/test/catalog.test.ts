@@ -150,7 +150,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				const { registerUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 				const emitter = new TestEmitter<never>();
 				const disposables = registerUi({
-					agents: { list: () => [], get: () => undefined, onDidChange: emitter.event, launch: () => '', started: async () => ({ state: 'closed' }), close: async () => 'already_ended', rename: () => undefined },
+					agents: { list: () => [], get: () => undefined, onDidChange: emitter.event, launch: () => '', started: async () => ({ state: 'closed' }), warmedUp: async () => undefined, close: async () => 'already_ended', rename: () => undefined },
 					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
 					clis: { list: async () => [] },

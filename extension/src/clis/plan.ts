@@ -6,10 +6,10 @@
 // alone, before any file or process exists. Discovery and launch use the same environment, so the program found is the one
 // started; every prerequisite that can be checked is checked here, and a failure carries its actual reason.
 
-import { Capability, CliAdapter, invocation } from './adapter';
+import { Capability, CliAdapter, invocation, WarmUp } from './adapter';
 import { Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
-import { composeEnvironment, Environment, EnvironmentMap, runEnvironment, setVariable } from './environment';
+import { composeEnvironment, Environment, EnvironmentMap, runEnvironment, setVariable, variableOf } from './environment';
 import { FoundExecutable, launchTarget, resolveExecutable, unsafeForCmd } from './executable';
 import type { Injection, ToolsInput } from './tools';
 import type { TrustTarget } from './trust';
@@ -72,6 +72,8 @@ export interface PlannedLaunch {
 	readonly injection?: Injection;
 	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
 	readonly screenStatus?: string;
+	/** What its start types before its first turn, where the tools are injected and its adapter needs it (COLLABORATION-2.2). */
+	readonly warmUp?: WarmUp;
 }
 
 /** Why a launch cannot be planned, with the PlanError reason it maps to (RULES-5.1: the actual reason, before any effect). */
@@ -88,7 +90,7 @@ export class CliPlanError extends Error {
 function promptOf(adapter: CliAdapter, prompt: string, throughCmd: boolean): { readonly path: 'native' | 'post_start'; readonly capability: Capability } {
 	const native = adapter.initialPrompt;
 	if (!adapter.groups.prompt || !native) {
-		return { path: 'post_start', capability: { state: 'unavailable', reason: `${adapter.displayName} takes no initial prompt argument; it is sent as the first message after the process starts` } };
+		return { path: 'post_start', capability: { state: 'unavailable', reason: adapter.promptAfterStart ?? `${adapter.displayName} takes no initial prompt argument; it is sent as the first message after the process starts` } };
 	}
 	const problem = prompt.includes('\0')
 		? 'a prompt with a NUL character cannot be an argument'
@@ -182,7 +184,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	const argsWith = (injection: Injection | undefined) => [...target.args, ...invocation(adapter.groups, {
 		yolo: input.yolo, connect: injection !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: native
 	}, {
-		...adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, model: input.model, effort: input.effort }),
+		...adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, model: input.model, effort: input.effort, env }),
 		...injection?.values,
 		...native ? { prompt: input.prompt! } : {}
 	})];
@@ -209,7 +211,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	}
 	const started = { ...env };
 	for (const [name, value] of Object.entries(injection?.env ?? {})) {
-		setVariable(started, name, value, platform);
+		setVariable(started, name, adapter.mergeVariable ? adapter.mergeVariable(name, value, variableOf(started, name, platform)) : value, platform);
 	}
 	const runEnv = runEnvironment(started, input.alias, platform);
 	const version = installedVersionOf(adapter.id, found.executable)?.version;
@@ -230,6 +232,8 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		...prompt ? { prompt } : {},
 		input: inputOf(adapter),
 		...injection ? { injection } : {},
-		...adapter.screenStatus ? { screenStatus: adapter.screenStatus } : {}
+		...adapter.screenStatus ? { screenStatus: adapter.screenStatus } : {},
+		// Only for the tools: without them, nothing waits on its first turn
+		...injection && adapter.warmUp ? { warmUp: adapter.warmUp } : {}
 	};
 }

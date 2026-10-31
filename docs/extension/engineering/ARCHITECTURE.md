@@ -329,9 +329,9 @@ its fake CLI is a Node single executable application, as a Windows CLI is an exe
 journeys over Remote-SSH from this computer to a host of a given SSH configuration (`FACADE_IT_SSH_CONFIG`,
 `FACADE_IT_SSH_HOST`, `FACADE_IT_REMOTE_EXTENSION` naming the extension built on that host): one SSH window, two SSH
 windows, local to SSH and SSH to local, each with Remote-SSH and the editor's server in folders of the run's own.
-`FACADE_IT_ONLY=real` runs real Claude Code agents with YOLO off - never part of a default run, as it signs in and uses an
-account's usage - with `FACADE_IT_CLAUDE` naming its executable and `FACADE_IT_CLAUDE_CONFIG` a configuration folder signed
-in for testing. Document changes to these commands before using a different build layout. Lock dependency versions, preserve licenses/notices, and keep generated/runtime files ignored.
+`FACADE_IT_ONLY=real` runs real agents of one built-in with YOLO off - never part of a default run, as it signs in and uses
+an account's usage - with `FACADE_IT_REAL` naming the built-in, `FACADE_IT_REAL_PATH` its executable, `FACADE_IT_REAL_ENV`
+the variables its terminals get and `FACADE_IT_REAL_PASS` those taken from the environment, never written to a file. Document changes to these commands before using a different build layout. Lock dependency versions, preserve licenses/notices, and keep generated/runtime files ignored.
 Do not repurpose HOME/CODEX_HOME as script scratch variables.
 
 The integration fixture build is staged separately in `build/extension-it/`; `npm run test:integration` assembles it from
@@ -455,6 +455,7 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-10-31: 4.1's real run takes any built-in, its configuration given to its terminals.
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 makes the window component the client component, using local
   sockets and a client registry without a broker process (D87); 1.3 adds the `schema`, `contract`, `transport` and
   `client` layers; 2.1 carries the Facade Dots routing rule; 2.3 adds shim call routing and input deadlines; 2.4 keeps

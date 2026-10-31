@@ -55,9 +55,16 @@ async function main(): Promise<void> {
 	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
-	// Real Claude Code, for `real` alone: its executable, and its configuration folder - else the person's own, signed in
-	const realClaude = process.env.FACADE_IT_CLAUDE;
+	// Real agents, for `real` alone: the built-in FACADE_IT_REAL (Claude Code by default) at FACADE_IT_REAL_PATH - FACADE_IT_CLAUDE
+	// for Claude Code - and Claude Code's configuration folder FACADE_IT_CLAUDE_CONFIG, else the person's own, signed in. Its terminals
+	// get FACADE_IT_REAL_ENV, a JSON object - such as a configuration folder of its own - and the variables FACADE_IT_REAL_PASS names,
+	// taken from this environment and never written to a file. FACADE_IT_REAL_HOME=keep leaves them the person's own home folder.
+	const realCli = process.env.FACADE_IT_REAL ?? 'claude';
+	const realPath = process.env.FACADE_IT_REAL_PATH ?? (realCli === 'claude' ? process.env.FACADE_IT_CLAUDE : undefined);
 	const realConfig = process.env.FACADE_IT_CLAUDE_CONFIG;
+	const realEnv = JSON.parse(process.env.FACADE_IT_REAL_ENV ?? '{}') as { [name: string]: string };
+	const realHome = process.env.FACADE_IT_REAL_HOME === 'keep';
+	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
 	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
@@ -207,17 +214,34 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
-	 * Real Claude Code agents working together (VERIFICATION G3): YOLO off, the suite's real journey alone. Each launch trusts its folder
-	 * in that Claude Code's configuration (D62), the person's own where no folder of its own is given: the run takes that back.
+	 * Real agents of one built-in working together (VERIFICATION G3): YOLO off, the suite's real journey alone. Each launch trusts its
+	 * folder in the CLI's own configuration where it keeps trust in a file (D62) - Claude Code's, or Antigravity's in the home folder
+	 * its terminals have: the run takes that back, Antigravity's file restored as it was.
 	 */
 	const real = async () => {
-		if (!realClaude) {
-			throw new Error('FACADE_IT_ONLY=real starts real Claude Code: set FACADE_IT_CLAUDE to its executable, and FACADE_IT_CLAUDE_CONFIG to a configuration folder signed in for testing - unset, it is your own.');
+		const cli = BUILT_INS.find(each => each.id === realCli);
+		if (!cli || !realPath) {
+			throw new Error('FACADE_IT_ONLY=real starts a real CLI: set FACADE_IT_REAL to a built-in and FACADE_IT_REAL_PATH to its executable (FACADE_IT_CLAUDE for Claude Code), and give it a configuration signed in for testing.');
 		}
+		const terminals = realHome
+			? { 'terminal.integrated.env.windows': realEnv, 'terminal.integrated.env.osx': realEnv, 'terminal.integrated.env.linux': realEnv }
+			: terminalEnv(realEnv);
+		const agySettings = path.join(realHome ? os.homedir() : agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
+		const agyBefore = cli.id === 'agy' ? (fs.existsSync(agySettings) ? fs.readFileSync(agySettings) : null) : undefined;
 		try {
-			await run('real', repo, { FACADE_IT_REAL: 'claude', FACADE_IT_GREP: 'real Claude Code' }, { 'facade.claude.path': realClaude, 'facade.yolo': false }, realConfig ?? null);
+			// The other built-ins not installed: the real one is the one New Agent preselects
+			const others = Object.fromEntries(BUILT_INS.filter(each => each !== cli).map(each => [`facade.${each.segment}.path`, path.join(root, `unavailable-${each.id}`)]));
+			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, 'facade.yolo': false, ...terminals }, cli.id === 'claude' ? realConfig ?? null : claudeConfig);
 		} finally {
-			untrust(realConfig ? path.join(realConfig, '.claude.json') : path.join(os.homedir(), '.claude.json'), root);
+			if (cli.id === 'claude') {
+				untrust(realConfig ? path.join(realConfig, '.claude.json') : path.join(os.homedir(), '.claude.json'), root);
+			}
+			if (agyBefore === null) {
+				fs.rmSync(agySettings, { force: true });
+			} else if (agyBefore !== undefined) {
+				fs.writeFileSync(agySettings, agyBefore);
+				console.log(`Restored ${agySettings} as it was before the run.`);
+			}
 		}
 	};
 	try {
@@ -225,8 +249,9 @@ async function main(): Promise<void> {
 			// The journeys once for each built-in: those before it in the catalog not installed, so that it is the one preselected
 			for (const [at, cli] of BUILT_INS.entries()) {
 				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
-				// Muse Code as it runs on Windows, reporting nothing: its dot follows its screen (CLIS-2.3, D80)
-				const screen = cli.id === 'muse' ? terminalEnv({ FACADE_IT_SCREEN: 'muse' }) : {};
+				// Each agent's fake draws its input as this built-in does (CLIS-2.1); Muse Code's as it runs on Windows, reporting nothing:
+				// its dot follows its screen (CLIS-2.3, D80)
+				const screen = terminalEnv({ FACADE_IT_AS: cli.id, ...cli.id === 'muse' ? { FACADE_IT_SCREEN: 'muse' } : {} });
 				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, { ...missing, ...screen });
 			}
 		}

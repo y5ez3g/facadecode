@@ -43,6 +43,8 @@ import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
 
+declare const FACADE_TEST_MODE: boolean;
+
 /** Where the window's workspace keeps its key, for the window's reloads (ARCHITECTURE-2.2). */
 const WORKSPACE_KEY = 'facade.workspaceKey';
 
@@ -144,6 +146,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		describe: (err, english) => worktreeProblemText(err, err instanceof PlanError ? reasonText(err.said, english) : english),
 		// The run's own shim, where orchestration is on for this start (RULES-4.4, MCP-6.1)
 		tools: run => clis.collaborationEnabled() ? execution.shimLaunch(run) : undefined,
+		// What a start types before its first turn goes ahead of every message to it (COLLABORATION-2.2); `input` exists by any launch
+		warmUp: (run, warmUp): Promise<void> => input.warmUp(run, warmUp),
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`
 	});
 	// This window's address for the tools: it may change on reload, while its runs keep their IDs (ARCHITECTURE-2.2)
@@ -151,11 +155,12 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const window = { id: address ?? `win-${crypto.randomBytes(8).toString('hex')}`, label: vscode.workspace.name ?? vscode.l10n.t('Window') };
 	const environment = editorEnvironment();
 	const contact = new WindowContact(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
-	const input = new OrdinaryInput({
+	const input: OrdinaryInput = new OrdinaryInput({
 		get: run => agents.get(run),
 		inspectInput: (run, adapter) => execution.inspectInput(run, adapter),
 		typeText: (run, text, enter) => execution.typeText(run, text, enter),
 		pressKeys: (run, keys) => execution.pressKeys(run, keys),
+		readScreen: (run, lines) => execution.readScreen(run, lines),
 		log: text => log.event(text)
 	});
 	// Direct text and keys wait for a message's paste and Enter under way to the same terminal (RULES-1.10)
@@ -241,6 +246,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
 		contact,
 		...registerMessageHistory({ messages }),
+		// The integration suite's own: what an agent's terminal shows, for a journey's diagnostics; compiled out of the shipped extension
+		...typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [vscode.commands.registerCommand('facade.screen', (run: string, lines = 40) => execution.readScreen(run, lines))] : [],
 		serveRoutes(route => services.serve(route)),
 		publishAgents(agents, window.label, line => log.event(line), session)
 	];

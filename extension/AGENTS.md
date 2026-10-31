@@ -73,9 +73,13 @@ it, and `FACADE_IT_KEEP=1` keeps what a run left. Linux runs it under `xvfb-run 
 it, and `FACADE_IT_REMOTE_EXTENSION` the extension's folder there, built with `npm run compile`, `npm run bundle` and
 `node scripts/build-it.mjs`. `FACADE_IT_ONLY=ssh`, `ssh-ssh`, `local-ssh` or `ssh-local` runs one scenario.
 
-`FACADE_IT_ONLY=real npm run test:integration` runs real Claude Code agents with YOLO off, never by default: it signs in and
-uses an account's usage. `FACADE_IT_CLAUDE` names its executable and `FACADE_IT_CLAUDE_CONFIG` a configuration folder
-signed in for testing; Codex has no such run.
+`FACADE_IT_ONLY=real npm run test:integration` runs real agents of one built-in with YOLO off, never by default: it signs
+in and uses an account's usage. `FACADE_IT_REAL` names the built-in (Claude Code by default) and `FACADE_IT_REAL_PATH` its
+executable (`FACADE_IT_CLAUDE` for Claude Code, with `FACADE_IT_CLAUDE_CONFIG` a configuration folder signed in for
+testing). Its terminals get `FACADE_IT_REAL_ENV`, a JSON object such as its own configuration folders, and the variables
+`FACADE_IT_REAL_PASS` names, taken from your environment and never written to a file; `FACADE_IT_REAL_HOME=keep` leaves
+them your own home folder, for a CLI signed in there. The run takes back the trust each launch gave its folder, and
+restores Antigravity's settings as they were.
 
 ## 6 Other files
 

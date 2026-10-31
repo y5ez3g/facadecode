@@ -93,7 +93,10 @@ omitted field adds no override: the CLI's native default or saved session state 
 in a later step, the call's explicit choice takes precedence over the same choice there. Versioned adapters map these
 choices to their CLI argument/configuration mechanism and report requested versus observed values separately. An
 ignored override is not verified success. Do not track every in-CLI change to reconstruct session settings. Previously
-observed choices remain discovery/display facts, not restore inputs.
+observed choices remain discovery/display facts, not restore inputs. Claude Code, Antigravity and Pi take `--model` and
+an effort option (Pi's `--thinking`); Codex its `model_reasoning_effort`; Muse Code `--model` and its `reasoning_effort`
+for the run, as its own effort option would save it in the person's settings. OpenCode's interface takes neither, so a
+start that asks it for one is refused with why.
 
 ## 2 Runtime adapters
 
@@ -108,8 +111,9 @@ Ordinary input evidence distinguishes a usable input box, a draft, a native inte
 tracked keystrokes alone cannot prove the draft empty after paste/history navigation. Never send Enter as a probe.
 Direct text/keys only require the terminal input backend, not an input reader.
 
-Each built-in CLI has an input reader that recognizes its input box by layout - prompt row, frame or footer, a
-placeholder drawn dim and the cursor position - not by version number. Every installed version is attempted. A screen
+Each built-in CLI has an input reader that recognizes its input box by layout - prompt row, frame, box or footer, a
+placeholder drawn dim or known by its words, and the cursor position or the CLI's own drawn cursor - not by version
+number. Every installed version is attempted. A screen
 the reader does not recognize is unknown: nothing is typed, and the message fails at its deadline with `input_unknown`,
 naming the CLI and the version Facade found. The version is recorded as a diagnostic, never as a gate. A CLI without an
 input reader fails ordinary messages at once with `unsupported`. Readers are tested against recorded screens of real
@@ -128,12 +132,29 @@ capabilities on its stated platform.
 
 **Use per-run launch files first; write project files only where the CLI requires them and preserve user content.**
 
-Claude Code receives the `facade` server in a per-run `--mcp-config` file and the skill in a per-run `--plugin-dir`
-plugin, plus `--allowedTools mcp__facade`. Codex receives per-run `-c mcp_servers.facade.*` launch overrides, including
-`default_tools_approval_mode="approve"`, and the skill in the project's `.agents/skills/facade/SKILL.md`. These
-approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode RULES-4.3
-chose (D84). The server is never declared required, so a CLI whose Facade server fails still starts and stays usable.
-The server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
+Each built-in receives the `facade` server, the skill and an approval of Facade's own tools as its CLI takes them (D94):
+
+| CLI | Server | Skill | Facade's tools without asking |
+| --- | --- | --- | --- |
+| Claude Code | Per-run `--mcp-config` file | Per-run `--plugin-dir` plugin | `--allowedTools mcp__facade` |
+| Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
+| Antigravity | Project plugin `.agents/plugins/facade`, shared | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
+| Muse Code | `facade` entry merged into the project's `.mcp.json`, shared | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
+| OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
+| Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
+
+These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
+RULES-4.3 chose (D84). An entry shared by a folder's runs holds no run's identity: the run's variables reach the server
+through the CLI's environment - for Muse Code as `${NAME:-}` references, empty in a session the person starts there by
+hand, whose server then offers no tools; an unset plain reference would turn off every server of theirs. Muse Code's
+arguments pass through cmd.exe on Windows, which cannot carry a server's JSON, so its entry is a project file on every
+platform. Antigravity's `--settings` replaces a settings key whole for its session, so the person's own permission rules
+are read and kept in it. OpenCode's background service, which the person's sessions share, would not read a run's own
+configuration, so a run with the tools has its own server process. Antigravity starts a folder's plugin servers only
+with its first turn, which is planned before they connect, or with its MCP panel: a run's start opens and closes that
+panel before the first turn (COLLABORATION-2.2), and the server marks its tools for Antigravity to give the model
+directly. The server is never declared required, so a CLI whose Facade server fails still starts and stays usable. The
+server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
 orchestration is off, inject no Facade server, skill or approval into that new process.
 
 Before a project write, snapshot exact original bytes/existence, lock the path across runs, merge only owned content,
@@ -211,9 +232,12 @@ choices under 1.4 using its vendor-specific invocation; no general argument-conf
 delays are internal adapter details only where required by its protocol.
 
 Each adapter declares its maintained native interactive prompt-argument mapping, if it has one; COLLABORATION-2.2 owns
-native/post-start prompt selection and its deadline start. Claude Code and Codex take the prompt as a positional
-argument after the end of options; this mapping is used while unverified and reports that state (Dots D49). Do not wait
-for MCP or activity idle, send a confirmed prompt twice or synthesize a prompt to make MCP appear connected.
+native/post-start prompt selection and its deadline start. Claude Code, Codex, Muse Code and Pi take the prompt as a
+positional argument after the end of options - Pi's unless it starts with `@`, which it reads as a file to attach - and
+OpenCode as the value of `--prompt` unless it starts with `-`; this mapping is used while unverified and reports that
+state (Dots D49). Antigravity's first task goes after what its start types before the first turn (COLLABORATION-2.2),
+as its first message. Do not wait for MCP or activity idle beyond that, send a confirmed prompt twice or synthesize a
+prompt to make MCP appear connected.
 
 ### 3.3 Native configuration and trust
 
@@ -294,6 +318,9 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-10-31: Antigravity, Muse Code, OpenCode and Pi are given the Facade tools (D91, D94): 1.4 says each built-in's
+  model and effort options, 2.1 their input readers - a box, a placeholder known by its words, a CLI's own drawn cursor -
+  and 2.2 how each receives the server, the skill and the approval of Facade's own tools.
 - 2026-10-30: Step 2 of the Facade Code extension: 1.3 and 2.2 pre-approve Facade's own tools in both YOLO modes and
   never require the server (D84); 1.4 carries model/effort for `start_agent` (D91); 2.1 adds input readers that recognize
   the input box by layout and attempt every version instead of Facade Dots' version list (D83); 2.2 and 3.2 add the

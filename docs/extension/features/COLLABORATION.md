@@ -69,6 +69,12 @@ Use the native interactive prompt argument that CLIS-3.2 maps for the CLI, even 
 capability state with the prompt outcome. Without a mapping, start the CLI and automatically send the same prompt after
 process startup through ordinary message delivery. The caller does not need to compensate for CLI differences. Start
 that delivery budget when the CLI process starts, not after waiting indefinitely for ready.
+Where a CLI's first turn could not use the Facade tools - Antigravity, which starts a folder's plugin servers only with
+its first turn or its MCP panel - its start types what readies them before any other input: once its input first reads
+empty, `/mcp` and Enter, then Escape once its panel shows the server ready or after ten seconds. It is given up, typing
+nothing, where the input first reads anything else or the CLI is working: the person's own first turn then starts the
+tools for the turns after it. Its creation prompt goes after that, as its first message, the budget starting then
+(D94).
 A blocked input box consumes the normal attempts. Both paths use RULES-1.3's meaning of delivery; native acceptance
 does not require a terminal Enter effect.
 Report process startup and prompt input separately. Failed prompt submission leaves the started agent available.
@@ -170,6 +176,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 
 ## Change log
 
+- 2026-10-31: 2.2 types what readies a CLI's tools before its first turn where that turn could not use them otherwise -
+  Antigravity's MCP panel - and sends its creation prompt after it (D94).
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots collaboration rules with the owner's
   2026-10-30 decisions: one delivery state, in which read_messages delivers and stops a pending paste (D82); `#human`
   for the person (D85); the recipient's window owns the delivery record and the sender's keeps a copy (D87). Resume,

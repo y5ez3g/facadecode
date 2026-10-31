@@ -86,6 +86,8 @@ function setUp(options: {
 	plan?: Partial<LaunchPlan>;
 	/** Orchestration on: each start is given its own shim. */
 	tools?: boolean;
+	/** What the window does with a start's typing before its first turn: recorded, and settled as the test says. */
+	warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
 } = {}) {
 	const execution = new FakeExecution();
 	const removals = new Emitter<LocationRemoval>();
@@ -160,6 +162,7 @@ function setUp(options: {
 		yolo: () => true,
 		...(options.tools ? { tools: (run: RunId) => (shims.push(run), { command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } }) } : {}),
 		...(options.describe ? { describe: options.describe } : {}),
+		...(options.warmUp ? { warmUp: options.warmUp } : {}),
 		newRunId: () => `run-${(++next).toString(16).padStart(32, '0')}`
 	});
 	const changes: RunChange[] = [];
@@ -168,6 +171,39 @@ function setUp(options: {
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+suite('A start\'s typing before the first turn (COLLABORATION-2.2)', () => {
+	const WARM_UP = { text: '/mcp', ready: '✓\\s+facade_facade\\b', close: 'Escape' };
+
+	test('a running start whose plan has it is handed to the window once its process started; warmedUp settles after it, at once for any other', async () => {
+		const asked: [RunId, unknown][] = [];
+		let finish!: () => void;
+		const world = setUp({ plan: { warmUp: WARM_UP }, warmUp: async (run, warmUp) => { asked.push([run, warmUp]); await new Promise<void>(resolve => finish = resolve); } });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'human' });
+		await world.agents.started(id);
+		assert.deepStrictEqual(asked, [[id, WARM_UP]]);
+		let warmed = false;
+		const waiting = world.agents.warmedUp(id).then(() => warmed = true);
+		await settle();
+		assert.strictEqual(warmed, false, 'not before the window is done');
+		finish();
+		await waiting;
+		await world.agents.warmedUp('run-unknown');
+		const plain = setUp({ warmUp: async () => { throw new Error('never asked'); } });
+		const other = plain.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await plain.agents.started(other);
+		await plain.agents.warmedUp(other);
+	});
+
+	test('one the window could not do is logged and settles: the run goes on', async () => {
+		const world = setUp({ plan: { warmUp: WARM_UP }, warmUp: async () => { throw new Error('ptyd went away'); } });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'human' });
+		await world.agents.started(id);
+		await world.agents.warmedUp(id);
+		assert.ok(world.log.some(line => /Could not prepare #a1's tools before its first turn: ptyd went away/.test(line)), world.log.join('\n'));
+		assert.strictEqual(world.agents.get(id)?.lifecycle, 'running');
+	});
+});
 
 suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () => {
 	test('ownership transfer drops cards and pending starts without closing or forgetting the transferred processes', async () => {

@@ -233,3 +233,75 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.deepStrictEqual(terminal.calls.filter(call => !call.startsWith('read')), ['type "Hello"', `type ${OTHER} "there"`, 'keys Enter', 'type "typed"']);
 	});
 });
+
+suite('A start\'s typing before the first turn: the CLI\'s tools ready before it takes a task (COLLABORATION-2.2)', () => {
+	const WARM_UP = { text: '/mcp', ready: '✓\\s+facade_facade\\b', close: 'Escape' };
+
+	/** The input of a run whose screen shows `/mcp` once typed and the tools' panel once entered, unless `shows` says otherwise. */
+	function warming(facts: Partial<RunFacts> = {}, shows: { readonly panel: boolean } = { panel: true }, starting = 0) {
+		const world = setUp(facts);
+		let unrecognized = starting;
+		const inspectInput = world.terminal.inspectInput;
+		let screen = ['>'];
+		const typeText = world.terminal.typeText;
+		const pressKeys = world.terminal.pressKeys;
+		let now = 0;
+		const input = new OrdinaryInput({
+			get: run => world.runs.get(run),
+			inspectInput: async (run, adapter) => unrecognized-- > 0 ? { state: 'unknown', evidence: 'still starting' } : inspectInput(run, adapter),
+			typeText: async (run, text, enter) => {
+				screen = [`> ${text}`];
+				return typeText(run, text, enter);
+			},
+			pressKeys: async (run, keys) => {
+				if (keys[0] === 'Enter' && screen[0] === '> /mcp') {
+					screen = ['MCP Servers', shows.panel ? '>  ✓ facade_facade  Tools: list_agents' : '>  ⋯ facade_facade'];
+				} else if (keys[0] === 'Escape') {
+					screen = ['>'];
+				}
+				return pressKeys(run, keys);
+			},
+			readScreen: async () => ({ lines: screen, text: screen, buffer: 'normal', older: false, trimmed: false, capturedAt: 0, exited: false }),
+			log: text => world.log.push(text),
+			monotonic: () => now,
+			wait: async ms => {
+				now += ms;
+			}
+		});
+		return { ...world, input, now: () => now };
+	}
+
+	test('once its input first reads empty, ahead of any message: the text, Enter, the close key once its screen shows the tools ready, then the message', async () => {
+		// Its CLI still starting: three readings of nothing it recognizes, then its empty input
+		const world = warming({}, { panel: true }, 3);
+		const warm = world.input.warmUp(RUN, WARM_UP);
+		const sent = world.input.submit(RUN, 'hello');
+		await warm;
+		assert.deepStrictEqual(await sent, CONFIRMED);
+		const typed = world.terminal.calls.filter(call => !call.startsWith('read'));
+		assert.deepStrictEqual(typed, ['type "/mcp"', 'keys Enter', 'keys Escape', 'type "hello"', 'keys Enter']);
+		assert.ok(world.log.some(line => /tools were shown ready, and its input reads empty again/.test(line)), world.log.join('\n'));
+	});
+
+	test('given up, typing nothing, where its input first reads a draft - the person typing first - or a question, or the CLI is working', async () => {
+		for (const [first, facts] of [['draft', {}], ['interaction', {}], ['usable', { activity: 'working' }]] as const) {
+			const world = warming(facts);
+			world.terminal.reading = first;
+			await world.input.warmUp(RUN, WARM_UP);
+			assert.deepStrictEqual(world.terminal.calls.filter(call => !call.startsWith('read')), [], first);
+			assert.ok(world.log.some(line => line.includes(`nothing is typed before its first turn: its input first read ${first}`)), world.log.join('\n'));
+		}
+	});
+
+	test('an input that never reads within the wait is given up; a panel that never shows ready is closed after its wait', async () => {
+		const silent = warming();
+		silent.terminal.reading = 'unknown';
+		await silent.input.warmUp(RUN, WARM_UP);
+		assert.deepStrictEqual(silent.terminal.calls.filter(call => !call.startsWith('read')), []);
+		assert.ok(silent.now() >= 30_000);
+		const slow = warming({}, { panel: false });
+		await slow.input.warmUp(RUN, WARM_UP);
+		assert.deepStrictEqual(slow.terminal.calls.filter(call => !call.startsWith('read')), ['type "/mcp"', 'keys Enter', 'keys Escape']);
+		assert.ok(slow.log.some(line => /did not show ready within 10 seconds/.test(line)), slow.log.join('\n'));
+	});
+});

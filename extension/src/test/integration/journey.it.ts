@@ -14,7 +14,10 @@ const AVATAR = process.env.FACADE_IT_AVATAR ?? `avatar-${CLI}.png`;
 /** The home folder the suite's settings give agents' terminals (`terminal.integrated.env.*`). */
 const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
 
-/** The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3); Codex's trust is checked apart. */
+/**
+ * The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3), after its Facade tools' own,
+ * which the tools' journey checks (CLIS-3.2); Codex's trust is checked apart.
+ */
 const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'],
 	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
@@ -83,10 +86,10 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		const launch = JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] };
 		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);
 		if (CLI === 'codex') {
-			assert.strictEqual(launch.args[0], '--dangerously-bypass-approvals-and-sandbox');
+			assert.ok(launch.args.includes('--dangerously-bypass-approvals-and-sandbox'), launch.args.join(' '));
 			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
 		} else {
-			assert.deepStrictEqual(launch.args, ARGUMENTS[CLI]);
+			assert.deepStrictEqual(launch.args.slice(-ARGUMENTS[CLI].length), ARGUMENTS[CLI], launch.args.join(' '));
 		}
 		// Antigravity's trust in the folder, in its settings in the home its terminal sees: the suite's, never the person's (CLIS-3.3)
 		if (CLI === 'agy') {

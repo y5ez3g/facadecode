@@ -2,19 +2,22 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The integration suite's agent CLI, run as Node in an agent's terminal in place of each built-in. It records its working directory
-// and arguments, and takes part in the Program Status Protocol (OSC 7501) as the built-ins do: it asks whether its terminal takes
-// reports and, once answered, reports that it is idle. It waits as an agent does, drawing its input the way Claude Code draws its
-// own - a full-width rule, its `❯` prompt row with a dim placeholder, another rule - so that Facade's `claude-frame` reader recognizes
-// it (CLIS-2.1). Typed or pasted text is a draft; Enter submits it, clearing the box, printing what it got and appending it to
-// `<record>.received.<agent>`; Ctrl+U clears it. A native prompt after `--` is taken as its first message. Given `--mcp-config`, it
-// starts the Facade server that file names as Claude would (MCP-6.1) and runs each `<record>.mcp-script.<agent>` that appears, in
-// turn, writing every answer to `<record>.mcp.<agent>` as a JSON line; `$name` strings take values earlier answers saved under that
-// name, and `until` repeats a step until its answer holds a text. With FACADE_IT_SCREEN=muse it is Muse Code as it runs on Windows
-// instead: it reports nothing and draws its input frame, which ptyd reads (CLIS-2.3, D80).
+// The integration suite's agent CLI, run as Node in an agent's terminal in place of each built-in. It records its working directory,
+// its arguments and the variables of Facade's it was given, and takes part in the Program Status Protocol (OSC 7501) as the built-ins
+// do: it asks whether its terminal takes reports and, once answered, reports that it is idle. It waits as an agent does, drawing its
+// input the way the built-in FACADE_IT_AS names draws its own - Claude Code's by default - so that Facade's reader for that CLI
+// recognizes it (CLIS-2.1). Typed or pasted text is a draft; Enter submits it, clearing the box, printing what it got and appending
+// it to `<record>.received.<agent>`; Ctrl+U clears it. A native prompt after `--`, or OpenCode's `--prompt`, is taken as its first
+// message. It finds the Facade server where that built-in finds it (CLIS-2.2), starts it as the CLI would - Antigravity's only once
+// its MCP panel opens, by `/mcp`, or its first turn - and runs each `<record>.mcp-script.<agent>` that appears, in turn, writing
+// every answer to `<record>.mcp.<agent>` as a JSON line; `$name` strings take values earlier answers saved under that name, and
+// `until` repeats a step until its answer holds a text. With FACADE_IT_SCREEN=muse it is Muse Code as it runs on Windows: it
+// reports nothing, and ptyd reads its status from its screen (CLIS-2.3, D80).
 
 import { spawn } from 'child_process';
 import * as fs from 'fs';
+import * as path from 'path';
+import { pathToFileURL } from 'url';
 
 const ESC = '\x1b';
 const ST = `${ESC}\\`;
@@ -24,7 +27,9 @@ const ANSWER = `${ESC}]7501;?:`;
 const record = process.env.FACADE_IT_RECORD!;
 const agent = process.env.FACADE_AGENT!;
 const args = process.argv.slice(2);
-fs.writeFileSync(`${record}.args.${agent}`, JSON.stringify({ cwd: process.cwd(), args }));
+// With the variables of Facade's that reach it: the run's own, and OpenCode's inline configuration
+const facadeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name)));
+fs.writeFileSync(`${record}.args.${agent}`, JSON.stringify({ cwd: process.cwd(), args, env: facadeEnv }));
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -35,32 +40,93 @@ const PLACEHOLDER = 'Try a task';
 const lines: string[] = ['fake agent ready'];
 let draft = '';
 
-const prompt = args.indexOf('--');
+// A native prompt: after `--`, or OpenCode's `--prompt`
+const prompt = args.includes('--prompt') ? args.indexOf('--prompt') : args.indexOf('--');
 if (prompt >= 0 && args[prompt + 1] !== undefined) {
 	lines.push(...args[prompt + 1].split('\n'));
+}
+
+/** The built-in it stands in for, whose input it draws as that CLI does, for that CLI's reader (CLIS-2.1): Claude Code by default. */
+const as = process.env.FACADE_IT_AS ?? (process.env.FACADE_IT_SCREEN === 'muse' ? 'muse' : 'claude');
+
+/** A row of its input as it draws it: its text, with SGR sequences, and the column the cursor stands at where it is on that row. */
+interface Row {
+	readonly text: string;
+	readonly cursor?: number;
+}
+
+const dim = (text: string) => `\x1b[2m${text}\x1b[22m`;
+const inverse = (text: string) => `\x1b[7m${text}\x1b[27m`;
+
+/**
+ * Its input as each built-in draws its own, `shown` its draft or nothing (CLIS-2.1): Claude Code's frame with a dim placeholder;
+ * Codex's prompt above its footer; Antigravity's `>` frame with its hints under it; Muse Code's frame, its upper rule labeled, its
+ * model line under it; Pi's editor between two rules with its own cursor drawn, its folder and figures under it; OpenCode's box with
+ * its bar, its placeholder words, its agent row and its bottom.
+ */
+function inputRows(width: number, shown: string): Row[] {
+	const rule = '─'.repeat(width);
+	const length = [...shown].length;
+	switch (as) {
+		case 'codex':
+			return [{ text: `› ${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: '' }, { text: `  gpt-fake max · ${process.cwd()}` }, { text: '  ? for shortcuts' }];
+		case 'agy':
+			return [{ text: rule }, { text: shown ? `> ${shown}` : '>', cursor: 2 + length }, { text: rule }, { text: '? for shortcuts' }];
+		case 'muse': {
+			const label = '── Voice input (⌥ + v to start) ';
+			return [{ text: `${label}${'─'.repeat(Math.max(2, width - [...label].length))}` }, { text: shown ? `❯ ${shown}` : '❯', cursor: 2 + length }, { text: rule }, { text: `  muse-spark-1.3 · minimal · ${process.cwd()}` }];
+		}
+		case 'pi':
+			return [{ text: rule }, { text: `${shown}${inverse(' ')}`, cursor: length }, { text: rule }, { text: process.cwd() }, { text: '↑0 ↓0 0.0%/131k (auto)' }];
+		case 'opencode':
+			return [{ text: '  ┃' }, { text: `  ┃  ${shown || 'Ask anything… "Fix broken tests"'}`, cursor: 5 + length }, { text: '  ┃' }, { text: '  ┃  Build · qwen3.8-flash' }, { text: `  ╹${'▀'.repeat(Math.max(2, width - 3))}` }];
+		default:
+			return [{ text: rule }, { text: `❯${NBSP}${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: rule }];
+	}
 }
 
 /** Redraws the whole screen in one synchronized update, so that no reading ever sees half of it. */
 function draw(): void {
 	const width = Math.max(20, process.stdout.columns || 80);
-	const height = Math.max(6, process.stdout.rows || 24);
-	const body = lines.flatMap(line => line.match(new RegExp(`.{1,${width}}`, 'gu')) ?? ['']).slice(-(height - 3));
-	const shown = draft.includes('\n') || [...draft].length > width - 3 ? `[Pasted text #1 +${draft.split('\n').length} lines]` : draft;
-	const rule = '─'.repeat(width);
+	const height = Math.max(8, process.stdout.rows || 24);
+	const collapsed = as === 'opencode' ? `[Pasted ~${draft.split('\n').length} lines]` : as === 'pi' ? `[paste #1 +${draft.split('\n').length} lines]` : `[Pasted text #1 +${draft.split('\n').length} lines]`;
+	const shown = draft.includes('\n') || [...draft].length > width - 6 ? collapsed : draft;
+	const input: Row[] = panel
+		// Antigravity's MCP panel in place of its input: its server ready once it was started
+		? [{ text: 'MCP Servers' }, { text: '>  ✓ facade_facade  Tools: list_agents', cursor: 0 }, { text: 'Keyboard: esc Exit' }]
+		: inputRows(width, shown);
+	const body = lines.flatMap(line => line.match(new RegExp(`.{1,${width}}`, 'gu')) ?? ['']).slice(-(height - input.length));
 	const out = ['\x1b[?2026h', '\x1b[H\x1b[2J'];
 	// What it printed sits right above its input, as a CLI's transcript does
-	body.forEach((line, at) => out.push(`\x1b[${height - 3 - body.length + at + 1};1H${line}`));
-	out.push(`\x1b[${height - 2};1H${rule}`);
-	out.push(`\x1b[${height - 1};1H❯${NBSP}${shown ? shown : `\x1b[2m${PLACEHOLDER}\x1b[22m`}`);
-	out.push(`\x1b[${height};1H${rule}`);
-	out.push(`\x1b[${height - 1};${3 + [...shown].length}H`);
+	const top = height - input.length;
+	body.forEach((line, at) => out.push(`\x1b[${top - body.length + at + 1};1H${line}`));
+	input.forEach((row, at) => out.push(`\x1b[${top + at + 1};1H${row.text}`));
+	const at = input.findIndex(row => row.cursor !== undefined);
+	out.push(`\x1b[${top + at + 1};${input[at].cursor! + 1}H`);
 	out.push('\x1b[?2026l');
 	process.stdout.write(out.join(''));
 }
 
+/** Whether Antigravity's MCP panel is open in place of its input, opened by `/mcp` and closed by Escape. */
+let panel = false;
+
 /** Enter: what the box held is taken, printed and recorded, and the box is empty again. */
 function submit(): void {
 	if (!draft) {
+		return;
+	}
+	if (startsServer) {
+		startsServer();
+		startsServer = undefined;
+		if (draft === '/mcp') {
+			fs.appendFileSync(`${record}.panel.${agent}`, 'opened\n');
+			panel = true;
+			draft = '';
+			return;
+		}
+	} else if (antigravity && draft === '/mcp') {
+		panel = true;
+		draft = '';
 		return;
 	}
 	fs.appendFileSync(`${record}.received.${agent}`, `${JSON.stringify(draft)}\n`);
@@ -108,6 +174,12 @@ function received(chunk: string): void {
 			pending = pending.slice(end.index + end[0].length);
 			continue;
 		}
+		if (pending === '\x1b') {
+			// Escape on its own, as a key is written: it closes Antigravity's MCP panel
+			pending = '';
+			panel = false;
+			continue;
+		}
 		if (pending.startsWith('\x1b')) {
 			// An escape sequence: a key the box does not use; an unfinished one waits for the rest
 			const sequence = /^\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.|[^[O])/.exec(pending);
@@ -147,11 +219,72 @@ function start(): void {
 	// Bracketed paste on, as Claude Code turns it on: a paste comes whole, its line breaks no Enter
 	process.stdout.write('\x1b[?2004h');
 	draw();
-	process.stdout.write(`${ESC}]7501;?${ST}`);
+	// Muse Code as it runs on Windows takes no part in the Program Status Protocol: its screen is read instead (CLIS-2.3, D80)
+	if (process.env.FACADE_IT_SCREEN !== 'muse') {
+		process.stdout.write(`${ESC}]7501;?${ST}`);
+	}
+	void serverOf().then(server => {
+		if (!server) {
+			return;
+		}
+		if (antigravity) {
+			// Antigravity starts a folder's plugin servers only with its first turn or its MCP panel
+			startsServer = () => void drive(server);
+		} else {
+			void drive(server);
+		}
+	});
+}
+
+/** Whether it stands in for Antigravity, whose launch with the tools gives it its session's settings (CLIS-2.2). */
+const antigravity = args.includes('--settings') && /"permissions"/.test(args[args.indexOf('--settings') + 1] ?? '');
+/** Starts the server Antigravity was given, at its first turn or once its MCP panel opens; nothing until then. */
+let startsServer: (() => void) | undefined;
+
+type Server = { command: string; args: string[]; env: { [name: string]: string } };
+
+/** A TOML basic string, array or inline table of strings, as Codex's per-launch overrides give them: as JSON values. */
+function tomlValue(text: string): unknown {
+	const pairs = [...text.matchAll(/("(?:[^"\\]|\\.)*")\s*=\s*("(?:[^"\\]|\\.)*")/g)];
+	return text.trim().startsWith('{') ? Object.fromEntries(pairs.map(([, key, value]) => [JSON.parse(key), JSON.parse(value)])) : JSON.parse(text);
+}
+
+/**
+ * The Facade server it was given, found where each built-in finds it (CLIS-2.2): Claude Code's `--mcp-config`, Codex's
+ * `-c mcp_servers.facade.*`, Pi's `-e` extension, OpenCode's inline configuration, Antigravity's plugin in its folder, Muse Code's
+ * entry in the folder's `.mcp.json` with its `${NAME:-}` references read from its environment. None where it was given none.
+ */
+async function serverOf(): Promise<Server | undefined> {
 	const config = args.indexOf('--mcp-config');
 	if (config >= 0) {
-		void drive(JSON.parse(fs.readFileSync(args[config + 1], 'utf8')).mcpServers.facade);
+		return JSON.parse(fs.readFileSync(args[config + 1], 'utf8')).mcpServers.facade;
 	}
+	const codex = (key: string) => args.find(arg => arg.startsWith(`mcp_servers.facade.${key}=`))?.slice(`mcp_servers.facade.${key}=`.length);
+	if (codex('command') !== undefined) {
+		return { command: tomlValue(codex('command')!) as string, args: tomlValue(codex('args') ?? '[]') as string[], env: tomlValue(codex('env') ?? '{}') as { [name: string]: string } };
+	}
+	const extension = args.indexOf('-e');
+	if (extension >= 0) {
+		let registered: Server | undefined;
+		const load = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
+		(await load(pathToFileURL(args[extension + 1]).href)).default({ registerMcpServer: (_name: string, server: Server) => registered = server });
+		return registered;
+	}
+	const inline = process.env.OPENCODE_CONFIG_CONTENT;
+	if (inline !== undefined) {
+		const facade = JSON.parse(inline).mcp?.facade as { command: string[]; environment: { [name: string]: string } } | undefined;
+		return facade && { command: facade.command[0], args: facade.command.slice(1), env: facade.environment };
+	}
+	const plugin = path.join('.agents', 'plugins', 'facade', 'mcp_config.json');
+	if (antigravity && fs.existsSync(plugin)) {
+		return JSON.parse(fs.readFileSync(plugin, 'utf8')).mcpServers.facade;
+	}
+	if (args.includes('--trust-workspace') && fs.existsSync('.mcp.json')) {
+		const entry = JSON.parse(fs.readFileSync('.mcp.json', 'utf8')).mcpServers?.facade as Server | undefined;
+		const expanded = (value: string) => value.replace(/\$\{(\w+)(?::-([^}]*))?\}/g, (_all, name: string, empty?: string) => process.env[name] ?? empty ?? '');
+		return entry && { ...entry, env: Object.fromEntries(Object.entries(entry.env ?? {}).map(([name, value]) => [name, expanded(value)])) };
+	}
+	return undefined;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -219,9 +352,4 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 	}
 }
 
-if (process.env.FACADE_IT_SCREEN === 'muse') {
-	process.stdout.write(`fake agent ready\r\n\x1b[2J\x1b[H  Muse Code 1.4.14\r\n\r\n── Voice input (Alt+V to start) ${'─'.repeat(40)}\r\n❯\r\n${'─'.repeat(72)}\r\n  muse-spark-1.3 · minimal · ${process.cwd()} · Launch overrides\r\n`);
-	setInterval(() => undefined, 60_000);
-} else {
-	start();
-}
+start();
