@@ -17,6 +17,9 @@ export const COMMANDS = {
 	filter: 'facade.filter',
 	clearFilter: 'facade.clearFilter',
 	configureAgents: 'facade.configureAgents',
+	/** Registered by the host, which has the CLIs' launch and the agents log (CLIS-4.1, ARCHITECTURE-3.3). */
+	showAgentLaunch: 'facade.showAgentLaunch',
+	showAgentsLog: 'facade.showAgentsLog',
 	newWorktree: 'facade.newWorktree',
 	moveUp: 'facade.moveUp',
 	moveDown: 'facade.moveDown',

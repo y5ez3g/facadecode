@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { AgentLog, AGENTS_LOG } from '../record/log';
 import { cutNextWriteShort, replaceFsFunction, tempDir } from './util';
+import { withModules } from './withModules';
 
 suite('Diagnostic log retention does not interrupt activation or lose retained records', () => {
 
@@ -60,6 +61,24 @@ suite('Diagnostic log retention does not interrupt activation or lose retained r
 			assert.deepStrictEqual([fs.readFileSync(file, 'utf8'), fs.readdirSync(temp.dir)], [old + recent + concurrent, [AGENTS_LOG]]);
 		} finally {
 			restore();
+			temp.remove();
+		}
+	});
+});
+
+suite('Show Agents Log (ARCHITECTURE-3.3)', () => {
+	test('the log as it is; empty, missing or unreadable, `No agent events yet` - never an information toast', () => {
+		const load = withModules({ vscode: { l10n: { t: (text: string) => text } } });
+		const { agentsLogText } = load<typeof import('../host/agentsLog')>(require.resolve('../host/agentsLog'));
+		const temp = tempDir('fc-agents-log-');
+		try {
+			const file = path.join(temp.dir, AGENTS_LOG);
+			const missing = agentsLogText(file);
+			fs.writeFileSync(file, '  \n');
+			const blank = agentsLogText(file);
+			fs.writeFileSync(file, '2026-10-30T12:00:00.000Z an operation\n');
+			assert.deepStrictEqual([missing, blank, agentsLogText(file), agentsLogText(temp.dir)], ['No agent events yet\n', 'No agent events yet\n', '2026-10-30T12:00:00.000Z an operation\n', 'No agent events yet\n']);
+		} finally {
 			temp.remove();
 		}
 	});
