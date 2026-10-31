@@ -10,6 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { timeout } from '../../base/async';
 import { messageOf } from '../../base/errors';
+import type { OwnerClaim } from '../../base/ownership';
 import { isPtydEvent, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent, RunInfo } from '../../ptyd/protocol';
 import { ensurePtydSocket } from '../../ptyd/socket';
 
@@ -18,6 +19,8 @@ const START_WAIT_MS = 5_000;
 
 /** How long a ptyd of another protocol has to answer when a window looks for runs it still holds. */
 const EARLIER_WAIT_MS = 2_000;
+/** How often a held earlier ptyd is asked whether runs of this window are left in it. */
+const EARLIER_CHECK_MS = 60_000;
 
 /**
  * A request that was refused before a write was attempted: ptyd did nothing of it. Once a write is attempted, a transport error
@@ -209,42 +212,113 @@ export class PtydClient {
 }
 
 /**
- * The ptyds of earlier protocols for `home` that still hold live runs of `owner`, by protocol: reported plainly, never ended
- * (ARCHITECTURE-2.4) - this window cannot speak their protocol, so it does not show them.
+ * This window's hold on the ptyds of earlier protocols for `home` that still run its agents. It cannot show them - it does not
+ * speak their protocol for that - but its claim there keeps them from ending five minutes after their window reloaded into this
+ * build: an update never ends them (ARCHITECTURE-2.4). They end five minutes after this window goes, as its own do (RULES-4.1).
+ * A ptyd none of whose runs of this window is left is let go, to exit once idle.
  */
-export async function earlierRuns(home: string, owner: string): Promise<readonly { readonly protocol: number; readonly runs: number }[]> {
-	const found: { protocol: number; runs: number }[] = [];
-	for (let protocol = 1; protocol < PTYD_PROTOCOL; protocol++) {
-		let socket: net.Socket | undefined;
-		try {
-			socket = await connectTo(ptydSocketPath(home, protocol));
-		} catch {
-			continue;
-		}
-		if (!socket) {
-			continue;
-		}
-		try {
-			const ask = lineRequester(socket);
-			const runs = await Promise.race([
-				ask('list', { owner }) as Promise<readonly RunInfo[]>,
-				timeout(EARLIER_WAIT_MS).then(() => [] as RunInfo[])
-			]);
-			const live = Array.isArray(runs) ? runs.filter(run => !run.exited).length : 0;
-			if (live) {
-				found.push({ protocol, runs: live });
+export class EarlierPtyds {
+	private readonly held = new Map<number, { readonly socket: net.Socket; readonly ask: Requester }>();
+	private finding: Promise<void> | undefined;
+	private timer: ReturnType<typeof setInterval> | undefined;
+	private disposed = false;
+
+	constructor(private readonly home: string, private readonly claim: OwnerClaim, private readonly log: (line: string) => void) { }
+
+	/** Finds the earlier ptyds that run this window's agents and claims them there: each held once, whatever asks again. */
+	find(): Promise<void> {
+		this.finding ??= this.search().finally(() => this.finding = undefined);
+		return this.finding;
+	}
+
+	/** Lets go of each earlier ptyd none of whose runs of this window is left, or that went. */
+	async check(): Promise<void> {
+		for (const [protocol, { socket, ask }] of [...this.held]) {
+			const live = await liveRunsOf(ask, this.claim.owner).catch(() => 0);
+			if (!live && this.held.get(protocol)?.socket === socket) {
+				this.release(protocol);
+				this.log(`The agent processes an earlier Facade Code started in a ptyd of protocol ${protocol} have ended.`);
 			}
-		} catch {
-			// It went meanwhile, or does not answer as any protocol did: nothing to report
-		} finally {
-			socket.destroy();
 		}
 	}
-	return found;
+
+	dispose(): void {
+		this.disposed = true;
+		for (const protocol of [...this.held.keys()]) {
+			this.release(protocol);
+		}
+	}
+
+	private async search(): Promise<void> {
+		for (let protocol = 1; protocol < PTYD_PROTOCOL && !this.disposed; protocol++) {
+			if (this.held.has(protocol)) {
+				continue;
+			}
+			const socket = await connectTo(ptydSocketPath(this.home, protocol)).catch(() => undefined);
+			if (!socket) {
+				continue;
+			}
+			const ask = lineRequester(socket);
+			let live: number;
+			try {
+				live = await liveRunsOf(ask, this.claim.owner);
+			} catch {
+				// It went meanwhile, or does not answer as any protocol did: nothing to hold
+				live = 0;
+			}
+			if (!live || this.disposed) {
+				socket.destroy();
+				continue;
+			}
+			try {
+				await answerOf(ask('claim', this.claim));
+			} catch (err) {
+				socket.destroy();
+				this.log(`${live} agent processes started by an earlier Facade Code run in a ptyd of protocol ${protocol}, which this window could not claim: ${messageOf(err)}`);
+				continue;
+			}
+			this.held.set(protocol, { socket, ask });
+			socket.on('close', () => {
+				if (this.held.get(protocol)?.socket === socket) {
+					this.release(protocol);
+				}
+			});
+			this.timer ??= setInterval(() => void this.check(), EARLIER_CHECK_MS);
+			this.timer.unref?.();
+			this.log(`${live} agent processes started by an earlier Facade Code still run in a ptyd of protocol ${protocol}; this window cannot show them, and keeps them running until it closes.`);
+		}
+	}
+
+	private release(protocol: number): void {
+		this.held.get(protocol)?.socket.destroy();
+		this.held.delete(protocol);
+		if (!this.held.size) {
+			clearInterval(this.timer);
+			this.timer = undefined;
+		}
+	}
+}
+
+type Requester = (method: string, params: object) => Promise<unknown>;
+
+/** How many runs of `owner` the ptyd `ask` asks has that have not ended; none where it does not answer in time. */
+async function liveRunsOf(ask: Requester, owner: string): Promise<number> {
+	const runs = await answerOf(ask('list', { owner }), [] as RunInfo[]);
+	return Array.isArray(runs) ? (runs as readonly RunInfo[]).filter(run => !run.exited).length : 0;
+}
+
+/** The answer to a request of an earlier ptyd: `otherwise` - or a failure, where there is none - if it does not come in time. */
+function answerOf<T>(answer: Promise<unknown>, otherwise?: T): Promise<unknown> {
+	return Promise.race([answer, timeout(EARLIER_WAIT_MS).then(() => {
+		if (otherwise === undefined) {
+			throw new Error(`ptyd did not answer within ${EARLIER_WAIT_MS} ms.`);
+		}
+		return otherwise;
+	})]);
 }
 
 /** Asks on `socket` in JSON lines, as every protocol of ptyd has: each request answered by its number. */
-function lineRequester(socket: net.Socket): (method: string, params: object) => Promise<unknown> {
+function lineRequester(socket: net.Socket): Requester {
 	let nextId = 1;
 	const pending = new Map<number, { resolve(value: unknown): void; reject(err: Error): void }>();
 	socket.setEncoding('utf8');

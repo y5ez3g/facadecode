@@ -9,7 +9,7 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { ActivityReport, ExitReport, LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
-import { PtydClient, PtydLost, PtydNotSent, earlierRuns, ptydSocketPath } from '../host/execution/ptydClient';
+import { EarlierPtyds, PtydClient, PtydLost, PtydNotSent, ptydSocketPath } from '../host/execution/ptydClient';
 import type { Method, Requests } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import { TestEmitter, withModules } from './withModules';
@@ -174,7 +174,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
-		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydLost, PtydNotSent, earlierRuns, ptydSocketPath } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
+		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydLost, PtydNotSent, EarlierPtyds, ptydSocketPath } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
 	});
 
 	teardown(() => {

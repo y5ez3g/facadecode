@@ -6,7 +6,7 @@ import * as path from 'path';
 import { messageOf } from '../../base/errors';
 import type { OwnerClaim } from '../../base/ownership';
 import { nextOwnerClaim } from '../../record/ownership';
-import { earlierRuns, PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
+import { EarlierPtyds, PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
 
 /** Cadence for checking live processes and retrying recovery (UX-5.2). */
 export const RECONCILE_MS = 2_000;
@@ -31,11 +31,14 @@ export class ExecutionSession {
 	private disposed = false;
 	private transferredAway = false;
 	private readonly claim: OwnerClaim;
+	/** This window's claim in the ptyds of earlier protocols that still run its agents: an update never ends them. */
+	private readonly earlier: EarlierPtyds;
 	private readonly reconcileTimer: ReturnType<typeof setInterval>;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(private readonly options: SessionOptions) {
 		this.claim = options.claim ?? nextOwnerClaim(options.owner, options.home);
+		this.earlier = new EarlierPtyds(options.home, this.claim, options.log);
 		this.reconcileTimer = setInterval(() => void options.reconcile(), RECONCILE_MS);
 		this.reconcileTimer.unref?.();
 	}
@@ -82,11 +85,7 @@ export class ExecutionSession {
 						}
 					}
 				});
-				void earlierRuns(this.options.home, this.options.owner).then(found => {
-					for (const { protocol, runs } of found) {
-						this.options.log(`${runs} agent processes started by an earlier Facade Code still run in a ptyd of protocol ${protocol}; this window cannot show them, and they were not ended.`);
-					}
-				}, () => undefined);
+				void this.earlier.find();
 			}, err => {
 				if (this.connection === connection) {
 					this.connection = undefined;
@@ -103,6 +102,7 @@ export class ExecutionSession {
 		}
 		this.transferredAway = true;
 		this.lost = false;
+		this.earlier.dispose();
 		clearInterval(this.reconcileTimer);
 		clearTimeout(this.reconnectTimer);
 		this.options.transferred();
@@ -143,6 +143,7 @@ export class ExecutionSession {
 			return;
 		}
 		this.disposed = true;
+		this.earlier.dispose();
 		clearInterval(this.reconcileTimer);
 		clearTimeout(this.reconnectTimer);
 		void this.connection?.then(client => client.dispose(), () => undefined);

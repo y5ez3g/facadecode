@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { PtydClient } from '../host/execution/ptydClient';
+import { EarlierPtyds, PtydClient, ptydSocketPath } from '../host/execution/ptydClient';
 import { lineReader, PTYD_PROTOCOL, RunEvent, SpawnParams } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import * as runModule from '../ptyd/run';
@@ -111,6 +111,44 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			await assert.rejects(PtydClient.connect(older, '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log')), new RegExp(`speaks protocol ${PTYD_PROTOCOL - 1}, and this window protocol ${PTYD_PROTOCOL}: its runs keep running`));
 		} finally {
 			await new Promise<void>(resolve => fake.close(() => resolve()));
+		}
+	});
+
+	test('a window of a later protocol holds its runs in the ptyd of an earlier one: its claim there, as their window reloads into the update, keeps them from ending five minutes later; once none is left it lets that ptyd go (ARCHITECTURE-2.4, RULES-4.1)', async function () {
+		this.timeout(20_000);
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-home-'));
+		const earlierSocket = ptydSocketPath(home, PTYD_PROTOCOL - 1);
+		// ptyd's five minutes for an absent owner, run by hand
+		const waits = new Set<() => void>();
+		const earlier = new PtydServer(earlierSocket, () => undefined, { after: (_ms, run) => { waits.add(run); return { dispose: () => waits.delete(run) }; } });
+		assert.strictEqual(await earlier.listen(), true);
+		const said: string[] = [];
+		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, line => said.push(line));
+		try {
+			// The window before the update starts a run there, and goes as it reloads into this build
+			const before = await PtydClient.connect(earlierSocket, '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			await before.request('claim', { owner: 'w1', generation: 1, token: 'before' });
+			const { pid } = await spawn(before, 'run-kept', 'sleep 30');
+			before.dispose();
+			await until('ptyd to wait for its owner', () => waits.size === 1);
+			// The reloaded window speaks this protocol: it holds the run there with its own claim, once, asked again on a reconnect
+			await hold.find();
+			await hold.find();
+			assert.strictEqual(waits.size, 0, 'no wait is left to end it five minutes later');
+			assert.ok(alive(pid));
+			assert.deepStrictEqual(said, [`1 agent processes started by an earlier Facade Code still run in a ptyd of protocol ${PTYD_PROTOCOL - 1}; this window cannot show them, and keeps them running until it closes.`]);
+			await hold.check();
+			assert.strictEqual(said.length, 1, 'still running, still held');
+			// It ends: the next check lets that ptyd go, which then waits for the owner as for any window, to exit once idle
+			process.kill(pid, 'SIGKILL');
+			await until('the ptyd to see it end', async () => { await hold.check(); return said.length === 2 || undefined; });
+			assert.strictEqual(said[1], `The agent processes an earlier Facade Code started in a ptyd of protocol ${PTYD_PROTOCOL - 1} have ended.`);
+			await until('ptyd to wait for its owner again', () => waits.size === 1);
+		} finally {
+			hold.dispose();
+			earlier.close();
+			fs.rmSync(earlierSocket, { force: true });
+			fs.rmSync(home, { recursive: true, force: true });
 		}
 	});
 

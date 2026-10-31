@@ -193,7 +193,9 @@ exhaustion fails the requesting operation; there is no product cap of 100 agents
 that disables an otherwise usable session.
 
 Existing processes are not killed just because an extension/protocol is updated. Compatible reconnect preserves their
-actual identity. New starts use current settings/protocol. Upgrade/reload behavior must be verified with in-flight work.
+actual identity. A window that cannot show the runs a ptyd of an earlier protocol holds for its workspace still claims
+them there, so they end only five minutes after that window goes (RULES-4.1), and its log says so. New starts use current
+settings/protocol. Upgrade/reload behavior must be verified with in-flight work.
 
 ## 3 Data and safety
 
@@ -367,6 +369,8 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-10-31: 2.4 says how runs held by an earlier protocol's ptyd survive an update: the night verification found they
+  ended five minutes after the reload, as no window claimed them there.
 - 2026-10-30: 2.2 and 2.3 describe the owner's five-minute policy (D75) as ptyd applies it, and 2.2 bounds the wait
   for each restored terminal to open.
 
