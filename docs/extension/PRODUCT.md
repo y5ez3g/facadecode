@@ -165,7 +165,7 @@ capabilities are named; technical limitations do not quietly redefine the produc
 ## Change log
 
 - 2026-10-30: Step 2 of the Facade Code extension: agents start, message and operate one another across this computer's
-  windows (1.1, 2.1, 3.1, 5.1, 5.6), with the Facade Dots wording; 4.2 adds the owner's plain-language rule (D85); 5.7
+  windows (1.1, 2.1, 3.1, 5.1, 5.6), with the Facade Dots wording; 4.2 adds the owner's plain-language rule (D90); 5.7
   requires local and two remote environments communicating and stopping agents.
 
 - 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots specification: the rules step 1

@@ -58,7 +58,7 @@ function workspaceUri(): string {
 export async function activateFacade(context: vscode.ExtensionContext): Promise<() => Promise<void>> {
 	const home = facadeHome();
 	const session = vscode.env.sessionId;
-	// The window component comes with Facade Code's extension pack, maybe after it: waited for a bounded time (ARCHITECTURE-4.3, D83)
+	// The window component comes with Facade Code's extension pack, maybe after it: waited for a bounded time (ARCHITECTURE-4.3, D88)
 	const identity = await waitForWindowIdentity(session);
 	if (!identity) {
 		const missing = showComponentMissing(context, session);

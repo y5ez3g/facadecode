@@ -140,7 +140,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const server = JSON.parse(fs.readFileSync(config, 'utf8')).mcpServers.facade;
 		assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_PTYD', 'FACADE_RUN']);
 		assert.ok(fs.existsSync(path.join(launch.args[launch.args.indexOf('--plugin-dir') + 1], 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
-		assert.strictEqual(launch.args[launch.args.indexOf('--allowedTools') + 1], 'mcp__facade', 'Facade\'s own tools never ask for approval (D79)');
+		assert.strictEqual(launch.args[launch.args.indexOf('--allowedTools') + 1], 'mcp__facade', 'Facade\'s own tools never ask for approval (D84)');
 		const lines = linesOf(alias);
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
 		assert.strictEqual(initialize?.serverInfo?.name, 'facade');
@@ -235,7 +235,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.ok(result.includes('was not delivered') && result.includes('(input_draft)') && result.includes('This is a Facade result, not a reply from the recipient.'), result);
 		assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
 
-		// The recipient reads what never reached it: delivered by that read, and only once (COLLABORATION-3.1, D77)
+		// The recipient reads what never reached it: delivered by that read, and only once (COLLABORATION-3.1, D82)
 		const read = await script(childAlias, [
 			{ tool: 'read_messages', arguments: {} },
 			{ tool: 'read_messages', arguments: {}, until: 'Nothing is waiting', wait: 5_000 },

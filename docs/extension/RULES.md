@@ -228,8 +228,8 @@ immediately. A stale observation is labeled as such rather than treated as proof
 
 **Working is green, not working is yellow, and an error or unavailable reliable status is red.**
 
-An unresolved error takes precedence. Without such an error, observed work/startup is green and observed not-working
-is yellow. Native permission/login questions are yellow unless a separate error exists. Unknown activity is an error:
+An unresolved error takes precedence. Without such an error, observed work/startup is green - startup lasting until the
+CLI first shows its activity, within CLIS-2.3's bound - and observed not-working is yellow. Native permission/login questions are yellow unless a separate error exists. Unknown activity is an error:
 use red and explain the unavailable status in the second line; there is no neutral/outline fourth state.
 A quiet screen does not prove idle. A turn ending becomes yellow without a notification. Recovery clears only the
 corresponding error. Reduced motion removes breathing, never the accessible state description.
@@ -350,9 +350,10 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 - 2026-10-30: Step 2 of the Facade Code extension: added the Facade Dots message rules 1.1–1.7 and 1.9–1.10, the client
   network (2.1), references (2.3), tool and input facts (3.1), client-wide reach (4.3), the MCP switch (4.4) and message
   retention (5.3), with the owner's decisions of that day: one delivery state, in which read_messages delivers (1.3, 1.7,
-  D77); every CLI version attempted, with unrecognized input boxes left untouched (1.4, D78); Facade's tools without
-  approval prompts (4.3, D79); `#human` for the person (2.3, D80); results for success and failure (1.7, D81). 4.1 keeps
+  D82); every CLI version attempted, with unrecognized input boxes left untouched (1.4, D83); Facade's tools without
+  approval prompts (4.3, D84); `#human` for the person (2.3, D85); results for success and failure (1.7, D86). 4.1 keeps
   the five-minute policy (D75) and adds that creators do not end their children.
+- 2026-10-30: 3.2's startup lasts until the CLI first shows its activity, within CLIS-2.3's bound (D81).
 
 - 2026-10-30: 4.1 states the owner's five-minute policy (D75) after a window's extension host disconnects, replacing the
   prohibition on timed cleanup; 4.4 notes that the disable setting joins in a later step.

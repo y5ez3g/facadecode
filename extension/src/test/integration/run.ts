@@ -12,7 +12,17 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { EDITOR_FLAGS, endMatching, fakeCli, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { EDITOR_FLAGS, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+
+/** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
+const BUILT_INS: readonly { readonly id: string; readonly segment: string; readonly avatar: string }[] = [
+	{ id: 'claude', segment: 'claude', avatar: 'avatar-claude.png' },
+	{ id: 'codex', segment: 'codex', avatar: 'avatar-codex.png' },
+	{ id: 'agy', segment: 'antigravity', avatar: 'avatar-antigravity.png' },
+	{ id: 'muse', segment: 'muse', avatar: 'avatar-muse.png' },
+	{ id: 'opencode', segment: 'opencode', avatar: 'avatar-opencode.png' },
+	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
+];
 
 /**
  * Takes back the trust each launch gave its folder in Claude Code's configuration `file` (CLIS-3.3, D62): the entries of the run's own
@@ -42,7 +52,7 @@ function untrust(file: string, root: string): void {
 async function main(): Promise<void> {
 	const executable = officialEditor();
 	const grep = process.env.FACADE_IT_GREP;
-	// For a look at what a run left: its folder kept, and one of its editors alone (`journeys` or `conversion`)
+	// For a look at what a run left: its folder kept, and one part of it alone (`journeys`, `cross` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
 	// Real Claude Code, for `real` alone: its executable, and its configuration folder - else the person's own, signed in
@@ -54,19 +64,29 @@ async function main(): Promise<void> {
 	const repo = path.join(root, 'app');
 	newRepository(repo);
 
-	// A Claude Code that records where it runs and what it was given, run as Node by this run's own
-	const fake = fakeCli(root, path.join(__dirname, 'fakeClaude.js'));
-	const record = path.join(root, 'fake-claude.log');
+	// An agent CLI that records where it runs and what it was given, as each built-in is installed
+	const { fake, launchers } = fakeClis(root);
+	const record = path.join(root, 'fake-cli.log');
 	// Claude Code's configuration, where each launch trusts its folder (CLIS-3.3, D62): the suite's own, never a person's
 	const claudeConfig = path.join(root, 'claude');
 	fs.mkdirSync(claudeConfig);
 	const home = path.join(root, 'home');
 	fs.mkdirSync(home);
+	// The home folder agents' terminals see, where a CLI such as Antigravity keeps the folders it trusts: the suite's own. Only the
+	// terminals' environment names it, as a person's terminal settings could; the editor keeps its own HOME.
+	const agentsHome = path.join(root, 'agents-home');
+	fs.mkdirSync(agentsHome);
 
+	/** What agents' terminals are given - the suite's home folder, and `more` - by the editor's terminal settings. */
+	const terminalEnv = (more: { readonly [name: string]: string } = {}) => ({
+		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, ...more },
+		'terminal.integrated.env.osx': { HOME: agentsHome, ...more },
+		'terminal.integrated.env.linux': { HOME: agentsHome, ...more }
+	});
 	// Every built-in points to a fake: the suite never starts a person's real CLI.
 	const settings = {
-		'facade.claude.path': fake,
-		'facade.codex.path': fake,
+		...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
+		...terminalEnv(),
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
 		'window.restoreWindows': 'none'
@@ -97,6 +117,7 @@ async function main(): Promise<void> {
 				extensionTestsEnv: {
 					FACADE_HOME: facade,
 					FACADE_IT_RECORD: record,
+					FACADE_IT_AGENTS_HOME: agentsHome,
 					// None: Claude Code's own default, the person's signed-in configuration
 					...(claude !== null ? { CLAUDE_CONFIG_DIR: claude } : {}),
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
@@ -110,8 +131,8 @@ async function main(): Promise<void> {
 	};
 	/**
 	 * A folder window that becomes a multi-root workspace keeps its agents (ARCHITECTURE-2.2, D70). The editor refuses to enter a
-	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake Claude Code in the
-	 * folder window and adds a folder, then, in the extension host the editor restarts, says what Facade shows; this judges it.
+	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake CLI in the folder window
+	 * and adds a folder, then, in the extension host the editor restarts, says what Facade shows; this judges it.
 	 */
 	const conversion = async () => {
 		const solo = path.join(root, 'solo');
@@ -201,8 +222,13 @@ async function main(): Promise<void> {
 	};
 	try {
 		if (!only || only === 'journeys') {
-			await run('journeys', repo, { FACADE_IT_CLI: 'claude' });
-			await run('codex', repo, { FACADE_IT_CLI: 'codex' }, { 'facade.claude.path': path.join(root, 'unavailable-claude') });
+			// The journeys once for each built-in: those before it in the catalog not installed, so that it is the one preselected
+			for (const [at, cli] of BUILT_INS.entries()) {
+				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
+				// Muse Code as it runs on Windows, reporting nothing: its dot follows its screen (CLIS-2.3, D80)
+				const screen = cli.id === 'muse' ? terminalEnv({ FACADE_IT_SCREEN: 'muse' }) : {};
+				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, { ...missing, ...screen });
+			}
 		}
 		if (!only || only === 'cross') {
 			await crossWindow();
@@ -218,7 +244,8 @@ async function main(): Promise<void> {
 		if (keep) {
 			console.log(`Kept ${root}`);
 		} else {
-			fs.rmSync(root, { recursive: true, force: true });
+			// On Windows a file a process just ended held can stay locked for a moment
+			fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 		}
 	}
 }

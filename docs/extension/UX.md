@@ -175,13 +175,13 @@ identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSel
 | `facade.collaboration.waitSeconds` | integer seconds 1–3600; 120 | machine in execution environment | MCP-1.3 |
 | `facade.<cli>.path` | string; empty | machine in execution environment | CLIS-1.2 |
 
-`<cli>` is `claude` or `codex`; `facade.<cli>.enabled` (CLIS-1.1) and `facade.<cli>.launch` (CLIS-3) join in a later
-step. Settings sections in order: `Agents` (`facade.yolo`, `facade.collaboration.enabled`, `facade.collaboration.waitSeconds`), then one
-section per built-in CLI in CLIS-1.1 order. Descriptions say what changes for the person, for example that agents can
-start, message and control other agents, and that a change applies to agents started afterwards. Read on use and apply
-live where RULES-4.4 allows. Do not add an “agent default CLI/model/worktree” setting. Local and remote values are
-clearly scoped in the editor. The window components' network has no settings; it shares the same OS-user desktop
-boundary.
+`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`; `facade.<cli>.enabled` (CLIS-1.1) and
+`facade.<cli>.launch` (CLIS-3) join in a later step. Settings sections in order: `Agents` (`facade.yolo`,
+`facade.collaboration.enabled`, `facade.collaboration.waitSeconds`), then one section per built-in CLI in CLIS-1.1
+order. Descriptions say what changes for the person, for example that agents can start, message and control other
+agents, and that a change applies to agents started afterwards. Read on use and apply live where RULES-4.4 allows. Do
+not add an “agent default CLI/model/worktree” setting. Local and remote values are clearly scoped in the editor. The
+window components' network has no settings; it shares the same OS-user desktop boundary.
 
 ### 4.2 Follow existing editor settings
 
@@ -248,9 +248,11 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 ## Change log
 
 - 2026-10-30: Step 2 of the Facade Code extension: 1.2 adds the notification for a message to the person; 1.3 adds the
-  owner's plain-language rule (D85); 3.1 adds Message History...; 3.2 adds message navigation and the components' private
-  commands; 4.1 adds `facade.collaboration.enabled` and `facade.collaboration.waitSeconds` to the Agents section (D84); 5.2 adds message
+  owner's plain-language rule (D90); 3.1 adds Message History...; 3.2 adds message navigation and the components' private
+  commands; 4.1 adds `facade.collaboration.enabled` and `facade.collaboration.waitSeconds` to the Agents section (D89); 5.2 adds message
   and history work budgets.
+- 2026-10-30: 4.1 adds the `.path` settings of Antigravity, Muse Code, OpenCode and Pi, each in its own section in
+  CLIS-1.1 order (D77).
 
 - 2026-10-30: 4.1 lists the step 1 settings for Claude Code and Codex, with `.enabled` and `.launch` in a later step;
   3.2 removes two context keys nothing sets or uses.

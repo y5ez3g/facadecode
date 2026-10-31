@@ -165,13 +165,13 @@
 	"Change Working Location...": "작업 위치 변경...",
 	"Change Name...": "이름 변경...",
 	"Configure Agents...": "Agent 구성...",
-	"Install Claude Code or Codex in this environment, or configure the path.": "이 환경에 Claude Code 또는 Codex를 설치하거나 경로를 구성하세요.",
+	"Install a supported CLI in this environment, or configure its path.": "이 환경에 지원되는 CLI를 설치하거나 해당 경로를 구성하세요.",
 	"Unavailable": "사용할 수 없음",
 	"Select a CLI": "CLI 선택",
 	"Open Folder...": "폴더 열기...",
 	"A workspace folder is required to run agents.": "에이전트를 실행하려면 작업 영역 폴더가 필요합니다.",
 	"Open a folder to continue": "계속하려면 폴더를 여세요",
-	"Could not start {0}: {1}.": "{0}을(를) 시작할 수 없습니다: {1}。",
+	"Could not start {0}: {1}.": "{0}을(를) 시작할 수 없습니다: {1}.",
 	"Could not create worktree: {0}.": "작업 트리를 만들 수 없습니다: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "브랜치 {0} 및 폴더 {1}이(가) 생성되었으며 유지됩니다.",
 	"Branch {0} was created and kept.": "브랜치 {0}이(가) 생성되었으며 유지됩니다.",
@@ -183,6 +183,7 @@
 	"{0}.path is {1}, which was not found on the PATH of a terminal in {2}": "{0}.path가 {1}(으)로 설정되었으나, {2}의 터미널 PATH에서 찾을 수 없습니다",
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path가 {1}(으)로 설정되었으나, {2}은(는) 실행할 수 있는 프로그램이 아닙니다",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0}은(는) cmd.exe를 통해 실행되므로 인수 {1}을(를) 안전하게 전달할 수 없습니다. {2}.path를 CLI 자체 프로그램 또는 Node 진입점으로 설정하세요",
+	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0}은(는) cmd.exe를 통해 실행되므로 해당 경로를 안전하게 전달할 수 없습니다. {1}.path를 CLI 자체 프로그램 또는 Node 진입점으로 설정하세요",
 	"facade.yolo must be true or false; received {0}": "facade.yolo는 true 또는 false이어야 합니다. 수신된 값: {0}",
 	"Configure Agents": "Agent 구성"
 }

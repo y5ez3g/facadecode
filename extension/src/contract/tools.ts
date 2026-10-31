@@ -320,7 +320,7 @@ class ToolService {
 
 	/** The run `reference` names within the caller's reach (RULES-2.3, 4.3). */
 	/**
-	 * Whether `reference` names the person (RULES-2.3, D80): `#human` always; `@human` or `human` unless an agent the caller reaches is
+	 * Whether `reference` names the person (RULES-2.3, D85): `#human` always; `@human` or `human` unless an agent the caller reaches is
 	 * named `human`, when it is ambiguous like any repeated name and resolving it as an agent says so.
 	 */
 	private isHuman(reference: string, caller: Caller): boolean {

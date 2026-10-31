@@ -161,6 +161,8 @@ export interface LaunchPlan {
 	 * version. A CLI without one is never typed a message into.
 	 */
 	readonly input: { readonly adapter?: string; readonly capability: CapabilityState };
+	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	readonly screenStatus?: string;
 }
 
 /** A reason Facade itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */
@@ -214,6 +216,8 @@ export interface ActivityReport {
 	readonly title?: string;
 	/** Whether this run's CLI has proven it reports activity (S12). */
 	readonly reporting: boolean;
+	/** Its CLI has shown no activity yet, and its run is still starting: no later than its bound from its process start (CLIS-2.3, D81). */
+	readonly awaitingActivity?: true;
 }
 
 export interface ExitReport {
@@ -390,6 +394,8 @@ export interface RunFacts {
 	readonly activityReason?: string;
 	/** Whether the run's CLI proved it reports activity; without it activity is unknown, shown red (RULES-3.2). */
 	readonly reporting: boolean;
+	/** Its process started, its CLI has shown no activity yet: the run is still starting, green, within CLIS-2.3's bound (D81). */
+	readonly awaitingActivity?: true;
 	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
 	readonly title?: string;
 	/** The unresolved error that makes the card red (RULES-3.2): launch failure, abnormal exit, reported error. */

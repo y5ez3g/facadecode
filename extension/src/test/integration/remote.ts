@@ -27,7 +27,7 @@ import { resolveCliArgsFromVSCodeExecutablePath, runTests } from '@vscode/test-e
 import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { EDITOR_FLAGS, endMatching, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { EDITOR_FLAGS, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
 
 const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts'] as const;
 type Scenario = typeof SCENARIOS[number];
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
 	const name = path.basename(root);
 	const facade = `${root}/facade`;
 	const claude = `${root}/claude`;
-	const record = `${root}/fake-claude.log`;
+	const record = `${root}/fake-cli.log`;
 
 	const hosts: Host[] = aliases.map((alias, index) => {
 		const ssh = (command: string[], input?: string) => execFileSync('ssh', ['-F', config, '-o', 'BatchMode=yes', alias, ...command], { input, encoding: 'utf8', stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
@@ -117,7 +117,7 @@ async function main(): Promise<void> {
 			const at = (file: string) => `${drive}${file.replace(/\//g, '\\')}`;
 			// The run's root on the system drive, as Node there resolves `/tmp/…`; a path with a drive of its own keeps it
 			const uri = (file: string) => `vscode-remote://ssh-remote+${alias}/${/^[A-Za-z]:/.test(file) ? `${file[0].toLowerCase()}${file.slice(1)}` : `${drive.toLowerCase()}${file}`}`;
-			return { alias, platform: 'windows', build, fake: at(`${root}/fake-claude.exe`), at, uri, run };
+			return { alias, platform: 'windows', build, fake: at(`${root}/fake-cli.cmd`), at, uri, run };
 		}
 		const run = (script: string) => ssh(['sh -s'], script);
 		let platform: string;
@@ -129,21 +129,22 @@ async function main(): Promise<void> {
 		if (!platform) {
 			throw new Error(`${alias} runs neither Linux, macOS nor Windows.`);
 		}
-		return { alias, platform, build, fake: `${root}/fake-claude`, at: file => file, uri: file => `vscode-remote://ssh-remote+${alias}${file}`, run };
+		return { alias, platform, build, fake: `${root}/fake-cli`, at: file => file, uri: file => `vscode-remote://ssh-remote+${alias}${file}`, run };
 	});
 
 	const extension = path.resolve(__dirname, '..', '..', '..', 'extension-it');
 	const windowComponent = path.resolve(__dirname, '..', '..', '..', 'window');
 	const extensions = path.join(root, 'x');
 	const local = { app: path.join(root, 'local-app'), peer: path.join(root, 'local-peer') };
-	const localFake = `${root}/fake-claude`;
 	const editors: ChildProcess[] = [];
 	const server = (host: Host) => host.at(`${root}/server`);
 
 	// Every built-in points to a fake on every computer: the run never starts a person's real CLI
+	const BUILT_INS = ['claude', 'codex', 'antigravity', 'muse', 'opencode', 'pi'];
+	const fakes = (fake: string) => Object.fromEntries(BUILT_INS.map(segment => [`facade.${segment}.path`, fake]));
+	const localFake = path.join(root, 'fake-cli');
 	const settings = {
-		'facade.claude.path': localFake,
-		'facade.codex.path': localFake,
+		...fakes(localFake),
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
 		'window.restoreWindows': 'none',
@@ -182,13 +183,13 @@ ${removeRoot ? `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Liter
 	try {
 		fs.mkdirSync(facade, { mode: 0o700 });
 		fs.mkdirSync(claude, { mode: 0o700 });
-		fs.writeFileSync(localFake, `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(path.join(__dirname, 'fakeClaude.js'))} "$@"\n`, { mode: 0o755 });
+		fakeClis(root);
 		newRepository(local.app);
 		newRepository(local.peer);
 		// Each host's half: the same root, the server's machine settings pointing to its fake, and two repositories
 		for (const host of hosts) {
 			const machine = `${server(host)}${host.platform === 'windows' ? '\\.vscode-server\\data\\Machine' : '/.vscode-server/data/Machine'}`;
-			const fakes = JSON.stringify({ 'facade.claude.path': host.fake, 'facade.codex.path': host.fake });
+			const machineSettings = JSON.stringify(fakes(host.fake));
 			try {
 				host.run(host.platform === 'windows' ? `
 foreach ($file in ${literal(`${host.build}/extension-it/package.json`)}, ${literal(`${host.build}/out/test/integration/index.js`)}) {
@@ -196,12 +197,11 @@ foreach ($file in ${literal(`${host.build}/extension-it/package.json`)}, ${liter
 }
 $root = ${literal(host.at(root))}
 New-Item -ItemType Directory -Force -Path $root, "$root\\facade", "$root\\claude", ${literal(machine)} | Out-Null
-[IO.File]::WriteAllText((Join-Path ${literal(machine)} 'settings.json'), ${literal(fakes)})
+[IO.File]::WriteAllText((Join-Path ${literal(machine)} 'settings.json'), ${literal(machineSettings)})
 # Its paths by name: Windows PowerShell drops the double quotes of an argument it gives a program
 $env:FACADE_IT_EDITORS = ${literal(`${host.build}/out/test/integration/editors.js`)}
 $env:FACADE_IT_FAKE_ROOT = $root
-$env:FACADE_IT_FAKE_SCRIPT = ${literal(`${host.build}/out/test/integration/fakeClaude.js`)}
-& node -e 'require(process.env.FACADE_IT_EDITORS).fakeCli(process.env.FACADE_IT_FAKE_ROOT,process.env.FACADE_IT_FAKE_SCRIPT)'
+& node -e 'require(process.env.FACADE_IT_EDITORS).fakeClis(process.env.FACADE_IT_FAKE_ROOT)'
 if ($LASTEXITCODE) { throw 'The fake CLI could not be made.' }
 foreach ($repo in 'app', 'remote-peer') {
 	git init -q -b main "$root\\$repo"
@@ -217,9 +217,9 @@ mkdir ${quoted(root)}
 cd ${quoted(root)}
 mkdir facade claude
 mkdir -p ${quoted(machine)}
-printf '%s' ${quoted(fakes)} > ${quoted(`${machine}/settings.json`)}
-printf '#!/bin/sh\\nexec %s %s "$@"\\n' "'$node'" ${quoted(quoted(`${host.build}/out/test/integration/fakeClaude.js`))} > fake-claude
-chmod 755 fake-claude
+printf '%s' ${quoted(machineSettings)} > ${quoted(`${machine}/settings.json`)}
+printf '#!/bin/sh\\nexec %s %s "$@"\\n' "'$node'" ${quoted(quoted(`${host.build}/out/test/integration/fakeCli.js`))} > fake-cli
+chmod 755 fake-cli
 for repo in app remote-peer; do
 	mkdir "$repo"
 	git -C "$repo" init -q -b main

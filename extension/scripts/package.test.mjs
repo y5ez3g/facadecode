@@ -48,7 +48,7 @@ test('production manifest and executable bundles exclude the integration command
 	const extension = fs.readFileSync(path.join(stage, 'dist', 'extension.js'), 'utf8');
 	const contributed = new Set(manifest.contributes.commands.map(command => command.command));
 	// Every command the bundle registers is a catalog command; test commands and retired IDs are absent
-	const registered = new Set([...extension.matchAll(/["'](_?facade\.[A-Za-z.]+)["']/g)].map(match => match[1]).filter(id => !/^facade\.(yolo|claude|codex|locations|lastLaunch|panel)/.test(id)));
+	const registered = new Set([...extension.matchAll(/["'](_?facade\.[A-Za-z.]+)["']/g)].map(match => match[1]).filter(id => !/^facade\.(yolo|claude|codex|antigravity|muse|opencode|pi|locations|lastLaunch|panel)\b/.test(id)));
 	for (const id of ['facade.state', 'facade.selectRow', 'facade.probe', 'facade.stopAgent', 'facade.nextAgent', 'facade.startAgent']) {
 		assert.ok(!contributed.has(id), `Not a shipped command: ${id}`);
 		assert.ok(!registered.has(id), `Registered in the production bundle: ${id}`);

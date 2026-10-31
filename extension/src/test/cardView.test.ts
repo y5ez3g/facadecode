@@ -3,8 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
+import { BUILT_IN_ADAPTERS } from '../clis/catalog';
 import type { RunFacts, WorktreeCreationEffects } from '../core/ports';
 import { avatarOf, cardOf, CardWords, statusOf } from '../ui/cardView';
+import type * as PresentationModule from '../ui/presentation';
+import { withModules } from './withModules';
 
 const WORDS: CardWords = {
 	starting: 'Starting',
@@ -85,6 +90,21 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
+	test('a run whose CLI has shown no activity yet is still starting, green with its stage, over its title; an error still comes first (CLIS-2.3, D81)', () => {
+		const connection = { reason: 'The connection to the agent\'s process was lost; reconnecting', source: 'connection', at: 3 };
+		assert.deepStrictEqual([
+			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, title: 'Fix login' }), WORDS),
+			statusOf(run({ activity: 'unknown', reporting: true, awaitingActivity: true }), WORDS),
+			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, error: connection }), WORDS).dot,
+			statusOf(run({ activity: 'unknown', reporting: false, activityReason: 'The CLI has not reported its activity' }), WORDS).dot
+		], [
+			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
+			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
+			'error',
+			'error'
+		]);
+	});
+
 	test('a known native blocker leads the second line over unavailable activity, which keeps the dot red and its explanation (PANEL-1.4, RULES-3.2)', () => {
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, blocker: { kind: 'auth' } }), WORDS),
@@ -146,8 +166,23 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([own.tooltip, own.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main · /app']);
 	});
 
-	test('avatars: Claude Code\'s maker avatar; none for a CLI this build has no avatar of, which the card then leaves out (PANEL-1.3, UX-2.1)', () => {
-		assert.deepStrictEqual([avatarOf('claude'), avatarOf('other')], [{ file: 'avatar-claude.png' }, undefined]);
+	test('avatars: each built-in\'s maker avatar, a file of media/agents; none for a CLI this build has no avatar of, which the card then leaves out (PANEL-1.3, UX-2.1)', () => {
+		const builtIns = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'];
+		assert.deepStrictEqual([...builtIns.map(avatarOf), avatarOf('other')], [
+			{ file: 'avatar-claude.png' }, { file: 'avatar-codex.png' }, { file: 'avatar-antigravity.png' }, { file: 'avatar-muse.png' }, { file: 'avatar-opencode.png' }, { file: 'avatar-pi.png' }, undefined
+		]);
+		assert.deepStrictEqual(BUILT_IN_ADAPTERS.map(adapter => adapter.id), builtIns);
+		const media = path.join(__dirname, '..', '..', '..', 'media');
+		assert.deepStrictEqual(builtIns.filter(cli => !fs.existsSync(path.join(media, 'agents', avatarOf(cli)!.file))), []);
+		// And each one's logo for pickers and terminal tabs, in both themes
+		const vscode = {
+			ThemeIcon: class { constructor(readonly id: string) { } },
+			Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: path.join(base.fsPath, ...parts) }) }
+		};
+		const { cliIcon } = withModules({ vscode })<typeof PresentationModule>(require.resolve('../ui/presentation'));
+		const logos = builtIns.map(cli => cliIcon({ fsPath: media } as never, cli) as unknown as { readonly light: { readonly fsPath: string }; readonly dark: { readonly fsPath: string } });
+		assert.deepStrictEqual(logos.flatMap(logo => [logo.light?.fsPath, logo.dark?.fsPath]).filter(file => !file || !fs.existsSync(file)), []);
+		assert.deepStrictEqual((cliIcon({ fsPath: media } as never, 'other') as unknown as { readonly id: string }).id, 'terminal');
 		assert.deepStrictEqual([cardOf(run(), { place, selected: false, menu, words: WORDS }).avatar, 'avatar' in cardOf(run({ cli: 'other' }), { place, selected: false, menu, words: WORDS })], [{ file: 'avatar-claude.png' }, false]);
 	});
 });

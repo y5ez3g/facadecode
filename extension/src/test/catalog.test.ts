@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { BUILT_IN_ADAPTERS } from '../clis/catalog';
 import { TestEmitter, withModules } from './withModules';
 
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -95,21 +96,30 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => each.command === 'facade.showActiveAgents' || each.command === 'facade.configureAgents'));
 	});
 
-	test('settings: Agents - YOLO, the agents\' tools switch and the start/stop timeout - then Claude Code and Codex; machine scope; each CLI has its path alone - turning it off and its launch come in later steps (UX-4.1, D43, D84, CLIS-1.2)', () => {
+	test('settings: Agents - YOLO, the agents\' tools switch and the start/stop timeout - then each built-in CLI in its catalog order; machine scope; each CLI has its path alone - turning it off and its launch come in later steps (UX-4.1, D43, D89, CLIS-1.2)', () => {
 		const sections = contributes.configuration.map((section: { id: string; title: string; order: number; properties: Record<string, unknown> }) => [section.id, english(section.title), section.order, Object.keys(section.properties)]);
 		assert.deepStrictEqual(sections, [
 			['facade.agents', 'Agents', 2, ['facade.yolo', 'facade.collaboration.enabled', 'facade.collaboration.waitSeconds']],
 			['facade.claude', 'Claude Code', 3, ['facade.claude.path']],
-			['facade.codex', 'Codex', 4, ['facade.codex.path']]
+			['facade.codex', 'Codex', 4, ['facade.codex.path']],
+			['facade.antigravity', 'Antigravity', 5, ['facade.antigravity.path']],
+			['facade.muse', 'Muse Code', 6, ['facade.muse.path']],
+			['facade.opencode', 'OpenCode', 7, ['facade.opencode.path']],
+			['facade.pi', 'Pi', 8, ['facade.pi.path']]
 		]);
+		// The sections are the catalog's, by its adapters' settings and display names
+		assert.deepStrictEqual(sections.slice(1).map((section: unknown[]) => [section[0], section[1]]), BUILT_IN_ADAPTERS.map(adapter => [adapter.setting, adapter.displayName]));
 		const settings: Record<string, { type: string; default: unknown; scope: string; markdownDescription: string }> = Object.assign({}, ...contributes.configuration.map((section: { properties: object }) => section.properties));
 		assert.deepStrictEqual(Object.entries(settings).map(([key, value]) => [key, value.type, value.default, value.scope]), [
 			['facade.yolo', 'boolean', true, 'machine'],
 			['facade.collaboration.enabled', 'boolean', true, 'machine'],
 			['facade.collaboration.waitSeconds', 'integer', 120, 'machine'],
-			['facade.claude.path', 'string', '', 'machine'],
-			['facade.codex.path', 'string', '', 'machine']
+			...BUILT_IN_ADAPTERS.map(adapter => [`${adapter.setting}.path`, 'string', '', 'machine'])
 		]);
+		// Each path's description names its CLI and the command PATH is searched for
+		for (const adapter of BUILT_IN_ADAPTERS) {
+			assert.strictEqual(english(settings[`${adapter.setting}.path`].markdownDescription), `Path to ${adapter.displayName}. Leave empty to use "${adapter.command}" from the terminal environment's PATH.`);
+		}
 		// Every description resolves; no retired setting survives
 		const keys = [...JSON.stringify(contributes).matchAll(/"%([\w.]+)%"/g)].map(match => match[1]);
 		assert.deepStrictEqual(keys.filter(key => nls[key] === undefined), []);

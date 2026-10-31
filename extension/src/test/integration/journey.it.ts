@@ -4,11 +4,29 @@
 
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 const CLI = process.env.FACADE_IT_CLI ?? 'claude';
+const AVATAR = process.env.FACADE_IT_AVATAR ?? `avatar-${CLI}.png`;
+/** The home folder the suite's settings give agents' terminals (`terminal.integrated.env.*`). */
+const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
+
+/** The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3); Codex's trust is checked apart. */
+const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
+	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'],
+	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
+	muse: ['--disable-approval', '--disable-sandbox', '--trust-workspace'],
+	opencode: ['--auto'],
+	pi: ['--approve']
+};
+
+/** Whether two paths name one folder as this system names them: Windows ignores case, and VS Code writes its drive in lower case. */
+function sameFolder(a: string, b: string): boolean {
+	return process.platform === 'win32' ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase() : path.resolve(a) === path.resolve(b);
+}
 
 async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
@@ -61,13 +79,32 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		const pidFile = `${RECORD}.${alias}`;
 		const pid = await until('the fake CLI to start', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
 		assert.ok(alive(pid));
-		assert.strictEqual(card.avatar?.file, `avatar-${CLI}.png`);
+		assert.strictEqual(card.avatar?.file, AVATAR);
 		const launch = JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] };
-		assert.strictEqual(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath);
-		assert.ok(launch.args.includes(CLI === 'codex' ? '--dangerously-bypass-approvals-and-sandbox' : '--dangerously-skip-permissions'));
+		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);
 		if (CLI === 'codex') {
+			assert.strictEqual(launch.args[0], '--dangerously-bypass-approvals-and-sandbox');
 			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
+		} else {
+			assert.deepStrictEqual(launch.args, ARGUMENTS[CLI]);
 		}
+		// Antigravity's trust in the folder, in its settings in the home its terminal sees: the suite's, never the person's (CLIS-3.3)
+		if (CLI === 'agy') {
+			const settings = JSON.parse(fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')) as { trustedWorkspaces: string[] };
+			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
+		}
+		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
+		// its screen showed its empty input: the dot says not working (CLIS-2.3, D80). Until then it was starting, never red (D81)
+		const dots = new Set([card.dot]);
+		const reported = await until('its idle report', async () => {
+			const now = (await state()).cards.find(each => each.runId === card.runId);
+			if (now) {
+				dots.add(now.dot);
+			}
+			return now?.dot === 'idle' ? now : undefined;
+		});
+		assert.strictEqual(reported.dot, 'idle');
+		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Close Agent removes the card at once');

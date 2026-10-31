@@ -157,7 +157,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([qwen.data.capabilities.activity.state, qwen.data.capabilities.initial_prompt.state, qwen.data.model.takes], ['unverified', 'unverified', undefined]);
 		});
 
-		test('message input is what the CLI\'s reader states, whatever its version (D78): supported with its reader; without one, unavailable and messages fail with unsupported', async () => {
+		test('message input is what the CLI\'s reader states, whatever its version (D83): supported with its reader; without one, unavailable and messages fail with unsupported', async () => {
 			const { lead } = team(s);
 			const read = { state: 'supported' as const, reason: 'claude-frame reads Claude Code\'s input by its layout.' };
 			s.deps.clis = {
@@ -511,7 +511,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.match(failed.error!.message, /Facade cannot type messages into the recipient's CLI; type_text still reaches its terminal/);
 		});
 
-		test('#human is the person in the caller\'s window; so is @human while no agent in reach is named human (RULES-2.3, O22, D80)', async () => {
+		test('#human is the person in the caller\'s window; so is @human while no agent in reach is named human (RULES-2.3, O22, D85)', async () => {
 			const { lead, worker } = team(s);
 			for (const to of ['#human', '@human', 'human']) {
 				const result = resultOf(await s.call(worker, 'send_message', { to, text: 'Done.' }));

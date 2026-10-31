@@ -101,3 +101,10 @@ export function mcpConfigText(server: McpServer): string {
 export function pluginManifest(): JsonObject {
 	return { name: SERVER_NAME, description: 'The Facade Code tools: start agents, send and read messages, and read or type into agent terminals.' };
 }
+
+/** No Facade tools: for a built-in whose integration is not in place yet - it starts without them. */
+export const NO_TOOLS: ToolsIntegration = {
+	capability: { state: 'unavailable', reason: 'Facade does not give this CLI its tools yet' },
+	where: () => 'nowhere: this CLI is not given the Facade tools yet',
+	inject: () => ({ values: {}, runFiles: [], project: [], env: {} })
+};

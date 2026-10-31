@@ -140,7 +140,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		assert.deepStrictEqual([[...messages.records.keys()], input.submitted.map(each => each.run)], [['m-50'], [B]]);
 	});
 
-	test('an input box Facade never recognized fails at the deadline, the result naming the CLI and the version it found (D78)', async () => {
+	test('an input box Facade never recognized fails at the deadline, the result naming the CLI and the version it found (D83)', async () => {
 		const { service, input, reported } = setUp();
 		input.states.set(B, ['unknown']);
 		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }));

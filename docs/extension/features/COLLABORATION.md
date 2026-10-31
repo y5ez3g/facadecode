@@ -171,6 +171,6 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 ## Change log
 
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots collaboration rules with the owner's
-  2026-10-30 decisions: one delivery state, in which read_messages delivers and stops a pending paste (D77); `#human`
-  for the person (D80); the recipient's window owns the delivery record and the sender's keeps a copy (D82). Resume,
+  2026-10-30 decisions: one delivery state, in which read_messages delivers and stops a pending paste (D82); `#human`
+  for the person (D85); the recipient's window owns the delivery record and the sender's keeps a copy (D87). Resume,
   Pin and panel filters are later steps.

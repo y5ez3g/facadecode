@@ -248,7 +248,8 @@ export function check(root = REPOSITORY) {
 				problems.push(`bundle.l10n.json: ${quote(key)} is not its English text; run \`node scripts/l10n.mjs export\``);
 			}
 		}
-		if (problems.length === before && fs.readFileSync(at.bundle, 'utf8') !== serialize(expected)) {
+		// Its line endings are the checkout's: Git's core.autocrlf gives a Windows checkout CRLF in place of what export writes
+		if (problems.length === before && fs.readFileSync(at.bundle, 'utf8').replace(/\r\n/g, '\n') !== serialize(expected)) {
 			problems.push('bundle.l10n.json: its order or layout is not what `export` writes; run `node scripts/l10n.mjs export`');
 		}
 

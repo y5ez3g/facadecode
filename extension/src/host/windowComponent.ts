@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The local window component, as the workspace extension waits for it (ARCHITECTURE-4.3, D83). The editor installs it through the
+// The local window component, as the workspace extension waits for it (ARCHITECTURE-4.3, D88). The editor installs it through the
 // extension pack and may activate it after this extension - in a remote window it installs it locally only after the remote one -
 // so activation waits a bounded time for its command. Without it Facade cannot tell this window from another, and says so plainly.
 

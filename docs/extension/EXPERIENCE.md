@@ -212,7 +212,7 @@ Evidence is recorded in [Verification](engineering/VERIFICATION.md); these scena
 
 - 2026-10-30: Step 2 of the Facade Code extension: group 3 and 4.1 carry the Facade Dots collaboration journeys across
   this computer's windows, without Resume, Pin or filters; 3.4–3.6 follow the owner's decisions of that day: a read
-  message is delivered (D77), every CLI version is attempted (D78) and the person is `#human` (D80).
+  message is delivered (D82), every CLI version is attempted (D83) and the person is `#human` (D85).
 
 - 2026-10-30: 2.4 says when a closed window's agents end under the owner's five-minute policy (D75).
 

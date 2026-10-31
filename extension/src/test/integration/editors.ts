@@ -23,21 +23,22 @@ export function officialEditor(): string {
 /** The official VS Code only: a derived editor can load its own agent extension and share a data folder with a person's live state. */
 function officialVsCode(executable: string): void {
 	const dir = path.dirname(executable);
-	// macOS's app bundle, Linux's folder, and Windows' archive, which keeps the app in a folder named for its version
-	const versioned = fs.readdirSync(dir, { withFileTypes: true }).filter(each => each.isDirectory()).map(each => path.join(dir, each.name, 'resources', 'app', 'product.json'));
 	const candidates = [
 		path.join(dir, '..', 'Resources', 'app', 'product.json'),
 		path.join(dir, 'resources', 'app', 'product.json'),
 		path.join(dir, '..', 'resources', 'app', 'product.json'),
-		...versioned
+		// Windows keeps each version in a folder of its own beside Code.exe, its archive and the installation that updates alike
+		...fs.readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => path.join(dir, entry.name, 'resources', 'app', 'product.json'))
 	];
-	const file = candidates.find(each => fs.existsSync(each));
-	if (!file) {
+	const files = candidates.filter(each => fs.existsSync(each));
+	if (!files.length) {
 		throw new Error(`Cannot find product.json beside ${executable}; refusing to run the suite in an unknown editor.`);
 	}
-	const product = JSON.parse(fs.readFileSync(file, 'utf8')) as { nameShort?: string; dataFolderName?: string; applicationName?: string };
-	if (product.dataFolderName !== '.vscode' || product.applicationName !== 'code') {
-		throw new Error(`${executable} is ${product.nameShort ?? 'not VS Code'} (data folder ${product.dataFolderName}); the suite runs only in official VS Code.`);
+	for (const file of files) {
+		const product = JSON.parse(fs.readFileSync(file, 'utf8')) as { nameShort?: string; dataFolderName?: string; applicationName?: string };
+		if (product.dataFolderName !== '.vscode' || product.applicationName !== 'code') {
+			throw new Error(`${executable} is ${product.nameShort ?? 'not VS Code'} (data folder ${product.dataFolderName}); the suite runs only in official VS Code.`);
+		}
 	}
 }
 
@@ -50,7 +51,7 @@ export const EDITOR_FLAGS = ['--no-sandbox', '--disable-gpu-sandbox', '--disable
 /** Variables an editor, Git or a CLI session could pass on: none of them may reach the test editor. */
 export function sanitizedEnvironment(): void {
 	for (const name of Object.keys(process.env)) {
-		if (/^(VSCODE_|CLAUDE_|CODEX_|GEMINI_|ANTHROPIC_|OPENAI_|FACADE_|ELECTRON_RUN_AS_NODE$|GIT_ASKPASS$|SSH_ASKPASS$)/.test(name) && name !== 'VSCODE_EXECUTABLE') {
+		if (/^(VSCODE_|CLAUDE_|CODEX_|GEMINI_|ANTIGRAVITY_|MUSE_|OPENCODE_|PI_|ANTHROPIC_|OPENAI_|QWEN_|FACADE_|ELECTRON_RUN_AS_NODE$|GIT_ASKPASS$|SSH_ASKPASS$)/.test(name) && name !== 'VSCODE_EXECUTABLE') {
 			delete process.env[name];
 		}
 	}
@@ -95,36 +96,63 @@ export async function registeredWindow(facade: string, matches: (label: string) 
 }
 
 /**
- * Ends every process whose command line contains `pattern` - the editors, ptyds and CLIs a run leaves - as `pkill -f` does; on
- * Windows, which has none, by each process's command line.
+ * Ends every process whose command line contains `text` - the editors, ptyds and CLIs a run leaves, never anything else - as
+ * `pkill -f` does; on Windows, which has none, by each process's command line, the text given by name rather than quoted.
  */
-export function endMatching(pattern: string): void {
+export function endMatching(text: string): void {
 	if (process.platform !== 'win32') {
-		spawnSync('pkill', ['-TERM', '-f', pattern]);
+		spawnSync('pkill', ['-TERM', '-f', text]);
 		return;
 	}
-	const literal = pattern.replace(/'/g, "''");
-	spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-		`Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains('${literal}') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
-	], { stdio: 'ignore' });
+	const script = 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:FACADE_IT_END) -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
+	spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, FACADE_IT_END: text }, stdio: 'ignore' });
+}
+
+/** Where the suite's agent CLI is, in `root`: the program each built-in's path names, and the launchers some are installed with. */
+export interface FakeClis {
+	readonly fake: string;
+	/** Built-ins whose path names a launcher of their own, by CLI ID. */
+	readonly launchers: { readonly [cli: string]: string };
 }
 
 /**
- * The suite's Claude Code as a program of its own, in `root`: a script running `script` with this Node; on Windows - where a CLI is
- * an executable, never a script - this Node made a single executable application of it (nodejs.org/api/single-executable-applications).
+ * The suite's agent CLI (`fakeCli.js` beside this file, run by this Node) in `root`, as each built-in is installed: elsewhere a
+ * script; on Windows a `.cmd` as npm writes one for a package's script, which Facade starts as that script with the Node beside it
+ * (CLIS-1.2), and the launchers Muse Code's and Pi's installers write, which Facade starts as they wrote them.
  */
-export function fakeCli(root: string, script: string): string {
+export function fakeClis(root: string): FakeClis {
+	const script = path.join(__dirname, 'fakeCli.js');
 	if (process.platform !== 'win32') {
-		const fake = path.join(root, 'fake-claude');
+		const fake = path.join(root, 'fake-cli');
 		fs.writeFileSync(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)} "$@"\n`, { mode: 0o755 });
-		return fake;
+		return { fake, launchers: {} };
 	}
-	const fake = path.join(root, 'fake-claude.exe');
-	const blob = path.join(root, 'fake-claude.blob');
-	const config = path.join(root, 'fake-claude.json');
-	fs.writeFileSync(config, JSON.stringify({ main: script, output: blob, disableExperimentalSEAWarning: true }));
-	execFileSync(process.execPath, ['--experimental-sea-config', config], { stdio: 'pipe' });
-	fs.copyFileSync(process.execPath, fake);
-	execFileSync(process.execPath, [require.resolve('postject/dist/cli.js'), fake, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'], { stdio: 'pipe' });
-	return fake;
+	const fake = path.join(root, 'fake-cli.cmd');
+	fs.copyFileSync(script, path.join(root, 'fakeCli.js'));
+	try {
+		fs.linkSync(process.execPath, path.join(root, 'node.exe'));
+	} catch {
+		fs.copyFileSync(process.execPath, path.join(root, 'node.exe'));
+	}
+	// npm 11's shim, byte for byte but for the script's name
+	fs.writeFileSync(fake, [
+		'@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+		'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
+		'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\fakeCli.js" %*', ''
+	].join('\r\n'));
+	// Muse Code's `.cmd`, started through cmd.exe, and the `pi.cmd` of Pi's installer, started as its `pi-launcher.js` with Node
+	const museBin = path.join(root, 'muse-bin');
+	fs.mkdirSync(museBin);
+	const muse = path.join(museBin, 'muse.cmd');
+	fs.writeFileSync(muse, `@echo off\r\nsetlocal\r\n"${path.join(root, 'node.exe')}" "${path.join(root, 'fakeCli.js')}" %*\r\nexit /b %ERRORLEVEL%\r\n`);
+	const piBin = path.join(root, 'pi-bin');
+	fs.mkdirSync(piBin);
+	const pi = path.join(piBin, 'pi.cmd');
+	fs.copyFileSync(script, path.join(piBin, 'pi-launcher.js'));
+	fs.writeFileSync(pi, [
+		'@ECHO off', 'SETLOCAL', 'SET "node=node"', '"%node%" "%~dp0pi-launcher.js" %*', 'SET "pi_exit_code=%ERRORLEVEL%"', 'IF "%pi_exit_code%"=="9009" (',
+		'  IF "%node%"=="node" (', '    "%SystemRoot%\\System32\\where.exe" /Q node', '    IF ERRORLEVEL 1 GOTO node_missing', '  ) ELSE IF NOT EXIST "%node%" GOTO node_missing', ')',
+		'EXIT /B %pi_exit_code%', ':node_missing', 'ECHO Pi could not find Node.js. Install Node.js 22.19.0 or newer, or rerun the installer at https://pi.dev. 1>&2', 'EXIT /B %pi_exit_code%', ''
+	].join('\r\n'));
+	return { fake, launchers: { muse, pi } };
 }

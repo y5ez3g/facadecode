@@ -182,7 +182,8 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 		const parent = path.join(temp.dir, 'repo.worktrees');
 		fs.mkdirSync(path.join(parent, 'feat'), { recursive: true });
 		fs.writeFileSync(path.join(parent, 'feat', 'mine.txt'), 'keep');
-		fs.symlinkSync(path.join(temp.dir, 'nowhere'), path.join(parent, 'feat-1'));
+		// A junction on Windows, which needs no administrator; a link elsewhere
+		fs.symlinkSync(path.join(temp.dir, 'nowhere'), path.join(parent, 'feat-1'), 'junction');
 		git(repo, 'worktree', 'add', '-q', '-b', 'gone', path.join(parent, 'feat-2'));
 		fs.rmSync(path.join(parent, 'feat-2'), { recursive: true, force: true });
 		const { worktrees, idOf } = await windowWith([repo]);

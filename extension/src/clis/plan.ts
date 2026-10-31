@@ -70,6 +70,8 @@ export interface PlannedLaunch {
 	readonly input: { readonly adapter?: string; readonly capability: Capability };
 	/** The files the run's launch needs written before it starts, where the tools are injected (CLIS-2.2). */
 	readonly injection?: Injection;
+	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	readonly screenStatus?: string;
 }
 
 /** Why a launch cannot be planned, with the PlanError reason it maps to (RULES-5.1: the actual reason, before any effect). */
@@ -156,7 +158,8 @@ export function discover(catalog: Catalog, destination: DestinationEnvironment, 
 export function planLaunch(catalog: Catalog, input: PlanInput, destination: DestinationEnvironment): PlannedLaunch {
 	const entry = entryOf(catalog, input.cli);
 	if (!entry) {
-		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are claude and codex`, 'not_found');
+		const ids = catalog.entries.map(each => each.adapter.id);
+		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.length > 1 ? `${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}` : ids.join('')}`, 'not_found');
 	}
 	const { adapter } = entry;
 	if (entry.problems.length) {
@@ -173,7 +176,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 			throw new CliPlanError(`${adapter.displayName} has no supported way to set ${asked === 'model' ? 'a model' : 'an effort'}; omit ${asked} to use its own default`, 'unsupported');
 		}
 	}
-	const target = launchTarget(found.executable, platform, env, input.cwd);
+	const target = adapter.launchTarget?.(found.executable, platform, env, input.cwd) ?? launchTarget(found.executable, platform, env, input.cwd);
 	const prompt = input.prompt === undefined ? undefined : promptOf(adapter, input.prompt, target.throughCmd);
 	const native = prompt?.path === 'native';
 	const argsWith = (injection: Injection | undefined) => [...target.args, ...invocation(adapter.groups, {
@@ -193,6 +196,11 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		args = argsWith(undefined);
 	}
 	if (target.throughCmd) {
+		// The program's own path reaches cmd.exe too, quoted only where it holds a space
+		if (unsafeForCmd(target.executable)) {
+			throw new CliPlanError(`${target.executable} runs through cmd.exe, which cannot be given its path safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unsafe_path', values: [target.executable, adapter.setting] });
+		}
 		const unsafe = args.find(unsafeForCmd);
 		if (unsafe !== undefined) {
 			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(unsafe)} safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
@@ -221,6 +229,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		tools,
 		...prompt ? { prompt } : {},
 		input: inputOf(adapter),
-		...injection ? { injection } : {}
+		...injection ? { injection } : {},
+		...adapter.screenStatus ? { screenStatus: adapter.screenStatus } : {}
 	};
 }

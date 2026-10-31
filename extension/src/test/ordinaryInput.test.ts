@@ -94,7 +94,7 @@ function setUp(facts: Partial<RunFacts> = {}) {
 
 suite('Ordinary message input: a whole paste, Enter once it shows, confirmed once the input empties (CLIS-2.1, RULES-1.3, 1.4, 1.10)', () => {
 
-	test('its capability is what the run\'s launch found - supported whenever its CLI has an input reader, whatever the version (D78); the launch\'s own reason otherwise', () => {
+	test('its capability is what the run\'s launch found - supported whenever its CLI has an input reader, whatever the version (D83); the launch\'s own reason otherwise', () => {
 		const unreadable: CapabilityState = { state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI, so messages to it fail; direct terminal input still works' };
 		assert.deepStrictEqual(setUp().input.capability(RUN), SUPPORTED);
 		assert.deepStrictEqual(setUp({ version: '2.1.999' }).input.capability(RUN), SUPPORTED, 'a version never recorded is read by its layout all the same');
@@ -117,7 +117,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.deepStrictEqual(unverified.terminal.calls, []);
 	});
 
-	test('a screen its reader does not recognize - a changed layout - is unknown, and nothing is pasted into it (D78, RULES-1.4)', async () => {
+	test('a screen its reader does not recognize - a changed layout - is unknown, and nothing is pasted into it (D83, RULES-1.4)', async () => {
 		const { input, terminal } = setUp();
 		terminal.reading = 'unknown';
 		assert.strictEqual(await input.inspect(RUN), 'unknown');

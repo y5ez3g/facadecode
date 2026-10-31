@@ -60,6 +60,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let failedConnects: number;
 	let failTerminateOnce: boolean;
 	let spawns: number;
+	/** Each connection to ptyd the ports made, in order. */
+	let connections: PtydClient[];
 	const ports: AgentExecution[] = [];
 	const extraClients: PtydClient[] = [];
 
@@ -82,6 +84,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		failedConnects = 0;
 		failTerminateOnce = false;
 		spawns = 0;
+		connections = [];
 		const vscodeApi = {
 			TabInputTerminal,
 			TabInputText,
@@ -129,6 +132,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				throw new Error('injected reconnect failure');
 			}
 			const real = await PtydClient.connect(...args);
+			connections.push(real);
 			return {
 				request: async <M extends Method>(method: M, params: Requests[M]['params']): Promise<Requests[M]['result']> => {
 					if (method === 'spawn') { spawns++; }
@@ -163,8 +167,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		fs.rmSync(home, { recursive: true, force: true });
 	});
 
-	const portOf = () => {
-		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined });
+	/** A window's execution port; `startupMs`, how long its runs are still starting while their CLIs show no activity. */
+	const portOf = (startupMs?: number) => {
+		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined, ...startupMs !== undefined ? { startupMs } : {} });
 		ports.push(port);
 		return port;
 	};
@@ -239,7 +244,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(screenOf(terminals[0]).split('ready').length - 1, 1, 'its output once');
 	});
 
-	test('what the CLI reports reaches the core as activity, and its title the tab after the native separator; a CLI that has not reported is unknown with its reason', async () => {
+	test('what the CLI reports reaches the core as activity, and its title the tab after the native separator; until its first report its run is still starting (CLIS-2.3, D81)', async () => {
 		const port = portOf();
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
@@ -247,12 +252,105 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		open(terminals[0]);
 		const title = Buffer.from('Fixing tests').toString('base64');
 		await port.spawn('run-3', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]0;\\u2733 Claude Code\\x07\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => { if (d.toString().includes('7501;?:')) process.stdout.write('\\x1b]7501;state=working:title=${title}\\x1b\\\\'); }); setInterval(() => {}, 1000);`), meta('run-3'));
-		assert.deepStrictEqual(reports[0], { run: 'run-3', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' });
+		assert.deepStrictEqual(reports[0], { run: 'run-3', activity: 'unknown', reporting: false, awaitingActivity: true });
 		await until('its report', () => reports.some(report => report.activity === 'working'));
 		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', reporting: true, title: 'Fixing tests' });
+		// Its probe answered, it was still starting until it reported: never unknown with a reason meanwhile
+		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity && !report.reason), JSON.stringify(reports));
 		assert.strictEqual(terminals[0].names[terminals[0].names.length - 1], 'Ada | Fixing tests');
 		port.rename('run-3', 'Grace');
 		assert.strictEqual(terminals[0].names[terminals[0].names.length - 1], 'Grace | Fixing tests');
+	});
+
+	/** A CLI that says it is ready and then nothing, taking no part in the protocol. */
+	const QUIET = `process.stdout.write('ready\\r\\n'); setInterval(() => {}, 1000);`;
+
+	test('a run whose CLI shows no activity is still starting until its bound from its process start, then unknown with why; a reloaded window counts from that start, not its own (CLIS-2.3, D81)', async function () {
+		this.timeout(30_000);
+		const BOUND = 2_000;
+		const first = portOf(BOUND);
+		const reports: ActivityReport[] = [];
+		first.onDidReport(report => reports.push(report));
+		first.openPair(facts('run-40'), { reveal: false });
+		open(terminals[0]);
+		const before = performance.now();
+		await first.spawn('run-40', plan(QUIET), meta('run-40'));
+		assert.deepStrictEqual(reports, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true }]);
+		/** The window `from` reloads: the next one claims the run again, and what it tells of it. */
+		const reload = async (from: AgentExecution) => {
+			ports.splice(ports.indexOf(from), 1);
+			from.dispose();
+			const next = portOf(BOUND);
+			const told: ActivityReport[] = [];
+			next.onDidReport(report => told.push(report));
+			const live = await until('the run to be unclaimed', async () => {
+				const runs = await next.live();
+				return runs.length === 1 && !runs[0].claimedElsewhere && runs;
+			});
+			const count = terminals.length;
+			const attaching = next.attach(live[0], facts('run-40'));
+			await until('its restored terminal', () => terminals.length > count);
+			open(terminals[terminals.length - 1]);
+			await attaching;
+			return { next, told };
+		};
+		// Reloaded within its bound: still starting, until the bound from its process start passes
+		const { next, told } = await reload(first);
+		assert.deepStrictEqual(told, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true }]);
+		const over = await until('its startup over', () => told.find(report => !report.awaitingActivity), 6_000);
+		assert.ok(performance.now() - before >= BOUND - 50, 'not before its bound');
+		assert.deepStrictEqual(over, { run: 'run-40', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' });
+		// Reloaded past it: unknown at once, its startup not begun again
+		const last = await reload(next);
+		assert.deepStrictEqual(last.told, [{ run: 'run-40', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' }]);
+		assert.strictEqual(await last.next.terminate('run-40'), 'terminated');
+	});
+
+	test('a CLI that asked whether its terminal takes reports and has not reported since is still starting until its bound, then waited for with why (CLIS-2.3, D81)', async () => {
+		const port = portOf(1_500);
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		port.openPair(facts('run-41'), { reveal: false });
+		open(terminals[0]);
+		await port.spawn('run-41', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); setInterval(() => {}, 1000);`), meta('run-41'));
+		await until('its probe answered', () => reports.some(report => report.reporting));
+		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 6_000);
+		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', reporting: true, reason: 'Waiting for the CLI\'s first activity report' });
+		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity), JSON.stringify(reports));
+		assert.strictEqual(reports.at(-2)?.reporting, true);
+	});
+
+	test('a run whose CLI showed its activity - its screen read, here - is not starting again as its CLI then asks whether its terminal takes reports and has not reported yet (CLIS-2.3, D81)', async () => {
+		const port = portOf(10_000);
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		port.openPair(facts('run-43', { cli: 'muse', displayName: 'Muse Code', command: 'muse' }), { reveal: false });
+		open(terminals[0]);
+		const idle = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
+		const script = `process.stdin.setRawMode(true); process.stdout.write('\\x1b[2J\\x1b[H' + ${JSON.stringify(idle)}); setTimeout(() => process.stdout.write('\\x1b]7501;?\\x1b\\\\'), 800); setInterval(() => {}, 1000);`;
+		await port.spawn('run-43', { ...plan(script), cli: 'muse', displayName: 'Muse Code', command: 'muse', screenStatus: 'muse' }, meta('run-43'));
+		await until('its screen read', () => reports.some(report => report.activity === 'not_working'));
+		const asked = await until('its probe told', () => reports.find(report => report.reporting && report.activity === 'unknown'), 5_000);
+		assert.deepStrictEqual(asked, { run: 'run-43', activity: 'unknown', reporting: true, reason: 'Waiting for the CLI\'s first activity report' });
+		assert.strictEqual(await port.terminate('run-43'), 'terminated');
+	});
+
+	test('a run whose startup ends while the connection to ptyd is lost is still told as lost - a rename meanwhile tells nothing more; claimed again, it is told past its startup (CLIS-2.3, RULES-3.1)', async function () {
+		this.timeout(20_000);
+		const port = portOf(400);
+		const heard: { readonly report: ActivityReport; readonly connections: number }[] = [];
+		port.onDidReport(report => heard.push({ report, connections: connections.length }));
+		port.openPair(facts('run-42'), { reveal: false });
+		open(terminals[0]);
+		await port.spawn('run-42', plan(QUIET), meta('run-42'));
+		assert.strictEqual(connections.length, 1);
+		// The connection goes while its run is starting, ptyd keeping the run; the port connects again a second later
+		connections[0].dispose();
+		await until('the loss told', () => heard.some(each => each.report.disconnected));
+		port.rename('run-42', 'Grace');
+		const back = await until('the run claimed again', () => heard.find(each => !each.report.disconnected && heard.indexOf(each) > heard.findIndex(lost => lost.report.disconnected)), 10_000);
+		assert.deepStrictEqual(back, { report: { run: 'run-42', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' }, connections: 2 });
+		assert.strictEqual(await port.terminate('run-42'), 'terminated');
 	});
 
 	/** A CLI that titles its terminal "Fixing tests" and says it is ready, then retitles it with whatever it is typed. */

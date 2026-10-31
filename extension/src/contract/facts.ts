@@ -164,7 +164,7 @@ const SEND_FAILURES: { readonly [reason: string]: readonly [ErrorCode, string] }
 	partial_input: ['FAILED', 'Only part of the message went in.'],
 	not_found: ['NOT_FOUND', 'The recipient was not found.'],
 	out_of_tree: ['REFUSED', 'The recipient is not in the sender\'s creation tree.'],
-	// No input reader for the recipient's CLI: a permanent obstacle, failed at once (MCP-1.2, D78)
+	// No input reader for the recipient's CLI: a permanent obstacle, failed at once (MCP-1.2, D83)
 	unsupported: ['UNAVAILABLE', 'Facade cannot type messages into the recipient\'s CLI; type_text still reaches its terminal.']
 };
 

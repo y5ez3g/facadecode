@@ -2,17 +2,24 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The integration suite's Claude Code, run as Node in an agent's terminal. It records its working directory and arguments, then
-// waits as an agent does, drawing its input the way Claude Code draws its own - a full-width rule, its `❯` prompt row with a dim
-// placeholder, another rule - so that Facade's `claude-frame` reader recognizes it (CLIS-2.1). Typed or pasted text is a draft;
-// Enter submits it, clearing the box, printing what it got and appending it to `<record>.received.<agent>`; Ctrl+U clears it. A
-// native prompt after `--` is taken as its first message. Given `--mcp-config`, it starts the Facade server that file names as
-// Claude would (MCP-6.1) and runs each `<record>.mcp-script.<agent>` that appears, in turn, writing every answer to
-// `<record>.mcp.<agent>` as a JSON line; `$name` strings take values earlier answers saved under that name, and `until` repeats a
-// step until its answer holds a text.
+// The integration suite's agent CLI, run as Node in an agent's terminal in place of each built-in. It records its working directory
+// and arguments, and takes part in the Program Status Protocol (OSC 7501) as the built-ins do: it asks whether its terminal takes
+// reports and, once answered, reports that it is idle. It waits as an agent does, drawing its input the way Claude Code draws its
+// own - a full-width rule, its `❯` prompt row with a dim placeholder, another rule - so that Facade's `claude-frame` reader recognizes
+// it (CLIS-2.1). Typed or pasted text is a draft; Enter submits it, clearing the box, printing what it got and appending it to
+// `<record>.received.<agent>`; Ctrl+U clears it. A native prompt after `--` is taken as its first message. Given `--mcp-config`, it
+// starts the Facade server that file names as Claude would (MCP-6.1) and runs each `<record>.mcp-script.<agent>` that appears, in
+// turn, writing every answer to `<record>.mcp.<agent>` as a JSON line; `$name` strings take values earlier answers saved under that
+// name, and `until` repeats a step until its answer holds a text. With FACADE_IT_SCREEN=muse it is Muse Code as it runs on Windows
+// instead: it reports nothing and draws its input frame, which ptyd reads (CLIS-2.3, D80).
 
 import { spawn } from 'child_process';
 import * as fs from 'fs';
+
+const ESC = '\x1b';
+const ST = `${ESC}\\`;
+/** How ptyd's answer to the question starts: `OSC 7501 ; ? : states=...`. */
+const ANSWER = `${ESC}]7501;?:`;
 
 const record = process.env.FACADE_IT_RECORD!;
 const agent = process.env.FACADE_AGENT!;
@@ -89,6 +96,18 @@ function received(chunk: string): void {
 			pending = pending.slice(6);
 			continue;
 		}
+		if (pending.startsWith(`${ESC}]`)) {
+			// An OSC sequence, ended by ST or BEL: ptyd's answer to its question is taken - it reports idle then - never typed
+			const end = /\x1b\\|\x07/.exec(pending);
+			if (!end) {
+				break;
+			}
+			if (pending.startsWith(ANSWER)) {
+				process.stdout.write(`${ESC}]7501;state=idle${ST}`);
+			}
+			pending = pending.slice(end.index + end[0].length);
+			continue;
+		}
 		if (pending.startsWith('\x1b')) {
 			// An escape sequence: a key the box does not use; an unfinished one waits for the rest
 			const sequence = /^\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.|[^[O])/.exec(pending);
@@ -117,15 +136,23 @@ function received(chunk: string): void {
 	draw();
 }
 
-if (process.stdin.isTTY) {
-	process.stdin.setRawMode(true);
+/** Takes its input, draws its screen and asks whether its terminal takes reports. */
+function start(): void {
+	if (process.stdin.isTTY) {
+		process.stdin.setRawMode(true);
+	}
+	process.stdin.setEncoding('utf8');
+	process.stdin.on('data', received);
+	process.stdout.on('resize', draw);
+	// Bracketed paste on, as Claude Code turns it on: a paste comes whole, its line breaks no Enter
+	process.stdout.write('\x1b[?2004h');
+	draw();
+	process.stdout.write(`${ESC}]7501;?${ST}`);
+	const config = args.indexOf('--mcp-config');
+	if (config >= 0) {
+		void drive(JSON.parse(fs.readFileSync(args[config + 1], 'utf8')).mcpServers.facade);
+	}
 }
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', received);
-process.stdout.on('resize', draw);
-// Bracketed paste on, as Claude Code turns it on: a paste comes whole, its line breaks no Enter
-process.stdout.write('\x1b[?2004h');
-draw();
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // Its Facade tools: the server `--mcp-config` names, and each script that appears for this agent
@@ -140,10 +167,6 @@ interface Step {
 	readonly wait?: number;
 }
 
-const config = args.indexOf('--mcp-config');
-if (config >= 0) {
-	void drive(JSON.parse(fs.readFileSync(args[config + 1], 'utf8')).mcpServers.facade);
-}
 
 async function drive(server: { command: string; args: string[]; env: { [name: string]: string } }): Promise<void> {
 	const shim = spawn(server.command, server.args, { env: { ...process.env, ...server.env }, stdio: ['pipe', 'pipe', 'ignore'] });
@@ -194,4 +217,11 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 		}
 		out({ step: 'done', phase });
 	}
+}
+
+if (process.env.FACADE_IT_SCREEN === 'muse') {
+	process.stdout.write(`fake agent ready\r\n\x1b[2J\x1b[H  Muse Code 1.4.14\r\n\r\n── Voice input (Alt+V to start) ${'─'.repeat(40)}\r\n❯\r\n${'─'.repeat(72)}\r\n  muse-spark-1.3 · minimal · ${process.cwd()} · Launch overrides\r\n`);
+	setInterval(() => undefined, 60_000);
+} else {
+	start();
 }

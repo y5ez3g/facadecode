@@ -6,7 +6,7 @@
 
 **Your coding agents, side by side in VS Code.**
 
-A VS Code extension that runs your native agent CLIs: Claude Code and Codex, with Antigravity, Muse Code and Qwen Code under development.
+A VS Code extension that runs your native agent CLIs: Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi, with Qwen Code under development.
 
 [Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ·
 [Open VSX](https://open-vsx.org/extension/facade/facadecode) ·
@@ -17,11 +17,11 @@ A VS Code extension that runs your native agent CLIs: Claude Code and Codex, wit
 
 Facade Code brings coding agents into the VS Code you already use. Each agent runs your own CLI in its own terminal and has a card in one panel, so you can see what every agent is doing and step in at any time.
 
-- 🤖 **Your own CLIs and accounts.** Claude Code and Codex run in VS Code terminals with their own sign-in, plans and interactive experience.
+- 🤖 **Your own CLIs and accounts.** Each CLI runs in a VS Code terminal with its own sign-in, plans and interactive experience.
 - 🗂️ **Every agent in one panel.** Each card shows the agent's name, where it works and a live status dot. Agents keep running when the window reloads.
 - 💬 **Agents that talk to each other.** Agents start and stop other agents, message each other and you, and read and type into each other's terminals when one is stuck, across your Facade windows on your computer.
 
-> **Preview.** This release covers Claude Code and Codex, the agent panel and agents that work together. Features marked *Under development* come in later releases.
+> **Preview.** This release covers Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi with the whole panel, and agents that work together. Features marked *Under development* come in later releases.
 
 ## Install
 
@@ -29,15 +29,15 @@ Install **Facade Code** from the [Visual Studio Marketplace](https://marketplace
 
 Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64). Other platforms are under development.
 
-**Prerequisites**: Install and sign in to Claude Code or Codex where your workspace runs: on your computer for local folders, or on the remote host for Remote - SSH. Git is required if you use worktrees.
+**Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your computer for local folders, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): agents also start with 1.x (`opencode-ai`), but their status dot stays red because 1.x does not report its activity. Git is required if you use worktrees.
 
-**Agents run without approval prompts by default.** With `facade.yolo` on, the default, Claude Code and Codex can run commands and change files without asking first. Turn it off to use each CLI's normal approvals and supported sandbox; the change applies to agents you start afterwards. **Configure Agents...** in the panel's `...` menu opens the settings. Facade also trusts the folder an agent starts in, as you would by accepting the CLI's own trust question. With `facade.yolo` on, agents can also stop, message and type into every agent in your Facade windows.
+**Agents run without approval prompts by default.** With `facade.yolo` on, the default, agents can run commands and change files without asking first. Turn it off to use each CLI's normal approvals and supported sandbox; the change applies to agents you start afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. **Configure Agents...** in the panel's `...` menu opens the settings. Facade also trusts the folder an agent starts in, as you would by accepting the CLI's own trust question. With `facade.yolo` on, agents can also stop, message and type into every agent in your Facade windows.
 
 ## Quick Start
 
 1. **Open a folder**: Use **File > Open Folder...** to open your project.
 
-2. **Start an agent**: Click **Facade Code** in the activity bar, then **New Agent...**, and choose Claude Code or Codex. Before you choose, **Change Name...** renames the agent and **Change Working Location...** starts it in another folder, a worktree or a new worktree.
+2. **Start an agent**: Click **Facade Code** in the activity bar, then **New Agent...**, and choose an installed CLI. Before you choose, **Change Name...** renames the agent and **Change Working Location...** starts it in another folder, a worktree or a new worktree.
 
 3. **Work with it**: The agent opens in its own editor terminal. Type to it as you would in any terminal.
 
@@ -81,7 +81,7 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 
 ### More CLIs *(Under development)*
 
-- **More built-in CLIs**: Antigravity, Muse Code and Qwen Code, and CLIs you add yourself.
+- **Qwen Code and your own CLIs**: Qwen Code as a built-in CLI, and CLIs you add yourself.
 - **Per-CLI settings**: Turn a CLI off, and set its launch arguments and environment.
 
 ### Languages
@@ -119,13 +119,18 @@ Facade runs the infrastructure, the CLIs do the work, and you decide the goals a
 | `facade.collaboration.waitSeconds` | 120 | How many seconds an agent waits for another agent to start or stop. Past that time, the agent gets the result later in a message. |
 | `facade.claude.path` | Empty | Path to Claude Code. Leave empty to use `claude` from the terminal environment's PATH. |
 | `facade.codex.path` | Empty | Path to Codex. Leave empty to use `codex` from the terminal environment's PATH. |
+| `facade.antigravity.path` | Empty | Path to Antigravity. Leave empty to use `agy` from the terminal environment's PATH. |
+| `facade.muse.path` | Empty | Path to Muse Code. Leave empty to use `muse` from the terminal environment's PATH. |
+| `facade.opencode.path` | Empty | Path to OpenCode. Leave empty to use `opencode` from the terminal environment's PATH. |
+| `facade.pi.path` | Empty | Path to Pi. Leave empty to use `pi` from the terminal environment's PATH. |
 
 These are machine settings: for a remote window, set them in the remote host's settings.
 
 ## Status and Known Limitations
 
-- **Tested so far**: macOS (Apple silicon) with local folders, and selected Remote - SSH workflows from a macOS client to Linux (x64) and Windows (x64) hosts.
-- **Not yet verified**: Windows or Linux as the local computer, WSL, Dev Containers, other editors compatible with VS Code, the declared minimum VS Code 1.105, complete real conversations with each CLI, messages and actions between local and Remote - SSH windows, installing Facade Code in a remote window for the first time, many agents in one window, and long-running sessions.
+- **Tested so far**: macOS (Apple silicon) with local folders, and selected Remote - SSH workflows from a macOS client to Linux (x64) and Windows (x64) hosts. Antigravity, Muse Code, OpenCode and Pi have also been started from the panel with Windows (x64) as the local computer, and with the command lines Facade gives them on macOS (Apple silicon); Antigravity and Muse Code on Linux (x64) too. Antigravity on Windows, and OpenCode and Pi on macOS, have each answered one short request.
+- **Not yet verified**: a complete walkthrough with Windows or Linux as the local computer, WSL, Dev Containers, other editors compatible with VS Code, the declared minimum VS Code 1.105, complete real conversations with each CLI, many agents in one window, and long-running sessions.
+- **Muse Code on Windows**: Muse Code does not report its activity on Windows, so Facade reads it from Muse Code's own screen: working while it shows *esc to interrupt*, ready for input when its input is empty or holds a draft, and waiting at its sign-in screen. While it asks for approval, with `facade.yolo` off, its dot keeps the state it showed before. On Linux it reports as the other CLIs do.
 - **Window Component**: Facade Code needs its Window Component on your computer; VS Code installs it with Facade Code. If it is missing or turned off, the panel says so and offers **Show Window Component**; install or enable it, then reload the window. Agents that are already running keep running.
 - **Updating from 0.0.1**: Agents started before the update keep running. They open in their own terminals, without cards, and cannot use the new features.
 - **Remote - SSH reconnects**: If VS Code stops reconnecting to an SSH host and asks you to reload the window, reload it once the network is back. The agents keep running on the host, and the reloaded window shows them again.
@@ -155,7 +160,7 @@ npm run test:integration
 ```
 
 `npm run test:package` checks the VSIX that `npm run package` makes, so run that first. Integration tests use an isolated
-editor profile, a temporary Facade root, disposable repositories and fake Claude Code and Codex programs, in an official VS Code: set
+editor profile, a temporary Facade root, disposable repositories and a fake program for each built-in CLI, in an official VS Code: set
 `VSCODE_EXECUTABLE` to its executable (on macOS the standard `/Applications/Visual Studio Code.app` is used when it is there).
 On Linux run them under `xvfb-run -a`; on Windows run them in the signed-in desktop session. `npm run test:remote` runs
 them over Remote-SSH to the hosts of an SSH configuration; [AGENTS.md](AGENTS.md) lists its variables.

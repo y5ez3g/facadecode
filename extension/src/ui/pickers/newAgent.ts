@@ -182,7 +182,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		const items: Item[] = [
 			...available.map((cli): Item => ({ label: cli.displayName, iconPath: cliIcon(deps.media, cli.id), does: 'start', cli })),
 			// No CLI can start here: why, and the way to the settings (LIFECYCLE-1.1, EXPERIENCE-1.4)
-			...available.length ? [] : [{ label: vscode.l10n.t("Configure Agents..."), detail: vscode.l10n.t("Install Claude Code or Codex in this environment, or configure the path."), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' as const }],
+			...available.length ? [] : [{ label: vscode.l10n.t("Configure Agents..."), detail: vscode.l10n.t("Install a supported CLI in this environment, or configure its path."), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' as const }],
 			...unavailable.length ? [{ label: vscode.l10n.t("Unavailable"), kind: vscode.QuickPickItemKind.Separator }] : [],
 			...unavailable.map((cli): Item => ({ label: cli.displayName, ...(cli.problem ? { detail: reasonText(cli.said, cli.problem) } : {}), iconPath: cliIcon(deps.media, cli.id), buttons: [configure], does: 'configure', cli })),
 			...bottom

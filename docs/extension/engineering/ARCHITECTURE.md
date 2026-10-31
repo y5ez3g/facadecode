@@ -256,7 +256,7 @@ actual identity; incompatible tools report unavailable. New starts use current s
 first update from the released 0.0.1 preview: agents its supervisor holds stay visible and usable in their window after
 the update, each in an editor terminal of its own without a card and without Facade tools, until they end or their
 terminal is closed with RULES-4.1's confirmation, and the update alone never starts RULES-4.1's five-minute cleanup for
-them; one notification says so in plain words (D87). Upgrade/reload behavior and window-component replacement must be verified with in-flight
+them; one notification says so in plain words (D92). Upgrade/reload behavior and window-component replacement must be verified with in-flight
 work under the applicable delivery rules.
 
 ## 3 Data and safety
@@ -456,12 +456,12 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 ## Change log
 
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 makes the window component the client component, using local
-  sockets and a client registry without a broker process (D82); 1.3 adds the `schema`, `contract`, `transport` and
+  sockets and a client registry without a broker process (D87); 1.3 adds the `schema`, `contract`, `transport` and
   `client` layers; 2.1 carries the Facade Dots routing rule; 2.3 adds shim call routing and input deadlines; 2.4 keeps
   agents of the 0.0.1 preview running across the first update; 3.1-3.3 add the client registry, message records and
   route logging; 4.1 ignores `.agents/` (Dots D50); 4.2 keeps the preview's settings and command IDs and refuses old
   MCP calls (Dots D37); 4.3 installs the window component through `extensionPack` with a bounded wait and a plain
-  explanation (D83).
+  explanation (D88).
 
 - 2026-10-30: 2.2 and 2.3 describe the owner's five-minute policy (D75) as ptyd applies it, and 2.2 bounds the wait
   for each restored terminal to open.

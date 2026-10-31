@@ -9,7 +9,11 @@ import type { FacadeReason, WorktreeCreationEffects } from '../core/ports';
 /** Native agent presentation shared by pickers, terminal tabs and notifications (ARCHITECTURE-1.3). */
 const LOGOS: { readonly [cli: string]: { readonly light: string; readonly dark: string } } = {
 	claude: { light: 'claude.svg', dark: 'claude.svg' },
-	codex: { light: 'codex-light.svg', dark: 'codex-dark.svg' }
+	codex: { light: 'codex-light.svg', dark: 'codex-dark.svg' },
+	agy: { light: 'antigravity.png', dark: 'antigravity.png' },
+	muse: { light: 'muse.png', dark: 'muse.png' },
+	opencode: { light: 'opencode-light.svg', dark: 'opencode-dark.svg' },
+	pi: { light: 'pi.svg', dark: 'pi.svg' }
 };
 
 /** A built-in CLI's theme logo, or the native terminal icon for another CLI (LIFECYCLE-2.2). */
@@ -52,6 +56,8 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'not_runnable': return vscode.l10n.t("{0}.path is {1}, and {2} is not a program that can be run", a, b, c);
 		// {0} is the program, {1} the argument, {2} the setting
 		case 'cmd_unsafe': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point", a, b, c);
+		// {0} is the program, {1} the setting
+		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point", a, b);
 		case 'yolo_type': return vscode.l10n.t("facade.yolo must be true or false; received {0}", a);
 		default: return otherwise;
 	}

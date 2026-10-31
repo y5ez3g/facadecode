@@ -8,6 +8,7 @@
 
 import type { Environment } from './environment';
 import type { Capability, ToolsIntegration } from './tools';
+import type { LaunchTarget } from './executable';
 import type { TrustTarget } from './trust';
 
 /**
@@ -96,7 +97,7 @@ export interface LaunchInput {
 
 /** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition. */
 export interface CliAdapter {
-	/** The API ID: `claude` or `codex` (CLIS-1.1). */
+	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` (CLIS-1.1). */
 	readonly id: string;
 	readonly displayName: string;
 	/** Its settings: `facade.<segment>`. */
@@ -123,8 +124,21 @@ export interface CliAdapter {
 	 * in, found with the environment `env` the launch starts with, as the CLI finds them.
 	 */
 	trustTarget?(cwd: string, env: Environment, platform: NodeJS.Platform): TrustTarget;
-	/** Its title decorations (CLIS-2.3): status marks its titles start with, and titles that only name it. */
-	readonly title: { readonly decoration?: RegExp; readonly names: readonly string[] };
+	/**
+	 * How its own installer's launcher `file` starts it, where the adapter verified that launcher (CLIS-1.2): found with the launch's
+	 * environment `env` in `cwd`; undefined for any other file, which is then started as `launchTarget` starts it.
+	 */
+	launchTarget?(file: string, platform: NodeJS.Platform, env: Environment, cwd: string): LaunchTarget | undefined;
+	/**
+	 * The screen reader ptyd reads its status with while it sends no OSC 7501 reports, by its ID in `ptyd/screenStatus.ts`: Muse
+	 * Code's, which sends none on Windows (CLIS-2.3, D80). Its own reports, where it sends them, always take precedence.
+	 */
+	readonly screenStatus?: 'muse';
+	/**
+	 * Its title decorations (CLIS-2.3): status marks its titles start with, titles that only name it, and the placeholder its reports
+	 * give for a title before it has one.
+	 */
+	readonly title: { readonly decoration?: RegExp; readonly names: readonly string[]; readonly placeholder?: RegExp };
 	/**
 	 * Whether an exit was the CLI's own handling of an interrupt the person typed (RULES-3.3): `ctrlC` says a Ctrl+C went into its
 	 * terminal just before. Without the adapter's evidence, no exit is an interrupt.

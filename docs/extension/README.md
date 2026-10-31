@@ -41,12 +41,12 @@ and do not reinstate a requirement explicitly superseded by the current body.
 deleted behavior must change its expectation; it is not evidence that the deleted feature should be restored.
 
 The Facade Code extension is committed in additive steps, and each commit carries only the specification its step needs.
-This is the subset for step 2, one of a sequence of owner-tested steps. Step 1 shipped Claude Code and Codex with the whole
-user interface that serves them, as the 0.0.1 preview. Step 2 adds agents that work together: the nine MCP tools,
-messages and their results, contact with the person, Message History, and control of agents in every Facade window on
-this computer, local and remote alike. Every rule keeps its final number, so the numbering has gaps that later steps fill
-(Resume, Pin, filters, more CLIs, custom CLIs and launch settings); their rules, decisions and checks are not part of
-this step.
+This is the subset for the owner-tested steps so far. Step 1 shipped Claude Code and Codex with the whole user interface
+that serves them, as the 0.0.1 preview; Antigravity, Muse Code, OpenCode and Pi join them at the same level (D77). Step 2
+adds agents that work together, with every built-in CLI: the nine MCP tools, messages and their results, contact with the
+person, Message History, and control of agents in every Facade window on this computer, local and remote alike. Every
+rule keeps its final number, so the numbering has gaps that later steps fill (Resume, Pin, filters, custom CLIs and
+launch settings); their rules, decisions and checks are not part of these steps.
 
 ## 3 Coverage and evidence limits
 
@@ -73,6 +73,7 @@ the owner to repeatedly approve speculative edge cases. Verification states rema
 ## Change log
 
 - 2026-10-30: Step 2 of the Facade Code extension: added COLLABORATION and MCP; 12 documents and 175 rules.
+- 2026-10-30: The step summary includes the step adding Antigravity, Muse Code, OpenCode and Pi (D77).
 
 - 2026-10-30: Corrected the stale step summary to include the owner's already-authorized Codex addition to step 1.
 

@@ -165,7 +165,7 @@
 	"Change Working Location...": "更改工作位置...",
 	"Change Name...": "更改名称...",
 	"Configure Agents...": "配置 Agent...",
-	"Install Claude Code or Codex in this environment, or configure the path.": "在此环境中安装 Claude Code 或 Codex，或配置程序路径。",
+	"Install a supported CLI in this environment, or configure its path.": "在此环境中安装受支持的 CLI，或配置其程序路径。",
 	"Unavailable": "不可用",
 	"Select a CLI": "选择 CLI",
 	"Open Folder...": "打开文件夹...",
@@ -183,6 +183,7 @@
 	"{0}.path is {1}, which was not found on the PATH of a terminal in {2}": "{0}.path 为 {1}，但在 {2} 中的终端 PATH 上未找到该程序",
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path 为 {1}，且 {2} 不是可运行的程序",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，无法安全传入参数 {1}；请将 {2}.path 设置为 CLI 自身的程序或 Node 入口点",
+	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，无法安全传入其路径；请将 {1}.path 设置为 CLI 自身的程序或 Node 入口点",
 	"facade.yolo must be true or false; received {0}": "facade.yolo 必须为 true 或 false；但收到的是 {0}",
 	"Configure Agents": "配置 Agent"
 }

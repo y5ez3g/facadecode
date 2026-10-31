@@ -725,7 +725,7 @@ export function formatResult(record: MessageRecord): string {
 function resultText(original: MessageRecord, cli?: string): string {
 	const target = `${partyText(original.to)} (${original.to.run})`;
 	const delivery = original.delivery;
-	// An input box Facade did not recognize names the CLI and version it found, for whoever looks into it (CLIS-2.1, D78)
+	// An input box Facade did not recognize names the CLI and version it found, for whoever looks into it (CLIS-2.1, D83)
 	const unrecognized = delivery.reason === 'input_unknown' && cli ? `; Facade did not recognize the input box of ${cli}` : '';
 	const outcome = delivery.status === 'success'
 		? delivery.via === 'read'

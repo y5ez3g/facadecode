@@ -270,6 +270,62 @@
 						"markdownDescription": "%config.codex.path%"
 					}
 				}
+			},
+			{
+				"id": "facade.antigravity",
+				"title": "%config.antigravity.title%",
+				"order": 5,
+				"properties": {
+					"facade.antigravity.path": {
+						"type": "string",
+						"default": "",
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.antigravity.path%"
+					}
+				}
+			},
+			{
+				"id": "facade.muse",
+				"title": "%config.muse.title%",
+				"order": 6,
+				"properties": {
+					"facade.muse.path": {
+						"type": "string",
+						"default": "",
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.muse.path%"
+					}
+				}
+			},
+			{
+				"id": "facade.opencode",
+				"title": "%config.opencode.title%",
+				"order": 7,
+				"properties": {
+					"facade.opencode.path": {
+						"type": "string",
+						"default": "",
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.opencode.path%"
+					}
+				}
+			},
+			{
+				"id": "facade.pi",
+				"title": "%config.pi.title%",
+				"order": 8,
+				"properties": {
+					"facade.pi.path": {
+						"type": "string",
+						"default": "",
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.pi.path%"
+					}
+				}
 			}
 		]
 	},
@@ -287,7 +343,6 @@
 		"@vscode/vsce": "4.1.0",
 		"esbuild": "^0.28.2",
 		"mocha": "^11.8.0",
-		"postject": "1.0.0-alpha.6",
 		"typescript": "^5.9.3"
 	},
 	"l10n": "./l10n",
@@ -296,6 +351,10 @@
 	"keywords": [
 		"agents",
 		"claude code",
-		"codex"
+		"codex",
+		"antigravity",
+		"muse code",
+		"opencode",
+		"pi"
 	]
 }

@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Real Claude Code agents working together through Facade (VERIFICATION G3, J12, M02, D79). It runs only where FACADE_IT_REAL asks
+// Real Claude Code agents working together through Facade (VERIFICATION G3, J12, M02, D84). It runs only where FACADE_IT_REAL asks
 // for it - `FACADE_IT_ONLY=real` - as each run signs in and uses an account's usage. YOLO is off: the agent the person starts uses
 // Facade's tools with no approval, starts a second Claude Code with a first task and messages it, and the second answers through
 // Facade's tools. Every message is pasted whole into its recipient's input box and seen submitted (RULES-1.4, COLLABORATION-2.1).
@@ -56,7 +56,7 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 	+ '3) Call send_message to Echo\'s agent_id with the text PING. '
 	+ '4) End your turn. When a Facade message with PONG reaches you, answer DONE and nothing else.';
 
-(REAL === 'claude' ? suite : suite.skip)('Journey: real Claude Code agents work together through Facade (G3, J12, M02, D79)', () => {
+(REAL === 'claude' ? suite : suite.skip)('Journey: real Claude Code agents work together through Facade (G3, J12, M02, D84)', () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined, 30_000);

@@ -336,6 +336,26 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		]);
 	});
 
+	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3, D80)', async function () {
+		this.timeout(10_000);
+		const client = await connect();
+		const idle = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
+		const working = `◈ Thinking (1s · esc to interrupt)\r\n\r\n${idle}`;
+		const drawing = (ask: boolean) => `const out = s => process.stdout.write(s); ${ask ? 'out(\'\\x1b]7501;?\\x1b\\\\\');' : ''} out('\\x1b[2J\\x1b[H' + ${JSON.stringify(idle)}); setTimeout(() => out('\\x1b[2J\\x1b[H' + ${JSON.stringify(working)}), 600); setInterval(() => {}, 1000);`;
+		const start = (run: string, ask: boolean) => client.request('spawn', { run, owner: 'w1', file: process.execPath, args: ['-e', drawing(ask)], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: {}, screenStatus: 'muse' });
+		const statesOf = (events: readonly RunEvent[]) => events.flatMap(event => event.event === 'status' && event.status ? [event.status.state] : []);
+		const read = eventsOf(client, 'screen');
+		await start('screen', false);
+		assert.deepStrictEqual(await until('its screen read as working', () => statesOf(read).includes('working') && statesOf(read)), ['idle', 'working']);
+		// A window that claims it later is told what its screen showed
+		assert.strictEqual((await client.request('list', { owner: 'w1' })).find(run => run.run === 'screen')?.status?.state, 'working');
+		const asking = eventsOf(client, 'asking');
+		await start('asking', true);
+		await until('its question answered', () => statesOf(asking).length > 0);
+		await new Promise(resolve => setTimeout(resolve, 1_200));
+		assert.deepStrictEqual(statesOf(asking), ['pending']);
+	});
+
 	test('a window that does not take its output pauses the run once the output waiting for it passes the bound, and lets it go on once it is gone (ARCHITECTURE-2.4)', async function () {
 		this.timeout(30_000);
 		const observer = await connect(false);

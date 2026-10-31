@@ -328,6 +328,11 @@ export function addMembers(text: string, node: JsonObjectNode, members: readonly
 	return added(text, node.start, node.end, first?.keyStart, last?.value.end, members.map(([key, value]) => (indent: string) => `${JSON.stringify(key)}${style.colon}${written(value, indent, style)}`), style);
 }
 
+/** The edits that add `items` to the end of the list `node` of `text`, written as `style` writes JSON. */
+export function addItems(text: string, node: JsonArrayNode, items: readonly unknown[], style: JsonStyle): readonly JsonEdit[] {
+	return added(text, node.start, node.end, node.items[0]?.start, node.items.at(-1)?.end, items.map(item => (indent: string) => written(item, indent, style)), style);
+}
+
 /** The edit that puts `value` in the place of `node` in `text`, written as `style` writes JSON. */
 export function replaceValue(text: string, node: JsonNode, value: unknown, style: JsonStyle): JsonEdit {
 	return { offset: node.start, length: node.end - node.start, text: written(value, indentAt(text, node.start), style) };

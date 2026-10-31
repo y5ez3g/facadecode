@@ -74,7 +74,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([planned.injection!.project, planned.injection!.env, planned.env.FACADE_RUN], [[], {}, undefined]);
 	});
 
-	test('with YOLO off, Facade\'s own tools still never ask for approval, while the CLI keeps its own approvals and sandbox (CLIS-1.3, D79)', () => {
+	test('with YOLO off, Facade\'s own tools still never ask for approval, while the CLI keeps its own approvals and sandbox (CLIS-1.3, D84)', () => {
 		const claude = plan({ cli: 'claude', yolo: false, tools });
 		assert.ok(claude.args.includes('--allowedTools') && claude.args[claude.args.indexOf('--allowedTools') + 1] === 'mcp__facade', claude.args.join(' '));
 		assert.ok(!claude.args.includes('--dangerously-skip-permissions'));
@@ -124,7 +124,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([neither.model, neither.effort], [undefined, undefined]);
 	});
 
-	test('the message input is read by each CLI\'s reader whatever its version; there is no version list (CLIS-2.1, D78)', () => {
+	test('the message input is read by each CLI\'s reader whatever its version; there is no version list (CLIS-2.1, D83)', () => {
 		assert.deepStrictEqual(inputOf(claudeAdapter), { adapter: 'claude-frame', capability: { state: 'supported', reason: inputOf(claudeAdapter).capability.reason } });
 		assert.deepStrictEqual(inputOf(codexAdapter).adapter, 'codex-prompt');
 		for (const each of [claudeAdapter, codexAdapter]) {
@@ -413,13 +413,13 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 
 	test('describe states, for a start here, the choices each CLI takes, its native prompt mapping, its input reader and nothing it does not stand behind; it writes nothing', () => {
 		const described = clis().describe(location, true).launches;
-		assert.deepStrictEqual(described.map(each => each.cli), ['claude', 'codex']);
+		assert.deepStrictEqual(described.map(each => each.cli), ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']);
 		const claude = described[0];
 		assert.deepStrictEqual([claude.takes, claude.initialPrompt?.mapping, claude.initialPrompt?.capability.state, claude.input?.adapter, claude.input?.capability.state],
 			[{ model: true, effort: true }, ['--', '${prompt}'], 'unverified', 'claude-frame', 'supported']);
 		assert.strictEqual(described[1].input?.adapter, 'codex-prompt');
 		// The programs here are no installations naming a version
-		assert.deepStrictEqual(described.map(each => each.version), [undefined, undefined]);
+		assert.deepStrictEqual(described.map(each => each.version), described.map(() => undefined));
 		assert.ok(!fs.existsSync(home));
 	});
 });

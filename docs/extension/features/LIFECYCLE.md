@@ -32,7 +32,7 @@ full current name. These items edit the values; they are not the only place the 
 accept the suggested name or leave it empty; an empty name keeps its title segment (`New Agent ·  · main`). Change Name
 prefills the current name without a custom prompt; the editor supplies the Enter/Escape instructions.
 Invalid configuration shows its reason. With no usable CLI, `Configure Agents...` has the detail
-`Install Claude Code or Codex in this environment, or configure the path.` With no folder, use PANEL-1.2's
+`Install a supported CLI in this environment, or configure its path.` With no folder, use PANEL-1.2's
 Open Folder prerequisite picker and its wording instead of the CLI step.
 Missing optional Git does not block creation or trigger a Git initialization suggestion. Cancel closes without effects
 or changing successful-launch history.
@@ -207,6 +207,8 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 - 2026-10-30: Step 2 of the Facade Code extension: 1.4 and 2.2 add agent starts through MCP in the background; 1.5
   keeps a usable CLI when its Facade tools fail; 2.1 adds agent-supplied names and RULES-2.3's references; 2.3 and 3.1
   add MCP across windows and `stop_agent`.
+- 2026-10-30: 1.1's detail with no usable CLI names no CLI, as six built-ins are offered (D77); the settings Configure
+  Agents opens list each of them.
 
 - 2026-10-30: Owner-approved after a native reproduction that Close All, Close Others and Close Saved closed every agent
   terminal without a question: 3.1 asks once before ending live agents whose tabs were closed, Cancel reopens their

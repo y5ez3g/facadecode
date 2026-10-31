@@ -56,7 +56,8 @@ automatically launch an agent. This prerequisite step does not ask the person to
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
 
-Use maker avatars in `media/agents/avatar-claude.png` and `avatar-codex.png`. Location is alias/branch/folder, prefixed by workspace folder in
+Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`,
+`avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Location is alias/branch/folder, prefixed by workspace folder in
 a multi-folder window unless it is named that folder's name already, as a plain folder is (D66). A related worktree can
 be outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
 temporarily disconnected location is retained. The location keeps its own width, as a chat list keeps a message's time,
@@ -68,9 +69,9 @@ all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibili
 **The second line adds the most useful known fact without claiming task completion.**
 
 Priority: retained failure or specific connection/status error; known native blocker; generic activity-unavailable
-explanation; unavailable Facade tools; active startup stage; CLI title; creation prompt first line; fallback. When a
-known native blocker coexists with unavailable activity, lead with the blocker and retain the status explanation, for
-example `Sign-in required · Activity unavailable`.
+explanation; unavailable Facade tools; active startup stage, active until the CLI first shows its activity (CLIS-2.3);
+CLI title; creation prompt first line; fallback. When a known native blocker coexists with unavailable activity, lead with
+the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
 A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file} in this folder`,
 and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
 title. Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
@@ -181,6 +182,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 adds Message History... to the view menu; 1.4 adds an
   unavailable-tools explanation and a creation prompt's first line; 1.5 names an agent's creator; 2.1 places agent-started
   cards like any other without tree grouping; 3.2 renders no command links from messages.
+- 2026-10-30: 1.3 adds the Antigravity, Muse Code, OpenCode and Pi avatars (D77); 1.4's startup stage lasts until the
+  CLI first shows its activity (D81).
 
 - 2026-10-30: 1.3 adds the Codex avatar; 3.1 names the current source paths.
 

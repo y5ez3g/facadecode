@@ -316,7 +316,7 @@ No migration guide for already-published user skills is required: this is the fi
 ## Change log
 
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots contract with the owner's 2026-10-30
-  decisions: one delivery state in which read_messages delivers (D77), no CLI-version gate on message input, with
-  `unsupported` and `input_unknown` replacing capability_unverified (D78), Facade's tools pre-approved in both YOLO modes
-  and never required (D79), `#human` for the person (D80), the client network across this computer's windows (D82) and
-  the `facade.collaboration.waitSeconds` setting (D84). Resume, Pin and custom CLIs are later steps.
+  decisions: one delivery state in which read_messages delivers (D82), no CLI-version gate on message input, with
+  `unsupported` and `input_unknown` replacing capability_unverified (D83), Facade's tools pre-approved in both YOLO modes
+  and never required (D84), `#human` for the person (D85), the client network across this computer's windows (D87) and
+  the `facade.collaboration.waitSeconds` setting (D89). Resume, Pin and custom CLIs are later steps.
