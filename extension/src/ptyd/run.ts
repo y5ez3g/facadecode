@@ -126,6 +126,8 @@ export class Run {
 	private readonly exitListeners = new Set<(exit: RunExit) => void>();
 	/** Whoever cannot take more of what the run writes yet: while anyone is, its pty is not read, and the CLI waits. */
 	private readonly holders = new Set<object>();
+	/** Whether it is being ended: what it writes is read on, held back or not, as its exit is known only once that is drained. */
+	private ending = false;
 	private readonly programStatus = new ProgramStatus();
 	/** How its screen is read as its status while its program reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
 	private readonly screenReader: ScreenReader | undefined;
@@ -256,7 +258,7 @@ export class Run {
 
 	/** Stops reading what the run writes until `holder` lets go: ordinary backpressure, the CLI waiting (ARCHITECTURE-2.4). */
 	hold(holder: object): void {
-		if (this.exited || this.holders.has(holder)) {
+		if (this.exited || this.ending || this.holders.has(holder)) {
 			return;
 		}
 		if (!this.holders.size) {
@@ -299,6 +301,12 @@ export class Run {
 	async terminate(graceMs: number): Promise<Termination> {
 		if (this.exited) {
 			return 'already_exited';
+		}
+		// A run held back is read on as it ends: node-pty tells its exit once its output is drained, which a paused read never is
+		this.ending = true;
+		if (this.holders.size) {
+			this.holders.clear();
+			this.pty.resume();
 		}
 		if (!this.signal(process.platform === 'win32' ? undefined : 'SIGHUP')) {
 			return this.reaped ? await this.exitWithin(KILL_CONFIRM_MS) ? 'terminated' : 'unconfirmed' : 'failed';

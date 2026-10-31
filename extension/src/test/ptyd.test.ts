@@ -152,6 +152,20 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	test('a run held back - its window not reading - is ended and its end confirmed: what it writes is read on as it ends (LIFECYCLE-4.2, ARCHITECTURE-2.4)', async function () {
+		this.timeout(15_000);
+		const run = new runModule.Run({ run: 'flood', owner: 'w1', file: SHELL, args: ['-c', 'yes flood'], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TERM: 'xterm-256color' }, cols: 80, rows: 24, meta: {} });
+		try {
+			await new Promise(resolve => setTimeout(resolve, 200));
+			run.hold({});
+			// Its terminal's buffer full and its writes blocked, as a window that stopped reading leaves it
+			await new Promise(resolve => setTimeout(resolve, 300));
+			assert.strictEqual(await run.terminate(500), 'terminated');
+		} finally {
+			run.dispose();
+		}
+	});
+
 	test('a run started is claimed by its window: its numbered output, what it is typed and its end reach that window', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'r1');
@@ -418,5 +432,25 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('the run to go on', async () => await seqOf() > last, 10_000);
 		await observer.request('claim', { owner: 'w1', generation: 2, token: 'observer' });
 		await observer.request('terminate', { run: 'flood', graceMs: 200 });
+	});
+});
+
+suite('ptyd: a run held back on Windows (LIFECYCLE-4.2, ARCHITECTURE-2.4)', function () {
+	if (process.platform !== 'win32') {
+		return;
+	}
+
+	test('a run its window stopped reading is ended and its end confirmed: ConPTY tells the exit once what it wrote is read', async function () {
+		this.timeout(15_000);
+		const shell = process.env.ComSpec ?? 'C:\Windows\System32\cmd.exe';
+		const run = new runModule.Run({ run: 'flood', owner: 'w1', file: shell, args: ['/d', '/c', 'for /L %i in () do @echo flood flood flood flood flood flood'], cwd: os.tmpdir(), env: { ...process.env } as Record<string, string>, cols: 80, rows: 24, meta: {} });
+		try {
+			await new Promise(resolve => setTimeout(resolve, 500));
+			run.hold({});
+			await new Promise(resolve => setTimeout(resolve, 800));
+			assert.strictEqual(await run.terminate(1000), 'terminated');
+		} finally {
+			run.dispose();
+		}
 	});
 });
