@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import type { Catalog, Location, LocationRemoval, RunChange, RunFacts, WorkspaceFolderInfo } from '../core/ports';
 import type { CardWords } from '../ui/cardView';
-import { PanelModel, REPORT_COALESCE_MS, Timers } from '../ui/model';
+import { locationOfFilter, PanelModel, REPORT_COALESCE_MS, Timers } from '../ui/model';
 import { PanelPrefs, Storage } from '../ui/order';
 import type { PanelState } from '../webview/protocol';
 import { TestEmitter } from './withModules';
@@ -54,7 +54,9 @@ class Locations {
 	readonly removed = new TestEmitter<LocationRemoval>();
 	readonly onDidChange = this.changed.event;
 	readonly onDidRemove = this.removed.event;
+	readonly gone = new Map<string, LocationRemoval['cause']>();
 	snapshot(): Catalog { return this.catalog; }
+	removalOf(id: string): LocationRemoval['cause'] | undefined { return this.gone.get(id); }
 }
 
 class Memory implements Storage {
@@ -165,13 +167,17 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([leading, held, trailing, line, sent() - first, model.state().cards[0].dot], [1, 1, 2, 'Three', 3, 'error']);
 	});
 
-	test('U05: the badge counts every card - starting and failed alike; a new card goes first; the order is kept in workspace storage', async () => {
+	test('U05: the badge counts every card - starting, failed and filtered out alike; a new card goes first; the order is kept in workspace storage', async () => {
 		let model = make();
 		agents.add(run(1, { lifecycle: 'starting', phase: 'launching_cli' }));
 		agents.add(run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }));
 		agents.add(run(3, { location: GUIDE.id }));
 		await tick();
 		const counted = [model.state().cardCount, names(model.state())];
+		model.setFilter({ kind: 'location', id: MAIN.id, label: 'main' });
+		await tick();
+		const filtered = [model.state().cardCount, names(model.state())];
+		model.setFilter(undefined);
 		assert.ok(model.move(id(1), -1));
 		await tick();
 		const moved = names(model.state());
@@ -181,8 +187,9 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		const reloaded = names(model.state());
 		agents.add(run(4));
 		await tick();
-		assert.deepStrictEqual([counted, moved, reloaded, names(model.state())], [
+		assert.deepStrictEqual([counted, filtered, moved, reloaded, names(model.state())], [
 			[3, ['Agent 3', 'Agent 2', 'Agent 1']],
+			[3, ['Agent 2', 'Agent 1']],
 			['Agent 3', 'Agent 1', 'Agent 2'],
 			['Agent 3', 'Agent 1', 'Agent 2'],
 			['Agent 4', 'Agent 3', 'Agent 1', 'Agent 2']
@@ -202,6 +209,104 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.ok(model.move(id(3), 1));
 		await tick();
 		assert.deepStrictEqual([menus, names(model.state())], [[['Agent 3', false, true], ['Agent 2', true, true], ['Agent 1', true, false]], ['Agent 1', 'Agent 2', 'Agent 3']]);
+	});
+
+	test('with a filter, Move Up/Down passes the next shown card, hidden ones keeping their slots (PANEL-2.1, 2.3)', async () => {
+		const model = make();
+		agents.add(run(1));
+		agents.add(run(2, { location: GUIDE.id }));
+		agents.add(run(3));
+		await tick();
+		model.setFilter({ kind: 'location', id: MAIN.id, label: 'main' });
+		await tick();
+		const menus = model.state().cards.map(card => [card.name, card.menu.moveUp, card.menu.moveDown]);
+		assert.ok(model.move(id(1), -1));
+		assert.ok(!model.move(id(1), -1));
+		assert.ok(!model.move(id(2), 1), 'a hidden card does not move');
+		model.setFilter(undefined);
+		await tick();
+		assert.deepStrictEqual([menus, names(model.state())], [[['Agent 3', false, true], ['Agent 1', true, false]], ['Agent 1', 'Agent 2', 'Agent 3']]);
+	});
+
+	test('U04: no launch, catalog change or failed Git read clears the filter; it persists, and only a confirmed removal of its location or folder clears it (PANEL-2.3)', async () => {
+		let model = make();
+		model.setFilter({ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' });
+		agents.add(run(1));
+		// A failed Git read: the worktree is unlisted for now, with no confirmed removal
+		locations.catalog = { locations: [MAIN, GUIDE], folders: [SHOP, DOCS], pending: false };
+		locations.changed.fire();
+		await tick();
+		const afterLaunchAndStale = [model.state().filter, model.state().empty, model.state().cardCount];
+		model.dispose();
+		model = make();
+		await tick();
+		const persisted = model.state().filter;
+		locations.removed.fire({ ids: [LOGIN.id], cause: 'deleted' });
+		await tick();
+		const cleared = model.state().filter;
+		model.setFilter({ kind: 'folder', id: DOCS.uri, label: 'docs' });
+		locations.catalog = { locations: [MAIN], folders: [SHOP], pending: false };
+		locations.removed.fire({ ids: [GUIDE.id], cause: 'folder' });
+		await tick();
+		assert.deepStrictEqual([afterLaunchAndStale, persisted, cleared, model.state().filter], [
+			[{ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' }, 'noMatch', 1],
+			{ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' },
+			undefined,
+			undefined
+		]);
+	});
+
+	test('a folder filter clears as the workspace drops its folder, though the folder\'s locations stay listed under another and report no removal (PANEL-2.3, RULES-2.4)', async () => {
+		const model = make();
+		agents.add(run(1, { location: GUIDE.id }));
+		model.setFilter({ kind: 'folder', id: DOCS.uri, label: 'docs' });
+		await tick();
+		const filtered = model.state().filter;
+		// The editor's own folder list is the workspace's; a Git read failing leaves it as it was
+		locations.catalog = { locations: [MAIN, LOGIN, { ...GUIDE, folders: [SHOP] }], folders: [SHOP], pending: false };
+		locations.changed.fire();
+		await tick();
+		assert.deepStrictEqual([filtered?.kind, model.state().filter, model.state().empty], ['folder', undefined, undefined]);
+	});
+
+	test('a filter whose location was confirmed removed as the host restarted, or whose folder the workspace no longer has, is cleared as the panel starts; one only unlisted is kept (PANEL-2.3, RULES-2.4)', async () => {
+		storage.values.set('facade.panel.filter', { kind: 'location', id: LOGIN.id, label: 'login-fix' });
+		locations.gone.set(LOGIN.id, 'deleted');
+		const removed = make().state().filter;
+		storage.values.set('facade.panel.filter', { kind: 'folder', id: 'file:///old', label: 'old' });
+		const folderGone = make().state().filter;
+		storage.values.set('facade.panel.filter', { kind: 'location', id: 'loc-unlisted', label: 'unlisted' });
+		const kept = make().state().filter;
+		await tick();
+		assert.deepStrictEqual([removed, folderGone, kept, storage.values.get('facade.panel.filter')], [undefined, undefined, { kind: 'location', id: 'loc-unlisted', label: 'unlisted' }, { kind: 'location', id: 'loc-unlisted', label: 'unlisted' }]);
+	});
+
+	test('a card\'s own filters appear only where they change what is shown, Clear Filter while filtered; the view names the filter by its location\'s current label (PANEL-2.2, 2.3)', async () => {
+		const model = make();
+		agents.add(run(1));
+		agents.add(run(2, { location: LOGIN.id }));
+		agents.add(run(3, { location: GUIDE.id }));
+		await tick();
+		const menuOf = (n: number) => { const { filterLocation, filterFolder, clearFilter } = model.state().cards.find(card => card.runId === id(n))!.menu; return { filterLocation, filterFolder, clearFilter }; };
+		const all = [menuOf(1), menuOf(3)];
+		model.setFilter(model.filterFor(id(1), 'folder'));
+		await tick();
+		const inFolder = [menuOf(1), model.state().filter?.label];
+		model.setFilter(model.filterFor(id(1), 'location'));
+		locations.catalog = { locations: [GUIDE, LOGIN], folders: [SHOP, DOCS], pending: false };
+		locations.changed.fire();
+		await tick();
+		assert.deepStrictEqual([all, inFolder, menuOf(1), model.state().filter?.label], [
+			[{ filterLocation: true, filterFolder: true, clearFilter: false }, { filterLocation: true, filterFolder: true, clearFilter: false }],
+			[{ filterLocation: true, filterFolder: false, clearFilter: true }, 'shop'],
+			{ filterLocation: false, filterFolder: true, clearFilter: true },
+			'shop · main'
+		]);
+		// One folder: no folder filter is offered, as Filter by Working Location has none to highlight
+		locations.catalog = { locations: [MAIN, LOGIN], folders: [SHOP], pending: false };
+		locations.changed.fire();
+		await tick();
+		assert.deepStrictEqual(menuOf(1), { filterLocation: false, filterFolder: false, clearFilter: true });
 	});
 
 	test('selection follows the last active owned terminal, survives a file in front and goes with its run; a background start leaves it; a failed launch stays selected (PANEL-2.1)', async () => {
@@ -276,15 +381,17 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		]);
 	});
 
-	test('ARCHITECTURE-4.2: an earlier build\'s stored card order is ignored, never translated, with one line in the agents log', () => {
+	test('ARCHITECTURE-4.2: an earlier build\'s stored card order or filter is ignored, never translated, with one line in the agents log', () => {
 		const logged: string[] = [];
 		storage.values.set('facade.panel.order', ['row-1', id(1)]);
+		storage.values.set('facade.panel.filter', { location: 'main' });
 		const prefs = new PanelPrefs(storage, { event: line => logged.push(line) });
-		const read = [prefs.order(), prefs.order()];
+		const read = [prefs.order(), prefs.order(), prefs.filter(), prefs.filter()];
 		const clean = new PanelPrefs(new Memory(), { event: line => logged.push(line) });
-		assert.deepStrictEqual([read, clean.order()], [[[id(1)], [id(1)]], []]);
+		assert.deepStrictEqual([read, clean.order(), clean.filter()], [[[id(1)], [id(1)], undefined, undefined], [], undefined]);
 		assert.deepStrictEqual(logged, [
-			'Ignored a stored panel card order (facade.panel.order) this build does not read, as from an earlier build'
+			'Ignored a stored panel card order (facade.panel.order) this build does not read, as from an earlier build',
+			'Ignored a stored panel filter (facade.panel.filter) this build does not read, as from an earlier build'
 		]);
 	});
 
@@ -295,5 +402,19 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		}
 		await tick();
 		assert.deepStrictEqual([model.state().cardCount, model.state().cards.length, model.state().cards[0].name, model.state().cards[99].name], [100, 100, 'Agent 100', 'Agent 1']);
+	});
+});
+
+suite('New Agent from the filtered empty panel (PANEL-1.2, LIFECYCLE-1.2, D59)', () => {
+	test('starts at the filtered location, or a filtered folder\'s own location, else its first; without a filter, or once the location is gone, wherever New Agent would', () => {
+		const shopRoot: Location = { ...location('loc-shop', 'shop', SHOP), uri: SHOP.uri, path: SHOP.path };
+		const all = [MAIN, LOGIN, GUIDE, shopRoot];
+		assert.deepStrictEqual([
+			locationOfFilter({ kind: 'location', id: LOGIN.id, label: 'login-fix' }, all),
+			locationOfFilter({ kind: 'folder', id: SHOP.uri, label: 'shop' }, all),
+			locationOfFilter({ kind: 'folder', id: DOCS.uri, label: 'docs' }, all),
+			locationOfFilter(undefined, all),
+			locationOfFilter({ kind: 'location', id: 'loc-gone', label: 'gone' }, all)
+		], [LOGIN.id, 'loc-shop', GUIDE.id, undefined, undefined]);
 	});
 });

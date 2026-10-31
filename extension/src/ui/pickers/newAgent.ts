@@ -7,9 +7,10 @@ import { messageOf } from '../../base/errors';
 import { FacadeError } from '../../core/errors';
 import { normalizeName, suggestName } from '../../core/names';
 import { PlanError, type Agents, type Catalog, type CliCatalogPort, type CliChoice, type HumanPort, type LaunchHistoryPort, type Location, type LocationId, type LocationPort, type LogPort, type RunId, type WorktreePort } from '../../core/ports';
+import { locationLabel } from '../cardView';
 import { COMMANDS } from '../catalog';
 import { cliIcon, configureAgentsLabel, launchFailureText, reasonText } from '../presentation';
-import { chooseLocation, Destination, environmentLabel, locationLabel, worktreeSourceLabel } from './location';
+import { chooseLocation, Destination, environmentLabel, worktreeSourceLabel } from './location';
 import { BACK, Flow } from './stepping';
 
 export interface NewAgentDeps {
@@ -62,9 +63,11 @@ type Item = vscode.QuickPickItem & { readonly does?: Does; readonly cli?: CliCho
  * New Agent (LIFECYCLE-1.1-1.3): one native picker titled `New Agent` with the CLIs to choose from - the last one used first and
  * selected, never started until chosen - and, at its bottom, `Change Working Location...` showing the location and its environment and
  * `Change Name...` showing an editable suggested name. Escape anywhere ends it with nothing done. Choosing a CLI closes it and starts
- * the agent - in a new worktree where one was chosen, made only now - whose card and terminal show at once.
+ * the agent - in a new worktree where one was chosen, made only now - whose card and terminal show at once. `startAt` is where
+ * it starts instead of the remembered location - the filtered empty panel's location (LIFECYCLE-1.2) - while it is offered;
+ * the person can change it as ever.
  */
-export async function newAgent(deps: NewAgentDeps): Promise<void> {
+export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promise<void> {
 	const title = vscode.l10n.t("New Agent");
 	const flow = new Flow();
 	const catalog = deps.locations.snapshot();
@@ -73,7 +76,7 @@ export async function newAgent(deps: NewAgentDeps): Promise<void> {
 	}
 	// Opening a location catalog reads Git again where needed; plain folders are there meanwhile (WORKTREES-1.1, 1.3)
 	deps.locations.refresh().catch(err => deps.log.event(`Could not refresh the working locations: ${messageOf(err)}`));
-	const found = defaultLocation(catalog, deps.history.last().location);
+	const found = (startAt === undefined ? undefined : catalog.locations.find(each => each.id === startAt)) ?? defaultLocation(catalog, deps.history.last().location);
 	if (!found) {
 		return openFolder(flow, title);
 	}

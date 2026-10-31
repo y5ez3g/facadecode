@@ -63,6 +63,11 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 	}
 }
 
+/** How many agents, in words: the panel's badge and Filter by Working Location say it alike (PANEL-1.1, 2.3). */
+export function agentCountText(count: number): string {
+	return count === 1 ? vscode.l10n.t("1 agent") : vscode.l10n.t("{0} agents", count);
+}
+
 /** The configuration action's native-button label, without the command's menu ellipsis (UX-1.3). */
 export function configureAgentsLabel(): string {
 	return vscode.l10n.t("Configure Agents");

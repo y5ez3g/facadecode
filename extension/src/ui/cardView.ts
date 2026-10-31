@@ -50,6 +50,12 @@ export function folderPrefixOf(location: Pick<Location, 'label' | 'folders'>, ca
 	return catalog.folders.length > 1 && folder && folder.name !== location.label ? folder.name : undefined;
 }
 
+/** A location as the person reads it alone (PANEL-1.3): its label, after its workspace folder's name in a multi-folder window. */
+export function locationLabel(location: Pick<Location, 'label' | 'folders'>, catalog: Pick<Catalog, 'folders'>): string {
+	const prefix = folderPrefixOf(location, catalog);
+	return prefix ? `${prefix} · ${location.label}` : location.label;
+}
+
 /** What a card's dot says and its second line (RULES-3.2, PANEL-1.4); `reason` is what the state's words leave unsaid. */
 export interface CardStatus {
 	readonly dot: Card['dot'];

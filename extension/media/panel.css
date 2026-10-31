@@ -115,6 +115,16 @@ body.vscode-context-menu-visible #list .item.menu-target {
 	background: var(--vscode-button-hoverBackground);
 }
 
+/* Another action beside the main one, as VS Code's welcome views set one off (PANEL-1.2) */
+.button.secondary {
+	color: var(--vscode-button-secondaryForeground);
+	background: var(--vscode-button-secondaryBackground);
+}
+
+.button.secondary:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
 
 /* ---- The agents ---- */
 
@@ -455,6 +465,11 @@ body.vscode-reduce-motion .item.closing {
 #empty .button {
 	width: 100%;
 	padding: 4px 8px;
+}
+
+/* Buttons one under another, close together as VS Code's welcome views stack them */
+#empty > .button-container + .button-container {
+	margin-top: 8px;
 }
 
 

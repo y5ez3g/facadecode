@@ -23,12 +23,18 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.renameAgent', 'Rename Agent...'],
 	['facade.copyAgentReference', 'Copy Agent Reference'],
 	['facade.closeAgent', 'Close Agent'],
+	['facade.filter', 'Filter by Working Location...', '$(filter)'],
+	['facade.clearFilter', 'Clear Filter'],
 	['facade.configureAgents', 'Configure Agents...']
 ];
 const HIDDEN: readonly [string, string, string?][] = [
 	['facade.newWorktree', 'New Worktree...'],
 	['facade.moveUp', 'Move Up'],
 	['facade.moveDown', 'Move Down'],
+	['facade.filterByLocation', 'Filter by This Location'],
+	['facade.filterByFolder', 'Filter by This Folder'],
+	// Filter by Working Location as its title button shows it while a filter is on (UX-3.2)
+	['facade.filterOn', 'Filter by Working Location...', '$(filter-filled)'],
 	['facade.revealAgent', 'Show Agent']
 ];
 const HOST_COMMANDS = ['facade.newWorktree'];
@@ -55,10 +61,12 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		}
 	});
 
-	test('menus: New Agent in the title; the card menu in PANEL-2.2\'s groups, Close Agent for every card; the palette by availability, context-only commands hidden', () => {
+	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, Close Agent for every card; the palette by availability, context-only commands hidden', () => {
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
+				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered', group: 'navigation@1' },
+				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered', group: 'navigation@1' },
 				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@3' },
 				// The More Actions menu (PANEL-1.1, D58): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
@@ -70,12 +78,16 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.copyAgentReference', when: card, group: '1_agent@3' },
 				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
 				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' },
+				{ command: 'facade.filterByLocation', when: `${card} && webviewFilterLocation`, group: '3_location@1' },
+				{ command: 'facade.filterByFolder', when: `${card} && webviewFilterFolder`, group: '3_location@2' },
+				{ command: 'facade.clearFilter', when: `${card} && webviewFiltered`, group: '3_location@3' },
 				{ command: 'facade.closeAgent', when: card, group: '4_close@1' }
 			],
 			commandPalette: [
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.copyAgentReference', when: 'facade.agentSelected' },
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
+				{ command: 'facade.clearFilter', when: 'facade.filtered' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' }))
 			]
 		});
