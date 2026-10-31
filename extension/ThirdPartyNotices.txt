@@ -42,6 +42,19 @@ Facade Code's MIT license grants no trademark rights.
 
 ---------------------------------------------------------
 
+@vscode/codicons: the new-session icon (media/new-agent.woff)
+
+Source: https://github.com/microsoft/vscode-codicons
+
+media/new-agent.woff is the Codicons font as VS Code 1.144.0 ships it (out/media/codicon.ttf) with every glyph but
+`new-session` removed, the metrics kept. Facade Code's view title draws New Agent with it.
+
+Copyright (c) Microsoft Corporation. The Codicons are licensed under the
+Creative Commons Attribution 4.0 International Public License (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/legalcode.
+They are offered as-is, without warranties of any kind, as section 5 of that license sets out.
+
+---------------------------------------------------------
+
 @xterm/headless and @xterm/addon-serialize
 
 Source: https://github.com/xtermjs/xterm.js/blob/6.0.0/LICENSE

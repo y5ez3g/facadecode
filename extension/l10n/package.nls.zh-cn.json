@@ -13,6 +13,7 @@
 	"command.moveUp": "上移",
 	"command.moveDown": "下移",
 	"command.revealAgent": "前往 Agent",
+	"icon.newAgent": "新建 Agent 图标",
 	"config.title": "Agent",
 	"config.yolo": "运行 Agent 时不请求审批。关闭后使用各 CLI 的常规审批和其支持的沙盒。仅对新启动的 Agent 生效。",
 	"config.claude.title": "Claude Code",

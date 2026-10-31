@@ -17,6 +17,9 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let progress: number;
 	let logged: string[];
 	let state: PanelState;
+	/** The editor's settings as the panel reads them, and their changes. */
+	let settings: Record<string, unknown>;
+	let configChanged: TestEmitter<{ affectsConfiguration(section: string): boolean }>;
 	let front: SelectedAgent | undefined;
 	let changed: TestEmitter<PanelState>;
 	let said: TestEmitter<unknown>;
@@ -49,8 +52,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			commands: { executeCommand: async (command: string, key: string, value: unknown) => { if (command === 'setContext') { contexts[key] = value; } } },
 			window: { withProgress: async () => void progress++ },
 			workspace: {
-				onDidChangeConfiguration: () => none,
-				getConfiguration: () => ({ get: () => undefined })
+				onDidChangeConfiguration: configChanged.event,
+				getConfiguration: () => ({ get: (key: string) => settings[key] })
 			}
 		};
 		(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
@@ -85,6 +88,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 
 	setup(() => {
 		posted = []; acts = []; contexts = {}; progress = 0; logged = [];
+		settings = {};
+		configChanged = new TestEmitter();
 		state = stateOf(1);
 		front = undefined;
 		changed = new TestEmitter();
@@ -105,6 +110,21 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		await say({ type: 'ready', page: page(1) });
 		await update(stateOf(3));
 		assert.deepStrictEqual([before, states().map(each => [each.page, each.state.revision])], [0, [[page(1), 2], [page(1), 3]]]);
+	});
+
+	test('the page that said it is ready is told the list settings its wheel follows - VS Code\'s defaults where one is not a number - and told again as they or the window\'s zoom change, nothing else (PANEL-3.1, 3.3)', async () => {
+		const scrolls = () => posted.filter(message => message.type === 'scrolling').map(message => [message.page, message.scrolling]);
+		settings = { 'workbench.list.mouseWheelScrollSensitivity': 'much' };
+		await say({ type: 'ready', page: page(1) });
+		settings = { 'workbench.list.mouseWheelScrollSensitivity': 2, 'workbench.list.fastScrollSensitivity': 3, 'workbench.list.smoothScrolling': true, 'window.zoomLevel': 1 };
+		configChanged.fire({ affectsConfiguration: section => section === 'editor.fontSize' });
+		configChanged.fire({ affectsConfiguration: section => section === 'workbench.list' });
+		configChanged.fire({ affectsConfiguration: section => section === 'window.zoomLevel' });
+		assert.deepStrictEqual(scrolls(), [
+			[page(1), { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1 }],
+			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2 }],
+			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2 }]
+		]);
 	});
 
 	test('a message of an unknown type, without a field its type has, with a field of the wrong type or any other field is refused and logged, and nothing is done (PANEL-3.2)', async () => {

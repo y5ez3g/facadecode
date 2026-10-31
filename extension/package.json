@@ -72,7 +72,7 @@
 				"command": "facade.newAgent",
 				"title": "%command.newAgent%",
 				"category": "%command.category%",
-				"icon": "$(new-session)"
+				"icon": "$(facade-new-agent)"
 			},
 			{
 				"command": "facade.showActiveAgents",
@@ -200,6 +200,15 @@
 					"when": "false"
 				}
 			]
+		},
+		"icons": {
+			"facade-new-agent": {
+				"description": "%icon.newAgent%",
+				"default": {
+					"fontPath": "./media/new-agent.woff",
+					"fontCharacter": "\\EC84"
+				}
+			}
 		},
 		"configuration": [
 			{

@@ -421,7 +421,7 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual({ stop, after, last }, { stop: ['run-5'], after: ['run-6', ['run-6']], last: 'run-28' });
 	});
 
-	test('PANEL-3.3: the page scrolls natively - a real wheel turn scrolls it and is not cancelled - its scrollbar VS Code\'s: 10px in the slider colours over no track, whatever VS Code\'s own webview default', async () => {
+	test('PANEL-3.3: a wheel scrolls the page as it does a VS Code list - 50 px a line times `mouseWheelScrollSensitivity`, `fastScrollSensitivity` times more with Alt, never past its end, the list taking every wheel and leaving Ctrl\'s to the editor - and its scrollbar is VS Code\'s: 10px in the slider colours over no track, whatever VS Code\'s own webview default', async () => {
 		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
 		/** The screen's colour at one CSS pixel: a 1x1 PNG's only pixel, whichever filter its one row has. */
 		const pixelAt = async (x: number, y: number) => {
@@ -448,13 +448,70 @@ suite('The agent panel in Chromium', function () {
 		await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: 395, y: 10, button: 'left', clickCount: 1 });
 		const pressed = await pixelAt(395, 5);
 		await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 395, y: 10, button: 'left', clickCount: 1 });
-		await call('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 100, y: 100, deltaX: 0, deltaY: 100 });
-		await until(async () => await evaluate('document.scrollingElement.scrollTop > 0'));
+		// A real wheel turn: one line to Chromium, whatever its pixels - natively, these four would scroll 373 px
+		const wheel = async (modifiers = 0) => {
+			await call('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 100, y: 100, deltaX: 0, deltaY: 100, modifiers });
+			return evaluate('document.scrollingElement.scrollTop');
+		};
+		const lines = [await wheel(), await wheel()];
+		await deliver({ type: 'scrolling', scrolling: { sensitivity: 2, fastSensitivity: 5, smooth: false, zoomFactor: 1 } });
+		const sensitive = await wheel();
+		// Alt: CDP's modifier 1
+		const fast = await wheel(1);
+		const end = await evaluate('document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight');
+		await evaluate(`document.scrollingElement.scrollTop = ${end} - 10`);
+		const atEnd = await wheel();
 		const cancelled = await evaluate('window.cancelled');
+		// Ctrl's wheel is the editor's: not taken, nothing scrolled
+		const ctrl = await evaluate(`(() => { const before = document.scrollingElement.scrollTop; const event = new WheelEvent('wheel', { deltaY: 100, ctrlKey: true, cancelable: true }); window.dispatchEvent(event); return [event.defaultPrevented, document.scrollingElement.scrollTop === before]; })()`);
 		// Out of every card's way, for the tests after
 		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 295 });
-		assert.deepStrictEqual([width, slider, track, hovered, pressed, cancelled.length > 0 && !cancelled.some(Boolean), await evaluate(`document.querySelectorAll('.scrollbar, .slider').length`)],
-			[10, '255,0,0', '255,255,255', '0,255,0', '0,0,255', true, 0]);
+		assert.deepStrictEqual([width, slider, track, hovered, pressed, await evaluate(`document.querySelectorAll('.scrollbar, .slider').length`)], [10, '255,0,0', '255,255,255', '0,255,0', '0,0,255', 0]);
+		assert.deepStrictEqual({ lines, sensitive, fast, atEnd: atEnd === end, cancelled: cancelled.length === 5 && cancelled.every(Boolean), ctrl, errors: await evaluate('window.errors') },
+			{ lines: [50, 100], sensitive: 200, fast: 700, atEnd: true, cancelled: true, ctrl: [false, true], errors: [] });
+	});
+
+	test('PANEL-3.3: with `smoothScrolling` a mouse wheel\'s scroll glides over 125 ms, ended where it is by what else scrolls the page; for a person who asked for less motion it does not glide; settings the page cannot read are refused', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		const wheel = () => call('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 100, y: 100, deltaX: 0, deltaY: 100 });
+		const top = () => evaluate('document.scrollingElement.scrollTop');
+		// Every scroll position the page went through
+		await evaluate(`window.tops = []; window.addEventListener('scroll', () => window.tops.push(document.scrollingElement.scrollTop))`);
+		await deliver({ type: 'scrolling', scrolling: { sensitivity: 1, fastSensitivity: 5, smooth: true, zoomFactor: 1 } });
+		await wheel();
+		await wait(400);
+		const glided = await evaluate('window.tops');
+		// A glide begun - nothing moves at once - and the page scrolled otherwise in the same task, the scrollbar dragged, before its
+		// first frame: it stays where the person took it. A mouse wheel's line, as Chromium gives one
+		const taken = await evaluate(`(async () => {
+			const before = document.scrollingElement.scrollTop;
+			window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, wheelDeltaY: -120, cancelable: true }));
+			const atOnce = document.scrollingElement.scrollTop;
+			document.scrollingElement.scrollTop = 400;
+			await new Promise(resolve => setTimeout(resolve, 400));
+			return [atOnce === before, document.scrollingElement.scrollTop];
+		})()`);
+		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+		await wheel();
+		const still = await top();
+		await deliver({ type: 'scrolling', scrolling: { sensitivity: 'fast', fastSensitivity: 5, smooth: true, zoomFactor: 1 } });
+		const refused = (await evaluate('window.errors')).map((error: string) => error.startsWith('The panel refused a message'));
+		assert.deepStrictEqual({ glides: glided.some((at: number) => at > 0 && at < 50), glided: glided[glided.length - 1], taken, still, refused },
+			{ glides: true, glided: 50, taken: [true, 400], still: 450, refused: [true] });
+	});
+
+	test('New Agent\'s own icon draws where codicons\' `new-session` does: at 300 px, ink from 38 to 281 px of a 300 px advance, as its outline is placed in VS Code\'s codicon.ttf (PANEL-1.1, D82)', async () => {
+		const root = path.resolve(__dirname, '../../..');
+		const font = fs.readFileSync(path.join(root, 'media', 'new-agent.woff')).toString('base64');
+		const drawn = await evaluate(`(async () => {
+			const face = new FontFace('facade-new-agent-test', 'url(data:font/woff;base64,${font})');
+			document.fonts.add(await face.load());
+			const context = document.createElement('canvas').getContext('2d');
+			context.font = '300px facade-new-agent-test';
+			const metrics = context.measureText('\\uEC84');
+			return [-metrics.actualBoundingBoxLeft, metrics.actualBoundingBoxRight, metrics.width].map(Math.round);
+		})()`);
+		assert.deepStrictEqual(drawn, [38, 281, 300]);
 	});
 
 	test('a card\'s face is its CLI\'s maker avatar, and an empty circle for a CLI the host gave none; a face changes only with its avatar (PANEL-1.3, UX-2.1)', async () => {

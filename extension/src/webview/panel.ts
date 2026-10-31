@@ -6,10 +6,12 @@
 // the name and location, and the most useful known fact (PANEL-1.3, 1.4). The extension sends every card already decided; the page
 // keeps only its scroll position and the card the keyboard is on, and reports what the person did (PANEL-3.1). The list is one Tab
 // stop that the arrows, Home, End and the page keys move, typing goes to a card by its name, Enter or Space opens it and F2 renames
-// it, as VS Code's lists have it (UX-2.3); the page scrolls as any page does (PANEL-3.3).
+// it, as VS Code's lists have it (UX-2.3); a wheel scrolls it as one of those lists, by the person's list settings, and its
+// scrollbar is the page's own (PANEL-3.3).
 
 import { act, Browsing, Check, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
-import { Card, PanelState } from './protocol';
+import { Card, PanelState, Scrolling } from './protocol';
+import { cancelSmoothScroll, setScrolling, takeWheel } from './wheel';
 
 /** Defined by the build: true only in the integration suite's build, whose probe the shipped page compiles out (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
@@ -51,9 +53,11 @@ const isState: Check = value => isShaped(value, {
 });
 
 /** What the extension may send this page, by type: the fields each has beside its type and its page, and those it may have (PANEL-3.2). */
+const isScrolling: Check = value => isShaped(value, { sensitivity: isNumber, fastSensitivity: isNumber, smooth: isBoolean, zoomFactor: value => isNumber(value) && (value as number) > 0 });
 const INCOMING: { readonly [type: string]: readonly [required: Readonly<Record<string, Check>>, optional?: Readonly<Record<string, Check>>] } = {
 	state: [{ state: isState }],
 	outcome: [{ action: isString, ok: isBoolean }, { reason: value => value === 'gone' || value === 'failed' }],
+	scrolling: [{ scrolling: isScrolling }],
 	...(typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? { probe: [{ id: isNumber, op: isString, selector: isString }, { index: isNumber }] as const } : {})
 };
 
@@ -90,6 +94,9 @@ window.addEventListener('message', event => {
 			if (opening.delete(message.action as string) && !message.ok) {
 				highlight(state.cards.find(card => card.selected)?.runId);
 			}
+			break;
+		case 'scrolling':
+			setScrolling(message.scrolling as Scrolling);
 			break;
 		default:
 			if (typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE && message.type === 'probe') {
@@ -179,6 +186,7 @@ function rememberBrowsing(): void {
 	});
 }
 window.addEventListener('scroll', rememberBrowsing, { passive: true });
+takeWheel(reducedMotion);
 
 /** One part of the empty panel: words, or a button - its main action's. */
 type EmptyPart =
@@ -466,6 +474,8 @@ function goTo(card: HTMLElement | undefined): void {
 	keyedByPerson = true;
 	rove();
 	card.focus({ preventScroll: true });
+	// The keyboard ends a wheel's glide (PANEL-3.3)
+	cancelSmoothScroll();
 	card.scrollIntoView({ block: 'nearest' });
 	rememberBrowsing();
 }

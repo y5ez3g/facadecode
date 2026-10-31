@@ -13,6 +13,7 @@
 	"command.moveUp": "Move Up",
 	"command.moveDown": "Move Down",
 	"command.revealAgent": "Show Agent",
+	"icon.newAgent": "New Agent icon",
 	"config.title": "Agents",
 	"config.yolo": "Run agents without approval prompts. Turn off to use each CLI's normal approvals and supported sandbox. Applies to new agents only.",
 	"config.claude.title": "Claude Code",

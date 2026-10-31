@@ -13,6 +13,7 @@
 	"command.moveUp": "Yukarı Taşı",
 	"command.moveDown": "Aşağı Taşı",
 	"command.revealAgent": "Aracıyı Göster",
+	"icon.newAgent": "Yeni Aracı simgesi",
 	"config.title": "Aracılar",
 	"config.yolo": "Aracıları onay istemleri olmadan çalıştırın. Her CLI'nın normal onaylarını ve desteklenen korumalı alanını kullanmak için kapatın. Yalnızca yeni başlatılan aracılar için geçerlidir.",
 	"config.claude.title": "Claude Code",

@@ -65,6 +65,16 @@ test('production manifest and executable bundles exclude the integration command
 	assert.deepStrictEqual(fs.readdirSync(path.join(stage, 'dist', 'webview')).filter(file => !file.endsWith('.map')).sort(), ['webview.js']);
 });
 
+test('the staged product carries the font of New Agent\'s own icon and the Codicons notice it needs (PANEL-1.1)', () => {
+	const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
+	const { fontPath } = manifest.contributes.icons['facade-new-agent'].default;
+	// A WOFF of its own, beside the manifest
+	assert.equal(fs.readFileSync(path.join(stage, fontPath)).subarray(0, 4).toString('latin1'), 'wOFF');
+	const notices = fs.readFileSync(path.join(stage, 'ThirdPartyNotices.txt'), 'utf8');
+	assert.match(notices, /^@vscode\/codicons: the new-session icon \(media\/new-agent\.woff\)$/m);
+	assert.match(notices, /Creative Commons Attribution 4\.0 International Public License/);
+});
+
 test('the native backend starts a PTY after the extension is moved outside the repository', { timeout: 15000 }, async t => {
 	const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-package-'));
 	t.after(() => fs.rmSync(temp, { recursive: true, force: true }));

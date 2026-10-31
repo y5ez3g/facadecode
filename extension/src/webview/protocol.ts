@@ -66,6 +66,18 @@ export interface Outcome {
 	readonly reason?: 'gone' | 'failed';
 }
 
+/** What the page's wheel follows, as VS Code's lists do (PANEL-3.3): the person's list settings, and the window's zoom. */
+export interface Scrolling {
+	/** `workbench.list.mouseWheelScrollSensitivity`: what a wheel's movement is multiplied by. */
+	readonly sensitivity: number;
+	/** `workbench.list.fastScrollSensitivity`: by how much more with Alt held. */
+	readonly fastSensitivity: number;
+	/** `workbench.list.smoothScrolling`: whether a mouse wheel's scroll glides. */
+	readonly smooth: boolean;
+	/** `1.2 ^ window.zoomLevel`, which Chrome multiplies a wheel's movement by. */
+	readonly zoomFactor: number;
+}
+
 /** The words the page draws itself; every card text comes with its card. */
 export interface Strings {
 	readonly agents: string;

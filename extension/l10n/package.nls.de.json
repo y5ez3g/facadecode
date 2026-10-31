@@ -13,6 +13,7 @@
 	"command.moveUp": "Nach oben verschieben",
 	"command.moveDown": "Nach unten verschieben",
 	"command.revealAgent": "Agent anzeigen",
+	"icon.newAgent": "Symbol „Neuer Agent“",
 	"config.title": "Agenten",
 	"config.yolo": "Agents ohne Genehmigungsaufforderungen ausführen. Deaktivieren, um die normalen Genehmigungen und die unterstützte Sandbox der jeweiligen CLI zu verwenden. Gilt nur für neue Agents.",
 	"config.claude.title": "Claude Code",

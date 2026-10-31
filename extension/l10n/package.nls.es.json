@@ -13,6 +13,7 @@
 	"command.moveUp": "Mover hacia arriba",
 	"command.moveDown": "Mover hacia abajo",
 	"command.revealAgent": "Mostrar agente",
+	"icon.newAgent": "Icono de Nuevo agente",
 	"config.title": "Agentes",
 	"config.yolo": "Ejecutar agentes sin solicitudes de aprobación. Desactívelo para usar las aprobaciones normales y el entorno de pruebas de cada CLI. Solo se aplica a agentes nuevos.",
 	"config.claude.title": "Claude Code",
