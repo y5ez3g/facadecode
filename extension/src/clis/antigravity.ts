@@ -59,5 +59,7 @@ export const antigravityAdapter: CliAdapter = {
 		return { file: antigravitySettingsFile(env, platform), keys: ['trustedWorkspaces'], entry: { item: folder }, folder };
 	},
 	title: { names: ['Antigravity', 'agy'] },
+	sandbox: () => ({ state: 'none' }),
+	approvals: yolo => yolo ? { state: 'bypassed', by: ['--mode', 'accept-edits', '--dangerously-skip-permissions'] } : { state: 'native' },
 	interruptExit: sigintExit
 };

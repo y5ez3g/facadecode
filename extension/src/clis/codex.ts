@@ -33,5 +33,7 @@ export const codexAdapter: CliAdapter = {
 		return { folderToml: tomlString(platform === 'win32' ? folder.replace(/[A-Z]/g, letter => letter.toLowerCase()) : folder) };
 	},
 	title: { names: ['Codex', 'codex'] },
+	sandbox: yolo => yolo ? { state: 'off', by: ['--dangerously-bypass-approvals-and-sandbox'] } : { state: 'on', by: ['--sandbox', 'workspace-write'] },
+	approvals: yolo => yolo ? { state: 'bypassed', by: ['--dangerously-bypass-approvals-and-sandbox'] } : { state: 'native' },
 	interruptExit: sigintExit
 };
