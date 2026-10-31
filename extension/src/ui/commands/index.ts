@@ -62,6 +62,8 @@ function cardWords(): CardWords {
 		exitedWithCode: code => vscode.l10n.t("Exited with code {0}", code),
 		// {0} is the signal that ended the agent's CLI, such as SIGKILL
 		endedBySignal: signal => vscode.l10n.t("Terminated by signal {0}", signal),
+		// A run its supervisor no longer had: it ended, how is not known
+		exitUnknown: vscode.l10n.t("Disconnected; exit cause unknown"),
 		// {0} is the name of the editor window the agent is in
 		window: label => vscode.l10n.t("Window: {0}", label)
 	};

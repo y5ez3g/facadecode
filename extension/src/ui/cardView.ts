@@ -25,6 +25,8 @@ export interface CardWords {
 	/** `Exited with code {0}` and `Terminated by signal {0}`: an abnormal exit, as Facade says it (RULES-3.3). */
 	readonly exitedWithCode: (code: string) => string;
 	readonly endedBySignal: (signal: string) => string;
+	/** `Disconnected; exit cause unknown`: a run its supervisor no longer had, how it ended not known (LIFECYCLE-3.5). */
+	readonly exitUnknown: string;
 	/** `Window: {0}`, {0} the window's name: where the hover says the agent is (PANEL-1.5). */
 	readonly window: (label: string) => string;
 }
@@ -100,6 +102,7 @@ function errorReasonOf(facts: RunFacts, words: CardWords): string {
 		if (facts.end.code !== undefined) {
 			return words.exitedWithCode(String(facts.end.code));
 		}
+		return words.exitUnknown;
 	}
 	const reason = facts.error?.reason.trim() || words.activityUnavailable;
 	return facts.error?.worktree ? words.worktreeFailure(reason, facts.error.worktree) : reason;

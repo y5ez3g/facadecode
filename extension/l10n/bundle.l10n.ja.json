@@ -34,6 +34,7 @@
 	"Waiting for an answer": "回答を待機しています",
 	"Exited with code {0}": "終了コード {0} で終了",
 	"Terminated by signal {0}": "シグナル {0} により終了",
+	"Disconnected; exit cause unknown": "切断されました (終了原因不明)",
 	"Window: {0}": "ウィンドウ: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "新しい作業ツリーには、コミットが 1 つ以上ある Git リポジトリ内の作業場所が必要です。",
 	"New Worktree": "新しい作業ツリー",

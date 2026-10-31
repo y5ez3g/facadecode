@@ -34,6 +34,7 @@
 	"Waiting for an answer": "Wartet auf eine Antwort",
 	"Exited with code {0}": "Mit Exitcode {0} beendet",
 	"Terminated by signal {0}": "Durch Signal {0} beendet",
+	"Disconnected; exit cause unknown": "Getrennt; Exit-Ursache unbekannt",
 	"Window: {0}": "Fenster: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "„Neuer Worktree“ benötigt einen Arbeitsort in einem Git-Repository mit mindestens einem Commit.",
 	"New Worktree": "Neuer Worktree",

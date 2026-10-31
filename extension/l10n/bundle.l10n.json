@@ -36,6 +36,7 @@
 	"Waiting for an answer": "Waiting for an answer",
 	"Exited with code {0}": "Exited with code {0}",
 	"Terminated by signal {0}": "Terminated by signal {0}",
+	"Disconnected; exit cause unknown": "Disconnected; exit cause unknown",
 	"Window: {0}": "Window: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "New Worktree needs a working location in a Git repository with a commit.",
 	"New Worktree": "New Worktree",

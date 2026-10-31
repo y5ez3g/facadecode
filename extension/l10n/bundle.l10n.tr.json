@@ -34,6 +34,7 @@
 	"Waiting for an answer": "Yanıt bekleniyor",
 	"Exited with code {0}": "{0} çıkış koduyla sona erdi",
 	"Terminated by signal {0}": "{0} sinyaliyle sonlandırıldı",
+	"Disconnected; exit cause unknown": "Bağlantı kesildi; çıkış nedeni bilinmiyor",
 	"Window: {0}": "Pencere: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "Yeni Çalışma Ağacı için en az bir işleme içeren bir Git deposunda bir çalışma konumu gerekir.",
 	"New Worktree": "Yeni Çalışma Ağacı",

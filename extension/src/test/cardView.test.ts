@@ -26,6 +26,7 @@ const WORDS: CardWords = {
 	hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Beendet mit Code ${code}`,
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
+	exitUnknown: 'Getrennt; Exit-Ursache unbekannt',
 	window: label => `Window: ${label}`
 };
 
@@ -153,7 +154,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			ended({ kind: 'abnormal', signal: 'SIGKILL', at: 3 }, 'Ended by signal SIGKILL'),
 			ended({ kind: 'abnormal', at: 3 }, 'Exited with code unknown'),
 			ended({ kind: 'failed', at: 3 }, 'claude was not found', 'launch')
-		], ['Beendet mit Code 137', 'Durch Signal SIGKILL beendet', 'Exited with code unknown', 'claude was not found']);
+		], ['Beendet mit Code 137', 'Durch Signal SIGKILL beendet', 'Getrennt; Exit-Ursache unbekannt', 'claude was not found']);
 	});
 
 	test('PANEL-1.5: the hover names the window with the agent\'s qualified location, where the window has a name', () => {
