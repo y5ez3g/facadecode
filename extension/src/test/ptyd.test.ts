@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { PtydClient } from '../host/execution/ptydClient';
+import { EarlierPtyds, PtydClient, ptydSocketPath } from '../host/execution/ptydClient';
 import { lineReader, PTYD_PROTOCOL, RunEvent, SpawnParams } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import * as runModule from '../ptyd/run';
@@ -111,6 +111,68 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			await assert.rejects(PtydClient.connect(older, '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log')), new RegExp(`speaks protocol ${PTYD_PROTOCOL - 1}, and this window protocol ${PTYD_PROTOCOL}: its runs keep running`));
 		} finally {
 			await new Promise<void>(resolve => fake.close(() => resolve()));
+		}
+	});
+
+	test('a window of a later protocol holds its runs in the ptyd of an earlier one: its claim there, as their window reloads into the update, keeps them from ending five minutes later; once none is left it lets that ptyd go (ARCHITECTURE-2.4, RULES-4.1)', async function () {
+		this.timeout(20_000);
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-home-'));
+		const earlierSocket = ptydSocketPath(home, PTYD_PROTOCOL - 1);
+		// ptyd's five minutes for an absent owner, run by hand
+		const waits = new Set<() => void>();
+		const earlier = new PtydServer(earlierSocket, () => undefined, { after: (_ms, run) => { waits.add(run); return { dispose: () => waits.delete(run) }; } });
+		assert.strictEqual(await earlier.listen(), true);
+		const said: string[] = [];
+		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, line => said.push(line));
+		try {
+			// The window before the update starts a run there, and goes as it reloads into this build
+			const before = await PtydClient.connect(earlierSocket, '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			await before.request('claim', { owner: 'w1', generation: 1, token: 'before' });
+			const { pid } = await spawn(before, 'run-kept', 'sleep 30');
+			before.dispose();
+			await until('ptyd to wait for its owner', () => waits.size === 1);
+			// The reloaded window speaks this protocol: it holds the run there with its own claim, once, asked again on a reconnect
+			await hold.find();
+			await hold.find();
+			assert.strictEqual(waits.size, 0, 'no wait is left to end it five minutes later');
+			assert.ok(alive(pid));
+			assert.deepStrictEqual(said, [`1 agent processes started by an earlier Facade Code still run in a ptyd of protocol ${PTYD_PROTOCOL - 1}; this window cannot show them, and keeps them running until it closes.`]);
+			await hold.check();
+			assert.strictEqual(said.length, 1, 'still running, still held');
+			// It ends: the next check lets that ptyd go, which then waits for the owner as for any window, to exit once idle
+			process.kill(pid, 'SIGKILL');
+			await until('the ptyd to see it end', async () => { await hold.check(); return said.length === 2 || undefined; });
+			assert.strictEqual(said[1], `The agent processes an earlier Facade Code started in a ptyd of protocol ${PTYD_PROTOCOL - 1} have ended.`);
+			await until('ptyd to wait for its owner again', () => waits.size === 1);
+		} finally {
+			hold.dispose();
+			earlier.close();
+			fs.rmSync(earlierSocket, { force: true });
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test('a terminal title longer than any tab shows is kept and told cut, so that no message of the run outgrows a frame (ARCHITECTURE-2.4)', async () => {
+		const client = await connect();
+		const events = eventsOf(client, 'titled');
+		await spawn(client, 'titled', 'printf "\\033]0;%s\\007ready" "$(head -c 20000 /dev/zero | tr "\\0" x)"; sleep 30');
+		const told = await until('its title', () => events.find(event => event.event === 'title') as { title: string } | undefined);
+		const listed = (await client.request('list', { owner: 'w1' })).find(run => run.run === 'titled');
+		assert.deepStrictEqual([told.title.length, listed?.title.length, told.title.startsWith('xxx')], [4096, 4096, true]);
+		await client.request('terminate', { run: 'titled', graceMs: 200 });
+	});
+
+	test('a run held back - its window not reading - is ended and its end confirmed: what it writes is read on as it ends (LIFECYCLE-4.2, ARCHITECTURE-2.4)', async function () {
+		this.timeout(15_000);
+		const run = new runModule.Run({ run: 'flood', owner: 'w1', file: SHELL, args: ['-c', 'yes flood'], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TERM: 'xterm-256color' }, cols: 80, rows: 24, meta: {} });
+		try {
+			await new Promise(resolve => setTimeout(resolve, 200));
+			run.hold({});
+			// Its terminal's buffer full and its writes blocked, as a window that stopped reading leaves it
+			await new Promise(resolve => setTimeout(resolve, 300));
+			assert.strictEqual(await run.terminate(500), 'terminated');
+		} finally {
+			run.dispose();
 		}
 	});
 
@@ -380,5 +442,25 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('the run to go on', async () => await seqOf() > last, 10_000);
 		await observer.request('claim', { owner: 'w1', generation: 2, token: 'observer' });
 		await observer.request('terminate', { run: 'flood', graceMs: 200 });
+	});
+});
+
+suite('ptyd: a run held back on Windows (LIFECYCLE-4.2, ARCHITECTURE-2.4)', function () {
+	if (process.platform !== 'win32') {
+		return;
+	}
+
+	test('a run its window stopped reading is ended and its end confirmed: ConPTY tells the exit once what it wrote is read', async function () {
+		this.timeout(15_000);
+		const shell = process.env.ComSpec ?? 'C:\Windows\System32\cmd.exe';
+		const run = new runModule.Run({ run: 'flood', owner: 'w1', file: shell, args: ['/d', '/c', 'for /L %i in () do @echo flood flood flood flood flood flood'], cwd: os.tmpdir(), env: { ...process.env } as Record<string, string>, cols: 80, rows: 24, meta: {} });
+		try {
+			await new Promise(resolve => setTimeout(resolve, 500));
+			run.hold({});
+			await new Promise(resolve => setTimeout(resolve, 800));
+			assert.strictEqual(await run.terminate(1000), 'terminated');
+		} finally {
+			run.dispose();
+		}
 	});
 });

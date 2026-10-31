@@ -69,6 +69,19 @@ const INTERRUPT_EVIDENCE_MS = 2_000;
 /** How long a forced kill has to be confirmed by the process's exit. */
 const KILL_CONFIRM_MS = 2_000;
 
+/** The longest terminal title kept: a tab shows far less, and no message of a run may outgrow ptyd's frames (ARCHITECTURE-2.4). */
+const MOST_TITLE = 4096;
+
+/** `title` cut to {@link MOST_TITLE} code units, at a whole character. */
+function boundedTitle(title: string): string {
+	if (title.length <= MOST_TITLE) {
+		return title;
+	}
+	const cut = title.slice(0, MOST_TITLE);
+	// A character of two code units is not halved
+	return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
 /** How long a Windows console's output pipe may still bring what its program wrote last once it ended: node-pty's own flush time. */
 const CONSOLE_FLUSH_MS = 1_000;
 
@@ -126,6 +139,8 @@ export class Run {
 	private readonly exitListeners = new Set<(exit: RunExit) => void>();
 	/** Whoever cannot take more of what the run writes yet: while anyone is, its pty is not read, and the CLI waits. */
 	private readonly holders = new Set<object>();
+	/** Whether it is being ended: what it writes is read on, held back or not, as its exit is known only once that is drained. */
+	private ending = false;
 	private readonly programStatus = new ProgramStatus();
 	/** How its screen is read as its status while its program reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
 	private readonly screenReader: ScreenReader | undefined;
@@ -159,8 +174,8 @@ export class Run {
 		terminal.loadAddon(new Unicode11Addon() as never);
 		terminal.unicode.activeVersion = '11';
 		terminal.onTitleChange(title => {
-			this.title = title;
-			this.listener?.title(title);
+			this.title = boundedTitle(title);
+			this.listener?.title(this.title);
 		});
 		this.followStatus();
 		this.programStatus.onDidChange(status => this.listener?.status(status));
@@ -256,7 +271,7 @@ export class Run {
 
 	/** Stops reading what the run writes until `holder` lets go: ordinary backpressure, the CLI waiting (ARCHITECTURE-2.4). */
 	hold(holder: object): void {
-		if (this.exited || this.holders.has(holder)) {
+		if (this.exited || this.ending || this.holders.has(holder)) {
 			return;
 		}
 		if (!this.holders.size) {
@@ -299,6 +314,12 @@ export class Run {
 	async terminate(graceMs: number): Promise<Termination> {
 		if (this.exited) {
 			return 'already_exited';
+		}
+		// A run held back is read on as it ends: node-pty tells its exit once its output is drained, which a paused read never is
+		this.ending = true;
+		if (this.holders.size) {
+			this.holders.clear();
+			this.pty.resume();
 		}
 		if (!this.signal(process.platform === 'win32' ? undefined : 'SIGHUP')) {
 			return this.reaped ? await this.exitWithin(KILL_CONFIRM_MS) ? 'terminated' : 'unconfirmed' : 'failed';
