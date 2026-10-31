@@ -309,7 +309,8 @@ export class EarlierPtyds {
 				// Not answering now, or gone: asked again at the next check, and a closed connection says so itself
 				continue;
 			}
-			if (!left && this.held.get(protocol) === client) {
+			// Closing or forgetting a run may have started while the list was in flight.
+			if (!left && this.held.get(protocol) === client && !this.events.busy?.(protocol)) {
 				this.release(protocol);
 				this.unheld.set(protocol, new PtydGone(`None of this window's runs is left in the ptyd of protocol ${protocol}.`));
 				this.events.log(`The agents an earlier Facade Code started in a ptyd of protocol ${protocol} have ended: this window lets that ptyd go.`);
