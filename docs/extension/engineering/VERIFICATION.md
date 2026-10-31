@@ -52,7 +52,7 @@ proves native support.
 | Gate | Required proof | Current evidence / status |
 | --- | --- | --- |
 | G2 True window lifetime | Distinguish reload, extension-host restart, remote loss, close-one, close-last and immediate reopen without mistaken replay/restart | Owner-accepted five-minute policy (D75) implemented in place of a close detector. Candidate 4/5 native evidence on a macOS VS Code 1.143.1 client with Remote-SSH to Linux x64 and Windows x64: reload and remote extension-host restart keep the original runs; close-last then immediate reopen keeps the original processes; no takeover ends them at about 300 s. Evidence stays with the handoff. True close detection remains OPEN |
-| G5 Native environment matrix | Native macOS/Windows/Linux, SSH, WSL and containers, compatible editor, native PTY ABI, paths/quoting/Unicode/keys and package install | Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. On 2026-10-30, a Windows x64 client with VS Code 1.140.0: the integration suite, and the four CLIs D77 adds started from the panel; a macOS arm64 client with VS Code 1.143.1: the native build, unit and package checks and the integration suite; Linux x64: the native build, unit and package checks. Not run: a full Windows or a Linux client walkthrough, WSL, containers, a compatible editor, the declared minimum VS Code 1.105, other architectures. OPEN |
+| G5 Native environment matrix | Native macOS/Windows/Linux, SSH, WSL and containers, compatible editor, native PTY ABI, paths/quoting/Unicode/keys and package install | Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. On 2026-10-30, a Windows x64 client with VS Code 1.140.0: the integration suite, and the four CLIs D77 adds started from the panel; a macOS arm64 client with VS Code 1.143.1: the native build, unit and package checks and the integration suite; Linux x64: the native build, unit and package checks. On 2026-10-31, a Windows x64 client with VS Code 1.144.0: Remote-SSH to Linux x64 and macOS arm64 hosts - an agent started there, a reload, a restarted remote extension host, a lost network, Close All's one question, reopening within five minutes, and the runs ending five minutes after the last window closed; the integration suite with VS Code 1.144.0 and the declared minimum 1.105.0, whose codicons have no `new-session` for New Agent's title button; Linux x64 under xvfb with VS Code 1.144.0: the integration suite. Not run: a full Windows or a Linux client walkthrough, Remote-SSH to a Windows host, WSL, containers, a compatible editor, other architectures. OPEN |
 
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
@@ -162,6 +162,8 @@ for review, not acceptance evidence.
 
 ## Change log
 
+- 2026-10-31: G5 records the night verification's Remote-SSH runs from a Windows x64 client, and the integration suite on
+  VS Code 1.105.0, the declared minimum, and on Linux.
 - 2026-10-30: G5 records the Windows x64 and macOS arm64 client and Linux x64 build evidence of the step adding four
   CLIs (D77); J05 covers startup until the CLI's first report (D81).
 

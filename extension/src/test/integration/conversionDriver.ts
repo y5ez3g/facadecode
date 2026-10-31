@@ -52,6 +52,12 @@ export async function activate(): Promise<void> {
 			});
 			const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
 			const pid = await until('the fake CLI to start', async () => fs.existsSync(`${RECORD}.${alias}`) ? Number(fs.readFileSync(`${RECORD}.${alias}`, 'utf8').trim()) : undefined);
+			// Its terminal open, as a person sees it before adding a folder: one the restart beat to opening tells the editor no
+			// process, which leaves its tab beside the new one, as Facade retires no tab it cannot tell from another's (ARCHITECTURE-2.2)
+			const terminal = await until('its terminal', async () => vscode.window.terminals.find(each => each.name === card.name));
+			let opened = false;
+			void Promise.resolve(terminal.processId).then(() => { opened = true; }, () => { opened = true; });
+			await until('its terminal to open', async () => opened || undefined);
 			write({ phase: 'folder', runId: card.runId, name: card.name, pid });
 			// As a folder dropped on the window adds it
 			vscode.workspace.updateWorkspaceFolders(1, 0, { uri: vscode.Uri.file(process.env.FACADE_IT_SECOND!) });

@@ -40,6 +40,8 @@ test('the staged product has usable README links and preserves both product and 
 	const notices = fs.readFileSync(path.join(stage, 'ThirdPartyNotices.txt'), 'utf8');
 	assert.match(notices, /2015 - present Microsoft Corporation/);
 	assert.match(notices, /2026 - present Facade Code contributors/);
+	// node-pty's Windows build ships ConPTY's conpty.dll and OpenConsole.exe, whose notice is not in node-pty's own
+	assert.match(notices, /^ConPTY \(conpty\.dll and OpenConsole\.exe/m);
 	assert.doesNotMatch(notices, /^None$/m);
 });
 
