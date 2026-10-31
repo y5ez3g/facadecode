@@ -53,7 +53,10 @@ launchers: start what a verified launcher runs, using an argument array - npm's 
 that script with Node, its shim for a native program runs that program, and a CLI's own installer launcher runs what
 its adapter verified (the `pi.cmd` Pi's own installer writes: its `pi-launcher.js` with Node); otherwise a dedicated, tested cmd.exe
 quoting adapter passes every argument safely. Reject unsupported quoting/control characters before execution, never build an
-unescaped shell string. PATH discovery and effective launch must agree. Checks requiring a new worktree's actual cwd
+unescaped shell string. cmd.exe starts in no UNC folder - a network share's, a WSL distribution's `\\wsl$` one - but in
+the Windows directory, so a launch through it from such a folder is refused before execution. On Windows, which cannot
+run a script itself, a `.js`, `.cjs` or `.mjs` program - the Node entry point those refusals advise - runs with the Node
+on the launch's PATH; with none there it is refused. PATH discovery and effective launch must agree. Checks requiring a new worktree's actual cwd
 follow the validation stages in 4.2.
 
 ### 1.3 Permissions and native CLI interaction
@@ -232,6 +235,9 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-10-31: 1.2 refuses a launch through cmd.exe from a UNC folder, where cmd.exe ran the CLI in the Windows directory
+  with the run's permissions - Muse Code's launcher always goes through it - and runs a Node entry point with Node on
+  Windows, where the program the refusals advise failed to start. Both found by the night verification.
 - 2026-10-30: At the owner's request, Antigravity, Muse Code, OpenCode and Pi join the built-in catalog at the level of
   Claude Code and Codex (D77): 1.1's catalog, 1.2's Windows launchers - recognized only as their installers write them, and
   refused through cmd.exe where the launcher's own path holds what cmd.exe reads as its own - 1.3's permission mappings, 2.3's OpenCode line

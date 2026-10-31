@@ -138,6 +138,8 @@
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path değeri {1} ve {2} çalıştırılabilir bir program değil",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0}, cmd.exe aracılığıyla çalışıyor ve {1} bağımsız değişkeni güvenli bir şekilde iletilemez; {2}.path değerini CLI'nin kendi programına veya Node giriş noktasına ayarlayın",
 	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0}, cmd.exe aracılığıyla çalışıyor ve yolu güvenli bir şekilde iletilemez; {1}.path değerini CLI'nin kendi programına veya Node giriş noktasına ayarlayın",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0}, cmd.exe aracılığıyla çalışıyor ve cmd.exe {1} UNC klasöründe çalışamaz; {2}.path değerini CLI'nin kendi programına veya Node giriş noktasına ayarlayın",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} bir Node betiğidir ve onu çalıştıracak Node PATH üzerinde yok",
 	"facade.yolo must be true or false; received {0}": "facade.yolo değeri true veya false olmalıdır; {0} alındı",
 	"Configure Agents": "Aracıları Yapılandır"
 }

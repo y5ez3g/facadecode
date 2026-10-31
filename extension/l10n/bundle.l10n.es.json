@@ -138,6 +138,8 @@
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path es {1}, y {2} no es un programa que se pueda ejecutar",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} se ejecuta a través de cmd.exe, al que no se le puede pasar el argumento {1} de forma segura; establezca {2}.path en el programa propio de la CLI o en el punto de entrada de Node",
 	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} se ejecuta a través de cmd.exe, al que no se le puede pasar su ruta de forma segura; establezca {1}.path en el programa propio de la CLI o en el punto de entrada de Node",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} se ejecuta a través de cmd.exe, que no puede ejecutarse en la carpeta UNC {1}; establezca {2}.path en el programa propio de la CLI o en el punto de entrada de Node",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} es un script de Node y no hay ningún Node en el PATH para ejecutarlo",
 	"facade.yolo must be true or false; received {0}": "facade.yolo debe ser true o false; se recibió {0}",
 	"Configure Agents": "Configurar agentes"
 }

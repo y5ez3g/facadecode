@@ -138,6 +138,8 @@
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path 为 {1}，且 {2} 不是可运行的程序",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，无法安全传入参数 {1}；请将 {2}.path 设置为 CLI 自身的程序或 Node 入口点",
 	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，无法安全传入其路径；请将 {1}.path 设置为 CLI 自身的程序或 Node 入口点",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，而 cmd.exe 无法在 UNC 文件夹 {1} 中运行；请将 {2}.path 设置为 CLI 自身的程序或 Node 入口点",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} 是 Node 脚本，但 PATH 上没有可运行它的 Node",
 	"facade.yolo must be true or false; received {0}": "facade.yolo 必须为 true 或 false；但收到的是 {0}",
 	"Configure Agents": "配置 Agent"
 }
