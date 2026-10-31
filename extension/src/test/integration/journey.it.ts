@@ -14,14 +14,20 @@ const AVATAR = process.env.FACADE_IT_AVATAR ?? `avatar-${CLI}.png`;
 /** The home folder the suite's settings give agents' terminals (`terminal.integrated.env.*`). */
 const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
 
-/** The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3); Codex's trust is checked apart. */
+/**
+ * The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3) - Codex's trust is checked apart -
+ * and the custom CLI the suite configures, with its start arguments exactly as configured (CLIS-3.4).
+ */
 const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'],
 	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 	muse: ['--disable-approval', '--disable-sandbox', '--trust-workspace'],
 	opencode: ['--auto'],
-	pi: ['--approve']
+	pi: ['--approve'],
+	'my-cli': ['--from-custom', 'two words']
 };
+/** Whether this run's CLI is the suite's custom one rather than a built-in. */
+const CUSTOM = CLI === 'my-cli';
 
 /** Whether two paths name one folder as this system names them: Windows ignores case, and VS Code writes its drive in lower case. */
 function sameFolder(a: string, b: string): boolean {
@@ -84,7 +90,15 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		const pidFile = `${RECORD}.${alias}`;
 		const pid = await until('the fake CLI to start', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
 		assert.ok(alive(pid));
-		assert.deepStrictEqual(card.avatar, { file: AVATAR });
+		// A built-in's maker avatar; the custom CLI's initial on a theme colour, and the terminal icon on its tab (PANEL-1.3, LIFECYCLE-2.2)
+		if (CUSTOM) {
+			const avatar = card.avatar as { initial: string; color: string };
+			assert.deepStrictEqual([avatar.initial, ['blue', 'orange', 'purple'].includes(avatar.color)], ['M', true]);
+			const terminal = vscode.window.terminals.find(each => each.name.startsWith(card.name))!;
+			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, 'terminal');
+		} else {
+			assert.deepStrictEqual(card.avatar, { file: AVATAR });
+		}
 		const launch = JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] };
 		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);
 		if (CLI === 'codex') {

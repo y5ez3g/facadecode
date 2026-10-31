@@ -64,6 +64,9 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
 ];
 
+/** The custom CLI's ID: a key of `facade.custom`, never a built-in's (CLIS-3.4). */
+const CUSTOM_CLI = 'my-cli';
+
 async function main(): Promise<void> {
 	const standard = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
 	const executable = process.env.VSCODE_EXECUTABLE || (process.platform === 'darwin' && fs.existsSync(standard) ? standard : undefined);
@@ -240,6 +243,10 @@ async function main(): Promise<void> {
 				const screen = cli.id === 'muse' ? terminalEnv({ FACADE_IT_SCREEN: 'muse' }) : {};
 				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar, FACADE_IT_AGENTS_HOME: agentsHome }, { ...missing, ...screen });
 			}
+			// A custom CLI with every built-in turned off, so that it is the one New Agent offers: started exactly as configured (CLIS-1.1, 3.4)
+			const off = Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.enabled`, false]));
+			const custom = { [CUSTOM_CLI]: { path: fake, launch: { start: ['--from-custom', 'two words'], resume: ['resume', '${sessionId}'] } } };
+			await run('custom', repo, { FACADE_IT_CLI: CUSTOM_CLI, FACADE_IT_AGENTS_HOME: agentsHome }, { ...off, 'facade.custom': custom });
 		}
 		if (only !== 'journeys') {
 			await conversion();
