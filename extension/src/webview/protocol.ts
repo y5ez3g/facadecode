@@ -21,8 +21,8 @@ export interface Card {
 	/** A built-in CLI's maker avatar in `media/agents`; none for a CLI this build has no avatar of. */
 	readonly avatar?: { readonly file: string };
 	/**
-	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it
-	 * and names the window.
+	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it,
+	 * then gives its folder and the window, each on a line of its own (PANEL-1.5, D74).
 	 */
 	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly full: string };
 	/** Green, yellow or red (RULES-3.2): unknown activity is `error`. */

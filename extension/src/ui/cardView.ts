@@ -151,7 +151,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		name: facts.name,
 		alias: facts.alias,
 		...(avatar ? { avatar } : {}),
-		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: input.window ? `${place.full} · ${words.window(input.window)}` : place.full },
+		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: input.window ? `${place.full}\n${words.window(input.window)}` : place.full },
 		dot: status.dot,
 		stateText: status.stateText,
 		line: status.line,

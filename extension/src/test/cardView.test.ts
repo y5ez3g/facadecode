@@ -38,7 +38,7 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 	};
 }
 
-const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', full: 'shop · main · /app' };
+const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', full: 'shop · main\n/app' };
 const menu = { moveUp: false, moveDown: true };
 
 suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () => {
@@ -136,7 +136,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([working.tooltip, working.label, working.selected, working.startedAt, working.location, working.menu], [
 			['Ada · #a1 · Claude Code', 'Fix the login flow', 'Working'],
 			'Ada, #a1, Working, shop · main, Claude Code, Fix the login flow',
-			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'shop · main · /app' }, menu
+			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'shop · main\n/app' }, menu
 		]);
 		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Ada · #a1 · Claude Code', 'Fix the login flow', 'Idle', 'Waiting for an answer'], 'Ada, #a1, Idle, shop · main, Claude Code, Waiting for an answer']);
 		// The second line saying no more than the state is not said twice
@@ -162,9 +162,9 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 
 	test('PANEL-1.5: the hover names the window with the agent\'s qualified location, where the window has a name', () => {
 		const card = cardOf(run({ title: 'Fix login' }), { place, selected: false, menu, words: WORDS, window: 'shop' });
-		assert.deepStrictEqual([card.tooltip, card.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main · /app · Window: shop']);
+		assert.deepStrictEqual([card.tooltip, card.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main\n/app\nWindow: shop']);
 		const own = cardOf(run({ title: 'Fix login' }), { place, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual([own.tooltip, own.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main · /app']);
+		assert.deepStrictEqual([own.tooltip, own.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main\n/app']);
 	});
 
 	test('avatars: each built-in\'s maker avatar, a file of media/agents; none for a CLI this build has no avatar of, which the card then leaves out (PANEL-1.3, UX-2.1)', () => {
