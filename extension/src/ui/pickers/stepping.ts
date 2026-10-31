@@ -4,6 +4,7 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { plainText } from '../presentation';
 
 /** What a step answers when the person went back to the one before. */
 export const BACK = Symbol('back');
@@ -56,6 +57,11 @@ interface TextOptions {
 /** How long typing pauses before a slower check runs. */
 const CHECK_DELAY_MS = 150;
 
+/** A message of an input box word for word (PANEL-3.2); none as none. */
+function plainOf(text: string | undefined): string | undefined {
+	return text === undefined ? undefined : plainText(text);
+}
+
 /**
  * One flow of the editor's own pickers and input boxes (UX-1.1): each step shows over the one before - the box never closes between
  * them - Back returns, and Escape, hiding the step up, ends the whole flow with nothing done. A step the flow is over before shows
@@ -106,7 +112,7 @@ export class Flow {
 		input.value = options.value;
 		input.valueSelection = options.valueSelection ? [...options.valueSelection] : [0, options.value.length];
 		input.placeholder = options.placeholder;
-		input.prompt = options.prompt;
+		input.prompt = plainOf(options.prompt);
 		input.buttons = options.back ? [vscode.QuickInputButtons.Back] : [];
 		/** The text the slower check last answered for, and whether it can be taken; a newer check supersedes an older one. */
 		let checked: { readonly value: string; readonly ok: boolean } | undefined;
@@ -136,8 +142,8 @@ export class Flow {
 			}
 			input.busy = false;
 			checked = { value, ok: !found.problem };
-			input.validationMessage = found.problem;
-			input.prompt = found.prompt ?? options.prompt;
+			input.validationMessage = plainOf(found.problem);
+			input.prompt = plainOf(found.prompt ?? options.prompt);
 			setActions(found.problem ? [] : found.actions ?? []);
 		};
 		const changed = (value: string) => {
@@ -146,9 +152,9 @@ export class Flow {
 			setActions([]);
 			clearTimeout(timer);
 			input.busy = false;
-			input.prompt = options.prompt;
+			input.prompt = plainOf(options.prompt);
 			const problem = options.validate?.(value);
-			input.validationMessage = problem;
+			input.validationMessage = plainOf(problem);
 			if (problem || !options.check) {
 				checked = { value, ok: !problem };
 			} else {

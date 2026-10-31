@@ -16,11 +16,13 @@ export interface Card {
 	readonly runId: string;
 	readonly selected: boolean;
 	readonly name: string;
+	/** Its `#aN`: how a message names an agent whose name is empty (LIFECYCLE-3.1). */
+	readonly alias: string;
 	/** A built-in CLI's maker avatar in `media/agents`; none for a CLI this build has no avatar of. */
 	readonly avatar?: { readonly file: string };
 	/**
-	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it
-	 * and names the window.
+	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it,
+	 * then gives its folder and the window, each on a line of its own (PANEL-1.5, D74).
 	 */
 	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly full: string };
 	/** Green, yellow or red (RULES-3.2): unknown activity is `error`. */
@@ -55,7 +57,7 @@ export interface PanelState {
 }
 
 /** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons). */
-export type Act = 'open' | 'new' | 'openFolder';
+export type Act = 'open' | 'new' | 'openFolder' | 'rename';
 
 /** The host's answer to one action of the page that asked: `gone` (its card's run is gone) or `failed`. */
 export interface Outcome {

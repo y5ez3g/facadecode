@@ -67,6 +67,14 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 	}
 }
 
+/**
+ * `text` as a picker's row or an input box's message shows it, word for word: the editor draws `$(name)` there as a theme icon, and a
+ * name, path, branch or CLI title may hold it (PANEL-3.2). A title draws it as it is, and is given it as it is.
+ */
+export function plainText(text: string): string {
+	return text.replace(/\$\(/g, '\\$(');
+}
+
 /** The configuration action's native-button label, without the command's menu ellipsis (UX-1.3). */
 export function configureAgentsLabel(): string {
 	return vscode.l10n.t("Configure Agents");
