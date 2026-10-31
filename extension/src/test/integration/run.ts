@@ -15,29 +15,54 @@ import * as path from 'path';
 
 /** The official VS Code only: a derived editor can load its own agent extension and share a data folder with a person's live state. */
 function officialVsCode(executable: string): void {
+	const dir = path.dirname(executable);
 	const candidates = [
-		path.join(path.dirname(executable), '..', 'Resources', 'app', 'product.json'),
-		path.join(path.dirname(executable), 'resources', 'app', 'product.json'),
-		path.join(path.dirname(executable), '..', 'resources', 'app', 'product.json')
+		path.join(dir, '..', 'Resources', 'app', 'product.json'),
+		path.join(dir, 'resources', 'app', 'product.json'),
+		path.join(dir, '..', 'resources', 'app', 'product.json'),
+		// The Windows installation that updates in the background keeps each version in a folder of its own beside Code.exe
+		...fs.readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => path.join(dir, entry.name, 'resources', 'app', 'product.json'))
 	];
-	const file = candidates.find(each => fs.existsSync(each));
-	if (!file) {
+	const files = candidates.filter(each => fs.existsSync(each));
+	if (!files.length) {
 		throw new Error(`Cannot find product.json beside ${executable}; refusing to run the suite in an unknown editor.`);
 	}
-	const product = JSON.parse(fs.readFileSync(file, 'utf8')) as { nameShort?: string; dataFolderName?: string; applicationName?: string };
-	if (product.dataFolderName !== '.vscode' || product.applicationName !== 'code') {
-		throw new Error(`${executable} is ${product.nameShort ?? 'not VS Code'} (data folder ${product.dataFolderName}); the suite runs only in official VS Code.`);
+	for (const file of files) {
+		const product = JSON.parse(fs.readFileSync(file, 'utf8')) as { nameShort?: string; dataFolderName?: string; applicationName?: string };
+		if (product.dataFolderName !== '.vscode' || product.applicationName !== 'code') {
+			throw new Error(`${executable} is ${product.nameShort ?? 'not VS Code'} (data folder ${product.dataFolderName}); the suite runs only in official VS Code.`);
+		}
 	}
 }
 
 /** Variables an editor, Git or a CLI session could pass on: none of them may reach the test editor. */
 function sanitizedEnvironment(): void {
 	for (const name of Object.keys(process.env)) {
-		if (/^(VSCODE_|CLAUDE_|CODEX_|GEMINI_|ANTHROPIC_|OPENAI_|FACADE_|ELECTRON_RUN_AS_NODE$|GIT_ASKPASS$|SSH_ASKPASS$)/.test(name) && name !== 'VSCODE_EXECUTABLE') {
+		if (/^(VSCODE_|CLAUDE_|CODEX_|GEMINI_|ANTIGRAVITY_|MUSE_|OPENCODE_|PI_|ANTHROPIC_|OPENAI_|FACADE_|ELECTRON_RUN_AS_NODE$|GIT_ASKPASS$|SSH_ASKPASS$)/.test(name) && name !== 'VSCODE_EXECUTABLE') {
 			delete process.env[name];
 		}
 	}
 }
+
+/** Ends every process whose command line holds `text`: what a run of the suite started and left, never anything else. */
+function endProcessesWith(text: string): void {
+	if (process.platform === 'win32') {
+		const script = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:FACADE_IT_END) -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+		spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, FACADE_IT_END: text }, stdio: 'ignore' });
+	} else {
+		spawnSync('pkill', ['-TERM', '-f', text]);
+	}
+}
+
+/** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
+const BUILT_INS: readonly { readonly id: string; readonly segment: string; readonly avatar: string }[] = [
+	{ id: 'claude', segment: 'claude', avatar: 'avatar-claude.png' },
+	{ id: 'codex', segment: 'codex', avatar: 'avatar-codex.png' },
+	{ id: 'agy', segment: 'antigravity', avatar: 'avatar-antigravity.png' },
+	{ id: 'muse', segment: 'muse', avatar: 'avatar-muse.png' },
+	{ id: 'opencode', segment: 'opencode', avatar: 'avatar-opencode.png' },
+	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
+];
 
 async function main(): Promise<void> {
 	const standard = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
@@ -59,20 +84,62 @@ async function main(): Promise<void> {
 	git('init', '-q', '-b', 'main');
 	git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'first');
 
-	// A Claude Code that records where it runs and what it was given, run as Node by this run's own
-	const fake = path.join(root, 'fake-claude');
-	const record = path.join(root, 'fake-claude.log');
-	fs.writeFileSync(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(__dirname, 'fakeClaude.js'))} "$@"\n`, { mode: 0o755 });
+	// An agent CLI that records where it runs and what it was given, run as Node by this run's own. On Windows it is a `.cmd` as npm
+	// writes one for a package's script, which Facade starts as that script with the Node beside it (CLIS-1.2); elsewhere a script.
+	const record = path.join(root, 'fake-cli.log');
+	let fake: string;
+	if (process.platform === 'win32') {
+		fake = path.join(root, 'fake-cli.cmd');
+		fs.copyFileSync(path.join(__dirname, 'fakeCli.js'), path.join(root, 'fakeCli.js'));
+		try {
+			fs.linkSync(process.execPath, path.join(root, 'node.exe'));
+		} catch {
+			fs.copyFileSync(process.execPath, path.join(root, 'node.exe'));
+		}
+		// npm 11's shim, byte for byte but for the script's name
+		fs.writeFileSync(fake, [
+			'@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+			'IF EXIST "%dp0%\\node.exe" (', '  SET "_prog=%dp0%\\node.exe"', ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
+			'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\fakeCli.js" %*', ''
+		].join('\r\n'));
+	} else {
+		fake = path.join(root, 'fake-cli');
+		fs.writeFileSync(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(__dirname, 'fakeCli.js'))} "$@"\n`, { mode: 0o755 });
+	}
+	// On Windows two built-ins are installed with launchers of their own, which Facade starts as their installers wrote them
+	// (CLIS-1.2): Muse Code's `.cmd`, through cmd.exe, and the `pi.cmd` of Pi's installer, as its `pi-launcher.js` with Node
+	const launchers: { [cli: string]: string } = {};
+	if (process.platform === 'win32') {
+		const museBin = path.join(root, 'muse-bin');
+		fs.mkdirSync(museBin);
+		launchers.muse = path.join(museBin, 'muse.cmd');
+		fs.writeFileSync(launchers.muse, `@echo off\r\nsetlocal\r\n"${path.join(root, 'node.exe')}" "${path.join(root, 'fakeCli.js')}" %*\r\nexit /b %ERRORLEVEL%\r\n`);
+		const piBin = path.join(root, 'pi-bin');
+		fs.mkdirSync(piBin);
+		launchers.pi = path.join(piBin, 'pi.cmd');
+		fs.copyFileSync(path.join(__dirname, 'fakeCli.js'), path.join(piBin, 'pi-launcher.js'));
+		fs.writeFileSync(launchers.pi, [
+			'@ECHO off', 'SETLOCAL', 'SET "node=node"', '"%node%" "%~dp0pi-launcher.js" %*', 'SET "pi_exit_code=%ERRORLEVEL%"', 'IF "%pi_exit_code%"=="9009" (',
+			'  IF "%node%"=="node" (', '    "%SystemRoot%\\System32\\where.exe" /Q node', '    IF ERRORLEVEL 1 GOTO node_missing', '  ) ELSE IF NOT EXIST "%node%" GOTO node_missing', ')',
+			'EXIT /B %pi_exit_code%', ':node_missing', 'ECHO Pi could not find Node.js. Install Node.js 22.19.0 or newer, or rerun the installer at https://pi.dev. 1>&2', 'EXIT /B %pi_exit_code%', ''
+		].join('\r\n'));
+	}
 	// Claude Code's configuration, where each launch trusts its folder (CLIS-3.3, D62): the suite's own, never a person's
 	const claudeConfig = path.join(root, 'claude');
 	fs.mkdirSync(claudeConfig);
 	const home = path.join(root, 'home');
 	fs.mkdirSync(home);
+	// The home folder agents' terminals see, where a CLI such as Antigravity keeps the folders it trusts: the suite's own. Only the
+	// terminals' environment names it, as a person's terminal settings could; the editor keeps its own HOME.
+	const agentsHome = path.join(root, 'agents-home');
+	fs.mkdirSync(agentsHome);
 
 	// Every built-in points to a fake: the suite never starts a person's real CLI.
 	const settings = {
-		'facade.claude.path': fake,
-		'facade.codex.path': fake,
+		...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
+		'terminal.integrated.env.windows': { USERPROFILE: agentsHome },
+		'terminal.integrated.env.osx': { HOME: agentsHome },
+		'terminal.integrated.env.linux': { HOME: agentsHome },
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
 		'window.restoreWindows': 'none'
@@ -110,12 +177,12 @@ async function main(): Promise<void> {
 			});
 		} finally {
 			// The window's ptyd outlives it, as it is made to: it goes with the run, and the agents it holds with it
-			spawnSync('pkill', ['-TERM', '-f', path.join(facade, 'extension', 'ptyd')]);
+			endProcessesWith(path.join(facade, 'extension', 'ptyd'));
 		}
 	};
 	/**
 	 * A folder window that becomes a multi-root workspace keeps its agents (ARCHITECTURE-2.2, D70). The editor refuses to enter a
-	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake Claude Code in the
+	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake CLI in the
 	 * folder window and adds a folder, then, in the extension host the editor restarts, says what Facade shows; this judges it.
 	 */
 	const conversion = async () => {
@@ -156,14 +223,17 @@ async function main(): Promise<void> {
 			console.log('    ✔ the agent started in the folder window is the same run, card, live process and one terminal in the workspace');
 		} finally {
 			editor.kill('SIGTERM');
-			spawnSync('pkill', ['-TERM', '-f', user]);
-			spawnSync('pkill', ['-TERM', '-f', path.join(facade, 'extension', 'ptyd')]);
+			endProcessesWith(user);
+			endProcessesWith(path.join(facade, 'extension', 'ptyd'));
 		}
 	};
 	try {
 		if (only !== 'conversion') {
-			await run('journeys', repo, { FACADE_IT_CLI: 'claude' });
-			await run('codex', repo, { FACADE_IT_CLI: 'codex' }, { 'facade.claude.path': path.join(root, 'unavailable-claude') });
+			// The journeys once for each built-in: those before it in the catalog not installed, so that it is the one preselected
+			for (const [at, cli] of BUILT_INS.entries()) {
+				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
+				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar, FACADE_IT_AGENTS_HOME: agentsHome }, missing);
+			}
 		}
 		if (only !== 'journeys') {
 			await conversion();
@@ -172,7 +242,8 @@ async function main(): Promise<void> {
 		if (keep) {
 			console.log(`Kept ${root}`);
 		} else {
-			fs.rmSync(root, { recursive: true, force: true });
+			// On Windows a file a process just ended held can stay locked for a moment
+			fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 		}
 	}
 }
