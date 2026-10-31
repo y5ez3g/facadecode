@@ -34,6 +34,7 @@
 	"Waiting for an answer": "等待回答",
 	"Exited with code {0}": "已結束，結束代碼為 {0}",
 	"Terminated by signal {0}": "被信號終止（{0}）",
+	"Disconnected; exit cause unknown": "中斷連線（結束原因未知）",
 	"Window: {0}": "視窗: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "新增工作樹需要位於至少有一次提交的 Git 存放庫中的工作位置。",
 	"New Worktree": "新增工作樹",
@@ -81,6 +82,8 @@
 	"Cannot delete \"{0}\": only standalone linked worktrees can be deleted.": "無法刪除「{0}」：僅支援刪除未作為工作區根資料夾的已連結工作樹。",
 	"Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.": "無法刪除工作樹「{0}」：存在未認可的變更。請使用 Git 認可或暫存後重試。",
 	"Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.": "無法刪除工作樹「{0}」：工作樹已鎖定。請先使用 Git 解除鎖定後重試。",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "無法刪除工作樹「{0}」：工作樹「{1}」位於其中。請先刪除或移走該工作樹，然後重試。",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "無法刪除工作樹「{0}」：無法確認其中 agent 的處理程序已結束。請在其結束後重試。",
 	"Could not delete worktree \"{0}\": {1}": "無法刪除工作樹 \"{0}\": {1}",
 	"Local": "本機",
 	"SSH: {0}": "SSH: {0}",
@@ -124,6 +127,7 @@
 	"A workspace folder is required to run agents.": "執行 Agent 需要工作區資料夾。",
 	"Open a folder to continue": "開啟資料夾以繼續",
 	"Could not start {0}: {1}.": "無法啟動 {0}：{1}。",
+	"Reload Window": "重新載入視窗",
 	"Could not create worktree: {0}.": "無法建立工作樹：{0}。",
 	"Branch {0} and folder {1} were created and kept.": "分支 {0} 與資料夾 {1} 已建立並保留。",
 	"Branch {0} was created and kept.": "分支 {0} 已建立並保留。",
@@ -136,6 +140,8 @@
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path 為 {1}，且 {2} 不是可執行的程式",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} 透過 cmd.exe 執行，無法安全傳入引數 {1}；請將 {2}.path 設定為 CLI 自身的程式或 Node 進入點",
 	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} 透過 cmd.exe 執行，無法安全傳入其路徑；請將 {1}.path 設定為 CLI 自身的程式或 Node 進入點",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} 透過 cmd.exe 執行，而 cmd.exe 無法在 UNC 資料夾 {1} 中執行；請將 {2}.path 設定為 CLI 自身的程式或 Node 進入點",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} 是 Node 指令碼，但 PATH 上沒有可執行它的 Node",
 	"facade.yolo must be true or false; received {0}": "facade.yolo 必須為 true 或 false；但收到的是 {0}",
 	"Configure Agents": "設定 Agent"
 }

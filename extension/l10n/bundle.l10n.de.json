@@ -34,6 +34,7 @@
 	"Waiting for an answer": "Wartet auf eine Antwort",
 	"Exited with code {0}": "Mit Exitcode {0} beendet",
 	"Terminated by signal {0}": "Durch Signal {0} beendet",
+	"Disconnected; exit cause unknown": "Getrennt; Exit-Ursache unbekannt",
 	"Window: {0}": "Fenster: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "„Neuer Worktree“ benötigt einen Arbeitsort in einem Git-Repository mit mindestens einem Commit.",
 	"New Worktree": "Neuer Worktree",
@@ -81,6 +82,8 @@
 	"Cannot delete \"{0}\": only standalone linked worktrees can be deleted.": "\"{0}\" kann nicht gelöscht werden: nur eigenständige verknüpfte Worktrees können gelöscht werden.",
 	"Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.": "Worktree \"{0}\" kann nicht gelöscht werden: nicht committete Änderungen vorhanden. Committen oder stashen Sie diese mit Git und versuchen Sie es erneut.",
 	"Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.": "Worktree \"{0}\" kann nicht gelöscht werden: Worktree ist gesperrt. Entsperren Sie ihn mit Git und versuchen Sie es erneut.",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "Worktree \"{0}\" kann nicht gelöscht werden: Worktree \"{1}\" liegt darin. Löschen oder verschieben Sie zuerst diesen Worktree und versuchen Sie es erneut.",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "Worktree \"{0}\" kann nicht gelöscht werden: Es konnte nicht bestätigt werden, dass der Prozess eines Agenten darin beendet ist. Versuchen Sie es erneut, sobald er beendet ist.",
 	"Could not delete worktree \"{0}\": {1}": "Der Worktree \"{0}\" konnte nicht gelöscht werden: {1}",
 	"Local": "Lokal",
 	"SSH: {0}": "SSH: {0}",
@@ -124,6 +127,7 @@
 	"A workspace folder is required to run agents.": "Ein Arbeitsbereichsordner ist erforderlich, um Agents auszuführen.",
 	"Open a folder to continue": "Öffnen Sie einen Ordner, um fortzufahren",
 	"Could not start {0}: {1}.": "{0} konnte nicht gestartet werden: {1}.",
+	"Reload Window": "Fenster neu laden",
 	"Could not create worktree: {0}.": "Worktree konnte nicht erstellt werden: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "Branch {0} und Ordner {1} wurden erstellt und beibehalten.",
 	"Branch {0} was created and kept.": "Branch {0} wurde erstellt und beibehalten.",
@@ -136,6 +140,8 @@
 	"{0}.path is {1}, and {2} is not a program that can be run": "{0}.path ist {1}, und {2} ist kein ausführbares Programm",
 	"{0} runs through cmd.exe, which cannot be given the argument {1} safely; set {2}.path to the CLI's own program or Node entry point": "{0} wird über cmd.exe ausgeführt, wodurch das Argument {1} nicht sicher übergeben werden kann; legen Sie {2}.path auf das eigene Programm der CLI oder den Node-Einstiegspunkt fest",
 	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} wird über cmd.exe ausgeführt, wodurch sein Pfad nicht sicher übergeben werden kann; legen Sie {1}.path auf das eigene Programm der CLI oder den Node-Einstiegspunkt fest",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} wird über cmd.exe ausgeführt, das nicht im UNC-Ordner {1} ausgeführt werden kann; legen Sie {2}.path auf das eigene Programm der CLI oder den Node-Einstiegspunkt fest",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} ist ein Node-Skript, und im PATH ist kein Node, um es auszuführen",
 	"facade.yolo must be true or false; received {0}": "facade.yolo muss true oder false sein; {0} empfangen",
 	"Configure Agents": "Agenten konfigurieren"
 }

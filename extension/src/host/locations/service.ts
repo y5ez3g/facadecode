@@ -135,6 +135,9 @@ export class LocationService implements LocationPort, Disposable {
 	private readonly repositories = new Map<string, RepositoryState>();
 	private catalog: Catalog;
 	private byId = new Map<LocationId, Location>();
+	/** Locations whose worktrees are being deleted, and the catalog without them that others see meanwhile. */
+	private readonly deleting = new Set<LocationId>();
+	private visible: Catalog | undefined;
 	private keys = new Map<LocationId, string>();
 	private readonly removals = new Map<LocationId, LocationRemoval['cause']>();
 	private readonly full = new Coalesced();
@@ -182,10 +185,35 @@ export class LocationService implements LocationPort, Disposable {
 	}
 
 	snapshot(): Catalog {
-		return this.catalog;
+		if (!this.deleting.size) {
+			return this.catalog;
+		}
+		return this.visible ??= { ...this.catalog, locations: this.catalog.locations.filter(each => !this.deleting.has(each.id)) };
+	}
+
+	/**
+	 * Takes `id` out of the catalog others see and out of `resolve` while its worktree is deleted (WORKTREES-3.2): no launch goes
+	 * there meanwhile. Its removal, once confirmed, is still told. The result puts it back where it is not gone.
+	 */
+	markDeleting(id: LocationId): () => void {
+		this.deleting.add(id);
+		this.visible = undefined;
+		this.changedEmitter.fire();
+		let done = false;
+		return () => {
+			if (!done) {
+				done = true;
+				this.deleting.delete(id);
+				this.visible = undefined;
+				this.changedEmitter.fire();
+			}
+		};
 	}
 
 	resolve(id: LocationId): Location | undefined {
+		if (this.deleting.has(id)) {
+			return undefined;
+		}
 		const location = this.byId.get(id);
 		// Revalidated on use (WORKTREES-1.2): a location whose directory is gone is no place to start a CLI
 		return location && this.isDirectory(location.path) ? location : undefined;
@@ -424,6 +452,7 @@ export class LocationService implements LocationPort, Disposable {
 		const next = this.build();
 		const changed = JSON.stringify(next) !== JSON.stringify(this.catalog);
 		this.catalog = next;
+		this.visible = undefined;
 		this.index();
 		this.syncWatchers();
 		this.persist();

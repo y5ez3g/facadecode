@@ -9,7 +9,7 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { ActivityReport, ExitReport, LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
-import { PtydClient, PtydLost, PtydNotSent, earlierRuns, ptydSocketPath } from '../host/execution/ptydClient';
+import { EarlierPtyds, PtydClient, PtydLost, PtydNotSent, ptydSocketPath } from '../host/execution/ptydClient';
 import type { Method, Requests } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import { TestEmitter, withModules } from './withModules';
@@ -64,6 +64,11 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let spawns: number;
 	/** Each connection to ptyd the ports made, in order. */
 	let connections: PtydClient[];
+	/** How long an attach's answer is held back while the run's events go on; and whether the next attach loses its connection. */
+	let delayAttach: number;
+	let loseAttach: boolean;
+	/** Where the next listing's answer waits, once had, until opened: what the run says meanwhile reaches the window first. */
+	let listGate: { entered(): void; readonly open: Promise<void> } | undefined;
 	const ports: AgentExecution[] = [];
 	const extraClients: PtydClient[] = [];
 
@@ -87,6 +92,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		failTerminateOnce = false;
 		spawns = 0;
 		connections = [];
+		delayAttach = 0;
+		loseAttach = false;
+		listGate = undefined;
 		const vscodeApi = {
 			TabInputTerminal,
 			TabInputText,
@@ -142,7 +150,24 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 						failTerminateOnce = false;
 						throw new PtydNotSent('injected request that did not arrive');
 					}
+					if (method === 'attach' && loseAttach) {
+						loseAttach = false;
+						const closed = new Promise<void>(resolve => real.onDidClose(resolve));
+						real.dispose();
+						await closed;
+						throw new PtydLost('injected loss of the connection as it reattached');
+					}
 					const result = await real.request(method, params);
+					if (method === 'list' && listGate) {
+						const gate = listGate;
+						listGate = undefined;
+						gate.entered();
+						await gate.open;
+					}
+					if (method === 'attach' && delayAttach) {
+						// The answer is late; what the run writes meanwhile reaches the window before it, as it can on a busy host
+						await new Promise(resolve => setTimeout(resolve, delayAttach));
+					}
 					if (method === 'spawn' && loseSpawnReply) {
 						loseSpawnReply = false;
 						const closed = new Promise<void>(resolve => real.onDidClose(resolve));
@@ -158,7 +183,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
-		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydLost, PtydNotSent, earlierRuns, ptydSocketPath } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
+		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydLost, PtydNotSent, EarlierPtyds, ptydSocketPath } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
 	});
 
 	teardown(() => {
@@ -262,6 +287,30 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(terminals[0].names[terminals[0].names.length - 1], 'Grace | Fixing tests');
 	});
 
+	test('a listing answered before what the run said since is no newer than that: a reconcile never puts back an older status (CLIS-2.3, UX-5.2)', async function () {
+		this.timeout(20_000);
+		const port = portOf();
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		port.openPair(facts('run-46'), { reveal: false });
+		open(terminals[0]);
+		// Working once its probe is answered, idle at a key
+		await port.spawn('run-46', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => process.stdout.write(d.toString().includes('7501;?:') ? '\\x1b]7501;state=working\\x1b\\\\' : '\\x1b]7501;state=idle\\x1b\\\\')); setInterval(() => {}, 1000);`), meta('run-46'));
+		await until('working', () => reports.some(report => report.activity === 'working'));
+		let entered!: () => void;
+		let release!: () => void;
+		const asked = new Promise<void>(resolve => { entered = resolve; });
+		listGate = { entered, open: new Promise<void>(resolve => { release = resolve; }) };
+		// A reconcile's listing has its answer - working - and waits; meanwhile the run goes idle
+		await asked;
+		terminals[0].options.pty.handleInput!('x');
+		await until('idle', () => reports[reports.length - 1]?.activity === 'not_working');
+		release();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.deepStrictEqual(reports.slice(reports.findIndex(report => report.activity === 'not_working')).map(report => report.activity), ['not_working']);
+		assert.strictEqual(await port.terminate('run-46'), 'terminated');
+	});
+
 	/** A CLI that says it is ready and then nothing, taking no part in the protocol. */
 	const QUIET = `process.stdout.write('ready\\r\\n'); setInterval(() => {}, 1000);`;
 
@@ -335,6 +384,93 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await port.terminate('run-43'), 'terminated');
 	});
 
+	test('a run started in a new worktree is read by the folder it runs in there: a CLI title naming that folder alone is no title (CLIS-2.3)', async function () {
+		this.timeout(15_000);
+		const port = portOf();
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-wt-'));
+		try {
+			// Accepted in its source folder; the worktree made, it starts in the worktree's
+			port.openPair(facts('run-47', { cli: 'pi', displayName: 'Pi', command: 'pi', cwd: os.tmpdir() }), { reveal: false });
+			open(terminals[0]);
+			await port.spawn('run-47', { ...plan(`process.stdout.write('\\x1b]0;π - ${path.basename(worktree)}\\x07ready\\r\\n'); setInterval(() => {}, 1000);`), cli: 'pi', displayName: 'Pi', command: 'pi', cwd: worktree }, meta('run-47'));
+			await until('its screen', () => screenOf(terminals[0]).includes('ready'));
+			await new Promise(resolve => setTimeout(resolve, 300));
+			assert.deepStrictEqual(reports.filter(report => report.title !== undefined), []);
+			assert.strictEqual(await port.terminate('run-47'), 'terminated');
+		} finally {
+			fs.rmSync(worktree, { recursive: true, force: true });
+		}
+	});
+
+	/** A CLI that says a numbered line every 20 ms, from 1 on. */
+	const COUNTING = `let n = 0; setInterval(() => process.stdout.write('line ' + (++n) + '\\r\\n'), 20);`;
+	/** The numbers of `text`'s lines, in the order written. */
+	const numbersIn = (text: string) => [...text.matchAll(/line (\d+)/g)].map(match => Number(match[1]));
+	/** The window `from` reloads: the next one finds the run and claims it again, its terminal opened; what it tells and shows. */
+	const reloadWith = async (from: AgentExecution, run: RunId) => {
+		ports.splice(ports.indexOf(from), 1);
+		from.dispose();
+		const next = portOf();
+		const told: ActivityReport[] = [];
+		next.onDidReport(report => told.push(report));
+		const live = await until('the run to be unclaimed', async () => {
+			const runs = await next.live();
+			return runs.length === 1 && !runs[0].claimedElsewhere && runs;
+		});
+		const count = terminals.length;
+		const attaching = next.attach(live[0], facts(run));
+		await until('its restored terminal', () => terminals.length > count);
+		const terminal = terminals[terminals.length - 1];
+		open(terminal);
+		await attaching;
+		return { next, told, terminal, live: live[0] };
+	};
+
+	test('what a run writes while a reloaded window claims it, before the answer with its screen, is drawn after that screen: no line lost (ARCHITECTURE-2.3, LIFECYCLE-3.5)', async function () {
+		this.timeout(20_000);
+		const first = portOf();
+		first.openPair(facts('run-44'), { reveal: false });
+		open(terminals[0]);
+		await first.spawn('run-44', plan(COUNTING), meta('run-44'));
+		await until('its first lines', () => numbersIn(screenOf(terminals[0])).length > 5);
+		delayAttach = 400;
+		const { next, terminal } = await reloadWith(first, 'run-44');
+		delayAttach = 0;
+		await new Promise(resolve => setTimeout(resolve, 600));
+		const numbers = numbersIn(screenOf(terminal));
+		const gaps = numbers.slice(1).filter((each, index) => each !== numbers[index] + 1);
+		assert.ok(numbers.length > 20, JSON.stringify(numbers));
+		assert.deepStrictEqual(gaps, [], `lines lost or repeated: ${JSON.stringify(numbers)}`);
+		assert.strictEqual(await next.terminate('run-44'), 'terminated');
+	});
+
+	test('a reloaded window whose connection goes as it claims a run keeps the agent, told as lost, and claims it again once connected: never forgotten for a moment (RULES-4.1, LIFECYCLE-3.5)', async function () {
+		this.timeout(20_000);
+		const first = portOf();
+		first.openPair(facts('run-45'), { reveal: false });
+		open(terminals[0]);
+		await first.spawn('run-45', plan(QUIET), meta('run-45'));
+		await until('its screen', () => screenOf(terminals[0]).includes('ready'));
+		loseAttach = true;
+		const { next, told, terminal } = await reloadWith(first, 'run-45');
+		assert.strictEqual(told[0]?.disconnected, true, JSON.stringify(told));
+		await until('the run claimed again', () => told.some(report => !report.disconnected), 10_000);
+		await until('its screen drawn again', () => screenOf(terminal).includes('ready'), 10_000);
+		assert.strictEqual(await next.terminate('run-45'), 'terminated');
+	});
+
+	test('a window that shows no run connects again when its connection goes: its claim, which ptyd would let expire, is kept (RULES-4.1, D75)', async function () {
+		this.timeout(20_000);
+		const port = portOf();
+		assert.deepStrictEqual(await port.live(), []);
+		assert.strictEqual(connections.length, 1);
+		connections[0].dispose();
+		await until('a new connection', () => connections.length === 2, 10_000);
+		assert.ok(!connections[1].isClosed);
+	});
+
 	test('a run whose startup ends while the connection to ptyd is lost is still told as lost - a rename meanwhile tells nothing more; claimed again, it is told past its startup (CLIS-2.3, RULES-3.1)', async function () {
 		this.timeout(20_000);
 		const port = portOf(400);
@@ -385,6 +521,16 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([renames, terminal.pending], [[{ run: 'run-r', name: 'Grace Hopper' }], ['Grace Hopper | Fixing tests']]);
 		shows(terminal);
 		assert.deepStrictEqual([renames.length, terminal.name], [1, 'Grace Hopper | Fixing tests'], 'its own name shown is no rename');
+	});
+
+	test('a person renaming a tab back to the name it had - after naming it with the separator and CLI title kept - renames the agent back: a name the tab already showed is no echo (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const renames = renamesOf(port);
+		const terminal = await agentTitled(port, 'run-x4');
+		titled(terminal, 'Bob | Fixing tests');
+		shows(terminal);
+		titled(terminal, 'Ada | Fixing tests');
+		assert.deepStrictEqual(renames.map(each => each.name), ['Bob', 'Ada']);
 	});
 
 	test('a person who kept the separator and CLI title renaming the tab - the ones it showed then, though the CLI retitled it since - names the agent by what is before them (LIFECYCLE-2.2)', async () => {

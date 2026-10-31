@@ -62,6 +62,8 @@ function cardWords(): CardWords {
 		exitedWithCode: code => vscode.l10n.t("Exited with code {0}", code),
 		// {0} is the signal that ended the agent's CLI, such as SIGKILL
 		endedBySignal: signal => vscode.l10n.t("Terminated by signal {0}", signal),
+		// A run its supervisor no longer had: it ended, how is not known
+		exitUnknown: vscode.l10n.t("Disconnected; exit cause unknown"),
 		// {0} is the name of the editor window the agent is in
 		window: label => vscode.l10n.t("Window: {0}", label)
 	};
@@ -99,6 +101,14 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				return undefined;
 			case 'openFolder':
 				await vscode.commands.executeCommand('vscode.openFolder');
+				return undefined;
+			case 'rename':
+				if (target === undefined || !deps.agents.get(target)) {
+					return 'gone';
+				}
+				await agent.rename(target);
+				// Back on the card F2 was pressed on, as a VS Code list has it: the editor gives a closed input box's focus to the editor
+				void vscode.commands.executeCommand(`${PANEL_VIEW}.focus`);
 				return undefined;
 		}
 	};

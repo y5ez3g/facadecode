@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import type { Agents, RunFacts, RunId } from '../../core/ports';
 import { CardWords, statusOf } from '../cardView';
 import { PanelModel } from '../model';
-import { cliIcon } from '../presentation';
+import { cliIcon, plainText } from '../presentation';
 
 export interface GoToAgentDeps {
 	readonly model: Pick<PanelModel, 'ordered' | 'placeOf'>;
@@ -48,8 +48,8 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location or ID");
 	picker.matchOnDescription = true;
 	const itemOf = (facts: RunFacts): Item => ({
-		label: facts.name,
-		description: [facts.alias, facts.displayName, statusOf(facts, deps.words).stateText, deps.model.placeOf(facts).qualified, facts.title].filter(Boolean).join(' · '),
+		label: plainText(facts.name),
+		description: plainText([facts.alias, facts.displayName, statusOf(facts, deps.words).stateText, deps.model.placeOf(facts).qualified, facts.title].filter(Boolean).join(' · ')),
 		iconPath: cliIcon(deps.media, facts.cli),
 		buttons: [copy, close],
 		run: facts.id

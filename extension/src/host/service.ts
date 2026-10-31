@@ -10,11 +10,13 @@ import { disposeAll } from '../base/lifecycle';
 import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { AgentService } from '../core/agents';
 import { PlanError, type LogPort, type RunFacts } from '../core/ports';
+import { PANEL_VIEW } from '../ui/catalog';
 import { worktreeProblemText } from '../ui/pickers/location';
 import { reasonText } from '../ui/presentation';
 import { registerUi } from '../ui/commands/index';
 import { registerWorktreeCommands } from '../ui/commands/worktree';
 import { AgentExecution } from './execution/agentExecution';
+import { RECONCILE_MS } from './execution/executionSession';
 import { AliasCounter } from '../record/aliases';
 import { AgentLog } from '../record/log';
 import { facadeHome } from '../record/paths';
@@ -31,6 +33,36 @@ import { KeptWorkspaceState } from './workspaceState';
 
 /** Where the window's workspace keeps its key, for the window's reloads (ARCHITECTURE-2.2). */
 const WORKSPACE_KEY = 'facade.workspaceKey';
+/** The longest wait between attempts to list this window's runs: well within the five minutes they are kept for it (RULES-4.1). */
+const MOST_RESTORE_WAIT_MS = 30_000;
+
+/** Why this window's Facade could not start, in the person's words: shown as it is. */
+export class ActivationError extends Error { }
+
+/**
+ * A window whose Facade could not start says why where the person looks - a notification, with the reload that tries again, and
+ * the panel in place of a progress that would never end - not only in the editor's log (UX-2.4).
+ */
+export function sayActivationFailed(context: vscode.ExtensionContext, err: unknown): void {
+	const text = err instanceof ActivationError ? err.message : vscode.l10n.t("Could not start {0}: {1}.", 'Facade Code', messageOf(err));
+	try {
+		context.subscriptions.push(vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
+			resolveWebviewView: view => {
+				view.webview.options = { enableScripts: false };
+				const escaped = text.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
+				view.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"></head><body><p style="padding: 0 8px; overflow-wrap: anywhere">${escaped}</p></body></html>`;
+			}
+		}));
+	} catch {
+		// The panel of the part that did start shows itself
+	}
+	const reload = vscode.l10n.t("Reload Window");
+	void vscode.window.showErrorMessage(text, reload).then(choice => {
+		if (choice === reload) {
+			void vscode.commands.executeCommand('workbench.action.reloadWindow');
+		}
+	});
+}
 
 /** The workspace this window keeps its runs under: its workspace file, else its first folder (ARCHITECTURE-3.1). */
 function workspaceUri(): string {
@@ -51,7 +83,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		console.error('Could not request the local window handover identity.', error);
 	}
 	if (!isWindowIdentity(identity, session)) {
-		throw new Error(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
+		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
 	}
 	// Remote workspace transitions replace the session ID and workspace state. The local component carries the native window's
 	// identity; a different window cannot acquire that identity merely by opening the same folders or a copied workspace file.
@@ -63,7 +95,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const claim = nextOwnerClaim(record.key, home);
 	const terminalOwner = { session, claim };
 	if (await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...terminalOwner, kind: 'activate', handedOver: record.key === handedOver }) !== true) {
-		throw new Error(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
+		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
 	}
 	const agentLog = new AgentLog(record.dir);
 	const log: LogPort = { event: text => agentLog.event(text) };
@@ -116,8 +148,15 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		describe: (err, english) => worktreeProblemText(err, err instanceof PlanError ? reasonText(err.said, english) : english),
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`
 	});
-	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1)
-	const restored = agents.restore();
+	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1). A window that
+	// cannot list them yet - its ptyd not answering - keeps trying, as they end five minutes after no window claims them (RULES-4.1)
+	let restoreRetry: ReturnType<typeof setTimeout> | undefined;
+	let disposed = false;
+	const restored = (async () => {
+		for (let wait = RECONCILE_MS; await agents.restore() === undefined && !disposed; wait = Math.min(wait * 2, MOST_RESTORE_WAIT_MS)) {
+			await new Promise<void>(resolve => { restoreRetry = setTimeout(resolve, wait); });
+		}
+	})();
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
 	const disposables: vscode.Disposable[] = [
 		...registerUi({
@@ -138,6 +177,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	];
 	context.subscriptions.push(...disposables);
 	return async () => {
+		disposed = true;
+		clearTimeout(restoreRetry);
 		agents.dispose();
 		// One that throws does not keep the rest open (ARCHITECTURE-2.4)
 		disposeAll(disposables, err => log.event(`Could not dispose part of the window: ${messageOf(err)}`));

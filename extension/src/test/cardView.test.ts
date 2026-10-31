@@ -26,6 +26,7 @@ const WORDS: CardWords = {
 	hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Beendet mit Code ${code}`,
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
+	exitUnknown: 'Getrennt; Exit-Ursache unbekannt',
 	window: label => `Window: ${label}`
 };
 
@@ -37,7 +38,7 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 	};
 }
 
-const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', full: 'shop · main · /app' };
+const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', full: 'shop · main\n/app' };
 const menu = { moveUp: false, moveDown: true };
 
 suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () => {
@@ -135,11 +136,14 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([working.tooltip, working.label, working.selected, working.startedAt, working.location, working.menu], [
 			['Ada · #a1 · Claude Code', 'Fix the login flow', 'Working'],
 			'Ada, #a1, Working, shop · main, Claude Code, Fix the login flow',
-			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'shop · main · /app' }, menu
+			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'shop · main\n/app' }, menu
 		]);
 		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Ada · #a1 · Claude Code', 'Fix the login flow', 'Idle', 'Waiting for an answer'], 'Ada, #a1, Idle, shop · main, Claude Code, Waiting for an answer']);
 		// The second line saying no more than the state is not said twice
 		assert.deepStrictEqual([unknown.tooltip, unknown.label, unknown.dot], [['Ada · #a1 · Claude Code', 'Activity unavailable'], 'Ada, #a1, Activity unavailable, shop · main, Claude Code', 'error']);
+		// An empty name is left out of both, never said as an empty part; the card carries its #aN for what the page says of it
+		const unnamed = cardOf(run({ name: '' }), { place, selected: false, menu, words: WORDS });
+		assert.deepStrictEqual([unnamed.tooltip[0], unnamed.label, unnamed.alias], ['#a1 · Claude Code', '#a1, Working, shop · main, Claude Code', '#a1']);
 		// Nothing the page never draws is sent
 		assert.deepStrictEqual(Object.keys(working).filter(key => ['cliName', 'pinId'].includes(key)), []);
 		// A launch that never started says when it was accepted
@@ -153,14 +157,14 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			ended({ kind: 'abnormal', signal: 'SIGKILL', at: 3 }, 'Ended by signal SIGKILL'),
 			ended({ kind: 'abnormal', at: 3 }, 'Exited with code unknown'),
 			ended({ kind: 'failed', at: 3 }, 'claude was not found', 'launch')
-		], ['Beendet mit Code 137', 'Durch Signal SIGKILL beendet', 'Exited with code unknown', 'claude was not found']);
+		], ['Beendet mit Code 137', 'Durch Signal SIGKILL beendet', 'Getrennt; Exit-Ursache unbekannt', 'claude was not found']);
 	});
 
 	test('PANEL-1.5: the hover names the window with the agent\'s qualified location, where the window has a name', () => {
 		const card = cardOf(run({ title: 'Fix login' }), { place, selected: false, menu, words: WORDS, window: 'shop' });
-		assert.deepStrictEqual([card.tooltip, card.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main · /app · Window: shop']);
+		assert.deepStrictEqual([card.tooltip, card.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main\n/app\nWindow: shop']);
 		const own = cardOf(run({ title: 'Fix login' }), { place, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual([own.tooltip, own.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main · /app']);
+		assert.deepStrictEqual([own.tooltip, own.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main\n/app']);
 	});
 
 	test('avatars: each built-in\'s maker avatar, a file of media/agents; none for a CLI this build has no avatar of, which the card then leaves out (PANEL-1.3, UX-2.1)', () => {

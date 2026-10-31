@@ -457,4 +457,39 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		fs.writeFileSync(path.join(spaced, 'muse.cmd'), '@echo off\r\nexit /b 0\r\n');
 		assert.strictEqual(plan({ cli: 'muse' }, {}, { host: { Path: spaced, PATHEXT: '.CMD', USERPROFILE: temp.dir }, platform: 'win32' }).executable, path.join(spaced, 'muse.cmd'));
 	});
+
+	test('a launcher that goes through cmd.exe is refused in a UNC folder - a network share, a WSL distribution - where cmd.exe would run it in the Windows directory; a program of its own starts there (CLIS-1.2)', () => {
+		const bin = path.join(temp.dir, 'muse-bin');
+		fs.mkdirSync(bin, { recursive: true });
+		const muse = path.join(bin, 'muse.cmd');
+		fs.writeFileSync(muse, '@echo off\r\nsetlocal\r\n"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0.muse-launcher.ps1" %*\r\nexit /b %ERRORLEVEL%\r\n');
+		const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.EXE;.CMD', USERPROFILE: temp.dir }, platform: 'win32' };
+		for (const folder of ['\\\\wsl.localhost\\Ubuntu\\home\\ada\\app', '\\\\server\\share\\app', '//server/share/app']) {
+			try {
+				plan({ cli: 'muse', cwd: folder }, {}, windows);
+				assert.fail(`planned in ${folder}`);
+			} catch (err) {
+				assert.ok(err instanceof CliPlanError, String(err));
+				assert.deepStrictEqual([err.reason, err.message, err.said], ['unsupported',
+					`${muse} runs through cmd.exe, which cannot run in the UNC folder ${folder}; set facade.muse.path to the CLI's own program or Node entry point`,
+					{ kind: 'cmd_unc_folder', values: [muse, folder, 'facade.muse'] }]);
+			}
+		}
+		fs.writeFileSync(path.join(bin, 'muse.exe'), '');
+		assert.strictEqual(plan({ cli: 'muse', cwd: '\\\\server\\share\\app' }, {}, windows).executable, path.join(bin, 'muse.exe'));
+	});
+
+	test('a Node entry point a refusal advises - .path set to a package\'s cli.js - runs with the Node on the PATH, which Windows needs; with none there it is refused before anything starts (CLIS-1.2)', () => {
+		const bin = path.join(temp.dir, 'node-bin');
+		const script = path.join(temp.dir, 'pkg', 'cli.js');
+		fs.mkdirSync(bin, { recursive: true });
+		fs.mkdirSync(path.dirname(script), { recursive: true });
+		fs.writeFileSync(script, '');
+		const windows = (Path: string): DestinationEnvironment => ({ host: { Path, PATHEXT: '.EXE;.CMD', USERPROFILE: temp.dir }, platform: 'win32' });
+		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, { 'facade.claude.path': script }, windows(bin))),
+			['not_found', `${script} is a Node script, and Node is not on the PATH to run it`]);
+		fs.writeFileSync(path.join(bin, 'node.exe'), '');
+		const planned = plan({ cli: 'claude' }, { 'facade.claude.path': script }, windows(bin));
+		assert.deepStrictEqual([planned.executable, planned.args[0], planned.args[1]], [path.join(bin, 'node.exe'), script, '--settings']);
+	});
 });

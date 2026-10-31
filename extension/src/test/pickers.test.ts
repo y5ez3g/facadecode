@@ -256,7 +256,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 		let changed: TestEmitter<void>;
 		let runs: RunFacts[];
 		let closed: string[];
-		let removing: { id: string; closeAgents: () => Promise<void> }[];
+		let removing: { id: string; closeAgents: () => Promise<boolean> }[];
 		let remove: WorktreePort['remove'];
 		let choices: CliChoice[] | Error;
 		let last: { location?: string; cli?: string };
@@ -498,6 +498,26 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 				0,
 				[{ name: 'Ada', location: opened.id, cli: 'claude', worktree: { branch: 'feat/login' } }]
 			]);
+		});
+
+		test('Back from the branch step keeps New Worktree chosen on the step it returns to, and the branch typed, there again as the step comes back (UX-1.1)', async () => {
+			const done = start();
+			await settle();
+			ui.current!.accept('Change Working Location...');
+			await settle();
+			ui.current!.accept('New Worktree...');
+			await settle();
+			ui.current!.type('feature-x');
+			await new Promise(resolve => setTimeout(resolve, 200));
+			ui.current!.back();
+			await settle();
+			const active = ui.current!.activeItems.map(item => item.label);
+			ui.current!.accept('New Worktree...');
+			await settle();
+			const value = ui.current!.value;
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual([active, value], [['New Worktree...'], 'feature-x']);
 		});
 
 		test('Back from the branch keeps the location chosen; Escape there makes nothing; a prerequisite missing is said and cannot be chosen; a plain folder offers no worktree (LIFECYCLE-1.3, PANEL-1.2)', async () => {
@@ -803,7 +823,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
@@ -840,6 +860,31 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 				['#a1 · Claude Code · Working · main · Fix login', '#a3 · Claude Code · Starting · main'],
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
+		});
+
+		test('a name or CLI title that holds $(...) is shown word for word, not as the theme icon the editor would draw (PANEL-3.2)', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const { plainText } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+			const runs = [run(1, { name: '$(rocket) Ada', title: 'Fix $(build) and $(x' })];
+			const words = {
+				worktreeFailure: (reason: string) => reason,
+				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`
+			};
+			const done = goToAgent({
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
+				agents: { onDidChange: new TestEmitter<void>().event as never },
+				words,
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined,
+				copyReference: async () => undefined,
+				close: async () => undefined
+			});
+			const picker = ui.current!;
+			const shown = [picker.items[0].label, picker.items[0].description];
+			picker.hide();
+			await done;
+			assert.deepStrictEqual([shown, plainText('no icon here')], [['\\$(rocket) Ada', '#a1 · Claude Code · Working · main · Fix \\$(build) and \\$(x'], 'no icon here']);
 		});
 	});
 });

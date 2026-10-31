@@ -52,6 +52,10 @@ export type WorktreeProblem =
 	| { readonly kind: 'worktree_changed'; readonly name: string }
 	/** Git lists the worktree as locked: no agent or file was touched. */
 	| { readonly kind: 'worktree_locked'; readonly name: string }
+	/** Another registered worktree, `nested`, is inside the worktree `name`, which would go with it: nothing was touched. */
+	| { readonly kind: 'worktree_nested'; readonly name: string; readonly nested: string }
+	/** An agent of the worktree `name` was closed, but its process could not be confirmed to have ended: nothing was deleted. */
+	| { readonly kind: 'agents_not_ended'; readonly name: string }
 	/** `git worktree remove` refused or failed; `detail` is what Git said. */
 	| { readonly kind: 'deletion_failed'; readonly name: string; readonly detail: string };
 

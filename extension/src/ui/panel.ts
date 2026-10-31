@@ -26,7 +26,9 @@ const isTarget: Check = value => typeof value === 'string' && value.length > 0 &
 const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
-	openFolder: { target: false }
+	openFolder: { target: false },
+	// F2 on a card: the host opens the Input Box and validates the name (D38)
+	rename: { target: true }
 };
 
 /**
