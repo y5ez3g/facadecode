@@ -81,6 +81,8 @@
 	"Cannot delete \"{0}\": only standalone linked worktrees can be deleted.": "无法删除“{0}”：仅支持删除未作为工作区根目录的已链接工作树。",
 	"Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.": "无法删除工作树“{0}”：存在未提交的更改。请使用 Git 提交或暂存后重试。",
 	"Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.": "无法删除工作树“{0}”：工作树已锁定。请先使用 Git 解锁后重试。",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "无法删除工作树“{0}”：工作树“{1}”位于其中。请先删除或移走该工作树，然后重试。",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "无法删除工作树“{0}”：无法确认其中 agent 的进程已结束。请在其结束后重试。",
 	"Could not delete worktree \"{0}\": {1}": "无法删除工作树 \"{0}\": {1}",
 	"Local": "本地",
 	"SSH: {0}": "SSH: {0}",

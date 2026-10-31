@@ -125,14 +125,27 @@ export async function checkoutOf(git: string, folder: string): Promise<Checkout 
 		}
 		throw err;
 	}
-	const [gitDir, commonDir, inside, up] = linesOf(answer);
+	let lines = linesOf(answer);
+	// Git before 2.31 takes --path-format for a revision's flag and says it back, every answer a line down: asked again without
+	// it, the directories it gives are from the folder asked in
+	if (lines[0] === '--path-format=absolute') {
+		try {
+			lines = linesOf(await runGit(git, ['-C', folder, 'rev-parse', '--git-dir', '--git-common-dir', '--is-inside-work-tree', '--show-cdup']));
+		} catch (err) {
+			if (isNoRepository(err)) {
+				return undefined;
+			}
+			throw err;
+		}
+	}
+	const [gitDir, commonDir, inside, up] = lines;
 	if (inside !== 'true') {
 		return undefined;
 	}
 	if (!gitDir || !commonDir) {
 		throw new GitError(`Git did not return the Git directories of '${folder}'.`, 0);
 	}
-	return { root: path.resolve(folder, up ?? ''), gitDir: path.normalize(gitDir), commonDir: path.normalize(commonDir) };
+	return { root: path.resolve(folder, up ?? ''), gitDir: path.resolve(folder, gitDir), commonDir: path.resolve(folder, commonDir) };
 }
 
 /** A registered worktree, as `git worktree list --porcelain` describes it. */
@@ -243,11 +256,30 @@ export async function whyNotBranchName(git: string, folder: string, branch: stri
 }
 
 /**
- * Whether `git status --porcelain` in the worktree at `folder` lists anything (D73): a change that is not committed or an
- * untracked file, whatever `status.showUntrackedFiles` says, and changes in submodules too, as `git worktree remove` checks.
+ * Whether the worktree at `folder` holds anything not committed (D73): what `git status --porcelain` lists - a change or an
+ * untracked file, whatever `status.showUntrackedFiles` says, and changes in submodules too, as `git worktree remove` checks - and a
+ * file Git is told to assume unchanged or to skip whose content is not what its index holds, which `git status` does not show.
  */
 export async function hasChanges(git: string, folder: string): Promise<boolean> {
-	return (await runGit(git, ['-C', folder, 'status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=none'])).trim() !== '';
+	if ((await runGit(git, ['-C', folder, 'status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=none'])).trim() !== '') {
+		return true;
+	}
+	// `S` is skip-worktree, a lower-case tag assume-unchanged; one with no file in the folder - a sparse checkout's - is no edit
+	const hidden = (await runGit(git, ['-C', folder, 'ls-files', '-v', '-z'])).split('\0')
+		.filter(entry => entry.length > 2 && (entry[0] === 'S' || (entry[0] >= 'a' && entry[0] <= 'z')))
+		.map(entry => entry.slice(2))
+		.filter(file => fs.existsSync(path.join(folder, file)));
+	for (const file of hidden) {
+		const [mode, indexed] = (await runGit(git, ['-C', folder, 'ls-files', '-s', '--', file])).trim().split(/\s+/);
+		if (mode === '160000') {
+			continue;
+		}
+		const now = (await runGit(git, ['-C', folder, 'hash-object', '--', file])).trim();
+		if (now !== indexed) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -256,5 +288,6 @@ export async function hasChanges(git: string, folder: string): Promise<boolean> 
  * is kept. Rejects with a `GitError` carrying Git's own words.
  */
 export async function removeWorktree(git: string, commonDir: string, worktree: string): Promise<void> {
-	await runGit(git, ['-C', commonDir, 'worktree', 'remove', '--', worktree], GIT_REMOVE_TIMEOUT_MS);
+	// Its own check sees untracked files whatever the repository's status.showUntrackedFiles says
+	await runGit(git, ['-C', commonDir, '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', worktree], GIT_REMOVE_TIMEOUT_MS);
 }

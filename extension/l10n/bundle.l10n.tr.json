@@ -81,6 +81,8 @@
 	"Cannot delete \"{0}\": only standalone linked worktrees can be deleted.": "\"{0}\" silinemiyor: yalnızca çalışma alanı klasörü bulunmayan bağımsız bağlantılı çalışma ağaçları silinebilir.",
 	"Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.": "\"{0}\" çalışma ağacı silinemiyor: işlenmemiş değişiklikler var. Bunları Git ile işleyin veya saklayın, ardından yeniden deneyin.",
 	"Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.": "\"{0}\" çalışma ağacı silinemiyor: çalışma ağacı kilitli. Kilidini Git ile açın, ardından yeniden deneyin.",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "\"{0}\" çalışma ağacı silinemiyor: içinde \"{1}\" çalışma ağacı var. Önce o çalışma ağacını silin veya taşıyın, ardından yeniden deneyin.",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "\"{0}\" çalışma ağacı silinemiyor: içindeki bir aracının işleminin sona erdiği doğrulanamadı. Sona erdiğinde yeniden deneyin.",
 	"Could not delete worktree \"{0}\": {1}": "\"{0}\" çalışma ağacı silinemedi: {1}",
 	"Local": "Yerel",
 	"SSH: {0}": "SSH: {0}",

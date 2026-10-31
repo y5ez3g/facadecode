@@ -81,6 +81,8 @@
 	"Cannot delete \"{0}\": only standalone linked worktrees can be deleted.": "No se puede eliminar \"{0}\": solo se pueden eliminar árboles de trabajo vinculados independientes.",
 	"Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.": "No se puede eliminar el árbol de trabajo \"{0}\": hay cambios no confirmados. Confírmelos o guárdelos con Git y vuelva a intentarlo.",
 	"Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.": "No se puede eliminar el árbol de trabajo \"{0}\": el árbol de trabajo está bloqueado. Desbloquéelo con Git y vuelva a intentarlo.",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "No se puede eliminar el árbol de trabajo \"{0}\": el árbol de trabajo \"{1}\" está dentro de él. Elimine o mueva primero ese árbol de trabajo y vuelva a intentarlo.",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "No se puede eliminar el árbol de trabajo \"{0}\": no se pudo confirmar que el proceso de un agente en él haya terminado. Vuelva a intentarlo cuando haya terminado.",
 	"Could not delete worktree \"{0}\": {1}": "No se pudo eliminar el árbol de trabajo \"{0}\": {1}",
 	"Local": "Local",
 	"SSH: {0}": "SSH: {0}",

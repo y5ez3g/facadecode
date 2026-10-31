@@ -81,6 +81,8 @@
 	"Cannot delete \"{0}\": only standalone linked worktrees can be deleted.": "Impossible de supprimer \"{0}\" : seuls les arborescences de travail liés autonomes peuvent être supprimés.",
 	"Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.": "Impossible de supprimer l'arborescence de travail \"{0}\" : modifications non validées présentes. Validez ou remisez-les avec Git, puis réessayez.",
 	"Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.": "Impossible de supprimer l'arborescence de travail \"{0}\" : l'arborescence de travail est verrouillé. Déverrouillez-le avec Git, puis réessayez.",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "Impossible de supprimer l'arborescence de travail \"{0}\" : l'arborescence de travail \"{1}\" se trouve à l'intérieur. Supprimez ou déplacez d'abord cette arborescence de travail, puis réessayez.",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "Impossible de supprimer l'arborescence de travail \"{0}\" : la fin du processus d'un agent qui s'y trouve n'a pas pu être confirmée. Réessayez une fois qu'il est terminé.",
 	"Could not delete worktree \"{0}\": {1}": "Impossible de supprimer l'arborescence de travail \"{0}\" : {1}",
 	"Local": "Local",
 	"SSH: {0}": "SSH: {0}",

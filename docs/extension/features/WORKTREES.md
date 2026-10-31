@@ -150,12 +150,18 @@ merge/commit/push and worktree deletion other than 3.2's also belong to ordinary
 
 Only a registered linked worktree is offered: not the main checkout, a plain folder, a location a workspace folder
 opened, or one a workspace folder is in. LIFECYCLE-1.3 owns the confirmation. Facade then revalidates it with Git. Where
-`git status --porcelain` in it lists anything - a change that is not committed or an untracked file - it refuses with
-nothing touched: `Cannot delete worktree "{0}": uncommitted changes present. Commit or stash them with Git, then try again.`
+`git status --porcelain` in it lists anything - a change that is not committed or an untracked file - or a file Git is told
+to assume unchanged or to skip differs from its index, it refuses with nothing touched:
+`Cannot delete worktree "{0}": uncommitted changes present. Commit or stash them with Git, then try again.`
 A worktree Git lists as locked is refused the same way, before any agent closes:
-`Cannot delete worktree "{0}": worktree is locked. Unlock it with Git, then try again.` Otherwise it closes the
-agents whose launch location is that worktree by the normal close (LIFECYCLE-3.1), waits for their processes to end, and
-runs `git worktree remove <path>` without `--force`, with 4.1's Git and execution environment; the branch is kept. Git's
+`Cannot delete worktree "{0}": worktree is locked. Unlock it with Git, then try again.` So is one another registered
+worktree is inside, which Git would remove with it, whatever that one holds:
+`Cannot delete worktree "{0}": worktree "{1}" is inside it. Delete or move that worktree first, then try again.`
+Otherwise it takes the worktree out of the catalog, so that no launch goes there meanwhile, closes the agents whose launch
+location is that worktree by the normal close (LIFECYCLE-3.1) and waits for their processes to end. Where one cannot be
+confirmed ended it deletes nothing: `Cannot delete worktree "{0}": an agent's process in it could not be confirmed to have
+ended. Try again once it has.` It then checks for changes again - what the agents wrote as they ended - refusing as above,
+and runs `git worktree remove <path>` without `--force`, with 4.1's Git and execution environment; the branch is kept. Git's
 own refusal is reported as `Could not delete worktree "{0}": {1}` and nothing is retried. The catalog is then read
 again, which confirms the deletion under 1.3 (3.3). There is no deletion command or agent API, no stop-and-delete,
 branch deletion, `--force`, discard flow or recursive removal by Facade. Stopping an agent does not delete its directory
@@ -224,6 +230,10 @@ final creation acceptance.
 Evidence: [Verification](../engineering/VERIFICATION.md). Git tests use disposable repositories.
 
 ## Change log
+
+- 2026-10-31: 3.2 keeps work Git would delete with a worktree, found by the night verification: a worktree another one is
+  inside is refused, as is an edit to a file Git assumes unchanged or skips; the worktree is out of the catalog while it is
+  deleted; an agent whose process cannot be confirmed ended keeps it; and changes are checked again after its agents close.
 
 - 2026-10-30: Apply the three-reviewer approved IA wording for status, location actions and failure feedback; behavior and deletion safeguards remain unchanged.
 
