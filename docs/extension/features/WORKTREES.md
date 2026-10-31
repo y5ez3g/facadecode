@@ -200,7 +200,8 @@ deletion is 3.2's. Background cleanup of an agent does not wait for native post-
 **The standalone worktree command belongs to the view menu and targets current-window locations.**
 
 `facade.newWorktree` is registered for the view's `…` menu and explicitly hidden from the Command Palette. With no
-arguments (including the menu's `null`), it opens 2.1's native picker flow. Its existing structured arguments are
+arguments - nothing, `null`, or the `{preserveFocus: boolean}` alone that the editor adds when a menu item is clicked
+with the mouse - it opens 2.1's native picker flow. Its existing structured arguments are
 `{location_id: string, branch: string, base_ref?: string}`; invalid arguments fail without guessing. The result identifies
 the created location, destination and branch; failures report actual retained effects without claiming subsequent
 environment setup completed. New Agent's contextual creation keeps its launch service under LIFECYCLE-1.3 and 4.1.
@@ -224,6 +225,8 @@ final creation acceptance.
 Evidence: [Verification](../engineering/VERIFICATION.md). Git tests use disposable repositories.
 
 ## Change log
+
+- 2026-10-31: 4.3 takes a mouse click's `{preserveFocus}`, which the editor gives a menu command, as no arguments.
 
 - 2026-10-30: Apply the three-reviewer approved IA wording for status, location actions and failure feedback; behavior and deletion safeguards remain unchanged.
 
