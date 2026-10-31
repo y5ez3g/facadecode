@@ -23,6 +23,18 @@ function fields(err: ArgumentError): string[] {
 	return err.problems.invalid.map(each => each.field);
 }
 
+type Schema = { readonly [key: string]: unknown };
+
+/** Each shape a tool advertises, its own and every one inside it, with where it is: `start_agent.worktree.branch`. */
+function schemasOf(schema: Schema, where: string): [string, Schema][] {
+	const properties = Object.entries((schema.properties ?? {}) as { readonly [name: string]: Schema });
+	return [
+		[where, schema],
+		...schema.items ? schemasOf(schema.items as Schema, `${where}[]`) : [],
+		...properties.flatMap(([name, each]) => schemasOf(each, `${where}.${name}`))
+	];
+}
+
 suite('Schema: tool arguments are validated whole, exactly, before any effect (MCP-1.1)', () => {
 
 	test('every missing required field is reported together, as missing_argument', () => {
@@ -47,7 +59,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 		assert.deepStrictEqual(fields(err), ['worktree.base']);
 	});
 
-	test('nothing is coerced: no strings for booleans or integers, no fractions, no null, no array written as a string', () => {
+	test('nothing is coerced: no strings for booleans or integers, no fractions, no null', () => {
 		for (const [tool, args, field] of [
 			['list_agents', { include_ended: 'true' }, 'include_ended'],
 			['list_agents', { limit: '5' }, 'limit'],
@@ -55,9 +67,8 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 			['list_agents', { cursor: null }, 'cursor'],
 			['read_screen', { agent: 'a', lines: '20' }, 'lines'],
 			['type_text', { agent: 'a', text: 'x', enter: 1 }, 'enter'],
-			['read_messages', { ids: '["m-1","m-2"]' }, 'ids'],
-			['press_keys', { agent: 'a', keys: '["Enter"]' }, 'keys'],
 			['press_keys', { agent: 'a', keys: [1] }, 'keys[0]'],
+			['press_keys', { agent: 'a', keys: '[1]' }, 'keys[0]'],
 			['stop_agent', { agent: '' }, 'agent']
 		] as const) {
 			const err = refusal(() => validateArguments(tool, args));
@@ -92,17 +103,50 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 
 	test('every tool has a check for its schema, and every schema property type is one the validator knows', () => {
 		const known = new Set(['string', 'integer', 'boolean', 'array', 'object']);
-		const types = (schema: { readonly [key: string]: unknown }): unknown[] => [
-			...schema.type !== undefined ? [schema.type] : [],
-			...Array.isArray(schema.oneOf) ? schema.oneOf.flatMap(each => types(each)) : [],
-			...schema.items ? types(schema.items as { readonly [key: string]: unknown }) : [],
-			...schema.properties ? Object.values(schema.properties as { readonly [key: string]: { readonly [key: string]: unknown } }).flatMap(types) : []
-		];
 		for (const tool of TOOLS) {
-			for (const type of types(tool.inputSchema as unknown as { readonly [key: string]: unknown })) {
-				assert.ok(known.has(type as string), `${tool.name}: ${String(type)}`);
+			for (const [where, schema] of schemasOf(tool.inputSchema as unknown as Schema, tool.name)) {
+				assert.ok(known.has(schema.type as string), `${where}: ${String(schema.type)}`);
 			}
 		}
+	});
+
+	test('every advertised shape has a type and none is a union, so that every model provider takes the tools (D96)', () => {
+		// Gemini refuses a whole tool list over one value without a type, and OpenCode sends unions as JSON text (T3 Code #21655)
+		for (const tool of TOOLS) {
+			for (const [where, schema] of schemasOf(tool.inputSchema as unknown as Schema, tool.name)) {
+				assert.ok(typeof schema.type === 'string', `${where} has no type`);
+				for (const union of ['oneOf', 'anyOf', 'allOf', 'not']) {
+					assert.ok(!(union in schema), `${where} has ${union}`);
+				}
+			}
+		}
+	});
+
+	test('a text whose beginning the caller\'s CLI cut off - Antigravity\'s mark of it first - is refused before any effect (D107)', () => {
+		const cut = `[Earlier output truncated]\n\n${'x'.repeat(100)}`;
+		for (const [tool, args, field] of [
+			['send_message', { to: 'a', text: cut }, 'text'],
+			['start_agent', { name: 'n', window_id: 'w', location_id: 'l', cli: 'c', prompt: cut }, 'prompt'],
+			['type_text', { agent: 'a', text: cut }, 'text']
+		] as const) {
+			const err = refusal(() => validateArguments(tool, args));
+			assert.deepStrictEqual(fields(err), [field], tool);
+			assert.match(err.message, /your CLI cut its beginning off before Facade received it\. Send it in shorter parts\./);
+		}
+		// The words anywhere else are a text like any other
+		assert.strictEqual(validateArguments('send_message', { to: 'a', text: `It said [Earlier output truncated] there.` }).text, 'It said [Earlier output truncated] there.');
+	});
+
+	test('a list takes one item alone, or the list written as JSON text, as some CLIs send one (D96)', () => {
+		assert.deepStrictEqual(validateArguments('read_messages', { ids: '["m-1","#m2"]' }).ids, ['m-1', '#m2']);
+		assert.deepStrictEqual(validateArguments('read_messages', { ids: ' [ "m-1" ] ' }).ids, ['m-1']);
+		assert.deepStrictEqual(validateArguments('press_keys', { agent: 'a', keys: '["Escape","Enter"]' }).keys, ['Escape', 'Enter']);
+		// A key that only looks like the start of a list is that key
+		assert.deepStrictEqual(validateArguments('press_keys', { agent: 'a', keys: '[' }).keys, ['[']);
+		// The list as JSON text keeps every limit a list has
+		assert.deepStrictEqual(fields(refusal(() => validateArguments('read_messages', { ids: '[]' }))), ['ids']);
+		assert.deepStrictEqual(fields(refusal(() => validateArguments('read_messages', { ids: JSON.stringify(Array.from({ length: 101 }, (_, i) => `m-${i}`)) }))), ['ids']);
+		assert.deepStrictEqual(fields(refusal(() => validateArguments('press_keys', { agent: 'a', keys: '["Enter","F1"]' }))), ['keys[1]', 'keys']);
 	});
 
 	test('start_agent: a name is any label, even empty (O22); models, efforts and branches are not blank, and a prompt is a message body', () => {

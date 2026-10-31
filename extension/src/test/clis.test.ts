@@ -278,10 +278,12 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		return 'planned';
 	};
 
-	test('Codex uses its native YOLO mapping and trusts this folder by an argument alone, with no later-step integrations', () => {
+	test('Codex uses its native YOLO mapping, starts without its update prompt and trusts this folder by an argument alone, with no later-step integrations', () => {
 		for (const yolo of [true, false]) {
 			const launch = plan({ cli: 'codex', yolo });
 			assert.deepStrictEqual(launch.args, [
+				// Its update prompt would hold back the first task it is given (CLIS-3.2, D95); embedded, as its -c overrides need it
+				'-c', 'check_for_update_on_startup=false', '--no-daemon',
 				...(yolo ? ['--dangerously-bypass-approvals-and-sandbox'] : ['--sandbox', 'workspace-write']),
 				'-c', `projects={ ${tomlString(fs.realpathSync(cwd))} = { trust_level = "trusted" } }`
 			]);

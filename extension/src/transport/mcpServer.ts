@@ -13,7 +13,7 @@ import { failureAnswer, isToolAnswer } from './failure';
 import { CallFailed } from './ptydLink';
 
 /** The MCP protocol versions the server speaks, the newest first: the one it answers where a client asks another. */
-export const MCP_VERSIONS: readonly string[] = ['2025-06-18', '2025-03-26', '2024-11-05'];
+export const MCP_VERSIONS: readonly string[] = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 
 /** What a server that speaks for no run says: its CLI was not started by Facade Code (CLIS-2.2). */
 const NOT_SERVING = 'This session was not started by Facade Code, so the Facade Code tools are not available in it.';

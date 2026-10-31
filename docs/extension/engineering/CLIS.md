@@ -156,8 +156,11 @@ share, would not read a run's own configuration, so a run with the tools has its
 inline configuration is read as OpenCode reads it, and one that cannot be read stays as it is, the run without the tools. Antigravity starts a folder's plugin servers only
 with its first turn, which is planned before they connect, or with its MCP panel: a run's start opens and closes that
 panel before the first turn (COLLABORATION-2.2), and the server marks its tools for Antigravity to give the model
-directly. The server is never declared required, so a CLI whose Facade server fails still starts and stays usable. The
-server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
+directly. The server is never declared required, so a CLI whose Facade server fails still starts and stays usable: Muse
+Code requires a server unless its entry says `"mode": "optional"`, and fails a whole run over a required one that does not
+start, so its entry says so (D101). Codex
+waits up to 10 s for its optional servers before its first model request, so a server that starts slowly still serves the
+first turn (D95). The server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
 orchestration is off, inject no Facade server, skill or approval into that new process.
 
 Before a project write, snapshot exact original bytes/existence, lock the path across runs, merge only owned content,
@@ -236,11 +239,16 @@ delays are internal adapter details only where required by its protocol.
 
 Each adapter declares its maintained native interactive prompt-argument mapping, if it has one; COLLABORATION-2.2 owns
 native/post-start prompt selection and its deadline start. Claude Code, Codex, Muse Code and Pi take the prompt as a
-positional argument after the end of options - Pi's unless it starts with `@`, which it reads as a file to attach - and
+positional argument after the end of options - Pi's unless it starts with `@`, which it reads as a file to attach, and Muse
+Code's unless it is one lowercase word, which it reads as one of its commands even there and refuses to start (D101) - and
 OpenCode as the value of `--prompt` unless it starts with `-`; this mapping is used while unverified and reports that
 state (Dots D49). Antigravity's first task goes after what its start types before the first turn (COLLABORATION-2.2),
 as its first message. Do not wait for MCP or activity idle beyond that, send a confirmed prompt twice or synthesize a
 prompt to make MCP appear connected.
+
+A CLI whose startup update prompt would hold back the first task it is given starts without that prompt in Facade's
+launches: Codex with `-c check_for_update_on_startup=false` (D95). The other built-ins update in the background or only
+note a new version, and keep that behavior.
 
 ### 3.3 Native configuration and trust
 
@@ -254,8 +262,9 @@ in that launch (Codex `-c projects` with `trust_level = "trusted"` for the folde
 CLI's lock and preserving the rest of the file (Claude Code `hasTrustDialogAccepted` for the repository's main checkout
 in its global configuration; Antigravity `trustedWorkspaces` with the folder, spelled as Antigravity names its
 working directory, in `~/.gemini/antigravity-cli/settings.json`). OpenCode asks no trust question and is given none.
-A file that cannot be read is left untouched and the CLI asks in its terminal. Native login and permission interactions
-remain in the terminal.
+A file that cannot be read, or that does not exist, is left as it is and the CLI asks in its terminal. Claude Code's trust
+covers every folder below a trusted one, so it is never written for the home folder, a folder above it or a filesystem
+root; that CLI asks in its terminal there too (D97). Native login and permission interactions remain in the terminal.
 
 Keep administrator settings and user deny policies effective according to verified native precedence. If effective
 native settings are unknown, report that fact instead of claiming trust or sandbox evidence. Test isolation remains
@@ -321,6 +330,7 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-10-31: Codex startup, Muse optional tools and first prompts, and bounded per-launch trust follow D95, D97 and D101.
 - 2026-10-31: Antigravity, Muse Code, OpenCode and Pi are given the Facade tools (D91, D94): 1.4 says each built-in's
   model and effort options, 2.1 their input readers - a box, a placeholder known by its words, a CLI's own drawn cursor -
   and 2.2 how each receives the server, the skill and the approval of Facade's own tools.

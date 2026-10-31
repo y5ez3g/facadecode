@@ -47,7 +47,8 @@ const codexTools: ToolsIntegration = {
 
 /**
  * Codex in its interactive terminal (CLIS-1.3, 3.3): trust applies to this launch through a TOML override, without writing its
- * configuration. YOLO bypasses approvals and sandbox; otherwise workspace-write keeps its native approval policy.
+ * configuration. YOLO bypasses approvals and sandbox; otherwise workspace-write keeps its native approval policy. It starts
+ * without its update prompt, which would hold back the first task it is given (CLIS-3.2, D95).
  */
 export const codexAdapter: CliAdapter = {
 	id: 'codex',
@@ -62,8 +63,11 @@ export const codexAdapter: CliAdapter = {
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
 			'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
-			'--no-daemon'
+			// Its first model request waits this long for the server, not its 1 s default, which leaves a slow start out (D95)
+			'-c', 'mcp_optional_startup_grace_ms=10000'
 		],
+		// Embedded, as -c overrides need it: 0.166.0 otherwise warns of it under its input, and runs embedded all the same
+		quiet: ['-c', 'check_for_update_on_startup=false', '--no-daemon'],
 		yoloOn: ['--dangerously-bypass-approvals-and-sandbox'],
 		yoloOff: ['--sandbox', 'workspace-write'],
 		model: ['--model', '${model}'],

@@ -3,8 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 // A tool call's arguments checked against its tool's schema before any effect (MCP-1.1): a JSON object of known keys and exact
-// types - nothing coerced, no default but the schema's own - with every missing required field reported together, then the
-// checks particular to each tool (MCP-4.1, 4.2, 5.2).
+// types - nothing coerced but a list given as one string or written as JSON text, as some CLIs send one (D96), and no default
+// but the schema's own - with every missing required field reported together, then the checks particular to each tool
+// (MCP-4.1, 4.2, 5.2).
 
 import { isJsonObject } from '../base/json';
 import { normalizeKey } from './keys';
@@ -120,14 +121,9 @@ function objectOf(schema: ArgumentSchema | Schema, given: { readonly [key: strin
 
 /** `given` checked against `schema`; undefined, with its problems collected, where it does not fit. */
 function valueOf(schema: Schema, given: unknown, field: string, problems: Collector): unknown {
-	if (Array.isArray(schema.oneOf)) {
-		const alternatives = schema.oneOf as readonly Schema[];
-		const fitting = alternatives.find(each => typeFits(each.type, given));
-		if (!fitting) {
-			problems.invalid.push({ field, problem: `\`${field}\` must be ${alternatives.map(each => typeName(each.type)).join(' or ')}, not ${kindOf(given)}.` });
-			return undefined;
-		}
-		return valueOf(fitting, given, field, problems);
+	if (schema.type === 'array' && typeof given === 'string') {
+		// One item alone, or the list as JSON text, as some CLIs send a list (D96)
+		return valueOf(schema, encodedArray(given) ? JSON.parse(given) : [given], field, problems);
 	}
 	if (!typeFits(schema.type, given)) {
 		problems.invalid.push({ field, problem: `\`${field}\` must be ${typeName(schema.type)}, not ${kindOf(given)}.` });
@@ -222,7 +218,7 @@ function controlIn(text: string): string | undefined {
 	return `U+${code.toString(16).toUpperCase().padStart(4, '0')}${code === 0x1b ? ' (Escape)' : ''} at code point ${codePoints(text.slice(0, match.index)) + 1}`;
 }
 
-/** A string that is a JSON array written out: a list must be sent as a list, never parsed out of text (MCP-1.1). */
+/** A string that is a JSON array written out: the list itself, as some CLIs send a list argument (MCP-1.1, D96). */
 function encodedArray(text: string): boolean {
 	if (!/^\s*\[/.test(text)) {
 		return false;
@@ -234,12 +230,23 @@ function encodedArray(text: string): boolean {
 	}
 }
 
-/** A message body (MCP-4.1, COLLABORATION-2.1): nonblank, and only text - a control would act outside the paste. */
+/** How Antigravity marks a long text argument it cut to its last 8,000 characters before it reached Facade (D107). */
+const CUT_MARK = '[Earlier output truncated]';
+
+/** A text whose beginning the caller's CLI cut off on the way: never passed on as though whole (MCP-4.1, D107). */
+function checkWhole(field: string, text: string, problems: Collector): void {
+	if (text.startsWith(CUT_MARK)) {
+		problems.invalid.push({ field, problem: `\`${field}\` begins with ${JSON.stringify(CUT_MARK)}: your CLI cut its beginning off before Facade received it. Send it in shorter parts.` });
+	}
+}
+
+/** A message body (MCP-4.1, COLLABORATION-2.1): nonblank, whole, and only text - a control would act outside the paste. */
 function checkBody(field: string, text: string, problems: Collector): void {
 	if (!text.trim()) {
 		problems.invalid.push({ field, problem: `\`${field}\` must not be blank.` });
 		return;
 	}
+	checkWhole(field, text, problems);
 	const control = controlIn(text);
 	if (control) {
 		problems.invalid.push({ field, problem: `\`${field}\` contains the control character ${control}; a message takes text, tabs and line breaks only. press_keys sends terminal keys.` });
@@ -284,12 +291,6 @@ const CHECKS: { readonly [T in ToolName]: (value: Value, given: { readonly [key:
 		if (given.all === true || given.cursor !== undefined) {
 			problems.invalid.push({ field: 'ids', problem: '`ids` selects messages itself and cannot be combined with `all` or `cursor`.' });
 		}
-		if (typeof ids === 'string') {
-			if (encodedArray(ids)) {
-				problems.invalid.push({ field: 'ids', problem: '`ids` is a JSON array written as a string; send the array itself.' });
-			}
-			value.ids = [ids];
-		}
 	},
 	read_screen: () => undefined,
 	type_text: (value, _given, problems) => {
@@ -298,28 +299,26 @@ const CHECKS: { readonly [T in ToolName]: (value: Value, given: { readonly [key:
 			return;
 		}
 		const control = controlIn(args.text);
+		checkWhole('text', args.text, problems);
 		if (control) {
 			problems.invalid.push({ field: 'text', problem: `\`text\` contains the control character ${control}; type_text types text, tabs and line breaks only. Use press_keys for Escape and other control keys.` });
 		} else if (args.text === '' && !args.enter) {
 			problems.invalid.push({ field: 'text', problem: '`text` is empty and `enter` is false: there is nothing to type.' });
 		}
 	},
-	press_keys: (value, _given, problems) => {
-		const given = value.keys as string | readonly string[] | undefined;
-		if (given === undefined) {
+	press_keys: (value, given, problems) => {
+		const keys = value.keys as readonly string[] | undefined;
+		if (keys === undefined) {
 			return;
 		}
-		if (typeof given === 'string' && encodedArray(given)) {
-			problems.invalid.push({ field: 'keys', problem: '`keys` is a JSON array written as a string; send the array itself.' });
-			return;
-		}
-		const keys = typeof given === 'string' ? [given] : given;
+		// A key given alone is named as it was given
+		const alone = typeof given.keys === 'string' && !encodedArray(given.keys);
 		const normalized: string[] = [];
 		const before = problems.invalid.length;
 		keys.forEach((key, index) => {
 			const name = normalizeKey(key);
 			if (name === undefined) {
-				const field = typeof given === 'string' ? 'keys' : `keys[${index}]`;
+				const field = alone ? 'keys' : `keys[${index}]`;
 				problems.invalid.push({ field, problem: `\`${field}\` ${JSON.stringify(key)} is not a key press_keys knows.` });
 			} else {
 				normalized.push(name);

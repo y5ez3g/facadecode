@@ -3,7 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The nine tools of the Facade MCP server (MCP-1.1), in their order: the one source of their names, descriptions and argument
-// shapes, which the shim lists and the window validates against (MCP-6.2).
+// shapes, which the shim lists and the window validates against (MCP-6.2). Every shape has a type and none a `oneOf`, so that
+// every model provider takes the list (D96).
 
 /** A JSON Schema of a tool's arguments, as MCP lists it. */
 export interface ArgumentSchema {
@@ -110,7 +111,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 		inputSchema: {
 			type: 'object',
 			properties: {
-				ids: { oneOf: [ID, { type: 'array', items: ID, minItems: 1, maxItems: 100 }], description: 'Message IDs or `#mN`.' },
+				ids: { type: 'array', items: ID, minItems: 1, maxItems: 100, description: 'Message IDs or `#mN`.' },
 				all: { type: 'boolean', default: false },
 				cursor: CURSOR,
 				limit: LIMIT
@@ -143,7 +144,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 		description: 'Press keys in an agent\'s terminal, in order: Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z, or a printable character. Return, Esc and ArrowUp-style names are taken too.',
 		inputSchema: {
 			type: 'object',
-			properties: { agent: AGENT, keys: { oneOf: [ID, { type: 'array', items: ID, minItems: 1 }] } },
+			properties: { agent: AGENT, keys: { type: 'array', items: ID, minItems: 1 } },
 			required: ['agent', 'keys'],
 			additionalProperties: false
 		}

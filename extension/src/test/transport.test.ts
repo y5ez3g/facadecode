@@ -244,8 +244,10 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 			instructions: instructionsFor('#a7')
 		});
 		assert.strictEqual((await shim.request('initialize', { protocolVersion: '2024-11-05' })).result.protocolVersion, '2024-11-05');
-		assert.strictEqual((await shim.request('initialize', { protocolVersion: '1999-01-01' })).result.protocolVersion, '2025-06-18');
-		assert.strictEqual((await shim.request('initialize', {})).result.protocolVersion, '2025-06-18');
+		// A CLI that speaks the newest the shim knows gets it; one newer still is answered with that newest (D105)
+		assert.strictEqual((await shim.request('initialize', { protocolVersion: '2025-11-25' })).result.protocolVersion, '2025-11-25');
+		assert.strictEqual((await shim.request('initialize', { protocolVersion: '2099-01-01' })).result.protocolVersion, '2025-11-25');
+		assert.strictEqual((await shim.request('initialize', {})).result.protocolVersion, '2025-11-25');
 		const before = shim.messages.length;
 		shim.write({ jsonrpc: '2.0', method: 'notifications/initialized' });
 		shim.write({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } });

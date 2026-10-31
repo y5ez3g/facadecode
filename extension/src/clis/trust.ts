@@ -5,9 +5,11 @@
 // The trust a CLI keeps in a file of its own (CLIS-3.3, D62): the folder a run starts in is trusted as the person trusts it by
 // accepting the CLI's question - the CLI's own entry merged into the CLI's own file as the CLI writes it, under the lock the CLI
 // takes, every other byte of the file kept - and nothing else of the file is touched. An entry already there writes nothing. A file
-// that cannot be read, or not as the CLI writes it, is left as it is: the CLI then asks in its terminal. The entry stays, as the
+// that cannot be read, or not as the CLI writes it, is left as it is, and one the CLI has not made is not made for it (D97): the
+// CLI then asks in its terminal. So it does for a folder whose trust would cover far more than it (D97). The entry stays, as the
 // person's own answer would: it is theirs to take out.
 
+import * as fs from 'fs';
 import { updateJsonFile } from '../base/files';
 import type { JsonObject } from '../base/json';
 import { addItems, addMembers, applyJsonEdits, JsonEdit, JsonNode, JsonObjectNode, JsonStyle, jsonStyleOf, memberOf, nodeValue, replaceValue } from '../base/jsonc';
@@ -24,10 +26,20 @@ export interface TrustTarget {
 	readonly entry: { readonly value: boolean } | { readonly item: string };
 	/** The folder trusted, as the CLI names it. */
 	readonly folder: string;
+	/** Why no trust is written for this folder: the CLI's trust would cover far more than it (D97). */
+	readonly withheld?: string;
 }
 
-/** What became of a trust: written, there already, or the file left as it is, with why. */
-export type TrustOutcome = { readonly kind: 'written' } | { readonly kind: 'there' } | { readonly kind: 'unreadable'; readonly why: string };
+/**
+ * What became of a trust: written, there already, or nothing written - the file not made by the CLI yet, left as it is with why,
+ * or the folder one whose trust is withheld, with why.
+ */
+export type TrustOutcome =
+	| { readonly kind: 'written' }
+	| { readonly kind: 'there' }
+	| { readonly kind: 'missing' }
+	| { readonly kind: 'unreadable'; readonly why: string }
+	| { readonly kind: 'withheld'; readonly why: string };
 
 /** The entry's value, a list of its item for a list. */
 function leafOf(target: TrustTarget): unknown {
@@ -46,17 +58,24 @@ export function trustEntryJson(target: TrustTarget): JsonObject {
 
 /**
  * Merges `target`'s entry into its file (CLIS-3.3, D62) under `lock` - the CLI's own, `<file>.lock`, which `withFileLock` waits for
- * as Claude Code takes it - so that what the CLI writes meanwhile is read again and kept. A file that is not there is
- * made with the entry alone; one that cannot be read, is no JSON object or has something of another kind where the entry goes is
- * left as it is. Throws where the lock or the write fails.
+ * as Claude Code takes it - so that what the CLI writes meanwhile is read again and kept. A file that is not there is not made,
+ * nor is the lock taken beside it (D97); one that cannot be read, is no JSON object or has something of another kind where the
+ * entry goes is left as it is. A withheld folder is not trusted (D97). Throws where the lock or the write fails.
  */
 export function mergeTrust(target: TrustTarget, lock: FileLock = withFileLock): TrustOutcome {
+	if (target.withheld !== undefined) {
+		return { kind: 'withheld', why: target.withheld };
+	}
+	if (!fs.existsSync(target.file)) {
+		return { kind: 'missing' };
+	}
 	return lock(target.file, () => updateJsonFile(target.file, (read): { readonly outcome: TrustOutcome; readonly write?: JsonObject | string } => {
 		if (read.kind === 'other') {
 			return { outcome: { kind: 'unreadable', why: read.why } };
 		}
 		if (read.kind === 'missing') {
-			return { outcome: { kind: 'written' }, write: trustEntryJson(target) };
+			// Taken away between the look and the lock
+			return { outcome: { kind: 'missing' } };
 		}
 		// The file's own text, edited where the entry goes: its comments, numbers, keys and layout stay as they were
 		const edits = trustEdits(read.text, read.tree, target, jsonStyleOf(read.text, read.tree, read.layout.lineEnding, read.layout.indent));
@@ -119,6 +138,8 @@ export function writeTrust(cli: string, target: TrustTarget, lock: FileLock = wi
 	switch (outcome.kind) {
 		case 'written': return `Trusted ${target.folder} for ${cli}: merged ${JSON.stringify(trustEntryJson(target))} into ${target.file}.`;
 		case 'there': return undefined;
+		case 'missing': return `Did not trust ${target.folder} for ${cli}: ${target.file} does not exist, and Facade makes no file of ${cli}'s; ${cli} asks in its terminal.`;
 		case 'unreadable': return `Did not trust ${target.folder} for ${cli}: ${target.file} ${outcome.why}, so Facade left it as it is; ${cli} asks in its terminal.`;
+		case 'withheld': return `Did not trust ${target.folder} for ${cli}: ${outcome.why}; ${cli} asks in its terminal.`;
 	}
 }

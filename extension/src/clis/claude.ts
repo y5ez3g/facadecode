@@ -116,6 +116,28 @@ export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string
 	return platform === 'win32' ? key.split('\\').join('/').replace(/^[a-z]:/, drive => drive.toUpperCase()) : key;
 }
 
+/**
+ * Why Claude Code's trust is not written for its project folder `folder` (CLIS-3.3, D97): its trust covers every folder below a
+ * trusted one, so for a filesystem root, the home folder `home` or a folder above it, it would trust every project there. None for
+ * any other folder.
+ */
+export function trustWithheld(folder: string, home: string, platform: NodeJS.Platform): string | undefined {
+	const paths = platform === 'win32' ? path.win32 : path.posix;
+	// Compared as the platform compares them: Windows ignores case and takes either slash
+	const spelled = (each: string) => paths.resolve(platform === 'win32' ? each.toLowerCase() : each);
+	// A home folder reached through a link is that folder; one that is not here is compared as it is named
+	const real = fs.existsSync(home) ? canonicalFolder(home) : home;
+	const project = spelled(folder);
+	if (paths.dirname(project) === project) {
+		return 'it is a filesystem root, and Claude Code trusts every folder below a trusted one';
+	}
+	const below = paths.relative(project, spelled(real));
+	if (below === '') {
+		return 'it is the home folder, and Claude Code trusts every folder below a trusted one';
+	}
+	return !below.startsWith('..') && !paths.isAbsolute(below) ? 'the home folder is inside it, and Claude Code trusts every folder below a trusted one' : undefined;
+}
+
 /** The run's plugin of the skill, as `--plugin-dir` loads one: its manifest and its skill. */
 const PLUGIN_DIR = 'plugin';
 
@@ -171,7 +193,8 @@ export const claudeAdapter: CliAdapter = {
 	initialPrompt: { state: 'unverified', reason: 'the prompt as its positional argument after --, which starts the interactive session with it' },
 	trustTarget: (cwd, env, platform): TrustTarget => {
 		const folder = claudeProjectKey(cwd, platform);
-		return { file: claudeConfigFile(env, platform), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder };
+		const withheld = trustWithheld(folder, homeOf(env, platform), platform);
+		return { file: claudeConfigFile(env, platform), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder, ...withheld ? { withheld } : {} };
 	},
 	// The switch would also turn off its status reports; the run's --settings clears it for the files' copy (CLIS-2.3)
 	adjustEnvironment: (env, platform) => setVariable(env, TITLE_SWITCH, null, platform),

@@ -22,8 +22,10 @@ Tools in order: `list_start_options`, `start_agent`, `list_agents`, `stop_agent`
 `read_messages`, `read_screen`, `type_text`, `press_keys`.
 Do not expose get_operation, cancel_message, rename, independent worktree creation/deletion or batch stop.
 
-Arguments are JSON objects with known keys and correct types; do not coerce arrays encoded as strings or missing
-choices into defaults except where explicitly allowed below. Return missing required arguments together.
+Arguments are JSON objects with known keys and correct types; do not coerce missing choices into defaults except where
+explicitly allowed below. Every advertised argument has a JSON Schema `type` and no `oneOf`, so that every model provider
+takes the tool list; a list argument also takes a single string, or the list written as JSON text, as some CLIs send
+it (D96). Return missing required arguments together.
 IDs are nonempty strings; references accept exact IDs and RULES-2.3's `#aN`, `@name`, or display-name-plus-ID form,
 plus the person's `#human`. Names can repeat; ambiguity requires an ID. A reference resolves once within the caller's
 normal reach.
@@ -191,7 +193,10 @@ Resolve an exact ID or unique eligible name; ambiguous names fail and require ID
 caller's window; RULES-2.3 decides when `@human` does. No array or merged recipient result.
 Text is nonblank and at most 8,000 Unicode code points. Preserve Unicode, line breaks and tabs as content; reject
 terminal-control encodings that would execute outside the message paste instead of silently transforming the body.
-Raw terminal control is a separate tool. Never replace the body with a pointer and call that full-content delivery.
+Raw terminal control is a separate tool. Never replace the body with a pointer and call that full-content delivery. A
+text that begins with `[Earlier output truncated]` - how Antigravity marks a long argument it cut to its last 8,000
+characters, which T3 Code reads back - lost its beginning on its way: send_message, start_agent's prompt and type_text refuse
+it with invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole (D107).
 
 Return message_id, resolved target, status/effects, and deadline/obstacle if accepted within RULES-1.2's response budget.
 Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget. Message ID allocation/reuse follows RULES-1.1;
@@ -215,7 +220,7 @@ All A-to-B delivery/reply/system-result errors remain with agents or end if nobo
 
 **Read only the calling agent's incoming messages, never its sent messages or another inbox; reading delivers.**
 
-Arguments: `ids?:string|string[]` (1–100 IDs), `all?:boolean=false`, `cursor?:string`,
+Arguments: `ids?:string[]` (1–100 IDs; one ID alone is taken too), `all?:boolean=false`, `cursor?:string`,
 `limit?:integer=100` (1–200). Explicit ids exclude all/cursor. Without them, return the caller's incoming records
 that are not yet delivered: still being delivered, not delivered at their deadline, uncertain, and Facade results that
 were not pasted. all:true pages every retained incoming record. IDs accept message IDs or their `#mN` aliases, not
@@ -254,7 +259,7 @@ including ESC, are rejected before writing with INVALID/`invalid_argument` point
 validation, not a length cap: there is no single-line, code-point, byte or whole-request cap that rejects otherwise
 valid direct text. Transport may send chunks internally.
 
-press_keys: required `agent:string`, `keys:string|string[]`, a nonempty sequence of recognized terminal keys with no
+press_keys: required `agent:string`, `keys:string[]` (one key alone is taken too), a nonempty sequence of recognized terminal keys with no
 count limit.
 Names include Enter, Escape, Tab, Shift+Tab, Backspace, Delete, directions, Home, End, PageUp, PageDown, Space,
 Ctrl+A through Ctrl+Z and printable characters. Normalize familiar Return/Esc/Arrow aliases; reject unsupported key
@@ -289,6 +294,12 @@ the tool directly rather than on demand; other CLIs ignore it. A server started 
 the person started in a folder whose shared entry is a running agent's - speaks for no run: it lists no tools and says
 so in its instructions, and a call to it fails with `configuration_invalid` and no effect.
 
+The shim speaks MCP 2025-11-25 down to 2024-11-05, the client's version where it is one of these and else the newest, and
+answers a method it does not know with JSON-RPC's method-not-found, so a newer CLI is never left without tools (D105). Its
+instructions tell a CLI that lists tools by name alone until they are loaded, as Claude Code does, to load one before calling
+it, as T3 Code tells it. A test keeps the tool list, the instructions and the skill within a byte budget, which every turn of
+every agent pays for (D105).
+
 ### 6.2 Protocol and recovery
 
 **Use one schema source for tools, descriptions and wire validation, and report incompatible protocols plainly.**
@@ -321,6 +332,7 @@ No migration guide for already-published user skills is required: this is the fi
 
 ## Change log
 
+- 2026-10-31: Typed schemas accept CLI list encodings, truncated text is refused, and MCP 2025-11-25 is supported.
 - 2026-10-31: 6.1 marks the tools for Antigravity to give the model directly, lists none for a session the person started
   in a folder whose shared entry is a running agent's, and names Muse Code's own approvals (D94).
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots contract with the owner's 2026-10-30

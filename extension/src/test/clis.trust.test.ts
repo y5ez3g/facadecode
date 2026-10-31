@@ -10,7 +10,7 @@ import { canonicalFolder } from '../base/files';
 import { withFileLock } from '../base/lock';
 import type { CliAdapter } from '../clis/adapter';
 import { BUILT_IN_ADAPTERS } from '../clis/catalog';
-import { claudeConfigFile, claudeProjectKey } from '../clis/claude';
+import { claudeConfigFile, claudeProjectKey, trustWithheld } from '../clis/claude';
 import type { Environment } from '../clis/environment';
 import { mergeTrust, TrustTarget, writeTrust } from '../clis/trust';
 import type { Location, PlanRequest } from '../core/ports';
@@ -44,7 +44,8 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		cwd = path.join(temp.dir, 'repo');
 		fs.mkdirSync(home);
 		fs.mkdirSync(cwd);
-		env = { HOME: home };
+		// Both home variables: on Windows the CLIs find the home folder by USERPROFILE, and without it, the real one
+		env = { HOME: home, USERPROFILE: home };
 	});
 	teardown(() => temp.remove());
 
@@ -63,6 +64,30 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.strictEqual(claudeConfigFile(env, 'darwin'), legacy);
 		fs.writeFileSync(path.join(home, '.claude.json'), '{}');
 		assert.strictEqual(claudeConfigFile(env, 'darwin'), path.join(home, '.claude.json'));
+	});
+
+	test('Claude Code\'s trust is never written for the home folder, a folder above it or a filesystem root: it would trust every project there (D97)', () => {
+		fs.writeFileSync(path.join(home, '.claude.json'), '{}');
+		// Real paths of this computer, as Claude Code names its project folders; the home folder named through a link is the same folder
+		const real = canonicalFolder(home);
+		const here = process.platform === 'win32' ? 'win32' : 'darwin';
+		assert.strictEqual(trustWithheld(path.join(real, 'code', 'app'), home, here), undefined);
+		assert.match(trustWithheld(real, home, here)!, /^it is the home folder/);
+		assert.match(trustWithheld(path.dirname(real), home, here)!, /^the home folder is inside it/);
+		assert.match(trustWithheld(path.parse(real).root, home, here)!, /^it is a filesystem root/);
+		// Windows compares without case, either slash, as Claude Code names its folders there
+		assert.strictEqual(trustWithheld('C:/Users/ada/code', 'C:\\Users\\Ada', 'win32'), undefined);
+		assert.match(trustWithheld('C:/Users/ada', 'C:\\Users\\Ada', 'win32')!, /^it is the home folder/);
+		assert.match(trustWithheld('C:/Users', 'C:\\Users\\Ada', 'win32')!, /^the home folder is inside it/);
+		assert.match(trustWithheld('C:/', 'C:\\Users\\Ada', 'win32')!, /^it is a filesystem root/);
+		// A start in the home folder writes nothing and says why; the CLI asks in its terminal
+		const target = targetOf('claude', home, env, here);
+		// Never this computer's own configuration, whatever the test gets wrong
+		assert.strictEqual(target.file, path.join(home, '.claude.json'));
+		assert.deepStrictEqual([mergeTrust(target).kind, fs.readFileSync(path.join(home, '.claude.json'), 'utf8')], ['withheld', '{}']);
+		assert.strictEqual(writeTrust('Claude Code', target), `Did not trust ${target.folder} for Claude Code: it is the home folder, and Claude Code trusts every folder below a trusted one; Claude Code asks in its terminal.`);
+		// Antigravity trusts exactly the folder named, so its home is trusted as any folder is
+		assert.strictEqual(targetOf('agy', home, env).withheld, undefined);
 	});
 
 	test('Claude Code keys its trust on the repository\'s main checkout - from a linked worktree and a folder inside it too - and on the folder itself outside a repository', () => {
@@ -109,11 +134,14 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		fs.writeFileSync(file, '{"projects":null,"theme":"dark"}');
 		mergeTrust(target);
 		assert.strictEqual(fs.readFileSync(file, 'utf8'), `{"projects":${JSON.stringify({ [cwd]: { hasTrustDialogAccepted: true } })},"theme":"dark"}`);
-		// One that is not there is made with the entry alone, readable by its owner only
-		fs.rmSync(file);
+		// What it says it merged, keeping the file's own permissions; Windows has no POSIX modes to read back
+		fs.writeFileSync(file, '{}');
+		fs.chmodSync(file, 0o640);
 		assert.strictEqual(writeTrust('Claude Code', target), `Trusted ${cwd} for Claude Code: merged ${JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } })} into ${file}.`);
-		// Windows has no POSIX modes to read back
-		assert.deepStrictEqual([fs.readFileSync(file, 'utf8'), process.platform === 'win32' || (fs.statSync(file).mode & 0o777) === 0o600], [`${JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } }, undefined, 2)}\n`, true]);
+		assert.deepStrictEqual([JSON.parse(fs.readFileSync(file, 'utf8')), process.platform === 'win32' || (fs.statSync(file).mode & 0o777) === 0o640], [{ projects: { [cwd]: { hasTrustDialogAccepted: true } } }, true]);
+		// One that is not there is not made (D97)
+		fs.rmSync(file);
+		assert.deepStrictEqual([mergeTrust(target), fs.readdirSync(home)], [{ kind: 'missing' }, []]);
 	});
 
 	test('an entry already there writes nothing; a file that cannot be read, or not as the CLI writes it, is left byte for byte as it is, with why', () => {
@@ -155,17 +183,18 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 	test('the merge takes the CLI\'s own lock, <file>.lock: a folder lock as Claude Code takes it is waited for, never written through, and one left behind is taken over', () => {
 		const target = targetOf('claude', cwd, env);
 		const locked: string[] = [];
+		fs.writeFileSync(target.file, '{}');
 		mergeTrust(target, (file, fn) => (locked.push(file), fn()));
 		assert.deepStrictEqual(locked, [target.file]);
-		fs.rmSync(target.file);
+		fs.writeFileSync(target.file, '{}');
 		const lock = `${target.file}.lock`;
 		fs.mkdirSync(lock);
 		assert.throws(() => mergeTrust(target, (file, fn) => withFileLock(file, fn, { waitMs: 200 })), /Timed out .* waiting for another window to release the lock/);
-		assert.strictEqual(fs.existsSync(target.file), false);
+		assert.strictEqual(fs.readFileSync(target.file, 'utf8'), '{}');
 		// Older than its holder keeps it fresh: left behind
 		const past = new Date(Date.now() - 60_000);
 		fs.utimesSync(lock, past, past);
-		assert.deepStrictEqual([mergeTrust(target), fs.existsSync(lock), fs.existsSync(target.file)], [{ kind: 'written' }, false, true]);
+		assert.deepStrictEqual([mergeTrust(target), fs.existsSync(lock), JSON.parse(fs.readFileSync(target.file, 'utf8')).projects[cwd]], [{ kind: 'written' }, false, { hasTrustDialogAccepted: true }]);
 	});
 
 	test('Antigravity: the folder an item of the trustedWorkspaces of its settings in the home folder, the folder its run takes for its working directory - PWD where that names it, else the real path; on Windows the folder as given', () => {
@@ -178,15 +207,21 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		const link = path.join(temp.dir, 'link');
 		fs.symlinkSync(cwd, link, 'junction');
 		assert.deepStrictEqual([targetOf('agy', link, { ...env, PWD: link }).folder, targetOf('agy', link, { ...env, PWD: temp.dir }).folder, targetOf('agy', link, env).folder], [link, folder, folder]);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, '{}');
 		assert.deepStrictEqual(mergeTrust(targetOf('agy', cwd, env)), { kind: 'written' });
-		assert.strictEqual(fs.readFileSync(file, 'utf8'), `${JSON.stringify({ trustedWorkspaces: [folder] }, undefined, 2)}\n`);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { trustedWorkspaces: [folder] });
 	});
 
 	test('a list entry: the folder added at the end of the list at its keys as the file is written - made where there is none, a null taken for nothing - and nothing written where it is there', () => {
 		const file = path.join(home, 'settings.json');
 		const target: TrustTarget = { file, keys: ['trustedWorkspaces'], entry: { item: cwd }, folder: cwd };
+		// A file the CLI has not made is not made for it, nor a lock beside it: the CLI asks (D97)
+		assert.deepStrictEqual([mergeTrust(target), fs.readdirSync(home)], [{ kind: 'missing' }, []]);
+		assert.strictEqual(writeTrust('Antigravity', target), `Did not trust ${cwd} for Antigravity: ${file} does not exist, and Facade makes no file of Antigravity's; Antigravity asks in its terminal.`);
+		fs.writeFileSync(file, '{}\n');
 		assert.deepStrictEqual(mergeTrust(target), { kind: 'written' });
-		assert.strictEqual(fs.readFileSync(file, 'utf8'), `${JSON.stringify({ trustedWorkspaces: [cwd] }, undefined, 2)}\n`);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { trustedWorkspaces: [cwd] });
 		const stamp = fs.statSync(file).mtimeMs;
 		assert.deepStrictEqual([mergeTrust(target), writeTrust('Antigravity', target), fs.statSync(file).mtimeMs], [{ kind: 'there' }, undefined, stamp]);
 		// Comments, tabs, the other settings and the other folders kept; the folder goes last
@@ -202,7 +237,7 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		fs.writeFileSync(file, '{"trustedWorkspaces":null,"theme":"dark"}');
 		mergeTrust(target);
 		assert.strictEqual(fs.readFileSync(file, 'utf8'), `{"trustedWorkspaces":${JSON.stringify([cwd])},"theme":"dark"}`);
-		fs.rmSync(file);
+		fs.writeFileSync(file, '{}');
 		assert.strictEqual(writeTrust('Antigravity', target), `Trusted ${cwd} for Antigravity: merged ${JSON.stringify({ trustedWorkspaces: [cwd] })} into ${file}.`);
 	});
 
@@ -288,6 +323,8 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 	test('a start of Claude Code has its folder trusted in its own file, in the launch\'s home, said in the log; the core\'s plan names none of it', async () => {
 		const log: string[] = [];
 		const planner = clis(log);
+		fs.mkdirSync(home, { recursive: true });
+		fs.writeFileSync(path.join(home, '.claude.json'), '{}');
 		const claude = await planner.plan(request('claude', 'run-1'));
 		assert.deepStrictEqual(['trust' in claude, JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'))], [false, { projects: { [location.path]: { hasTrustDialogAccepted: true } } }]);
 		// Up to what was merged: a Windows folder has a colon of its own after its drive
@@ -295,10 +332,16 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		// Again: there already, nothing written or said
 		await planner.plan(request('claude', 'run-2'));
 		assert.strictEqual(log.length, 1);
-		// Where the folder's terminal environment puts Claude Code's configuration
-		destination = { ...destination, terminal: { CLAUDE_CONFIG_DIR: path.join(temp.dir, 'claude-config') } };
+		// Where the folder's terminal environment puts Claude Code's configuration - which it has not made yet: none is made (D97)
+		const config = path.join(temp.dir, 'claude-config');
+		destination = { ...destination, terminal: { CLAUDE_CONFIG_DIR: config } };
 		await planner.plan(request('claude', 'run-3'));
-		assert.ok(fs.existsSync(path.join(temp.dir, 'claude-config', '.claude.json')));
+		assert.deepStrictEqual([fs.existsSync(config), log.length], [false, 2]);
+		assert.match(log[1], /^Did not trust .* for Claude Code: .*\.claude\.json does not exist, and Facade makes no file of Claude Code's; Claude Code asks in its terminal\.$/);
+		fs.mkdirSync(config);
+		fs.writeFileSync(path.join(config, '.claude.json'), '{}');
+		await planner.plan(request('claude', 'run-4'));
+		assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(config, '.claude.json'), 'utf8')).projects), [location.path]);
 	});
 
 	test('a start of Antigravity has its folder trusted in its own settings, in the launch\'s home, said in the log; Muse Code, OpenCode and Pi write nothing', async () => {
@@ -309,6 +352,8 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		const planner = clis(log);
 		const file = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
 		const folder = canonicalFolder(location.path);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, '{}');
 		const agy = await planner.plan(request('agy', 'run-1'));
 		assert.deepStrictEqual([agy.cli, 'trust' in agy, JSON.parse(fs.readFileSync(file, 'utf8'))], ['agy', false, { trustedWorkspaces: [folder] }]);
 		assert.deepStrictEqual(log, [`Trusted ${folder} for Antigravity: merged ${JSON.stringify({ trustedWorkspaces: [folder] })} into ${file}.`]);
@@ -333,12 +378,12 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		assert.strictEqual(planned.cli, 'claude');
 		assert.strictEqual(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'), '{ broken');
 		assert.match(log[0], /^Did not trust .* for Claude Code: .*\.claude\.json is not valid JSON: .*, so Facade left it as it is; Claude Code asks in its terminal\.$/);
-		// Where the CLI's file cannot even be made: a file where its folder goes
-		const blocked = path.join(temp.dir, 'claude-config');
-		fs.writeFileSync(blocked, '');
-		destination = { ...destination, terminal: { CLAUDE_CONFIG_DIR: blocked } };
+		// Where the lock cannot be had: a folder where it goes, which the merge waits for, never writing through
+		fs.writeFileSync(path.join(home, '.claude.json'), '{}');
+		fs.mkdirSync(path.join(home, '.claude.json.lock', 'held'), { recursive: true });
 		const again = await clis(log).plan(request('claude', 'run-2'));
 		assert.strictEqual(again.cli, 'claude');
 		assert.match(log[1], /^Did not trust .* for Claude Code in .*\.claude\.json: .*; Claude Code asks in its terminal\.$/);
+		assert.strictEqual(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'), '{}');
 	});
 });
