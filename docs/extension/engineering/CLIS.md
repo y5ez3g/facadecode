@@ -217,6 +217,11 @@ the folder is trusted and configuration errors. Use one launch configuration and
 inspection location is not an API launch default. Redact account secrets and sensitive environment values; do not
 invent invalid-plan defaults. The document does not certify observed behavior of a process never started.
 
+Its location is the one a `{ location_id }` names, the window's only one, or the person's choice in native steps by
+folder that offer locations alone (D84): in a window of several folders, the folders, as Change Working Location lists
+them (LIFECYCLE-1.3) - one with a single location choosing it, one with more opening its own step of them; in a window
+of one folder, its locations. Locations come main checkout first (WORKTREES-1.2), and no separator divides them.
+
 ### 4.2 Adapter ownership and files
 
 **One versioned adapter definition generates detection and launch.**
@@ -273,6 +278,8 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
+
+- 2026-10-31: 4.1 chooses its location in native steps by folder, as Change Working Location does (D84).
 
 - 2026-10-31: 1.1 lists configured custom CLIs after the built-ins; 3.1 names 3.4's templates as its exception; 3.4
   Custom CLIs, carried from the Facade Dots specification under `facade.custom`, with the capabilities of later steps

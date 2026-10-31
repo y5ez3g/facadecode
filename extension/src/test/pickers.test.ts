@@ -131,7 +131,8 @@ function vscodeFor(ui: Ui) {
 const SHOP: WorkspaceFolderInfo = { index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' };
 const DOCS: WorkspaceFolderInfo = { index: 1, name: 'docs', uri: 'file:///docs', path: '/docs' };
 const place = (id: string, label: string, folder: WorkspaceFolderInfo, more: Partial<Location> = {}): Location => ({ id, path: `/${label}`, uri: `file:///${label}`, environment: 'local', label, folders: [folder], kind: 'checkout', opened: false, git: 'ok', ...more });
-const MAIN = place('loc-main', 'main', SHOP, { opened: true, isMain: true });
+// The location a folder opened has the folder's own URI, as the catalog gives it
+const MAIN = place('loc-main', 'main', SHOP, { opened: true, isMain: true, uri: SHOP.uri });
 const LOGIN = place('loc-login', 'login-fix', SHOP, { branch: 'login-fix' });
 const GUIDE = place('loc-guide', 'guide', DOCS, { kind: 'folder' });
 const cli = (id: string, displayName: string, more: Partial<CliChoice & { notInstalled: boolean }> = {}): CliChoice => ({ id, displayName, available: true, ...more });
@@ -1011,6 +1012,117 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				undefined,
 				{ kind: 'location', id: MAIN.id, label: 'main' },
 				undefined
+			]);
+		});
+	});
+
+	suite('Show Agent Launch: its location', () => {
+		const log = { event: () => undefined };
+		const locationsOf = (catalog: () => Catalog, changed = new TestEmitter<void>()) => ({ snapshot: catalog, refresh: async () => undefined, onDidChange: changed.event });
+		// Its folder with two locations second, so that Back's highlight is not merely the first row's
+		const two: Catalog = { locations: [GUIDE, LOGIN, MAIN], folders: [DOCS, SHOP], pending: false };
+		const icons = () => ui.current!.items.map(item => (item.iconPath as { id: string }).id);
+
+		test('CLIS-4.1, D84: in a window of several folders, the folders with their own icons - one with a single location choosing it at once, one with more opening its own step titled with it, main checkout first; Back returns to the folders at it; no separator; Escape chooses none', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			let choosing = chooseLaunchLocation(locationsOf(() => two), log);
+			await settle();
+			const first = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.items.map(item => item.description), icons(), ui.current!.buttons.length];
+			ui.current!.accept('shop');
+			await settle();
+			const inFolder = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.buttons.length];
+			ui.current!.back();
+			await settle();
+			const back = [ui.current!.labels(), ui.current!.activeItems.map(item => item.label)];
+			ui.current!.accept('shop');
+			await settle();
+			ui.current!.accept('login-fix');
+			const login = await choosing;
+			choosing = chooseLaunchLocation(locationsOf(() => two), log);
+			await settle();
+			ui.current!.accept('docs');
+			const guide = await choosing;
+			choosing = chooseLaunchLocation(locationsOf(() => two), log);
+			await settle();
+			ui.current!.accept('shop');
+			await settle();
+			ui.current!.hide();
+			assert.deepStrictEqual([first, inFolder, back, login?.id, guide?.id, await choosing], [
+				['Show Agent Launch', 'Select a folder', ['docs', 'shop'], ['/', '/'], ['folder', 'repo'], 0],
+				['Show Agent Launch · shop', 'Select a working location', ['main', 'login-fix'], 1],
+				[['docs', 'shop'], ['shop']],
+				LOGIN.id,
+				GUIDE.id,
+				null
+			]);
+		});
+
+		test('in a window of one folder, its locations at once - main checkout first, each with its path - searched by path too; Escape chooses none (CLIS-4.1, D84)', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			const one: Catalog = { locations: [LOGIN, MAIN], folders: [SHOP], pending: false };
+			let choosing = chooseLaunchLocation(locationsOf(() => one), log);
+			await settle();
+			const shown = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.items.map(item => item.description), ui.current!.matchOnDescription];
+			ui.current!.accept('login-fix');
+			const login = await choosing;
+			choosing = chooseLaunchLocation(locationsOf(() => one), log);
+			await settle();
+			ui.current!.hide();
+			assert.deepStrictEqual([shown, login?.id, await choosing], [['Show Agent Launch', 'Select a working location', ['main', 'login-fix'], ['/main', '/login-fix'], true], LOGIN.id, null]);
+		});
+
+		test('a location of two folders is listed under each; each folder has the icon of the location it opened, not another\'s listed under it (CLIS-4.1, WORKTREES-1.2)', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			const FEAT: WorkspaceFolderInfo = { index: 1, name: 'feat', uri: 'file:///feat', path: '/feat' };
+			const shared: Location = { ...MAIN, folders: [SHOP, FEAT] };
+			const feat = place('loc-feat', 'feat', FEAT, { opened: true, uri: FEAT.uri, branch: 'feat' });
+			const choosing = chooseLaunchLocation(locationsOf(() => ({ locations: [shared, feat], folders: [SHOP, FEAT], pending: false })), log);
+			await settle();
+			const first = [ui.current!.labels(), icons()];
+			ui.current!.accept('feat');
+			await settle();
+			const inFolder = [ui.current!.labels(), icons()];
+			ui.current!.accept('main');
+			assert.deepStrictEqual([first, inFolder, (await choosing)?.id], [[['shop', 'feat'], ['repo', 'worktree']], [['main', 'feat'], ['repo', 'worktree']], MAIN.id]);
+		});
+
+		test('as the locations are read again while a step is up, its items, hint and busy state follow, and the item under the cursor stays under it - a folder too, as it comes to have more locations (WORKTREES-1.3)', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			const notes = place('loc-notes', 'notes', DOCS, { kind: 'folder' });
+			const polish = place('loc-polish', 'ui-polish', SHOP, { branch: 'ui-polish' });
+			const changed = new TestEmitter<void>();
+			let catalog: Catalog = { locations: [GUIDE, MAIN], folders: [DOCS, SHOP], pending: true };
+			let choosing = chooseLaunchLocation(locationsOf(() => catalog, changed), log);
+			await settle();
+			let picker = ui.current!;
+			const pending = [picker.labels(), picker.busy];
+			picker.activeItems = [picker.item('docs')];
+			catalog = { locations: [GUIDE, notes, MAIN, LOGIN], folders: [DOCS, SHOP], pending: false };
+			changed.fire();
+			const grown = [picker.labels(), picker.busy, picker.activeItems.map(item => item.label), picker.items.indexOf(picker.activeItems[0])];
+			catalog = { locations: [MAIN, LOGIN], folders: [SHOP], pending: false };
+			changed.fire();
+			const oneFolder = [picker.labels(), picker.placeholder];
+			picker.hide();
+			const none = await choosing;
+			catalog = two;
+			choosing = chooseLaunchLocation(locationsOf(() => catalog, changed), log);
+			await settle();
+			ui.current!.accept('shop');
+			await settle();
+			picker = ui.current!;
+			picker.activeItems = [picker.item('login-fix')];
+			catalog = { locations: [polish, GUIDE, LOGIN, MAIN], folders: [DOCS, SHOP], pending: false };
+			changed.fire();
+			const inFolder = [picker.labels(), picker.activeItems.map(item => item.label), picker.items.indexOf(picker.activeItems[0])];
+			picker.hide();
+			assert.deepStrictEqual([pending, grown, oneFolder, none, inFolder, await choosing], [
+				[['docs', 'shop'], true],
+				[['docs', 'shop'], false, ['docs'], 0],
+				[['main', 'login-fix'], 'Select a working location'],
+				null,
+				[['main', 'ui-polish', 'login-fix'], ['login-fix'], 2],
+				null
 			]);
 		});
 	});
