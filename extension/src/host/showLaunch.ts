@@ -7,8 +7,6 @@
 // configuration errors - computed without running any CLI or writing any file, secrets redacted, in the person's language.
 
 import * as vscode from 'vscode';
-import { homeRelative } from '../base/files';
-import { messageOf } from '../base/errors';
 import type { ApprovalFact, SandboxFact } from '../clis/adapter';
 import type { CatalogEntry } from '../clis/catalog';
 import type { CliProblem } from '../clis/config';
@@ -17,11 +15,11 @@ import type { LaunchTrust } from '../clis/plan';
 import { redactedText } from '../clis/redact';
 import { trustEntryJson } from '../clis/trust';
 import { invalid } from '../core/errors';
-import type { Catalog, Location, LocationPort, LogPort } from '../core/ports';
+import type { Location, LocationPort, LogPort } from '../core/ports';
 import { locationLabel } from '../ui/cardView';
 import { COMMANDS } from '../ui/catalog';
-import { environmentLabel, locationIcon } from '../ui/pickers/location';
-import { BACK, Flow } from '../ui/pickers/stepping';
+import { chooseLaunchLocation } from '../ui/pickers/launchLocation';
+import { environmentLabel } from '../ui/pickers/location';
 import { reasonText } from '../ui/presentation';
 import type { HostClis } from './clis';
 import { readYolo, YOLO_SETTING } from './settings';
@@ -242,18 +240,6 @@ export function locationArgument(argument: unknown): string | undefined {
 	return given.location_id;
 }
 
-type Item = vscode.QuickPickItem & { readonly location?: Location };
-
-/** The locations to choose from, by workspace folder in a multi-folder window, each with its path from the home folder. */
-function locationItems(catalog: Catalog): Item[] {
-	const several = catalog.folders.length > 1;
-	return catalog.folders.flatMap(folder => {
-		const here = catalog.locations.filter(location => location.folders[0]?.uri === folder.uri);
-		const items = here.map((location): Item => ({ label: location.label, description: homeRelative(location.path), iconPath: locationIcon(location), location }));
-		return several && items.length ? [{ label: folder.name, kind: vscode.QuickPickItemKind.Separator }, ...items] : items;
-	});
-}
-
 /** The location the command shows: the one its argument names, the only one, or the person's choice; null when they cancel. */
 async function chosen(locations: Pick<LocationPort, 'snapshot' | 'resolve' | 'refresh' | 'onDidChange'>, argument: unknown, log: LogPort): Promise<Location | undefined | null> {
 	const id = locationArgument(argument);
@@ -268,24 +254,7 @@ async function chosen(locations: Pick<LocationPort, 'snapshot' | 'resolve' | 're
 	if (catalog.locations.length <= 1) {
 		return catalog.locations[0];
 	}
-	// A location catalog opened reads Git again where needed; its items follow (WORKTREES-1.3)
-	locations.refresh().catch(err => log.event(`Could not refresh the working locations: ${messageOf(err)}`));
-	const flow = new Flow();
-	const picked = await flow.pick<Item>({
-		title: vscode.l10n.t("Show Agent Launch"),
-		placeholder: vscode.l10n.t("Select a working location"),
-		items: locationItems(catalog),
-		matchOnDescription: true,
-		live: picker => locations.onDidChange(() => {
-			const active = picker.activeItems[0]?.location?.id;
-			picker.items = locationItems(locations.snapshot());
-			if (active !== undefined) {
-				picker.activeItems = picker.items.filter(item => item.location?.id === active);
-			}
-		})
-	});
-	flow.close();
-	return picked && picked !== BACK && picked.item.location ? picked.item.location : null;
+	return chooseLaunchLocation(locations, log);
 }
 
 /**

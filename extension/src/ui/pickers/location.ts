@@ -136,7 +136,7 @@ export function locationsIn(catalog: Catalog, folder: WorkspaceFolderInfo): Loca
 
 /** A workspace folder's icon: that of the location it opened - a plain folder, a repository's main checkout or another worktree. */
 export function folderIconOf(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.ThemeIcon {
-	const opened = locationsIn(catalog, folder).find(location => location.opened);
+	const opened = locationsIn(catalog, folder).find(location => location.opened && location.uri === folder.uri);
 	return opened ? locationIcon(opened) : new vscode.ThemeIcon('folder');
 }
 
