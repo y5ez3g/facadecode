@@ -10,7 +10,7 @@
 	"Close Agent": "Закрыть агента",
 	"Close Agents": "Закрыть агенты",
 	"Close {0}?": "Закрыть {0}?",
-	"Close {0} agents?": "Закрыть {0} агентов?",
+	"Close {0} agents?": "Закрыть агентов ({0})?",
 	"Its process will end. Cancel keeps it running and opens its terminal again.": "Его процесс будет завершен. Отмена сохранит его выполнение и снова откроет его терминал.",
 	"Their processes will end. Cancel keeps them running and opens their terminals again.": "Их процессы будут завершены. Отмена сохранит их выполнение и снова откроет их терминалы.",
 	"Show": "Показать",
