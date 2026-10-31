@@ -3,8 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND, type WindowIdentity } from '../base/windowIdentity';
-import { windowToken } from '../record/windowIdentity';
+import { WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND, type DamagedWindowIdentity, type WindowIdentity } from '../base/windowIdentity';
+import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
 import { WindowTerminals } from './windowTerminals';
 
 /** The local component has no exported API and no process ownership; its public command serves this window alone. */
@@ -14,7 +14,15 @@ export function activate(context: vscode.ExtensionContext): void {
 		token = windowToken(context.logUri.fsPath);
 	} catch (error) {
 		console.error('Could not read the local window handover record.', error);
-		throw new Error(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
+		if (!(error instanceof DamagedWindowRecord)) {
+			// Not read or written now - a lock, no file handles left - which a reload may not meet again
+			throw new Error(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
+		}
+		// Damaged: no other identity is invented (ARCHITECTURE-2.2). The workspace component asks, and says what helps: not a reload,
+		// which reads this record again
+		context.subscriptions.push(vscode.commands.registerCommand(WINDOW_IDENTITY_COMMAND, (session: unknown): DamagedWindowIdentity | undefined =>
+			session === vscode.env.sessionId ? { version: 1, session, damaged: true } : undefined));
+		return;
 	}
 	const terminals = new WindowTerminals({ directory: context.logUri.fsPath, log: line => console.error(line) });
 	context.subscriptions.push(terminals,

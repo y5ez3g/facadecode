@@ -16,6 +16,7 @@
 	"Show": "Show",
 	"Could not start {0}: {1}.": "Could not start {0}: {1}.",
 	"Reload Window": "Reload Window",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.",
 	"Could not restore agents for this window. Reload the window to try again.": "Could not restore agents for this window. Reload the window to try again.",
 	"{0} was closed, but its process could not be terminated.": "{0} was closed, but its process could not be terminated.",
 	"Could not close {0}: {1}": "Could not close {0}: {1}",

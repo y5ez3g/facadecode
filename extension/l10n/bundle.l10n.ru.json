@@ -128,6 +128,7 @@
 	"Open a folder to continue": "Откройте папку, чтобы продолжить",
 	"Could not start {0}: {1}.": "Не удалось запустить {0}: {1}.",
 	"Reload Window": "Перезагрузить окно",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "Запись Facade Code для этого окна повреждена, поэтому его агенты нельзя восстановить здесь. Закройте это окно и снова откройте его папку или рабочую область либо перезапустите {0}.",
 	"Could not create worktree: {0}.": "Не удалось создать рабочее дерево: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "Ветка {0} и папка {1} созданы и сохранены.",
 	"Branch {0} was created and kept.": "Ветка {0} создана и сохранена.",

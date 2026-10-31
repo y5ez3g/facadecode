@@ -7,7 +7,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
-import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { isDamagedWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { AgentService } from '../core/agents';
 import { PlanError, type LogPort, type RunFacts } from '../core/ports';
 import { PANEL_VIEW } from '../ui/catalog';
@@ -36,12 +36,16 @@ const WORKSPACE_KEY = 'facade.workspaceKey';
 /** The longest wait between attempts to list this window's runs: well within the five minutes they are kept for it (RULES-4.1). */
 const MOST_RESTORE_WAIT_MS = 30_000;
 
-/** Why this window's Facade could not start, in the person's words: shown as it is. */
-export class ActivationError extends Error { }
+/** Why this window's Facade could not start, in the person's words: shown as it is; `reloadHelps` where reloading tries again. */
+export class ActivationError extends Error {
+	constructor(message: string, readonly reloadHelps = true) {
+		super(message);
+	}
+}
 
 /**
- * A window whose Facade could not start says why where the person looks - a notification, with the reload that tries again, and
- * the panel in place of a progress that would never end - not only in the editor's log (UX-2.4).
+ * A window whose Facade could not start says why where the person looks - a notification, with the reload that tries again where
+ * one can help, and the panel in place of a progress that would never end - not only in the editor's log (UX-2.4).
  */
 export function sayActivationFailed(context: vscode.ExtensionContext, err: unknown): void {
 	const text = err instanceof ActivationError ? err.message : vscode.l10n.t("Could not start {0}: {1}.", 'Facade Code', messageOf(err));
@@ -55,6 +59,10 @@ export function sayActivationFailed(context: vscode.ExtensionContext, err: unkno
 		}));
 	} catch {
 		// The panel of the part that did start shows itself
+	}
+	if (err instanceof ActivationError && !err.reloadHelps) {
+		void vscode.window.showErrorMessage(text);
+		return;
 	}
 	const reload = vscode.l10n.t("Reload Window");
 	void vscode.window.showErrorMessage(text, reload).then(choice => {
@@ -81,6 +89,10 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		identity = await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session);
 	} catch (error) {
 		console.error('Could not request the local window handover identity.', error);
+	}
+	if (isDamagedWindowIdentity(identity, session)) {
+		// No other identity is invented (ARCHITECTURE-2.2), and a reload reads the same record: another window has its own
+		throw new ActivationError(vscode.l10n.t("This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.", vscode.env.appName), false);
 	}
 	if (!isWindowIdentity(identity, session)) {
 		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
@@ -158,6 +170,12 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		}
 	})();
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
+	// Then a ptyd listing runs of this window that it shows no pair of - one of an earlier protocol found late, or a failed reattach -
+	// restores again, one restore at a time: no started agent is left out (RULES-4.1, D83)
+	let restoring: Promise<unknown> = ready;
+	const found = execution.onDidFindRuns(() => {
+		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`));
+	});
 	const disposables: vscode.Disposable[] = [
 		...registerUi({
 			agents,
@@ -179,6 +197,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	return async () => {
 		disposed = true;
 		clearTimeout(restoreRetry);
+		found.dispose();
 		agents.dispose();
 		// One that throws does not keep the rest open (ARCHITECTURE-2.4)
 		disposeAll(disposables, err => log.event(`Could not dispose part of the window: ${messageOf(err)}`));

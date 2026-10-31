@@ -128,6 +128,7 @@
 	"Open a folder to continue": "打开文件夹以继续",
 	"Could not start {0}: {1}.": "无法启动 {0}：{1}。",
 	"Reload Window": "重新加载窗口",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "此窗口的 Facade Code 记录已损坏，无法在此恢复其 Agent。请关闭此窗口并重新打开其文件夹或工作区，或重启 {0}。",
 	"Could not create worktree: {0}.": "无法创建工作树：{0}。",
 	"Branch {0} and folder {1} were created and kept.": "分支 {0} 与目录 {1} 已创建并保留。",
 	"Branch {0} was created and kept.": "分支 {0} 已创建并保留。",

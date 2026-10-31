@@ -128,6 +128,7 @@
 	"Open a folder to continue": "Ouvrez un dossier pour continuer",
 	"Could not start {0}: {1}.": "Impossible de démarrer {0} : {1}.",
 	"Reload Window": "Recharger la fenêtre",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "L'enregistrement Facade Code de cette fenêtre est endommagé : ses agents ne peuvent pas être restaurés ici. Fermez cette fenêtre et rouvrez son dossier ou son espace de travail, ou redémarrez {0}.",
 	"Could not create worktree: {0}.": "Impossible de créer l'arborescence de travail : {0}.",
 	"Branch {0} and folder {1} were created and kept.": "La branche {0} et le dossier {1} ont été créés et conservés.",
 	"Branch {0} was created and kept.": "La branche {0} a été créée et conservée.",

@@ -128,6 +128,7 @@
 	"Open a folder to continue": "続行するにはフォルダーを開いてください",
 	"Could not start {0}: {1}.": "{0} を起動できませんでした: {1}。",
 	"Reload Window": "ウィンドウの再読み込み",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "このウィンドウの Facade Code の記録が破損しているため、ここではエージェントを復元できません。このウィンドウを閉じてフォルダーまたはワークスペースを開き直すか、{0} を再起動してください。",
 	"Could not create worktree: {0}.": "作業ツリーを作成できませんでした: {0}。",
 	"Branch {0} and folder {1} were created and kept.": "ブランチ {0} とフォルダー {1} が作成され、保持されました。",
 	"Branch {0} was created and kept.": "ブランチ {0} が作成され、保持されました。",

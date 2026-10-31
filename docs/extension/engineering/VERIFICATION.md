@@ -94,7 +94,7 @@ passes.
 | J05 | Startup before the CLI's first report and past CLIS-2.3's bound, working, idle, native blocker, unavailable reliable status, blocker plus unavailable status, recovery | RULES-3 dot meanings; startup green until the first activity, then red with why; PANEL-1.4 leads with the known blocker before generic unavailable text while retaining that explanation; no idle/turn-end popup |
 | J06 | Normal exit 0; Ctrl+C ordinary interruption from the person; unexplained nonzero exit | Actor-independent classification; abnormal retained; unknown cause no popup; RULES-3.3 |
 | J07 | Close card/terminal, stop during creation, unreachable remote cleanup; close live agents' tabs alone and with Close All, then Cancel and confirm | Immediately remove pair; cleanup background, no fixed five-second wait; created files remain; one question for tabs closed together, Cancel reopens their terminals, confirm ends them; LIFECYCLE-3.1 |
-| J09 | Reload, extension-host restart, remote loss, close-one, close-last, immediate reopen, close-last without reopen | G2 trace; original process survives reload/disconnect; reopen within five minutes claims the original runs; without it they end at five minutes (RULES-4.1) |
+| J09 | Reload, extension-host restart, an update from the last released build with its agents running, remote loss, close-one, close-last, immediate reopen, close-last without reopen | G2 trace; original process survives reload/disconnect/update; after the update the earlier build's agents show and work through its ptyd, which exits once they are gone (ARCHITECTURE-2.4); reopen within five minutes claims the original runs; without it they end at five minutes (RULES-4.1) |
 | J13 | New VS Code user follows empty-panel explanation | First agent starts without a separate onboarding wizard |
 | J14 | 100 agents in one window, then request another | Panel/search/manual order remain usable at 100; no 100-agent hard cap |
 | J16 | Real VS Code user completes the common flows before public use | Record observed familiarity/usability; automated tests alone do not pass |
@@ -162,6 +162,7 @@ for review, not acceptance evidence.
 
 ## Change log
 
+- 2026-10-31: J09 includes an update from the last released build with its agents running (D83).
 - 2026-10-31: G5 records the night verification's Remote-SSH runs from a Windows x64 client, and the integration suite on
   VS Code 1.105.0, the declared minimum, and on Linux.
 - 2026-10-30: G5 records the Windows x64 and macOS arm64 client and Linux x64 build evidence of the step adding four

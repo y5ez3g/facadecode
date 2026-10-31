@@ -4,14 +4,16 @@
 
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { ActivityReport, ExitReport, LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
-import { EarlierPtyds, PtydClient, PtydLost, PtydNotSent, ptydSocketPath } from '../host/execution/ptydClient';
-import type { Method, Requests } from '../ptyd/protocol';
+import { EarlierPtyds, PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from '../host/execution/ptydClient';
+import { EARLIER_PROTOCOLS, lineReader, type Method, type Requests } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
+import { nextOwnerClaim } from '../record/ownership';
 import { TestEmitter, withModules } from './withModules';
 
 /** A terminal as the stand-in editor makes it: what it was created with, and what was done to it. */
@@ -61,6 +63,18 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let failConnectAfterLostSpawn: number;
 	let failedConnects: number;
 	let failTerminateOnce: boolean;
+	let failForgetOnce: boolean;
+	/** How many reaches of a ptyd of an earlier protocol fail next, as one not taking a connection now would. */
+	let failEarlierClients: number;
+	class FlakyEarlierPtyds extends EarlierPtyds {
+		override async client(protocol: number): Promise<PtydClient> {
+			if (failEarlierClients > 0) {
+				failEarlierClients--;
+				throw new PtydNotSent('injected: the ptyd of an earlier protocol took no connection now');
+			}
+			return super.client(protocol);
+		}
+	}
 	let spawns: number;
 	/** Each connection to ptyd the ports made, in order. */
 	let connections: PtydClient[];
@@ -90,6 +104,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		failConnectAfterLostSpawn = 0;
 		failedConnects = 0;
 		failTerminateOnce = false;
+		failForgetOnce = false;
+		failEarlierClients = 0;
 		spawns = 0;
 		connections = [];
 		delayAttach = 0;
@@ -150,6 +166,10 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 						failTerminateOnce = false;
 						throw new PtydNotSent('injected request that did not arrive');
 					}
+					if (method === 'forget' && failForgetOnce) {
+						failForgetOnce = false;
+						throw new PtydNotSent('injected forget that did not arrive');
+					}
 					if (method === 'attach' && loseAttach) {
 						loseAttach = false;
 						const closed = new Promise<void>(resolve => real.onDidClose(resolve));
@@ -183,7 +203,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
-		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydLost, PtydNotSent, EarlierPtyds, ptydSocketPath } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
+		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
 	});
 
 	teardown(() => {
@@ -817,6 +837,177 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('the same live screen after terminal relaunch', () => screenOf(terminal).includes('got back'));
 		assert.strictEqual(screenOf(terminal).split('ready').length - 1, 1);
 		assert.strictEqual(await reloaded.terminate('run-8'), 'terminated');
+	});
+
+	/** A ptyd of an earlier protocol, holding a run its window started before that window reloaded into this build. */
+	const earlierWith = async (run: RunId): Promise<{ readonly server: PtydServer; readonly socket: string }> => {
+		const protocol = EARLIER_PROTOCOLS[0];
+		const socket = ptydSocketPath(home, protocol);
+		const server = new PtydServer(socket, () => undefined, undefined, protocol);
+		assert.strictEqual(await server.listen(), true);
+		const before = (await PtydClient.join(socket, protocol))!;
+		await before.request('claim', nextOwnerClaim('workspace-1', home));
+		await before.request('spawn', {
+			run, owner: 'workspace-1', file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: { ...meta(run) }
+		});
+		before.dispose();
+		return { server, socket };
+	};
+
+	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1, D83)', async function () {
+		this.timeout(20_000);
+		const protocol = EARLIER_PROTOCOLS[0];
+		const earlier = await earlierWith('run-old');
+		try {
+			const port = portOf();
+			const live = await port.live();
+			assert.deepStrictEqual(live.map(run => [run.run, run.meta.name, run.claimedElsewhere]), [['run-old', 'Ada', false]]);
+			const attaching = port.attach(live[0], facts('run-old'));
+			const terminal = await until('its terminal', () => terminals[0]);
+			open(terminal);
+			await attaching;
+			await until('its screen', () => screenOf(terminal).includes('ready'));
+			terminal.options.pty.handleInput!('old');
+			await until('its answer, through the earlier ptyd', () => screenOf(terminal).includes('got old'));
+			// A new agent starts in this window's own ptyd alone
+			port.openPair(facts('run-new'), { reveal: false });
+			open(terminals[1]);
+			await port.spawn('run-new', plan(ECHO), meta('run-new'));
+			const own = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+			const old = (await PtydClient.join(earlier.socket, protocol))!;
+			extraClients.push(own, old);
+			const runsOf = async (client: PtydClient) => (await client.request('list', { owner: 'workspace-1' })).map(run => run.run);
+			assert.deepStrictEqual([await runsOf(own), await runsOf(old)], [['run-new'], ['run-old']]);
+			// Closing it ends it there
+			assert.strictEqual(await port.terminate('run-old'), 'terminated');
+			assert.deepStrictEqual(await runsOf(old), []);
+		} finally {
+			earlier.server.close();
+		}
+	});
+
+	test('the ptyd of an earlier protocol going takes the window\'s runs there with it: each is told ended, how not known, and its terminal says so - never left out (RULES-3.3, 4.1, D83)', async function () {
+		this.timeout(20_000);
+		const earlier = await earlierWith('run-gone');
+		try {
+			const port = portOf();
+			const exits: ExitReport[] = [];
+			port.onDidExit(exit => exits.push(exit));
+			const [live] = await port.live();
+			const attaching = port.attach(live, facts('run-gone'));
+			const terminal = await until('its terminal', () => terminals[0]);
+			open(terminal);
+			await attaching;
+			await until('its screen', () => screenOf(terminal).includes('ready'));
+			// Its ptyd goes with the run, telling the window nothing more
+			earlier.server.close();
+			await until('its end told', () => exits.length === 1);
+			assert.deepStrictEqual(exits, [{ run: 'run-gone', interruptVerified: false }]);
+			await until('its terminal to say so', () => screenOf(terminal).includes('[Agent process disconnected; exit cause unknown]'));
+		} finally {
+			earlier.server.close();
+		}
+	});
+
+	test('after its first restore, a run a ptyd lists that the window shows no pair of - its reattach failed, or its ptyd was found late - is told once a while, for the window to restore again (RULES-4.1, D83)', async function () {
+		this.timeout(15_000);
+		const first = portOf();
+		first.openPair(facts('run-unshown'), { reveal: false });
+		open(terminals[0]);
+		await first.spawn('run-unshown', plan(ECHO), meta('run-unshown'));
+		ports.splice(ports.indexOf(first), 1);
+		first.dispose();
+		const reloaded = portOf();
+		await until('the run to be unclaimed', async () => (await reloaded.live()).some(run => run.run === 'run-unshown' && !run.claimedElsewhere));
+		let found = 0;
+		reloaded.onDidFindRuns(() => found++);
+		// Its reattach failed: no pair shows it, and before the first restore is over nothing is told
+		await new Promise(resolve => setTimeout(resolve, 2_500));
+		assert.strictEqual(found, 0);
+		await reloaded.finishRestore();
+		await until('it to be told', () => found === 1, 6_000);
+		await new Promise(resolve => setTimeout(resolve, 4_500));
+		assert.strictEqual(found, 1, 'once a while, not at every check');
+	});
+
+	test('a run of an earlier protocol\'s ptyd that could not be reached as the window reattached it is told as lost, and claimed again at a later check once it can be: never left reconnecting (RULES-3.1, 4.1, D83)', async function () {
+		this.timeout(20_000);
+		const earlier = await earlierWith('run-late');
+		try {
+			const port = portOf();
+			const reports: ActivityReport[] = [];
+			port.onDidReport(report => reports.push(report));
+			const [live] = await port.live();
+			failEarlierClients = 1;
+			const attaching = port.attach(live, facts('run-late'));
+			const terminal = await until('its terminal', () => terminals[0]);
+			open(terminal);
+			await attaching;
+			assert.ok(reports.some(report => report.run === 'run-late' && report.disconnected), 'told as lost');
+			await until('its screen, claimed again', () => screenOf(terminal).includes('ready'), 10_000);
+			terminal.options.pty.handleInput!('back');
+			await until('its answer', () => screenOf(terminal).includes('got back'));
+		} finally {
+			earlier.server.close();
+		}
+	});
+
+	test('a run its ptyd was not told to forget is told again at a later check: it does not stay listed for good, holding its ptyd (RULES-5.3)', async function () {
+		this.timeout(15_000);
+		const port = portOf();
+		const exits: ExitReport[] = [];
+		port.onDidExit(exit => exits.push(exit));
+		port.openPair(facts('run-forget'), { reveal: false });
+		open(terminals[0]);
+		await port.spawn('run-forget', plan(ECHO), meta('run-forget'));
+		await until('its output', () => screenOf(terminals[0]).includes('ready'));
+		terminals[0].options.pty.handleInput!('q');
+		await until('its exit', () => exits.length === 1);
+		failForgetOnce = true;
+		port.removePair('run-forget');
+		const own = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		extraClients.push(own);
+		const listed = async () => (await own.request('list', { owner: 'workspace-1' })).some(run => run.run === 'run-forget');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		assert.strictEqual(await listed(), true, 'not forgotten at first');
+		await until('ptyd to forget it at a later check', async () => !await listed(), 8_000);
+	});
+
+	test('a ptyd of an earlier protocol that stops answering holds up no listing of the window\'s own runs: they are listed in bounded time, the others by a later restore (ARCHITECTURE-2.4, RULES-4.1)', async function () {
+		this.timeout(15_000);
+		const protocol = EARLIER_PROTOCOLS[0];
+		// It answers as a ptyd of that protocol holding one run of this window, and then answers no listing more
+		const sockets: net.Socket[] = [];
+		let lists = 0;
+		const hung = net.createServer(connection => {
+			sockets.push(connection);
+			connection.setEncoding('utf8');
+			connection.on('data', lineReader(line => {
+				const { id, method } = JSON.parse(line) as { readonly id: number; readonly method: string };
+				const answer = (result: unknown) => connection.write(`${JSON.stringify({ id, result })}\n`);
+				if (method === 'hello') {
+					answer({ protocol, pid: 1 });
+				} else if (method === 'claim') {
+					answer(null);
+				} else if (method === 'list' && lists++ === 0) {
+					answer([{ run: 'run-hung', owner: 'workspace-1', pid: 1, cwd: os.tmpdir(), cols: 80, rows: 24, title: '', startedAt: 1, seq: 0, claimedElsewhere: false, meta: { ...meta('run-hung') } }]);
+				}
+			}, () => connection.destroy()));
+		});
+		await new Promise<void>(resolve => hung.listen(ptydSocketPath(home, protocol), resolve));
+		try {
+			const port = portOf();
+			port.openPair(facts('run-own'), { reveal: false });
+			open(terminals[0]);
+			await port.spawn('run-own', plan(ECHO), meta('run-own'));
+			const started = Date.now();
+			const live = await port.live();
+			assert.deepStrictEqual(live.map(run => run.run), ['run-own']);
+			assert.ok(Date.now() - started < 6_000, `listed in ${Date.now() - started} ms`);
+		} finally {
+			sockets.forEach(socket => socket.destroy());
+			await new Promise<void>(resolve => hung.close(() => resolve()));
+		}
 	});
 
 	test('a pair made behind the person\'s work moves no selection as its terminal opens, and the tab it covered is shown again without focus (PANEL-2.1, LIFECYCLE-2.2)', async () => {

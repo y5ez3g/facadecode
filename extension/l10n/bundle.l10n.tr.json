@@ -128,6 +128,7 @@
 	"Open a folder to continue": "Devam etmek için bir klasör açın",
 	"Could not start {0}: {1}.": "{0} başlatılamadı: {1}.",
 	"Reload Window": "Pencereyi Yeniden Yükle",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "Bu pencerenin Facade Code kaydı bozuk, bu yüzden aracıları burada geri yüklenemiyor. Bu pencereyi kapatıp klasörünü veya çalışma alanını yeniden açın ya da {0} uygulamasını yeniden başlatın.",
 	"Could not create worktree: {0}.": "Çalışma ağacı oluşturulamadı: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "{0} dalı ve {1} klasörü oluşturuldu ve korundu.",
 	"Branch {0} was created and kept.": "{0} dalı oluşturuldu ve korundu.",

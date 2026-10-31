@@ -14,6 +14,13 @@
  */
 export const PTYD_PROTOCOL = 9;
 
+/**
+ * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
+ * through those ptyds, and starts none there (ARCHITECTURE-2.4). None is ever dropped. 8, of 0.0.1, is 9 without `spawn`'s
+ * `screenStatus`, which this window sends to no earlier ptyd.
+ */
+export const EARLIER_PROTOCOLS: readonly number[] = [8];
+
 import type { OwnerClaim } from '../base/ownership';
 import { isJsonObject } from '../base/json';
 export type { OwnerClaim } from '../base/ownership';

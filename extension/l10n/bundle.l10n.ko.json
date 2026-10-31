@@ -128,6 +128,7 @@
 	"Open a folder to continue": "계속하려면 폴더를 여세요",
 	"Could not start {0}: {1}.": "{0}을(를) 시작할 수 없습니다: {1}.",
 	"Reload Window": "창 다시 로드",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "이 창의 Facade Code 기록이 손상되어 여기에서 에이전트를 복원할 수 없습니다. 이 창을 닫고 폴더 또는 작업 영역을 다시 열거나 {0}을(를) 다시 시작하세요.",
 	"Could not create worktree: {0}.": "작업 트리를 만들 수 없습니다: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "브랜치 {0} 및 폴더 {1}이(가) 생성되었으며 유지됩니다.",
 	"Branch {0} was created and kept.": "브랜치 {0}이(가) 생성되었으며 유지됩니다.",
