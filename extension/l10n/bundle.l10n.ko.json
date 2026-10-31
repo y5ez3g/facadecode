@@ -123,7 +123,7 @@
 	"Open Folder...": "폴더 열기...",
 	"A workspace folder is required to run agents.": "에이전트를 실행하려면 작업 영역 폴더가 필요합니다.",
 	"Open a folder to continue": "계속하려면 폴더를 여세요",
-	"Could not start {0}: {1}.": "{0}을(를) 시작할 수 없습니다: {1}。",
+	"Could not start {0}: {1}.": "{0}을(를) 시작할 수 없습니다: {1}.",
 	"Could not create worktree: {0}.": "작업 트리를 만들 수 없습니다: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "브랜치 {0} 및 폴더 {1}이(가) 생성되었으며 유지됩니다.",
 	"Branch {0} was created and kept.": "브랜치 {0}이(가) 생성되었으며 유지됩니다.",
