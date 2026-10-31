@@ -172,7 +172,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 					agents: { list: () => [], get: () => undefined, onDidChange: emitter.event, launch: () => '', close: async () => 'already_ended', rename: () => undefined },
 					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
-					clis: { list: async () => [] },
+					clis: { list: async () => ({ clis: [], problems: [] }) },
 					history: { last: () => ({}), remember: () => undefined },
 					execution: { reveal: async () => false, onDidActivate: emitter.event },
 					workspaceState: { get: () => undefined, update: async () => undefined, keys: () => [] } as never,

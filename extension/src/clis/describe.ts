@@ -41,7 +41,8 @@ export interface LaunchDescription {
 	};
 	/** The literal invocation in order, secrets redacted; none where the configuration or the program is missing. */
 	readonly args?: readonly string[];
-	readonly yolo: boolean;
+	/** The YOLO a start is given; none for a custom CLI, which has no YOLO mapping (CLIS-3.4). */
+	readonly yolo?: boolean;
 	readonly sandbox: SandboxFact;
 	readonly approvals: ApprovalFact;
 	/** How a start trusts its folder (CLIS-3.3): named, never written; none where no launch can be planned. */
@@ -138,7 +139,7 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 			...destination.profileName && destination.profile && Object.keys(destination.profile).length ? { profile: destination.profileName } : {}
 		},
 		...args ? { args } : {},
-		yolo,
+		...entry.custom ? {} : { yolo },
 		sandbox: adapter.sandbox(yolo, platform),
 		approvals: adapter.approvals(yolo),
 		...trust ? { trust } : {},

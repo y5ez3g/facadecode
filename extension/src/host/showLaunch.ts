@@ -11,8 +11,10 @@ import { homeRelative } from '../base/files';
 import { messageOf } from '../base/errors';
 import type { ApprovalFact, SandboxFact } from '../clis/adapter';
 import type { CatalogEntry } from '../clis/catalog';
+import type { CliProblem } from '../clis/config';
 import type { EnvironmentSource, LaunchDescription } from '../clis/describe';
 import type { LaunchTrust } from '../clis/plan';
+import { redactedText } from '../clis/redact';
 import { trustEntryJson } from '../clis/trust';
 import { invalid } from '../core/errors';
 import type { Catalog, Location, LocationPort, LogPort } from '../core/ports';
@@ -46,6 +48,7 @@ function sandboxText(sandbox: SandboxFact, launch: LaunchDescription): string {
 		case 'native': return vscode.l10n.t("Sandbox: as the CLI's own configuration sets it");
 		// {0} is the CLI's name, such as Claude Code
 		case 'none': return vscode.l10n.t("Sandbox: none; {0} has no sandbox here", launch.displayName);
+		case 'unknown': return vscode.l10n.t("Sandbox: unknown; Facade does not read a custom CLI's configuration");
 	}
 }
 
@@ -56,6 +59,7 @@ function approvalsText(approvals: ApprovalFact, launch: LaunchDescription): stri
 		case 'native': return vscode.l10n.t("Approvals: the CLI's own");
 		// {0} is the CLI's name, such as Pi
 		case 'none': return vscode.l10n.t("Approvals: none; {0} has no approvals", launch.displayName);
+		case 'unknown': return vscode.l10n.t("Approvals: unknown; Facade does not read a custom CLI's configuration");
 	}
 }
 
@@ -73,8 +77,14 @@ function sourceText(source: EnvironmentSource, launch: LaunchDescription): strin
 	}
 }
 
-/** How a start trusts its folder (CLIS-3.3, D62): for the launch alone, by an entry merged into the CLI's file, or not at all. */
+/**
+ * How a start trusts its folder (CLIS-3.3, 3.4, D62): for the launch alone, by an entry merged into the CLI's file, not at all, or -
+ * for a custom CLI - as its own configuration has it.
+ */
 function trustText(trust: LaunchTrust): string {
+	if (trust.kind === 'unknown') {
+		return vscode.l10n.t("Trust: none given by Facade; a custom CLI that asks about the folder asks in its terminal");
+	}
 	if (trust.kind === 'file') {
 		// {0} is the entry, as JSON; {1} the CLI's file
 		return vscode.l10n.t("Trust: {0} merged into {1} before each start, as the CLI writes it when its trust question is accepted; a file that cannot be read is left as it is, and the CLI asks in its terminal", JSON.stringify(trustEntryJson(trust.target)), trust.target.file);
@@ -140,7 +150,9 @@ function launchSection(launch: LaunchDescription, yoloProblem: string | undefine
 		add(vscode.l10n.t("Arguments: none: this CLI cannot start here as configured"));
 	}
 	if (yoloProblem === undefined) {
-		add(launch.yolo ? vscode.l10n.t("YOLO: on") : vscode.l10n.t("YOLO: off"));
+		add(launch.yolo === undefined
+			? vscode.l10n.t("YOLO: not applied; a custom CLI starts exactly as configured")
+			: launch.yolo ? vscode.l10n.t("YOLO: on") : vscode.l10n.t("YOLO: off"));
 		add(sandboxText(launch.sandbox, launch));
 		add(approvalsText(launch.approvals, launch));
 	}
@@ -159,6 +171,8 @@ export interface LaunchDocumentInput {
 	readonly yolo: { readonly value: boolean; readonly problem?: undefined } | { readonly value?: undefined; readonly problem: string; readonly received: string };
 	readonly launches: readonly LaunchDescription[];
 	readonly entries: readonly Pick<CatalogEntry, 'adapter' | 'enabled' | 'problems'>[];
+	/** What is wrong with `facade.custom` as a whole, which then defines no custom CLI (CLIS-3.4). */
+	readonly problems: readonly CliProblem[];
 	readonly now: Date;
 }
 
@@ -191,6 +205,10 @@ export function launchDocument(input: LaunchDocumentInput): string {
 		: yolo.value
 			? vscode.l10n.t("YOLO: on, from {0}; it applies to agents started from now on", YOLO_SETTING)
 			: vscode.l10n.t("YOLO: off, from {0}; it applies to agents started from now on", YOLO_SETTING));
+	if (input.problems.length) {
+		lines.push(vscode.l10n.t("Configuration errors:"));
+		input.problems.forEach(problem => lines.push(`  - ${reasonText(problem.said, redactedText(problem.text))}`));
+	}
 	if (location) {
 		for (const launch of input.launches) {
 			lines.push('', ...launchSection(launch, yoloProblem));
@@ -294,6 +312,7 @@ export function registerShowLaunch(clis: HostClis, locations: LocationPort, log:
 			yolo,
 			launches: described.launches,
 			entries: described.entries,
+			problems: described.problems,
 			now: new Date()
 		});
 	};

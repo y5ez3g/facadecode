@@ -447,7 +447,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		const invalid = { 'facade.claude.path': 7 };
 		assert.deepStrictEqual(discover(catalogOf(settings(invalid)), destination, cwd).map(each => [each.available, each.problem, each.said?.kind]).slice(0, 2), [[false, 'facade.claude.path must be a string; received number', 'path_type'], [true, undefined, undefined]]);
 		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, invalid))[0], 'configuration_invalid');
-		assert.deepStrictEqual(failure(() => plan({ cli: 'gemini' })), ['not_found', 'No CLI "gemini" is configured; the built-ins are claude, codex, agy, muse, opencode and pi']);
+		assert.deepStrictEqual(failure(() => plan({ cli: 'gemini' })), ['not_found', 'No CLI "gemini" is configured; the built-ins are claude, codex, agy, muse, opencode and pi, and custom CLIs are configured in facade.custom']);
 	});
 
 	test('each built-in\'s sandbox and approvals, as Show Agent Launch says them, name only arguments its launch has (CLIS-1.3, 4.1)', () => {
