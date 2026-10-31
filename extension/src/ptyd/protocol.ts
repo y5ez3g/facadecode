@@ -172,7 +172,12 @@ export interface Requests {
 	/** The bottom `lines` lines of the run's screen, once what it wrote is drawn (MCP-5.1). */
 	read: { params: { readonly run: string; readonly lines: number }; result: ScreenRead };
 	/** Pastes text - bracketed where the program turned that mode on - then Enter if asked: in turn with other automated input. */
-	type: { params: { readonly run: string; readonly text: string; readonly enter: boolean }; result: InputEffect };
+	/**
+	 * Pastes `text`, then Enter where asked. `lead`, where given, is typed before the paste in the same write: words of the person's
+	 * own ahead of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1, D102). A
+	 * ptyd from before it takes no lead and pastes the text alone.
+	 */
+	type: { params: { readonly run: string; readonly text: string; readonly enter: boolean; readonly lead?: string }; result: InputEffect };
 	/** Presses keys by name, or printable characters, in order: in turn with other automated input. */
 	keys: { params: { readonly run: string; readonly keys: readonly string[] }; result: InputEffect };
 	/**

@@ -26,6 +26,8 @@ const ID = { type: 'string', minLength: 1 } as const;
 const AGENT = { ...ID, description: 'The agent: its ID, `#aN`, unique `@name`, or name with its ID.' } as const;
 const CURSOR = { ...ID, description: 'The next_cursor of the previous page.' } as const;
 const LIMIT = { type: 'integer', minimum: 1, maximum: 200, default: 100 } as const;
+/** A caller's own ID for one start or one send: the same one again within an hour answers the first call, doing nothing again (D104). */
+const REQUEST = { type: 'string', minLength: 1, maxLength: 200, description: 'Optional: your own ID for this call. The same request_id again within an hour answers what the first call did instead of doing it again; a new one does it anew.' } as const;
 
 /** The most Unicode code points of a message body, and of a result returned inline rather than in a file (MCP-4.1, 4.2, 5.1). */
 export const MESSAGE_LIMIT = 8000;
@@ -66,7 +68,8 @@ export const TOOLS: readonly ToolDefinition[] = [
 					properties: { branch: ID, base_ref: ID },
 					required: ['branch', 'base_ref'],
 					additionalProperties: false
-				}
+				},
+				request_id: REQUEST
 			},
 			required: ['name', 'window_id', 'location_id', 'cli'],
 			additionalProperties: false
@@ -99,7 +102,8 @@ export const TOOLS: readonly ToolDefinition[] = [
 			properties: {
 				to: { ...ID, description: 'One agent, or `#human` for the person.' },
 				text: { ...ID, maxLength: MESSAGE_LIMIT, description: 'The complete message: text, tabs and line breaks, at most 8,000 Unicode code points.' },
-				reply_to: { ...ID, description: 'Optional: a message ID from your inbox.' }
+				reply_to: { ...ID, description: 'Optional: a message ID from your inbox.' },
+				request_id: REQUEST
 			},
 			required: ['to', 'text'],
 			additionalProperties: false

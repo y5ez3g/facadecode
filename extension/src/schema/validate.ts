@@ -23,10 +23,11 @@ export interface ToolArguments {
 		readonly effort?: string;
 		readonly prompt?: string;
 		readonly worktree?: { readonly branch: string; readonly base_ref: string };
+		readonly request_id?: string;
 	};
 	readonly list_agents: { readonly window_id?: string; readonly include_ended: boolean; readonly cursor?: string; readonly limit: number };
 	readonly stop_agent: { readonly agent: string };
-	readonly send_message: { readonly to: string; readonly text: string; readonly reply_to?: string };
+	readonly send_message: { readonly to: string; readonly text: string; readonly reply_to?: string; readonly request_id?: string };
 	readonly read_messages: { readonly ids?: readonly string[]; readonly all: boolean; readonly cursor?: string; readonly limit: number };
 	readonly read_screen: { readonly agent: string; readonly lines: number };
 	readonly type_text: { readonly agent: string; readonly text: string; readonly enter: boolean };

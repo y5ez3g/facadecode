@@ -370,15 +370,18 @@ export class Run {
 		this.terminal.options.scrollback = scrollbackRows(cols);
 	}
 
-	/** Pastes `text` as one input - bracketed where the program turned that mode on - and Enter after it if asked, in turn. */
-	type(text: string, enter: boolean): Promise<InputEffect> {
+	/**
+	 * Pastes `text` as one input - bracketed where the program turned that mode on - and Enter after it if asked, in turn. A `lead` is
+	 * typed before the paste, in the same write: the program takes it as typed, and the paste whole after it (D102).
+	 */
+	type(text: string, enter: boolean, lead?: string): Promise<InputEffect> {
 		return this.queue.add(async alive => {
 			await this.parsed();
 			if (!alive()) {
 				return { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false };
 			}
 			if (text) {
-				this.pty.write(pasteSequence(this.terminal.modes.bracketedPasteMode, text));
+				this.pty.write(`${lead ?? ''}${pasteSequence(this.terminal.modes.bracketedPasteMode, text)}`);
 			}
 			if (!enter) {
 				return { outcome: 'applied', pasted: !!text, entered: false };

@@ -41,6 +41,8 @@ export interface MessageRecord {
 	readonly text: string;
 	/** Unicode code points of `text`. */
 	readonly length: number;
+	/** The sender's request ID for this send, where it gave one: the same one again answers this record (MCP-1.1, D104). */
+	readonly requestId?: string;
 	readonly delivery: {
 		readonly status: 'pending' | 'success' | 'failure';
 		readonly reason?: string;
@@ -72,6 +74,8 @@ export interface SendRequest {
 	readonly callId?: string;
 	/** The ID {@link Messages.allocate} took for it, where it was formatted before it was sent: a creation prompt (COLLABORATION-2.2). */
 	readonly id?: string;
+	/** The caller's request ID, kept with the record (MCP-1.1, D104). */
+	readonly requestId?: string;
 }
 
 /** The first response to a send (RULES-1.2): success, failure, or accepted with its deadline and current obstacle. */
@@ -99,6 +103,8 @@ export interface InboxPage {
 
 /** The message service the tool service and Message History use. */
 export interface Messages {
+	/** The first message sent by this caller with this request ID within the last hour, including routed sends. */
+	findRequest(from: RunId, requestId: string): MessageRecord | undefined;
 	/** Sends one message, answering within the response budget (RULES-1.2); an accepted one reports its outcome later. */
 	send(request: SendRequest): Promise<SendResult>;
 	/**
@@ -120,7 +126,8 @@ export interface Messages {
 	inbox(run: RunId, query: InboxQuery): InboxPage;
 	/**
 	 * Delivers the records of `run`'s inbox that a read handed back and that were not delivered yet (COLLABORATION-3.1): one still being
-	 * delivered stops being typed into the terminal, and its sender's result says read_messages delivered it; one that failed is now
+	 * delivered cancels unstarted typing and lets an already pasted owned draft finish, while its sender's result immediately says
+	 * read_messages delivered it; one that failed is now
 	 * delivered, and its sender, told of the failure already, is not told again.
 	 */
 	markDelivered(run: RunId, ids: readonly string[]): void;
@@ -132,13 +139,35 @@ export interface Messages {
 /** A run's ordinary message input (CLIS-2.1, RULES-1.4): only a `supported` capability is ever typed into. */
 export interface InputPort {
 	capability(run: RunId): CapabilityState;
-	/** The input now: a usable composer without draft, a draft, a native interaction, or unknown. */
-	inspect(run: RunId): Promise<'usable' | 'draft' | 'interaction' | 'unknown'>;
 	/**
-	 * Pastes the complete text once and presses Enter, answering what actually went in (RULES-1.3, 1.10). Once `signal` aborts - the
-	 * attempt's deadline passed, or its run ended - nothing more goes in.
+	 * The input now: a usable composer without draft, a draft - `own` where it is `own` alone as its CLI draws it, after `lead` where
+	 * that was typed, the message an earlier attempt wrote whole (RULES-1.6), and `seen` itself where its CLI drew it as a placeholder
+	 * then (D112) - a native interaction, or unknown.
 	 */
-	submit(run: RunId, text: string, signal?: AbortSignal): Promise<InputEffects>;
+	inspect(run: RunId, own?: string, lead?: string, seen?: string): Promise<'usable' | 'draft' | 'own' | 'interaction' | 'unknown'>;
+	/**
+	 * Pastes the complete text once - `lead` typed before it where its CLI takes a paste alone as material (D102) - and presses Enter
+	 * once the input shows it as its own draft, answering what actually went in and whether the input showed it (RULES-1.3, 1.6,
+	 * 1.10). Once `signal` aborts - the attempt's deadline passed, or its run ended - nothing more goes in. `canPaste` is checked
+	 * immediately before writing: a read cancels an unstarted paste without interrupting an already-issued owned draft.
+	 */
+	submit(run: RunId, text: string, signal?: AbortSignal, lead?: string, canPaste?: () => boolean): Promise<Submission>;
+	/**
+	 * Presses Enter where the input holds `text` alone as its own draft, after `lead` where that was typed, written whole by an earlier
+	 * attempt - `seen` itself where it showed as a placeholder (D112) - and answers what went in: nothing where it holds anything else
+	 * (RULES-1.6). Once `signal` aborts nothing more goes in.
+	 */
+	enter(run: RunId, text: string, signal?: AbortSignal, lead?: string, seen?: string): Promise<InputEffects>;
+	/** How much longer than usual a paste of `text` into `run`'s CLI takes to show and be taken: its size, and lines for some (D99, D112). */
+	pasteTime?(run: RunId, text: string): number;
+}
+
+/** What one submission did: what went in, and whether the input showed the message as its own draft, as which (RULES-1.6, D112). */
+export interface Submission {
+	readonly effects: InputEffects;
+	readonly shown: boolean;
+	/** The draft it showed as, its own and alone, where it did. */
+	readonly draft?: string;
 }
 
 /** Explicit contact with the person in the sender's window (COLLABORATION-2.3): true once handed to the editor. */

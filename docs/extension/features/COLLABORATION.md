@@ -51,7 +51,10 @@ Format (English API text):
 The optional reply field appears only when supplied. Bodies are data: control bytes/terminal escapes are rejected by
 MCP validation; ordinary Unicode and newlines are preserved, never silently truncated. Metadata uses escaped display
 text so a name cannot forge a header. A body containing the delimiter remains literal body content, identified also by
-length in the operation record. A message is one paste followed by Enter, not one Enter per line. No ten-message batching
+length in the operation record. A message is one paste followed by Enter, not one Enter per line. Where the recipient's CLI
+takes a paste alone as material rather than a request - Claude Code - the words `Act on this Facade message: ` are typed
+before the paste in the same write, so that the message is the person's own request: Orca saw Claude refuse a brief that came
+as a paste alone (D102). A Facade result asks for nothing and has none. No ten-message batching
 that changes per-send identity, no doorbell or reminder line, and no “fetch the body” notice in place of the message.
 The header's message ID is the same across retries under RULES-1.1; MCP-6.2 teaches the receiving model to deduplicate it.
 Oversized content fails before writing with the supported limit; a caller can explicitly send a file-reference message.
@@ -107,13 +110,14 @@ Show opens the actual run/record in this window, never a same-named replacement 
 
 ### 3.1 Reading delivers the record
 
-**A record handed back by read_messages is delivered; reading never submits content to the terminal again.**
+**A record handed back by read_messages is delivered; reading starts no new terminal paste.**
 
 read_messages without IDs returns the caller's incoming records that are not yet delivered; all:true pages all retained
 incoming records. Explicit IDs also resolve only inside the caller's inbox. Other agents' inboxes and the caller's own
 sent messages are unavailable through this tool, including in YOLO. A message has one delivery state (RULES-1.3);
-there is no separate fetch state. A read that hands back a record still being pasted ends that delivery, so the
-recipient does not receive it twice, and its sender's result says it was delivered through read_messages. A record
+there is no separate fetch state. Its sender's result immediately says it was delivered through read_messages.
+An unstarted paste is canceled; an already pasted complete owned draft may finish under RULES-1.5, with the same
+message ID so the recipient recognizes the repeat. No person's edited draft is submitted or erased. A record
 that reached its deadline undelivered and is read later becomes delivered; its sender already has the failure result
 and receives no second one. An uncertain return can expose a record again with the same ID without another terminal
 submission. No understanding or completion claim is inferred from reading.
@@ -134,8 +138,8 @@ text; do not execute links or commands embedded in it.
 **Facade message history is view-only and uses the automatic retention in RULES-5.3.**
 
 Do not provide manual Delete Messages/Chat Rooms, hide or restore-hidden actions. Expiration removes Facade's own
-records and associated copies, not vendor conversations or work files. No caller-request-key retention or
-deletion-consent workflow is required.
+records and associated copies, not vendor conversations or work files. Request IDs on those records follow MCP-1.1's
+one-hour reuse rule; no separate request ledger or deletion-consent workflow is required.
 
 ## 4 Technical design
 
@@ -169,13 +173,15 @@ Do not add protected-storage or authentication protocols to this generated-conte
 | --- | --- |
 | 1.1–1.2 | Local/remote reach under RULES-4.3 across this computer's windows, direct text/keys with drafts and multiline content |
 | 2.1–2.4 | Full CLI acceptance, repeated message IDs, native and post-start prompt, truthful result author, `#human` notification, no human message fallback |
-| 3.1–3.3 | Own inbox only, one delivery state, reading stops pasting and reports delivery, window-local Message History, thirty-day automatic cleanup |
+| 3.1–3.3 | Own inbox only, one delivery state, reading cancels unstarted pastes and reports delivery, owned-draft completion under RULES-1.5, window-local Message History, thirty-day automatic cleanup |
 | 4.1–4.2 | Recipient-owned record with a sender copy, natural sender-close handling, no replay, complete readable cross-environment files and expiry |
 
 Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remains unverified.
 
 ## Change log
 
+- 2026-10-31: 3.1 follows RULES-1.5's completion of an already pasted owned draft after read delivery (D113).
+- 2026-10-31: 2.1 types `Act on this Facade message: ` before a message's paste for Claude Code (D102).
 - 2026-10-31: 2.2 types what readies a CLI's tools before its first turn where that turn could not use them otherwise -
   Antigravity's MCP panel - and sends its creation prompt after it (D94).
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots collaboration rules with the owner's

@@ -500,11 +500,16 @@ export class PtydServer {
 				return runOf(run).read(lines);
 			}
 			case 'type': {
-				const { run, text, enter } = params as Requests['type']['params'];
+				const { run, text, enter, lead } = params as Requests['type']['params'];
 				if (typeof text !== 'string') {
 					throw new Error('Text to type must be a string.');
 				}
-				return runOf(run).type(text, !!enter);
+				// A lead is typed as it is: words alone, nothing a terminal would act on
+				// eslint-disable-next-line no-control-regex
+				if (lead !== undefined && (typeof lead !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(lead))) {
+					throw new Error('A lead to type before a paste is text without control characters.');
+				}
+				return runOf(run).type(text, !!enter, lead);
 			}
 			case 'keys': {
 				const { run, keys } = params as Requests['keys']['params'];

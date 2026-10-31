@@ -119,12 +119,26 @@ the reader does not recognize is unknown: nothing is typed, and the message fail
 naming the CLI and the version Facade found. The version is recorded as a diagnostic, never as a gate. A CLI without an
 input reader fails ordinary messages at once with `unsupported`. Readers are tested against recorded screens of real
 CLI versions; a changed layout becomes a new recorded case, and a reader never guesses an empty input from a layout it
-does not recognize (D83).
+does not recognize (D83). In a terminal 24 rows high, as an editor's
+panel may be, Antigravity and Pi scroll a draft taller than their input box, Antigravity marking it with `↑ 1 more lines`
+first in the box and Pi in its upper rule, `─── ↑ 2 more ───`: their readers say how many rows are out of sight above and
+below, apart from the draft, and a draft whose end in sight is the message's end, nothing being out of sight below, is the
+message's own. Pi draws a paste of ten lines or fewer and more than 1,000 characters as `[paste #1 1284 chars]`, counting
+a tab as four (D112). Codex 0.166.0 draws a status at the right
+end of its hints row, `⚠ 1 warning · f2 to view`, alone there while a draft hides the hints, when `-c` overrides run it
+outside its background server: Facade starts it with `--no-daemon`, and its reader takes that row either way.
 
-Use complete paste plus Enter for ordinary messages: Enter only once the pasted text shows in the input box, and
-delivery confirmed once the input box is empty again. State actual full/partial/unknown effects. Lost acknowledgement
-can cause another finite attempt with the same message ID, while draft protection still applies. Do not enforce a
-never-repeat guarantee or require a reconciliation API.
+Each reader also reports a draft as it is drawn, so that a delivery knows its own (RULES-1.6): its rows' text, or the
+placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N lines]` counting the lines after the
+first, Antigravity's `[Pasted text #1 +N lines]` and Pi's `[paste #1 +N lines]` counting every line, Codex's and Muse
+Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lines on. That text is compared, never
+logged. A message's lead, where its CLI takes one (COLLABORATION-2.1), is typed ahead of the paste in the same write, and
+the draft is the message's own with it, or without it where an older ptyd typed none (D102). Use complete paste plus Enter
+for ordinary messages: Enter only once the input holds the message's own draft and
+the CLI has had the time a paste of that size takes - its bytes at 4 KB a millisecond, ConPTY's 64 bytes on Windows, and
+45 ms a line more for Antigravity, which takes seconds to expand a long paste, as Orca measured (D99) - and delivery
+confirmed once the input box is empty again. State actual full/partial/unknown effects. A later attempt never types the
+text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require a reconciliation API.
 An unknown version still starts its terminal, and its activity can still be verified per run under 2.3. Unproved
 activity shows red with an error once the run's startup is over (2.3). Every CLI advertised as fully supported must actually demonstrate the required
 capabilities on its stated platform.
@@ -330,7 +344,12 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
-- 2026-10-31: Codex startup, Muse optional tools and first prompts, and bounded per-launch trust follow D95, D97 and D101.
+- 2026-10-31: 2.1 reads Antigravity's and Pi's scrolled drafts and Pi's `[paste #N C chars]` (D112).
+- 2026-10-31: 2.2 makes Muse Code's Facade server optional, and 3.2 gives it a one-word first task after startup (D101).
+- 2026-10-31: 2.1's readers report a draft's text or its CLI's paste placeholder, so that a delivery knows its own;
+  Enter waits for a paste of its size and is pressed again only over that draft (D98, D99).
+- 2026-10-31: 2.2 has Codex wait for its optional MCP servers before its first turn and 3.2 starts it without its
+  update prompt (D95); 3.3 writes no trust for a home folder, a folder above it or a root, nor into a missing file (D97).
 - 2026-10-31: Antigravity, Muse Code, OpenCode and Pi are given the Facade tools (D91, D94): 1.4 says each built-in's
   model and effort options, 2.1 their input readers - a box, a placeholder known by its words, a CLI's own drawn cursor -
   and 2.2 how each receives the server, the skill and the approval of Facade's own tools.

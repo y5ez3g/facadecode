@@ -214,6 +214,62 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.choices.list('local', 'claude'), { model: ['opus'], effort: ['high'] });
 		});
 
+		test('a request ID given again by the same caller answers the agent its first start started, starting nothing; another caller\'s is its own (D104)', async () => {
+			const { lead, worker } = team(s);
+			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-1' }));
+			// Started a minute before the window's clock: within the hour a request ID answers for
+			const started = s.agents.runs.get(first.data.agent_id)!;
+			s.agents.runs.set(started.id, { ...started, createdAt: Date.UTC(2026, 9, 28, 21, 59, 0) });
+			const again = await s.call(worker, 'start_agent', { ...START, name: 'something else', request_id: 'review-1' });
+			const repeated = resultOf(again);
+			assert.deepStrictEqual([s.agents.launched.length, s.agents.launched[0].requestId], [1, 'review-1']);
+			assert.deepStrictEqual([repeated.status, repeated.data.agent_id, repeated.data.repeated, repeated.data.request_id, repeated.effects], ['success', first.data.agent_id, true, 'review-1', { outcome: 'none', agent_id: first.data.agent_id }]);
+			assert.match(headlineOf(again), /^Request review-1 started @backend review #a100 \(run-0+64\) already, at .*: nothing was started again\./);
+			// Another caller's ID of the same text, or this caller's new one, starts anew; and one older than an hour no longer answers
+			await s.call(lead, 'start_agent', { ...START, request_id: 'review-1' });
+			await s.call(worker, 'start_agent', { ...START, request_id: 'review-2' });
+			s.agents.runs.set(started.id, { ...started, createdAt: Date.UTC(2026, 9, 28, 20, 59, 0) });
+			await s.call(worker, 'start_agent', { ...START, request_id: 'review-1' });
+			assert.strictEqual(s.agents.launched.length, 4);
+		});
+
+		test('a request ID given again answers as its start went: still starting is accepted, a start that failed is its failure, nothing started again (D104, D112)', async () => {
+			const { worker } = team(s);
+			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' }));
+			const started = s.agents.runs.get(first.data.agent_id)!;
+			const at = Date.UTC(2026, 9, 28, 21, 59, 0);
+			s.agents.runs.set(started.id, { ...started, createdAt: at, lifecycle: 'starting' });
+			const starting = await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' });
+			assert.deepStrictEqual([resultOf(starting).status, resultOf(starting).effects], ['accepted', { outcome: 'pending', agent_id: started.id }]);
+			assert.match(headlineOf(starting), /Its process is still starting\. The start's outcome is recorded later as a Facade result/);
+			s.agents.runs.set(started.id, { ...started, createdAt: at, lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason: 'claude was not found', source: 'launch', at } });
+			const failed = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' }));
+			assert.deepStrictEqual([failed.status, failed.error?.code, failed.error?.reason, failed.data.repeated], ['failure', 'FAILED', 'launch_failed', true]);
+			assert.match(failed.error!.message, /It could not start: claude was not found$/);
+			assert.strictEqual(s.agents.launched.length, 1);
+		});
+
+		test('removed and interrupted starts reuse retained facts without creating another run', async () => {
+			const { worker } = team(s);
+			const saved = runFacts(100, { creator: worker.id, requestId: 'kept-start', lifecycle: 'ended' });
+			s.agents.requested = () => saved;
+			const ended = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'kept-start' }));
+			assert.deepStrictEqual([ended.status, ended.data.agent_id, ended.data.process, ended.data.repeated], ['success', saved.id, 'unknown', true]);
+			s.agents.requested = () => ({ ...saved, lifecycle: 'starting' });
+			const interrupted = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'kept-start' }));
+			assert.deepStrictEqual([interrupted.status, interrupted.error?.reason, interrupted.effects.outcome, s.agents.launched.length], ['failure', 'window_unavailable', 'unknown', 0]);
+		});
+
+		test('read delivery is reported as read_messages for ordinary sends and creation prompts', async () => {
+			const { worker, lead } = team(s);
+			s.messages.respond = () => ({ status: 'success', delivery: { status: 'success', effects: { outcome: 'none' }, attempts: 0, via: 'read' } });
+			const sent = await s.call(lead, 'send_message', { to: worker.id, text: 'Read this.' });
+			assert.strictEqual(resultOf(sent).data.disposition, 'read_messages');
+			assert.match(headlineOf(sent), /through read_messages/);
+			const started = await s.call(lead, 'start_agent', { ...START, prompt: 'Read the first task.' });
+			assert.match(headlineOf(started), /prompt #m2 was delivered through read_messages after startup/);
+		});
+
 		test('a native prompt is the caller\'s headed message, its ID taken before the launch; used unverified, its outcome is unknown, never invented', async () => {
 			const { lead } = team(s);
 			s.agents.startWith = { state: 'running', prompt: { path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' } } };
@@ -509,6 +565,27 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.messages.sent, [{ from: lead.id, to: worker.id, text: 'Please review.', elapsedMs: 7, callId: 'call-1' }]);
 			assert.deepStrictEqual(result.data, { message_id: 'm-1', alias: '#m1', target: worker.id, target_reference: '@worker #a2', length: 14, disposition: 'submitted_to_cli' });
 			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', text_written: 'full', enter_written: true });
+		});
+
+		test('a request ID given again by the same sender answers the message it sent, as its delivery stands, sending nothing again (D104)', async () => {
+			const { lead } = team(s);
+			const first = resultOf(await s.call(lead, 'send_message', { to: '@worker', text: 'Please review.', request_id: 'ask-1' }));
+			// Sent a minute before the window's clock
+			const minuteAgo = Date.UTC(2026, 9, 28, 21, 59, 0);
+			s.messages.records[0] = { ...s.messages.records[0], at: minuteAgo };
+			const again = await s.call(lead, 'send_message', { to: '@worker', text: 'Please review.', request_id: 'ask-1' });
+			const repeated = resultOf(again);
+			assert.deepStrictEqual([s.messages.sent.length, s.messages.sent[0].requestId], [1, 'ask-1']);
+			assert.deepStrictEqual([repeated.status, repeated.data.message_id, repeated.data.repeated], ['success', first.data.message_id, true]);
+			assert.match(headlineOf(again), /^Request ask-1 sent message #m1 to @worker #a2 already: nothing was sent again\. It was delivered\.$/);
+			// One that was not delivered stays so; a new request ID sends anew
+			s.messages.respond = () => ({ status: 'failure', reason: 'input_draft' });
+			await s.call(lead, 'send_message', { to: '@worker', text: 'Second.', request_id: 'ask-2' });
+			s.messages.records[1] = { ...s.messages.records[1], at: minuteAgo };
+			const failed = await s.call(lead, 'send_message', { to: '@worker', text: 'Second.', request_id: 'ask-2' });
+			assert.strictEqual(resultOf(failed).status, 'failure');
+			assert.match(headlineOf(failed), /A new request_id sends it anew\.$/);
+			assert.strictEqual(s.messages.sent.length, 2);
 		});
 
 		test('the window\'s own time before the send comes off its budget with the hops before it (RULES-1.2)', async () => {

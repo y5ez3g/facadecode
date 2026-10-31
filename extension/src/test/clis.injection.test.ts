@@ -575,12 +575,12 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 		assert.ok(FACADE_SKILL.includes(verbatim));
 		assert.match(FACADE_SKILL, /^---\nname: facade\ndescription: .+\n---\n/);
 		assert.deepStrictEqual(TOOLS.map(tool => tool.name).filter(name => !FACADE_SKILL.includes(`\`${name}\``)), []);
-		for (const fact of ['`model`', '`effort`', '`prompt`', '`facade.yolo`', 'creation tree', 'Delivery is finite']) {
+		for (const fact of ['`model`', '`effort`', '`prompt`', '`facade.yolo`', 'creation tree', 'Delivery is finite', '`request_id`']) {
 			assert.ok(FACADE_SKILL.includes(fact), fact);
 		}
 		assert.ok(!/facade\.agents\.|Facade Dots/.test(FACADE_SKILL));
-		// Mechanics only: no workflow, mandatory reply, escalation, request keys, tasks or authentication
-		for (const absent of [/request_id|idempoten/i, /\btask\b/i, /escalat/i, /must (reply|answer|report)/i, /token|credential|authenticat/i]) {
+		// Mechanics only: no workflow, mandatory reply, escalation, tasks or authentication
+		for (const absent of [/\btask\b/i, /escalat/i, /must (reply|answer|report)/i, /token|credential|authenticat/i]) {
 			assert.ok(!absent.test(FACADE_SKILL), String(absent));
 		}
 	});

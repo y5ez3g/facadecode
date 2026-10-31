@@ -49,6 +49,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const runs = new Map([[RUN, FACTS]]);
 		disposables = registerUi({
 			agents: {
+				requested: () => undefined,
 				list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, launch: () => RUN, started: async () => ({ state: 'running' }), warmedUp: async () => undefined,
 				close: async id => { closed.push(id); runs.delete(id); return cleanup; }, rename: () => undefined
 			},

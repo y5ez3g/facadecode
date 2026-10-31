@@ -285,6 +285,40 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 
 	suite('send_message to another window\'s agent', () => {
 
+		test('overlapping sends with one request ID resolve and route only the first target', async () => {
+			const { stranger } = team(s);
+			network.window(2, 'Backend', [remoteAgent(20), remoteAgent(21)]);
+			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, route.args.to, DELIVERED), requestId: route.args.requestId } } });
+			const replies = await Promise.all([20, 21].map(id => s.call(stranger, 'send_message', { to: runId(id), text: 'Only once.', request_id: 'one-target' })));
+			assert.strictEqual(network.routed.length, 1);
+			assert.deepStrictEqual(replies.map(answer => [resultOf(answer).data.message_id, resultOf(answer).data.target]), [['m-1', runId(20)], ['m-1', runId(20)]]);
+		});
+
+		test('@human checks reachable agents in other windows; #human stays an unambiguous local notification', async () => {
+			const { stranger } = team(s);
+			network.window(2, 'Backend', [remoteAgent(20, { name: 'human' })]);
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: '@human', text: 'Hello' })).error?.reason, 'ambiguous_reference');
+			assert.deepStrictEqual(s.messages.sent, []);
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: '#human', text: 'Hello' })).status, 'success');
+		});
+
+		test('an incomplete window list never guesses a local agent by name; its exact ID remains usable', async () => {
+			const { stranger, worker } = team(s);
+			network.directoryError = new Error('window component unavailable');
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: '@worker', text: 'Hello' })).error?.reason, 'window_unavailable');
+			assert.deepStrictEqual(s.messages.sent, []);
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: `@worker ${worker.alias}`, text: 'Hello' })).status, 'success');
+		});
+
+		test('its request ID goes with it to the window it is delivered in, and the copy kept here keeps it too (D104, D112)', async () => {
+			const { stranger } = team(s);
+			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
+			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, runId(20), DELIVERED), requestId: route.args.requestId } } });
+			await s.call(stranger, 'send_message', { to: '@builder', text: 'Please check the build.', request_id: 'ask-7' });
+			assert.strictEqual(network.routed[0].args.requestId, 'ask-7');
+			assert.deepStrictEqual(s.messages.kept.map(record => [record.id, record.requestId]), [['m-1', 'ask-7']]);
+		});
+
 		test('its ID is taken here, it is delivered there within the two seconds, a copy is kept here and success is the CLI\'s acceptance', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
@@ -311,7 +345,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
 			const earlier = s.messages.deliver(runFacts(1), stranger, 'Can you ask builder?');
 			const pending: MessageRecord['delivery'] = { status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, deadline: Date.UTC(2026, 9, 28, 22, 0, 15), attempts: 1 };
-			network.respond = route => ({ ok: true, result: { status: 'accepted', obstacle: 'input_draft', record: recordOf(route.args.id, stranger.id, runId(20), pending) } });
+			network.respond = route => ({ ok: true, result: { status: 'accepted', obstacle: 'input_draft', record: { ...recordOf(route.args.id, stranger.id, runId(20), pending), replyTo: route.args.replyTo } } });
 			const later = resultOf(await s.call(stranger, 'send_message', { to: '#a20', text: 'Hi', reply_to: earlier.alias }));
 			assert.deepStrictEqual([later.status, later.data.deadline, later.data.obstacle, later.data.reply_to, later.effects.outcome], ['accepted', '2026-10-28T22:00:15.000Z', 'input_draft', earlier.id, 'pending']);
 			assert.strictEqual(network.routed[0].args.replyTo, earlier.id);
@@ -407,9 +441,10 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const { lead, stranger } = team(s);
 			const reaching = guestOf(30, { yolo: true });
 			s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_draft' });
-			const answered = await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-77', from: reaching, to: stranger.id, text: 'Hi there', replyTo: 'm-70', callId: 'c-1', elapsedMs: 900 } }) as { status: string; obstacle: string; record: MessageRecord };
+			const answered = await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-77', from: reaching, to: stranger.id, text: 'Hi there', replyTo: 'm-70', callId: 'c-1', requestId: 'ask-9', elapsedMs: 900 } }) as { status: string; obstacle: string; record: MessageRecord };
 			assert.deepStrictEqual([answered.status, answered.obstacle, answered.record.id], ['accepted', 'input_draft', 'm-77']);
-			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-77', from: runId(30), sender: { party: { run: runId(30), alias: '#a30', name: 'guest 30' }, window: 'win-2', label: 'Backend' }, to: stranger.id, text: 'Hi there', replyTo: 'm-70', elapsedMs: 900, callId: 'c-1' }]);
+			// Its request ID kept with it here, where its record is made, for the sender's retry to find (D104, D112)
+			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-77', from: runId(30), sender: { party: { run: runId(30), alias: '#a30', name: 'guest 30' }, window: 'win-2', label: 'Backend' }, to: stranger.id, text: 'Hi there', replyTo: 'm-70', elapsedMs: 900, callId: 'c-1', requestId: 'ask-9' }]);
 			// Out of a non-YOLO guest's tree: not found, nothing sent
 			await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-78', from: guestOf(31), to: lead.id, text: 'Hi', elapsedMs: 0 } }), /No agent .* that the sender reaches is in this window/);
 			await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-79', from: reaching, to: runId(99), text: 'Hi', elapsedMs: 0 } }), /No agent/);

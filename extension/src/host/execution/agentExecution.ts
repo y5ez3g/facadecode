@@ -230,11 +230,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	/**
-	 * Pastes `text` into `run`'s terminal, then Enter where asked, in turn with its other automated input (MCP-5.2). Rejects with
-	 * {@link PtydNotSent} where nothing reached ptyd, {@link PtydLost} where its answer was lost and the effects are not known.
+	 * Pastes `text` into `run`'s terminal, then Enter where asked, in turn with its other automated input (MCP-5.2), `lead` typed
+	 * before it where given (D102). Rejects with {@link PtydNotSent} where nothing reached ptyd, {@link PtydLost} where its answer was
+	 * lost and the effects are not known.
 	 */
-	typeText(run: RunId, text: string, enter: boolean): Promise<InputEffect> {
-		return this.ask('type', { run, text, enter });
+	typeText(run: RunId, text: string, enter: boolean, lead?: string): Promise<InputEffect> {
+		return this.ask('type', { run, text, enter, ...lead !== undefined ? { lead } : {} });
 	}
 
 	/** Presses `keys`, already validated names, in `run`'s terminal, in turn with its other automated input (MCP-5.2). */

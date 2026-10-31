@@ -17,7 +17,23 @@ export type InputState = 'usable' | 'draft' | 'interaction' | 'unknown';
 export interface InputReading {
 	readonly state: InputState;
 	readonly evidence: string;
+	/**
+	 * A draft as it is drawn - its rows' text, or its CLI's placeholder for a long paste - so that a delivery knows its own message
+	 * there (RULES-1.6, CLIS-2.1). It is compared, never logged.
+	 */
+	readonly draft?: string;
+	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (D112). */
+	readonly hidden?: Hidden;
 }
+
+export interface Hidden {
+	readonly above: number;
+	readonly below: number;
+}
+
+/** Antigravity's marks of rows scrolled out of its input box, `↑ 1 more lines` first in it and `↓ 2 more lines` last. */
+const MORE_ABOVE = /^↑ (\d+) more lines?$/u;
+const MORE_BELOW = /^↓ (\d+) more lines?$/u;
 
 /** One cell as drawn: its characters, and whether they are dim or in inverse video. */
 export interface InputCell {
@@ -72,6 +88,8 @@ const isText = (cell: InputCell) => shows(cell) && !cell.dim;
 const isContinuation = (row: Row) => charAt(row, 0) === ' ' && charAt(row, 1) === ' ';
 /** A rule across the terminal: `─` alone, from its first column to its last. */
 const isRule = (row: Row) => /^─+$/.test(textOf(row));
+/** A draft's text as its rows draw it, the spaces at each row's end left out. */
+const draftOf = (rows: readonly Row[]) => rows.map(row => textOf(row).trimEnd()).join('\n').trimEnd();
 
 /**
  * A native menu as its CLI draws it in place of its input: its selected item and the item under it - or, for a question it draws
@@ -111,7 +129,15 @@ function contentOf(rows: readonly Row[], prompt: number, end: number, cursor: In
 	const input = [rows[prompt].slice(2), ...rows.slice(prompt + 1, end)];
 	const where = `${what} at ${input.length > 1 ? `rows ${prompt + 1}-${end}` : `row ${end}`}`;
 	if (input.some(row => row.some(isText))) {
-		return { state: 'draft', evidence: `${where} holds text` };
+		// The rows under the prompt row are indented two columns; marks of rows scrolled out of the box are no part of the draft
+		const drawn = [input[0], ...input.slice(1).map(row => row.slice(2))];
+		const above = drawn.length > 1 ? MORE_ABOVE.exec(textOf(drawn[0]).trim())?.[1] : undefined;
+		const below = drawn.length > 1 ? MORE_BELOW.exec(textOf(drawn[drawn.length - 1]).trim())?.[1] : undefined;
+		const shown = drawn.slice(above !== undefined ? 1 : 0, below !== undefined ? -1 : undefined);
+		return {
+			state: 'draft', evidence: `${where} holds text${above !== undefined || below !== undefined ? ', scrolled' : ''}`, draft: draftOf(shown),
+			...above !== undefined || below !== undefined ? { hidden: { above: Number(above ?? 0), below: Number(below ?? 0) } } : {}
+		};
 	}
 	if (input.slice(1).some(row => !isBlank(row))) {
 		return { state: 'unknown', evidence: `${where} holds dim text under its prompt row, which is no placeholder` };
@@ -214,8 +240,11 @@ function readFrame(screen: InputScreen, layout: FrameLayout): InputReading {
 const CODEX_MENU: Menu = { selected: /^› \d+\. \S/, next: /^ {2}\d+\. \S/ };
 /** Its footer's first row: the model and the folder, `  GPT-… max · /work/app`, maybe more after them. */
 const CODEX_MODEL = /^ {2}\S.*? · (?:[~/]|[A-Za-z]:\\)/;
-/** A row of hints under it: `  ← for agents · ? for shortcuts`, or `  tab to queue message` while it works. */
-const CODEX_HINTS = /^ {2}(?:\S.*? · )?(?:\? for shortcuts|tab to queue message) *$/;
+/**
+ * A row of hints under it: `  ← for agents · ? for shortcuts`, or `  tab to queue message` while it works - 0.166.0 draws a status
+ * at its right end too, `⚠ 1 warning · f2 to view`, alone on the row while a draft hides its hints.
+ */
+const CODEX_HINTS = /^ {2}(?:\S.*? · )?(?:\? for shortcuts|tab to queue message)(?: {2,}\S.*?)? *$|^ {20,}\S.*$/;
 
 /**
  * Codex's input, as 0.165.0 was observed drawing it, which has no frame: its footer at the bottom of what it draws - the model line, and a row of hints under
@@ -256,6 +285,9 @@ function readCodexPrompt(screen: InputScreen): InputReading {
 const PI_UPPER = /^(?:─+|─{2,} \S.*? ─+)$/;
 /** Its lower rule: plain, or with its scroll mark ` ↓ 3 more `. */
 const PI_LOWER = /^─+(?: ↓ \d+ more ─+)?$/;
+/** The rows its scroll marks say are out of its editor, above and below. */
+const PI_ABOVE = /^─{2,} ↑ (\d+) more ─+$/;
+const PI_BELOW = /^─+ ↓ (\d+) more ─+$/;
 /** Its footer's row of figures, which ends in the context it has used: `↑637 ↓15 … 1.3%/131k (auto)`, `?/131k` before it knows. */
 const PI_STATS = /(?:^|\s)(?:\d+\.\d%|\?)\/\d+(?:\.\d)?[kM]?(?: \(auto\))?(?:\s|$)/;
 /**
@@ -303,7 +335,12 @@ function readPiEditor(screen: InputScreen): InputReading {
 	}
 	const input = rows.slice(top, lower);
 	if (input.some(row => row.some(isText))) {
-		return { state: 'draft', evidence: `${where} holds text` };
+		const above = PI_ABOVE.exec(textOf(rows[upper]))?.[1];
+		const below = PI_BELOW.exec(textOf(rows[lower]))?.[1];
+		return {
+			state: 'draft', evidence: `${where} holds text${above !== undefined || below !== undefined ? ', scrolled' : ''}`, draft: draftOf(input),
+			...above !== undefined || below !== undefined ? { hidden: { above: Number(above ?? 0), below: Number(below ?? 0) } } : {}
+		};
 	}
 	// Its padding, a setting, puts the start of an empty editor at most three columns in
 	if (height > 1 || cursor.x > 3) {
@@ -367,7 +404,7 @@ function readOpenCodeBox(screen: InputScreen): InputReading {
 		return atStart ? { state: 'usable', evidence: `${where} is empty but for its placeholder` } : away;
 	}
 	if (input.some(row => row.some(isText))) {
-		return { state: 'draft', evidence: `${where} holds text` };
+		return { state: 'draft', evidence: `${where} holds text`, draft: draftOf(input) };
 	}
 	return atStart ? { state: 'usable', evidence: `${where} is empty` } : away;
 }

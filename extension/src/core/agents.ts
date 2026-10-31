@@ -8,6 +8,7 @@ import { displayLine } from '../base/text';
 import { FacadeError, invalid } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
 import { labelOf, normalizeName } from './names';
+import { REQUEST_MS } from './requests';
 import {
 	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
 	LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError,
@@ -115,6 +116,33 @@ export class AgentService implements Agents, Disposable {
 		return this.runs.get(run)?.facts;
 	}
 
+	requested(from: RunId, requestId: string): RunFacts | undefined {
+		const cutoff = this.deps.clock.now() - REQUEST_MS;
+		const kept = this.deps.retained.list().filter(record => isRetainedRun(record) || isRequestRun(record));
+		for (const record of kept) {
+			if (record.requestOnly && record.createdAt <= cutoff) {
+				this.deps.retained.remove(record.id);
+			}
+		}
+		return [...this.list(), ...kept].find(run => run.creator === from && run.requestId === requestId && run.createdAt > cutoff);
+	}
+
+	/** Keep the existing run metadata, not a second request ledger. Closed pairs are never restored by this record. */
+	private rememberRequest(facts: RunFacts, required = false): boolean {
+		if (facts.requestId !== undefined && facts.createdAt > this.deps.clock.now() - REQUEST_MS) {
+			try {
+				this.deps.retained.put({ ...facts, requestOnly: true });
+				return true;
+			} catch (err) {
+				if (required) {
+					throw err;
+				}
+				this.deps.log.event(`Could not update the request-bearing metadata of ${facts.alias}: ${messageOf(err)}`);
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Finds this window's runs again after a reload, and the failed launches it retained (LIFECYCLE-3.5, 1.5). Answers how many live
 	 * runs the execution owner reports as held elsewhere. Actual process records take precedence over a retained failed-start
@@ -136,6 +164,12 @@ export class AgentService implements Agents, Disposable {
 		}
 		const liveIds = new Set(live.map(run => run.run));
 		for (const kept of this.deps.retained.list()) {
+			if (isRequestRun(kept)) {
+				if (kept.createdAt <= this.deps.clock.now() - REQUEST_MS) {
+					this.deps.retained.remove(kept.id);
+				}
+				continue;
+			}
 			if (!isRetainedRun(kept)) {
 				this.deps.log.event('Ignored an invalid retained agent record.');
 				continue;
@@ -283,6 +317,7 @@ export class AgentService implements Agents, Disposable {
 			...(byAgent ? { creator: byAgent.run } : {}),
 			...(byAgent?.label ? { creatorLabel: byAgent.label } : {}),
 			origin: byAgent ? 'agent' : 'human',
+			...(byAgent && request.requestId !== undefined ? { requestId: request.requestId } : {}),
 			...(request.model !== undefined ? { model: request.model.trim() } : {}),
 			...(request.effort !== undefined ? { effort: request.effort.trim() } : {}),
 			tools: 'not_injected',
@@ -290,6 +325,8 @@ export class AgentService implements Agents, Disposable {
 		};
 		let settle!: () => void;
 		const run: Run = { facts, closing: false, settled: new Promise(resolve => settle = resolve) };
+		// Persist a request-bearing accepted run before creating its worktree or process, including starts interrupted by reload.
+		this.rememberRequest(facts, true);
 		this.runs.set(id, run);
 		// The person's own launch shows its terminal; an agent's opens in the background, the person's focus kept (LIFECYCLE-2.2)
 		this.deps.execution.openPair(pairOf(facts), { reveal: !byAgent });
@@ -419,8 +456,11 @@ export class AgentService implements Agents, Disposable {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
 		run.closing = true;
+		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
-		this.deps.retained.remove(id);
+		if (!kept) {
+			this.deps.retained.remove(id);
+		}
 		this.deps.execution.removePair(id);
 		this.emit({ run: id, kind: 'removed', cause: 'close' });
 		this.release(id);
@@ -500,6 +540,7 @@ export class AgentService implements Agents, Disposable {
 		}
 		const changes: Partial<Mutable<RunFacts>> = {
 			activity: report.activity,
+			...report.activity !== run.facts.activity ? { activitySince: this.deps.clock.now() } : {},
 			reporting: report.reporting,
 			awaitingActivity: report.awaitingActivity,
 			activityReason: report.reason,
@@ -536,6 +577,7 @@ export class AgentService implements Agents, Disposable {
 		this.release(exit.run);
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
+			this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 			this.runs.delete(exit.run);
 			this.deps.execution.removePair(exit.run);
 			this.emit({ run: exit.run, kind: 'removed', cause: 'exit' });
@@ -573,6 +615,9 @@ export class AgentService implements Agents, Disposable {
 			}
 		}
 		run.facts = next;
+		if (kind === 'lifecycle') {
+			this.rememberRequest(next);
+		}
 		this.emit({ run: run.facts.id, kind });
 	}
 
@@ -583,27 +628,38 @@ export class AgentService implements Agents, Disposable {
 	}
 }
 
-/** Disk records are observations, not typed objects: reject a damaged record before opening any of its UI. */
-function isRetainedRun(value: unknown): value is RunFacts {
+/** Disk records are observations, not typed objects: validate them before returning facts or opening any UI. */
+function isRunRecord(value: unknown): value is RunFacts {
 	if (!isJsonObject(value)) {
 		return false;
 	}
 	const strings = ['id', 'alias', 'name', 'cli', 'displayName', 'command', 'location', 'cwd', 'environment'];
 	return strings.every(key => typeof value[key] === 'string') && typeof value.yolo === 'boolean' &&
-		typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) && value.lifecycle === 'ended' &&
+		typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) &&
+		typeof value.lifecycle === 'string' && ['starting', 'running', 'ended'].includes(value.lifecycle) &&
 		typeof value.phase === 'string' && ['creating_worktree', 'launching_cli', 'running'].includes(value.phase) &&
 		typeof value.activity === 'string' && ['working', 'not_working', 'unknown'].includes(value.activity) && typeof value.reporting === 'boolean' &&
 		['title', 'activityReason'].every(key => value[key] === undefined || typeof value[key] === 'string') &&
 		['pid', 'startedAt'].every(key => value[key] === undefined || typeof value[key] === 'number' && Number.isFinite(value[key])) &&
 		(value.blocker === undefined || isJsonObject(value.blocker) && typeof value.blocker.kind === 'string' &&
 			['permission', 'question', 'auth'].includes(value.blocker.kind) && (value.blocker.text === undefined || typeof value.blocker.text === 'string')) &&
-		isJsonObject(value.end) && value.end.kind === 'failed' && typeof value.end.at === 'number' && Number.isFinite(value.end.at) &&
-		(value.end.code === undefined || typeof value.end.code === 'number') && (value.end.signal === undefined || typeof value.end.signal === 'string') &&
-		isJsonObject(value.error) && typeof value.error.reason === 'string' && typeof value.error.source === 'string' && typeof value.error.at === 'number' && Number.isFinite(value.error.at) &&
+		(value.end === undefined || isJsonObject(value.end) && ['failed', 'abnormal'].includes(value.end.kind as string) && typeof value.end.at === 'number' && Number.isFinite(value.end.at) &&
+		(value.end.code === undefined || typeof value.end.code === 'number') && (value.end.signal === undefined || typeof value.end.signal === 'string')) &&
+		(value.error === undefined || isJsonObject(value.error) && typeof value.error.reason === 'string' && typeof value.error.source === 'string' && typeof value.error.at === 'number' && Number.isFinite(value.error.at) &&
 		(value.error.worktree === undefined || (isJsonObject(value.error.worktree) &&
 			(value.error.worktree.branch === undefined || (typeof value.error.worktree.branch === 'string' && !!value.error.worktree.branch)) &&
 			(value.error.worktree.folder === undefined || (typeof value.error.worktree.folder === 'string' && !!value.error.worktree.folder)) &&
-			(value.error.worktree.branch !== undefined || value.error.worktree.folder !== undefined)));
+			(value.error.worktree.branch !== undefined || value.error.worktree.folder !== undefined))));
+}
+
+function isRetainedRun(value: unknown): value is RunFacts {
+	return isRunRecord(value) && !('requestOnly' in value) && value.lifecycle === 'ended' && value.end?.kind === 'failed' && value.error !== undefined;
+}
+
+function isRequestRun(value: unknown): value is RunFacts & { readonly requestOnly: true } {
+	return isRunRecord(value) && 'requestOnly' in value && value.requestOnly === true &&
+		typeof value.creator === 'string' && !!value.creator && typeof value.requestId === 'string' && !!value.requestId &&
+		typeof value.root === 'string' && !!value.root;
 }
 
 /** A retained record as this build keeps runs: one an earlier build wrote is a root of its own, without tools (ARCHITECTURE-4.2). */
@@ -639,6 +695,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(typeof meta.creator === 'string' && meta.creator ? { creator: meta.creator } : {}),
 		...(typeof meta.creatorLabel === 'string' && meta.creatorLabel ? { creatorLabel: meta.creatorLabel } : {}),
 		origin: meta.origin === 'agent' ? 'agent' : 'human',
+		...(typeof meta.requestId === 'string' && meta.requestId ? { requestId: meta.requestId } : {}),
 		...(typeof meta.model === 'string' ? { model: meta.model } : {}),
 		...(typeof meta.effort === 'string' ? { effort: meta.effort } : {}),
 		...(typeof meta.version === 'string' ? { version: meta.version } : {}),
@@ -667,6 +724,7 @@ export function metaOf(facts: RunFacts): RunMeta {
 		root: facts.root,
 		...(facts.creator !== undefined ? { creator: facts.creator } : {}),
 		...(facts.creatorLabel !== undefined ? { creatorLabel: facts.creatorLabel } : {}),
+		...(facts.requestId !== undefined ? { requestId: facts.requestId } : {}),
 		origin: facts.origin,
 		...(facts.model !== undefined ? { model: facts.model } : {}),
 		...(facts.effort !== undefined ? { effort: facts.effort } : {}),

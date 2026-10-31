@@ -219,7 +219,7 @@ Keep process/run identity, screen snapshot/output sequence and actual input effe
 Attach without duplicating output; retain a dated final screen after exit where available.
 Propagate RULES-1.5's remaining message budget to the input owner; internal hops cannot restart it.
 Do not compare independent host wall clocks as if synchronized. Check whether input can still start before writing.
-Uncertain effects stay uncertain; ordinary-message retries may repeat content under RULES-1.6 and still protect drafts.
+Uncertain effects stay uncertain; ordinary-message retries follow RULES-1.6's single paste and owned-draft Enter.
 No exactly-once write protocol or operation-query service is required.
 
 A run's shim connects to its execution environment's supervisor and names the run it speaks for. The supervisor
@@ -240,6 +240,9 @@ temporary disconnection; RULES-4.1's five minutes after the owning extension hos
 **Use simple bounded runtime storage, preserve observed effects across reload, and report real capacity failures.**
 
 Keep current process/message records and sequence information needed for reconnect, actual results and history.
+Request-bearing run metadata is persisted before startup effects and retained for MCP-1.1's one-hour period after its
+pair is removed. Such request-only records are validated on reading, never restore a card or process, and expire
+without removing a failed launch that the person has not closed (D113).
 There is no caller request-key ledger, durable human-notification claim protocol or authenticated cleanup authority.
 Atomic updates and a single writer for each record are ordinary implementation tools, not new API promises.
 Closing a run does not replay its mail on a later run. Changing protocol does not convert old pending messages into
@@ -455,6 +458,7 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-10-31: Persist request metadata before startup and keep removed runs deduplicated without restoring their pairs.
 - 2026-10-31: 4.1's real run takes any built-in, its configuration given to its terminals.
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 makes the window component the client component, using local
   sockets and a client registry without a broker process (D87); 1.3 adds the `schema`, `contract`, `transport` and

@@ -20,10 +20,11 @@ The owner recalibrated these contracts on 2026-10-28. They are implementation ta
 There are no recipient arrays or aggregate sends. A caller sending to several agents calls the same tool separately.
 Resolve the target once under 2.3; keep that target and message ID through internal attempts. An optional reply-to ID
 expresses a relationship, not a promise of a reply. Names and conversation IDs are not substitutes for the resolved run.
-Callers do not supply request-id/idempotency keys. Each new send invocation gets a new message ID; internal attempts
-for an accepted message retain its ID. Message IDs, including their displayed aliases, are unique across the client
-network and never reassigned, including after reopening or history expiry. This uses ordinary ID allocation, not a
-deduplication ledger. Report invalid content or an unavailable target before writing.
+A caller may give a send its own request ID: the same one again from that caller within an hour answers the message it
+sent, as it stands, and sends nothing again (D104). Each new send invocation without one gets a new message ID; internal
+attempts for an accepted message retain its ID. Message IDs, including their displayed aliases, are unique across the client
+network and never reassigned, including after reopening or history expiry. This uses ordinary ID allocation; a request ID is kept on its
+message record, not in a separate deduplication ledger. Report invalid content or an unavailable target before writing.
 
 ### 1.2 The first response has three outcomes
 
@@ -44,8 +45,8 @@ a separate ordinary message.
 
 **A message is delivered when the target CLI accepted the complete instruction or read_messages handed the complete record to its recipient.**
 
-For terminal delivery, confirm the complete text and Enter submission: the CLI's input box empties after Enter. Text
-without Enter is not delivery. For a native interactive startup prompt, confirm acceptance through the adapter's native
+For terminal delivery, confirm the complete text and Enter submission: the CLI's input box empties after Enter, at that
+attempt or a later one of the same delivery (1.6). Text without Enter is not delivery. For a native interactive startup prompt, confirm acceptance through the adapter's native
 launch path; no synthetic Enter is required. Passing arguments to an unstarted process is not acceptance. A
 read_messages result that is handed back to the recipient delivers every record it contains (COLLABORATION-3.1).
 Busy/idle transitions or unrelated output are not evidence that this particular instruction was submitted. The adapter
@@ -60,8 +61,9 @@ Human notification handoff is defined separately in COLLABORATION-2.3.
 | Observed input | Action |
 | --- | --- |
 | Usable, no draft, CLI working or not working | Attempt delivery. Activity is not a gate. |
-| Draft present | Leave it untouched; retry at the next fixed slot. |
-| Menu, login, permission interaction or unusable input box | Do not type a message into it; retry within the budget. |
+| The message's own draft, written whole by an earlier attempt | Press Enter; never type its text again (1.6). |
+| Another draft present | Leave it untouched; wait for it to go (1.5). |
+| Menu, login, permission interaction or unusable input box | Do not type a message into it; wait for it to close (1.5). |
 | Draft/input state unknown, including an input box the reader does not recognize | Treat as unavailable, without guessing an empty input. |
 | CLI without an input reader | Fail at once as a permanent obstacle; nothing is typed. |
 | Run ended or explicitly closed | Fail; do not restart it. |
@@ -74,34 +76,51 @@ protection.
 
 ### 1.5 Both delivery stages have a finite budget
 
-**Ordinary delivery and a needed system-result handoff each use at most five attempts within fifteen seconds.**
+**Ordinary delivery and a needed system-result handoff each try every three seconds for fifteen seconds, and wait up to ten minutes for an input a person or the CLI holds.**
 
 | Value | Policy |
 | --- | --- |
 | Initial response | At most 2 seconds from Facade ingress |
-| Attempts per stage | At stage start, then 3, 6, 9 and 12 seconds |
+| Attempts per stage | At stage start, then every 3 seconds |
 | Deadline per stage | 15 seconds from that stage's start |
+| Input held by another draft or a native menu or question | The deadline moves on while it holds, to at most 10 minutes from the stage's start (D100) |
 | Permanent obstacle | Finish immediately; do not wait out unused slots |
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
 or environments consume the same budget. No extra attempts on input-change events, indefinite retries, or bursts to catch
-missed slots. At the deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known
-effects. A draft or unavailable input throughout the budget means failure; at-least-once delivery is not a promise to
-overcome a permanently unavailable target. A read through read_messages that delivers the message ends its stage.
-Result handoff starts its own budget once the original result is known. Window-close handling is 1.9 and does not
+missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for: Orca holds its
+notices while a person types, and so does Facade, never submitting the person's text with the message (D100). At the
+deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage
+whose input was never held ends at fifteen seconds; once held, its deadline is ten minutes from its start, whatever the
+input shows after. A long paste adds the time it takes, at CLIS-2.1's paste rates, to each of its stage's deadlines, so
+that its Enter is never cut off by its own size; a part of a message's text in the input, which no wait makes its own, is
+not waited for (D112). An input still unavailable then means failure; delivery is not a promise to overcome a permanently
+unavailable target. A read through read_messages delivers the message immediately and cancels any paste that has not
+begun. If text is already being written or remains as this message's own complete draft, the existing stage may finish
+its Enter within its original budget. It never types the text again, submits an edited draft or delays the read's result.
+Result handoff starts its own budget once the original result is known; a result joins others typed in one paste only
+while a whole stage's time is still before them (1.7, D112). Window-close handling is 1.9 and does not
 extend a deadline.
 
-### 1.6 At-least-once delivery and uncertainty
+### 1.6 A message is typed at most once
 
-**Within the finite budget, retry uncertain delivery when input is usable; the same message may arrive more than once.**
+**Once a message's text went into the input whole, later attempts never type it again; they press Enter only over the message's own draft.**
 
-Do not impose an exactly-once or never-repeat guarantee. Lost acknowledgement may lead to another attempt with the
-same message ID. Still protect drafts at every ordinary-message attempt: a partially written draft cannot be erased
-or blindly appended to. Report partial or uncertain effects honestly if the deadline expires. A confirmed successful
-submission ends that stage. Internal effect records may help explain what happened; they are not caller request keys
-or a new reconciliation API. No automatic content retry occurs after the budget ends.
-The injected skill tells the receiving model to recognize repeated message IDs and avoid repeating work for the same
-message; MCP-6.2 owns that instruction. Facade does not add an exactly-once execution or platform deduplication service.
+A submission the CLI takes slowly is not lost: Orca found that typing it again delivers it twice, and counts a written
+prompt as delivered (D98). A later attempt of the same delivery reads the input: the message's own draft alone - its
+text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
+this delivery confirms the submission; anything else is waited for under 1.4 and 1.5. A paste that never showed in the
+input is not typed again either: a CLI busy with its turn draws it late, and its own draft then gets Enter. A paste whose
+answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. Once a paste
+showed as its CLI's placeholder, a later Enter goes only over that same placeholder, its paste number included, as a
+person's later paste of the same size draws another (D112). Never press Enter over a draft that is not the message's own: a
+person's text is never submitted, nor appended to, nor erased. Report partial or uncertain effects honestly at the
+deadline: text without a confirmed submission is not delivery. A confirmed submission ends that stage. Internal effect
+records may help explain what happened; they are not caller request keys or a reconciliation API. No automatic content
+retry occurs after the budget ends.
+A message can still arrive twice where a person submits its pasted text themselves, so the injected skill tells the
+receiving model to recognize repeated message IDs and avoid repeating work for the same message; MCP-6.2 owns that
+instruction. Facade does not add an exactly-once execution or platform deduplication service.
 
 ### 1.7 Deliver the result back to A, then stop
 
@@ -110,7 +129,9 @@ message; MCP-6.2 owns that instruction. Facade does not add an exactly-once exec
 A returned immediate final result needs no second notification. An accepted asynchronous send gives A a clearly
 labeled Facade result with the original message ID, target and outcome - delivered, including delivery through
 read_messages, or not delivered - using the finite result budget if needed. The result is not authored by B and
-requests no response. Failure to return it never resends the original message. A message whose result already said
+requests no response. Results that come for one terminal while none of them is typed yet go in one paste, one turn of its
+model for them all, as T3 Code wakes a parent once for the tasks that finished together; a result read meanwhile is left out
+of it (D109). Failure to return it never resends the original message. A message whose result already said
 it was not delivered and that its recipient reads later becomes delivered without a second result.
 If A is gone or result delivery fails, finish the handoff; do not generate another error for B or a human popup.
 If B actually chooses to reply, B is that new send's caller: a closed A produces an error to B. If no agent can receive
@@ -153,7 +174,8 @@ No notification or message is scheduled for replay on the next opening.
 **Serialize automated input per terminal so two operations cannot splice their contents together.**
 
 An ordinary message is one full paste plus Enter, not one Enter per line. Direct text/keys use the same serialization.
-Waiting in that sequence does not renew deadlines. Stop is independent of pending input and prevents further queued
+While another delivery's text may still be in that input - written, neither confirmed nor ended - no message is pasted
+into it: that input is held for it, as by a draft (D112). Waiting in that sequence does not renew deadlines. Stop is independent of pending input and prevents further queued
 input for the closed run. Use a simple bounded implementation; no agent workflow or general-purpose scheduler is added.
 
 ## 2 Identity and locations
@@ -308,8 +330,8 @@ locations remain usable without Git.
 
 Accepted launches create their pair immediately. Later failure does not erase already created files or claim nothing
 happened. Validate what is available before effects; CLIS-4.2 defines checks that require a newly created directory.
-No caller request-id or idempotency-key contract is exposed. Repeating a start after losing its reply may create
-another agent; use list_agents to inspect current runs rather than adding get_operation or hidden request keys.
+MCP-1.1's optional request_id makes a repeated start or send reuse its first operation, including concurrent calls,
+lost cross-window replies and a run that has since ended. Without it, repeating a start may create another agent.
 Facade may keep internal IDs for its own operations without turning them into a public feature.
 
 ### 5.2 Cancellation preserves completed effects
@@ -347,6 +369,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
+- 2026-10-31: Request IDs, owned drafts, bounded delivery and read-delivery follow D98-D104, D109, D112 and D113.
 - 2026-10-30: Step 2 of the Facade Code extension: added the Facade Dots message rules 1.1–1.7 and 1.9–1.10, the client
   network (2.1), references (2.3), tool and input facts (3.1), client-wide reach (4.3), the MCP switch (4.4) and message
   retention (5.3), with the owner's decisions of that day: one delivery state, in which read_messages delivers (1.3, 1.7,

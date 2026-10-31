@@ -12,7 +12,7 @@ import { createToolServices } from '../contract/tools';
 import { AgentService } from '../core/agents';
 import type { MessageRecord } from '../core/messagePorts';
 import { MessageService } from '../core/messages';
-import { PlanError, type LogPort, type RunFacts, type RunId } from '../core/ports';
+import { PlanError, type LogPort, type RetainedRun, type RunId } from '../core/ports';
 import { worktreeProblemText } from '../ui/pickers/location';
 import { reasonText } from '../ui/presentation';
 import { registerUi } from '../ui/commands/index';
@@ -136,7 +136,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		worktrees,
 		history,
 		human,
-		retained: new RetainedFile<RunFacts>(record.dir, writeIfOwned),
+		retained: new RetainedFile<RetainedRun>(record.dir, writeIfOwned),
 		aliases: network ? agentAliases(agentNumbers) : localAliases,
 		clock: { now: Date.now },
 		log,
@@ -158,7 +158,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const input: OrdinaryInput = new OrdinaryInput({
 		get: run => agents.get(run),
 		inspectInput: (run, adapter) => execution.inspectInput(run, adapter),
-		typeText: (run, text, enter) => execution.typeText(run, text, enter),
+		typeText: (run, text, enter, lead) => execution.typeText(run, text, enter, lead),
 		pressKeys: (run, keys) => execution.pressKeys(run, keys),
 		readScreen: (run, lines) => execution.readScreen(run, lines),
 		log: text => log.event(text)
@@ -166,7 +166,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	// Direct text and keys wait for a message's paste and Enter under way to the same terminal (RULES-1.10)
 	const terminal = {
 		readScreen: (run: RunId, lines: number) => execution.readScreen(run, lines),
-		typeText: (run: RunId, text: string, enter: boolean) => input.inTurn(run, () => execution.typeText(run, text, enter)),
+		typeText: (run: RunId, text: string, enter: boolean) => input.inTurn(run, () => input.typeDirect(run, text, enter)),
 		pressKeys: (run: RunId, keys: readonly string[]) => input.inTurn(run, () => execution.pressKeys(run, keys))
 	};
 	const messages = new MessageService({

@@ -311,6 +311,8 @@ export interface RunMeta {
 	readonly creator?: RunId;
 	readonly creatorLabel?: string;
 	readonly origin?: 'human' | 'agent';
+	/** The creator's request ID for its start, where it gave one (MCP-1.1, D104). */
+	readonly requestId?: string;
 	readonly model?: string;
 	readonly effort?: string;
 	readonly version?: string;
@@ -401,6 +403,8 @@ export interface RunFacts {
 	readonly pid?: number;
 	readonly startedAt?: number;
 	readonly activity: Activity;
+	/** Epoch ms its CLI's report of its current activity came: how long ago it said so, never that it still does (RULES-3.2). */
+	readonly activitySince?: number;
 	readonly activityReason?: string;
 	/** Whether the run's CLI proved it reports activity; without it activity is unknown, shown red (RULES-3.2). */
 	readonly reporting: boolean;
@@ -418,6 +422,8 @@ export interface RunFacts {
 	/** The creator's reference as its window named it at the start, `@name #aN`: what the card's hover says started it (PANEL-1.5). */
 	readonly creatorLabel?: string;
 	readonly origin: 'human' | 'agent';
+	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1, D104). */
+	readonly requestId?: string;
 	/** The model and effort this start asked for, where it asked (CLIS-1.4). */
 	readonly model?: string;
 	readonly effort?: string;
@@ -476,10 +482,13 @@ export interface WindowLifetimePort {
 	readonly onDidClose: Event<void>;
 }
 
-/** Durable facts of runs that have no live process to remember them: failed launches retained red (LIFECYCLE-1.5). */
+/** Request-bearing run metadata can remain without a visible pair until its request ID expires (MCP-1.1). */
+export type RetainedRun = RunFacts & { readonly requestOnly?: true };
+
+/** Durable run metadata: failed launches retained red, or request-bearing records without a pair. */
 export interface RetainedStore {
-	list(): readonly RunFacts[];
-	put(run: RunFacts): void;
+	list(): readonly RetainedRun[];
+	put(run: RetainedRun): void;
 	remove(run: RunId): void;
 }
 
@@ -514,6 +523,8 @@ export interface LaunchRequest {
 	 */
 	readonly origin: 'human' | 'agent';
 	readonly creator?: { readonly run: RunId; readonly root: RunId; readonly label?: string };
+	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D104). */
+	readonly requestId?: string;
 	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
 	readonly prompt?: string;
 	/** The first line of the caller's own prompt text, shown in the card's hover. */
@@ -529,6 +540,8 @@ export interface StartOutcome {
 }
 
 export interface Agents {
+	/** Finds a caller's accepted start within the last hour, including a run whose pair has been removed. */
+	requested(from: RunId, requestId: string): RunFacts | undefined;
 	/** Validates (all problems together) and, once accepted, creates the pair at once and returns its run ID (LIFECYCLE-1.5). */
 	launch(request: LaunchRequest): RunId;
 	/** Settles when the accepted run's process started, its launch failed or it was closed first. */

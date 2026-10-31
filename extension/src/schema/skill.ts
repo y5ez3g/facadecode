@@ -47,7 +47,9 @@ Every result has a \`status\` - \`success\`, \`failure\` or \`accepted\` - the s
 - \`list_agents\` lists the agents you can reach, with their current facts; \`window_id\` limits it to one window, and
   \`include_ended: true\` adds ended ones. A long list comes in pages with \`next_cursor\`.
 
-Each call is a new request: repeating a start can create another agent, so check \`list_agents\` before starting again.
+Each call is a new request: repeating a start can create another agent. Give \`start_agent\` and \`send_message\` a
+\`request_id\` of your own to make a retry safe: the same one again within an hour answers what the first call did instead
+of doing it again; a new one does it anew.
 
 ## Creation trees, YOLO and reach
 

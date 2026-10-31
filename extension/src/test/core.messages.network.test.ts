@@ -4,7 +4,7 @@
 
 import * as assert from 'assert';
 import { MessageService, ResultRoute } from '../core/messages';
-import type { InputEffects, InputPort, MessageRecord } from '../core/messagePorts';
+import type { InputEffects, InputPort, MessageRecord, Submission } from '../core/messagePorts';
 import type { CapabilityState, Disposable, Event, RunChange, RunFacts, RunId } from '../core/ports';
 import { settled, sleep, useFakeClock } from './clock';
 
@@ -26,8 +26,12 @@ class FakeInput implements InputPort {
 		return !script?.length ? 'usable' : script.length > 1 ? script.shift()! : script[0];
 	}
 
-	async submit(run: RunId, text: string): Promise<InputEffects> {
+	async submit(run: RunId, text: string): Promise<Submission> {
 		this.submitted.push({ run, text });
+		return { effects: CONFIRMED, shown: true };
+	}
+
+	async enter(): Promise<InputEffects> {
 		return CONFIRMED;
 	}
 }

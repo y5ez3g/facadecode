@@ -7,7 +7,7 @@ import { AgentService } from '../core/agents';
 import { FacadeError } from '../core/errors';
 import {
 	ActivityReport, CleanupResult, Disposable, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, Location, LocationPort,
-	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RunChange, RunFacts, RunId, RunMeta, WorktreeError, WorktreePlan
+	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RetainedRun, RunChange, RunFacts, RunId, RunMeta, WorktreeError, WorktreePlan
 } from '../core/ports';
 
 class Emitter<T> {
@@ -105,7 +105,7 @@ function setUp(options: {
 	const errors: { text: string; show?: RunId }[] = [];
 	const failures: HumanFailure[] = [];
 	const remembered: { location: string; cli: string }[] = [];
-	const retained = new Map<RunId, RunFacts>();
+	const retained = new Map<RunId, RetainedRun>();
 	const released: RunId[] = [];
 	const shims: RunId[] = [];
 	const log: string[] = [];
@@ -167,10 +167,77 @@ function setUp(options: {
 	});
 	const changes: RunChange[] = [];
 	agents.onDidChange(change => changes.push(change));
-	return { agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, log, changes, created, plans };
+	return { agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, log, changes, created, plans, advance: (ms: number) => { now += ms; } };
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+suite('Start request metadata survives the run (MCP-1.1, D113)', () => {
+	const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once' } as const;
+
+	for (const end of ['close', 'exit', 'failed'] as const) {
+		test(`${end}: the first request survives removal and reload without restoring a closed pair`, async () => {
+			const world = setUp();
+			if (end === 'failed') {
+				world.execution.spawnError = new Error('could not start');
+			}
+			const id = world.agents.launch(request);
+			await world.agents.started(id);
+			if (end === 'exit') {
+				world.execution.exits.fire({ run: id, code: 0, interruptVerified: false });
+			} else {
+				await world.agents.close(id);
+			}
+			const facts = world.agents.requested(creator, request.requestId)!;
+			assert.deepStrictEqual([facts.id, facts.lifecycle, facts.end?.kind], [id, 'ended', end === 'failed' ? 'failed' : undefined]);
+			assert.strictEqual(world.agents.get(id), undefined);
+			assert.strictEqual(world.agents.requested('another-caller', request.requestId), undefined);
+			const reload = setUp();
+			reload.retained.set(id, world.retained.get(id)!);
+			await reload.agents.restore();
+			assert.deepStrictEqual([reload.agents.list(), [...reload.execution.pairs]], [[], []]);
+			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.id, id);
+			reload.advance(60 * 60_000);
+			assert.strictEqual(reload.agents.requested(creator, request.requestId), undefined);
+			assert.strictEqual(reload.retained.size, 0, 'expired metadata is removed');
+		});
+	}
+
+	test('a request is recorded before asynchronous planning, even when a reload interrupts startup', async () => {
+		const world = setUp();
+		const id = world.agents.launch(request);
+		assert.strictEqual(world.execution.spawned.length, 0);
+		const saved = world.retained.get(id)!;
+		assert.deepStrictEqual([saved.lifecycle, saved.requestOnly], ['starting', true]);
+		const reload = setUp();
+		reload.retained.set(id, saved);
+		await reload.agents.restore();
+		assert.strictEqual(reload.agents.requested(creator, request.requestId)?.lifecycle, 'starting');
+		assert.deepStrictEqual([reload.agents.list(), reload.execution.spawned], [[], []]);
+		await world.agents.close(id);
+		await world.agents.started(id);
+	});
+
+	test('closing a failed launch after the request expires removes its retained card too', async () => {
+		const world = setUp();
+		world.execution.spawnError = new Error('could not start');
+		const id = world.agents.launch(request);
+		await world.agents.started(id);
+		world.advance(60 * 60_000);
+		await world.agents.close(id);
+		await world.agents.restore();
+		assert.deepStrictEqual([world.retained.size, world.agents.list()], [0, []]);
+	});
+
+	test('damaged request metadata is neither returned nor restored as a card', async () => {
+		const world = setUp();
+		world.retained.set('bad', { id: 'bad', requestOnly: true, creator, requestId: request.requestId, createdAt: 10_000 } as RetainedRun);
+		assert.strictEqual(world.agents.requested(creator, request.requestId), undefined);
+		await world.agents.restore();
+		assert.deepStrictEqual([world.agents.list(), [...world.execution.pairs], world.log], [[], [], ['Ignored an invalid retained agent record.']]);
+	});
+});
 
 suite('A start\'s typing before the first turn (COLLABORATION-2.2)', () => {
 	const WARM_UP = { text: '/mcp', typed: '^> /mcp\\s*$', ready: '✓\\s+facade_facade\\b', opened: '^MCP Servers\\s*$', close: 'Escape' };
@@ -329,6 +396,13 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		world.execution.reports.fire({ run: id, activity: 'working', reporting: true });
 		assert.strictEqual(world.agents.get(id)?.error, undefined);
 		assert.strictEqual(world.agents.get(id)?.title, 'Fix login', 'the last title stays until the CLI sets another');
+		// When its CLI reported its current activity: the same report again keeps that time, another activity takes its own
+		const since = world.agents.get(id)!.activitySince;
+		assert.strictEqual(typeof since, 'number');
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Still' });
+		assert.strictEqual(world.agents.get(id)!.activitySince, since);
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true });
+		assert.ok(world.agents.get(id)!.activitySince! >= since!);
 	});
 
 	test('a run is awaiting its CLI\'s activity while its reports say so, and no longer once one does not (CLIS-2.3, D81)', async () => {

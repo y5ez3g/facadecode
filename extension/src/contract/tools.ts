@@ -82,10 +82,10 @@ export type ResultWriter = (home: string, kind: 'messages' | 'screen', text: str
 
 export interface ToolServiceDeps {
 	readonly window: ToolWindow;
-	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get'>;
+	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get' | 'requested'>;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'resolve'>;
 	readonly clis: StartCatalog;
-	readonly messages: Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent'>;
+	readonly messages: Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'>;
 	readonly terminal: TerminalPort;
 	/** The execution environment's Facade directory, where long results are written. */
 	readonly home: string;
@@ -182,6 +182,8 @@ export function createToolServices(deps: ToolServiceDeps): ToolServices {
 }
 
 class ToolService {
+	/** Overlapping keyed calls share the first invocation; durable retries are answered by run/message metadata. */
+	private readonly pendingRequests = new Map<string, Promise<Outcome>>();
 	private readonly handlers: { readonly [T in ToolName]: Handler<T> } = {
 		list_start_options: (args, caller, call) => this.listStartOptions(args, caller, call),
 		start_agent: (args, caller, call) => this.startAgent(args, caller, call),
@@ -230,7 +232,21 @@ class ToolService {
 		const tool = call.tool as ToolName;
 		const args = validateArguments(tool, call.arguments);
 		const caller: Caller = call.guest ?? await this.callerOf(call);
-		return (this.handlers[tool] as Handler<ToolName>)(args as never, caller, call);
+		const key = 'request_id' in args && typeof args.request_id === 'string' ? JSON.stringify([caller.id, tool, args.request_id]) : undefined;
+		const pending = key !== undefined ? this.pendingRequests.get(key) : undefined;
+		if (pending) {
+			return pending;
+		}
+		const answer = (this.handlers[tool] as Handler<ToolName>)(args as never, caller, call);
+		if (key === undefined) {
+			return answer;
+		}
+		this.pendingRequests.set(key, answer);
+		try {
+			return await answer;
+		} finally {
+			this.pendingRequests.delete(key);
+		}
 	}
 
 	/**
@@ -323,12 +339,34 @@ class ToolService {
 	 * Whether `reference` names the person (RULES-2.3, D85): `#human` always; `@human` or `human` unless an agent the caller reaches is
 	 * named `human`, when it is ambiguous like any repeated name and resolving it as an agent says so.
 	 */
-	private isHuman(reference: string, caller: Caller): boolean {
+	private async isHuman(reference: string, caller: Caller): Promise<boolean> {
 		const text = reference.trim();
 		if (/^#human$/i.test(text)) {
 			return true;
 		}
-		return /^@?human$/i.test(text) && !this.deps.agents.list().some(run => reaches(caller, run) && /^human$/i.test(run.name));
+		if (!/^@?human$/i.test(text)) {
+			return false;
+		}
+		const named = this.deps.agents.list().filter(run => reaches(caller, run) && /^human$/i.test(run.name));
+		if (this.deps.network && caller.window === undefined) {
+			let directory;
+			try {
+				directory = await this.deps.network.directory();
+			} catch {
+				throw new FacadeError('UNAVAILABLE', 'window_unavailable', 'The other windows could not be checked for an agent named human. Use #human for the person.');
+			}
+			const others = directory.windows.flatMap(window => window.agents).filter(run => reaches(caller, run) && /^human$/i.test(run.name));
+			if (named.length || others.length) {
+				throw new FacadeError('INVALID', 'ambiguous_reference', '@human names the person and an agent named human. Use #human for the person, or the agent ID.');
+			}
+			if (directory.unavailable.length) {
+				throw new FacadeError('UNAVAILABLE', 'window_unavailable', 'Some windows could not be checked for an agent named human. Use #human for the person.');
+			}
+		}
+		if (named.length) {
+			resolveAgent(reference, named);
+		}
+		return true;
 	}
 
 	private target(reference: string, caller: Caller, eligible?: ResolveOptions['eligible']): RunFacts {
@@ -344,19 +382,26 @@ class ToolService {
 	private async locate(reference: string, caller: Caller, eligible?: (run: Reachable) => boolean): Promise<Located> {
 		const self = this.deps.window.id;
 		const here = this.deps.agents.list().map(run => ({ facts: run, reachable: { id: run.id, alias: run.alias, name: run.name, root: run.root, yolo: run.yolo, lifecycle: run.lifecycle, window: self } }));
-		const exact = here.find(each => each.facts.id === reference.trim() || each.facts.alias === reference.trim());
+		const id = /(?:^|\s)(#a\d+|run-[0-9a-f]{32})$/.exec(reference.trim())?.[1] ?? reference.trim();
+		const exact = here.find(each => each.facts.id === id || each.facts.alias === id);
 		const network = this.deps.network;
 		if (exact || !network || caller.window !== undefined) {
 			return { here: this.target(reference, caller, eligible ? (run: RunFacts) => eligible({ ...run, window: self }) : undefined) };
 		}
 		let others: Reachable[] = [];
+		let incomplete = false;
 		try {
 			const directory = await network.directory();
 			others = directory.windows.filter(window => window.window !== self).flatMap(window => window.agents.map(agent => reachableOf(agent, window.window)));
+			incomplete = directory.unavailable.length > 0;
 		} catch (err) {
 			this.deps.log?.(`Could not read the other Facade windows' agents: ${errorText(err)}`);
+			incomplete = true;
 		}
 		const all: Reachable[] = [...here.map(each => each.reachable), ...others];
+		if (incomplete && !all.some(run => run.id === id || run.alias === id)) {
+			throw new FacadeError('UNAVAILABLE', 'window_unavailable', 'Some Facade windows could not be listed, so this reference cannot be resolved without guessing. Use an agent ID from an available window.');
+		}
 		const found = resolveAgent(reference, all.filter(run => reaches(caller, run)), { outside: all.filter(run => !reaches(caller, run)), ...eligible ? { eligible } : {} });
 		const facts = found.window === self ? this.deps.agents.get(found.id) : undefined;
 		return facts ? { here: facts } : { there: found };
@@ -504,6 +549,10 @@ class ToolService {
 			throw new Error('The routed message was incomplete: it had no effect.');
 		}
 		const sender: GuestCaller = { ...delivery.from, window: from };
+		const earlier = typeof delivery.requestId === 'string' ? this.deps.messages.findRequest(sender.id, delivery.requestId) : undefined;
+		if (earlier) {
+			return defined({ status: earlier.delivery.status === 'pending' ? 'accepted' : earlier.delivery.status, reason: earlier.delivery.reason, record: earlier });
+		}
 		const target = this.deps.agents.get(delivery.to);
 		if (!target || !reaches(sender, target)) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${delivery.to} that the sender reaches is in this window.`);
@@ -511,7 +560,9 @@ class ToolService {
 		const sent = await this.deps.messages.send({
 			id: delivery.id, from: sender.id, sender: { party: { run: sender.id, alias: sender.alias, name: sender.name }, window: from, ...sender.windowLabel !== undefined ? { label: sender.windowLabel } : {} },
 			to: target.id, text: delivery.text, ...delivery.replyTo !== undefined ? { replyTo: delivery.replyTo } : {},
-			elapsedMs: delivery.elapsedMs, ...delivery.callId !== undefined ? { callId: delivery.callId } : {}
+			elapsedMs: delivery.elapsedMs, ...delivery.callId !== undefined ? { callId: delivery.callId } : {},
+			// A request ID is the sender's words, kept as given where it is the shape a call's is (MCP-1.1, D104)
+			...typeof delivery.requestId === 'string' && codePoints(delivery.requestId) > 0 && codePoints(delivery.requestId) <= 200 ? { requestId: delivery.requestId } : {}
 		});
 		return defined({ status: sent.status, reason: sent.reason, obstacle: sent.obstacle, record: sent.record });
 	}
@@ -638,6 +689,11 @@ class ToolService {
 	}
 
 	private async startAgent(args: ToolArguments['start_agent'], caller: Caller, call: Received): Promise<Outcome> {
+		// A request ID the caller gave a start before: that start's agent, and no other (MCP-1.1, D104)
+		const earlier = args.request_id !== undefined ? this.deps.agents.requested(caller.id, args.request_id) : undefined;
+		if (earlier) {
+			return this.startedBefore(earlier, args);
+		}
 		if (args.window_id !== this.deps.window.id && this.deps.network && caller.window === undefined) {
 			// The child starts in its window, joining the caller's tree (COLLABORATION-1.1, RULES-4.3)
 			await this.knownWindow(args.window_id);
@@ -646,7 +702,13 @@ class ToolService {
 		// Everything that can be checked before acceptance is: a failure here creates no card or terminal (MCP-2.3, RULES-5.1)
 		this.checkWindow(args.window_id);
 		const location = this.location(args.location_id);
-		const choice = cliChoiceOf(await this.deps.clis.list(location), args.cli, location);
+		const choices = await this.deps.clis.list(location);
+		// CLI discovery can yield while another call accepts this request. The check immediately before acceptance closes that race.
+		const acceptedMeanwhile = args.request_id !== undefined ? this.deps.agents.requested(caller.id, args.request_id) : undefined;
+		if (acceptedMeanwhile) {
+			return this.startedBefore(acceptedMeanwhile, args);
+		}
+		const choice = cliChoiceOf(choices, args.cli, location);
 		if (!choice.available) {
 			throw new FacadeError('UNAVAILABLE', 'unavailable', `${choice.displayName} cannot start at ${location.path}: ${choice.problem ?? 'it is not available.'}`);
 		}
@@ -671,7 +733,8 @@ class ToolService {
 			...args.worktree ? { worktree: { branch: args.worktree.branch, baseRef: args.worktree.base_ref } } : {},
 			...prompt ? { prompt: prompt.text, promptLine: args.prompt!.split(/\r\n?|\n/).find(line => line.trim()) ?? args.prompt! } : {},
 			origin: 'agent',
-			creator: { run: caller.id, root: caller.root, label: [caller.name, caller.alias].filter(Boolean).join(' ') }
+			creator: { run: caller.id, root: caller.root, label: [caller.name, caller.alias].filter(Boolean).join(' ') },
+			...args.request_id !== undefined ? { requestId: args.request_id } : {}
 		});
 		const start: Start = { run, args, caller, call, location, ...prompt ? { promptId: prompt.id } : {}, answerBy: Date.now() + this.deps.timeout() * 1000 };
 		const settled = this.deps.agents.started(run);
@@ -698,6 +761,32 @@ class ToolService {
 			result: accepted(this.startData(start, facts, 'starting'), { outcome: 'pending', agent_id: run }),
 			headline: `Accepted ${facts ? referenceOf(facts) : args.name} (${run}): its process is still starting. The start's outcome is ${LATER}.`
 		};
+	}
+
+	/**
+	 * A start whose request ID started `facts` already: its agent as it is now, nothing started again (MCP-1.1, D104) - answered as the
+	 * start went: still starting, failed, or started (D112).
+	 */
+	private startedBefore(facts: RunFacts, args: ToolArguments['start_agent']): Outcome {
+		const present = this.deps.agents.get(facts.id);
+		const data = { ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true };
+		const before = `Request ${args.request_id} started ${referenceOf(facts)} (${facts.id}) already, at ${isoOf(facts.createdAt)}: nothing was started again.`;
+		const effects: Effects = { outcome: 'none', agent_id: facts.id };
+		if (!present && facts.lifecycle !== 'ended') {
+			return { result: failure({ code: 'UNAVAILABLE', reason: 'window_unavailable', message: `${before} The window reloaded before the start's outcome was recorded; its effects are not known.` }, data, { ...effects, outcome: 'unknown' }) };
+		}
+		if (facts.lifecycle === 'starting') {
+			return { result: accepted(data, { ...effects, outcome: 'pending' }), headline: `${before} Its process is still starting. The start's outcome is ${LATER}.` };
+		}
+		if (facts.end?.kind === 'failed') {
+			const message = `${before} It could not start: ${facts.error?.reason ?? 'its launch failed.'}`;
+			return { result: failure({ code: 'FAILED', reason: facts.error?.source === 'worktree' ? 'worktree_failed' : 'launch_failed', message }, data, effects), headline: message };
+		}
+		if (!present && !facts.end) {
+			// Removing a card can precede process cleanup, including cleanup that failed. Retention proves the start, not termination.
+			return { result: success({ ...data, process: 'unknown' }, effects), headline: `${before} Its card and terminal are closed; its process state is no longer observed here.` };
+		}
+		return { result: success(data, effects), headline: `${before} Its process is ${facts.lifecycle}.` };
 	}
 
 	private async finishStart(start: Start, outcome: StartOutcome): Promise<Outcome> {
@@ -831,7 +920,7 @@ class ToolService {
 			deadline: status === 'pending' && record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined,
 			effects: defined({ ...record.delivery.effects })
 		});
-		const headline = status === 'success' ? `Its prompt ${record.alias} was submitted to its CLI after startup.`
+		const headline = status === 'success' ? record.delivery.via === 'read' ? `Its prompt ${record.alias} was delivered through read_messages after startup.` : `Its prompt ${record.alias} was submitted to its CLI after startup.`
 			: status === 'pending' ? `Its prompt ${record.alias} is still being delivered after startup; its outcome is ${LATER}.`
 				: `Its prompt ${record.alias} was not delivered: ${failedWith!.message} The agent keeps running.`;
 		return { data, headline };
@@ -902,7 +991,12 @@ class ToolService {
 	// Messages (MCP-4)
 
 	private async sendMessage(args: ToolArguments['send_message'], caller: Caller, call: Received): Promise<Outcome> {
-		const human = this.isHuman(args.to, caller);
+		// A request ID the caller gave a send before: that message as it stands, sent no second time (MCP-1.1, D104)
+		const earlier = args.request_id !== undefined ? this.deps.messages.findRequest(caller.id, args.request_id) : undefined;
+		if (earlier) {
+			return this.sentBefore(earlier, args);
+		}
+		const human = await this.isHuman(args.to, caller);
 		const located = human ? undefined : await this.locate(args.to, caller, run => run.lifecycle !== 'ended');
 		if (located?.there) {
 			if (located.there.lifecycle === 'ended') {
@@ -923,23 +1017,25 @@ class ToolService {
 		}
 		const to = target?.id ?? '@human';
 		// The window's time so far comes off the same two seconds as the hops before it (RULES-1.2, 1.5)
-		const sent = await this.deps.messages.send({ from: caller.id, to, text: args.text, ...replyTo ? { replyTo } : {}, elapsedMs: this.elapsed(call), callId: call.callId });
+		const sent = await this.deps.messages.send({ from: caller.id, to, text: args.text, ...replyTo ? { replyTo } : {}, elapsedMs: this.elapsed(call), callId: call.callId, ...args.request_id !== undefined ? { requestId: args.request_id } : {} });
 		const { record } = sent;
-		const shown = target ? referenceOf(target) : '#human';
+		// A concurrent request may already have resolved this key to another target. Report its authoritative record.
+		const actual = record.to.run === '@human' ? undefined : this.deps.agents.get(record.to.run);
+		const shown = record.to.run === '@human' ? '#human' : actual ? referenceOf(actual) : record.to.alias ?? record.to.run;
 		const data = defined({
 			message_id: record.id,
 			alias: record.alias,
-			target: target ? to : '#human',
+			target: record.to.run === '@human' ? '#human' : record.to.run,
 			target_reference: shown,
-			reply_to: replyTo,
+			reply_to: record.replyTo,
 			length: record.length
 		});
 		const effects = defined({ ...record.delivery.effects });
 		switch (sent.status) {
 			case 'success':
 				return {
-					result: success({ ...data, disposition: target ? 'submitted_to_cli' : 'notified' }, effects),
-					headline: target ? `Message ${record.alias} was submitted to ${shown}'s CLI.` : `Message ${record.alias} was handed to the person's notifications in this window.`
+					result: success({ ...data, disposition: record.delivery.via === 'read' ? 'read_messages' : record.to.run === '@human' ? 'notified' : 'submitted_to_cli' }, effects),
+					headline: record.delivery.via === 'read' ? `Message ${record.alias} was delivered to ${shown} through read_messages.` : record.to.run !== '@human' ? `Message ${record.alias} was submitted to ${shown}'s CLI.` : `Message ${record.alias} was handed to the person's notifications in this window.`
 				};
 			case 'accepted': {
 				const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
@@ -971,35 +1067,58 @@ class ToolService {
 		const alias = `#m${id.slice(2)}`;
 		const shown = referenceOf(target);
 		const delivery: RoutedDelivery = {
-			id, from: this.guestOf(caller), to: target.id, text: args.text, ...replyTo ? { replyTo } : {}, callId: call.callId, elapsedMs: this.elapsed(call)
+			id, from: this.guestOf(caller), to: target.id, text: args.text, ...replyTo ? { replyTo } : {}, callId: call.callId,
+			...args.request_id !== undefined ? { requestId: args.request_id } : {}, elapsedMs: this.elapsed(call)
 		};
 		// The two seconds hold across the hops; the route waits a little longer for the other window's own first response (RULES-1.2)
 		const response = await this.deps.network!.route(target.window, 'deliver', delivery, Math.max(0, RESPONSE_MS - this.elapsed(call)) + ROUTE_SLACK_MS);
-		const data = defined({ message_id: id, alias, target: target.id, target_reference: shown, reply_to: replyTo, length: codePoints(args.text), window_id: target.window });
+		let data = defined({ message_id: id, alias, target: target.id, target_reference: shown, reply_to: replyTo, length: codePoints(args.text), window_id: target.window });
 		if (!response.ok) {
 			const effects: Effects = response.effects === 'unknown' ? { outcome: 'unknown', text_written: 'unknown', enter_written: null } : { outcome: 'none', text_written: 'none', enter_written: false };
-			return { result: failure({ code: 'UNAVAILABLE', reason: response.reason === 'protocol_incompatible' ? 'protocol_incompatible' : 'window_unavailable', message: response.message }, data, effects), headline: `Message ${alias} to ${shown} was not delivered: ${response.message}` };
+			return { result: failure({ code: 'UNAVAILABLE', reason: response.reason === 'protocol_incompatible' ? 'protocol_incompatible' : 'window_unavailable', message: response.message }, data, effects), headline: `Message ${alias} to ${shown}: ${response.effects === 'unknown' ? 'whether it was delivered is not known' : 'it was not delivered'}. ${response.message}` };
 		}
 		const answered = response.result as { readonly status?: string; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord } | undefined;
 		const record = answered?.record;
 		if (!answered || !record || (answered.status !== 'success' && answered.status !== 'accepted' && answered.status !== 'failure')) {
 			return { result: failure({ code: 'FAILED', reason: 'internal_error', message: `The Facade window of ${shown} answered with nothing this window can read: whether the message went in is not known.` }, data, { outcome: 'unknown' }) };
 		}
-		this.deps.messages.keepSent(record);
+		this.deps.messages.keepSent(args.request_id !== undefined ? { ...record, requestId: args.request_id } : record);
+		// The destination may have deduplicated a retry whose first reply was lost: its original ID, never the proposed new one.
+		data = defined({ ...data, message_id: record.id, alias: record.alias, target: record.to.run, reply_to: record.replyTo, length: record.length });
 		const effects = defined({ ...record.delivery.effects });
 		switch (answered.status) {
 			case 'success':
-				return { result: success({ ...data, disposition: 'submitted_to_cli' }, effects), headline: `Message ${alias} was submitted to ${shown}'s CLI.` };
+				return { result: success({ ...data, disposition: record.delivery.via === 'read' ? 'read_messages' : 'submitted_to_cli' }, effects), headline: record.delivery.via === 'read' ? `Message ${record.alias} was delivered to ${shown} through read_messages.` : `Message ${record.alias} was submitted to ${shown}'s CLI.` };
 			case 'accepted': {
 				const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
 				return {
 					result: accepted(defined({ ...data, deadline, obstacle: answered.obstacle }), effects),
-					headline: `Message ${alias} to ${shown} is accepted but not yet submitted${answered.obstacle ? ` (${answered.obstacle})` : ''}; delivery continues${deadline ? ` until ${deadline}` : ''}, and its outcome is ${LATER}.`
+					headline: `Message ${record.alias} to ${shown} is accepted but not yet submitted${answered.obstacle ? ` (${answered.obstacle})` : ''}; delivery continues${deadline ? ` until ${deadline}` : ''}, and its outcome is ${LATER}.`
 				};
 			}
 			case 'failure': {
 				const error = sendFailureOf(answered.reason ?? record.delivery.reason);
-				return { result: failure(error, data, effects), headline: `Message ${alias} to ${shown} was not delivered: ${error.message}` };
+				return { result: failure(error, data, effects), headline: `Message ${record.alias} to ${shown} was not delivered: ${error.message}` };
+			}
+		}
+	}
+
+	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1, D104). */
+	private sentBefore(record: MessageRecord, args: ToolArguments['send_message']): Outcome {
+		const shown = record.to.run === '@human' ? '#human' : record.to.alias ? referenceOf({ name: record.to.name ?? '', alias: record.to.alias }) : record.to.run;
+		const data = defined({ message_id: record.id, alias: record.alias, target: record.to.run, target_reference: shown, reply_to: record.replyTo, length: record.length, request_id: args.request_id, repeated: true });
+		const effects = defined({ ...record.delivery.effects });
+		const again = `Request ${args.request_id} sent message ${record.alias} to ${shown} already: nothing was sent again.`;
+		switch (record.delivery.status) {
+			case 'success':
+				return { result: success(data, effects), headline: `${again} It was delivered.` };
+			case 'pending': {
+				const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
+				return { result: accepted(defined({ ...data, deadline }), effects), headline: `${again} It is still being delivered, and its outcome is ${LATER}.` };
+			}
+			case 'failure': {
+				const error = sendFailureOf(record.delivery.reason);
+				return { result: failure(error, data, effects), headline: `${again} It was not delivered: ${error.message} A new request_id sends it anew.` };
 			}
 		}
 	}

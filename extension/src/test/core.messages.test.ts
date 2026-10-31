@@ -3,8 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { formatMessage, messageIdOf, MessageService } from '../core/messages';
-import type { InputEffects, InputPort, MessageRecord, SendResult } from '../core/messagePorts';
+import { formatMessage, MESSAGE_LEAD, messageIdOf, MessageService } from '../core/messages';
+import type { InputEffects, InputPort, MessageRecord, SendResult, Submission } from '../core/messagePorts';
 import type { CapabilityState, Disposable, Event, RunChange, RunFacts, RunId } from '../core/ports';
 import { settled, sleep, useFakeClock } from './clock';
 
@@ -25,16 +25,26 @@ type InputState = Awaited<ReturnType<InputPort['inspect']>>;
 
 const CONFIRMED: InputEffects = { outcome: 'confirmed', text_written: 'full', enter_written: true };
 
-/** A run's input as the test scripts it: states each inspection takes in turn, the last one kept; effects each paste answers. */
+/**
+ * A run's input as the test scripts it: states each inspection takes in turn, the last one kept; effects each paste answers, and
+ * whether its draft showed - by default where its text went in whole; effects each Enter over its own draft answers.
+ */
 class FakeInput implements InputPort {
 	readonly capabilities = new Map<RunId, CapabilityState>();
 	readonly states = new Map<RunId, InputState[]>();
 	readonly effects = new Map<RunId, InputEffects[]>();
+	readonly shown = new Map<RunId, boolean[]>();
+	readonly enterEffects = new Map<RunId, InputEffects[]>();
+	readonly entered: { readonly run: RunId; readonly text: string; readonly at: number; readonly seen?: string }[] = [];
+	/** Errors each paste throws, in turn, its answer lost on its way. */
+	readonly throws = new Map<RunId, (Error | undefined)[]>();
+	/** The time a paste takes beyond the usual, as the input says. */
+	extraMs = 0;
 	/** Runs whose inspection never answers. */
 	readonly hanging = new Set<RunId>();
 	submitMs = 0;
-	readonly inspected: { readonly run: RunId; readonly at: number }[] = [];
-	readonly submitted: { readonly run: RunId; readonly text: string; readonly at: number; readonly end: number }[] = [];
+	readonly inspected: { readonly run: RunId; readonly at: number; readonly own?: string; readonly seen?: string }[] = [];
+	readonly submitted: { readonly run: RunId; readonly text: string; readonly at: number; readonly end: number; readonly lead?: string }[] = [];
 	/** What each submission was told would stop it, in the order they began. */
 	readonly signals: (AbortSignal | undefined)[] = [];
 	/** Inspections and pastes under way together, at most. */
@@ -45,8 +55,8 @@ class FakeInput implements InputPort {
 		return this.capabilities.get(run) ?? { state: 'supported', reason: 'verified' };
 	}
 
-	async inspect(run: RunId): Promise<InputState> {
-		this.inspected.push({ run, at: Date.now() });
+	async inspect(run: RunId, own?: string, _lead?: string, seen?: string): Promise<InputState> {
+		this.inspected.push({ run, at: Date.now(), ...own !== undefined ? { own } : {}, ...seen !== undefined ? { seen } : {} });
 		if (this.hanging.has(run)) {
 			return new Promise(() => undefined);
 		}
@@ -54,18 +64,38 @@ class FakeInput implements InputPort {
 		return !script?.length ? 'usable' : script.length > 1 ? script.shift()! : script[0];
 	}
 
-	async submit(run: RunId, text: string, signal?: AbortSignal): Promise<InputEffects> {
+	async submit(run: RunId, text: string, signal?: AbortSignal, lead?: string): Promise<Submission> {
 		const at = Date.now();
 		this.signals.push(signal);
+		const lost = next(this.throws.get(run));
+		if (lost) {
+			throw lost;
+		}
 		this.busiest = Math.max(this.busiest, ++this.busy);
 		if (this.submitMs) {
 			await new Promise(resolve => setTimeout(resolve, this.submitMs));
 		}
 		this.busy--;
-		this.submitted.push({ run, text, at, end: Date.now() });
-		const script = this.effects.get(run);
-		return !script?.length ? CONFIRMED : script.length > 1 ? script.shift()! : script[0];
+		this.submitted.push({ run, text, at, end: Date.now(), ...lead !== undefined ? { lead } : {} });
+		const effects = next(this.effects.get(run)) ?? CONFIRMED;
+		const shown = next(this.shown.get(run)) ?? effects.text_written === 'full';
+		// As its CLI drew it, here a placeholder of its own
+		return { effects, shown, ...shown ? { draft: `[Pasted text #${this.submitted.length} +1 lines]` } : {} };
 	}
+
+	async enter(run: RunId, text: string, _signal?: AbortSignal, _lead?: string, seen?: string): Promise<InputEffects> {
+		this.entered.push({ run, text, at: Date.now(), ...seen !== undefined ? { seen } : {} });
+		return next(this.enterEffects.get(run)) ?? CONFIRMED;
+	}
+
+	pasteTime(): number {
+		return this.extraMs;
+	}
+}
+
+/** The next of a script, the last one kept; none where there is none. */
+function next<T>(script: T[] | undefined): T | undefined {
+	return !script?.length ? undefined : script.length > 1 ? script.shift()! : script[0];
 }
 
 const A = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -146,7 +176,8 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		const answer = service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, callId: 'call-7' });
 		const result = await settled(answer);
 		assert.ok(Date.now() - start <= 2_000, `answered after ${Date.now() - start} ms`);
-		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.status, result.record.delivery.deadline], ['accepted', 'input_draft', 'pending', start + 15_000]);
+		// A draft holds the input: the deadline moves on to ten minutes from the start (RULES-1.5, D100)
+		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.status, result.record.delivery.deadline], ['accepted', 'input_draft', 'pending', start + 600_000]);
 		assert.deepStrictEqual(result.record.delivery.effects, { outcome: 'pending', text_written: 'none', enter_written: false });
 		await sleep(15_000);
 		assert.deepStrictEqual(since(start, input.inspected.filter(each => each.run === B).map(each => each.at)), [0, 3_000, 6_000, 9_000]);
@@ -168,38 +199,45 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.strictEqual(inbox[0].text, `Your message #m1 to @Bob #a2 (${B}) was submitted to its CLI. This is a Facade result, not a reply from the recipient.`);
 		const toA = input.submitted.filter(each => each.run === A);
 		assert.deepStrictEqual(toA.map(each => [each.at - start, each.text.split('\n')[0]]), [[3_000, '[Facade result #m2 | about #m1 | call call-7]']]);
+		// A message goes with the words that ask its CLI to act on it; a Facade result asks for nothing and has none (D102)
+		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).map(each => each.lead), toA.map(each => each.lead)], [[MESSAGE_LEAD], [undefined]]);
 		assert.deepStrictEqual([inbox[0].delivery.status, inbox[0].delivery.via], ['success', 'terminal']);
 		// B's inbox has the message alone; the result is not B's
 		assert.deepStrictEqual(service.inbox(B, { all: true, limit: 100 }).records.map(record => record.id), ['m-1']);
 	});
 
-	test('a draft throughout: exactly five slots at 0, 3, 6, 9 and 12 s, nothing typed, failure at 15 s with no effects', async () => {
+	test('a draft throughout is waited for, a slot every three seconds for ten minutes, nothing typed, then failure with no effects (D100)', async () => {
 		const { service, input } = setUp();
 		input.states.set(B, ['draft']);
 		const start = Date.now();
 		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
-		await sleep(20_000);
-		assert.deepStrictEqual(since(start, input.inspected.filter(each => each.run === B).map(each => each.at)), [0, 3_000, 6_000, 9_000, 12_000]);
+		await sleep(610_000);
+		assert.deepStrictEqual(since(start, input.inspected.filter(each => each.run === B).map(each => each.at)), Array.from({ length: 200 }, (_, slot) => slot * 3_000));
 		assert.strictEqual(input.submitted.filter(each => each.run === B).length, 0);
 		const original = service.history().find(record => record.id === 'm-1')!;
-		assert.deepStrictEqual(original.delivery, { status: 'failure', reason: 'input_draft', effects: { outcome: 'none', text_written: 'none', enter_written: false }, deadline: start + 15_000, attempts: 5 });
+		assert.deepStrictEqual(original.delivery, { status: 'failure', reason: 'input_draft', effects: { outcome: 'none', text_written: 'none', enter_written: false }, deadline: start + 600_000, attempts: 200 });
 		const result = service.inbox(A, { all: true, limit: 100 }).records[0];
-		assert.deepStrictEqual([result.about, result.at - start], ['m-1', 15_000]);
+		assert.deepStrictEqual([result.about, result.at - start], ['m-1', 600_000]);
 		assert.ok(result.text.includes('was not delivered: a draft stayed in its input until the deadline (input_draft). Input effects: none.'), result.text);
 		// Never delivered, the message itself is what B's own read would find waiting
 		assert.deepStrictEqual(service.inbox(B, { limit: 100 }).records.map(record => record.id), ['m-1']);
 	});
 
-	test('a menu, then unknown input, consume their slots; time already spent before Facade had the request comes off both budgets', async () => {
+	test('unknown input, then a menu, consume their slots; time already spent before Facade had the request comes off both budgets', async () => {
 		const { service, input } = setUp();
-		input.states.set(B, ['interaction', 'unknown']);
+		input.states.set(B, ['unknown', 'interaction', 'unknown']);
 		const start = Date.now();
 		const result = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 1_500 }));
-		assert.ok(Date.now() - start <= 500);
-		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.deadline], ['accepted', 'input_interaction', start + 13_500]);
-		await sleep(15_000);
-		// Slots at 0, 3, 6, 9, 12 s from the request's arrival, which was 1.5 s ago
-		assert.deepStrictEqual(since(start, input.inspected.filter(each => each.run === B).map(each => each.at)), [0, 1_500, 4_500, 7_500, 10_500]);
+		assert.ok(Date.now() - start <= 2_000);
+		// Unknown: the fifteen seconds, counted from the request's arrival 1.5 s before
+		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.deadline], ['accepted', 'input_unknown', start + 13_500]);
+		await sleep(2_000);
+		// The CLI's own menu holds the input: the deadline moves on to ten minutes from that arrival, whatever it shows after (D100)
+		assert.deepStrictEqual([service.history().find(record => record.id === 'm-1')!.delivery.deadline], [start + 598_500]);
+		await sleep(600_000);
+		const slots = since(start, input.inspected.filter(each => each.run === B).map(each => each.at));
+		assert.deepStrictEqual(slots.slice(0, 3), [0, 1_500, 4_500]);
+		assert.strictEqual(slots.at(-1), 595_500);
 		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.delivery.reason, 'input_unknown');
 	});
 
@@ -289,34 +327,264 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(original.delivery, { status: 'failure', reason: 'partial_input', effects: { outcome: 'partial', text_written: 'partial', enter_written: false }, deadline: original.at + 15_000, attempts: 5 });
 	});
 
-	test('an unconfirmed paste into a usable composer is tried again in the next slot with the same ID (RULES-1.6)', async () => {
+	test('an unconfirmed submission is never pasted again: an input empty after its Enter confirms it at the next slot (RULES-1.6, D98)', async () => {
 		const { service, input } = setUp();
-		input.effects.set(B, [{ outcome: 'unknown', text_written: 'unknown', enter_written: null }, CONFIRMED]);
+		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);
 		const start = Date.now();
 		const result = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
 		assert.strictEqual(result.status, 'accepted');
 		await sleep(5_000);
-		const pastes = input.submitted.filter(each => each.run === B);
-		assert.deepStrictEqual(pastes.map(each => each.at - start), [0, 3_000]);
-		assert.ok(pastes.every(each => each.text.startsWith('[Facade message #m1 |')));
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.at - start), [0]);
+		// The next look asks after the message's own draft, and finds the input empty: taken
+		assert.ok(input.inspected.filter(each => each.run === B).slice(1).every(each => each.own?.startsWith('[Facade message #m1 |')));
+		const original = service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([original.delivery.status, original.delivery.effects, original.delivery.attempts], ['success', CONFIRMED, 2]);
+		assert.strictEqual(input.entered.length, 0);
+	});
+
+	test('the message\'s own draft, left by an Enter that was not taken, gets Enter again and only Enter; another draft over it is never typed over (D98)', async () => {
+		const { service, input } = setUp();
+		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);
+		input.states.set(B, ['usable', 'own']);
+		const start = Date.now();
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(5_000);
+		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.map(each => each.at - start)], [1, [3_000]]);
+		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.delivery.status, 'success');
+		// Someone added to its draft: no Enter, no paste, and the draft waited for, as any draft is, up to ten minutes (RULES-1.4, D100)
+		const other = setUp();
+		other.input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }]);
+		other.input.states.set(B, ['usable', 'draft']);
+		const begun = Date.now();
+		await settled(other.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(20_000);
+		const waiting = other.service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([waiting.delivery.status, waiting.delivery.deadline! - begun], ['pending', 600_000]);
+		await sleep(600_000);
+		assert.deepStrictEqual([other.input.submitted.filter(each => each.run === B).length, other.input.entered.length], [1, 0]);
+		const failed = other.service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.deadline! - begun], ['failure', 'submission_unconfirmed', 600_000]);
+	});
+
+	test('a paste whose draft never showed is not pasted again, even into an empty input: it may still show (D98)', async () => {
+		const { service, input } = setUp();
+		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }]);
+		input.shown.set(B, [false]);
+		input.states.set(B, ['usable', 'usable', 'usable', 'own']);
+		const start = Date.now();
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(20_000);
+		// Shown at last at 9 s: Enter then, the text typed once
+		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.map(each => each.at - start)], [1, [9_000]]);
 		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.delivery.status, 'success');
 	});
 
-	test('the Facade result has its own fifteen-second budget, and a result that cannot be handed over ends quietly', async () => {
+	test('a paste whose answer was lost is never confirmed by an empty input after it: no Enter of it went, and it is not typed again (D98, D112)', async () => {
+		const { service, input } = setUp();
+		input.throws.set(B, [new Error('ptyd lost'), undefined]);
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(20_000);
+		const failed = service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.effects], ['failure', 'submission_unconfirmed', { outcome: 'unknown', text_written: 'unknown', enter_written: false }]);
+		// The paste that threw is the only one: nothing typed after it, no Enter
+		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.length], [0, 0]);
+	});
+
+	test('a later Enter is only over the draft its paste showed as - its placeholder, its number too - which every later look is given (D112)', async () => {
+		const { service, input } = setUp();
+		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);
+		input.states.set(B, ['usable', 'own']);
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(5_000);
+		assert.deepStrictEqual(input.inspected.filter(each => each.run === B).map(each => each.seen), [undefined, '[Pasted text #1 +1 lines]']);
+		assert.deepStrictEqual(input.entered.map(each => each.seen), ['[Pasted text #1 +1 lines]']);
+	});
+
+	test('a paste that may still show holds its terminal: no other message is pasted with it until its delivery ends (RULES-1.10, D112)', async () => {
+		const { service, input } = setUp();
+		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }, CONFIRMED]);
+		input.shown.set(B, [false, true]);
+		const start = Date.now();
+		await settled(service.send({ from: A, to: B, text: 'One', elapsedMs: 0 }));
+		// Sent two seconds later, as One's first response came
+		const second = await settled(service.send({ from: C, to: B, text: 'Two', elapsedMs: 0 }));
+		assert.deepStrictEqual([second.status, second.obstacle], ['accepted', 'input_draft']);
+		await sleep(14_000 - (Date.now() - start));
+		assert.strictEqual(input.submitted.filter(each => each.run === B).length, 1, 'Two waits while One may still show');
+		await sleep(12_000);
+		// One ends unconfirmed at fifteen seconds; Two goes in at its next slot, held meanwhile rather than failed
+		const pastes = input.submitted.filter(each => each.run === B);
+		assert.deepStrictEqual(pastes.map(each => [/One/.test(each.text) ? 'One' : 'Two', each.at - start]), [['One', 0], ['Two', 17_000]]);
+		assert.deepStrictEqual(['m-1', 'm-2'].map(id => service.history().find(record => record.id === id)!.delivery.status), ['failure', 'success']);
+	});
+
+	test('a long paste is given the time it takes at its deadline, on top of the fifteen seconds (D99, D112)', async () => {
+		const { service, input } = setUp();
+		input.extraMs = 4_000;
+		input.states.set(B, ['unknown']);
+		const begun = Date.now();
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(17_000);
+		const waiting = service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([waiting.delivery.status, waiting.delivery.deadline! - begun], ['pending', 19_000]);
+		await sleep(5_000);
+		const failed = service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.attempts], ['failure', 'input_unknown', 7]);
+	});
+
+	test('a Facade result joins others only with a whole stage\'s time before them; otherwise it is its own, its budget its own (RULES-1.5, D109, D112)', async () => {
+		const { service, input } = setUp();
+		input.states.set(A, [...Array(6).fill('unknown'), 'usable']);
+		const start = Date.now();
+		service.report({ to: A, text: 'First notice' });
+		await sleep(13_000);
+		service.report({ to: A, text: 'Second notice' });
+		await sleep(20_000);
+		const results = service.inbox(A, { all: true, limit: 10 }).records;
+		assert.deepStrictEqual(results.map(each => [each.delivery.status, each.delivery.deadline! - each.at]), [['failure', 15_000], ['success', 15_000]]);
+		const pastes = input.submitted.filter(each => each.run === A);
+		assert.deepStrictEqual(pastes.map(each => [each.at - start, /First/.test(each.text), /Second/.test(each.text)]), [[16_000, false, true]]);
+	});
+
+	test('a paste of results that typed nothing leaves them gathering: one that comes meanwhile goes in the same paste (D109, D112)', async () => {
+		const { service, input } = setUp();
+		input.states.set(A, ['draft', 'usable']);
+		input.effects.set(A, [{ outcome: 'none', text_written: 'none', enter_written: false }, CONFIRMED]);
+		service.report({ to: A, text: 'First notice' });
+		await sleep(4_000);
+		service.report({ to: A, text: 'Second notice' });
+		await sleep(10_000);
+		const pastes = input.submitted.filter(each => each.run === A);
+		assert.deepStrictEqual(pastes.map(each => [/First/.test(each.text), /Second/.test(each.text)]), [[true, false], [true, true]]);
+		assert.deepStrictEqual(service.inbox(A, { all: true, limit: 10 }).records.map(each => each.delivery.status), ['success', 'success']);
+	});
+
+	test('a send keeps its request ID with its record, for a retry to find it (D104, D112)', async () => {
+		const { service } = setUp();
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, requestId: 'ask-1' }));
+		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.requestId, 'ask-1');
+	});
+
+	test('a native question over the message\'s own draft holds the input: waited for, and the draft gets Enter once it closes (D100)', async () => {
+		const { service, input } = setUp();
+		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }]);
+		input.states.set(B, ['usable', ...Array(30).fill('interaction'), 'own']);
+		const start = Date.now();
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(120_000);
+		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.map(each => each.at - start)], [1, [93_000]]);
+		const original = service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([original.delivery.status, original.delivery.deadline! - start], ['success', 600_000]);
+	});
+
+	test('the Facade result has its own budget, and a result that cannot be handed over ends quietly', async () => {
 		const { service, input, contacts, log } = setUp();
 		input.states.set(B, ['draft', 'usable']);
 		input.states.set(A, ['draft']);
 		const start = Date.now();
 		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
-		await sleep(40_000);
-		// B took it at 3 s; A's result stage starts then: 3, 6, 9, 12, 15 s, and ends at 18 s
-		assert.deepStrictEqual(since(start, input.inspected.filter(each => each.run === A).map(each => each.at)), [3_000, 6_000, 9_000, 12_000, 15_000]);
+		await sleep(610_000);
+		// B took it at 3 s; A's result stage starts then, and its draft holds A's input: a slot every 3 s until 10 min on (D100)
+		const slots = since(start, input.inspected.filter(each => each.run === A).map(each => each.at));
+		assert.deepStrictEqual([slots.length, slots[0], slots[1], slots.at(-1)], [200, 3_000, 6_000, 600_000]);
 		// The result that never reached A's terminal waits in A's inbox for its own read (COLLABORATION-3.1)
 		const result = service.inbox(A, { limit: 100 }).records[0];
-		assert.deepStrictEqual([result.delivery.status, result.delivery.reason, result.delivery.deadline! - start], ['failure', 'input_draft', 18_000]);
+		assert.deepStrictEqual([result.delivery.status, result.delivery.reason, result.delivery.deadline! - start], ['failure', 'input_draft', 603_000]);
 		// No person is told, nothing goes to B, and the original is not sent again
 		assert.deepStrictEqual([contacts.length, input.submitted.filter(each => each.run === B).length, service.history().length], [0, 1, 2]);
 		assert.ok(log.some(line => line.startsWith('Facade result #m2 to #a1: not delivered (input_draft)')), log.join('\n'));
+	});
+
+	test('a long Facade result gets its paste time as well as the normal delivery budget', async () => {
+		const { service, input } = setUp();
+		input.extraMs = 20_000;
+		input.submitMs = 17_000;
+		const record = service.report({ to: A, text: 'A long result.' });
+		assert.strictEqual(record.delivery.deadline, record.at + 35_000);
+		await sleep(18_000);
+		const delivered = service.history().find(each => each.id === record.id)!;
+		assert.deepStrictEqual([delivered.delivery.status, input.submitted.length, input.signals[0]?.aborted], ['success', 1, false]);
+	});
+
+	test('joining a result batch extends the active wait by the combined paste time', async () => {
+		const { service, input } = setUp();
+		input.submitMs = 17_000;
+		const first = service.report({ to: A, text: 'First result.' });
+		input.extraMs = 20_000;
+		const second = service.report({ to: A, text: 'Second result.' });
+		assert.strictEqual(second.delivery.deadline, first.at + 35_000);
+		await sleep(18_000);
+		assert.deepStrictEqual(service.history().filter(each => each.kind === 'result').map(each => each.delivery.status), ['success', 'success']);
+		assert.strictEqual(input.submitted.length, 1);
+		assert.ok(input.submitted[0].text.includes('First result.') && input.submitted[0].text.includes('Second result.'));
+	});
+
+	test('a later long result keeps a full budget when the earlier batch no longer has that time left', async () => {
+		const { service, input } = setUp();
+		input.extraMs = 20_000;
+		input.states.set(A, ['unknown']);
+		const first = service.report({ to: A, text: 'First result.' });
+		await sleep(1_000);
+		const second = service.report({ to: A, text: 'Later result.' });
+		assert.strictEqual(second.delivery.deadline, first.at + 36_000);
+		service.dispose();
+	});
+
+	test('Facade results that come while none of them is typed go to their sender in one paste, one turn of its model (D109)', async () => {
+		const { service, input } = setUp();
+		input.states.set(B, ['draft', 'draft', 'usable']);
+		input.states.set(A, ['draft', 'draft', 'usable']);
+		const start = Date.now();
+		await settled(service.send({ from: A, to: B, text: 'One', elapsedMs: 0 }));
+		await settled(service.send({ from: A, to: B, text: 'Two', elapsedMs: 0 }));
+		await sleep(30_000);
+		const toA = input.submitted.filter(each => each.run === A);
+		assert.deepStrictEqual(toA.map(each => [each.at - start, (each.text.match(/^\[Facade result #m\d+/gm) ?? []).length]), [[9_000, 2]]);
+		const results = service.inbox(A, { all: true, limit: 10 }).records;
+		assert.deepStrictEqual(results.map(each => [each.kind, each.delivery.status, each.delivery.via]), [['result', 'success', 'terminal'], ['result', 'success', 'terminal']]);
+		// A result after that paste began starts a paste of its own
+		input.states.set(B, ['draft', 'usable']);
+		await settled(service.send({ from: A, to: B, text: 'Three', elapsedMs: 0 }));
+		await sleep(20_000);
+		assert.strictEqual(input.submitted.filter(each => each.run === A).length, 2);
+	});
+
+	test('a result its sender reads while it waits with others is left out of their paste (D109)', async () => {
+		const { service, input } = setUp();
+		input.states.set(B, ['draft', 'draft', 'usable']);
+		input.states.set(A, ['draft', 'draft', 'usable']);
+		await settled(service.send({ from: A, to: B, text: 'One', elapsedMs: 0 }));
+		await settled(service.send({ from: A, to: B, text: 'Two', elapsedMs: 0 }));
+		await sleep(4_000);
+		const waiting = service.inbox(A, { limit: 10 }).records;
+		assert.strictEqual(waiting.length, 2);
+		service.markDelivered(A, [waiting[1].id]);
+		await sleep(20_000);
+		const toA = input.submitted.filter(each => each.run === A);
+		assert.deepStrictEqual(toA.map(each => [each.text.includes(waiting[0].alias), each.text.includes(waiting[1].alias)]), [[true, false]]);
+		const results = service.inbox(A, { all: true, limit: 10 }).records;
+		assert.deepStrictEqual(results.map(each => each.delivery.via), ['terminal', 'read']);
+	});
+
+	test('results their sender reads, all of them, before their paste are never typed; a result joining others keeps their deadline (D109)', async () => {
+		const { service, input } = setUp();
+		input.states.set(B, ['draft', 'draft', 'usable']);
+		input.states.set(A, ['draft', 'draft', 'usable']);
+		await settled(service.send({ from: A, to: B, text: 'One', elapsedMs: 0 }));
+		await settled(service.send({ from: A, to: B, text: 'Two', elapsedMs: 0 }));
+		await sleep(4_000);
+		const waiting = service.inbox(A, { limit: 10 }).records;
+		assert.strictEqual(waiting.length, 2);
+		assert.strictEqual(waiting[1].delivery.deadline, waiting[0].delivery.deadline);
+		service.markDelivered(A, waiting.map(each => each.id));
+		await sleep(20_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === A), []);
+		assert.deepStrictEqual(service.inbox(A, { all: true, limit: 10 }).records.map(each => [each.delivery.status, each.delivery.via]), [['success', 'read'], ['success', 'read']]);
+		// The next result is a paste of its own: its message accepted, as one its recipient takes at once has no result
+		input.states.set(B, ['draft', 'usable']);
+		await settled(service.send({ from: A, to: B, text: 'Three', elapsedMs: 0 }));
+		await sleep(15_000);
+		assert.strictEqual(input.submitted.filter(each => each.run === A).length, 1);
 	});
 
 	test('a sender gone before the outcome: the result is kept, ends quietly, no human notification, no error to B', async () => {
@@ -403,7 +671,8 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		const result = await settled(answer);
 		// Ingress was 500 ms before the call; the record took 700 ms more: 800 ms are left of the two seconds
 		assert.strictEqual(result.status, 'accepted');
-		assert.strictEqual(result.record.delivery.deadline, start - 500 + 15_000);
+		// Held by a draft: ten minutes from ingress
+		assert.strictEqual(result.record.delivery.deadline, start - 500 + 600_000);
 		assert.ok(Date.now() - start < 1_000, String(Date.now() - start));
 	});
 
@@ -437,7 +706,8 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 	test('a read without IDs returns only what has not reached the run - failed or still pending - and pages with a cursor; all:true pages every one kept', async () => {
 		const { service, input } = setUp();
 		await settled(service.send({ from: A, to: B, text: 'taken', elapsedMs: 0 }));
-		input.states.set(B, ['draft']);
+		// An input that cannot be read: each fails at its fifteen seconds
+		input.states.set(B, ['unknown']);
 		for (const text of ['one', 'two', 'three']) {
 			await settled(service.send({ from: C, to: B, text, elapsedMs: 0 }));
 		}
@@ -454,7 +724,7 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 
 	test('reading a failed message delivers it - via read, at the read - and its sender, told of the failure, is told nothing more', async () => {
 		const { service, input } = setUp();
-		input.states.set(B, ['draft']);
+		input.states.set(B, ['unknown']);
 		const start = Date.now();
 		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, callId: 'call-1' }));
 		await sleep(20_000);
@@ -465,7 +735,7 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 		const readAt = Date.now();
 		service.markDelivered(B, ['#m1']);
 		const original = service.history().find(record => record.id === 'm-1')!;
-		assert.deepStrictEqual([original.delivery.status, original.delivery.via, original.delivery.deliveredAt, original.delivery.reason], ['success', 'read', readAt, 'input_draft']);
+		assert.deepStrictEqual([original.delivery.status, original.delivery.via, original.delivery.deliveredAt, original.delivery.reason], ['success', 'read', readAt, 'input_unknown']);
 		assert.ok(readAt - start > 15_000);
 		assert.deepStrictEqual(service.inbox(B, { limit: 10 }).records, []);
 		await sleep(20_000);
@@ -515,7 +785,7 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 	test('a Facade result that never reached its terminal is delivered by the sender\'s own read', async () => {
 		const { service, input } = setUp();
 		input.states.set(B, ['draft', 'usable']);
-		input.states.set(A, ['draft']);
+		input.states.set(A, ['unknown']);
 		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
 		await sleep(40_000);
 		assert.deepStrictEqual(service.inbox(A, { limit: 10 }).records.map(record => [record.id, record.kind, record.delivery.status]), [['m-2', 'result', 'failure']]);

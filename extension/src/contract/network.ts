@@ -62,6 +62,8 @@ export interface RoutedDelivery {
 	readonly text: string;
 	readonly replyTo?: string;
 	readonly callId?: string;
+	/** The send's request ID, kept with the message where it is recorded, for a retry to find it (D104). */
+	readonly requestId?: string;
 	readonly elapsedMs: number;
 }
 

@@ -5,11 +5,16 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { isOwnDraft } from '../ptyd/drafts';
 import { INPUT_ADAPTERS, InputCell, InputScreen, InputState, readInput } from '../ptyd/composer';
 
 /**
  * The rendered screens of real signed-in CLIs, probed in a 120x40 headless terminal (VERIFICATION G3): Claude Code, Codex and Muse
- * Code on 2026-10-29, Antigravity, OpenCode and Pi on 2026-10-30.
+ * Code on 2026-10-29, Antigravity, OpenCode and Pi on 2026-10-30; and on 2026-10-31 each built-in's pastes by
+ * `scripts/capture-inputs.mjs`, which keeps a paste's text with its screen - Claude Code 2.1.316 and Codex 0.166.0 then new, Codex
+ * with the warning under its input that its configuration overrides bring - and again in a 120x24 terminal, as an editor's panel
+ * may be, with a taller paste and a wider one: where Antigravity and Pi scroll a draft in its input box, and Pi draws a wide paste
+ * as `[paste #1 1284 chars]` (D112).
  */
 const FIXTURES = path.join(__dirname, '..', '..', '..', 'src', 'test', 'fixtures', 'composer');
 
@@ -23,7 +28,19 @@ const FOLDERS: { readonly [folder: string]: { readonly adapter: string; readonly
 	'muse-1.4.14': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') },
 	'agy-1.4.12': { adapter: 'agy-frame', garble: chars => chars.replace('>', '❯') },
 	'pi-1.4.0': { adapter: 'pi-frame', garble: chars => chars.replace(/─/g, '-') },
-	'opencode-2.1.4': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') }
+	'opencode-2.1.4': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') },
+	'claude-2.1.316': { adapter: 'claude-frame', garble: chars => chars.replace('❯', '>') },
+	'codex-0.166.0': { adapter: 'codex-prompt', garble: chars => chars.replace('›', '>') },
+	'agy-1.4.12-pastes': { adapter: 'agy-frame', garble: chars => chars.replace('>', '❯') },
+	'muse-1.4.14-pastes': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') },
+	'pi-1.4.0-pastes': { adapter: 'pi-frame', garble: chars => chars.replace(/─/g, '-') },
+	'opencode-2.1.4-pastes': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') },
+	'claude-2.1.316-24rows': { adapter: 'claude-frame', garble: chars => chars.replace('❯', '>') },
+	'codex-0.166.0-24rows': { adapter: 'codex-prompt', garble: chars => chars.replace('›', '>') },
+	'agy-1.4.12-24rows': { adapter: 'agy-frame', garble: chars => chars.replace('>', '❯') },
+	'muse-1.4.14-24rows': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') },
+	'pi-1.4.0-24rows': { adapter: 'pi-frame', garble: chars => chars.replace(/─/g, '-') },
+	'opencode-2.1.4-24rows': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') }
 };
 
 /** A screen as a fixture keeps it: each row's cells - a string of one character each, trailing spaces cut - and its dim and inverse runs. */
@@ -33,6 +50,9 @@ interface Fixture {
 	readonly cols: number;
 	readonly cursor: { readonly x: number; readonly y: number };
 	readonly rows: readonly { readonly cells: string | readonly string[]; readonly dim?: readonly [number, number][]; readonly inverse?: readonly [number, number][] }[];
+	/** What was pasted, where the capture kept it, and the lead typed before it. */
+	readonly paste?: string;
+	readonly lead?: string;
 }
 
 interface Probed {
@@ -103,7 +123,7 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 
 	test('every fixture folder is read by one of ptyd\'s input readers, and every reader has its CLI\'s probed screens', () => {
 		assert.deepStrictEqual(fs.readdirSync(FIXTURES).sort(), Object.keys(FOLDERS).sort());
-		assert.deepStrictEqual([...INPUT_ADAPTERS].sort(), Object.values(FOLDERS).map(each => each.adapter).sort());
+		assert.deepStrictEqual([...INPUT_ADAPTERS].sort(), [...new Set(Object.values(FOLDERS).map(each => each.adapter))].sort());
 	});
 
 	test('each probed screen reads as what it showed: usable empty input, a draft, or a native question in its place', () => {
@@ -111,9 +131,51 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		const read = PROBED.map(each => `${label(each)}: ${readInput(each.screen, each.adapter).state}`);
 		assert.deepStrictEqual(read, PROBED.map(each => `${label(each)}: ${each.fixture.expect}`));
 		// Each kind of screen is among them, for each CLI
-		for (const folder of Object.keys(FOLDERS)) {
-			const kinds = new Set(PROBED.filter(each => each.folder === folder).map(each => each.fixture.expect));
-			assert.deepStrictEqual([...kinds].sort(), ['draft', 'interaction', 'usable'], folder);
+		for (const adapter of INPUT_ADAPTERS) {
+			const kinds = new Set(PROBED.filter(each => each.adapter === adapter).map(each => each.fixture.expect));
+			assert.deepStrictEqual([...kinds].sort(), ['draft', 'interaction', 'usable'], adapter);
+		}
+	});
+
+	test('each CLI\'s pasted draft reads as the message\'s own - its text, or its placeholder for a paste of its size - and a typed one does not (RULES-1.6, D98)', () => {
+		// What the probes pasted: three lines, a Facade message, and 33 lines of 3,886 characters, here as long as those were
+		const pasted: { readonly [name: string]: string } = {
+			'pasted': 'first pasted line\nsecond pasted line\nthird pasted line',
+			'message-pasted': '[Facade message #m1 | from @probe #a0 | window Probe]\nReply with exactly the word ACK-TWO and nothing else.\n[/Facade message #m1]',
+			'long-pasted': [...Array.from({ length: 32 }, () => 'x'.repeat(117)), 'x'.repeat(3_886 - 32 * 118)].join('\n')
+		};
+		assert.strictEqual([...pasted['long-pasted']].length, 3_886);
+		let checked = 0;
+		for (const each of PROBED.filter(probed => probed.fixture.paste === undefined && Object.hasOwn(pasted, probed.fixture.name))) {
+			const reading = readInput(each.screen, each.adapter);
+			assert.strictEqual(reading.state, 'draft', label(each));
+			assert.ok(reading.draft !== undefined && isOwnDraft(reading.draft, pasted[each.fixture.name], each.adapter), `${label(each)}: ${JSON.stringify(reading.draft)}`);
+			// One line less or one more is someone else's
+			assert.ok(!isOwnDraft(reading.draft, `${pasted[each.fixture.name]}\nmore`, each.adapter), label(each));
+			checked++;
+		}
+		assert.strictEqual(checked, 3 * Object.keys(FOLDERS).filter(folder => !folder.endsWith('-pastes') && !folder.endsWith('-24rows') && !['claude-2.1.316', 'codex-0.166.0'].includes(folder)).length);
+		// Each captured paste, its text kept with its screen: its own draft, after its lead where one was typed
+		const captured = PROBED.filter(probed => probed.fixture.paste !== undefined);
+		assert.ok(captured.length >= 60, `${captured.length} captured pastes`);
+		for (const each of captured) {
+			const reading = readInput(each.screen, each.adapter);
+			assert.ok(reading.draft !== undefined && isOwnDraft(reading.draft, each.fixture.paste!, each.adapter, each.fixture.lead, reading.hidden), `${label(each)}: ${JSON.stringify(reading.draft)}`);
+			assert.ok(!isOwnDraft(reading.draft, `${each.fixture.paste}\nmore`, each.adapter, each.fixture.lead, reading.hidden), label(each));
+		}
+		// A draft scrolled in its box: the rows out of sight said apart from it, its marks no part of it (D112)
+		const scrolled = captured.filter(each => readInput(each.screen, each.adapter).hidden !== undefined).map(each => `${each.folder}/${each.fixture.name}`);
+		assert.deepStrictEqual(scrolled.sort(), ['agy-1.4.12-24rows/wide-pasted', 'pi-1.4.0-24rows/medium-pasted']);
+		for (const each of captured.filter(probed => readInput(probed.screen, probed.adapter).hidden !== undefined)) {
+			const reading = readInput(each.screen, each.adapter);
+			assert.ok(reading.hidden!.above > 0 && reading.hidden!.below === 0 && !/more/.test(reading.draft!.split('\n')[0]), `${label(each)}: ${JSON.stringify(reading)}`);
+			// Its rows in sight are not the text whole: without what it says is out of sight, they are not its own
+			assert.ok(!isOwnDraft(reading.draft!, each.fixture.paste!, each.adapter), label(each));
+		}
+		// A draft the person typed is not a message's own
+		for (const each of PROBED.filter(probed => probed.fixture.name === 'typed')) {
+			const reading = readInput(each.screen, each.adapter);
+			assert.ok(reading.draft !== undefined && !isOwnDraft(reading.draft, pasted['message-pasted'], each.adapter), label(each));
 		}
 	});
 

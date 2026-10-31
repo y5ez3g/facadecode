@@ -30,8 +30,19 @@ IDs are nonempty strings; references accept exact IDs and RULES-2.3's `#aN`, `@n
 plus the person's `#human`. Names can repeat; ambiguity requires an ID. A reference resolves once within the caller's
 normal reach.
 
-No tool accepts request_id, an equivalent caller idempotency key, selectable YOLO/permission profile or input_policy.
-A new tool invocation is a new request; a repeated start may create another agent. Facade may number internal work.
+start_agent and send_message take an optional `request_id` of the caller's own: the same one again from that caller
+within an hour answers what the first call started or sent, as it stands, and does nothing again - T3 Code's
+`clientRequestId` and Orca's `--retry-request` make a retry after a lost answer safe the same way (D104). It is kept on the
+run or message record - a message to another window's agent carries it there, where its record is made - and a repeated
+start answers as its start went: accepted while its process still starts, the start's failure where it could not start,
+success otherwise (D112). Concurrent calls share that operation. The recipient deduplicates a routed send before input,
+so a lost route reply cannot make a retry send again. Request-bearing run metadata remains available for the original
+one-hour request period even after its card closes or its process exits; it does not restore a closed card or process.
+An interrupted start whose outcome was not recorded reports unknown effects instead of starting again. Removing a
+card does not prove process termination: a repeated request reports that process state as unknown where no exit was
+recorded (D113).
+No other tool takes one, and none takes a selectable YOLO/permission profile or input_policy. A new
+invocation without one is a new request; a repeated start may create another agent. Facade may number internal work.
 The normal shim supplies its run ID from launch context; it is an address, not a credential. Protocol framing may
 chunk large data, but no transport-frame limit becomes a total-content limit on direct text input.
 
@@ -81,7 +92,7 @@ Queries use a ten-second route deadline and report unavailable windows rather th
 An actual continuing operation may return accepted with its run/effects; later completion returns to its initiating
 agent through a Facade system result. The accepted response and later result identify the same originating tool call
 and target run, using existing call correlation facts so concurrent calls, including calls to the same target, are
-distinguishable. This adds no caller-managed request key, public operation object or query API. Result handoff follows
+distinguishable. This adds no public operation object or query API. Result handoff follows
 RULES-1.7, including no duplicate receipt for an immediate final result and no human fallback when handoff fails.
 Use list_agents for current run state; there is no separate operation inspection API.
 send_message always uses the initial-response and delivery-stage budgets owned by RULES-1.2 and RULES-1.5.
@@ -124,6 +135,7 @@ scoped under RULES-4.3. Selection is revalidated at start, without reservations.
 | effort | Optional nonempty literal; this call's choice takes precedence under CLIS-1.4 |
 | prompt | Optional nonblank initial message, subject to ordinary message length |
 | worktree | Optional `{branch:string, base_ref:string}` to create a worktree from the selected location |
+| request_id | Optional caller ID of the start, 1–200 characters: the same one again within an hour answers the agent it started (1.1) |
 
 No worktree field means use location_id directly, including ordinary folders and worktrees made by other tools.
 A new-worktree branch/base are explicit and validated by the Git flow; the agent's display name is not its branch.
@@ -175,7 +187,7 @@ read_messages remains limited to the caller's inbox even if list_agents can see 
 
 **Stop one identified agent and remove its UI immediately; clean up its process in the background.**
 
-Arguments: `agent:string` required. No delete_worktree, discard_changes, recipient array or request key.
+Arguments: `agent:string` required. No delete_worktree, discard_changes, recipient array or request ID.
 Resolve an allowed run, remove card/terminal, prevent new input, then terminate its process as needed.
 Do not stop children. Already-ended known runs can return already_ended; missing IDs fail without guessing.
 Return agent_id, actual process/cleanup state and effects. Accepted/unknown cleanup is not proof of exit, but does not
@@ -199,9 +211,10 @@ characters, which T3 Code reads back - lost its beginning on its way: send_messa
 it with invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole (D107).
 
 Return message_id, resolved target, status/effects, and deadline/obstacle if accepted within RULES-1.2's response budget.
-Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget. Message ID allocation/reuse follows RULES-1.1;
-uncertain delivery can repeat that ID. Expiry is failure.
-No caller request key or cancel_message is provided. B's actual reply is another send.
+Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an accepted send returns moves on,
+to at most ten minutes, while the recipient's input holds another draft or a native question (RULES-1.5). Message ID
+allocation/reuse follows RULES-1.1; a message's text is typed at most once (RULES-1.6). Expiry is failure.
+An optional `request_id` makes a retry safe under 1.1. No cancel_message is provided. B's actual reply is another send.
 Human contact means notification handoff in the sender's window; no migration to another window on closure.
 All A-to-B delivery/reply/system-result errors remain with agents or end if nobody can receive them.
 
@@ -229,8 +242,8 @@ without exposing another recipient's record. Multiple read IDs are a query, not 
 
 Return records oldest first: message ID, sender/recipient, time, optional reply relation, message/system kind, exact
 body and length, delivery state, how it was delivered and input effects. Once the result is handed back, every record
-in it is delivered (RULES-1.3): one still being pasted stops being pasted, and its sender's result says it was
-delivered through read_messages. An uncertain return may repeat the same record without resubmitting it to the
+in it is delivered (RULES-1.3): its sender's result says it was delivered through read_messages. RULES-1.5 cancels
+unstarted pastes and permits only completion of an already pasted owned draft. An uncertain return may repeat the same record without starting another paste to the
 terminal. Above 8,000 combined code points, return the complete selected content in a file readable in the caller
 environment, with path/size and per-message metadata. COLLABORATION-4.2 defines transfer and expiry.
 No instructions to print, answer, escalate or follow a workflow are embedded in results.
@@ -269,7 +282,10 @@ Both operate on the addressed live terminal within normal tree reach and seriali
 They can act on drafts, menus or unknown layouts; no input-box evidence is required. No mandatory read_screen
 or permission question is added. Return actual full/partial/unknown text, Enter fact, pasted count or keys_sent.
 A supplementary screen is only observation; its failure does not undo input. No automatic raw-content retry occurs
-after unknown effects. Ordinary messages retain their separate draft and at-least-once rules.
+after unknown effects. type_text's Enter goes in a write of its own after its text, once the CLI can have read the text -
+a tenth of a second, and CLIS-2.1's time for a paste of its size and for Antigravity's lines - as a CLI that reads a
+paste's end and an Enter together may drop the Enter, as Orca found Claude Code does (D107). Ordinary messages keep their
+own draft rules and are typed at most once (RULES-1.6).
 
 ## 6 Technical design
 
@@ -314,17 +330,17 @@ work for that same message. A new send call has a new ID, even if its text match
 message is a separate kind of information, not another copy of that message's instruction.”
 This is model-side handling of transport duplicates, not a Facade deduplication database or an exactly-once guarantee.
 The skill does not prescribe project workflow, mandatory replies or escalation to a person.
-Old task workflows, request keys, operation-query/deletion tools, input_policy and authentication instructions are absent.
+Old task workflows, operation-query/deletion tools, input_policy and authentication instructions are absent.
 No migration guide for already-published user skills is required: this is the first release of the contract.
 
 ## Checks
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.3 | Nine-tool schemas, complete missing-field report, no request keys, current effects, `unsupported` and `input_unknown` reasons and fixed message budgets |
+| 1.1–1.3 | Nine-tool schemas, complete missing-field report, request IDs on start and send alone, current effects, `unsupported` and `input_unknown` reasons and message budgets |
 | 2.1–2.3 | Empty/remote windows, optional model/effort, shared YOLO rule, cataloged/new-worktree locations, both prompt paths |
 | 3.1–3.2 | Same-tree lists, duplicate names, one-agent stop, immediate UI close, no delete/query extensions |
-| 4.1–4.2 | One recipient, `#human`, fixed retries/duplicates, no human fallback, own inbox including ID lookups, reading delivers and stops pasting, long-file expiry |
+| 4.1–4.2 | One recipient, `#human`, fixed retries/duplicates, no human fallback, own inbox including ID lookups, reading delivers and cancels unstarted pastes while an owned draft can finish, long-file expiry |
 | 5.1–5.2 | Current/final screen, direct multiline/unbounded text and drafts, control characters refused toward press_keys, recognized keys, true input effects |
 | 6.1–6.2 | Run routing without credentials, Facade tools never prompt for approval, optional server, future-only MCP setting, version errors, consistent schemas and explicit ID deduplication skill text |
 
@@ -332,7 +348,19 @@ No migration guide for already-published user skills is required: this is the fi
 
 ## Change log
 
-- 2026-10-31: Typed schemas accept CLI list encodings, truncated text is refused, and MCP 2025-11-25 is supported.
+- 2026-10-31: Request IDs cover concurrent calls, lost route replies and removed runs; read delivery does not orphan
+  a complete Facade draft (D113).
+- 2026-10-31: 1.1's repeated start answers as its start went, and a request ID travels with a message to another window
+  (D112).
+- 2026-10-31: 4.1 refuses a text that arrives with Antigravity's mark of a cut beginning; 5.2's Enter goes a moment after its
+  text (D107).
+- 2026-10-31: 6.1 speaks MCP 2025-11-25, tells a CLI that defers tools to load them, and keeps what every turn pays for
+  within a tested byte budget (D105).
+- 2026-10-31: 1.1, 2.2 and 4.1 take an optional `request_id` on start_agent and send_message (D104).
+- 2026-10-31: 4.1's accepted deadline moves on while the recipient's input is held, and a message is typed at most once
+  (D98, D100).
+- 2026-10-31: 1.1 advertises every argument with a type and no `oneOf`, and takes a list given as one string or as
+  JSON text; 4.2's `ids` and 5.2's `keys` are lists (D96).
 - 2026-10-31: 6.1 marks the tools for Antigravity to give the model directly, lists none for a session the person started
   in a folder whose shared entry is a running agent's, and names Muse Code's own approvals (D94).
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots contract with the owner's 2026-10-30

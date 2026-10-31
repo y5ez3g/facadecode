@@ -66,7 +66,11 @@ class Deferred<T> {
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
-export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get'> {
+export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get' | 'requested'> {
+	now: () => number = Date.now;
+	requested(from: RunId, requestId: string): RunFacts | undefined {
+		return this.list().find(run => run.creator === from && run.requestId === requestId && run.createdAt > this.now() - 60 * 60_000);
+	}
 	readonly runs = new Map<RunId, RunFacts>();
 	readonly launched: LaunchRequest[] = [];
 	readonly closed: RunId[] = [];
@@ -93,7 +97,8 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 			name: request.name.trim(), cli: request.cli, location: request.location, origin: request.origin, creator: request.creator?.run,
 			root: request.creator?.root ?? runId(n), yolo: true, lifecycle: 'starting', phase: request.worktree ? 'creating_worktree' : 'launching_cli',
 			pid: undefined, startedAt: undefined, tools: 'connecting', activity: 'unknown', reporting: false,
-			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {}
+			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {},
+			...request.requestId !== undefined ? { requestId: request.requestId } : {}
 		});
 		this.runs.set(facts.id, facts);
 		this.starts.set(facts.id, new Deferred());
@@ -154,7 +159,8 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 /** The first response a send gets, by default success. */
 export type SendResponse = Pick<SendResult, 'status' | 'reason' | 'obstacle'> & { readonly delivery?: MessageRecord['delivery'] };
 
-export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent'> {
+export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'> {
+	now: () => number = Date.now;
 	readonly records: MessageRecord[] = [];
 	readonly sent: SendRequest[] = [];
 	readonly allocated: string[] = [];
@@ -178,8 +184,17 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		const n = request.id !== undefined ? Number(request.id.slice(2)) : ++this.n;
 		return {
 			id: `m-${n}`, alias: `#m${n}`, kind, from: this.who(kind === 'result' ? 'facade' : request.from), to: this.who(request.to), window: 'win-1', environment: 'local',
-			at: 3000 + n, ...request.replyTo ? { replyTo: request.replyTo } : {}, ...request.callId ? { callId: request.callId } : {}, text: request.text, length: codePoints(request.text), delivery
+			at: 3000 + n, ...request.replyTo ? { replyTo: request.replyTo } : {}, ...request.callId ? { callId: request.callId } : {}, text: request.text, length: codePoints(request.text), delivery,
+			...request.requestId !== undefined ? { requestId: request.requestId } : {}
 		};
+	}
+
+	history(): readonly MessageRecord[] {
+		return this.records;
+	}
+
+	findRequest(from: RunId, requestId: string): MessageRecord | undefined {
+		return [...this.records, ...this.kept].find(record => record.kind === 'message' && record.from.run === from && record.requestId === requestId && record.at > this.now() - 60 * 60_000);
 	}
 
 	allocate(request: { readonly from: RunId; readonly text: string }): { readonly id: string; readonly text: string } {
@@ -361,6 +376,7 @@ export function setUp(): Setup {
 		monotonic: () => 0,
 		log: text => log.push(text)
 	};
+	agents.now = messages.now = () => deps.clock?.now() ?? Date.now();
 	const service = createToolService(deps);
 	const serve = (call: TestCall, receivedAt?: number) => service({ protocol: TOOL_PROTOCOL, elapsedMs: 0, callId: `call-${++calls}`, ...call } as ToolCall, receivedAt);
 	const handedBack = async (served: Promise<ServedAnswer>) => {
