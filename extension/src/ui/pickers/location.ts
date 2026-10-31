@@ -66,6 +66,10 @@ function wordsOf(problem: WorktreeProblem): string {
 		case 'worktree_changed': return vscode.l10n.t("Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.", problem.name);
 		// {0} is the worktree's name
 		case 'worktree_locked': return vscode.l10n.t("Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.", problem.name);
+		// {0} is the worktree's name, {1} the name of the worktree inside it
+		case 'worktree_nested': return vscode.l10n.t("Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.", problem.name, problem.nested);
+		// {0} is the worktree's name
+		case 'agents_not_ended': return vscode.l10n.t("Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.", problem.name);
 		// {0} is the worktree's name, {1} what Git said
 		case 'deletion_failed': return deletionFailed(problem.name, problem.detail);
 	}
@@ -460,10 +464,18 @@ function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolea
  * processes ended, before Git removes it. Why it was not deleted goes to the person. Never rejects.
  */
 async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<void> {
+	// True only once every agent's process is known to have ended: Git removes nothing a process may still be writing in
 	const closeAgents = async () => {
-		await Promise.all(deps.agents.list().filter(run => run.location === worktree.id).map(run => deps.agents.close(run.id).then(
-			result => deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`),
-			err => deps.log.event(`Could not close ${run.alias} to delete its worktree: ${messageOf(err)}`))));
+		const results = await Promise.all(deps.agents.list().filter(run => run.location === worktree.id).map(run => deps.agents.close(run.id).then(
+			result => {
+				deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`);
+				return result === 'terminated' || result === 'already_exited' || result === 'already_ended' || result === 'not_started';
+			},
+			err => {
+				deps.log.event(`Could not close ${run.alias} to delete its worktree: ${messageOf(err)}`);
+				return false;
+			})));
+		return results.every(Boolean);
 	};
 	try {
 		await deps.worktrees.remove(worktree.id, closeAgents);

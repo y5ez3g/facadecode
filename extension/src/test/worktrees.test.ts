@@ -259,11 +259,14 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 
 	suite('deleting a linked worktree (WORKTREES-3.2, D73)', () => {
 
-		/** What `remove` came to - `fulfilled`, or its reason and problem - and whether it asked to close the agents first. */
-		async function removed(worktrees: WorktreeService, id: string, closing?: () => void): Promise<{ outcome: string; closed: number }> {
+		/**
+		 * What `remove` came to - `fulfilled`, or its reason and problem - and whether it asked to close the agents first; `ended`, what
+		 * closing them says of their processes.
+		 */
+		async function removed(worktrees: WorktreeService, id: string, closing?: () => void, ended = true): Promise<{ outcome: string; closed: number }> {
 			let closed = 0;
 			try {
-				await worktrees.remove(id, async () => { closed++; closing?.(); });
+				await worktrees.remove(id, async () => { closed++; closing?.(); return ended; });
 				return { outcome: 'fulfilled', closed };
 			} catch (err) {
 				return { outcome: `${(err as WorktreeError).reason} ${JSON.stringify(worktreeProblemOf(err))}`, closed };
@@ -331,6 +334,91 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 			assert.match(results[0].outcome, /^deletion_failed \{"kind":"deletion_failed","name":"missed","detail":"fatal: '.*missed' contains modified or untracked files, use --force to delete it"\}$/);
 			assert.strictEqual(results[1].outcome, 'worktree_locked {"kind":"worktree_locked","name":"locked"}');
 			assert.ok(fs.existsSync(path.join(missed, 'new.txt')) && fs.existsSync(locked));
+		});
+
+		test('one another worktree is inside - an agent\'s own, in an ignored folder - is refused untouched, and so is the inner one\'s uncommitted work', async () => {
+			fs.writeFileSync(path.join(repo, '.gitignore'), '.worktrees/\n');
+			git(repo, 'add', '.gitignore');
+			git(repo, 'commit', '-q', '-m', 'ignore nested worktrees');
+			const outer = path.join(temp.dir, 'repo.worktrees', 'outer');
+			git(repo, 'worktree', 'add', '-q', '-b', 'outer', outer);
+			const inner = path.join(outer, '.worktrees', 'inner');
+			git(repo, 'worktree', 'add', '-q', '-b', 'inner', inner);
+			fs.writeFileSync(path.join(inner, 'work.txt'), 'an agent\'s uncommitted work');
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			assert.deepStrictEqual(await removed(worktrees, idOf(outer)), { outcome: 'worktree_nested {"kind":"worktree_nested","name":"outer","nested":"inner"}', closed: 0 });
+			assert.ok(fs.existsSync(path.join(inner, 'work.txt')) && fs.existsSync(outer));
+		});
+
+		test('what its agents write as they end is checked again before Git removes anything - an untracked file Git is set not to show - and is kept', async () => {
+			const notes = path.join(temp.dir, 'notes');
+			git(repo, 'worktree', 'add', '-q', '-b', 'notes', notes);
+			git(repo, 'config', 'status.showUntrackedFiles', 'no');
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			const result = await removed(worktrees, idOf(notes), () => fs.writeFileSync(path.join(notes, 'notes.md'), 'written while ending'));
+
+			assert.deepStrictEqual(result, { outcome: 'worktree_changed {"kind":"worktree_changed","name":"notes"}', closed: 1 });
+			assert.strictEqual(fs.readFileSync(path.join(notes, 'notes.md'), 'utf8'), 'written while ending');
+		});
+
+		test('an agent whose process could not be confirmed ended keeps the worktree: nothing is deleted while a process may still write in it', async () => {
+			const busy = path.join(temp.dir, 'busy');
+			git(repo, 'worktree', 'add', '-q', '-b', 'busy', busy);
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			assert.deepStrictEqual(await removed(worktrees, idOf(busy), undefined, false), { outcome: 'agents_not_ended {"kind":"agents_not_ended","name":"busy"}', closed: 1 });
+			assert.ok(fs.existsSync(busy));
+		});
+
+		test('while it is deleted it is out of the catalog and cannot be resolved for a new launch; refused, it is back', async () => {
+			const going = path.join(temp.dir, 'going');
+			const staying = path.join(temp.dir, 'staying');
+			git(repo, 'worktree', 'add', '-q', '-b', 'going', going);
+			git(repo, 'worktree', 'add', '-q', '-b', 'staying', staying);
+			const { worktrees, idOf, locations } = await windowWith([repo]);
+			const seen = (id: string) => [locations.resolve(id) !== undefined, locations.snapshot().locations.some(each => each.id === id)];
+			let during: boolean[][] = [];
+
+			const id = idOf(going);
+			const refusedId = idOf(staying);
+			await removed(worktrees, id, () => { during = [seen(id), seen(refusedId)]; });
+			const refusedDuring = await (async () => {
+				let inside: boolean[] = [];
+				await removed(worktrees, refusedId, () => { inside = seen(refusedId); }, false);
+				return inside;
+			})();
+
+			assert.deepStrictEqual([during, refusedDuring, seen(refusedId)], [[[false, false], [true, true]], [false, false], [true, true]]);
+		});
+
+		test('a file Git is told to assume unchanged or to skip, edited, is a change not committed: refused untouched; one a sparse checkout leaves out is none', async () => {
+			for (const name of ['skipped.json', 'assumed.json', 'sparse.json']) {
+				fs.writeFileSync(path.join(repo, name), '{}');
+			}
+			git(repo, 'add', '.');
+			git(repo, 'commit', '-q', '-m', 'settings');
+			const skipped = path.join(temp.dir, 'skipped');
+			const assumed = path.join(temp.dir, 'assumed');
+			const sparse = path.join(temp.dir, 'sparse');
+			for (const each of [skipped, assumed, sparse]) {
+				git(repo, 'worktree', 'add', '-q', '-b', path.basename(each), each);
+			}
+			git(skipped, 'update-index', '--skip-worktree', 'skipped.json');
+			fs.writeFileSync(path.join(skipped, 'skipped.json'), '{"local": "edit"}');
+			git(assumed, 'update-index', '--assume-unchanged', 'assumed.json');
+			fs.writeFileSync(path.join(assumed, 'assumed.json'), '{"local": "edit"}');
+			git(sparse, 'update-index', '--skip-worktree', 'sparse.json');
+			fs.rmSync(path.join(sparse, 'sparse.json'));
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			assert.deepStrictEqual([await removed(worktrees, idOf(skipped)), await removed(worktrees, idOf(assumed)), await removed(worktrees, idOf(sparse))], [
+				{ outcome: 'worktree_changed {"kind":"worktree_changed","name":"skipped"}', closed: 0 },
+				{ outcome: 'worktree_changed {"kind":"worktree_changed","name":"assumed"}', closed: 0 },
+				{ outcome: 'fulfilled', closed: 1 }
+			]);
+			assert.deepStrictEqual([fs.readFileSync(path.join(skipped, 'skipped.json'), 'utf8'), fs.readFileSync(path.join(assumed, 'assumed.json'), 'utf8')], ['{"local": "edit"}', '{"local": "edit"}']);
 		});
 
 		test('only a linked worktree no workspace folder is in: the main checkout, a plain folder, an opened worktree and one holding a workspace folder are refused untouched; a detached one goes', async () => {

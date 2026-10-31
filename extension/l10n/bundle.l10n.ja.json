@@ -81,6 +81,8 @@
 	"Cannot delete \"{0}\": only standalone linked worktrees can be deleted.": "\"{0}\" を削除できません: ワークスペース フォルダーを含まないスタンドアロンのリンクされた作業ツリーのみ削除できます。",
 	"Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.": "作業ツリー \"{0}\" を削除できません: コミットされていない変更があります。Git でコミットまたは stash してから再試行してください。",
 	"Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.": "作業ツリー \"{0}\" を削除できません: 作業ツリーがロックされています。Git でロックを解除してから再試行してください。",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "作業ツリー \"{0}\" を削除できません: 作業ツリー \"{1}\" がその中にあります。先にその作業ツリーを削除するか移動してから、再試行してください。",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "作業ツリー \"{0}\" を削除できません: その中の Agent のプロセスが終了したことを確認できませんでした。終了してから再試行してください。",
 	"Could not delete worktree \"{0}\": {1}": "作業ツリー \"{0}\" を削除できませんでした: {1}",
 	"Local": "ローカル",
 	"SSH: {0}": "SSH: {0}",

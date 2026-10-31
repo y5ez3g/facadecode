@@ -256,7 +256,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 		let changed: TestEmitter<void>;
 		let runs: RunFacts[];
 		let closed: string[];
-		let removing: { id: string; closeAgents: () => Promise<void> }[];
+		let removing: { id: string; closeAgents: () => Promise<boolean> }[];
 		let remove: WorktreePort['remove'];
 		let choices: CliChoice[] | Error;
 		let last: { location?: string; cli?: string };
