@@ -137,7 +137,8 @@ async function choosePlan(deps: WorktreeCommandDeps): Promise<WorktreePlan | und
 		} else if (step === 'branch') {
 			// Back to the folder step where there is one
 			const several = deps.locations.snapshot().folders.length > 1;
-			const answer = await askWorktreeRef(flow, deps.worktrees, source!, { title, kind: 'branch', value: branch, base, back: several });
+			// Back keeps the branch typed, to be there again (UX-1.1)
+			const answer = await askWorktreeRef(flow, deps.worktrees, source!, { title, kind: 'branch', value: branch, base, back: several, typed: value => { branch = value; } });
 			if (answer === undefined) {
 				return undefined;
 			}

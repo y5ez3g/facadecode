@@ -248,6 +248,8 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 	/** The checkout a new worktree would be made of in the folder chosen, and what the branch step proposed last. */
 	let source: Location | undefined;
 	let branch = current.worktree?.branch;
+	/** Whether New Worktree is the choice the location step shows: the destination's, or the person's before Back (UX-1.1). */
+	let wantsWorktree = !!current.worktree;
 	/** The worktree being deleted: not offered meanwhile, and the step busy until it is gone (WORKTREES-3.2). */
 	let deleting: { readonly id: LocationId; readonly done: Promise<void> } | undefined;
 	for (; ;) {
@@ -268,7 +270,8 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 			continue;
 		}
 		if (step === 'branch' && source) {
-			const plan = await askWorktreeRef(flow, worktrees, source, { title, kind: 'branch', value: branch, back: true });
+			// Back keeps the branch typed, to be there again, and New Worktree chosen on the step it returns to (UX-1.1)
+			const plan = await askWorktreeRef(flow, worktrees, source, { title, kind: 'branch', value: branch, back: true, typed: value => { branch = value; } });
 			if (plan === undefined) {
 				return undefined;
 			}
@@ -311,7 +314,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 			title,
 			placeholder: from ? vscode.l10n.t("Select a branch or worktree") : vscode.l10n.t("Select a working location"),
 			items,
-			active: items.find(item => current.worktree ? item.newWorktree === 'available' : item.location?.id === current.location.id),
+			active: items.find(item => wantsWorktree ? item.newWorktree === 'available' : item.location?.id === current.location.id),
 			back: true,
 			busy: locations.snapshot().pending || checked !== undefined || deleting !== undefined,
 			accepts: item => item.newWorktree !== 'unavailable',
@@ -326,7 +329,11 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 					const catalog = locations.snapshot();
 					const active = picker.activeItems[0];
 					picker.items = itemsOf(catalog);
-					picker.activeItems = picker.items.filter(item => active?.newWorktree ? item.newWorktree === active.newWorktree : item.location?.id === active?.location?.id);
+					// The choice where it was; none yet - New Worktree offered only now - the step's own, never a line or two rows
+					const kept = (item: StepItem) => active
+						? active.newWorktree ? item.newWorktree === active.newWorktree : item.location !== undefined && item.location.id === active.location?.id
+						: wantsWorktree ? item.newWorktree === 'available' : item.location?.id === current.location.id;
+					picker.activeItems = picker.items.filter(kept).slice(0, 1);
 					picker.busy = catalog.pending || (checked !== undefined && availability === undefined) || deleting !== undefined;
 				};
 				void checked?.then(refresh);
@@ -359,6 +366,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 			continue;
 		}
 		if (picked.item.newWorktree === 'available') {
+			wantsWorktree = true;
 			step = 'branch';
 			continue;
 		}
@@ -488,6 +496,8 @@ async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<v
 type WorktreeRefInput = {
 	readonly title: string;
 	readonly back: boolean;
+	/** Told each text as it is typed: what Back keeps for the step's return (UX-1.1). */
+	readonly typed?: (value: string) => void;
 } & ({ readonly kind: 'branch'; readonly value?: string; readonly base?: string }
 	| { readonly kind: 'base'; readonly value: string; readonly branch: string });
 
@@ -535,7 +545,10 @@ export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source
 		placeholder: asked.kind === 'branch' ? vscode.l10n.t("Branch name") : vscode.l10n.t("Commit, branch, or tag (e.g. HEAD)"),
 		prompt: asked.kind === 'branch' ? vscode.l10n.t("Starts from {0}", asked.base ?? worktreeSourceLabel(source)) : vscode.l10n.t("Base ref for {0}", asked.branch),
 		back: asked.back,
-		validate: value => value.trim() ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' }),
+		validate: value => {
+			asked.typed?.(value);
+			return value.trim() ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' });
+		},
 		check: async value => {
 			try {
 				const text = value.trim();

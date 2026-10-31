@@ -500,6 +500,26 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 			]);
 		});
 
+		test('Back from the branch step keeps New Worktree chosen on the step it returns to, and the branch typed, there again as the step comes back (UX-1.1)', async () => {
+			const done = start();
+			await settle();
+			ui.current!.accept('Change Working Location...');
+			await settle();
+			ui.current!.accept('New Worktree...');
+			await settle();
+			ui.current!.type('feature-x');
+			await new Promise(resolve => setTimeout(resolve, 200));
+			ui.current!.back();
+			await settle();
+			const active = ui.current!.activeItems.map(item => item.label);
+			ui.current!.accept('New Worktree...');
+			await settle();
+			const value = ui.current!.value;
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual([active, value], [['New Worktree...'], 'feature-x']);
+		});
+
 		test('Back from the branch keeps the location chosen; Escape there makes nothing; a prerequisite missing is said and cannot be chosen; a plain folder offers no worktree (LIFECYCLE-1.3, PANEL-1.2)', async () => {
 			let done = start();
 			await settle();
