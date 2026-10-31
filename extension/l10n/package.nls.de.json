@@ -20,7 +20,7 @@
 	"command.filterByFolder": "Nach diesem Ordner filtern",
 	"command.revealAgent": "Agent anzeigen",
 	"config.title": "Agenten",
-	"config.yolo": "Agents ohne Genehmigungsaufforderungen ausführen. Deaktivieren, um die normalen Genehmigungen und die unterstützte Sandbox der jeweiligen CLI zu verwenden. Gilt nur für neue Agents.",
+	"config.yolo": "Agenten ohne Genehmigungsaufforderungen ausführen. Deaktivieren, um die normalen Genehmigungen und die unterstützte Sandbox der jeweiligen CLI zu verwenden. Gilt nur für neue Agenten.",
 	"config.claude.title": "Claude Code",
 	"config.claude.enabled": "Steuert, ob Claude Code für neue Agenten angeboten wird. Das Deaktivieren beendet keine laufenden Agenten.",
 	"config.claude.path": "Pfad zu Claude Code. Leer lassen, um „claude“ aus dem PATH der Terminalumgebung zu verwenden.",

@@ -20,7 +20,7 @@
 	"command.filterByFolder": "Filtrar por esta carpeta",
 	"command.revealAgent": "Mostrar agente",
 	"config.title": "Agentes",
-	"config.yolo": "Ejecutar agentes sin solicitudes de aprobación. Desactívelo para usar las aprobaciones normales y el entorno de pruebas de cada CLI. Solo se aplica a agentes nuevos.",
+	"config.yolo": "Ejecutar agentes sin solicitudes de aprobación. Desactívelo para usar las aprobaciones normales y el espacio aislado de cada CLI. Solo se aplica a agentes nuevos.",
 	"config.claude.title": "Claude Code",
 	"config.claude.enabled": "Controla si se ofrece Claude Code para los agentes nuevos. Desactivarlo no detiene los agentes que están en ejecución.",
 	"config.claude.path": "Ruta a Claude Code. Deje este campo vacío para usar \"claude\" desde el PATH del entorno de terminal.",

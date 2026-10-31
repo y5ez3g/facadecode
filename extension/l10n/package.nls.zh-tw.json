@@ -20,7 +20,7 @@
 	"command.filterByFolder": "依此資料夾篩選",
 	"command.revealAgent": "前往 Agent",
 	"config.title": "Agent",
-	"config.yolo": "執行 Agent 時不請求審批。關閉後使用各 CLI 的常規審批和其支援的沙箱。僅對新啟動的 Agent 生效。",
+	"config.yolo": "執行 Agent 時不請求核准。關閉後使用各 CLI 的常規核准和其支援的沙箱。僅對新啟動的 Agent 生效。",
 	"config.claude.title": "Claude Code",
 	"config.claude.enabled": "控制是否為新的 Agent 提供 Claude Code。關閉後不會停止執行中的 Agent。",
 	"config.claude.path": "Claude Code 的程式路徑。留空則使用終端環境 PATH 中的 \"claude\"。",
