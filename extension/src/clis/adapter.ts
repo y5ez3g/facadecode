@@ -73,21 +73,25 @@ export interface LaunchInput {
 
 /**
  * A CLI's sandbox as a launch leaves it (CLIS-1.3, 4.1): turned on by arguments of the launch (`by`), else by Facade's run settings
- * for it; turned off by arguments; left to the CLI's own configuration; or none, where the CLI has no sandbox on this platform.
+ * for it; turned off by arguments; left to the CLI's own configuration; none, where the CLI has no sandbox on this platform; or
+ * unknown, for a custom CLI whose configuration Facade does not read (CLIS-3.3, 3.4).
  */
-export type SandboxFact = { readonly state: 'on'; readonly by?: readonly string[] } | { readonly state: 'off'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' };
+export type SandboxFact = { readonly state: 'on'; readonly by?: readonly string[] } | { readonly state: 'off'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' | 'unknown' };
 
-/** A CLI's approvals as a launch leaves them (CLIS-1.3, 4.1): bypassed by arguments of the launch, its own, or none it has. */
-export type ApprovalFact = { readonly state: 'bypassed'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' };
+/**
+ * A CLI's approvals as a launch leaves them (CLIS-1.3, 4.1): bypassed by arguments of the launch, its own, none it has, or unknown
+ * for a custom CLI (CLIS-3.4).
+ */
+export type ApprovalFact = { readonly state: 'bypassed'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' | 'unknown' };
 
-/** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition. */
+/** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition, or a custom CLI's validated configuration (CLIS-3.4). */
 export interface CliAdapter {
-	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` (CLIS-1.1). */
+	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, or a custom CLI's key (CLIS-1.1, 3.4). */
 	readonly id: string;
 	readonly displayName: string;
-	/** Its settings: `facade.<segment>`. */
+	/** Its settings: `facade.<segment>`, or `facade.custom.<key>`. */
 	readonly setting: string;
-	/** The command PATH is searched for where its `path` setting is empty. */
+	/** The command PATH is searched for where its `path` setting is empty; a custom CLI's configured path. */
 	readonly command: string;
 	readonly groups: Groups;
 	/** The values its groups' `${name}`s take for a launch. */

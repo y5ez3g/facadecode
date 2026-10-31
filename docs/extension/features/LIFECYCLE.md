@@ -24,7 +24,8 @@ the local window component sees the remote authority, so it reports it with the 
 not change. This summary remains visible while CLI choices
 are filtered or scrolled, including when 1.2 has fallen back to another location. Put the last successfully used CLI
 first and preselect it; never execute it without selection. The CLI step lists nothing until the CLIs are found, so an
-Enter while they load starts nothing (D71). The bottom items, under a separator labeled `Options`, are
+Enter while they load starts nothing (D71). Other installed/enabled CLIs follow CLIS-1.1 order, then configured
+custom CLIs. The bottom items, under a separator labeled `Options`, are
 `Change Working Location...` and `Change Name...`; where the location is only a label, that label is the line. The
 location item's description shows the full current working location, including `New worktree {branch} from {source}`
 for a proposed worktree, and its environment when that is not this machine (D67). The name item's description shows the
@@ -123,7 +124,8 @@ descriptive; stale display text must not redirect the run.
 **Each visible agent has one terminal in an editor group; no terminal-panel placement option is provided.**
 
 Human New shows the terminal. Card/Go to Agent reveals the same terminal without launching another. Tab title uses the
-agent name and, when present, the native tabs separator plus CLI title. Use the CLI's theme-appropriate logo. Do not put
+agent name and, when present, the native tabs separator plus CLI title. Use the CLI's theme-appropriate logo; custom CLIs
+use a terminal icon. Do not put
 status in the name. Native tab renames synchronize the display name when valid. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
 as an alternative.
@@ -199,6 +201,8 @@ integration evidence, not a fact established by this document.
 See [Verification](../engineering/VERIFICATION.md). Runtime results remain unverified.
 
 ## Change log
+
+- 2026-10-31: 1.1 offers configured custom CLIs after the built-ins; 2.2 gives their tabs a terminal icon.
 
 - 2026-10-30: 1.2 starts New Agent from the filtered empty panel at the filtered location; 1.4 leaves the filter as
   it is when a new agent starts (PANEL-2.3).

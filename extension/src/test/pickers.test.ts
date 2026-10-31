@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { Catalog, CliChoice, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
+import type { Catalog, CliChoice, CliChoices, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
 
@@ -260,6 +260,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		let removing: { id: string; closeAgents: () => Promise<void> }[];
 		let remove: WorktreePort['remove'];
 		let choices: CliChoice[] | Error;
+		/** What no CLI stands for: `facade.custom` wrong as a whole (CLIS-3.4). */
+		let problems: CliChoices['problems'] = [];
 		let last: { location?: string; cli?: string };
 		let launched: LaunchRequest[];
 		let selected: string[];
@@ -275,7 +277,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			return newAgent({
 				agents: { launch: request => { launched.push(request); return 'run-new'; }, list: () => runs, close: async run => { closed.push(run); return 'terminated'; } },
 				locations: { snapshot: () => catalog, refresh: async () => undefined, onDidChange: changed.event },
-				clis: { list: async location => { listed.push(location.id); if (choices instanceof Error) { throw choices; } return choices; } },
+				clis: { list: async location => { listed.push(location.id); if (choices instanceof Error) { throw choices; } return { clis: choices, problems }; } },
 				worktrees,
 				history: { last: () => last, remember: () => undefined },
 				select: run => selected.push(run),
@@ -470,11 +472,20 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const nothing = ui.current!.labels();
 			ui.current!.hide();
 			await done;
-			assert.deepStrictEqual([noFolder, noCli, nothing, ui.commands, launched], [
+			// A wrong facade.custom defines no CLI, so it is said by its setting, with the way to the settings (CLIS-3.4)
+			problems = [{ setting: 'facade.custom', problem: 'facade.custom must be an object of custom CLIs by ID; received array', said: { kind: 'custom_type', values: ['facade.custom', 'array'] } }];
+			done = start();
+			await settle();
+			const broken = [ui.current!.labels(), ui.current!.item('facade.custom').detail];
+			ui.current!.accept('facade.custom');
+			await done;
+			problems = [];
+			assert.deepStrictEqual([noFolder, noCli, nothing, broken, ui.commands, launched], [
 				['Open Folder...'],
 				[['Configure Agents...', 'Unavailable', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Configure Agents...'], 'Install a supported CLI in this environment, or configure its path.', 'facade.claude.path is "/opt/claude", which is not a program that can be run', [['Claude Code', 'gear: Configure Agents']]],
 				['Configure Agents...', 'Options', 'Change Working Location...', 'Change Name...'],
-				[['vscode.openFolder'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents']],
+				[['Configure Agents...', 'Unavailable', 'facade.custom', 'Options', 'Change Working Location...', 'Change Name...'], 'facade.custom must be an object of custom CLIs by ID; received array'],
+				[['vscode.openFolder'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents']],
 				[]
 			]);
 		});
@@ -1019,7 +1030,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`, locale: 'en'
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },

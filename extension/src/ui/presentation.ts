@@ -81,6 +81,32 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		// {0} is the program, {1} the setting
 		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point", a, b);
 		case 'yolo_type': return vscode.l10n.t("facade.yolo must be true or false; received {0}", a);
+		// {0} is the setting, facade.custom; {1} the type of value it holds, such as array
+		case 'custom_type': return vscode.l10n.t("{0} must be an object of custom CLIs by ID; received {1}", a, b);
+		// {0} is the setting, facade.custom; {1} the ID, quoted, such as ""
+		case 'custom_key': return vscode.l10n.t("{0}: {1} cannot be a CLI's ID, which must have a visible character and no control character; choose another ID for the custom CLI", a, b);
+		// {0} is a custom CLI's setting, such as facade.custom.claude; {1} its ID, quoted
+		case 'custom_builtin': return vscode.l10n.t("{0}: {1} is the ID of a built-in CLI; choose another ID for the custom CLI", a, b);
+		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} the type of value it holds, such as string; {2} an example definition
+		case 'custom_entry_type': return vscode.l10n.t("{0} must be an object such as {2}; received {1}", a, b, c);
+		// {0} is a custom CLI's setting, such as facade.custom.my-cli
+		case 'custom_capabilities': return vscode.l10n.t("{0}.capabilities is not a custom CLI setting: capabilities are what a shipped adapter proves, never configured. Remove it", a);
+		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} a field of it that is no setting
+		case 'custom_field': return vscode.l10n.t("{0}.{1} is not a custom CLI setting; a custom CLI accepts only path and launch", a, b);
+		// {0} is a custom CLI's setting, such as facade.custom.my-cli
+		case 'custom_path_missing': return vscode.l10n.t("{0}.path is missing; set it to the program to run", a);
+		case 'custom_path_empty': return vscode.l10n.t("{0}.path is empty or contains only whitespace; set it to the program to run", a);
+		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} the type of value it holds, such as array
+		case 'custom_launch_type': return vscode.l10n.t("{0}.launch must be an object with start, resume and environment; received {1}", a, b);
+		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} a field of its launch that is no setting
+		case 'custom_launch_field': return vscode.l10n.t("{0}.launch.{1} is not a custom launch setting; a custom launch accepts only start, resume and environment", a, b);
+		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} the placeholder, ${sessionId}
+		case 'custom_resume_missing': return vscode.l10n.t("{0}.launch.resume is required: the arguments that resume an exact conversation, containing {1}", a, b);
+		case 'custom_resume_placeholder': return vscode.l10n.t("{0}.launch.resume must contain {1}, the exact session ID it resumes", a, b);
+		// {0} is the setting, such as facade.custom.my-cli.launch.start; {1} the argument's place in it, from 0; {2} the placeholder, ${sessionId}
+		case 'custom_placeholder': return vscode.l10n.t("{0}[{1}] uses an unsupported placeholder; {2} in resume is the only placeholder a custom CLI's arguments can contain", a, b, c);
+		// {0} is the setting, such as facade.custom.my-cli.launch.start; {1} the argument's place in it, from 0; {2} the placeholder, ${sessionId}
+		case 'custom_start_session': return vscode.l10n.t("{0}[{1}] uses {2}, which only resume can contain: a new conversation has no session ID yet", a, b, c);
 		default: return otherwise;
 	}
 }

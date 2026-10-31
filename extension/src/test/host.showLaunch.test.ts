@@ -43,7 +43,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 	});
 
 	test('a location\'s document: each CLI as a start there would have it - its program, environment, arguments in order, YOLO, sandbox, approvals and trust', () => {
-		const text = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: false }, launches: [codex()], entries: [], now });
+		const text = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: false }, launches: [codex()], entries: [], problems: [], now });
 		assert.deepStrictEqual(text.split('\n'), [
 			...header,
 			'YOLO: off, from facade.yolo; it applies to agents started from now on',
@@ -69,7 +69,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 	});
 
 	test('a CLI turned off, misconfigured, not found or unable to start says why, and no plan or program is invented for it', () => {
-		const sections = (launch: LaunchDescription) => launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: { value: true }, launches: [launch], entries: [], now }).split('\n').slice(5);
+		const sections = (launch: LaunchDescription) => launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: { value: true }, launches: [launch], entries: [], problems: [], now }).split('\n').slice(5);
 		const off = sections(codex({ enabled: false, args: undefined, trust: undefined }));
 		const wrong = sections(codex({
 			problems: [{ text: 'facade.codex.launch.arguments must be an array of strings; received object', said: { kind: 'arguments_type', values: ['facade.codex.launch.arguments', 'object'] } }],
@@ -92,15 +92,42 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			],
 			'  Status: cannot start: codex.cmd runs through cmd.exe, which cannot be given facade.codex.launch.arguments[1] safely, as that argument contains "!"; set facade.codex.path to the CLI\'s own program or Node entry point'
 		]);
-		assert.strictEqual(launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: { value: true }, launches: [], entries: [], now }).split('\n')[1], 'Working location: /repo (SSH: build)');
+		assert.strictEqual(launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: { value: true }, launches: [], entries: [], problems: [], now }).split('\n')[1], 'Working location: /repo (SSH: build)');
+	});
+
+	test('a custom CLI\'s section says its YOLO is not applied and its sandbox, approvals and trust are its own; a wrong facade.custom is said at the top (CLIS-3.4)', () => {
+		const custom = codex({
+			cli: 'my-cli', displayName: 'my-cli', setting: 'facade.custom.my-cli',
+			program: { file: '/bin/my-cli', configured: 'my-cli', throughCmd: false },
+			args: ['--fast'], yolo: undefined, sandbox: { state: 'unknown' }, approvals: { state: 'unknown' }, trust: { kind: 'unknown' }
+		});
+		const text = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: true }, launches: [custom], entries: [], problems: [], now }).split('\n');
+		assert.deepStrictEqual(text.slice(5, 8).concat(text.slice(-6)), [
+			'my-cli (my-cli, facade.custom.my-cli)',
+			'  Status: available',
+			'  Executable: /bin/my-cli (from facade.custom.my-cli.path "my-cli")',
+			'    --fast',
+			'  YOLO: not applied; a custom CLI starts exactly as configured',
+			'  Sandbox: unknown; Facade does not read a custom CLI\'s configuration',
+			'  Approvals: unknown; Facade does not read a custom CLI\'s configuration',
+			'  Trust: none given by Facade; a custom CLI that asks about the folder asks in its terminal',
+			''
+		]);
+		const problems = [{ text: 'facade.custom must be an object of custom CLIs by ID; received array', said: { kind: 'custom_type', values: ['facade.custom', 'array'] } }];
+		const wrong = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: true }, launches: [], entries: [], problems, now }).split('\n');
+		assert.deepStrictEqual(wrong.slice(3, 6), [
+			'YOLO: on, from facade.yolo; it applies to agents started from now on',
+			'Configuration errors:',
+			'  - facade.custom must be an object of custom CLIs by ID; received array'
+		]);
 	});
 
 	test('a wrong facade.yolo shows no arguments and no YOLO, sandbox or approvals; without a folder, each CLI\'s settings and errors; a location since gone says so', () => {
 		const yolo = { problem: 'facade.yolo must be true or false; received "yes"', received: '"yes"' };
-		const wrongYolo = launchDocument({ location: { label: 'main', path: '/repo' }, yolo, launches: [codex()], entries: [], now }).split('\n');
+		const wrongYolo = launchDocument({ location: { label: 'main', path: '/repo' }, yolo, launches: [codex()], entries: [], problems: [], now }).split('\n');
 		const adapter = { id: 'codex', displayName: 'Codex', setting: 'facade.codex' };
 		const noFolder = launchDocument({
-			yolo: { value: true }, launches: [], now,
+			yolo: { value: true }, launches: [], problems: [], now,
 			entries: [
 				{ adapter, enabled: false, problems: [] },
 				{ adapter: { id: 'pi', displayName: 'Pi', setting: 'facade.pi' }, enabled: true, problems: [{ text: 'x', said: { kind: 'enabled_type', values: ['facade.pi', 'string'] } }] }
@@ -110,7 +137,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			wrongYolo[3],
 			wrongYolo.filter(line => /^ {2}(Arguments|YOLO|Sandbox|Approvals)/.test(line)),
 			noFolder.split('\n').slice(3),
-			launchDocument({ gone: 'shop · login-fix', yolo: { value: true }, launches: [], entries: [], now })
+			launchDocument({ gone: 'shop · login-fix', yolo: { value: true }, launches: [], entries: [], problems: [], now })
 		], [
 			'YOLO: facade.yolo must be true or false; received "yes". No agent starts until it is fixed.',
 			['  Arguments: not shown until facade.yolo is fixed'],

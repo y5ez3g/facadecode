@@ -66,10 +66,13 @@ language.
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
 | Corners/inset | 4 px rows/buttons, 2 px fields, 4 px list side inset |
 
-No contributed color palette. Status colors are not reused as avatar meanings. High contrast selection uses a dotted
-`contrastActiveBorder` outline, hover dashed, never over keyboard focus. Do not fade high-contrast text. Other secondary
-selection text can use 80% opacity only if contrast remains adequate. Whole-pixel layout at supported zoom; preserve
-diacritics/descenders. Paragraphs wrap, card lines ellipsize with full accessible text.
+No contributed color palette. Custom avatars use a stable hash of the normalized CLI name to choose one of the editor's
+`charts` colors, paired with contrast-tested foreground/background; in high contrast use `foreground` on
+`sideBar.background` with `contrastBorder` if the chosen pair fails. Status colors are not reused as avatar meanings.
+High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never over keyboard focus. Do not
+fade high-contrast text. Other secondary selection text can use 80% opacity only if contrast remains adequate.
+Whole-pixel layout at supported zoom; preserve diacritics/descenders. Paragraphs wrap, card lines ellipsize with full
+accessible text.
 
 ### 2.2 Motion and responsive layout
 
@@ -166,10 +169,11 @@ identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSel
 | `facade.<cli>.enabled` | boolean; true | machine in execution environment | CLIS-1.1 |
 | `facade.<cli>.path` | string; empty | machine in execution environment | CLIS-1.2 |
 | `facade.<cli>.launch` | object; `{}` | machine in execution environment | CLIS-3 |
+| `facade.custom` | object; `{}` | machine in execution environment | CLIS-3.4 |
 
 `<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. Settings sections in order: `Agents` (`facade.yolo`), then one section per built-in CLI in CLIS-1.1
-order. Read on use and apply live where RULES-4.4 allows. Do not add an “agent default CLI/model/worktree” setting.
-Local and remote values are clearly scoped in the editor.
+order, then `Custom Agents` (`facade.custom`). Read on use and apply live where RULES-4.4 allows. Do not add an “agent
+default CLI/model/worktree” setting. Local and remote values are clearly scoped in the editor.
 
 ### 4.2 Follow existing editor settings
 
@@ -233,6 +237,8 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-10-31: 2.1 gives custom CLIs their avatars' colors; 4.1 adds `facade.custom` in its own section, Custom Agents.
 
 - 2026-10-30: 3.1 adds Show Agent Launch (CLIS-4.1) and Show Agents Log (ARCHITECTURE-3.3), Command Palette
   commands (D83); 4.1 adds each built-in's `.enabled` and `.launch`; 1.1 points long operation diagnostics to Show

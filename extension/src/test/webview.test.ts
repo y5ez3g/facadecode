@@ -396,4 +396,45 @@ suite('The agent panel in Chromium', function () {
 		})()`);
 		assert.deepStrictEqual(seen, [[['/avatar-claude.png', '', 'true'], ['', '', 'true']], true, false, '/avatar-claude.png']);
 	});
+
+	test('a custom CLI\'s face is its initial on its theme colour, kept while it stays, on a fainter tint or the side bar\'s own colour where its letter would not read (PANEL-1.3, UX-2.1)', async () => {
+		/** The theme's colours, as VS Code sets them on the page's root: null removes one. */
+		const theme = (colors: { readonly [name: string]: string | null }) => evaluate(`(() => {
+			for (const [name, value] of Object.entries(${JSON.stringify(colors)})) {
+				value === null ? document.documentElement.style.removeProperty(name) : document.documentElement.style.setProperty(name, value);
+			}
+		})()`);
+		const grounds = () => evaluate(`[...document.querySelectorAll('.agent .face')].map(face => [face.classList.contains('faint') ? 'faint' : face.classList.contains('unreadable') ? 'plain' : 'tint', getComputedStyle(face).backgroundColor])`);
+		// Dark Modern, whose orange is VS Code's own, see-through: taken opaque, so that every circle is measured as it is drawn
+		await theme({ '--vscode-foreground': '#cccccc', '--vscode-sideBar-background': '#181818', '--vscode-charts-blue': '#3794ff', '--vscode-charts-orange': '#d186167e', '--vscode-charts-purple': '#b180d7' });
+		const seen = await evaluate(`(() => {
+			agents = [newCard(1, { avatar: { initial: 'M', color: 'blue' } }), newCard(2, { avatar: { initial: 'Q', color: 'purple' } }), newCard(3, { avatar: { initial: 'Z', color: 'purple' } })]; redraw({ revision: 2 });
+			const faces = [...document.querySelectorAll('.agent .face')];
+			const drawn = faces.map(face => [face.classList.contains('initial'), face.className.match(/on-\\w+/)[0], face.textContent, face.querySelector('img') === null, face.getAttribute('aria-hidden')]);
+			agents = [newCard(1, { avatar: { initial: 'M', color: 'blue' }, line: 'Another line' }), newCard(2, { avatar: { initial: 'Q', color: 'orange' } }), agents[2]]; redraw({ revision: 3 });
+			const after = [...document.querySelectorAll('.agent .face')];
+			return [drawn, after[0] === faces[0], after[1] === faces[1], after[1].className.match(/on-\\w+/)[0]];
+		})()`);
+		assert.deepStrictEqual(seen, [[[true, 'on-blue', 'M', true, 'true'], [true, 'on-purple', 'Q', true, 'true'], [true, 'on-purple', 'Z', true, 'true']], true, false, 'on-orange']);
+		const dark = await grounds();
+		assert.deepStrictEqual(dark.map((each: string[]) => each[0]), ['tint', 'tint', 'tint']);
+		assert.ok(dark.every((each: string[]) => !/rgba\(|\/ 0?\.\d/.test(each[1])), JSON.stringify(dark));
+		// Light+: no letter reads on the tint, each does on the fainter one
+		await theme({ '--vscode-foreground': '#616161', '--vscode-sideBar-background': '#f3f3f3', '--vscode-charts-blue': '#1a85ff', '--vscode-charts-orange': '#d18616', '--vscode-charts-purple': '#652d90' });
+		await wait(30);
+		const light = (await grounds()).map((each: string[]) => each[0]);
+		// A theme whose text reads best on the side bar itself; and one without a colour, which leaves that circle clear and untested
+		await theme({ '--vscode-foreground': '#5a7fb0', '--vscode-sideBar-background': '#ffffff', '--vscode-charts-purple': null });
+		await wait(30);
+		const poor = (await grounds()).map((each: string[]) => each[0]);
+		await theme({ '--vscode-foreground': '#cccccc', '--vscode-sideBar-background': '#181818', '--vscode-charts-purple': '#b180d7' });
+		await wait(30);
+		assert.deepStrictEqual([light, poor, (await grounds()).map((each: string[]) => each[0])], [['faint', 'faint', 'faint'], ['plain', 'plain', 'tint'], ['tint', 'tint', 'tint']]);
+		// An initial must be a letter and its colour one of the three: anything else is refused, as any malformed state is
+		for (const avatar of [{ initial: '', color: 'blue' }, { initial: 'M', color: 'red' }, { initial: 'M' }]) {
+			await evaluate('window.errors = []');
+			await deliver({ type: 'state', state: { revision: 9, loading: false, cards: [{ ...(await evaluate('newCard(1)')), avatar }], cardCount: 1, capabilities: { remote: false } } });
+			assert.strictEqual((await evaluate('window.errors')).length, 1, JSON.stringify(avatar));
+		}
+	});
 });

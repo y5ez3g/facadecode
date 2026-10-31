@@ -47,6 +47,12 @@
 	"config.pi.launch": "Erweitert: zusätzliche Befehlszeilenargumente und Umgebungsvariablen für Pi. **Agent-Startkonfiguration anzeigen** zeigt, womit jeder Agent gestartet wird.",
 	"config.launch.arguments": "Zusätzliche Befehlszeilenoptionen, unverändert und in dieser Reihenfolge an die CLI übergeben.",
 	"config.launch.environment": "Umgebungsvariablen für die CLI: Eine Zeichenfolge legt eine fest, `null` entfernt sie, und `${env:NAME}` in einem Wert liest die Umgebung des Editors.",
+	"config.custom.title": "Benutzerdefinierte Agenten",
+	"config.custom": "Ihre eigenen CLIs, nach ID, jede in einem eigenen Terminal gestartet: `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`. Eine ID darf nicht die einer integrierten CLI sein: `claude`, `codex`, `agy`, `muse`, `opencode` oder `pi`.",
+	"config.custom.path": "Das auszuführende Programm: ein Befehl im PATH oder ein Dateipfad. Erforderlich.",
+	"config.custom.launch": "Wie die CLI startet: `start` für eine neue Konversation, `resume` für eine gespeicherte und `environment` für ihre Umgebungsvariablen.",
+	"config.custom.launch.start": "Argumente für eine neue interaktive Konversation, die genau wie geschrieben übergeben werden.",
+	"config.custom.launch.resume": "Erforderlich: die Argumente, mit denen eine bestimmte gespeicherte Konversation fortgesetzt wird. `${sessionId}` wird durch ihre Sitzungs-ID ersetzt und muss enthalten sein.",
 	"windowDisplayName": "Facade Code-Fensterkomponente",
 	"windowDescription": "Fensteridentitäts- und Sitzungskontinuitätskoordinator für Facade Code."
 }

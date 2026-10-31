@@ -7,7 +7,7 @@
 // keeps only its scroll position, and reports what the person did (PANEL-3.1). It has no keys of its own: the pointer opens a card
 // and its menu, and the keyboard reaches agents through the Command Palette (UX-2.3); the page scrolls as any page does (PANEL-3.3).
 
-import { act, Browsing, Check, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
+import { act, Browsing, Check, contrastOf, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
 import { Card, PanelState } from './protocol';
 
 /** Defined by the build: true only in the integration suite's build, whose probe the shipped page compiles out (UX-3.2). */
@@ -33,9 +33,11 @@ let restoring = savedBrowsing();
 
 const DOTS: readonly unknown[] = ['working', 'idle', 'error'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
+const AVATAR_COLORS: readonly unknown[] = ['blue', 'orange', 'purple'];
 
 const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean, filterLocation: isBoolean, filterFolder: isBoolean, clearFilter: isBoolean });
-const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) });
+const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) })
+	|| isShaped(value, { initial: value => isString(value) && value !== '', color: value => AVATAR_COLORS.includes(value) });
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString,
 	location: value => isShaped(value, { label: isString, full: isString }, { folderPrefix: isString }),
@@ -137,12 +139,75 @@ function renderList(): void {
 	}
 	renderEmpty();
 	draw(state.cards);
+	// Only the letters just drawn: a redraw that keeps its faces measures nothing
+	checkInitials(untested.splice(0));
 	if (restoring) {
 		restoreBrowsing(restoring);
 		restoring = undefined;
 	}
 	rememberBrowsing();
 }
+
+/** How far apart a custom CLI's letter and its circle are to be: as far as WCAG asks of text (UX-2.1). */
+const READABLE = 4.5;
+
+/** The circles a custom CLI's letter can be on, strongest first: its tint, a fainter one, the side bar's own colour (UX-2.1). */
+const GROUNDS = ['', 'faint', 'unreadable'] as const;
+
+/** Faces with a letter drawn since the letters were last tested. */
+const untested: HTMLElement[] = [];
+
+/**
+ * Tests each custom CLI's letter of `faces` on its circle as the theme draws them now (UX-2.1): it goes on the strongest circle on
+ * which it reads as far as WCAG asks of text, else on the one it reads best on - the side bar's own colour only where that is better,
+ * as a theme may have its own text closer still. A colour the page cannot measure leaves the tint as it is.
+ */
+function checkInitials(faces: readonly HTMLElement[]): void {
+	if (!faces.length) {
+		return;
+	}
+	// All measured at once on each circle: three looks at the page's styles, not three for each face
+	const contrasts = GROUNDS.map(ground => {
+		faces.forEach(face => face.classList.remove('faint', 'unreadable'));
+		if (ground) {
+			faces.forEach(face => face.classList.add(ground));
+		}
+		return faces.map(face => {
+			const style = getComputedStyle(face);
+			return contrastOf(style.color, style.backgroundColor);
+		});
+	});
+	faces.forEach((face, i) => {
+		face.classList.remove('faint', 'unreadable');
+		const seen = contrasts.map(each => each[i]);
+		if (seen.some(each => each === undefined)) {
+			return;
+		}
+		const readable = seen.findIndex(each => each! >= READABLE);
+		const best = readable >= 0 ? readable : seen.indexOf(Math.max(...seen as number[]));
+		if (GROUNDS[best]) {
+			face.classList.add(GROUNDS[best]);
+		}
+	});
+}
+
+/** A card's face, a custom CLI's letter among those to test once it is on the page (UX-2.1). */
+function newFace(avatar: Card['avatar']): HTMLElement {
+	const element = face(avatar);
+	if (element.classList.contains('initial')) {
+		untested.push(element);
+	}
+	return element;
+}
+
+/** Tests every custom CLI's letter again: the theme changed. */
+function checkAllInitials(): void {
+	checkInitials([...list.querySelectorAll<HTMLElement>('.face.initial')]);
+}
+
+// The theme changed - VS Code sets its colours on the page's root and its kind on the body: the letters are tested again
+new MutationObserver(checkAllInitials).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+new MutationObserver(checkAllInitials).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
 /** The saved scroll position on the cards drawn from the host's state, kept within the list. */
 function restoreBrowsing(saved: Browsing): void {
@@ -300,7 +365,7 @@ function make(card: Card): Drawn {
 	element.setAttribute('role', 'option');
 	const avatar = el('span', 'avatar');
 	const dot = el('span', 'dot');
-	avatar.append(face(card.avatar), dot);
+	avatar.append(newFace(card.avatar), dot);
 	const body = el('span', 'body');
 	const top = el('span', 'line top');
 	const name = el('span', 'name');
@@ -329,7 +394,7 @@ function update(entry: Drawn, card: Card): void {
 	const look = lookOf(card.avatar);
 	if (look !== entry.look) {
 		entry.look = look;
-		entry.avatar.firstElementChild?.replaceWith(face(card.avatar));
+		entry.avatar.firstElementChild?.replaceWith(newFace(card.avatar));
 	}
 	const kind = card.dot === 'idle' ? 'not-working' : card.dot;
 	if (!entry.dot.classList.contains(kind) || entry.dot.title !== card.stateText) {

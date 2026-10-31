@@ -47,6 +47,12 @@
 	"config.pi.launch": "Gelişmiş: Pi için ek komut satırı bağımsız değişkenleri ve ortam değişkenleri. **Aracı Başlatma Yapılandırmasını Göster**, her aracının neyle başladığını gösterir.",
 	"config.launch.arguments": "Ek komut satırı seçenekleri; CLI'ye yazıldığı gibi ve bu sırayla iletilir.",
 	"config.launch.environment": "CLI için ortam değişkenleri: bir dize bir değişkeni ayarlar, `null` onu kaldırır ve bir değerdeki `${env:NAME}`, düzenleyicinin ortamını okur.",
+	"config.custom.title": "Özel Aracılar",
+	"config.custom": "Kimliğe göre kendi CLI'leriniz; her biri kendi terminalinde başlatılır: `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`. Kimlik, yerleşik bir kimlik olamaz: `claude`, `codex`, `agy`, `muse`, `opencode` veya `pi`.",
+	"config.custom.path": "Çalıştırılacak program: PATH üzerindeki bir komut veya bir dosya yolu. Gereklidir.",
+	"config.custom.launch": "CLI'nin nasıl başladığı: yeni bir konuşma için `start`, kayıtlı bir konuşma için `resume` ve ortam değişkenleri için `environment`.",
+	"config.custom.launch.start": "Yeni bir etkileşimli konuşma için, tam olarak yazıldığı gibi geçirilen bağımsız değişkenler.",
+	"config.custom.launch.resume": "Gerekli: kaydedilmiş belirli bir konuşmayı sürdüren bağımsız değişkenler. `${sessionId}`, oturum kimliğiyle değiştirilir ve bulunmalıdır.",
 	"windowDisplayName": "Facade Code Pencere Bileşeni",
 	"windowDescription": "Facade Code için pencere kimliği ve oturum sürekliliği koordinatörü."
 }

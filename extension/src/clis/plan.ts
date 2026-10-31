@@ -7,8 +7,9 @@
 // started; every prerequisite that can be checked is checked here, and a failure carries its actual reason.
 
 import { expanded, invocation } from './adapter';
-import { Catalog, CatalogEntry, entryOf } from './catalog';
+import { BUILT_IN_ADAPTERS, Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
+import { CUSTOM_SETTING } from './custom';
 import { composeEnvironment, Environment, EnvironmentMap, runEnvironment } from './environment';
 import { FoundExecutable, LaunchTarget, launchTarget, resolveExecutable, unsafeCharacterForCmd, unsafeForCmd } from './executable';
 import type { TrustTarget } from './trust';
@@ -37,12 +38,13 @@ export interface PlanInput {
 
 /**
  * How a launch trusts its folder (CLIS-3.3, D62): a native file entry, or an override already in its arguments - these, none for a
- * CLI that asks no trust question.
+ * CLI that asks no trust question; for a custom CLI, nothing Facade knows of: it starts as configured, and asks in its terminal
+ * where it asks (CLIS-3.4).
  */
 export type LaunchTrust = {
 	readonly kind: 'file';
 	readonly target: TrustTarget;
-} | { readonly kind: 'arguments'; readonly args: readonly string[] };
+} | { readonly kind: 'arguments'; readonly args: readonly string[] } | { readonly kind: 'unknown' };
 
 /** A launch as planned: the same facts as the core's LaunchPlan, kept as plain data here. */
 export interface PlannedLaunch {
@@ -95,8 +97,8 @@ export interface Discovered {
 }
 
 /**
- * The catalog for a destination folder, as new starts are offered it (CLIS-1.1): the enabled built-ins in their order, each found
- * with its own launch environment. A configuration problem is said in the person's language by its first (UX-2.4).
+ * The catalog for a destination folder, as new starts are offered it (CLIS-1.1): the enabled built-ins in their order, then the
+ * custom CLIs, each found with its own launch environment. A configuration problem is said in the person's language by its first (UX-2.4).
  */
 export function discover(catalog: Catalog, destination: DestinationEnvironment, cwd: string): readonly Discovered[] {
 	return catalog.entries.filter(entry => entry.enabled).map(entry => {
@@ -111,6 +113,15 @@ export function discover(catalog: Catalog, destination: DestinationEnvironment, 
 	});
 }
 
+/** How a launch of `entry` trusts its folder `cwd` (CLIS-3.3, 3.4), found where the run will look for it: with the environment `env` it starts with. */
+function trustOf(entry: CatalogEntry, cwd: string, env: Environment, platform: NodeJS.Platform, values: { readonly [name: string]: string }): LaunchTrust {
+	const { adapter } = entry;
+	if (entry.custom) {
+		return { kind: 'unknown' };
+	}
+	return adapter.trustTarget ? { kind: 'file', target: adapter.trustTarget(cwd, env, platform) } : { kind: 'arguments', args: expanded(adapter.groups.trust ?? [], values) };
+}
+
 /**
  * The launch of `input.cli` in `input.cwd` (CLIS-1.2, 1.3, 3.2, 4.2): its program found with the environment the run starts with, its
  * adapter's literal invocation - its run options and the YOLO mapping - and the run's variables. It writes nothing: a trust kept in a
@@ -120,8 +131,12 @@ export function discover(catalog: Catalog, destination: DestinationEnvironment, 
 export function planLaunch(catalog: Catalog, input: PlanInput, destination: DestinationEnvironment): PlannedLaunch {
 	const entry = entryOf(catalog, input.cli);
 	if (!entry) {
-		const ids = catalog.entries.map(each => each.adapter.id);
-		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.length > 1 ? `${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}` : ids.join('')}`, 'not_found');
+		// Where custom CLIs are configured with errors, those may be why: both are said (CLIS-3.4)
+		const ids = BUILT_IN_ADAPTERS.map(each => each.id);
+		const custom = catalog.problems.length
+			? `; custom CLIs are configured in ${CUSTOM_SETTING}, which has errors: ${catalog.problems.map(each => each.text).join('; ')}`
+			: `, and custom CLIs are configured in ${CUSTOM_SETTING}`;
+		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}${custom}`, 'not_found');
 	}
 	const { adapter } = entry;
 	// A turned-off CLI is not newly started; its runs go on (CLIS-1.1, RULES-4.4)
@@ -150,7 +165,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		// A configured argument is named by its place in the setting and its character, never quoted: it may be a secret (CLIS-4.1)
 		const configured = unsafe - (args.length - entry.extra.length);
 		if (unsafe >= 0 && configured >= 0) {
-			const setting = `${adapter.setting}.launch.arguments`;
+			const setting = entry.extraSetting;
 			const character = unsafeCharacterForCmd(args[unsafe])!;
 			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given ${setting}[${configured}] safely, as that argument contains ${character}; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
 				{ kind: 'cmd_unsafe_setting', values: [found.executable, setting, String(configured), character, adapter.setting] });
@@ -169,8 +184,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		args,
 		env: runEnv,
 		cwd: input.cwd,
-		// Its trust found where the run will look for it: with the environment it starts with (CLIS-1.2, 3.3)
-		trust: adapter.trustTarget ? { kind: 'file', target: adapter.trustTarget(input.cwd, runEnv, platform) } : { kind: 'arguments', args: expanded(adapter.groups.trust ?? [], values) },
+		trust: trustOf(entry, input.cwd, runEnv, platform, values),
 		...adapter.screenStatus ? { screenStatus: adapter.screenStatus } : {}
 	};
 }
