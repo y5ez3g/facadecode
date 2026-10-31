@@ -126,6 +126,7 @@
 	"A workspace folder is required to run agents.": "Aracıları çalıştırmak için bir çalışma alanı klasörü gereklidir.",
 	"Open a folder to continue": "Devam etmek için bir klasör açın",
 	"Could not start {0}: {1}.": "{0} başlatılamadı: {1}.",
+	"Reload Window": "Pencereyi Yeniden Yükle",
 	"Could not create worktree: {0}.": "Çalışma ağacı oluşturulamadı: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "{0} dalı ve {1} klasörü oluşturuldu ve korundu.",
 	"Branch {0} was created and kept.": "{0} dalı oluşturuldu ve korundu.",

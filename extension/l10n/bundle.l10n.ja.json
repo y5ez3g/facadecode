@@ -126,6 +126,7 @@
 	"A workspace folder is required to run agents.": "エージェントを実行するにはワークスペース フォルダーが必要です。",
 	"Open a folder to continue": "続行するにはフォルダーを開いてください",
 	"Could not start {0}: {1}.": "{0} を起動できませんでした: {1}。",
+	"Reload Window": "ウィンドウの再読み込み",
 	"Could not create worktree: {0}.": "作業ツリーを作成できませんでした: {0}。",
 	"Branch {0} and folder {1} were created and kept.": "ブランチ {0} とフォルダー {1} が作成され、保持されました。",
 	"Branch {0} was created and kept.": "ブランチ {0} が作成され、保持されました。",

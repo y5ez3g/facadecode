@@ -126,6 +126,7 @@
 	"A workspace folder is required to run agents.": "Un dossier d'espace de travail est requis pour exécuter des agents.",
 	"Open a folder to continue": "Ouvrez un dossier pour continuer",
 	"Could not start {0}: {1}.": "Impossible de démarrer {0} : {1}.",
+	"Reload Window": "Recharger la fenêtre",
 	"Could not create worktree: {0}.": "Impossible de créer l'arborescence de travail : {0}.",
 	"Branch {0} and folder {1} were created and kept.": "La branche {0} et le dossier {1} ont été créés et conservés.",
 	"Branch {0} was created and kept.": "La branche {0} a été créée et conservée.",

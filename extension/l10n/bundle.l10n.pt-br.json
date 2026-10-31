@@ -126,6 +126,7 @@
 	"A workspace folder is required to run agents.": "Uma pasta de espaço de trabalho é necessária para executar agentes.",
 	"Open a folder to continue": "Abra uma pasta para continuar",
 	"Could not start {0}: {1}.": "Não foi possível iniciar {0}: {1}.",
+	"Reload Window": "Recarregar a Janela",
 	"Could not create worktree: {0}.": "Não foi possível criar a árvore de trabalho: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "O branch {0} e a pasta {1} foram criados e mantidos.",
 	"Branch {0} was created and kept.": "O branch {0} foi criado e mantido.",

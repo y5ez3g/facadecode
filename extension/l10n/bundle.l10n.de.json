@@ -126,6 +126,7 @@
 	"A workspace folder is required to run agents.": "Ein Arbeitsbereichsordner ist erforderlich, um Agents auszuführen.",
 	"Open a folder to continue": "Öffnen Sie einen Ordner, um fortzufahren",
 	"Could not start {0}: {1}.": "{0} konnte nicht gestartet werden: {1}.",
+	"Reload Window": "Fenster neu laden",
 	"Could not create worktree: {0}.": "Worktree konnte nicht erstellt werden: {0}.",
 	"Branch {0} and folder {1} were created and kept.": "Branch {0} und Ordner {1} wurden erstellt und beibehalten.",
 	"Branch {0} was created and kept.": "Branch {0} wurde erstellt und beibehalten.",

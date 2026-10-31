@@ -126,6 +126,7 @@
 	"A workspace folder is required to run agents.": "執行 Agent 需要工作區資料夾。",
 	"Open a folder to continue": "開啟資料夾以繼續",
 	"Could not start {0}: {1}.": "無法啟動 {0}：{1}。",
+	"Reload Window": "重新載入視窗",
 	"Could not create worktree: {0}.": "無法建立工作樹：{0}。",
 	"Branch {0} and folder {1} were created and kept.": "分支 {0} 與資料夾 {1} 已建立並保留。",
 	"Branch {0} was created and kept.": "分支 {0} 已建立並保留。",
