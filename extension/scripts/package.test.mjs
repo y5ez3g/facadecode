@@ -40,6 +40,8 @@ test('the staged product has usable README links and preserves both product and 
 	const notices = fs.readFileSync(path.join(stage, 'ThirdPartyNotices.txt'), 'utf8');
 	assert.match(notices, /2015 - present Microsoft Corporation/);
 	assert.match(notices, /2026 - present Facade Code contributors/);
+	// node-pty's Windows build ships ConPTY's conpty.dll and OpenConsole.exe, whose notice is not in node-pty's own
+	assert.match(notices, /^ConPTY \(conpty\.dll and OpenConsole\.exe/m);
 	assert.doesNotMatch(notices, /^None$/m);
 });
 
@@ -61,6 +63,16 @@ test('production manifest and executable bundles exclude the integration command
 	assert.ok(!page.includes('FACADE_PROBE'), 'Test probe in the shipped page');
 	// The page's folder, the webview's one resource root in dist/, holds the page alone (PANEL-3.2)
 	assert.deepStrictEqual(fs.readdirSync(path.join(stage, 'dist', 'webview')).filter(file => !file.endsWith('.map')).sort(), ['webview.js']);
+});
+
+test('the staged product carries the font of New Agent\'s own icon and the Codicons notice it needs (PANEL-1.1)', () => {
+	const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
+	const { fontPath } = manifest.contributes.icons['facade-new-agent'].default;
+	// A WOFF of its own, beside the manifest
+	assert.equal(fs.readFileSync(path.join(stage, fontPath)).subarray(0, 4).toString('latin1'), 'wOFF');
+	const notices = fs.readFileSync(path.join(stage, 'ThirdPartyNotices.txt'), 'utf8');
+	assert.match(notices, /^@vscode\/codicons: the new-session icon \(media\/new-agent\.woff\)$/m);
+	assert.match(notices, /Creative Commons Attribution 4\.0 International Public License/);
 });
 
 test('the native backend starts a PTY after the extension is moved outside the repository', { timeout: 15000 }, async t => {

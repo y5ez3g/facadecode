@@ -8,7 +8,7 @@ import type { Catalog, Location, LocationPort, LogPort, WorkspaceFolderInfo } fr
 import type { PanelFilter } from '../../webview/protocol';
 import { locationLabel } from '../cardView';
 import { PanelModel } from '../model';
-import { agentCountText } from '../presentation';
+import { agentCountText, plainText } from '../presentation';
 import { folderIconOf, inStepOrder, locationIcon, locationsIn } from './location';
 import { BACK, Flow } from './stepping';
 
@@ -52,7 +52,7 @@ function stepOf(first: Item, rest: readonly Item[]): Item[] {
 }
 
 function locationItem(model: Model, location: Location, filter: PanelFilter): Item {
-	return { label: location.label, description: agentCountText(model.count(filter)), iconPath: locationIcon(location), filter };
+	return { label: plainText(location.label), description: agentCountText(model.count(filter)), iconPath: locationIcon(location), filter };
 }
 
 /**
@@ -65,7 +65,7 @@ function locationItem(model: Model, location: Location, filter: PanelFilter): It
 export function filterItems(model: Model, catalog: Catalog): Item[] {
 	const current = model.currentFilter();
 	const lost: Item[] = current?.kind === 'location' && !catalog.locations.some(location => location.id === current.id)
-		? [{ label: current.label, description: agentCountText(model.count(current)), iconPath: new vscode.ThemeIcon('worktree'), filter: current }]
+		? [{ label: plainText(current.label), description: agentCountText(model.count(current)), iconPath: new vscode.ThemeIcon('worktree'), filter: current }]
 		: [];
 	if (catalog.folders.length < 2) {
 		const folder = catalog.folders.at(0);
@@ -81,7 +81,7 @@ export function filterItems(model: Model, catalog: Catalog): Item[] {
 		}
 		const holdsFilter = current?.kind === 'location' && listed.some(each => each.filter.id === current.id) && locationsIn(catalog, folder).length > 1;
 		const does = listed.length > 1 || holdsFilter ? { folder } : { filter: whole };
-		return [{ label: folder.name, description: agentCountText(model.count(whole)), iconPath: folderIconOf(catalog, folder), ...does }];
+		return [{ label: plainText(folder.name), description: agentCountText(model.count(whole)), iconPath: folderIconOf(catalog, folder), ...does }];
 	});
 	return stepOf({ label: vscode.l10n.t("All Locations"), description: agentCountText(model.count(undefined)), iconPath: new vscode.ThemeIcon('list-flat'), filter: 'all' }, [...folders, ...lost]);
 }

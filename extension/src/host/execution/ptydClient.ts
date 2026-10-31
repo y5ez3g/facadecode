@@ -10,14 +10,17 @@ import * as os from 'os';
 import * as path from 'path';
 import { timeout } from '../../base/async';
 import { messageOf } from '../../base/errors';
-import { isPtydEvent, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent, RunInfo } from '../../ptyd/protocol';
+import type { OwnerClaim } from '../../base/ownership';
+import { EARLIER_PROTOCOLS, isPtydEvent, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent } from '../../ptyd/protocol';
 import { ensurePtydSocket } from '../../ptyd/socket';
 
 /** How long a window waits for a ptyd it started to listen. */
 const START_WAIT_MS = 5_000;
 
-/** How long a ptyd of another protocol has to answer when a window looks for runs it still holds. */
+/** How long a ptyd of an earlier protocol has to answer as a window joins it. */
 const EARLIER_WAIT_MS = 2_000;
+/** How often a window looks for ptyds of earlier protocols holding its runs, and lets go of those holding none any more. */
+const EARLIER_CHECK_MS = 60_000;
 
 /**
  * A request that was refused before a write was attempted: ptyd did nothing of it. Once a write is attempted, a transport error
@@ -27,6 +30,9 @@ export class PtydNotSent extends Error { }
 
 /** A request whose answer was lost as the connection to ptyd closed: ptyd may have carried it out, all of it or part. */
 export class PtydLost extends Error { }
+
+/** The ptyd of an earlier protocol holds none of the window's runs any more - it went, or they did: they ended with it. */
+export class PtydGone extends Error { }
 
 /**
  * The socket the ptyd of `protocol` listens on for the Facade data directory `home`: one ptyd per person, directory and protocol,
@@ -135,17 +141,39 @@ export class PtydClient {
 				throw new Error(`ptyd did not start: nothing listens on ${socketPath}. See ${logFile}.`);
 			}
 		}
-		const client = new PtydClient(socket);
+		return PtydClient.greeted(new PtydClient(socket), PTYD_PROTOCOL, START_WAIT_MS,
+			spoken => `The ptyd at ${socketPath} speaks protocol ${spoken}, and this window protocol ${PTYD_PROTOCOL}: its runs keep running, and this window cannot show them.`);
+	}
+
+	/**
+	 * Connects to the ptyd of the earlier protocol `protocol` at `socketPath`, which a window never starts: undefined where none is
+	 * there - no such name, or on POSIX a name nothing listens on. Rejects with PtydNotSent where one may be there but took no
+	 * connection in time, and where it does not answer in time, or as that protocol.
+	 */
+	static async join(socketPath: string, protocol: number): Promise<PtydClient | undefined> {
+		const reached = await reach(socketPath, EARLIER_WAIT_MS);
+		if (reached === 'none') {
+			return undefined;
+		}
+		if (reached === 'not now') {
+			throw new PtydNotSent(`The ptyd of protocol ${protocol} took no connection now.`);
+		}
+		return PtydClient.greeted(new PtydClient(reached), protocol, EARLIER_WAIT_MS,
+			spoken => `The ptyd at ${socketPath} for protocol ${protocol} speaks protocol ${spoken}: this window does not join it.`);
+	}
+
+	/** `client` once its ptyd said it speaks `protocol`, within `ms`; disposed and rejected, as `mismatch` says, otherwise. */
+	private static async greeted(client: PtydClient, protocol: number, ms: number, mismatch: (spoken: number) => string): Promise<PtydClient> {
 		let helloTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			const hello = await Promise.race([
-				client.request('hello', { protocol: PTYD_PROTOCOL }),
+				client.request('hello', { protocol }),
 				new Promise<never>((_, reject) => {
-					helloTimer = setTimeout(() => reject(new Error(`ptyd did not answer hello within ${START_WAIT_MS} ms.`)), START_WAIT_MS);
+					helloTimer = setTimeout(() => reject(new Error(`ptyd did not answer hello within ${ms} ms.`)), ms);
 				})
 			]);
-			if (hello.protocol !== PTYD_PROTOCOL) {
-				throw new Error(`The ptyd at ${socketPath} speaks protocol ${hello.protocol}, and this window protocol ${PTYD_PROTOCOL}: its runs keep running, and this window cannot show them.`);
+			if (hello.protocol !== protocol) {
+				throw new Error(mismatch(hello.protocol));
 			}
 		} catch (err) {
 			client.dispose();
@@ -208,66 +236,200 @@ export class PtydClient {
 	}
 }
 
-/**
- * The ptyds of earlier protocols for `home` that still hold live runs of `owner`, by protocol: reported plainly, never ended
- * (ARCHITECTURE-2.4) - this window cannot speak their protocol, so it does not show them.
- */
-export async function earlierRuns(home: string, owner: string): Promise<readonly { readonly protocol: number; readonly runs: number }[]> {
-	const found: { protocol: number; runs: number }[] = [];
-	for (let protocol = 1; protocol < PTYD_PROTOCOL; protocol++) {
-		let socket: net.Socket | undefined;
-		try {
-			socket = await connectTo(ptydSocketPath(home, protocol));
-		} catch {
-			continue;
-		}
-		if (!socket) {
-			continue;
-		}
-		try {
-			const ask = lineRequester(socket);
-			const runs = await Promise.race([
-				ask('list', { owner }) as Promise<readonly RunInfo[]>,
-				timeout(EARLIER_WAIT_MS).then(() => [] as RunInfo[])
-			]);
-			const live = Array.isArray(runs) ? runs.filter(run => !run.exited).length : 0;
-			if (live) {
-				found.push({ protocol, runs: live });
-			}
-		} catch {
-			// It went meanwhile, or does not answer as any protocol did: nothing to report
-		} finally {
-			socket.destroy();
-		}
-	}
-	return found;
+/** What a window hears of the ptyds of earlier protocols it joined. */
+export interface EarlierEvents {
+	readonly log: (line: string) => void;
+	/** The connection to the ptyd of `protocol` closed unasked: its runs are not heard until it is joined again. */
+	readonly lost: (protocol: number) => void;
+	/** The workspace went to a newer activation there. */
+	readonly ownerLost: () => void;
+	/** Whether the window has requests through the ptyd of `protocol` under way - closing a run - for which it is not let go. */
+	readonly busy?: (protocol: number) => boolean;
 }
 
-/** Asks on `socket` in JSON lines, as every protocol of ptyd has: each request answered by its number. */
-function lineRequester(socket: net.Socket): (method: string, params: object) => Promise<unknown> {
-	let nextId = 1;
-	const pending = new Map<number, { resolve(value: unknown): void; reject(err: Error): void }>();
-	socket.setEncoding('utf8');
-	socket.on('data', lineReader(line => {
-		try {
-			const message = JSON.parse(line) as Response;
-			const waiting = pending.get(message.id);
-			pending.delete(message.id);
-			if ('error' in message) {
-				waiting?.reject(new Error(message.error));
-			} else {
-				waiting?.resolve(message.result);
-			}
-		} catch {
-			// Not an answer: an event, or what cannot be read
+/**
+ * This window's connections to the ptyds of earlier released protocols that hold its runs (ARCHITECTURE-2.4): each joined in its
+ * own protocol and claimed with this window's claim, so that the window shows and operates their runs as its own - their cards,
+ * terminals, input and closing - and an update never ends them. They are looked for as the window connects, and every minute
+ * while one could not be joined; one none of whose runs of this window is left is let go. None is ever started, and one found
+ * gone - nothing listening, or none of this window's runs there - is not asked again, as every connection would put off the
+ * idle exit it waits for.
+ */
+export class EarlierPtyds {
+	private readonly held = new Map<number, PtydClient>();
+	/** Why a ptyd of an earlier protocol is not held, as its last search found: gone, or not joined now. */
+	private readonly unheld = new Map<number, PtydGone | PtydNotSent>();
+	private finding: Promise<void> | undefined;
+	private readonly timer: ReturnType<typeof setInterval>;
+	private disposed = false;
+
+	constructor(private readonly home: string, private readonly claim: OwnerClaim, private readonly events: EarlierEvents) {
+		this.timer = setInterval(() => void this.find().then(() => this.check()), EARLIER_CHECK_MS);
+		this.timer.unref?.();
+	}
+
+	/** The ptyds of earlier protocols this window holds, each with its protocol. */
+	get clients(): readonly (readonly [number, PtydClient])[] {
+		return [...this.held];
+	}
+
+	/** Joins each ptyd of an earlier protocol that holds runs of this window and is not held yet: once, whatever asks again. */
+	find(): Promise<void> {
+		this.finding ??= this.search().finally(() => this.finding = undefined);
+		return this.finding;
+	}
+
+	/**
+	 * The connection to the ptyd of the earlier protocol `protocol`: held, or joined again. Rejects with PtydGone where that ptyd holds
+	 * none of this window's runs any more, or nothing listens there - its runs ended with it - and with PtydNotSent where it could
+	 * not be joined now, to be tried again.
+	 */
+	async client(protocol: number): Promise<PtydClient> {
+		// A search under way may have passed it by, held then: one of its own follows
+		for (let searches = 0; searches < 2 && !this.held.has(protocol) && !(this.unheld.get(protocol) instanceof PtydGone); searches++) {
+			await this.find();
 		}
-	}, err => socket.destroy(err)));
-	socket.on('close', () => pending.forEach(waiting => waiting.reject(new Error('ptyd closed the connection.'))));
-	socket.on('error', () => socket.destroy());
-	return (method, params) => new Promise((resolve, reject) => {
-		const id = nextId++;
-		pending.set(id, { resolve, reject });
-		socket.write(JSON.stringify({ id, method, params }) + '\n');
+		const client = this.held.get(protocol);
+		if (!client) {
+			throw this.unheld.get(protocol) ?? new PtydNotSent(`The ptyd of protocol ${protocol} is not joined now.`);
+		}
+		return client;
+	}
+
+	/** Lets go of each held ptyd none of whose runs of this window is left - ended and forgotten - to exit once idle. */
+	async check(): Promise<void> {
+		for (const [protocol, client] of [...this.held]) {
+			if (this.events.busy?.(protocol)) {
+				continue;
+			}
+			let left: number;
+			try {
+				left = (await within(client.request('list', { owner: this.claim.owner }))).length;
+			} catch {
+				// Not answering now, or gone: asked again at the next check, and a closed connection says so itself
+				continue;
+			}
+			// Closing or forgetting a run may have started while the list was in flight.
+			if (!left && this.held.get(protocol) === client && !this.events.busy?.(protocol)) {
+				this.release(protocol);
+				this.unheld.set(protocol, new PtydGone(`None of this window's runs is left in the ptyd of protocol ${protocol}.`));
+				this.events.log(`The agents an earlier Facade Code started in a ptyd of protocol ${protocol} have ended: this window lets that ptyd go.`);
+			}
+		}
+	}
+
+	dispose(): void {
+		this.disposed = true;
+		clearInterval(this.timer);
+		for (const protocol of [...this.held.keys()]) {
+			this.release(protocol);
+		}
+	}
+
+	private async search(): Promise<void> {
+		for (const protocol of EARLIER_PROTOCOLS) {
+			if (this.disposed) {
+				return;
+			}
+			if (this.held.has(protocol) || this.unheld.get(protocol) instanceof PtydGone) {
+				continue;
+			}
+			try {
+				await this.join(protocol);
+				this.unheld.delete(protocol);
+			} catch (err) {
+				this.unheld.set(protocol, err instanceof PtydGone ? err : new PtydNotSent(`Could not join the ptyd of protocol ${protocol}: ${messageOf(err)}`));
+			}
+		}
+	}
+
+	/** Joins the ptyd of `protocol` and claims this window's runs there, where it holds any. */
+	private async join(protocol: number): Promise<void> {
+		const client = await PtydClient.join(ptydSocketPath(this.home, protocol), protocol);
+		if (!client) {
+			throw new PtydGone(`Nothing listens for a ptyd of protocol ${protocol}.`);
+		}
+		// Heard from the start: the workspace can go to a newer activation in the same answer as the claim
+		client.onDidLoseOwner(owner => {
+			if (owner === this.claim.owner) {
+				this.events.ownerLost();
+			}
+		});
+		let runs: number;
+		try {
+			runs = (await within(client.request('list', { owner: this.claim.owner }))).length;
+			if (!runs) {
+				throw new PtydGone(`The ptyd of protocol ${protocol} holds no run of this window.`);
+			}
+			await within(client.request('claim', this.claim));
+			if (this.disposed) {
+				throw new PtydNotSent('The window is closing.');
+			}
+		} catch (err) {
+			client.dispose();
+			if (/ownership was transferred or expired/.test(messageOf(err))) {
+				this.events.ownerLost();
+			}
+			throw err;
+		}
+		this.held.set(protocol, client);
+		client.onDidClose(() => {
+			if (this.held.get(protocol) === client) {
+				this.held.delete(protocol);
+				this.events.log(`The connection to the ptyd of protocol ${protocol} closed: its agents keep running, and this window joins it again.`);
+				this.events.lost(protocol);
+			}
+		});
+		this.events.log(`${runs} agents an earlier Facade Code started are in a ptyd of protocol ${protocol}: this window shows them and keeps them running until it closes.`);
+	}
+
+	private release(protocol: number): void {
+		const client = this.held.get(protocol);
+		this.held.delete(protocol);
+		client?.dispose();
+	}
+}
+
+/**
+ * The answer to a request, or a failure where it does not come within `ms`: what a window asks of a ptyd that may hang - one of an
+ * earlier protocol - never holds up its own runs.
+ */
+export function within<T>(answer: Promise<T>, ms = EARLIER_WAIT_MS): Promise<T> {
+	return Promise.race([answer, timeout(ms).then((): never => {
+		throw new Error(`ptyd did not answer within ${ms} ms.`);
+	})]);
+}
+
+/**
+ * A connection to `socketPath` within `ms`: 'none' where no ptyd is there - no such name, or on POSIX a name nothing listens on,
+ * its ptyd gone - and 'not now' where one may be but took no connection: another failure, or one slower than `ms`, as a busy
+ * Windows pipe is.
+ */
+function reach(socketPath: string, ms: number): Promise<net.Socket | 'none' | 'not now'> {
+	ensurePtydSocket(socketPath);
+	return new Promise(resolve => {
+		const socket = net.connect(socketPath);
+		let settled = false;
+		const settle = (reached: net.Socket | 'none' | 'not now') => {
+			if (!settled) {
+				settled = true;
+				clearTimeout(timer);
+				resolve(reached);
+			}
+		};
+		const timer = setTimeout(() => {
+			socket.destroy();
+			settle('not now');
+		}, ms);
+		const failed = (err: NodeJS.ErrnoException) => {
+			socket.destroy();
+			settle(err.code === 'ENOENT' || (process.platform !== 'win32' && err.code === 'ECONNREFUSED') ? 'none' : 'not now');
+		};
+		socket.once('error', failed);
+		socket.once('connect', () => {
+			socket.off('error', failed);
+			settle(socket);
+		});
 	});
 }
 

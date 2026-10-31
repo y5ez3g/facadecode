@@ -54,5 +54,6 @@
 	"config.custom.launch.start": "Yeni bir etkileşimli konuşma için, tam olarak yazıldığı gibi geçirilen bağımsız değişkenler.",
 	"config.custom.launch.resume": "Gerekli: kaydedilmiş belirli bir konuşmayı sürdüren bağımsız değişkenler. `${sessionId}`, oturum kimliğiyle değiştirilir ve bulunmalıdır.",
 	"windowDisplayName": "Facade Code Pencere Bileşeni",
-	"windowDescription": "Facade Code için pencere kimliği ve oturum sürekliliği koordinatörü."
+	"windowDescription": "Facade Code için pencere kimliği ve oturum sürekliliği koordinatörü.",
+	"icon.newAgent": "Yeni Aracı simgesi"
 }

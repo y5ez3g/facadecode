@@ -100,6 +100,9 @@ rejected several of them. Their old implementation/tests must follow the current
 | D82 | Owner-decided 2026-10-31, after trying the filter: Filter by Working Location steps by folder. Its first step lists All Locations, then the folders; a folder whose cards are in two or more locations opens its own step, All Worktrees then its locations; a window of one folder shows its folder's step alone (All Locations first outside Git). One separator follows each step's first item. This replaces Facade Dots' one grouped list | PANEL-2.3 |
 | D83 | Owner-decided 2026-10-31, after trying them: Show Agent Launch and Show Agents Log are commands only, in the Command Palette; the view's `…` menu does not list them, as Facade Dots' did | PANEL-1.1, UX-3.1 |
 | D84 | Owner-decided 2026-10-31, after the filter's steps: Show Agent Launch chooses its location in steps by folder - the folders, one with two or more locations opening a step of them; a window of one folder lists its locations - offering locations alone, main checkout first and with no separator, rather than one list grouped by folder | CLIS-4.1 |
+| D85 | Owner-decided 2026-10-31, after VS Code 1.105 - the declared minimum - showed New Agent's title button with no icon, its codicons having no `new-session` before 1.111: New Agent shows Facade's own copy of that glyph, shipped with the extension, in every editor. Using the editor's own where it has one would take a second New Agent command, listed beside the first in Keyboard Shortcuts. Neither the minimum version nor the icon's look changes | PANEL-1.1 |
+| D86 | Owner-decided 2026-10-31, after the night verification found that agents still running in 0.0.1's ptyd (protocol 8) were only kept alive, unseen, by a window updated to protocol 9: every agent Facade started stays shown in its window's panel and editor, whatever the reason, red where it is in error. As Orca keeps every released daemon protocol attachable, a build speaks each earlier released protocol and operates each run through the ptyd that holds it. A lost or damaged window identity record (ARCHITECTURE-2.2) stays the exception: refusing is safer there than guessing whose agents they are | RULES-4.1, ARCHITECTURE-2.4 |
+| D87 | Owner-decided 2026-10-31, after the night verification found the panel scrolling natively - about twice a list's step a wheel turn on Windows, gliding, its list settings unread - though R7 had kept the full contract: the wheel is VS Code's own list code, ported, so that it scrolls exactly as a list does; the scrollbar stays the page's, in VS Code's colors. An overlay scrollbar that hides and fades as VS Code's does would have to be drawn by Facade, a change of its own | PANEL-3.3 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -149,8 +152,8 @@ owners and verification scenarios; they are not evidence that the implementation
 | Webview actions | Accepted: retain generation isolation, stable targets and current-state validation; do not mandate expected revisions or correlation IDs on every action | PANEL-3.1 |
 | Rule ownership and assignments | Accepted: replace repeated status/theme/update rules with references; keep engineering safeguards and make temporary reviewer/implementer assignments follow current user instructions | UX, PANEL, ARCHITECTURE-5.3, VERIFICATION-4.1 |
 
-The earlier R7 decision still protects the complete PANEL-3.3 scrolling contract. No new settings,
-capability-registration framework or general argument parser is introduced by this follow-up.
+The earlier R7 decision still protects the PANEL-3.3 scrolling contract, whose scrollbar D87 later left to the page. No
+new settings, capability-registration framework or general argument parser is introduced by this follow-up.
 
 ## Evidence and open engineering gates
 
@@ -167,6 +170,9 @@ full spec revision; it does not authorize publication or unrelated source change
 
 ## Change log
 
+- 2026-10-31: Recorded the owner's decision on the panel's wheel and scrollbar (D87).
+- 2026-10-31: Recorded the owner's rule that every started agent stays shown, every released ptyd protocol spoken (D86).
+- 2026-10-31: Recorded the owner's decision on New Agent's icon in an editor without `new-session` (D85).
 - 2026-10-31: Recorded the owner's choice of Show Agent Launch's location in steps by folder (D84).
 
 - 2026-10-31: Recorded the owner's choice of Filter by Working Location in steps by folder (D82).

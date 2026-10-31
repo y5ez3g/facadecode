@@ -224,5 +224,12 @@
 	"{0}[{1}] uses {2}, which only resume can contain: a new conversation has no session ID yet": "{0}[{1}] 使用了 {2}，但只有 resume 可以包含它: 新對話還沒有工作階段 ID",
 	"1 agent": "1 個 Agent",
 	"{0} agents": "{0} 個 Agent",
-	"Configure Agents": "設定 Agent"
+	"Configure Agents": "設定 Agent",
+	"Disconnected; exit cause unknown": "中斷連線（結束原因未知）",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "無法刪除工作樹「{0}」：工作樹「{1}」位於其中。請先刪除或移走該工作樹，然後重試。",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "無法刪除工作樹「{0}」：無法確認其中 agent 的處理程序已結束。請在其結束後重試。",
+	"Reload Window": "重新載入視窗",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "此視窗的 Facade Code 記錄已損毀，無法在此還原其 Agent。請關閉此視窗並重新開啟其資料夾或工作區，或重新啟動 {0}。",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} 透過 cmd.exe 執行，而 cmd.exe 無法在 UNC 資料夾 {1} 中執行；請將 {2}.path 設定為 CLI 自身的程式或 Node 進入點",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} 是 Node 指令碼，但 PATH 上沒有可執行它的 Node"
 }

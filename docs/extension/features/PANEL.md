@@ -19,7 +19,8 @@ Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facad
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
 card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), New Agent
-(`new-session`), so New Agent is rightmost. The view's native `Views and More Actions...` (`…`) menu holds
+(Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
+The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
 Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log are Command Palette entries, not view-menu items (D83). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
@@ -173,19 +174,21 @@ nodes survive ordinary text changes; initial draw/filter changes do not animate.
 
 ### 3.3 Scrolling
 
-**Scrolling follows VS Code's list settings and remains usable by wheel, trackpad, scrollbar and keyboard.**
+**A wheel scrolls the list as VS Code's own lists scroll; the scrollbar is the page's, in VS Code's colors.**
 
-Respect `mouseWheelScrollSensitivity` (default 1), `fastScrollSensitivity` (default 5 with Alt), `smoothScrolling`,
-`scrollByPage`, and zoom. Wheel baseline 50 px per line; normalize Chromium wheel delta/120, else line delta, else
-pixel delta/40; round away from zero to whole pixels. Predominantly horizontal movement does not scroll vertically;
-Ctrl-wheel is left to the editor. No overscroll/page scroll at list ends. Trackpad movement tracks fingers; mouse-wheel
-smoothing is 125 ms cubic ease-out only when enabled, canceled by keyboard/drag. Wheel/trackpad classification is an
-implementation adapter verified against current VS Code behavior, not guessed from one event.
+The wheel follows VS Code's list code, ported, not imitated: `workbench.list.mouseWheelScrollSensitivity` (default 1),
+`fastScrollSensitivity` (default 5, with Alt), `smoothScrolling` and the window's zoom. Wheel baseline 50 px per line;
+normalize Chromium wheel delta/120, else line delta, else pixel delta/40; round away from zero to whole pixels.
+Predominantly horizontal movement does not scroll vertically, and off macOS Shift turns vertical movement horizontal, as
+in VS Code's lists. Ctrl-wheel is left to the editor; the list takes every other wheel, so nothing scrolls past its ends.
+Mouse-wheel smoothing is 125 ms cubic ease-out, only when enabled and only for what VS Code's classifier takes for a
+physical mouse wheel; the keyboard or any other scroll ends it where it is, and reduced motion removes it. The classifier
+undoes the zoom `window.zoomLevel` says, the only one a page is told: a window zoomed alone (`window.zoomPerWindow`) can
+have a mouse wheel's scroll taken for a touchpad's, and not glide.
 
-Overlay scrollbar: 8 px at right, 4 px top/bottom inset, minimum thumb 20 px, 4 px corners, theme scrollbarSlider colors.
-Show on hover/scroll, fade in 100 ms; after 500 ms without activity fade out 800 ms. No bar when content fits. Click
-centers and begins drag unless scrollByPage is enabled, when it moves a viewport toward the click. Reduced motion
-removes fades/glides. Keyboard Page Up/Down moves fully visible row count minus one (minimum one).
+The scrollbar is the page's own (D87): 10 px in the theme's scrollbarSlider colors over no track, its dragging and track
+clicks the browser's, so `scrollByPage` does not apply. Keyboard Page Up/Down moves fully visible row count minus one
+(minimum one).
 
 ## Checks
 
@@ -199,6 +202,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
+- 2026-10-31: 3.3's wheel is VS Code's list code, ported, and its scrollbar the page's own (D87).
+- 2026-10-31: 1.1's New Agent shows Facade's own copy of `new-session`, which VS Code before 1.111 does not have (D85).
 - 2026-10-31: 2.3's Filter by Working Location steps by folder; All Locations and All Worktrees replace All
   Agents (D82).
 

@@ -5,8 +5,9 @@
 import * as path from 'path';
 import { messageOf } from '../../base/errors';
 import type { OwnerClaim } from '../../base/ownership';
+import { PTYD_PROTOCOL } from '../../ptyd/protocol';
 import { nextOwnerClaim } from '../../record/ownership';
-import { earlierRuns, PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
+import { EarlierPtyds, PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
 
 /** Cadence for checking live processes and retrying recovery (UX-5.2). */
 export const RECONCILE_MS = 2_000;
@@ -17,7 +18,10 @@ interface SessionOptions {
 	readonly home: string;
 	readonly ptydScript: string;
 	readonly log: (line: string) => void;
-	readonly connectionLost: () => void;
+	/** The connection to the ptyd of `protocol` - this window's own, or an earlier one's - was lost. */
+	readonly connectionLost: (protocol: number) => void;
+	/** Whether requests through the ptyd of the earlier protocol `protocol` are under way, for which it is not let go. */
+	readonly busy?: (protocol: number) => boolean;
 	readonly transferred: () => void;
 	readonly reconnect: () => Promise<void>;
 	readonly reconcile: () => Promise<void>;
@@ -31,11 +35,16 @@ export class ExecutionSession {
 	private disposed = false;
 	private transferredAway = false;
 	private readonly claim: OwnerClaim;
+	/** This window's connections to the ptyds of earlier protocols that hold its agents: shown as its own, never ended by an update. */
+	private readonly earlier: EarlierPtyds;
 	private readonly reconcileTimer: ReturnType<typeof setInterval>;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(private readonly options: SessionOptions) {
 		this.claim = options.claim ?? nextOwnerClaim(options.owner, options.home);
+		this.earlier = new EarlierPtyds(options.home, this.claim, {
+			log: options.log, lost: protocol => this.lose(protocol), ownerLost: () => this.transfer(), ...options.busy ? { busy: options.busy } : {}
+		});
 		this.reconcileTimer = setInterval(() => void options.reconcile(), RECONCILE_MS);
 		this.reconcileTimer.unref?.();
 	}
@@ -45,10 +54,30 @@ export class ExecutionSession {
 	get current(): Promise<PtydClient> | undefined { return this.connection; }
 	get needsRecovery(): boolean { return this.lost; }
 
-	/** The connection to ptyd, made where there is none: a lost one is replaced and this window's runs claimed again. */
-	client(): Promise<PtydClient> {
+	/** The ptyds of earlier protocols this window holds now, each with its protocol. */
+	get earlierHeld(): readonly (readonly [number, PtydClient])[] {
+		return this.closed ? [] : this.earlier.clients;
+	}
+
+	/** The ptyds of earlier protocols that hold this window's runs, each with its protocol: looked for first (ARCHITECTURE-2.4). */
+	async earlierClients(): Promise<readonly (readonly [number, PtydClient])[]> {
+		if (this.closed) {
+			return [];
+		}
+		await this.earlier.find();
+		return this.earlier.clients;
+	}
+
+	/**
+	 * The connection to the ptyd of `protocol`, made where there is none: this window's own, a lost one replaced and this window's
+	 * runs claimed again; or that of an earlier protocol, joined again where it was lost (ARCHITECTURE-2.4).
+	 */
+	client(protocol = PTYD_PROTOCOL): Promise<PtydClient> {
 		if (this.closed) {
 			return Promise.reject(new PtydNotSent('The window is closing.'));
+		}
+		if (protocol !== PTYD_PROTOCOL) {
+			return this.earlier.client(protocol);
 		}
 		if (!this.connection) {
 			const socket = ptydSocketPath(this.options.home);
@@ -73,20 +102,10 @@ export class ExecutionSession {
 					if (this.connection === connection) {
 						this.connection = undefined;
 						this.options.log('The connection to ptyd closed: agents keep running, and this window claims them again.');
-						if (!this.closed) {
-							this.lost = true;
-							this.options.connectionLost();
-							clearTimeout(this.reconnectTimer);
-							this.reconnectTimer = setTimeout(() => void this.options.reconnect(), 1_000);
-							this.reconnectTimer.unref?.();
-						}
+						this.lose(PTYD_PROTOCOL);
 					}
 				});
-				void earlierRuns(this.options.home, this.options.owner).then(found => {
-					for (const { protocol, runs } of found) {
-						this.options.log(`${runs} agent processes started by an earlier Facade Code still run in a ptyd of protocol ${protocol}; this window cannot show them, and they were not ended.`);
-					}
-				}, () => undefined);
+				void this.earlier.find();
 			}, err => {
 				if (this.connection === connection) {
 					this.connection = undefined;
@@ -97,12 +116,25 @@ export class ExecutionSession {
 		return this.connection;
 	}
 
+	/** The connection to the ptyd of `protocol` is lost: its runs are told so, and claimed again soon (RULES-3.1, 4.1). */
+	private lose(protocol: number): void {
+		if (this.closed) {
+			return;
+		}
+		this.lost = true;
+		this.options.connectionLost(protocol);
+		clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = setTimeout(() => void this.options.reconnect(), 1_000);
+		this.reconnectTimer.unref?.();
+	}
+
 	private transfer(): void {
 		if (this.transferredAway) {
 			return;
 		}
 		this.transferredAway = true;
 		this.lost = false;
+		this.earlier.dispose();
 		clearInterval(this.reconcileTimer);
 		clearTimeout(this.reconnectTimer);
 		this.options.transferred();
@@ -114,8 +146,12 @@ export class ExecutionSession {
 		return this.reclaiming;
 	}
 
+	/**
+	 * Connects and claims again, whether or not runs are shown: ptyd ends an absent owner's runs, and its claim, five minutes after
+	 * the window went (D75), and this window is still here. A failed connection keeps the loss, tried again by the next check.
+	 */
 	private async restore(hasRuns: boolean, restore: (client: PtydClient) => Promise<boolean>): Promise<void> {
-		if (!hasRuns || this.closed) {
+		if (this.closed) {
 			this.lost = false;
 			return;
 		}
@@ -129,7 +165,7 @@ export class ExecutionSession {
 			return;
 		}
 		this.lost = false;
-		if (!await restore(client) && !this.closed) {
+		if (hasRuns && !await restore(client) && !this.closed) {
 			this.lost = true;
 		}
 	}
@@ -139,6 +175,7 @@ export class ExecutionSession {
 			return;
 		}
 		this.disposed = true;
+		this.earlier.dispose();
 		clearInterval(this.reconcileTimer);
 		clearTimeout(this.reconnectTimer);
 		void this.connection?.then(client => client.dispose(), () => undefined);

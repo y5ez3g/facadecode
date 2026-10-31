@@ -109,7 +109,9 @@ The local window component keeps a random handover identity in its own directory
 It neither parses the URI nor reads editor storage internals. On the verified desktop editor, that directory remains the
 same for this native window across these transitions and differs for a separate window, including one opening a copied
 workspace. This lifecycle is a platform evidence requirement, not a guarantee inferred from the API's name. Removal or
-replacement of that directory cannot justify a folder-based search for another window's identity.
+replacement of that directory cannot justify a folder-based search for another window's identity. A record gone is
+replaced by a new identity unnoticed; a damaged one is not replaced: Facade does not start in that window and says to close
+it and open its folder again, or restart the editor - not to reload, which reads the same record (D86).
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
 component rejects a request from a different session. Each activation records its key and folders under that identity in
@@ -193,7 +195,12 @@ exhaustion fails the requesting operation; there is no product cap of 100 agents
 that disables an otherwise usable session.
 
 Existing processes are not killed just because an extension/protocol is updated. Compatible reconnect preserves their
-actual identity. New starts use current settings/protocol. Upgrade/reload behavior must be verified with in-flight work.
+actual identity. A build speaks every earlier protocol a released build used, and drops none: a window joins each such
+ptyd that holds runs of its workspace - never starting one - claims them there, and shows and operates them through it as
+its own: cards, terminals, input, resizing, closing and ends (RULES-4.1, D86). A run whose earlier-protocol ptyd is gone
+ended with it, how is not known. A request a later protocol added goes to no earlier ptyd. Once none of the window's runs
+is left in such a ptyd the window lets it go, to exit once idle. New starts use current settings/protocol, in the window's
+own ptyd. Upgrade/reload behavior must be verified with in-flight work.
 
 ## 3 Data and safety
 
@@ -269,7 +276,7 @@ never rewritten by staging. This keeps repository setup instructions out of the 
 
 ### 4.2 No compatibility migration
 
-**The Facade Code extension has never been released, so it does not migrate earlier development settings, command IDs or stored state.**
+**Earlier development settings, command IDs and stored state are not migrated; released runtime protocols remain supported under 2.4.**
 
 Earlier development settings and stored workspace state are not read into the current catalog, and earlier command
 IDs get no aliases; this includes the Facade Dots development builds' `facadeDots.*` and `facade.agents.*` settings
@@ -368,6 +375,14 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-10-31: 4.2 distinguishes unreleased development data from released runtime protocols, removing the stale
+  claim that the extension has never been released.
+
+- 2026-10-31: 2.4: a build speaks every earlier released protocol and shows and operates the runs such a ptyd holds through
+  it (D86), where a window only held them unseen before.
+- 2026-10-31: 2.2 says what a damaged window identity record does: Facade does not start there and says what helps.
+- 2026-10-31: 2.4 says how runs held by an earlier protocol's ptyd survive an update: the night verification found they
+  ended five minutes after the reload, as no window claimed them there.
 - 2026-10-30: 3.3 opens the agents log as Show Agents Log, a read-only document.
 
 - 2026-10-30: Workspace storage keeps the panel's filter (PANEL-2.3); a filter stored by an earlier build is ignored.

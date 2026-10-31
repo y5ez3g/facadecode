@@ -54,5 +54,6 @@
 	"config.custom.launch.start": "用于新交互式对话的参数，按所写内容原样传递。",
 	"config.custom.launch.resume": "必填: 用于恢复某个确切的已保存对话的参数。`${sessionId}` 会被替换为其会话 ID，且必须出现。",
 	"windowDisplayName": "Facade Code 窗口组件",
-	"windowDescription": "Facade Code 的窗口身份与会话连续性协调组件。"
+	"windowDescription": "Facade Code 的窗口身份与会话连续性协调组件。",
+	"icon.newAgent": "新建 Agent 图标"
 }

@@ -11,7 +11,7 @@
 	"Close Agent": "Zamknij agenta",
 	"Close Agents": "Zamknij agentów",
 	"Close {0}?": "Zamknąć {0}?",
-	"Close {0} agents?": "Zamknąć {0} agentów?",
+	"Close {0} agents?": "Zamknąć agentów ({0})?",
 	"Its process will end. Cancel keeps it running and opens its terminal again.": "Jego proces zostanie zakończony. Anulowanie pozwoli na kontynuację jego działania i ponowne otwarcie terminala.",
 	"Their processes will end. Cancel keeps them running and opens their terminals again.": "Ich procesy zostaną zakończone. Anulowanie pozwoli na kontynuację ich działania i ponowne otwarcie ich terminali.",
 	"Show": "Pokaż",
@@ -224,5 +224,12 @@
 	"{0}[{1}] uses {2}, which only resume can contain: a new conversation has no session ID yet": "{0}[{1}] używa {2}, który może występować tylko w resume: nowa rozmowa nie ma jeszcze identyfikatora sesji",
 	"1 agent": "1 agent",
 	"{0} agents": "Agenci: {0}",
-	"Configure Agents": "Konfiguruj agentów"
+	"Configure Agents": "Konfiguruj agentów",
+	"Disconnected; exit cause unknown": "Rozłączono; przyczyna zakończenia nieznana",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "Nie można usunąć drzewa roboczego „{0}”: wewnątrz znajduje się drzewo robocze „{1}”. Najpierw usuń lub przenieś to drzewo robocze, a następnie spróbuj ponownie.",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "Nie można usunąć drzewa roboczego „{0}”: nie udało się potwierdzić, że proces agenta w nim się zakończył. Spróbuj ponownie, gdy się zakończy.",
+	"Reload Window": "Załaduj ponownie okno",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "Zapis Facade Code tego okna jest uszkodzony, więc nie można tu przywrócić jego agentów. Zamknij to okno i otwórz ponownie jego folder lub obszar roboczy albo uruchom ponownie {0}.",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} działa za pośrednictwem cmd.exe, który nie może działać w folderze UNC {1}; ustaw {2}.path na własny program CLI lub punkt wejścia Node",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} jest skryptem Node, a w PATH nie ma Node, który mógłby go uruchomić"
 }

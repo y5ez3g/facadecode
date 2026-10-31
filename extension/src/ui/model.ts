@@ -2,6 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
 import type { CardMenu, PanelFilter, PanelState } from '../webview/protocol';
 import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel } from './cardView';
@@ -211,7 +212,9 @@ export class PanelModel implements Disposable {
 		const folderPrefix = location ? folderPrefixOf(location, catalog) : undefined;
 		const qualified = location ? locationLabel(location, catalog) : label;
 		const environment = facts.environment !== 'local' ? this.deps.environmentLabel?.(facts.environment) ?? facts.environment : undefined;
-		const full = [qualified, environment, location?.path ?? facts.cwd].filter(Boolean).join(' · ');
+		// A fact a line (PANEL-1.5, D74): where it works, then its folder - the home folder as ~, not on Windows - which the editor's
+		// tooltip then never breaks mid-line
+		const full = `${[qualified, environment].filter(Boolean).join(' · ')}\n${homeRelative(location?.path ?? facts.cwd)}`;
 		return { label, ...(folderPrefix ? { folderPrefix } : {}), qualified, full };
 	}
 

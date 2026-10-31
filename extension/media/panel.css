@@ -82,6 +82,16 @@ html {
 
 /* The card a menu was opened on, framed while the menu is up as VS Code's lists frame it; over the dotted edge of the agent chosen,
    in a high contrast theme. A card is never a Tab stop, so no other frame is the keyboard's (UX-2.3). */
+/* The keyboard's card, outlined as VS Code's focused list row where the keys put it there, never by the pointer's click (UX-2.3) */
+#list .item:focus {
+	outline: none;
+}
+
+#list .item:focus-visible {
+	outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
+	outline-offset: -1px;
+}
+
 body.vscode-context-menu-visible #list .item.menu-target {
 	outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
 	outline-offset: -1px;

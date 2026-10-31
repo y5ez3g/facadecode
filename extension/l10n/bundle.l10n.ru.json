@@ -11,7 +11,7 @@
 	"Close Agent": "Закрыть агента",
 	"Close Agents": "Закрыть агентов",
 	"Close {0}?": "Закрыть {0}?",
-	"Close {0} agents?": "Закрыть {0} агентов?",
+	"Close {0} agents?": "Закрыть агентов ({0})?",
 	"Its process will end. Cancel keeps it running and opens its terminal again.": "Его процесс будет завершен. Отмена сохранит его выполнение и снова откроет его терминал.",
 	"Their processes will end. Cancel keeps them running and opens their terminals again.": "Их процессы будут завершены. Отмена сохранит их выполнение и снова откроет их терминалы.",
 	"Show": "Показать",
@@ -224,5 +224,12 @@
 	"{0}[{1}] uses {2}, which only resume can contain: a new conversation has no session ID yet": "{0}[{1}] использует {2}, который может присутствовать только в resume: у новой беседы еще нет идентификатора сеанса",
 	"1 agent": "1 агент",
 	"{0} agents": "Агентов: {0}",
-	"Configure Agents": "Настроить агентов"
+	"Configure Agents": "Настроить агентов",
+	"Disconnected; exit cause unknown": "Отключен; причина завершения неизвестна",
+	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "Не удалось удалить рабочее дерево \"{0}\": внутри него находится рабочее дерево \"{1}\". Сначала удалите или переместите это рабочее дерево и повторите попытку.",
+	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "Не удалось удалить рабочее дерево \"{0}\": не удалось подтвердить, что процесс агента в нем завершился. Повторите попытку, когда он завершится.",
+	"Reload Window": "Перезагрузить окно",
+	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "Запись Facade Code для этого окна повреждена, поэтому его агенты нельзя восстановить здесь. Закройте это окно и снова откройте его папку или рабочую область либо перезапустите {0}.",
+	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} запускается через cmd.exe, который не может работать в папке UNC {1}; задайте в {2}.path собственную программу CLI или точку входа Node",
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} — это скрипт Node, но в PATH нет Node для его запуска"
 }

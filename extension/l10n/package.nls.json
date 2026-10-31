@@ -54,5 +54,6 @@
 	"config.custom.launch.start": "Arguments for a new interactive conversation, passed exactly as written.",
 	"config.custom.launch.resume": "Required: the arguments that resume an exact saved conversation. `${sessionId}` is replaced by its session ID and must appear.",
 	"windowDisplayName": "Facade Code Window Component",
-	"windowDescription": "Window identity and session continuity coordinator for Facade Code."
+	"windowDescription": "Window identity and session continuity coordinator for Facade Code.",
+	"icon.newAgent": "New Agent icon"
 }

@@ -142,6 +142,12 @@ export function fileIn(dir: string, relative: string): string | undefined {
  * is run as that program. Anything else stays as it is, marked `throughCmd`.
  */
 export function launchTarget(file: string, platform: NodeJS.Platform = process.platform, env: Environment = process.env, cwd: string = process.cwd()): LaunchTarget {
+	if (isNodeScript(file, platform)) {
+		// A Node entry point, such as a package's cli.js: run with the Node on the PATH of a launch in `cwd`, as Windows cannot
+		// run a script itself; where there is none, it stays as it is, for the plan to refuse
+		const node = nodeOnPath(env, platform, cwd);
+		return node ? { executable: node, args: [file], throughCmd: false } : { executable: file, args: [], throughCmd: false };
+	}
 	if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(file)) {
 		return { executable: file, args: [], throughCmd: false };
 	}
@@ -170,6 +176,11 @@ export function launchTarget(file: string, platform: NodeJS.Platform = process.p
 		return { executable: program, args: [], throughCmd: false };
 	}
 	return { executable: file, args: [], throughCmd: true };
+}
+
+/** Whether `file` is a Node script Windows cannot run itself: elsewhere one marked executable runs by its `#!` line. */
+export function isNodeScript(file: string, platform: NodeJS.Platform): boolean {
+	return platform === 'win32' && /\.[cm]?js$/i.test(file);
 }
 
 /** Whether `arg` could not go through cmd.exe as it is (`throughCmd`). */

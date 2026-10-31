@@ -298,10 +298,11 @@ export interface WorktreePort {
 	create(plan: WorktreePlan, stillWanted: () => boolean): Promise<Location>;
 	/**
 	 * Deletes a linked worktree that no workspace folder is in (WORKTREES-3.2, D73): refused with nothing touched where Git lists a
-	 * change that is not committed or an untracked file; otherwise `closeAgents` - the agents launched there closed, their processes
-	 * ended - then `git worktree remove` without `--force`. Its branch is kept.
+	 * change that is not committed or an untracked file, or another worktree is inside it; otherwise `closeAgents` - the agents
+	 * launched there closed, true once all their processes are known to have ended - then a second check and `git worktree remove`
+	 * without `--force`. Its branch is kept.
 	 */
-	remove(id: LocationId, closeAgents: () => Promise<void>): Promise<void>;
+	remove(id: LocationId, closeAgents: () => Promise<boolean>): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------

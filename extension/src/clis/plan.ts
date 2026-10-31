@@ -11,7 +11,7 @@ import { BUILT_IN_ADAPTERS, Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
 import { CUSTOM_SETTING } from './custom';
 import { composeEnvironment, Environment, EnvironmentMap, runEnvironment } from './environment';
-import { FoundExecutable, LaunchTarget, launchTarget, resolveExecutable, unsafeCharacterForCmd, unsafeForCmd } from './executable';
+import { FoundExecutable, LaunchTarget, isNodeScript, launchTarget, resolveExecutable, unsafeCharacterForCmd, unsafeForCmd } from './executable';
 import type { TrustTarget } from './trust';
 
 /** The destination environment's own layers (CLIS-1.2), read where the launch will run. */
@@ -155,7 +155,18 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	const target = targetOf(entry, found.executable, env, platform, input.cwd);
 	const values = adapter.values({ yolo: input.yolo, cwd: input.cwd, platform });
 	const args = [...target.args, ...invocation(adapter.groups, entry.extra, { yolo: input.yolo }, values)];
+	if (isNodeScript(target.executable, platform)) {
+		// A Node entry point - what a refusal below advises - that no Node on the PATH can run: Windows cannot run it itself
+		throw new CliPlanError(`${target.executable} is a Node script, and Node is not on the PATH to run it`, 'not_found',
+			{ kind: 'node_missing', values: [target.executable] });
+	}
 	if (target.throughCmd) {
+		// cmd.exe starts in no UNC folder - a network share's, a WSL distribution's \\wsl$ one - but in the Windows directory,
+		// where the CLI would run with the run's permissions: refused before anything starts
+		if (/^[\\/]{2}/.test(input.cwd)) {
+			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot run in the UNC folder ${input.cwd}; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unc_folder', values: [found.executable, input.cwd, adapter.setting] });
+		}
 		// The program's own path reaches cmd.exe too, quoted only where it holds a space
 		if (unsafeForCmd(target.executable)) {
 			throw new CliPlanError(`${target.executable} runs through cmd.exe, which cannot be given its path safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',

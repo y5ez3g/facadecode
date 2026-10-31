@@ -9,7 +9,7 @@ import { invalid } from '../../core/errors';
 import { worktreeCreationEffects } from '../../core/locations/problems';
 import { Agents, Catalog, HumanPort, Location, LocationPort, LogPort, WorkspaceFolderInfo, WorktreeError, WorktreePlan, WorktreePort } from '../../core/ports';
 import { COMMANDS, PANEL_VIEW } from '../catalog';
-import { worktreeFailureText } from '../presentation';
+import { plainText, worktreeFailureText } from '../presentation';
 import { askWorktreeRef, chooseFolder, copyPathAction, worktreeBaseLabel, worktreeProblemText } from '../pickers/location';
 import { BACK, Flow } from '../pickers/stepping';
 
@@ -146,7 +146,8 @@ async function choosePlan(deps: WorktreeCommandDeps): Promise<WorktreePlan | und
 		} else if (step === 'branch') {
 			// Back to the folder step where there is one
 			const several = deps.locations.snapshot().folders.length > 1;
-			const answer = await askWorktreeRef(flow, deps.worktrees, source!, { title, kind: 'branch', value: branch, base, back: several });
+			// Back keeps the branch typed, to be there again (UX-1.1)
+			const answer = await askWorktreeRef(flow, deps.worktrees, source!, { title, kind: 'branch', value: branch, base, back: several, typed: value => { branch = value; } });
 			if (answer === undefined) {
 				return undefined;
 			}
@@ -191,8 +192,8 @@ async function confirm(flow: Flow, title: string, plan: WorktreePlan, source: Lo
 	const base = worktreeBaseLabel(plan, source, explicitBase);
 	const items: ConfirmItem[] = [
 		// {0} the branch, {1} its base, {2} the base's commit
-		{ label: vscode.l10n.t("Create Worktree"), description: plan.destination, detail: vscode.l10n.t("Branch {0} · Base: {1} ({2})", plan.branch, base, plan.baseCommit.slice(0, 12)), iconPath: new vscode.ThemeIcon('add'), does: 'create' },
-		{ label: vscode.l10n.t("Change Base..."), description: base, detail: vscode.l10n.t("Commit, branch, or tag to start from"), iconPath: new vscode.ThemeIcon('git-commit'), does: 'base' }
+		{ label: vscode.l10n.t("Create Worktree"), description: plainText(plan.destination), detail: plainText(vscode.l10n.t("Branch {0} · Base: {1} ({2})", plan.branch, base, plan.baseCommit.slice(0, 12))), iconPath: new vscode.ThemeIcon('add'), does: 'create' },
+		{ label: vscode.l10n.t("Change Base..."), description: plainText(base), detail: vscode.l10n.t("Commit, branch, or tag to start from"), iconPath: new vscode.ThemeIcon('git-commit'), does: 'base' }
 	];
 	const picked = await flow.pick({ title, placeholder: vscode.l10n.t("Confirm worktree details or change base"), items, active: items[0], back: true, actions: [copyPathAction(plan.destination)] });
 	return picked === undefined || picked === BACK ? picked : picked.item.does;

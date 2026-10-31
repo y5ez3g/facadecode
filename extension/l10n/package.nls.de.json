@@ -54,5 +54,6 @@
 	"config.custom.launch.start": "Argumente für eine neue interaktive Konversation, die genau wie geschrieben übergeben werden.",
 	"config.custom.launch.resume": "Erforderlich: die Argumente, mit denen eine bestimmte gespeicherte Konversation fortgesetzt wird. `${sessionId}` wird durch ihre Sitzungs-ID ersetzt und muss enthalten sein.",
 	"windowDisplayName": "Facade Code-Fensterkomponente",
-	"windowDescription": "Fensteridentitäts- und Sitzungskontinuitätskoordinator für Facade Code."
+	"windowDescription": "Fensteridentitäts- und Sitzungskontinuitätskoordinator für Facade Code.",
+	"icon.newAgent": "Symbol „Neuer Agent“"
 }

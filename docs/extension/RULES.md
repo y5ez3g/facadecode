@@ -110,6 +110,12 @@ termination and uncertain remote cleanup remain distinct facts in the operation 
 policy, not proof that a person closed the window: no other timer ends a process, and true close detection remains a
 platform proof obligation.
 
+Until a person closes it or it ends normally, every agent a window started stays shown: its card in the window's panel and
+its terminal in the editor, across a reload, an extension host restart, an update and a lost connection alike. Where Facade
+cannot reach its process or tell its state, the card is red and says why (3.2); Facade never leaves it out (D86). A window
+whose own identity record is gone or damaged cannot tell its agents from another window's (ARCHITECTURE-2.2) and is the
+exception.
+
 ### 4.3 Permissions remain explicit
 
 **Every launch reads the destination execution environment's current `facade.yolo` setting (default true) when the launch is accepted and keeps that value for the run.**
@@ -157,13 +163,14 @@ accumulated-operation counter may permanently disable an otherwise usable enviro
 | 1.8 | Errors to initiator in the related window only; no popup for an ended or idle agent |
 | 2.2, 2.4 | Unique run IDs, remote paths, folder/worktree removal |
 | 3.1–3.4 | Unknown red, idle yellow, exits, errors to initiator, no routine notices or attention queue |
-| 4.1, 4.3–4.4 | Immediate close, reload/disconnect, current-setting YOLO on every launch, unchanged live runs |
+| 4.1, 4.3–4.4 | Immediate close, reload/disconnect/update keeping every started agent shown - red where unreachable - current-setting YOLO on every launch, unchanged live runs |
 | 5.1–5.3 | Invalid requests, simple cancellation/capacity |
 
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
 ## Change log
 
+- 2026-10-31: 4.1 keeps every agent a window started shown, red where Facade cannot reach it or tell its state (D86).
 - 2026-10-30: 4.4 refers to CLIS-1.1's `.enabled`, now part of the extension.
 
 - 2026-10-30: 3.2's startup lasts until the CLI first shows its activity, within CLIS-2.3's bound (D81).

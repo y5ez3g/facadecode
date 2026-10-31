@@ -50,7 +50,8 @@ suite('Execution session: ownership and recovery across asynchronous boundaries'
 		nextClaim = undefined;
 		reconnects = reconciles = transfers = 0;
 		const { ExecutionSession: Session } = withModules({ './ptydClient': {
-			PtydNotSent, ptydSocketPath: () => '/test/socket', earlierRuns: async () => [],
+			PtydNotSent, ptydSocketPath: () => '/test/socket',
+			EarlierPtyds: class { readonly clients = []; find() { return Promise.resolve(); } client() { return Promise.reject(new PtydNotSent('none')); } dispose() { return undefined; } },
 			PtydClient: { connect: async () => {
 				const peer = new Peer();
 				peer.claimWait = nextClaim;

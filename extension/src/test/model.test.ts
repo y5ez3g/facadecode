@@ -14,7 +14,7 @@ const WORDS: CardWords = {
 	worktreeFailure: reason => reason,
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', working: 'Working', notWorking: 'Idle', error: reason => `Error: ${reason}`,
 	activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
-	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, window: label => `Window: ${label}`, locale: 'en'
+	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: label => `Window: ${label}`, locale: 'en'
 };
 
 const SHOP: WorkspaceFolderInfo = { index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' };
@@ -348,8 +348,8 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		locations.changed.fire();
 		await tick();
 		assert.deepStrictEqual([multi, model.state().cards[0].location], [
-			{ label: 'login-fix', folderPrefix: 'shop', full: 'shop · login-fix · /login-fix' },
-			{ label: 'login-fix', full: 'login-fix · /login-fix' }
+			{ label: 'login-fix', folderPrefix: 'shop', full: 'shop · login-fix\n/login-fix' },
+			{ label: 'login-fix', full: 'login-fix\n/login-fix' }
 		]);
 	});
 
@@ -361,7 +361,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(2, { location: MAIN.id, cwd: MAIN.path }));
 		await tick();
 		assert.deepStrictEqual(model.state().cards.map(card => card.location), [
-			{ label: 'main', folderPrefix: 'shop', full: 'shop · main · /main' }, { label: 'docs', full: 'docs · /docs' }
+			{ label: 'main', folderPrefix: 'shop', full: 'shop · main\n/main' }, { label: 'docs', full: 'docs\n/docs' }
 		]);
 	});
 
@@ -376,7 +376,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([before, model.state().cards.map(card => card.name), model.state().cards[0].location.full, model.state().capabilities], [
 			['Lead'],
 			['Chief'],
-			'shop · main · /main · Window: shop',
+			'shop · main\n/main\nWindow: shop',
 			{ remote: false }
 		]);
 	});

@@ -53,6 +53,22 @@ suite('Git reads: discovery in disposable repositories (WORKTREES-1.1, 1.2, 4.2;
 		assert.strictEqual(await checkoutOf('git', path.join(temp.dir, 'bare.git')), undefined);
 	});
 
+	test('Git before 2.31, which says --path-format back as a revision\'s flag, gives the same checkout: its directories are from the folder asked in', async function () {
+		// A script stands in for Git only where the system runs one by itself
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		const older = path.join(temp.dir, 'older-git');
+		const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+		// As Git 2.30 answers: the unknown option said back first, then each directory as Git finds it from where it runs
+		fs.writeFileSync(older, `#!/bin/sh\nfor arg; do shift; if [ "$arg" = "--path-format=absolute" ]; then echo "$arg"; else set -- "$@" "$arg"; fi; done\nexec "${real}" "$@"\n`, { mode: 0o755 });
+		git(repo, 'worktree', 'add', '-q', '-b', 'feat', path.join(temp.dir, 'repo.worktrees', 'feat'));
+		for (const folder of [repo, path.join(repo, 'packages', 'app'), path.join(temp.dir, 'repo.worktrees', 'feat')]) {
+			assert.deepStrictEqual(await checkoutOf(older, folder), await checkoutOf('git', folder), folder);
+		}
+		assert.strictEqual(await checkoutOf(older, temp.dir), undefined);
+	});
+
 	test('a checkout\'s root is written as the folder was opened - through a link too - with the shared Git directory of its repository', async () => {
 		const link = path.join(temp.dir, 'link');
 		// A junction on Windows, which needs no administrator; a link elsewhere

@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { homeRelative } from '../../base/files';
 import { messageOf } from '../../base/errors';
 import type { Catalog, Location, LocationPort, LogPort, WorkspaceFolderInfo } from '../../core/ports';
+import { plainText } from '../presentation';
 import { folderIconOf, inStepOrder, locationIcon, locationsIn } from './location';
 import { BACK, Flow } from './stepping';
 
@@ -21,7 +22,7 @@ function keyOf(item: Item): string | undefined {
 
 /** A location by its label, its path from the home folder beside it - searched too. */
 function locationItem(location: Location): Item {
-	return { label: location.label, description: homeRelative(location.path), iconPath: locationIcon(location), location };
+	return { label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location };
 }
 
 /** The locations of `folder`, main checkout first, then the folder's opened location (WORKTREES-1.2). */
@@ -43,7 +44,7 @@ function firstItems(catalog: Catalog): Item[] {
 		if (!here.length) {
 			return [];
 		}
-		return [{ label: folder.name, description: homeRelative(path.dirname(folder.path)), iconPath: folderIconOf(catalog, folder), folder, ...here.length === 1 ? { location: here[0] } : {} }];
+		return [{ label: plainText(folder.name), description: plainText(homeRelative(path.dirname(folder.path))), iconPath: folderIconOf(catalog, folder), folder, ...here.length === 1 ? { location: here[0] } : {} }];
 	});
 }
 

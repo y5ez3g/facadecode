@@ -6,10 +6,24 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { isJsonObject, JsonObject } from '../base/json';
 import type { LogPort } from '../core/ports';
-import type { Act, Outcome, PanelState, Strings } from '../webview/protocol';
+import type { Act, Outcome, PanelState, Scrolling, Strings } from '../webview/protocol';
 import { CONTEXT, PANEL_VIEW } from './catalog';
 import { PanelModel } from './model';
 import { agentCountText } from './presentation';
+
+/**
+ * What the page's wheel follows (PANEL-3.3): the list settings VS Code's own lists scroll by, its defaults where a value is not a
+ * number, and the window's zoom.
+ */
+export function scrollingOf(configuration: { get(section: string): unknown }): Scrolling {
+	const number = (value: unknown, otherwise: number) => typeof value === 'number' && Number.isFinite(value) ? value : otherwise;
+	return {
+		sensitivity: number(configuration.get('workbench.list.mouseWheelScrollSensitivity'), 1),
+		fastSensitivity: number(configuration.get('workbench.list.fastScrollSensitivity'), 5),
+		smooth: configuration.get('workbench.list.smoothScrolling') === true,
+		zoomFactor: Math.pow(1.2, number(configuration.get('window.zoomLevel'), 0))
+	};
+}
 
 /** Defined by the build: true only in the integration suite's build (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
@@ -28,7 +42,9 @@ const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
 	clearFilter: { target: false },
-	openFolder: { target: false }
+	openFolder: { target: false },
+	// F2 on a card: the host opens the Input Box and validates the name (D38)
+	rename: { target: true }
 };
 
 /**
@@ -89,7 +105,11 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 	private progressing = false;
 
 	constructor(private readonly extensionUri: vscode.Uri, private readonly model: PanelModel, private readonly actions: PanelActions, private readonly log: LogPort) {
-		this.disposables.push(model.onDidChange(state => this.publish(state)));
+		this.disposables.push(model.onDidChange(state => this.publish(state)), vscode.workspace.onDidChangeConfiguration(change => {
+			if (change.affectsConfiguration('workbench.list') || change.affectsConfiguration('window.zoomLevel')) {
+				this.postScrolling();
+			}
+		}));
 		this.sayContext(model.state());
 		this.showLoading();
 	}
@@ -172,6 +192,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		if (message.type === 'ready') {
 			this.page = message.page;
 			this.post(this.model.state());
+			this.postScrolling();
 			this.waiting.splice(0).forEach(then => then());
 			return;
 		}
@@ -214,6 +235,13 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 	private post(state: PanelState): void {
 		if (this.view && this.page !== undefined) {
 			void this.view.webview.postMessage({ type: 'state', page: this.page, state });
+		}
+	}
+
+	/** Says the page shown the list settings its wheel follows, as it is ready and as they change (PANEL-3.1, 3.3). */
+	private postScrolling(): void {
+		if (this.view && this.page !== undefined) {
+			void this.view.webview.postMessage({ type: 'scrolling', page: this.page, scrolling: scrollingOf(vscode.workspace.getConfiguration()) });
 		}
 	}
 

@@ -154,7 +154,8 @@ export class PtydServer {
 	private readonly owners: OwnerClaims<Connection>;
 	private closing = false;
 
-	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock) {
+	/** `speaks` is the protocol it answers hello with: its own, or for a test the earlier one it stands for. */
+	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock, private readonly speaks = PTYD_PROTOCOL) {
 		this.owners = new OwnerClaims((owner, previous) => {
 			for (const run of this.claimedBy(previous).filter(run => run.params.owner === owner)) {
 				this.claims.delete(run);
@@ -294,7 +295,7 @@ export class PtydServer {
 		};
 		switch (request.method) {
 			case 'hello':
-				return { protocol: PTYD_PROTOCOL, pid: process.pid };
+				return { protocol: this.speaks, pid: process.pid };
 			case 'claim':
 				this.owners.claim(params as Requests['claim']['params'], connection);
 				return undefined;

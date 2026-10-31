@@ -25,6 +25,8 @@ export interface CardWords {
 	/** `Exited with code {0}` and `Terminated by signal {0}`: an abnormal exit, as Facade says it (RULES-3.3). */
 	readonly exitedWithCode: (code: string) => string;
 	readonly endedBySignal: (signal: string) => string;
+	/** `Disconnected; exit cause unknown`: a run its supervisor no longer had, how it ended not known (LIFECYCLE-3.5). */
+	readonly exitUnknown: string;
 	/** `Window: {0}`, {0} the window's name: where the hover says the agent is (PANEL-1.5). */
 	readonly window: (label: string) => string;
 	/** The person's language, as a custom CLI's initial is uppercased in it (UX-2.1). */
@@ -108,6 +110,7 @@ function errorReasonOf(facts: RunFacts, words: CardWords): string {
 		if (facts.end.code !== undefined) {
 			return words.exitedWithCode(String(facts.end.code));
 		}
+		return words.exitUnknown;
 	}
 	const reason = facts.error?.reason.trim() || words.activityUnavailable;
 	return facts.error?.worktree ? words.worktreeFailure(reason, facts.error.worktree) : reason;
@@ -173,19 +176,21 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const { place, words } = input;
 	const status = statusOf(facts, words);
 	const tooltip = [
-		`${facts.name} · ${facts.alias} · ${facts.displayName}`,
+		// An empty name is left out, not said as an empty part (LIFECYCLE-2.1)
+		[facts.name, facts.alias, facts.displayName].filter(Boolean).join(' · '),
 		...facts.title ? [facts.title] : [],
 		status.stateText,
 		...status.reason && status.reason !== facts.title ? [status.reason] : []
 	];
-	const label = [facts.name, facts.alias, status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].join(', ');
+	const label = [facts.name, facts.alias, status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
 	const avatar = avatarOf(facts.cli, facts.displayName, words.locale);
 	return {
 		runId: facts.id,
 		selected: input.selected,
 		name: facts.name,
+		alias: facts.alias,
 		...(avatar ? { avatar } : {}),
-		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: input.window ? `${place.full} · ${words.window(input.window)}` : place.full },
+		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: input.window ? `${place.full}\n${words.window(input.window)}` : place.full },
 		dot: status.dot,
 		stateText: status.stateText,
 		line: status.line,

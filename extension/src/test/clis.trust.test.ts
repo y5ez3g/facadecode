@@ -52,6 +52,8 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.deepStrictEqual(targetOf('claude', cwd, env), { file: path.join(home, '.claude.json'), keys: ['projects', cwd, 'hasTrustDialogAccepted'], entry: { value: true }, folder: cwd });
 		const config = path.join(temp.dir, 'claude-config');
 		assert.strictEqual(targetOf('claude', cwd, { ...env, CLAUDE_CONFIG_DIR: config }).file, path.join(config, '.claude.json'));
+		// A relative one is from the folder Claude Code starts in, as it reads it there - not the editor's own folder
+		assert.strictEqual(targetOf('claude', cwd, { ...env, CLAUDE_CONFIG_DIR: 'local-claude' }).file, path.join(cwd, 'local-claude', '.claude.json'));
 		assert.strictEqual(claudeConfigFile({ ...env, CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://login.example' }, 'darwin'), path.join(home, '.claude-custom-oauth.json'));
 		assert.strictEqual(claudeConfigFile({ USERPROFILE: home }, 'win32'), path.join(home, '.claude.json'));
 		// An older version's file counts where it holds something, or where it is empty, may be written and the current one is not there

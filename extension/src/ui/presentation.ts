@@ -80,6 +80,10 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'cmd_unsafe_setting': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given {1}[{2}] safely, as that argument contains {3}; set {4}.path to the CLI's own program or Node entry point", a, b, c, d, e);
 		// {0} is the program, {1} the setting
 		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point", a, b);
+		// {0} is the program, {1} the folder - a network share's or a WSL distribution's, starting with \\ - {2} the setting
+		case 'cmd_unc_folder': return vscode.l10n.t("{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point", a, b, c);
+		// {0} is the script, such as a package's cli.js
+		case 'node_missing': return vscode.l10n.t("{0} is a Node script, and Node is not on the PATH to run it", a);
 		case 'yolo_type': return vscode.l10n.t("facade.yolo must be true or false; received {0}", a);
 		// {0} is the setting, facade.custom; {1} the type of value it holds, such as array
 		case 'custom_type': return vscode.l10n.t("{0} must be an object of custom CLIs by ID; received {1}", a, b);
@@ -109,6 +113,14 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'custom_start_session': return vscode.l10n.t("{0}[{1}] uses {2}, which only resume can contain: a new conversation has no session ID yet", a, b, c);
 		default: return otherwise;
 	}
+}
+
+/**
+ * `text` as a picker's row or an input box's message shows it, word for word: the editor draws `$(name)` there as a theme icon, and a
+ * name, path, branch or CLI title may hold it (PANEL-3.2). A title draws it as it is, and is given it as it is.
+ */
+export function plainText(text: string): string {
+	return text.replace(/\$\(/g, '\\$(');
 }
 
 /** How many agents, in words: the panel's badge and Filter by Working Location say it alike (PANEL-1.1, 2.3). */

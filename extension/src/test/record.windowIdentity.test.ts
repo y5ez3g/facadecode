@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isWindowIdentity, isWindowToken } from '../base/windowIdentity';
-import { beginWindowTerminals, retireWindowTerminals, windowToken } from '../record/windowIdentity';
+import { beginWindowTerminals, DamagedWindowRecord, retireWindowTerminals, windowToken } from '../record/windowIdentity';
 import { keepWindowKey, workspaceRecord } from '../record/workspace';
 import { tempDir } from './util';
 
@@ -35,7 +35,7 @@ suite('Record: local window handover identity', () => {
 		const file = path.join(temp.dir, 'handover.json');
 		for (const value of ['{', '{}', '{"version":2,"token":"bad"}']) {
 			fs.writeFileSync(file, value);
-			assert.throws(() => windowToken(temp.dir));
+			assert.throws(() => windowToken(temp.dir), DamagedWindowRecord);
 			assert.strictEqual(fs.readFileSync(file, 'utf8'), value);
 		}
 	});
