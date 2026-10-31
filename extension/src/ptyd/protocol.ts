@@ -12,7 +12,7 @@
  * output, generation-fenced claims, explicit `terminate` and `endWindow`, and the selected five-minute disconnected-owner
  * cleanup. An upgrade alone never ends an earlier protocol's runs.
  */
-export const PTYD_PROTOCOL = 8;
+export const PTYD_PROTOCOL = 9;
 
 import type { OwnerClaim } from '../base/ownership';
 import { isJsonObject } from '../base/json';
@@ -33,6 +33,11 @@ export interface SpawnParams {
 	readonly rows: number;
 	/** What the window keeps of the agent with its run, to show it again after a reload. Plain JSON. */
 	readonly meta: { readonly [key: string]: unknown };
+	/**
+	 * The screen reader that reads the run's status from its screen while its program reports nothing (CLIS-2.3, D80), by its ID
+	 * in `screenStatus.ts`; none for a program that is read by its reports alone. An ID this ptyd knows no reader by reads nothing.
+	 */
+	readonly screenStatus?: string;
 }
 
 /** What a program reports it is doing (OSC 7501). */

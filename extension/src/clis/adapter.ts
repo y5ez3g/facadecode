@@ -89,6 +89,11 @@ export interface CliAdapter {
 	 */
 	launchTarget?(file: string, platform: NodeJS.Platform, env: Environment, cwd: string): LaunchTarget | undefined;
 	/**
+	 * The screen reader ptyd reads its status with while it sends no OSC 7501 reports, by its ID in `ptyd/screenStatus.ts`: Muse
+	 * Code's, which sends none on Windows (CLIS-2.3, D80). Its own reports, where it sends them, always take precedence.
+	 */
+	readonly screenStatus?: 'muse';
+	/**
 	 * Its title decorations (CLIS-2.3): status marks its titles start with, titles that only name it, and the placeholder its reports
 	 * give for a title before it has one.
 	 */

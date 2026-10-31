@@ -10,7 +10,8 @@ import { CliAdapter, sigintExit } from './adapter';
  * configuration has them, the sandbox on unless that turns it off. Every launch trusts the folder it starts in for that launch alone
  * with `--trust-workspace`, as accepting its trust question would, writing nothing (CLIS-3.3, D62). On Windows its installer's
  * `muse.cmd` runs a PowerShell launcher that picks its current program, so it goes through cmd.exe, which takes these arguments
- * safely (CLIS-1.2). It reports its activity by OSC 7501 on Linux and macOS but sends nothing on Windows (CLIS-2.3).
+ * safely (CLIS-1.2). It reports its activity by OSC 7501 on Linux and macOS but sends nothing on Windows, where ptyd reads it from
+ * its screen instead (CLIS-2.3, D80).
  */
 export const museAdapter: CliAdapter = {
 	id: 'muse',
@@ -22,6 +23,7 @@ export const museAdapter: CliAdapter = {
 		trust: ['--trust-workspace']
 	},
 	values: () => ({}),
+	screenStatus: 'muse',
 	title: { names: ['Muse Code', 'Muse', 'muse'] },
 	interruptExit: sigintExit
 };

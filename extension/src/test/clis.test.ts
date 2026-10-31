@@ -387,6 +387,8 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 			const launch = plan({ cli });
 			assert.deepStrictEqual([launch.cli, launch.command, launch.executable, launch.env.FACADE_AGENT, 'ELECTRON_RUN_AS_NODE' in launch.env], [cli, cli, path.join(bin, cli), '#a7', false]);
 		}
+		// Muse Code alone is read from its screen where it sends no reports - on Windows (CLIS-2.3, D80); the others report themselves
+		assert.deepStrictEqual(['claude', 'codex', ...added].map(cli => plan({ cli }).screenStatus), [undefined, undefined, undefined, 'muse', undefined, undefined]);
 	});
 
 	test('on Windows each new built-in starts through the launcher its installer put on PATH: Muse Code\'s through cmd.exe with arguments it takes safely, OpenCode\'s npm shim as its program, Pi\'s installer launcher as its script with Node', () => {

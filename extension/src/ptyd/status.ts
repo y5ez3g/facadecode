@@ -10,6 +10,7 @@
 
 import { displayLine } from '../base/text';
 import type { RunStatus, StatusKind, StatusState } from './protocol';
+import type { ScreenReading } from './screenStatus';
 
 /** What ptyd answers a program that asks whether it takes reports: the states and the kinds it knows, as the protocol words them. */
 export const STATUS_REPLY = '\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\';
@@ -161,6 +162,10 @@ function keptText(text: string | undefined): string | undefined {
 export class ProgramStatus {
 
 	private current: RunStatus | undefined;
+	/** Whether the program has asked whether ptyd takes reports, or reported: from then on its own word alone counts. */
+	private partaking = false;
+	/** Whether the status now is what the run's screen showed, a program that takes no part being read so (CLIS-2.3, D80). */
+	private fromScreen = false;
 	private readonly listeners = new Set<(status: RunStatus | undefined) => void>();
 
 	/** The status now; none for a program that takes no part. */
@@ -168,16 +173,39 @@ export class ProgramStatus {
 		return this.current;
 	}
 
+	/** Whether the program has taken part in the protocol: its screen is then read no more. */
+	get takesPart(): boolean {
+		return this.partaking;
+	}
+
 	onDidChange(listener: (status: RunStatus | undefined) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
 
-	/** The program asked whether ptyd takes reports: it takes part, pending its first report. */
+	/** The program asked whether ptyd takes reports: it takes part, pending its first report, whatever its screen showed. */
 	asked(): void {
-		if (!this.current) {
+		this.partaking = true;
+		if (!this.current || this.fromScreen) {
+			this.fromScreen = false;
 			this.set({ state: 'pending', negotiating: true, at: Date.now() });
 		}
+	}
+
+	/**
+	 * What the run's screen shows, for a program that takes no part (CLIS-2.3, D80): taken as its own report would be, the same
+	 * state and kind again keeping its time; nothing once the program has asked or reported.
+	 */
+	observed(reading: ScreenReading): void {
+		if (this.partaking) {
+			return;
+		}
+		const now = this.current;
+		if (now !== undefined && now.state === reading.state && now.kind === reading.kind) {
+			return;
+		}
+		this.fromScreen = true;
+		this.set({ state: reading.state, ...(reading.kind ? { kind: reading.kind } : {}), at: Date.now() });
 	}
 
 	/** Takes `report`: of the program's own record alone - a worker's, with its own id, is ignored (CLIS-2.3). */
@@ -185,6 +213,8 @@ export class ProgramStatus {
 		if (report.id !== undefined) {
 			return;
 		}
+		this.partaking = true;
+		this.fromScreen = false;
 		if (report.state === 'clear') {
 			this.clear();
 			return;
@@ -216,8 +246,14 @@ export class ProgramStatus {
 		}
 	}
 
-	/** Its record taken away - `clear`, or a full reset of the terminal: it stands on no report, pending the next. */
+	/**
+	 * Its record taken away - `clear`, or a full reset of the terminal: it stands on no report, pending the next. What its screen
+	 * showed is no record of its own to take away: the screen goes on deciding.
+	 */
 	clear(): void {
+		if (this.fromScreen) {
+			return;
+		}
 		if (this.current && (this.current.state !== 'pending' || this.current.negotiating)) {
 			this.set({ state: 'pending', at: Date.now() });
 		}

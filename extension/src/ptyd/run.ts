@@ -4,6 +4,7 @@
 
 import type { IPty } from 'node-pty';
 import type { RunExit, RunInfo, RunStatus, SpawnParams, Termination } from './protocol';
+import { ScreenReader, screenReaderOf } from './screenStatus';
 import { parseStatus, ProgramStatus, STATUS_REPLY } from './status';
 
 /** The backend packaged beside ptyd, loaded lazily so tests can substitute the process adapter (ARCHITECTURE-1.2). */
@@ -71,6 +72,9 @@ const KILL_CONFIRM_MS = 2_000;
 /** How long a Windows console's output pipe may still bring what its program wrote last once it ended: node-pty's own flush time. */
 const CONSOLE_FLUSH_MS = 1_000;
 
+/** How soon after what it drew a screen read as its status is read again (CLIS-2.3): at most this often, while it draws. */
+const SCREEN_READ_MS = 200;
+
 /** What node-pty 1.1 keeps of a Windows console: the pipes to it, and the worker thread that reads its output. */
 interface WindowsConsole {
 	readonly _agent?: {
@@ -123,6 +127,9 @@ export class Run {
 	/** Whoever cannot take more of what the run writes yet: while anyone is, its pty is not read, and the CLI waits. */
 	private readonly holders = new Set<object>();
 	private readonly programStatus = new ProgramStatus();
+	/** How its screen is read as its status while its program reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	private readonly screenReader: ScreenReader | undefined;
+	private screenRead: ReturnType<typeof setTimeout> | undefined;
 	/** The number of the last output chunk: each is numbered as it is drawn, so that a reattach never shows one twice. */
 	private seq = 0;
 	/** What was written to the headless terminal and is not drawn yet, in UTF-8 bytes. */
@@ -141,6 +148,7 @@ export class Run {
 
 	constructor(readonly params: SpawnParams) {
 		this.meta = params.meta;
+		this.screenReader = screenReaderOf(params.screenStatus);
 		const { Terminal } = loadXterm();
 		const { SerializeAddon } = loadSerialize();
 		const terminal = this.terminal = new Terminal({ cols: params.cols, rows: params.rows, scrollback: scrollbackRows(params.cols), allowProposedApi: true });
@@ -309,6 +317,8 @@ export class Run {
 		this.signal(process.platform === 'win32' ? undefined : 'SIGHUP');
 		this.listener = undefined;
 		this.exitListeners.clear();
+		clearTimeout(this.screenRead);
+		this.screenRead = undefined;
 		this.terminal.dispose();
 	}
 
@@ -376,7 +386,44 @@ export class Run {
 			if (this.undrawn <= MOST_RUN_BUFFER / 2) {
 				this.release(DRAWING);
 			}
+			this.readScreenSoon();
 		});
+	}
+
+	/**
+	 * Reads its screen as its status a moment after it drew (CLIS-2.3, D80), where its adapter names a reader and its program has
+	 * neither asked nor reported: at most every {@link SCREEN_READ_MS}, never in the middle of a synchronized update, and no more once
+	 * the program takes part or ends.
+	 */
+	private readScreenSoon(): void {
+		if (!this.screenReader || this.screenRead || this.programStatus.takesPart || this.exited) {
+			return;
+		}
+		this.screenRead = setTimeout(() => {
+			this.screenRead = undefined;
+			if (this.programStatus.takesPart || this.exited) {
+				return;
+			}
+			if (this.terminal.modes.synchronizedOutputMode) {
+				this.readScreenSoon();
+				return;
+			}
+			const reading = this.screenReader!(this.screenRows());
+			if (reading) {
+				this.programStatus.observed(reading);
+			}
+		}, SCREEN_READ_MS);
+		this.screenRead.unref?.();
+	}
+
+	/** The rows its terminal shows now, top to bottom, each without the spaces at its end. */
+	private screenRows(): string[] {
+		const buffer = this.terminal.buffer.active;
+		const rows: string[] = [];
+		for (let y = 0; y < this.terminal.rows; y++) {
+			rows.push(buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '');
+		}
+		return rows;
 	}
 
 	/**

@@ -93,7 +93,8 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			const settings = JSON.parse(fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')) as { trustedWorkspaces: string[] };
 			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
 		}
-		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle: the dot says not working (CLIS-2.3)
+		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
+		// its screen showed its empty input: the dot says not working (CLIS-2.3, D80)
 		const reported = await until('its idle report', async () => (await state()).cards.find(each => each.runId === card.runId && each.dot === 'idle'));
 		assert.strictEqual(reported.dot, 'idle');
 

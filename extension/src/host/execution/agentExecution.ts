@@ -176,7 +176,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		try {
 			info = await client.request('spawn', {
 				run, owner: this.options.owner, file: plan.executable, args: plan.args, cwd: plan.cwd, env: plan.env,
-				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...meta }
+				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...meta },
+				...plan.screenStatus ? { screenStatus: plan.screenStatus } : {}
 			});
 		} catch (err) {
 			if (!(err instanceof PtydLost)) {

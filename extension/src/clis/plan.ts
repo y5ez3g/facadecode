@@ -50,6 +50,8 @@ export interface PlannedLaunch {
 	readonly cwd: string;
 	/** How it trusts its folder: its entry is for the caller to merge into the CLI's file before the run starts. */
 	readonly trust: LaunchTrust;
+	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	readonly screenStatus?: string;
 }
 
 /** Why a launch cannot be planned, with the PlanError reason it maps to (RULES-5.1: the actual reason, before any effect). */
@@ -146,6 +148,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		env: runEnv,
 		cwd: input.cwd,
 		// Its trust found where the run will look for it: with the environment it starts with (CLIS-1.2, 3.3)
-		trust: adapter.trustTarget ? { kind: 'file', target: adapter.trustTarget(input.cwd, runEnv, platform) } : { kind: 'arguments' }
+		trust: adapter.trustTarget ? { kind: 'file', target: adapter.trustTarget(input.cwd, runEnv, platform) } : { kind: 'arguments' },
+		...adapter.screenStatus ? { screenStatus: adapter.screenStatus } : {}
 	};
 }

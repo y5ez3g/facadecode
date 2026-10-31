@@ -134,12 +134,16 @@ async function main(): Promise<void> {
 	const agentsHome = path.join(root, 'agents-home');
 	fs.mkdirSync(agentsHome);
 
+	/** What agents' terminals are given - the suite's home folder, and `more` - by the editor's terminal settings. */
+	const terminalEnv = (more: { readonly [name: string]: string } = {}) => ({
+		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, ...more },
+		'terminal.integrated.env.osx': { HOME: agentsHome, ...more },
+		'terminal.integrated.env.linux': { HOME: agentsHome, ...more }
+	});
 	// Every built-in points to a fake: the suite never starts a person's real CLI.
 	const settings = {
 		...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
-		'terminal.integrated.env.windows': { USERPROFILE: agentsHome },
-		'terminal.integrated.env.osx': { HOME: agentsHome },
-		'terminal.integrated.env.linux': { HOME: agentsHome },
+		...terminalEnv(),
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
 		'window.restoreWindows': 'none'
@@ -232,7 +236,9 @@ async function main(): Promise<void> {
 			// The journeys once for each built-in: those before it in the catalog not installed, so that it is the one preselected
 			for (const [at, cli] of BUILT_INS.entries()) {
 				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
-				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar, FACADE_IT_AGENTS_HOME: agentsHome }, missing);
+				// Muse Code as it runs on Windows, reporting nothing: its dot follows its screen (CLIS-2.3, D80)
+				const screen = cli.id === 'muse' ? terminalEnv({ FACADE_IT_SCREEN: 'muse' }) : {};
+				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar, FACADE_IT_AGENTS_HOME: agentsHome }, { ...missing, ...screen });
 			}
 		}
 		if (only !== 'journeys') {

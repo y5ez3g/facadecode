@@ -122,6 +122,8 @@ export interface LaunchPlan {
 	readonly args: readonly string[];
 	readonly env: { readonly [name: string]: string };
 	readonly cwd: string;
+	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	readonly screenStatus?: string;
 }
 
 /** A reason Facade itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */
