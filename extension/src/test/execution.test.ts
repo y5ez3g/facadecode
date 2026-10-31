@@ -67,6 +67,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	/** How long an attach's answer is held back while the run's events go on; and whether the next attach loses its connection. */
 	let delayAttach: number;
 	let loseAttach: boolean;
+	/** Where the next listing's answer waits, once had, until opened: what the run says meanwhile reaches the window first. */
+	let listGate: { entered(): void; readonly open: Promise<void> } | undefined;
 	const ports: AgentExecution[] = [];
 	const extraClients: PtydClient[] = [];
 
@@ -92,6 +94,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		connections = [];
 		delayAttach = 0;
 		loseAttach = false;
+		listGate = undefined;
 		const vscodeApi = {
 			TabInputTerminal,
 			TabInputText,
@@ -155,6 +158,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 						throw new PtydLost('injected loss of the connection as it reattached');
 					}
 					const result = await real.request(method, params);
+					if (method === 'list' && listGate) {
+						const gate = listGate;
+						listGate = undefined;
+						gate.entered();
+						await gate.open;
+					}
 					if (method === 'attach' && delayAttach) {
 						// The answer is late; what the run writes meanwhile reaches the window before it, as it can on a busy host
 						await new Promise(resolve => setTimeout(resolve, delayAttach));
@@ -276,6 +285,30 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(terminals[0].names[terminals[0].names.length - 1], 'Ada | Fixing tests');
 		port.rename('run-3', 'Grace');
 		assert.strictEqual(terminals[0].names[terminals[0].names.length - 1], 'Grace | Fixing tests');
+	});
+
+	test('a listing answered before what the run said since is no newer than that: a reconcile never puts back an older status (CLIS-2.3, UX-5.2)', async function () {
+		this.timeout(20_000);
+		const port = portOf();
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		port.openPair(facts('run-46'), { reveal: false });
+		open(terminals[0]);
+		// Working once its probe is answered, idle at a key
+		await port.spawn('run-46', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => process.stdout.write(d.toString().includes('7501;?:') ? '\\x1b]7501;state=working\\x1b\\\\' : '\\x1b]7501;state=idle\\x1b\\\\')); setInterval(() => {}, 1000);`), meta('run-46'));
+		await until('working', () => reports.some(report => report.activity === 'working'));
+		let entered!: () => void;
+		let release!: () => void;
+		const asked = new Promise<void>(resolve => { entered = resolve; });
+		listGate = { entered, open: new Promise<void>(resolve => { release = resolve; }) };
+		// A reconcile's listing has its answer - working - and waits; meanwhile the run goes idle
+		await asked;
+		terminals[0].options.pty.handleInput!('x');
+		await until('idle', () => reports[reports.length - 1]?.activity === 'not_working');
+		release();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.deepStrictEqual(reports.slice(reports.findIndex(report => report.activity === 'not_working')).map(report => report.activity), ['not_working']);
+		assert.strictEqual(await port.terminate('run-46'), 'terminated');
 	});
 
 	/** A CLI that says it is ready and then nothing, taking no part in the protocol. */

@@ -69,6 +69,8 @@ interface Pair {
 	exited?: RunExit;
 	status?: RunStatus;
 	terminalTitle: string;
+	/** How many status and title events it heard: a listing asked before the last of them is no newer than they are. */
+	heard?: number;
 	/** The last report told, to tell each change once. */
 	told?: string;
 	events?: { dispose(): void };
@@ -458,10 +460,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				break;
 			case 'title':
 				pair.terminalTitle = event.title;
+				pair.heard = (pair.heard ?? 0) + 1;
 				this.tell(pair);
 				break;
 			case 'status':
 				pair.status = event.status;
+				pair.heard = (pair.heard ?? 0) + 1;
 				this.tell(pair);
 				break;
 			case 'exit': {
@@ -719,6 +723,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 		try {
 			const client = await connection;
+			// What each pair heard before it asked: an event heard since - before the answer, or in the same chunk after it, its
+			// continuation coming later - is at least as new as the answer, which never puts an older status or title back
+			const heard = new Map(shown.map(pair => [pair, pair.heard ?? 0]));
 			const runs = new Map((await client.request('list', { owner: this.options.owner })).map(run => [run.run, run]));
 			for (const pair of shown) {
 				const run = runs.get(pair.run);
@@ -729,7 +736,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 					this.endedUnknown(pair);
 				} else if (run.exited) {
 					this.ended(pair, run.exited);
-				} else if (run.status?.at !== pair.status?.at || run.title !== pair.terminalTitle) {
+				} else if ((pair.heard ?? 0) === heard.get(pair) && (run.status?.at !== pair.status?.at || run.title !== pair.terminalTitle)) {
 					pair.status = run.status;
 					pair.terminalTitle = run.title;
 					this.tell(pair);
