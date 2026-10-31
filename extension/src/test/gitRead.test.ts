@@ -55,7 +55,8 @@ suite('Git reads: discovery in disposable repositories (WORKTREES-1.1, 1.2, 4.2;
 
 	test('a checkout\'s root is written as the folder was opened - through a link too - with the shared Git directory of its repository', async () => {
 		const link = path.join(temp.dir, 'link');
-		fs.symlinkSync(repo, link, 'dir');
+		// A junction on Windows, which needs no administrator; a link elsewhere
+		fs.symlinkSync(repo, link, 'junction');
 		git(repo, 'worktree', 'add', '-q', '-b', 'feat', path.join(temp.dir, 'repo.worktrees', 'feat'));
 
 		assert.deepStrictEqual(await checkoutOf('git', path.join(link, 'packages', 'app')), { root: link, gitDir: path.join(repo, '.git'), commonDir: path.join(repo, '.git') });

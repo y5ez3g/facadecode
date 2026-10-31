@@ -82,7 +82,8 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.strictEqual(claudeProjectKey(stray, 'darwin'), stray);
 		// A folder opened through a link is keyed by its real path
 		const link = path.join(temp.dir, 'link');
-		fs.symlinkSync(worktree, link);
+		// A junction on Windows, which needs no administrator; a link elsewhere
+		fs.symlinkSync(worktree, link, 'junction');
 		assert.strictEqual(claudeProjectKey(link, 'darwin'), main);
 	});
 

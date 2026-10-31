@@ -91,6 +91,13 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 			assert.strictEqual(status, 0, output);
 		});
 
+		test('an English bundle a Windows checkout holds with CRLF line endings (Git\'s core.autocrlf) is laid out as export writes it', () => {
+			const bundle = path.join(root, 'l10n', 'bundle.l10n.json');
+			fs.writeFileSync(bundle, fs.readFileSync(bundle, 'utf8').replace(/\n/g, '\r\n'));
+			const { status, output } = run('check', root);
+			assert.strictEqual(status, 0, output);
+		});
+
 		test('a translated bundle missing a text, or keeping an obsolete one', () => {
 			fails('l10n/bundle.l10n.de.json', json => delete json['Hello {0}'], 'bundle.l10n.de.json: missing text "Hello {0}"');
 			fails('l10n/bundle.l10n.fr.json', json => json['Gone'] = 'Parti', 'bundle.l10n.fr.json: obsolete text "Gone"');
