@@ -7,12 +7,16 @@
 // configuration only: it never runs a CLI, logs in, installs or changes settings.
 
 import { CliAdapter } from './adapter';
+import { antigravityAdapter } from './antigravity';
 import { claudeAdapter } from './claude';
 import { codexAdapter } from './codex';
 import { CliSettings, readCliSettings } from './config';
+import { museAdapter } from './muse';
+import { openCodeAdapter } from './opencode';
+import { piAdapter } from './pi';
 
 /** The built-ins, in the order every list gives them (CLIS-1.1). */
-export const BUILT_IN_ADAPTERS: readonly CliAdapter[] = [claudeAdapter, codexAdapter];
+export const BUILT_IN_ADAPTERS: readonly CliAdapter[] = [claudeAdapter, codexAdapter, antigravityAdapter, museAdapter, openCodeAdapter, piAdapter];
 
 /** One CLI of the catalog: its adapter and its settings as read. */
 export interface CatalogEntry {

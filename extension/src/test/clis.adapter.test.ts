@@ -88,6 +88,37 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 		], ['Fixing the tests', 'Refactoring parser', undefined, undefined, undefined, undefined, '★ Release v2 — notes!', '✳ ★ Release v2 — notes!', undefined, 'evil', undefined]);
 	});
 
+	test('Antigravity, Muse Code, OpenCode and Pi: a title that only names the CLI, its folder or the agent - alone or joined - is none; a title of work is kept whole, the report\'s first', () => {
+		const context = { cwd: '/work/shop-app', name: 'Ada' };
+		assert.deepStrictEqual([
+			cliTitle('pi', 'Pi', { terminal: 'π - shop-app' }, context),
+			cliTitle('pi', 'Pi', { terminal: 'π - Fix login - shop-app' }, context),
+			cliTitle('pi', 'Pi', { terminal: 'pi' }, context),
+			cliTitle('opencode', 'OpenCode', { terminal: 'OpenCode' }, context),
+			cliTitle('opencode', 'OpenCode', { terminal: 'OC | shop-app' }, context),
+			cliTitle('opencode', 'OpenCode', { terminal: 'OC | Fix the login bug' }, context),
+			cliTitle('opencode', 'OpenCode', { reported: 'Fix the login bug', terminal: 'OC | Fix the login bug' }, context),
+			cliTitle('muse', 'Muse Code', { terminal: 'Muse Code' }, context),
+			cliTitle('muse', 'Muse Code', { terminal: 'muse - shop-app' }, context),
+			cliTitle('muse', 'Muse Code', { terminal: 'Refactoring the parser' }, context),
+			cliTitle('agy', 'Antigravity', { terminal: 'agy' }, context),
+			cliTitle('agy', 'Antigravity', { terminal: 'Antigravity · shop-app' }, context),
+			cliTitle('agy', 'Antigravity', { terminal: 'Ada' }, context)
+		], [undefined, 'π - Fix login - shop-app', undefined, undefined, undefined, 'OC | Fix the login bug', 'Fix the login bug', undefined, undefined, 'Refactoring the parser', undefined, undefined, undefined]);
+	});
+
+	test('the placeholder OpenCode reports for a session it has not named yet is no title: its terminal\'s is read instead; a title a person gave is kept, and only its adapter knows it (CLIS-2.3)', () => {
+		const context = { cwd: '/work/shop-app', name: 'Ada' };
+		const placeholder = 'New session - 2026-10-31T03:29:22.759Z';
+		assert.deepStrictEqual([
+			cliTitle('opencode', 'OpenCode', { reported: placeholder, terminal: 'OpenCode' }, context),
+			cliTitle('opencode', 'OpenCode', { reported: placeholder, terminal: 'OC | Reply OK only' }, context),
+			cliTitle('opencode', 'OpenCode', { reported: 'Child session - 2026-10-31T03:29:22.759Z' }, context),
+			cliTitle('opencode', 'OpenCode', { reported: 'New session - plan the release' }, context),
+			cliTitle('pi', 'Pi', { reported: placeholder }, context)
+		], [undefined, 'OC | Reply OK only', undefined, 'New session - plan the release', placeholder]);
+	});
+
 	test('titles and status words are capped at 300 code points with an ellipsis, never splitting a character', () => {
 		const long = `${'a'.repeat(298)}🌍🌍tail`;
 		const title = cliTitle('claude', 'Claude Code', { terminal: long }, { cwd: '/w', name: 'n' })!;
@@ -105,5 +136,12 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 			interruptVerified('claude', { code: 1, ctrlC: true }),
 			interruptVerified('other', { code: 130, ctrlC: true })
 		], [true, true, false, false, false]);
+		// Every built-in ends on SIGINT as POSIX programs do; Pi's and OpenCode's own Ctrl+C exit is 0, a normal exit anyway
+		assert.deepStrictEqual(['codex', 'agy', 'muse', 'opencode', 'pi'].map(cli => [
+			interruptVerified(cli, { code: 130, ctrlC: true }),
+			interruptVerified(cli, { signal: 'SIGINT', ctrlC: true }),
+			interruptVerified(cli, { code: 130, ctrlC: false }),
+			interruptVerified(cli, { code: 1, ctrlC: true })
+		]), Array(5).fill([true, true, false, false]));
 	});
 });

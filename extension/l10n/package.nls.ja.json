@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "VS Code で Claude Code / Codex エージェントを並べて実行します。",
+	"description": "VS Code で Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi のエージェントを並べて実行します。",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "新しい Agent...",
@@ -19,6 +19,14 @@
 	"config.claude.path": "Claude Code へのパス。ターミナル環境の PATH にある \"claude\" を使用する場合は空のままにします。",
 	"config.codex.title": "Codex",
 	"config.codex.path": "Codex へのパス。ターミナル環境の PATH にある \"codex\" を使用する場合は空のままにします。",
+	"config.antigravity.title": "Antigravity",
+	"config.antigravity.path": "Antigravity へのパス。ターミナル環境の PATH にある \"agy\" を使用する場合は空のままにします。",
+	"config.muse.title": "Muse Code",
+	"config.muse.path": "Muse Code へのパス。ターミナル環境の PATH にある \"muse\" を使用する場合は空のままにします。",
+	"config.opencode.title": "OpenCode",
+	"config.opencode.path": "OpenCode へのパス。ターミナル環境の PATH にある \"opencode\" を使用する場合は空のままにします。",
+	"config.pi.title": "Pi",
+	"config.pi.path": "Pi へのパス。ターミナル環境の PATH にある \"pi\" を使用する場合は空のままにします。",
 	"windowDisplayName": "Facade Code ウィンドウ コンポーネント",
 	"windowDescription": "Facade Code のウィンドウ ID およびセッション継続性コーディネーター。"
 }

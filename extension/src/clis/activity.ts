@@ -60,10 +60,14 @@ export function activityOf(status: ReportedStatus | undefined): ActivityFacts {
 	}
 }
 
-/** How a CLI's titles are read: the status marks they start with, and the names that alone make no title (CLIS-2.3). */
+/**
+ * How a CLI's titles are read: the status marks they start with, the names that alone make no title, and the placeholder its
+ * reports give before it has a title (CLIS-2.3).
+ */
 interface TitleRules {
 	readonly decoration?: RegExp;
 	readonly names: readonly string[];
+	readonly placeholder?: RegExp;
 }
 
 /** The title rules of the CLI `cli`: its built-in adapter's own; without one, its display name alone. */
@@ -75,16 +79,17 @@ function titleRulesOf(cli: string, displayName: string): TitleRules {
 const NAME_JOINS = /\s+[-–—|·:]\s+/;
 
 /**
- * The title a run shows for its CLI (CLIS-2.3): the report's title over the terminal's OSC 0/2 title; without the status marks its
- * adapter knows it starts with; none where it only names the CLI, its folder or the agent - alone or joined - as CLIs title their
- * terminal until there is work to name. Invisible formatting and controls removed, at most 300 code points with an ellipsis.
+ * The title a run shows for its CLI (CLIS-2.3): the report's title over the terminal's OSC 0/2 title - unless it is the placeholder
+ * the adapter knows the CLI reports before it has a title; without the status marks its adapter knows it starts with; none where it
+ * only names the CLI, its folder or the agent - alone or joined - as CLIs title their terminal until there is work to name.
+ * Invisible formatting and controls removed, at most 300 code points with an ellipsis.
  */
 export function cliTitle(cli: string, displayName: string, titles: { readonly reported?: string; readonly terminal?: string }, context: { readonly cwd: string; readonly name: string }): string | undefined {
 	const rules = titleRulesOf(cli, displayName);
-	for (const raw of [titles.reported, titles.terminal]) {
+	for (const [raw, reported] of [[titles.reported, true], [titles.terminal, false]] as const) {
 		const clean = displayLine(raw ?? '', Number.MAX_SAFE_INTEGER);
 		const text = (rules.decoration ? clean.replace(rules.decoration, '') : clean).trim();
-		if (!text) {
+		if (!text || (reported && rules.placeholder?.test(text))) {
 			continue;
 		}
 		const names = new Set([...rules.names, displayName, path.basename(context.cwd), context.name].map(each => each.trim().toLocaleLowerCase()).filter(Boolean));

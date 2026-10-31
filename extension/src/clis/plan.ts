@@ -108,7 +108,8 @@ export function discover(catalog: Catalog, destination: DestinationEnvironment, 
 export function planLaunch(catalog: Catalog, input: PlanInput, destination: DestinationEnvironment): PlannedLaunch {
 	const entry = entryOf(catalog, input.cli);
 	if (!entry) {
-		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are claude and codex`, 'not_found');
+		const ids = catalog.entries.map(each => each.adapter.id);
+		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.length > 1 ? `${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}` : ids.join('')}`, 'not_found');
 	}
 	const { adapter } = entry;
 	if (entry.problems.length) {
@@ -120,10 +121,15 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	if (found.problem !== undefined) {
 		throw new CliPlanError(found.problem, 'not_found', found.said);
 	}
-	const target = launchTarget(found.executable, platform, env, input.cwd);
+	const target = adapter.launchTarget?.(found.executable, platform, env, input.cwd) ?? launchTarget(found.executable, platform, env, input.cwd);
 	const values = adapter.values({ yolo: input.yolo, cwd: input.cwd, platform });
 	const args = [...target.args, ...invocation(adapter.groups, { yolo: input.yolo }, values)];
 	if (target.throughCmd) {
+		// The program's own path reaches cmd.exe too, quoted only where it holds a space
+		if (unsafeForCmd(target.executable)) {
+			throw new CliPlanError(`${target.executable} runs through cmd.exe, which cannot be given its path safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unsafe_path', values: [target.executable, adapter.setting] });
+		}
 		const unsafe = args.find(unsafeForCmd);
 		if (unsafe !== undefined) {
 			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(unsafe)} safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',

@@ -144,8 +144,14 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 	});
 });
 
-/** Names no language translates (UX-2.4), and the CLI's product name. */
-const NAMES = ['Facade Code', 'Facade', 'CLI', 'YOLO', 'Claude Code', 'Codex'];
+/** Names no language translates (UX-2.4), and the built-in CLIs' product names. */
+const NAMES = ['Facade Code', 'Facade', 'CLI', 'YOLO', 'Claude Code', 'Codex', 'Antigravity', 'Muse Code', 'OpenCode', 'Pi'];
+
+/**
+ * Whether `text` says `name` as a word of its own: `Pi`, never the start of `Pick`. Only Latin letters and digits join a name, as a
+ * Korean particle or a CJK character follows one directly: `Codex를`.
+ */
+const says = (text: string, name: string): boolean => new RegExp(`(?<![A-Za-z0-9])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`).test(text);
 
 /**
  * Each language's word for a Git worktree - Microsoft's, which the Git extension's commands use - and for a working location,
@@ -168,9 +174,11 @@ const TERMS: { readonly [locale in typeof LOCALES[number]]: { readonly worktree:
 
 suite('Localization: the words each language has for Facade\'s things (UX-2.4)', () => {
 
-	test('Facade Code, Facade, CLI, YOLO and the CLI\'s name stay as they are in every language', () => {
-		const wrong = LOCALES.flatMap(locale => textsOf(locale).filter(text => NAMES.some(name => text.english.includes(name) && !text.text.includes(name)))).map(shown);
+	test('Facade Code, Facade, CLI, YOLO and the CLIs\' names stay as they are in every language', () => {
+		const wrong = LOCALES.flatMap(locale => textsOf(locale).filter(text => NAMES.some(name => says(text.english, name) && !says(text.text, name)))).map(shown);
 		assert.deepStrictEqual(wrong, []);
+		// A name is a word: Pick and Pipe do not say Pi
+		assert.deepStrictEqual([says('Pick a CLI', 'Pi'), says('Use Pi.', 'Pi'), says('Pi の', 'Pi'), says('Codex-Agenten', 'Codex'), says('Codex를', 'Codex'), says('OpenCodex', 'Codex')], [false, true, true, true, true, false]);
 	});
 
 	test('Chinese says agent, untranslated, wherever the English does', () => {

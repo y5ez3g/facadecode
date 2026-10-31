@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "Claude Code / Codex ajanlarını VS Code'da yan yana çalıştırın.",
+	"description": "Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi aracılarını VS Code'da yan yana çalıştırın.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Yeni Aracı...",
@@ -19,6 +19,14 @@
 	"config.claude.path": "Claude Code yolu. Terminal ortamının PATH değerindeki \"claude\" komutunu kullanmak için boş bırakın.",
 	"config.codex.title": "Codex",
 	"config.codex.path": "Codex yolu. Terminal ortamının PATH değerindeki \"codex\" komutunu kullanmak için boş bırakın.",
+	"config.antigravity.title": "Antigravity",
+	"config.antigravity.path": "Antigravity yolu. Terminal ortamının PATH değerindeki \"agy\" komutunu kullanmak için boş bırakın.",
+	"config.muse.title": "Muse Code",
+	"config.muse.path": "Muse Code yolu. Terminal ortamının PATH değerindeki \"muse\" komutunu kullanmak için boş bırakın.",
+	"config.opencode.title": "OpenCode",
+	"config.opencode.path": "OpenCode yolu. Terminal ortamının PATH değerindeki \"opencode\" komutunu kullanmak için boş bırakın.",
+	"config.pi.title": "Pi",
+	"config.pi.path": "Pi yolu. Terminal ortamının PATH değerindeki \"pi\" komutunu kullanmak için boş bırakın.",
 	"windowDisplayName": "Facade Code Pencere Bileşeni",
 	"windowDescription": "Facade Code için pencere kimliği ve oturum sürekliliği koordinatörü."
 }

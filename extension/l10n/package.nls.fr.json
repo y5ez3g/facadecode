@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "Exécutez des agents Claude Code / Codex côte à côte dans VS Code.",
+	"description": "Exécutez des agents Claude Code, Codex, Antigravity, Muse Code, OpenCode et Pi côte à côte dans VS Code.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "Nouvel agent...",
@@ -19,6 +19,14 @@
 	"config.claude.path": "Chemin d'accès à Claude Code. Laissez vide pour utiliser « claude » à partir du PATH de l'environnement de terminal.",
 	"config.codex.title": "Codex",
 	"config.codex.path": "Chemin d'accès à Codex. Laissez vide pour utiliser « codex » à partir du PATH de l'environnement de terminal.",
+	"config.antigravity.title": "Antigravity",
+	"config.antigravity.path": "Chemin d'accès à Antigravity. Laissez vide pour utiliser « agy » à partir du PATH de l'environnement de terminal.",
+	"config.muse.title": "Muse Code",
+	"config.muse.path": "Chemin d'accès à Muse Code. Laissez vide pour utiliser « muse » à partir du PATH de l'environnement de terminal.",
+	"config.opencode.title": "OpenCode",
+	"config.opencode.path": "Chemin d'accès à OpenCode. Laissez vide pour utiliser « opencode » à partir du PATH de l'environnement de terminal.",
+	"config.pi.title": "Pi",
+	"config.pi.path": "Chemin d'accès à Pi. Laissez vide pour utiliser « pi » à partir du PATH de l'environnement de terminal.",
 	"windowDisplayName": "Composant de fenêtre Facade Code",
 	"windowDescription": "Coordinateur d'identité de fenêtre et de continuité de session pour Facade Code."
 }

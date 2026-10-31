@@ -6,6 +6,7 @@ import * as assert from 'assert';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { canonicalFolder } from '../base/files';
 import { withFileLock } from '../base/lock';
 import type { CliAdapter } from '../clis/adapter';
 import { BUILT_IN_ADAPTERS } from '../clis/catalog';
@@ -167,6 +168,20 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.deepStrictEqual([mergeTrust(target), fs.existsSync(lock), fs.existsSync(target.file)], [{ kind: 'written' }, false, true]);
 	});
 
+	test('Antigravity: the folder an item of the trustedWorkspaces of its settings in the home folder, the folder its run takes for its working directory - PWD where that names it, else the real path; on Windows the folder as given', () => {
+		const file = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
+		const folder = canonicalFolder(cwd);
+		assert.deepStrictEqual(targetOf('agy', cwd, env), { file, keys: ['trustedWorkspaces'], entry: { item: folder }, folder });
+		assert.strictEqual(targetOf('agy', cwd, { USERPROFILE: home }, 'win32').file, file);
+		assert.strictEqual(targetOf('agy', 'C:\\work\\repo', { USERPROFILE: 'C:\\Users\\me' }, 'win32').folder, path.resolve('C:\\work\\repo'));
+		// A folder reached through a link: the PWD that names it, as a Go program takes its working directory; else its real path
+		const link = path.join(temp.dir, 'link');
+		fs.symlinkSync(cwd, link, 'junction');
+		assert.deepStrictEqual([targetOf('agy', link, { ...env, PWD: link }).folder, targetOf('agy', link, { ...env, PWD: temp.dir }).folder, targetOf('agy', link, env).folder], [link, folder, folder]);
+		assert.deepStrictEqual(mergeTrust(targetOf('agy', cwd, env)), { kind: 'written' });
+		assert.strictEqual(fs.readFileSync(file, 'utf8'), `${JSON.stringify({ trustedWorkspaces: [folder] }, undefined, 2)}\n`);
+	});
+
 	test('a list entry: the folder added at the end of the list at its keys as the file is written - made where there is none, a null taken for nothing - and nothing written where it is there', () => {
 		const file = path.join(home, 'settings.json');
 		const target: TrustTarget = { file, keys: ['trustedWorkspaces'], entry: { item: cwd }, folder: cwd };
@@ -262,7 +277,7 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		destination.host.CODEX_HOME = home;
 		const log: string[] = [];
 		const planner = clis(log);
-		assert.deepStrictEqual((await planner.list(location)).map(cli => [cli.id, cli.available]), [['claude', true], ['codex', true]]);
+		assert.deepStrictEqual((await planner.list(location)).map(cli => [cli.id, cli.available]), [['claude', true], ['codex', true], ['agy', false], ['muse', false], ['opencode', false], ['pi', false]]);
 		const planned = await planner.plan(request('codex', 'codex-1'));
 		assert.strictEqual(planned.cli, 'codex');
 		assert.strictEqual(planned.env.CODEX_HOME, home);
@@ -284,6 +299,30 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		destination = { ...destination, terminal: { CLAUDE_CONFIG_DIR: path.join(temp.dir, 'claude-config') } };
 		await planner.plan(request('claude', 'run-3'));
 		assert.ok(fs.existsSync(path.join(temp.dir, 'claude-config', '.claude.json')));
+	});
+
+	test('a start of Antigravity has its folder trusted in its own settings, in the launch\'s home, said in the log; Muse Code, OpenCode and Pi write nothing', async () => {
+		for (const name of ['agy', 'muse', 'opencode', 'pi']) {
+			fs.writeFileSync(path.join(temp.dir, 'bin', name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+		}
+		const log: string[] = [];
+		const planner = clis(log);
+		const file = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
+		const folder = canonicalFolder(location.path);
+		const agy = await planner.plan(request('agy', 'run-1'));
+		assert.deepStrictEqual([agy.cli, 'trust' in agy, JSON.parse(fs.readFileSync(file, 'utf8'))], ['agy', false, { trustedWorkspaces: [folder] }]);
+		assert.deepStrictEqual(log, [`Trusted ${folder} for Antigravity: merged ${JSON.stringify({ trustedWorkspaces: [folder] })} into ${file}.`]);
+		await planner.plan(request('agy', 'run-2'));
+		assert.strictEqual(log.length, 1);
+		for (const cli of ['muse', 'opencode', 'pi']) {
+			assert.strictEqual((await planner.plan(request(cli, `run-${cli}`))).cli, cli);
+		}
+		assert.deepStrictEqual([fs.readdirSync(home), log.length], [['.gemini'], 1]);
+		// A settings file it cannot read: left as it is, and the start goes ahead
+		fs.writeFileSync(file, '{ "trustedWorkspaces": ');
+		assert.strictEqual((await planner.plan(request('agy', 'run-3'))).cli, 'agy');
+		assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ "trustedWorkspaces": ');
+		assert.match(log[1], /^Did not trust .* for Antigravity: .*settings\.json is not valid JSON: .*, so Facade left it as it is; Antigravity asks in its terminal\.$/);
 	});
 
 	test('a file that cannot be read is left as it is and the start goes ahead, the log saying why; so does a lock that cannot be had', async () => {

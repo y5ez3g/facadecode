@@ -113,7 +113,11 @@ export function referenceOf(facts: Pick<RunFacts, 'name' | 'alias'>): string {
 /** The maker avatars of the built-in CLIs, by API ID, in `media/agents` (PANEL-1.3). */
 const AVATARS: { readonly [cli: string]: string } = {
 	claude: 'avatar-claude.png',
-	codex: 'avatar-codex.png'
+	codex: 'avatar-codex.png',
+	agy: 'avatar-antigravity.png',
+	muse: 'avatar-muse.png',
+	opencode: 'avatar-opencode.png',
+	pi: 'avatar-pi.png'
 };
 
 /** A card's avatar (PANEL-1.3, UX-2.1): its built-in CLI's maker avatar; none for a CLI this build has no avatar of. */

@@ -5,12 +5,14 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { canonicalFolder } from '../base/files';
 import { GROUP_ORDER, invocation } from '../clis/adapter';
 import { BUILT_IN_ADAPTERS, catalogOf } from '../clis/catalog';
 import { claudeAdapter } from '../clis/claude';
 import { codexAdapter, tomlString } from '../clis/codex';
 import { readCliSettings } from '../clis/config';
 import { executableAt, launchTarget, resolveExecutable, unsafeForCmd, which } from '../clis/executable';
+import { piInstallerTarget } from '../clis/pi';
 import { CliPlanError, DestinationEnvironment, discover, planLaunch, PlanInput } from '../clis/plan';
 import { tempDir } from './util';
 
@@ -28,14 +30,37 @@ function settings(values: { readonly [name: string]: unknown } = {}): (name: str
 	return name => values[name];
 }
 
+/** The `pi.cmd` Pi's own Windows installer (pi.dev, for Pi 1.4.0) writes, with its choice of Node `setup`. */
+function PI_CMD(setup: string): string {
+	return `@ECHO off\r\nSETLOCAL\r\n${setup}\r\n"%node%" "%~dp0pi-launcher.js" %*\r\nSET "pi_exit_code=%ERRORLEVEL%"\r\nIF "%pi_exit_code%"=="9009" (\r\n  IF "%node%"=="node" (\r\n    "%SystemRoot%\\System32\\where.exe" /Q node\r\n    IF ERRORLEVEL 1 GOTO node_missing\r\n  ) ELSE IF NOT EXIST "%node%" GOTO node_missing\r\n)\r\nEXIT /B %pi_exit_code%\r\n:node_missing\r\nECHO Pi could not find Node.js. Install Node.js 22.19.0 or newer, or rerun the installer at https://pi.dev. 1>&2\r\nEXIT /B %pi_exit_code%\r\n`;
+}
+/** The installer's choice of Node where it installed a Node of its own. */
+const PI_OWN_NODE = 'SET "node=node"\r\nIF EXIST "%LOCALAPPDATA%\\pi-node\\current\\node.exe" SET "node=%LOCALAPPDATA%\\pi-node\\current\\node.exe"';
+
 suite('CLIs: the catalog and its settings (CLIS-1.1, 1.2)', () => {
 
 	test('the built-ins in their order, with their API IDs, executables and setting segments', () => {
 		assert.deepStrictEqual(BUILT_IN_ADAPTERS.map(adapter => [adapter.displayName, adapter.id, adapter.command, adapter.setting.replace(/^facade\./, '')]), [
 			['Claude Code', 'claude', 'claude', 'claude'],
-			['Codex', 'codex', 'codex', 'codex']
+			['Codex', 'codex', 'codex', 'codex'],
+			['Antigravity', 'agy', 'agy', 'antigravity'],
+			['Muse Code', 'muse', 'muse', 'muse'],
+			['OpenCode', 'opencode', 'opencode', 'opencode'],
+			['Pi', 'pi', 'pi', 'pi']
 		]);
-		assert.deepStrictEqual(catalogOf(settings()).entries.map(entry => entry.adapter.id), ['claude', 'codex']);
+		assert.deepStrictEqual(catalogOf(settings()).entries.map(entry => entry.adapter.id), ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']);
+	});
+
+	test('each built-in\'s path is read from its own setting, and a problem with one names that setting alone', () => {
+		const entries = catalogOf(settings({ 'facade.antigravity.path': ' C:\\Tools\\agy.exe ', 'facade.muse.path': 7, 'facade.opencode.path': '', 'facade.pi.path': '~/bin/pi' })).entries;
+		assert.deepStrictEqual(entries.map(entry => [entry.adapter.id, entry.path, entry.problems]), [
+			['claude', '', []],
+			['codex', '', []],
+			['agy', 'C:\\Tools\\agy.exe', []],
+			['muse', '', ['facade.muse.path must be a string; received 7']],
+			['opencode', '', []],
+			['pi', '~/bin/pi', []]
+		]);
 	});
 
 	test('a built-in\'s path is read trimmed; none is its command on PATH', () => {
@@ -166,6 +191,64 @@ suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
 			temp.remove();
 		}
 	});
+
+	test('Pi\'s installer launcher runs its pi-launcher.js with the Node it chooses - its own Node in LOCALAPPDATA while that is there, else node on PATH; another shape or choice of Node, or no Node of its own on PATH, is left to cmd.exe', () => {
+		const temp = tempDir('fd-pi-shim-');
+		try {
+			const bin = path.join(temp.dir, 'bin');
+			const nodeDir = path.join(temp.dir, 'nodejs');
+			const local = path.join(temp.dir, 'local');
+			fs.mkdirSync(bin);
+			fs.mkdirSync(nodeDir);
+			const shim = path.join(bin, 'pi.cmd');
+			const launcher = path.join(bin, 'pi-launcher.js');
+			fs.writeFileSync(launcher, '');
+			fs.writeFileSync(path.join(nodeDir, 'node.exe'), '');
+			const env = { Path: nodeDir, PATHEXT: '.EXE;.CMD', LOCALAPPDATA: local };
+			const target = (text: string, where = env, platform: NodeJS.Platform = 'win32') => {
+				fs.writeFileSync(shim, text);
+				return piInstallerTarget(shim, platform, where, temp.dir);
+			};
+			const onPath = { executable: path.join(nodeDir, 'node.exe'), args: [launcher], throughCmd: false };
+			assert.deepStrictEqual(target(PI_CMD('SET "node=node"')), onPath);
+			// The file as this machine's installer wrote it: LF line endings, but for one CRLF
+			assert.deepStrictEqual(target(PI_CMD('SET "node=node"').replace(/\r\n/g, '\n').replace('SETLOCAL\n', 'SETLOCAL\r\n')), onPath);
+			// Its own Node: used while it is there
+			assert.deepStrictEqual(target(PI_CMD(PI_OWN_NODE)), onPath);
+			const own = path.join(local, 'pi-node', 'current', 'node.exe');
+			fs.mkdirSync(path.dirname(own), { recursive: true });
+			fs.writeFileSync(own, '');
+			assert.deepStrictEqual(target(PI_CMD(PI_OWN_NODE)), { executable: own, args: [launcher], throughCmd: false });
+			// Its message where it finds no Node may be worded otherwise, and its last line end: it still starts only the launcher
+			assert.deepStrictEqual(target(PI_CMD('SET "node=node"').replace('Install Node.js 22.19.0 or newer', 'Install Node.js 24 or newer').replace(/\r\n$/, '')), onPath);
+			// Not the file Pi's installer writes, whole: another Node, another program, another order or a line of its own - each
+			// of which the shim would run otherwise - is left to cmd.exe
+			const pathNode = PI_CMD('SET "node=node"');
+			assert.deepStrictEqual([
+				target(PI_CMD('SET "node=C:\\Other\\node.exe"')),
+				target(PI_CMD('SET "node=node"\r\nSET "node=C:\\Other\\node.exe"')),
+				target(PI_CMD('SET "node=node"\r\nSET node=C:\\Other\\node.exe')),
+				target(PI_CMD(PI_OWN_NODE.split('\r\n').reverse().join('\r\n'))),
+				target(pathNode.replace('"%node%" "%~dp0pi-launcher.js" %*', 'IF EXIST "%~dp0pi.exe" "%~dp0pi.exe" %*\r\n"%node%" "%~dp0pi-launcher.js" %*')),
+				target(pathNode.replace('SETLOCAL\r\n', 'SETLOCAL\r\nSET "PI_CODING_AGENT_DIR=C:\\elsewhere"\r\n')),
+				target(pathNode.replace('SETLOCAL\r\n', 'SETLOCAL\r\nSET NODE_OPTIONS=--inspect\r\n')),
+				target(pathNode.replace('pi-launcher.js', 'other.js')),
+				target(pathNode.replace('ECHO Pi could not find', 'ECHO Pi could not find & calc &')),
+				target('@ECHO off\r\nSET "_prog=node"\r\n"%_prog%" "%dp0%\\node_modules\\@earendil-works\\pi-coding-agent\\dist\\bundle\\cli.js" %*\r\n'),
+				target(pathNode, env, 'darwin')
+			], Array(11).fill(undefined));
+			// Node on PATH that is a version manager's .cmd, or none: left to cmd.exe
+			fs.rmSync(path.join(nodeDir, 'node.exe'));
+			fs.writeFileSync(path.join(nodeDir, 'node.cmd'), '');
+			fs.rmSync(own);
+			assert.strictEqual(target(PI_CMD('SET "node=node"')), undefined);
+			fs.writeFileSync(path.join(nodeDir, 'node.exe'), '');
+			fs.rmSync(launcher);
+			assert.strictEqual(target(PI_CMD('SET "node=node"')), undefined);
+		} finally {
+			temp.remove();
+		}
+	});
 });
 
 suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
@@ -268,23 +351,69 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		assert.strictEqual(discover(catalogOf(settings()), where, cwd).find(each => each.entry.adapter.id === 'claude')?.available, true);
 		// A terminal PATH without the program: neither finds it, whatever the host's PATH has
 		const empty: DestinationEnvironment = { ...destination, terminal: { PATH: path.join(temp.dir, 'empty') } };
-		assert.deepStrictEqual(discover(catalogOf(settings()), empty, cwd).map(each => [each.available, each.notInstalled]), [[false, true], [false, true]]);
+		assert.deepStrictEqual(discover(catalogOf(settings()), empty, cwd).map(each => [each.available, each.notInstalled]), Array(BUILT_IN_ADAPTERS.length).fill([false, true]));
 		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, {}, empty))[0], 'not_found');
 	});
 
 	test('Claude Code is always offered: a value left in facade.claude.enabled or facade.claude.launch, settings of later steps, changes nothing; one not installed, misconfigured or unknown fails with its actual reason (RULES-5.1)', () => {
 		const left = { 'facade.claude.enabled': false, 'facade.claude.launch': { arguments: ['--verbose'], environment: { LEFT: '1' } } };
 		const planned = plan({ cli: 'claude' }, left);
+		// Only Claude Code and Codex are installed here
 		assert.deepStrictEqual([discover(catalogOf(settings(left)), destination, cwd).map(each => each.available), planned.args, 'LEFT' in planned.env], [
-			[true, true], ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'], false
+			[true, true, false, false, false, false], ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'], false
 		]);
 		const missing = { 'facade.claude.path': '/nowhere/claude' };
-		assert.deepStrictEqual(discover(catalogOf(settings(missing)), destination, cwd).map(each => [each.available, each.notInstalled]), [[false, undefined], [true, undefined]]);
+		assert.deepStrictEqual(discover(catalogOf(settings(missing)), destination, cwd).map(each => [each.available, each.notInstalled]).slice(0, 2), [[false, undefined], [true, undefined]]);
 		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, missing))[0], 'not_found');
 		const invalid = { 'facade.claude.path': 7 };
-		assert.deepStrictEqual(discover(catalogOf(settings(invalid)), destination, cwd).map(each => [each.available, each.problem]), [[false, 'facade.claude.path must be a string; received 7'], [true, undefined]]);
+		assert.deepStrictEqual(discover(catalogOf(settings(invalid)), destination, cwd).map(each => [each.available, each.problem]).slice(0, 2), [[false, 'facade.claude.path must be a string; received 7'], [true, undefined]]);
 		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, invalid))[0], 'configuration_invalid');
-		assert.deepStrictEqual(failure(() => plan({ cli: 'gemini' })), ['not_found', 'No CLI "gemini" is configured; the built-ins are claude and codex']);
+		assert.deepStrictEqual(failure(() => plan({ cli: 'gemini' })), ['not_found', 'No CLI "gemini" is configured; the built-ins are claude, codex, agy, muse, opencode and pi']);
+	});
+
+	test('Antigravity, Muse Code, OpenCode and Pi each map YOLO to their own switches and trust their folder as their own questions would, with no later-step integrations (CLIS-1.3, 3.3)', () => {
+		const bin = path.join(temp.dir, 'bin');
+		const added = ['agy', 'muse', 'opencode', 'pi'];
+		added.forEach(name => program(bin, name));
+		assert.deepStrictEqual([true, false].map(yolo => added.map(cli => plan({ cli, yolo }).args)), [
+			[['--mode', 'accept-edits', '--dangerously-skip-permissions'], ['--disable-approval', '--disable-sandbox', '--trust-workspace'], ['--auto'], ['--approve']],
+			[[], ['--trust-workspace'], [], ['--approve']]
+		]);
+		// Antigravity keeps its trust in its settings, in the launch's home; the others take it for the launch, or ask none
+		assert.deepStrictEqual(added.map(cli => plan({ cli }).trust.kind), ['file', 'arguments', 'arguments', 'arguments']);
+		const folder = canonicalFolder(cwd);
+		assert.deepStrictEqual(plan({ cli: 'agy', yolo: false }).trust, { kind: 'file', target: { file: path.join(temp.dir, '.gemini', 'antigravity-cli', 'settings.json'), keys: ['trustedWorkspaces'], entry: { item: folder }, folder } });
+		for (const cli of added) {
+			const launch = plan({ cli });
+			assert.deepStrictEqual([launch.cli, launch.command, launch.executable, launch.env.FACADE_AGENT, 'ELECTRON_RUN_AS_NODE' in launch.env], [cli, cli, path.join(bin, cli), '#a7', false]);
+		}
+	});
+
+	test('on Windows each new built-in starts through the launcher its installer put on PATH: Muse Code\'s through cmd.exe with arguments it takes safely, OpenCode\'s npm shim as its program, Pi\'s installer launcher as its script with Node', () => {
+		const bin = path.join(temp.dir, 'winbin');
+		fs.mkdirSync(bin);
+		const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.EXE;.CMD', USERPROFILE: temp.dir, LOCALAPPDATA: path.join(temp.dir, 'local') }, platform: 'win32' };
+		// Muse Code's installer: a .cmd running a PowerShell launcher
+		fs.writeFileSync(path.join(bin, 'muse.cmd'), '@echo off\r\nsetlocal\r\n"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0.muse-launcher.ps1" %*\r\nexit /b %ERRORLEVEL%\r\n');
+		for (const yolo of [true, false]) {
+			const muse = plan({ cli: 'muse', yolo }, {}, windows);
+			assert.deepStrictEqual([muse.executable, muse.args], [path.join(bin, 'muse.cmd'), [...yolo ? ['--disable-approval', '--disable-sandbox'] : [], '--trust-workspace']]);
+		}
+		const exe = path.join(bin, 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe');
+		fs.mkdirSync(path.dirname(exe), { recursive: true });
+		fs.writeFileSync(exe, '');
+		fs.writeFileSync(path.join(bin, 'opencode.cmd'), '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\@opencode\\cli\\bin\\opencode.exe"   %*\r\n');
+		const opencode = plan({ cli: 'opencode' }, {}, windows);
+		assert.deepStrictEqual([opencode.executable, opencode.args], [exe, ['--auto']]);
+		fs.writeFileSync(path.join(bin, 'node.exe'), '');
+		fs.writeFileSync(path.join(bin, 'pi.cmd'), PI_CMD('SET "node=node"'));
+		fs.writeFileSync(path.join(bin, 'pi-launcher.js'), '');
+		const pi = plan({ cli: 'pi' }, {}, windows);
+		assert.deepStrictEqual([pi.executable, pi.args], [path.join(bin, 'node.exe'), [path.join(bin, 'pi-launcher.js'), '--approve']]);
+		// Antigravity's own program, and its settings in the Windows home
+		fs.writeFileSync(path.join(bin, 'agy.exe'), '');
+		const agy = plan({ cli: 'agy' }, {}, windows);
+		assert.deepStrictEqual([agy.executable, agy.trust.kind === 'file' && agy.trust.target.file], [path.join(bin, 'agy.exe'), path.join(temp.dir, '.gemini', 'antigravity-cli', 'settings.json')]);
 	});
 
 	test('a launch through cmd.exe refuses an argument cmd.exe would read as its own, before anything starts; npm\'s shim runs its script with Node instead', () => {
@@ -303,5 +432,27 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		fs.writeFileSync(script, '');
 		const planned = plan({ cli: 'claude', yolo: false }, {}, windows);
 		assert.deepStrictEqual([planned.executable, planned.args.slice(0, 2)], [path.join(bin, 'node.exe'), [script, '--settings']]);
+	});
+
+	test('a launcher that goes through cmd.exe from a folder whose path cmd.exe reads as its own - a profile named R&D - is refused before anything starts, with the setting that fixes it', () => {
+		for (const folder of ['R&D', '100%', 'a^b']) {
+			const bin = path.join(temp.dir, folder, 'muse');
+			fs.mkdirSync(bin, { recursive: true });
+			const muse = path.join(bin, 'muse.cmd');
+			fs.writeFileSync(muse, '@echo off\r\nsetlocal\r\n"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0.muse-launcher.ps1" %*\r\nexit /b %ERRORLEVEL%\r\n');
+			const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.EXE;.CMD', USERPROFILE: temp.dir }, platform: 'win32' };
+			const result = failure(() => plan({ cli: 'muse' }, {}, windows));
+			assert.deepStrictEqual(result, ['unsupported', `${muse} runs through cmd.exe, which cannot be given its path safely; set facade.muse.path to the CLI's own program or Node entry point`], folder);
+			try {
+				plan({ cli: 'muse' }, {}, windows);
+			} catch (err) {
+				assert.deepStrictEqual((err as CliPlanError).said, { kind: 'cmd_unsafe_path', values: [muse, 'facade.muse'] });
+			}
+		}
+		// A path with spaces alone is quoted whole, and goes through
+		const spaced = path.join(temp.dir, 'Program Files', 'muse');
+		fs.mkdirSync(spaced, { recursive: true });
+		fs.writeFileSync(path.join(spaced, 'muse.cmd'), '@echo off\r\nexit /b 0\r\n');
+		assert.strictEqual(plan({ cli: 'muse' }, {}, { host: { Path: spaced, PATHEXT: '.CMD', USERPROFILE: temp.dir }, platform: 'win32' }).executable, path.join(spaced, 'muse.cmd'));
 	});
 });
