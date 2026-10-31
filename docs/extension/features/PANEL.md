@@ -61,9 +61,10 @@ automatically launch an agent. This prerequisite step does not ask the person to
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
 
 Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`,
-`avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Location is alias/branch/folder, prefixed by workspace folder in
-a multi-folder window unless it is named that folder's name already, as a plain folder is (D66). A related worktree can
-be outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
+`avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Custom avatars are an uppercased first grapheme in a
+circle; deterministic theme colors from UX-2.1. Location is alias/branch/folder, prefixed by workspace folder in a
+multi-folder window unless it is named that folder's name already, as a plain folder is (D66). A related worktree can be
+outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
 temporarily disconnected location is retained. The location keeps its own width, as a chat list keeps a message's time,
 up to 40% of the line, and is cut beyond that; the name has the rest. A workspace-folder prefix is shown whole or not at
 all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibility.
@@ -200,6 +201,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 - 2026-10-31: 2.3's Filter by Working Location steps by folder; All Locations and All Worktrees replace All
   Agents (D82).
+
+- 2026-10-31: 1.3 draws a custom CLI's avatar as its initial on a theme color (UX-2.1).
 
 - 2026-10-31: 1.1 names Show Agent Launch and Show Agents Log as Command Palette entries, not view-menu items (D83).
 

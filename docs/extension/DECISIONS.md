@@ -67,7 +67,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D39 | Owner-revised in IA-03: the native picker title uses middle dots and keeps name/location visible while filtering, including the folder in multi-folder windows. A planned worktree uses `(new)` in the title and retains its source in the location row. Missing history silently falls back. The branch input has a placeholder and shorter source prompt. The latest confirmed screenshots use `Select a branch or worktree` without a folder suffix and no custom Change Name prompt, without restricting name labels | LIFECYCLE-1.1, 1.2, 1.3 |
 | D41 | Owner-authorized: the 160 ms removal animation follows only a normal exit; explicit close and confirmed location removal are immediate | UX-2.2 |
 | D42 | Owner-authorized: test-only `state`, `selectRow` (by run ID) and `probe` commands; the first draft's hidden scripted start was withdrawn because the owner-approved R9 removal stands | UX-3.2 |
-| D43 | Owner-authorized: Settings sections are Agents, then each built-in CLI in CLIS-1.1 order | UX-4.1 |
+| D43 | Owner-authorized: Settings sections are Agents, then each built-in CLI in CLIS-1.1 order, then Custom Agents | UX-4.1 |
 | D46 | Owner-authorized: `FACADE_AGENT` carries the run's `#aN` alias | CLIS-1.2 |
 | D47 | Owner-authorized: confirmed deletion needs a successful Git read without the worktree (or marking it prunable) and a missing root; launch-location association; feature-detected Git extension creation API | WORKTREES-1.3, 3.3, 4.1 |
 | D48 | Owner-authorized: activity is verified per run by an OSC 7501 probe answer or valid reports, independent of version; quirks stay version-scoped | CLIS-2.1, 2.3 |
@@ -115,6 +115,7 @@ asserted design defects.
 | Review item | Owner disposition and reason | Normative owner |
 | --- | --- | --- |
 | R1 | Accepted: a user must be able to change YOLO for the next start without preserving an old mode | RULES-4.3 |
+| R2 | Accepted: an incomplete custom definition without a Resume command is not a supported configuration | CLIS-3.4 |
 | R5 | Accepted: vendor internals and arbitrary file merging do not belong in a general launch configuration language | CLIS-3 |
 | R7 | Scrolling reduction rejected: the owner tried the earlier simpler scrolling and found it inadequate; retain the full existing requirements | PANEL-3.3 |
 | R8 | Accepted: existing notification navigation and Go to Agent cover the need without another attention queue | RULES-3.4, LIFECYCLE-2.3 |
@@ -166,6 +167,8 @@ full spec revision; it does not authorize publication or unrelated source change
 ## Change log
 
 - 2026-10-31: Recorded the owner's choice of Filter by Working Location in steps by folder (D82).
+
+- 2026-10-31: D43 adds the Custom Agents section and R2 the required custom Resume, carried with the custom CLIs.
 
 - 2026-10-31: Recorded the owner's choice of Show Agent Launch and Show Agents Log as commands only (D83).
 
