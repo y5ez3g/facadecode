@@ -523,6 +523,16 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([renames.length, terminal.name], [1, 'Grace Hopper | Fixing tests'], 'its own name shown is no rename');
 	});
 
+	test('a person renaming a tab back to the name it had - after naming it with the separator and CLI title kept - renames the agent back: a name the tab already showed is no echo (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const renames = renamesOf(port);
+		const terminal = await agentTitled(port, 'run-x4');
+		titled(terminal, 'Bob | Fixing tests');
+		shows(terminal);
+		titled(terminal, 'Ada | Fixing tests');
+		assert.deepStrictEqual(renames.map(each => each.name), ['Bob', 'Ada']);
+	});
+
 	test('a person who kept the separator and CLI title renaming the tab - the ones it showed then, though the CLI retitled it since - names the agent by what is before them (LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);

@@ -281,9 +281,16 @@ export class AgentPty implements vscode.Pseudoterminal {
 	/** Names the tab by {@link tabName}, noting it as said: as the tab shows it, it is not a person's name for it. */
 	private say(): void {
 		const name = this.tabName();
-		this.said.push({ name: shownAs(name), suffix: shownAs(this.suffix()) });
-		if (this.said.length > MOST_SAID) {
-			this.said.shift();
+		const said = { name: shownAs(name), suffix: shownAs(this.suffix()) };
+		if (said.name === shownAs(this.seen)) {
+			// The tab shows it already - a person named it so - and no change will say so: the names said before it are over, and a
+			// person naming the tab one of them again renames the agent (LIFECYCLE-2.2)
+			this.said = [said];
+		} else {
+			this.said.push(said);
+			if (this.said.length > MOST_SAID) {
+				this.said.shift();
+			}
 		}
 		this.nameEmitter.fire(name);
 	}
